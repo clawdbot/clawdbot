@@ -46,11 +46,35 @@ describe("memory index concurrency resolution", () => {
     ).toBe(4);
   });
 
-  it("respects configured concurrency even when batch mode is disabled", () => {
+  it("respects configured non-batch concurrency when batch mode is disabled", () => {
     expect(
       resolveMemoryIndexConcurrency({
         batch: { enabled: false, concurrency: 1 },
-        configuredConcurrency: 1,
+        configuredNonBatchConcurrency: 1,
+      }),
+    ).toBe(1);
+  });
+
+  it("clamps configured non-batch concurrency to a positive integer", () => {
+    expect(
+      resolveMemoryIndexConcurrency({
+        batch: { enabled: false, concurrency: 2 },
+        configuredNonBatchConcurrency: 2.8,
+      }),
+    ).toBe(2);
+    expect(
+      resolveMemoryIndexConcurrency({
+        batch: { enabled: false, concurrency: 2 },
+        configuredNonBatchConcurrency: 0,
+      }),
+    ).toBe(1);
+  });
+
+  it("uses conservative non-batch concurrency for Ollama by default", () => {
+    expect(
+      resolveMemoryIndexConcurrency({
+        batch: { enabled: false, concurrency: 2 },
+        providerId: "ollama",
       }),
     ).toBe(1);
   });

@@ -1,37 +1,17 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
+import { createRuntimeTaskFlow } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createMockServerResponse } from "../../../test/helpers/plugins/mock-http-response.js";
-import { createRuntimeTaskFlow } from "../../../test/helpers/plugins/runtime-taskflow.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createTaskFlowWebhookRequestHandler, type TaskFlowWebhookTarget } from "./http.js";
 
 const hoisted = vi.hoisted(() => {
-  const sendMessageMock = vi.fn();
-  const cancelSessionMock = vi.fn();
-  const killSubagentRunAdminMock = vi.fn();
   const resolveConfiguredSecretInputStringMock = vi.fn();
   return {
-    sendMessageMock,
-    cancelSessionMock,
-    killSubagentRunAdminMock,
     resolveConfiguredSecretInputStringMock,
   };
 });
-
-vi.mock("../../../src/tasks/task-registry-delivery-runtime.js", () => ({
-  sendMessage: hoisted.sendMessageMock,
-}));
-
-vi.mock("../../../src/acp/control-plane/manager.js", () => ({
-  getAcpSessionManager: () => ({
-    cancelSession: hoisted.cancelSessionMock,
-  }),
-}));
-
-vi.mock("../../../src/agents/subagent-control.js", () => ({
-  killSubagentRunAdmin: (params: unknown) => hoisted.killSubagentRunAdminMock(params),
-}));
 
 vi.mock("../runtime-api.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../runtime-api.js")>();

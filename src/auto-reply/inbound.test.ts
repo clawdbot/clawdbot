@@ -4,6 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GroupKeyResolution } from "../config/sessions.js";
+import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { createInboundDebouncer } from "./inbound-debounce.js";
 import { installGroupRequireMentionTestPlugins } from "./inbound.group-require-mention-test-plugins.js";
@@ -209,7 +210,16 @@ describe("inbound dedupe", () => {
       OriginatingTo: "telegram:123",
       MessageSid: "42",
     };
-    expect(buildInboundDedupeKey(ctx)).toBe("telegram|telegram:123|42");
+    expect(buildInboundDedupeKey(ctx)).toBe(
+      JSON.stringify([
+        "",
+        channelRouteDedupeKey({
+          channel: "telegram",
+          to: "telegram:123",
+        }),
+        "42",
+      ]),
+    );
   });
 
   it("skips duplicates with the same key", () => {

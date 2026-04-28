@@ -109,6 +109,14 @@ export const es: TranslationMap = {
       lightningHelp: "Dirección Lightning para propinas (LUD-16)",
     },
   },
+  lazyView: {
+    loadingTitle: "Cargando panel",
+    errorTitle: "No se pudo cargar el panel",
+    errorSubtitle:
+      "Vuelve a cargar la página para cargar el paquete más reciente de Control UI, o inténtalo de nuevo si falló la solicitud de red.",
+    retry: "Reintentar",
+    unknownError: "Error desconocido al cargar el módulo.",
+  },
   nodes: {
     binding: {
       loadConfigHint: "Carga la configuración para editar las vinculaciones.",

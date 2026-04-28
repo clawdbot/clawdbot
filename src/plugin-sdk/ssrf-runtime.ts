@@ -4,6 +4,7 @@
 export {
   closeDispatcher,
   createPinnedDispatcher,
+  SsrFBlockedError,
   isBlockedHostnameOrIp,
   resolvePinnedHostname,
   resolvePinnedHostnameWithPolicy,

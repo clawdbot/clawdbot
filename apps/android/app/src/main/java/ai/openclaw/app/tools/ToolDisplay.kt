@@ -48,13 +48,14 @@ data class ToolDisplaySummary(
     }
 
   val summaryLine: String
-    get() = if (detailLine != null) "${emoji} ${label}: ${detailLine}" else "${emoji} ${label}"
+    get() = if (detailLine != null) "$emoji $label: $detailLine" else "$emoji $label"
 }
 
 object ToolDisplayRegistry {
   private const val CONFIG_ASSET = "tool-display.json"
 
   private val json = Json { ignoreUnknownKeys = true }
+
   @Volatile private var cachedConfig: ToolDisplayConfig? = null
 
   fun resolve(
@@ -112,7 +113,11 @@ object ToolDisplayRegistry {
     val existing = cachedConfig
     if (existing != null) return existing
     return try {
-      val jsonString = context.assets.open(CONFIG_ASSET).bufferedReader().use { it.readText() }
+      val jsonString =
+        context.assets
+          .open(CONFIG_ASSET)
+          .bufferedReader()
+          .use { it.readText() }
       val decoded = json.decodeFromString(ToolDisplayConfig.serializer(), jsonString)
       cachedConfig = decoded
       decoded
@@ -130,8 +135,11 @@ object ToolDisplayRegistry {
       .split(Regex("\\s+"))
       .joinToString(" ") { part ->
         val upper = part.uppercase()
-        if (part.length <= 2 && part == upper) part
-        else upper.firstOrNull()?.toString().orEmpty() + part.lowercase().drop(1)
+        if (part.length <= 2 && part == upper) {
+          part
+        } else {
+          upper.firstOrNull()?.toString().orEmpty() + part.lowercase().drop(1)
+        }
       }
   }
 
@@ -147,17 +155,18 @@ object ToolDisplayRegistry {
     val limit = args["limit"].asNumberOrNull()
     return if (offset != null && limit != null) {
       val end = offset + limit
-      "${path}:${offset.toInt()}-${end.toInt()}"
+      "$path:${offset.toInt()}-${end.toInt()}"
     } else {
       path
     }
   }
 
-  private fun pathDetail(args: JsonObject?): String? {
-    return args?.get("path")?.asStringOrNull()
-  }
+  private fun pathDetail(args: JsonObject?): String? = args?.get("path")?.asStringOrNull()
 
-  private fun firstValue(args: JsonObject?, keys: List<String>): String? {
+  private fun firstValue(
+    args: JsonObject?,
+    keys: List<String>,
+  ): String? {
     for (key in keys) {
       val value = valueForPath(args, key)
       val rendered = renderValue(value)
@@ -166,7 +175,10 @@ object ToolDisplayRegistry {
     return null
   }
 
-  private fun valueForPath(args: JsonObject?, path: String): JsonElement? {
+  private fun valueForPath(
+    args: JsonObject?,
+    path: String,
+  ): JsonElement? {
     var current: JsonElement? = args
     for (segment in path.split(".")) {
       if (segment.isBlank()) return null
@@ -182,7 +194,12 @@ object ToolDisplayRegistry {
       if (value.isString) {
         val trimmed = value.contentOrNull?.trim().orEmpty()
         if (trimmed.isEmpty()) return null
-        val firstLine = trimmed.lineSequence().firstOrNull()?.trim().orEmpty()
+        val firstLine =
+          trimmed
+            .lineSequence()
+            .firstOrNull()
+            ?.trim()
+            .orEmpty()
         if (firstLine.isEmpty()) return null
         return if (firstLine.length > 160) "${firstLine.take(157)}…" else firstLine
       }
@@ -195,16 +212,18 @@ object ToolDisplayRegistry {
       val items = value.mapNotNull { renderValue(it) }
       if (items.isEmpty()) return null
       val preview = items.take(3).joinToString(", ")
-      return if (items.size > 3) "${preview}…" else preview
+      return if (items.size > 3) "$preview…" else preview
     }
     return null
   }
 
   private fun shortenHomeInString(value: String): String {
-    val home = System.getProperty("user.home")?.takeIf { it.isNotBlank() }
-      ?: System.getenv("HOME")?.takeIf { it.isNotBlank() }
+    val home =
+      System.getProperty("user.home")?.takeIf { it.isNotBlank() }
+        ?: System.getenv("HOME")?.takeIf { it.isNotBlank() }
     if (home.isNullOrEmpty()) return value
-    return value.replace(home, "~")
+    return value
+      .replace(home, "~")
       .replace(Regex("/Users/[^/]+"), "~")
       .replace(Regex("/home/[^/]+"), "~")
   }

@@ -1,33 +1,31 @@
 import {
+  MANAGED_MEMORY_DREAMING_CRON_NAME,
+  MANAGED_MEMORY_DREAMING_CRON_TAG,
+  MEMORY_DREAMING_SYSTEM_EVENT_TEXT,
+} from "../memory-host-sdk/dreaming.js";
+import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-
-// Constants are owned by the memory-core dreaming implementation. Mirrored here
-// so doctor can rewrite stale jobs without taking a runtime dep on the
-// extension. Keep in sync if the memory-core constants change.
-const MANAGED_DREAMING_CRON_NAME = "Memory Dreaming Promotion";
-const MANAGED_DREAMING_CRON_TAG = "[managed-by=memory-core.short-term-promotion]";
-const DREAMING_SYSTEM_EVENT_TEXT = "__openclaw_memory_core_short_term_promotion_dream__";
 
 type UnknownRecord = Record<string, unknown>;
 
 function isManagedDreamingJob(raw: UnknownRecord): boolean {
   const description = normalizeOptionalString(raw.description);
-  if (description?.includes(MANAGED_DREAMING_CRON_TAG)) {
+  if (description?.includes(MANAGED_MEMORY_DREAMING_CRON_TAG)) {
     return true;
   }
   const name = normalizeOptionalString(raw.name);
-  if (name !== MANAGED_DREAMING_CRON_NAME) {
+  if (name !== MANAGED_MEMORY_DREAMING_CRON_NAME) {
     return false;
   }
   const payload = (raw.payload as UnknownRecord | undefined) ?? undefined;
   const payloadKind = normalizeOptionalLowercaseString(payload?.kind);
   if (payloadKind === "systemevent") {
-    return normalizeOptionalString(payload?.text) === DREAMING_SYSTEM_EVENT_TEXT;
+    return normalizeOptionalString(payload?.text) === MEMORY_DREAMING_SYSTEM_EVENT_TEXT;
   }
   if (payloadKind === "agentturn") {
-    return normalizeOptionalString(payload?.message) === DREAMING_SYSTEM_EVENT_TEXT;
+    return normalizeOptionalString(payload?.message) === MEMORY_DREAMING_SYSTEM_EVENT_TEXT;
   }
   return false;
 }
@@ -57,7 +55,7 @@ function rewriteDreamingJobShape(raw: UnknownRecord): void {
   raw.sessionTarget = "isolated";
   raw.payload = {
     kind: "agentTurn",
-    message: DREAMING_SYSTEM_EVENT_TEXT,
+    message: MEMORY_DREAMING_SYSTEM_EVENT_TEXT,
     lightContext: true,
   };
   raw.delivery = { mode: "none" };

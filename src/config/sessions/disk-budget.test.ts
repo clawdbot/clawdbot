@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
+import {
+  resolveTrajectoryFilePath,
+  resolveTrajectoryPointerFilePath,
+} from "../../trajectory/paths.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
 import { enforceSessionDiskBudget } from "./disk-budget.js";
 import type { SessionEntry } from "./types.js";
@@ -137,6 +141,56 @@ describe("enforceSessionDiskBudget", () => {
       expect(result).toEqual(
         expect.objectContaining({
           removedFiles: 1,
+          removedEntries: 0,
+        }),
+      );
+    });
+  });
+
+  it("removes unreferenced trajectory sidecars while preserving referenced ones", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const sessionId = "keep";
+      const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
+      const referencedRuntime = resolveTrajectoryFilePath({
+        env: {},
+        sessionFile: transcriptPath,
+        sessionId,
+      });
+      const referencedPointer = resolveTrajectoryPointerFilePath(transcriptPath);
+      const orphanRuntime = path.join(dir, "old.trajectory.jsonl");
+      const orphanPointer = path.join(dir, "old.trajectory-path.json");
+      const store: Record<string, SessionEntry> = {
+        "agent:main:main": {
+          sessionId,
+          updatedAt: Date.now(),
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await fs.writeFile(transcriptPath, "k".repeat(80), "utf-8");
+      await fs.writeFile(referencedRuntime, "r".repeat(80), "utf-8");
+      await fs.writeFile(referencedPointer, "p".repeat(80), "utf-8");
+      await fs.writeFile(orphanRuntime, "o".repeat(5000), "utf-8");
+      await fs.writeFile(orphanPointer, "q".repeat(5000), "utf-8");
+
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        maintenance: {
+          maxDiskBytes: 7000,
+          highWaterBytes: 2000,
+        },
+        warnOnly: false,
+      });
+
+      await expect(fs.stat(transcriptPath)).resolves.toBeDefined();
+      await expect(fs.stat(referencedRuntime)).resolves.toBeDefined();
+      await expect(fs.stat(referencedPointer)).resolves.toBeDefined();
+      await expect(fs.stat(orphanRuntime)).rejects.toThrow();
+      await expect(fs.stat(orphanPointer)).rejects.toThrow();
+      expect(result).toEqual(
+        expect.objectContaining({
+          removedFiles: 2,
           removedEntries: 0,
         }),
       );

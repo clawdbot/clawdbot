@@ -9,6 +9,10 @@ import {
   startsWithSilentToken,
   stripLeadingSilentToken,
 } from "../../auto-reply/tokens.js";
+import {
+  type ClaudeCliFallbackSeed,
+  readClaudeCliFallbackSeed,
+} from "../../gateway/cli-session-history.js";
 
 /** Maximum number of JSONL records to inspect before giving up. */
 const SESSION_FILE_MAX_RECORDS = 500;
@@ -105,11 +109,13 @@ export function resolveFallbackRetryPrompt(params: {
   body: string;
   isFallbackRetry: boolean;
   sessionHasHistory?: boolean;
+  priorContextPrelude?: string;
 }): string {
   if (!params.isFallbackRetry) {
     return params.body;
   }
-  if (!params.sessionHasHistory) {
+  const prelude = params.priorContextPrelude?.trim();
+  if (!params.sessionHasHistory && !prelude) {
     return params.body;
   }
   // Even with persisted session history, fully replacing the body with a
@@ -118,7 +124,160 @@ export function resolveFallbackRetryPrompt(params: {
   // instruction from history alone, which is fragile and sometimes
   // impossible. Prepend the retry context to the original body instead so
   // the fallback model has both the recovery signal AND the task. (#65760)
-  return `[Retry after the previous model attempt failed or timed out]\n\n${params.body}`;
+  const retryMarked = `[Retry after the previous model attempt failed or timed out]\n\n${params.body}`;
+  return prelude ? `${prelude}\n\n${retryMarked}` : retryMarked;
+}
+
+const CLAUDE_CLI_FALLBACK_PRELUDE_DEFAULT_CHAR_BUDGET = 8_000;
+const CLAUDE_CLI_FALLBACK_PRELUDE_MIN_TURN_CHARS = 64;
+
+type FallbackTurnLikeMessage = Record<string, unknown>;
+
+function extractFallbackTurnText(message: FallbackTurnLikeMessage): string {
+  const content = message.content;
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  const parts: string[] = [];
+  for (const block of content) {
+    if (typeof block === "string") {
+      parts.push(block);
+      continue;
+    }
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const rec = block as Record<string, unknown>;
+    if (typeof rec.text === "string") {
+      parts.push(rec.text);
+      continue;
+    }
+    // Tool calls: render as a compact "(tool: name)" hint so the fallback
+    // model sees the conversation flow without the full tool argument blob,
+    // which is rarely useful out of context and chews through char budget.
+    if (rec.type === "tool_use" && typeof rec.name === "string") {
+      parts.push(`(tool call: ${rec.name})`);
+      continue;
+    }
+    if (rec.type === "tool_result") {
+      const inner = typeof rec.content === "string" ? rec.content : undefined;
+      if (inner) {
+        parts.push(`(tool result: ${inner})`);
+      } else {
+        parts.push("(tool result)");
+      }
+    }
+  }
+  return parts.join("\n").trim();
+}
+
+function formatFallbackTurns(
+  turns: ReadonlyArray<FallbackTurnLikeMessage>,
+  remainingBudget: number,
+): { text: string; consumed: number } {
+  if (turns.length === 0 || remainingBudget <= 0) {
+    return { text: "", consumed: 0 };
+  }
+  const lines: string[] = [];
+  let consumed = 0;
+  for (let i = turns.length - 1; i >= 0; i -= 1) {
+    const turn = turns[i];
+    if (!turn || typeof turn !== "object") {
+      continue;
+    }
+    const role = turn.role;
+    if (role !== "user" && role !== "assistant") {
+      continue;
+    }
+    const text = extractFallbackTurnText(turn);
+    if (!text) {
+      continue;
+    }
+    const line = `${role}: ${text}`;
+    if (consumed + line.length + 1 > remainingBudget) {
+      break;
+    }
+    lines.unshift(line);
+    consumed += line.length + 1;
+  }
+  return { text: lines.join("\n"), consumed };
+}
+
+/**
+ * Format a previously-harvested Claude CLI session into a labeled prelude
+ * suitable for prepending to a fallback candidate's prompt. Behavior matches
+ * Claude Code's own resume strategy after compaction: prefer the explicit
+ * summary, then append the most recent turns up to a char budget.
+ *
+ * Returns an empty string when neither a summary nor any usable turn fits in
+ * the budget; callers can treat that as "no context to seed".
+ */
+export function formatClaudeCliFallbackPrelude(
+  seed: ClaudeCliFallbackSeed,
+  options?: { charBudget?: number },
+): string {
+  const charBudget = Math.max(
+    CLAUDE_CLI_FALLBACK_PRELUDE_MIN_TURN_CHARS,
+    options?.charBudget ?? CLAUDE_CLI_FALLBACK_PRELUDE_DEFAULT_CHAR_BUDGET,
+  );
+  const heading = "## Prior session context (from claude-cli)";
+  const sections: string[] = [heading];
+  let remaining = charBudget - heading.length;
+  if (seed.summaryText) {
+    const summarySection = `\nSummary of earlier conversation:\n${seed.summaryText}`;
+    if (summarySection.length <= remaining) {
+      sections.push(summarySection);
+      remaining -= summarySection.length;
+    } else {
+      // Truncate the summary at a word boundary if it's huge; clearly mark
+      // the truncation so the fallback model treats the prelude as a hint,
+      // not exhaustive state.
+      const slice = seed.summaryText.slice(0, Math.max(0, remaining - 64));
+      const lastBreak = slice.lastIndexOf(" ");
+      const trimmed = lastBreak > 0 ? slice.slice(0, lastBreak).trimEnd() : slice.trimEnd();
+      sections.push(`\nSummary of earlier conversation (truncated):\n${trimmed} …`);
+      remaining = 0;
+    }
+  }
+  if (remaining > CLAUDE_CLI_FALLBACK_PRELUDE_MIN_TURN_CHARS && seed.recentTurns.length > 0) {
+    const { text } = formatFallbackTurns(
+      seed.recentTurns as ReadonlyArray<FallbackTurnLikeMessage>,
+      remaining - 32,
+    );
+    if (text) {
+      sections.push(`\nRecent turns:\n${text}`);
+    }
+  }
+  // No summary AND no fittable turns => nothing to seed beyond the heading,
+  // which would just confuse the model. Drop the prelude entirely.
+  if (sections.length === 1) {
+    return "";
+  }
+  return sections.join("\n");
+}
+
+/**
+ * Read the Claude CLI session pointed to by `cliSessionId` and format a
+ * fallback prelude. Returns `""` when no session file is found or when the
+ * harvested seed has no usable content.
+ */
+export function buildClaudeCliFallbackContextPrelude(params: {
+  cliSessionId: string | undefined;
+  homeDir?: string;
+  charBudget?: number;
+}): string {
+  const sessionId = params.cliSessionId?.trim();
+  if (!sessionId) {
+    return "";
+  }
+  const seed = readClaudeCliFallbackSeed({ cliSessionId: sessionId, homeDir: params.homeDir });
+  if (!seed) {
+    return "";
+  }
+  return formatClaudeCliFallbackPrelude(seed, { charBudget: params.charBudget });
 }
 
 export function createAcpVisibleTextAccumulator() {

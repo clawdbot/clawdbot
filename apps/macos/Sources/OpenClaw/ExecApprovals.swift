@@ -227,6 +227,13 @@ enum ExecApprovalsStore {
     private static let defaultAskFallback: ExecSecurity = .deny
     private static let defaultAutoAllowSkills = false
     private static let secureStateDirPermissions = 0o700
+    private static let fileLock = NSRecursiveLock()
+
+    private static func withFileLock<T>(_ body: () throws -> T) rethrows -> T {
+        self.fileLock.lock()
+        defer { self.fileLock.unlock() }
+        return try body()
+    }
 
     static func fileURL() -> URL {
         OpenClawPaths.stateDirURL.appendingPathComponent("exec-approvals.json")
@@ -270,27 +277,31 @@ enum ExecApprovalsStore {
     }
 
     static func readSnapshot() -> ExecApprovalsSnapshot {
-        let url = self.fileURL()
-        guard FileManager().fileExists(atPath: url.path) else {
+        self.withFileLock {
+            let url = self.fileURL()
+            guard FileManager().fileExists(atPath: url.path) else {
+                return ExecApprovalsSnapshot(
+                    path: url.path,
+                    exists: false,
+                    hash: self.hashRaw(nil),
+                    file: ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:]))
+            }
+            let raw = try? String(contentsOf: url, encoding: .utf8)
+            let data = raw.flatMap { $0.data(using: .utf8) }
+            let decoded: ExecApprovalsFile = {
+                if let data, let file = try? JSONDecoder().decode(ExecApprovalsFile.self, from: data),
+                   file.version == 1
+                {
+                    return file
+                }
+                return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+            }()
             return ExecApprovalsSnapshot(
                 path: url.path,
-                exists: false,
-                hash: self.hashRaw(nil),
-                file: ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:]))
+                exists: true,
+                hash: self.hashRaw(raw),
+                file: decoded)
         }
-        let raw = try? String(contentsOf: url, encoding: .utf8)
-        let data = raw.flatMap { $0.data(using: .utf8) }
-        let decoded: ExecApprovalsFile = {
-            if let data, let file = try? JSONDecoder().decode(ExecApprovalsFile.self, from: data), file.version == 1 {
-                return file
-            }
-            return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
-        }()
-        return ExecApprovalsSnapshot(
-            path: url.path,
-            exists: true,
-            hash: self.hashRaw(raw),
-            file: decoded)
     }
 
     static func redactForSnapshot(_ file: ExecApprovalsFile) -> ExecApprovalsFile {
@@ -310,62 +321,68 @@ enum ExecApprovalsStore {
     }
 
     static func loadFile() -> ExecApprovalsFile {
-        let url = self.fileURL()
-        guard FileManager().fileExists(atPath: url.path) else {
-            return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
-        }
-        do {
-            let data = try Data(contentsOf: url)
-            let decoded = try JSONDecoder().decode(ExecApprovalsFile.self, from: data)
-            if decoded.version != 1 {
+        self.withFileLock {
+            let url = self.fileURL()
+            guard FileManager().fileExists(atPath: url.path) else {
                 return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
             }
-            return decoded
-        } catch {
-            self.logger.warning("exec approvals load failed: \(error.localizedDescription, privacy: .public)")
-            return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+            do {
+                let data = try Data(contentsOf: url)
+                let decoded = try JSONDecoder().decode(ExecApprovalsFile.self, from: data)
+                if decoded.version != 1 {
+                    return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+                }
+                return decoded
+            } catch {
+                self.logger.warning("exec approvals load failed: \(error.localizedDescription, privacy: .public)")
+                return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+            }
         }
     }
 
     static func saveFile(_ file: ExecApprovalsFile) {
-        do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(file)
-            let url = self.fileURL()
-            self.ensureSecureStateDirectory()
-            try FileManager().createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true)
-            try data.write(to: url, options: [.atomic])
-            try? FileManager().setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-        } catch {
-            self.logger.error("exec approvals save failed: \(error.localizedDescription, privacy: .public)")
+        self.withFileLock {
+            do {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                let data = try encoder.encode(file)
+                let url = self.fileURL()
+                self.ensureSecureStateDirectory()
+                try FileManager().createDirectory(
+                    at: url.deletingLastPathComponent(),
+                    withIntermediateDirectories: true)
+                try data.write(to: url, options: [.atomic])
+                try? FileManager().setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            } catch {
+                self.logger.error("exec approvals save failed: \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 
     static func ensureFile() -> ExecApprovalsFile {
-        self.ensureSecureStateDirectory()
-        let url = self.fileURL()
-        let existed = FileManager().fileExists(atPath: url.path)
-        let loaded = self.loadFile()
-        let loadedHash = self.hashFile(loaded)
+        self.withFileLock {
+            self.ensureSecureStateDirectory()
+            let url = self.fileURL()
+            let existed = FileManager().fileExists(atPath: url.path)
+            let loaded = self.loadFile()
+            let loadedHash = self.hashFile(loaded)
 
-        var file = self.normalizeIncoming(loaded)
-        if file.socket == nil { file.socket = ExecApprovalsSocketConfig(path: nil, token: nil) }
-        let path = file.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if path.isEmpty {
-            file.socket?.path = self.socketPath()
+            var file = self.normalizeIncoming(loaded)
+            if file.socket == nil { file.socket = ExecApprovalsSocketConfig(path: nil, token: nil) }
+            let path = file.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if path.isEmpty {
+                file.socket?.path = self.socketPath()
+            }
+            let token = file.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if token.isEmpty {
+                file.socket?.token = self.generateToken()
+            }
+            if file.agents == nil { file.agents = [:] }
+            if !existed || loadedHash != self.hashFile(file) {
+                self.saveFile(file)
+            }
+            return file
         }
-        let token = file.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if token.isEmpty {
-            file.socket?.token = self.generateToken()
-        }
-        if file.agents == nil { file.agents = [:] }
-        if !existed || loadedHash != self.hashFile(file) {
-            self.saveFile(file)
-        }
-        return file
     }
 
     static func resolve(agentId: String?) -> ExecApprovalsResolved {
@@ -533,9 +550,11 @@ enum ExecApprovalsStore {
     }
 
     private static func updateFile(_ mutate: (inout ExecApprovalsFile) -> Void) {
-        var file = self.ensureFile()
-        mutate(&file)
-        self.saveFile(file)
+        self.withFileLock {
+            var file = self.ensureFile()
+            mutate(&file)
+            self.saveFile(file)
+        }
     }
 
     private static func ensureSecureStateDirectory() {

@@ -8,6 +8,18 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 // Grace period to keep resolved entries for late awaitDecision calls
 const RESOLVED_ENTRY_GRACE_MS = 15_000;
 
+function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
+  const unref = (timer as { unref?: () => void }).unref;
+  if (typeof unref === "function") {
+    unref.call(timer);
+  }
+}
+
+function scheduleResolvedEntryCleanup(cleanup: () => void): void {
+  const timer = setTimeout(cleanup, RESOLVED_ENTRY_GRACE_MS);
+  unrefTimer(timer);
+}
+
 export type ExecApprovalRequestPayload = InfraExecApprovalRequestPayload;
 
 export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
@@ -117,12 +129,12 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     // Resolve the promise first, then delete after a grace period.
     // This allows in-flight awaitDecision calls to find the resolved entry.
     pending.resolve(decision);
-    setTimeout(() => {
+    scheduleResolvedEntryCleanup(() => {
       // Only delete if the entry hasn't been replaced
       if (this.pending.get(recordId) === pending) {
         this.pending.delete(recordId);
       }
-    }, RESOLVED_ENTRY_GRACE_MS);
+    });
     return true;
   }
 
@@ -139,11 +151,11 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     pending.record.decision = undefined;
     pending.record.resolvedBy = resolvedBy ?? null;
     pending.resolve(null);
-    setTimeout(() => {
+    scheduleResolvedEntryCleanup(() => {
       if (this.pending.get(recordId) === pending) {
         this.pending.delete(recordId);
       }
-    }, RESOLVED_ENTRY_GRACE_MS);
+    });
     return true;
   }
 

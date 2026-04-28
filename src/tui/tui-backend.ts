@@ -28,11 +28,13 @@ export type TuiSessionList = {
     model?: string | null;
     modelProvider?: string | null;
     contextTokens?: number | null;
+    thinkingLevels?: Array<{ id: string; label: string }>;
   };
   sessions: Array<
     Pick<
       SessionInfo,
       | "thinkingLevel"
+      | "thinkingLevels"
       | "fastMode"
       | "verboseLevel"
       | "reasoningLevel"

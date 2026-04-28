@@ -25,6 +25,7 @@ let buildExecExitOutcome: typeof import("./bash-tools.exec-runtime.js").buildExe
 let detectCursorKeyMode: typeof import("./bash-tools.exec-runtime.js").detectCursorKeyMode;
 let emitExecSystemEvent: typeof import("./bash-tools.exec-runtime.js").emitExecSystemEvent;
 let formatExecFailureReason: typeof import("./bash-tools.exec-runtime.js").formatExecFailureReason;
+let renderExecUpdateText: typeof import("./bash-tools.exec-runtime.js").renderExecUpdateText;
 let resolveExecTarget: typeof import("./bash-tools.exec-runtime.js").resolveExecTarget;
 let runExecProcess: typeof import("./bash-tools.exec-runtime.js").runExecProcess;
 
@@ -35,6 +36,7 @@ beforeAll(async () => {
     detectCursorKeyMode,
     emitExecSystemEvent,
     formatExecFailureReason,
+    renderExecUpdateText,
     resolveExecTarget,
     runExecProcess,
   } = await import("./bash-tools.exec-runtime.js"));
@@ -310,6 +312,28 @@ describe("resolveExecTarget", () => {
       }),
     ).toThrow(
       "exec host not allowed (requested gateway; configured host is node; set tools.exec.host=gateway or auto to allow this override).",
+    );
+  });
+});
+
+describe("renderExecUpdateText", () => {
+  it("uses a non-empty placeholder when an exec update has no output", () => {
+    expect(renderExecUpdateText({ tailText: "", warnings: [] })).toBe("(no output)");
+  });
+
+  it("preserves non-empty exec output", () => {
+    expect(renderExecUpdateText({ tailText: "hello", warnings: [] })).toBe("hello");
+  });
+
+  it("keeps warnings while still avoiding empty output text", () => {
+    expect(renderExecUpdateText({ tailText: "", warnings: ["Warning: retrying"] })).toBe(
+      "Warning: retrying\n\n(no output)",
+    );
+  });
+
+  it("combines warnings with non-empty output", () => {
+    expect(renderExecUpdateText({ tailText: "hello", warnings: ["Warning: retrying"] })).toBe(
+      "Warning: retrying\n\nhello",
     );
   });
 });

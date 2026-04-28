@@ -17,7 +17,7 @@ const contextTestState = vi.hoisted(() => {
 });
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => contextTestState.loadConfigImpl(),
+  getRuntimeConfig: () => contextTestState.loadConfigImpl(),
 }));
 
 vi.mock("./models-config.runtime.js", () => ({
@@ -34,17 +34,17 @@ vi.mock("./pi-model-discovery-runtime.js", () => ({
 }));
 
 function mockContextDeps(params: {
-  loadConfig: () => unknown;
+  getRuntimeConfig: () => unknown;
   discoveredModels?: DiscoveredModel[];
 }) {
-  contextTestState.loadConfigImpl = params.loadConfig;
+  contextTestState.loadConfigImpl = params.getRuntimeConfig;
   contextTestState.discoveredModels = params.discoveredModels ?? [];
   contextTestState.ensureOpenClawModelsJson.mockClear();
   return { ensureOpenClawModelsJson: contextTestState.ensureOpenClawModelsJson };
 }
 
 function mockContextModuleDeps(loadConfigImpl: () => unknown) {
-  return mockContextDeps({ loadConfig: loadConfigImpl });
+  return mockContextDeps({ getRuntimeConfig: loadConfigImpl });
 }
 
 // Shared mock setup used by multiple tests.
@@ -53,7 +53,7 @@ function mockDiscoveryDeps(
   configModels?: Record<string, { models: Array<{ id: string; contextWindow: number }> }>,
 ) {
   mockContextDeps({
-    loadConfig: () => ({ models: configModels ? { providers: configModels } : {} }),
+    getRuntimeConfig: () => ({ models: configModels ? { providers: configModels } : {} }),
     discoveredModels: models,
   });
 }
@@ -222,6 +222,9 @@ describe("lookupContextTokens", () => {
     expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "logs", "--limit", "5"])).toBe(
       false,
     );
+    expect(
+      shouldEagerWarmContextWindowCache(["node", "openclaw", "memory", "search", "--json"]),
+    ).toBe(false);
     expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "status", "--json"])).toBe(false);
     expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "sessions", "--json"])).toBe(
       false,

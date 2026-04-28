@@ -1,8 +1,8 @@
 package ai.openclaw.app
 
-import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
+import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
@@ -240,13 +240,19 @@ class GatewayBootstrapAuthTest {
     error("Expected status text update")
   }
 
-  private fun desiredBootstrapToken(runtime: NodeRuntime, sessionFieldName: String): String? {
+  private fun desiredBootstrapToken(
+    runtime: NodeRuntime,
+    sessionFieldName: String,
+  ): String? {
     val session = readField<GatewaySession>(runtime, sessionFieldName)
     val desired = readField<Any?>(session, "desired") ?: return null
     return readField(desired, "bootstrapToken")
   }
 
-  private fun <T> readField(target: Any, name: String): T {
+  private fun <T> readField(
+    target: Any,
+    name: String,
+  ): T {
     var type: Class<*>? = target.javaClass
     while (type != null) {
       try {

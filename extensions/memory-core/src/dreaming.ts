@@ -1,5 +1,4 @@
-import { peekSystemEventEntries } from "openclaw/plugin-sdk/infra-runtime";
-import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   DEFAULT_MEMORY_DREAMING_FREQUENCY as DEFAULT_MEMORY_DREAMING_CRON_EXPR,
   DEFAULT_MEMORY_DEEP_DREAMING_LIMIT as DEFAULT_MEMORY_DREAMING_LIMIT,
@@ -7,13 +6,28 @@ import {
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE as DEFAULT_MEMORY_DREAMING_MIN_SCORE,
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES as DEFAULT_MEMORY_DREAMING_MIN_UNIQUE_QUERIES,
   DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS as DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS,
+  LEGACY_MEMORY_LIGHT_DREAMING_CRON_NAME as LEGACY_LIGHT_SLEEP_CRON_NAME,
+  LEGACY_MEMORY_LIGHT_DREAMING_CRON_TAG as LEGACY_LIGHT_SLEEP_CRON_TAG,
+  LEGACY_MEMORY_LIGHT_DREAMING_EVENT_TEXT as LEGACY_LIGHT_SLEEP_EVENT_TEXT,
+  LEGACY_MEMORY_REM_DREAMING_CRON_NAME as LEGACY_REM_SLEEP_CRON_NAME,
+  LEGACY_MEMORY_REM_DREAMING_CRON_TAG as LEGACY_REM_SLEEP_CRON_TAG,
+  LEGACY_MEMORY_REM_DREAMING_EVENT_TEXT as LEGACY_REM_SLEEP_EVENT_TEXT,
+  MANAGED_MEMORY_DREAMING_CRON_NAME as MANAGED_DREAMING_CRON_NAME,
+  MANAGED_MEMORY_DREAMING_CRON_TAG as MANAGED_DREAMING_CRON_TAG,
+  MEMORY_DREAMING_SYSTEM_EVENT_TEXT as DREAMING_SYSTEM_EVENT_TEXT,
   resolveMemoryCorePluginConfig,
   resolveMemoryDeepDreamingConfig,
   resolveMemoryDreamingWorkspaces,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { writeDeepDreamingReport } from "./dreaming-markdown.js";
-import { generateAndAppendDreamNarrative, type NarrativePhaseData } from "./dreaming-narrative.js";
+import {
+  generateAndAppendDreamNarrative,
+  type NarrativePhaseData,
+  runDetachedDreamNarrative,
+} from "./dreaming-narrative.js";
 import { runDreamingSweepPhases } from "./dreaming-phases.js";
 import {
   formatErrorMessage,
@@ -26,15 +40,6 @@ import {
   rankShortTermPromotionCandidates,
 } from "./short-term-promotion.js";
 
-const MANAGED_DREAMING_CRON_NAME = "Memory Dreaming Promotion";
-const MANAGED_DREAMING_CRON_TAG = "[managed-by=memory-core.short-term-promotion]";
-const DREAMING_SYSTEM_EVENT_TEXT = "__openclaw_memory_core_short_term_promotion_dream__";
-const LEGACY_LIGHT_SLEEP_CRON_NAME = "Memory Light Dreaming";
-const LEGACY_LIGHT_SLEEP_CRON_TAG = "[managed-by=memory-core.dreaming.light]";
-const LEGACY_LIGHT_SLEEP_EVENT_TEXT = "__openclaw_memory_core_light_sleep__";
-const LEGACY_REM_SLEEP_CRON_NAME = "Memory REM Dreaming";
-const LEGACY_REM_SLEEP_CRON_TAG = "[managed-by=memory-core.dreaming.rem]";
-const LEGACY_REM_SLEEP_EVENT_TEXT = "__openclaw_memory_core_rem_sleep__";
 const RUNTIME_CRON_RECONCILE_INTERVAL_MS = 60_000;
 const HEARTBEAT_ISOLATED_SESSION_SUFFIX = ":heartbeat";
 
@@ -115,6 +120,9 @@ export type ShortTermPromotionDreamingConfig = {
   storage?: {
     mode: "inline" | "separate" | "both";
     separateReports: boolean;
+  };
+  execution?: {
+    model?: string;
   };
 };
 
@@ -391,6 +399,7 @@ export function resolveShortTermPromotionDreamingConfig(params: {
     ...(typeof resolved.maxAgeDays === "number" ? { maxAgeDays: resolved.maxAgeDays } : {}),
     verboseLogging: resolved.verboseLogging,
     storage: resolved.storage,
+    ...(resolved.execution.model ? { execution: { model: resolved.execution.model } } : {}),
   };
 }
 
@@ -626,15 +635,14 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
           promotions: applied.appliedCandidates.map((c) => c.snippet).filter(Boolean),
         };
         if (detachNarratives) {
-          queueMicrotask(() => {
-            void generateAndAppendDreamNarrative({
-              subagent: params.subagent!,
-              workspaceDir,
-              data,
-              nowMs: sweepNowMs,
-              timezone: params.config.timezone,
-              logger: params.logger,
-            }).catch(() => undefined);
+          runDetachedDreamNarrative({
+            subagent: params.subagent,
+            workspaceDir,
+            data,
+            nowMs: sweepNowMs,
+            timezone: params.config.timezone,
+            model: params.config.execution?.model,
+            logger: params.logger,
           });
         } else {
           await generateAndAppendDreamNarrative({
@@ -643,6 +651,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
             data,
             nowMs: sweepNowMs,
             timezone: params.config.timezone,
+            model: params.config.execution?.model,
             logger: params.logger,
           });
         }
@@ -675,7 +684,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
   let lastRuntimeCronRef: CronServiceLike | null = null;
 
   const resolveCurrentConfig = (): OpenClawConfig =>
-    api.runtime.config?.loadConfig?.() ?? api.config;
+    (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
 
   const runtimeConfigKey = (config: ShortTermPromotionDreamingConfig): string =>
     [

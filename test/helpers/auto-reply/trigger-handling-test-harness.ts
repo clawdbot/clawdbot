@@ -414,7 +414,7 @@ export async function expectInlineCommandHandledAndStripped(params: {
   expect(text).toBe("ok");
 }
 
-export async function runGreetingPromptForBareNewOrReset(params: {
+export async function expectBareNewOrResetAcknowledged(params: {
   home: string;
   body: "/new" | "/reset";
   getReplyFromConfig: typeof import("../../../src/auto-reply/reply.js").getReplyFromConfig;
@@ -440,12 +440,8 @@ export async function runGreetingPromptForBareNewOrReset(params: {
     makeCfg(params.home),
   );
   const text = Array.isArray(res) ? res[0]?.text : res?.text;
-  expect(text).toBe("hello");
-  expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-  const prompt = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0]?.prompt ?? "";
-  expect(prompt).toContain("A new session was started via /new or /reset");
-  expect(prompt).toContain("Execute your Session Startup sequence now");
-  expect(prompt).toContain("read the required files before responding to the user");
+  expect(text).toBe(params.body === "/reset" ? "✅ Session reset." : "✅ New session started.");
+  expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
 }
 
 export function installTriggerHandlingE2eTestHooks() {

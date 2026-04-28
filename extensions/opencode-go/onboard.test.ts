@@ -1,5 +1,5 @@
+import { expectProviderOnboardPrimaryAndFallbacks } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
-import { expectProviderOnboardPrimaryAndFallbacks } from "../../test/helpers/plugins/provider-onboard.js";
 import { applyOpencodeGoConfig, applyOpencodeGoProviderConfig } from "./onboard.js";
 
 const MODEL_REF = "opencode-go/kimi-k2.6";

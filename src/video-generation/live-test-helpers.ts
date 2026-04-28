@@ -13,6 +13,7 @@ export { parseProviderModelMap, redactLiveApiKey };
 export const DEFAULT_LIVE_VIDEO_MODELS: Record<string, string> = {
   alibaba: "alibaba/wan2.6-t2v",
   byteplus: "byteplus/seedance-1-0-lite-t2v-250428",
+  deepinfra: "deepinfra/Pixverse/Pixverse-T2V",
   fal: "fal/fal-ai/minimax/video-01-live",
   google: "google/veo-3.1-fast-generate-preview",
   minimax: "minimax/MiniMax-Hailuo-2.3",

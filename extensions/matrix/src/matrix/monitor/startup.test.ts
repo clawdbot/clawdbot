@@ -127,8 +127,8 @@ describe("runMatrixStartupMaintenance", () => {
         error: vi.fn(),
       },
       logVerboseMessage: vi.fn(),
-      loadConfig: vi.fn(() => ({ channels: { matrix: {} } })),
-      writeConfigFile: vi.fn(async () => {}),
+      getRuntimeConfig: vi.fn(() => ({ channels: { matrix: {} } })),
+      replaceConfigFile: vi.fn(async () => {}),
       loadWebMedia: vi.fn(async () => ({
         buffer: Buffer.from("avatar"),
         contentType: "image/png",
@@ -166,7 +166,7 @@ describe("runMatrixStartupMaintenance", () => {
       "ops",
       { avatarUrl: "mxc://avatar" },
     );
-    expect(params.writeConfigFile).toHaveBeenCalledWith(updatedCfg as never);
+    expect(params.replaceConfigFile).toHaveBeenCalledWith(updatedCfg as never);
     expect(params.logVerboseMessage).toHaveBeenCalledWith(
       "matrix: persisted converted avatar URL for account ops (mxc://avatar)",
     );

@@ -62,7 +62,7 @@ final class MotionService: MotionServicing {
 
         let (start, end) = Self.resolveRange(startISO: params.startISO, endISO: params.endISO)
         let pedometer = CMPedometer()
-        let payload: OpenClawPedometerPayload = try await withCheckedThrowingContinuation { cont in
+        return try await withCheckedThrowingContinuation { cont in
             pedometer.queryPedometerData(from: start, to: end) { data, error in
                 if let error {
                     cont.resume(throwing: error)
@@ -79,7 +79,6 @@ final class MotionService: MotionServicing {
                 }
             }
         }
-        return payload
     }
 
     private static func resolveRange(startISO: String?, endISO: String?) -> (Date, Date) {

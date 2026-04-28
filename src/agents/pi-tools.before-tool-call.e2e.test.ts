@@ -245,6 +245,32 @@ describe("before_tool_call loop detection behavior", () => {
     ).rejects.toThrow("global circuit breaker");
   });
 
+  it("does not carry loop history across run ids", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "same output" }],
+      details: { ok: true },
+    });
+    const params = { path: "/tmp/file" };
+    const firstRunTool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      ...enabledLoopDetectionContext,
+      runId: "heartbeat-1",
+    });
+    const secondRunTool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      ...enabledLoopDetectionContext,
+      runId: "heartbeat-2",
+    });
+
+    for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+      await expect(
+        firstRunTool.execute(`old-run-${i}`, params, undefined, undefined),
+      ).resolves.toBeDefined();
+    }
+
+    await expect(
+      secondRunTool.execute("new-run-0", params, undefined, undefined),
+    ).resolves.toBeDefined();
+  });
+
   it("coalesces repeated generic warning events into threshold buckets", async () => {
     await withToolLoopEvents(
       async (emitted) => {
@@ -438,6 +464,43 @@ describe("before_tool_call loop detection behavior", () => {
         errorCategory: "Error",
       });
       expect(JSON.stringify(emitted[1])).not.toContain("sk-1234567890abcdef1234567890abcdef");
+    });
+  });
+
+  it("emits blocked diagnostics without error severity for intentional hook vetoes", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      block: true,
+      blockReason: "blocked by policy",
+    });
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "nope" }] });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+
+    await withToolExecutionEvents(async (emitted, flush) => {
+      const result = await tool.execute("tool-call-blocked", { path: "/tmp/file" });
+      await flush();
+
+      expect(result).toEqual({
+        content: [{ type: "text", text: "blocked by policy" }],
+        details: {
+          status: "blocked",
+          deniedReason: "plugin-before-tool-call",
+          reason: "blocked by policy",
+        },
+      });
+      expect(execute).not.toHaveBeenCalled();
+      expect(emitted.map((evt) => evt.type)).toEqual(["tool.execution.blocked"]);
+      expect(emitted[0]).toMatchObject({
+        type: "tool.execution.blocked",
+        toolName: "read",
+        toolCallId: "tool-call-blocked",
+        deniedReason: "plugin-before-tool-call",
+        reason: "blocked by policy",
+      });
     });
   });
 

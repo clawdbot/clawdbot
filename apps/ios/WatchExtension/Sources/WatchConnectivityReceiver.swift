@@ -1,7 +1,7 @@
 import Foundation
 import WatchConnectivity
 
-struct WatchReplyDraft: Sendable {
+struct WatchReplyDraft {
     var replyId: String
     var promptId: String
     var actionId: String
@@ -11,7 +11,7 @@ struct WatchReplyDraft: Sendable {
     var sentAtMs: Int
 }
 
-struct WatchReplySendResult: Sendable, Equatable {
+struct WatchReplySendResult: Equatable {
     var deliveredImmediately: Bool
     var queuedForDelivery: Bool
     var transport: String
@@ -19,6 +19,8 @@ struct WatchReplySendResult: Sendable, Equatable {
 }
 
 final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
+    private typealias MessageSendContinuation = CheckedContinuation<Void, Error>
+
     private let store: WatchInboxStore
     private let session: WCSession?
 
@@ -61,14 +63,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         let payload = Self.encodeSnapshotRequestPayload(request)
         if session.isReachable {
             do {
-                try await withCheckedThrowingContinuation(isolation: nil) {
-                    (continuation: CheckedContinuation<Void, Error>) in
-                    session.sendMessage(payload, replyHandler: { _ in
-                        continuation.resume(returning: ())
-                    }, errorHandler: { error in
-                        continuation.resume(throwing: error)
-                    })
-                }
+                try await Self.sendMessage(payload, through: session)
                 return
             } catch {
                 // Fall through to queued delivery.
@@ -136,14 +131,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
     private func sendPayload(_ payload: [String: Any], session: WCSession) async -> WatchReplySendResult {
         if session.isReachable {
             do {
-                try await withCheckedThrowingContinuation(isolation: nil) {
-                    (continuation: CheckedContinuation<Void, Error>) in
-                    session.sendMessage(payload, replyHandler: { _ in
-                        continuation.resume(returning: ())
-                    }, errorHandler: { error in
-                        continuation.resume(throwing: error)
-                    })
-                }
+                try await Self.sendMessage(payload, through: session)
                 return WatchReplySendResult(
                     deliveredImmediately: true,
                     queuedForDelivery: false,
@@ -160,6 +148,15 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             queuedForDelivery: true,
             transport: "transferUserInfo",
             errorMessage: nil)
+    }
+
+    private static func sendMessage(_ payload: [String: Any], through session: WCSession) async throws {
+        try await withCheckedThrowingContinuation(isolation: nil) { (continuation: MessageSendContinuation) in
+            session.sendMessage(
+                payload,
+                replyHandler: { _ in continuation.resume(returning: ()) },
+                errorHandler: { error in continuation.resume(throwing: error) })
+        }
     }
 
     private static func nowMs() -> Int {
@@ -254,7 +251,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
     }
 
     private static func parseExecApprovalItem(_ value: Any?) -> WatchExecApprovalItem? {
-        guard let payload = value.flatMap(Self.normalizeObject) else {
+        guard let payload = value.flatMap(normalizeObject) else {
             return nil
         }
         let id = (payload["id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -291,7 +288,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
     {
         guard let type = payload["type"] as? String,
               type == WatchPayloadType.execApprovalPrompt.rawValue,
-              let approval = Self.parseExecApprovalItem(payload["approval"])
+              let approval = parseExecApprovalItem(payload["approval"])
         else {
             return nil
         }

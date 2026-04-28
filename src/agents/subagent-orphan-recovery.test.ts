@@ -12,7 +12,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 // Mock dependencies before importing the module under test
 vi.mock("../config/config.js", () => ({
-  loadConfig: vi.fn(() => ({
+  getRuntimeConfig: vi.fn(() => ({
     session: { store: undefined },
   })),
 }));

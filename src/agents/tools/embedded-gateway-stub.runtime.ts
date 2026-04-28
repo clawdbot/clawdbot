@@ -1,5 +1,5 @@
 export { resolveSessionAgentId } from "../../agents/agent-scope.js";
-export { loadConfig } from "../../config/config.js";
+export { getRuntimeConfig } from "../../config/config.js";
 export {
   projectRecentChatDisplayMessages,
   resolveEffectiveChatHistoryMaxChars,

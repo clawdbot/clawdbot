@@ -1295,21 +1295,86 @@
   accent-color: var(--accent);
 }
 
-.cron-run-entry {
-  align-items: start;
+.list-item.cron-run-entry {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.cron-run-entry__header {
+  display: flex;
+  flex-direction: column;
+  align-items: baseline;
+  gap: 8px;
+  padding: 12px;
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--secondary);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  border-bottom: 1px solid var(--border);
+}
+
+@media (min-width: 1101px) {
+  .cron-run-entry__header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(200px, 260px);
+    gap: 16px;
+    align-items: start;
+  }
+}
+
+:root[data-theme-mode="light"] .cron-run-entry__header {
+  background: var(--bg-muted);
 }
 
 .cron-run-entry__meta {
   text-align: right;
-  min-width: 220px;
+  min-width: 0;
 }
 
-.cron-run-entry__summary {
-  white-space: pre-wrap;
+.cron-run-entry__body {
+  padding: 12px;
   line-height: 1.45;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 @media (max-width: 1100px) {
+  .cron-job.list-item {
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    overflow: hidden;
+    max-width: 100%;
+  }
+
+  .cron-job .cron-job-header {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+    width: 100%;
+  }
+
+  .cron-job .list-meta {
+    min-width: 0;
+  }
+
+  .cron-job .cron-job-header .cron-job-state {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 16px;
+  }
+
+  .cron-job .cron-job-detail,
+  .cron-job .cron-job-footer {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
   .cron-summary-strip {
     flex-direction: column;
   }
@@ -1372,6 +1437,27 @@
   .cron-run-entry__meta {
     min-width: 0;
     text-align: left;
+  }
+
+  .list-item.cron-run-entry {
+    padding: 0;
+  }
+
+  .cron-run-entry__header {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .cron-run-entry__body {
+    padding: 10px;
+  }
+
+  .cron-run-entry__body pre,
+  .cron-run-entry__body table {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
   }
 }
 
@@ -1852,17 +1938,40 @@
 .cron-job {
   grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
   grid-template-areas:
-    "main meta"
+    "header header"
+    "payload payload"
     "footer footer";
-  row-gap: 10px;
+  row-gap: 0;
+  padding: 0;
+  overflow: hidden;
 }
 
-.cron-job .list-main {
-  grid-area: main;
+.cron-job .cron-job-header {
+  grid-area: header;
+  display: flex;
+  flex-direction: column;
+  align-items: baseline;
+  gap: 8px;
+  padding: 12px;
+  background: var(--secondary);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  border-bottom: 1px solid var(--border);
+}
+
+@media (min-width: 1101px) {
+  .cron-job .cron-job-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
+    gap: 16px;
+    align-items: start;
+  }
+}
+
+:root[data-theme-mode="light"] .cron-job .cron-job-header {
+  background: var(--bg-muted);
 }
 
 .cron-job .list-meta {
-  grid-area: meta;
   min-width: 240px;
   gap: 8px;
 }
@@ -1873,8 +1982,8 @@
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-  border-top: 1px solid var(--border);
-  padding-top: 10px;
+  border-top: none;
+  padding: 4px 12px 12px;
 }
 
 .cron-job-chips {
@@ -1882,9 +1991,18 @@
 }
 
 .cron-job-detail {
+  grid-area: payload;
+  display: grid;
+  gap: 8px;
+  margin-top: 2px;
+  padding: 8px 12px 12px;
+  overflow: hidden;
+}
+
+.cron-job-detail-section {
   display: grid;
   gap: 3px;
-  margin-top: 2px;
+  min-width: 0;
 }
 
 .cron-job-detail-label {
@@ -1893,11 +2011,17 @@
   font-weight: 600;
   letter-spacing: 0.03em;
   text-transform: uppercase;
+  padding: 4px 8px;
+  background: var(--secondary);
+  border-radius: var(--radius-sm);
+  display: inline-block;
+  width: fit-content;
 }
 
 .cron-job-detail-value {
   font-size: 13px;
   line-height: 1.35;
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 
@@ -1988,8 +2112,8 @@
   .cron-job {
     grid-template-columns: 1fr;
     grid-template-areas:
-      "main"
-      "meta"
+      "header"
+      "payload"
       "footer";
   }
 
@@ -2889,6 +3013,101 @@ td.data-table-key-col {
   font-weight: 500;
   color: var(--muted);
   background: var(--secondary);
+}
+
+/* Cron markdown overrides must come after .chat-text rules to win cascade. */
+.cron-run-entry__body.chat-text table,
+.cron-job-detail-value.chat-text table {
+  display: table;
+  width: 100%;
+}
+
+.cron-run-entry__body.chat-text pre,
+.cron-run-entry__body.chat-text blockquote,
+.cron-job-detail-value.chat-text pre,
+.cron-job-detail-value.chat-text blockquote {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.cron-run-entry__body.chat-text pre + p,
+.cron-run-entry__body.chat-text blockquote + p,
+.cron-run-entry__body.chat-text table + p,
+.cron-run-entry__body.chat-text p + pre,
+.cron-run-entry__body.chat-text p + blockquote,
+.cron-run-entry__body.chat-text p + table,
+.cron-job-detail-value.chat-text pre + p,
+.cron-job-detail-value.chat-text blockquote + p,
+.cron-job-detail-value.chat-text table + p,
+.cron-job-detail-value.chat-text p + pre,
+.cron-job-detail-value.chat-text p + blockquote,
+.cron-job-detail-value.chat-text p + table {
+  margin-top: 0.75em;
+}
+
+.cron-run-entry__body.chat-text pre,
+.cron-run-entry__body.chat-text blockquote,
+.cron-run-entry__body.chat-text table,
+.cron-job-detail-value.chat-text pre,
+.cron-job-detail-value.chat-text blockquote,
+.cron-job-detail-value.chat-text table {
+  margin-bottom: 0.75em;
+}
+
+.cron-run-entry__body.chat-text > :last-child,
+.cron-job-detail-value.chat-text > :last-child {
+  margin-bottom: 0;
+}
+
+@media (max-width: 600px) {
+  .cron-job .cron-job-header {
+    padding: 10px;
+    gap: 6px;
+  }
+
+  .cron-job .cron-job-header .cron-job-state {
+    gap: 4px 12px;
+  }
+
+  .cron-job .cron-job-detail {
+    padding: 10px;
+  }
+
+  .cron-job .cron-job-detail-value {
+    font-size: 13px;
+    overflow-x: auto;
+  }
+
+  .cron-job .cron-job-detail-value table,
+  .cron-run-entry__body table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .cron-job .cron-job-detail-value pre {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .cron-job .cron-job-footer {
+    padding: 8px 10px 10px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    flex-wrap: nowrap;
+    gap: 8px;
+  }
+
+  .cron-job .cron-job-footer .chip-row,
+  .cron-job .cron-job-footer .cron-job-actions {
+    flex-wrap: nowrap;
+    flex-shrink: 0;
+  }
+
+  .cron-job .cron-job-footer .cron-job-actions {
+    gap: 6px;
+  }
 }
 
 /* Tool cards */

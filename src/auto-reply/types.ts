@@ -3,6 +3,7 @@ export type {
   GetReplyOptions,
   ModelSelectedContext,
   ReplyThreadingPolicy,
+  SourceReplyDeliveryMode,
   TypingPolicy,
 } from "./get-reply-options.types.js";
 export { getReplyPayloadMetadata, setReplyPayloadMetadata } from "./reply-payload.js";

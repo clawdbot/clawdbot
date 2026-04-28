@@ -37,37 +37,28 @@ describe("resolveOpenAICompletionsCompatDefaults", () => {
     ).toBe(false);
   });
 
-  it.each([
-    "vllm",
-    "localai",
-    "sglang",
-    "llama-cpp",
-    "llama.cpp",
-    "llamacpp",
-    "jan",
-    "lmstudio",
-    "lm-studio",
-    "text-generation-webui",
-    "tabby",
-    "tabbyapi",
-  ])("enables streaming usage compat for known local provider %s", (provider) => {
-    expect(
-      resolveOpenAICompletionsCompatDefaults({
-        provider,
-        endpointClass: "custom",
-        knownProviderFamily: provider,
-      }).supportsUsageInStreaming,
-    ).toBe(true);
-  });
+  it.each(["vllm", "sglang", "lmstudio"])(
+    "enables streaming usage compat for manifest-declared local provider %s",
+    (provider) => {
+      expect(
+        resolveOpenAICompletionsCompatDefaults({
+          provider,
+          endpointClass: "custom",
+          knownProviderFamily: provider,
+          supportsOpenAICompletionsStreamingUsageCompat: true,
+        }).supportsUsageInStreaming,
+      ).toBe(true);
+    },
+  );
 
-  it("matches known local providers case-insensitively", () => {
+  it("does not infer local streaming usage from provider id alone", () => {
     expect(
       resolveOpenAICompletionsCompatDefaults({
-        provider: "vLLM",
-        endpointClass: "local",
+        provider: "vllm",
+        endpointClass: "custom",
         knownProviderFamily: "vllm",
       }).supportsUsageInStreaming,
-    ).toBe(true);
+    ).toBe(false);
   });
 });
 

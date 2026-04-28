@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import {
   createBundledRuntimeDepsWritableInstallSpecs,
-  repairBundledRuntimeDepsInstallRoot,
+  repairBundledRuntimeDepsInstallRootAsync,
   resolveBundledRuntimeDependencyPackageInstallRootPlan,
   scanBundledPluginRuntimeDeps,
   type BundledRuntimeDepsInstallParams,
@@ -14,6 +14,25 @@ import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
+const RUNTIME_DEPS_INSTALL_HEARTBEAT_MS = 15_000;
+
+function formatElapsedMs(elapsedMs: number): string {
+  if (elapsedMs < 1000) {
+    return `${elapsedMs}ms`;
+  }
+  const seconds = Math.round(elapsedMs / 1000);
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
+}
+
+function logRuntimeDepsInstallProgress(runtime: RuntimeEnv, message: string): void {
+  runtime.log(message);
+}
+
 export async function maybeRepairBundledPluginRuntimeDeps(params: {
   runtime: RuntimeEnv;
   prompter: DoctorPrompter;
@@ -21,7 +40,7 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
   env?: NodeJS.ProcessEnv;
   packageRoot?: string | null;
   includeConfiguredChannels?: boolean;
-  installDeps?: (params: BundledRuntimeDepsInstallParams) => void;
+  installDeps?: (params: BundledRuntimeDepsInstallParams) => void | Promise<void>;
 }): Promise<void> {
   const packageRoot =
     params.packageRoot ??
@@ -104,18 +123,52 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
     return;
   }
 
+  let heartbeat: NodeJS.Timeout | undefined;
+  let progress: { setLabel: (label: string) => void; done: () => void } | undefined;
   try {
-    const result = repairBundledRuntimeDepsInstallRoot({
+    const { createCliProgress } = await import("../cli/progress.js");
+    progress = createCliProgress({
+      label: `Installing bundled plugin runtime deps (${missingSpecs.length})`,
+      indeterminate: true,
+      enabled: process.env.VITEST !== "true" || process.env.OPENCLAW_TEST_RUNTIME_LOG === "1",
+    });
+    const installStartedAt = Date.now();
+    logRuntimeDepsInstallProgress(
+      params.runtime,
+      `Installing bundled plugin runtime deps (${missingSpecs.length} missing, ${installSpecs.length} install specs): ${missingSpecs.join(", ")}`,
+    );
+    heartbeat = setInterval(() => {
+      logRuntimeDepsInstallProgress(
+        params.runtime,
+        `Still installing bundled plugin runtime deps after ${formatElapsedMs(Date.now() - installStartedAt)}...`,
+      );
+    }, RUNTIME_DEPS_INSTALL_HEARTBEAT_MS);
+    heartbeat.unref?.();
+    const result = await repairBundledRuntimeDepsInstallRootAsync({
       installRoot: installRootPlan.installRoot,
       missingSpecs,
       installSpecs,
       env: params.env ?? process.env,
-      installDeps: params.installDeps,
-      warn: (message) => params.runtime.log(message),
+      installDeps: params.installDeps
+        ? async (installParams) => {
+            await params.installDeps?.(installParams);
+          }
+        : undefined,
+      warn: (message) => logRuntimeDepsInstallProgress(params.runtime, message),
+      onProgress: (message) => progress?.setLabel(message),
     });
+    logRuntimeDepsInstallProgress(
+      params.runtime,
+      `Installed bundled plugin runtime deps in ${formatElapsedMs(Date.now() - installStartedAt)}: ${result.installSpecs.join(", ")}`,
+    );
     note(`Installed bundled plugin deps: ${result.installSpecs.join(", ")}`, "Bundled plugins");
   } catch (error) {
     params.runtime.error(`Failed to install bundled plugin runtime deps: ${String(error)}`);
     throw error instanceof Error ? error : new Error(String(error));
+  } finally {
+    if (heartbeat) {
+      clearInterval(heartbeat);
+    }
+    progress?.done();
   }
 }

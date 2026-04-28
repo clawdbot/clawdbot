@@ -510,36 +510,41 @@ export class AcpxRuntime implements AcpRuntime {
   ): Promise<void> {
     const delegate = await this.resolveDelegateForHandle(input.handle);
     const command = await this.resolveCommandForHandle(input.handle);
-    if (
-      (input.key === "model" ||
-        input.key === "thinking" ||
-        input.key === "thought_level" ||
-        input.key === "reasoning_effort") &&
-      isCodexAcpCommand(command)
-    ) {
-      const override =
-        input.key === "model"
-          ? normalizeCodexAcpModelOverride(input.value)
-          : normalizeCodexAcpModelOverride(undefined, input.value);
-      if (!override && input.key !== "model") {
+    const key = input.key.trim().toLowerCase();
+    if (isCodexAcpCommand(command)) {
+      if (key === "timeout" || key === "timeout_seconds") {
         return;
       }
-      if (override) {
-        if (override.model) {
-          await delegate.setConfigOption({
-            ...input,
-            key: "model",
-            value: override.model,
-          });
+      if (
+        key === "model" ||
+        key === "thinking" ||
+        key === "thought_level" ||
+        key === "reasoning_effort"
+      ) {
+        const override =
+          key === "model"
+            ? normalizeCodexAcpModelOverride(input.value)
+            : normalizeCodexAcpModelOverride(undefined, input.value);
+        if (!override && key !== "model") {
+          return;
         }
-        if (override.reasoningEffort) {
-          await delegate.setConfigOption({
-            ...input,
-            key: "reasoning_effort",
-            value: override.reasoningEffort,
-          });
+        if (override) {
+          if (override.model) {
+            await delegate.setConfigOption({
+              ...input,
+              key: "model",
+              value: override.model,
+            });
+          }
+          if (override.reasoningEffort) {
+            await delegate.setConfigOption({
+              ...input,
+              key: "reasoning_effort",
+              value: override.reasoningEffort,
+            });
+          }
+          return;
         }
-        return;
       }
     }
     await delegate.setConfigOption(input);

@@ -725,7 +725,9 @@ async function loadModelCatalog(
   opts?: { allowFailure?: boolean },
 ): Promise<ModelCatalogEntry[]> {
   try {
-    const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {});
+    const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {
+      view: "configured",
+    });
     return result?.models ?? [];
   } catch (err) {
     if (opts?.allowFailure) {

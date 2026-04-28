@@ -30,7 +30,13 @@ internal object JpegSizeLimiter {
     var width = initialWidth
     var height = initialHeight
     val clampedStartQuality = startQuality.coerceIn(minQuality, 100)
-    var best = JpegSizeLimiterResult(bytes = encode(width, height, clampedStartQuality), width = width, height = height, quality = clampedStartQuality)
+    var best =
+      JpegSizeLimiterResult(
+        bytes = encode(width, height, clampedStartQuality),
+        width = width,
+        height = height,
+        quality = clampedStartQuality,
+      )
     if (best.bytes.size <= maxBytes) return best
 
     repeat(maxScaleAttempts) {

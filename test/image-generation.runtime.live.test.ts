@@ -1,3 +1,7 @@
+import {
+  registerProviderPlugin,
+  requireRegisteredProvider,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
 import { resolveOpenClawAgentDir } from "../src/agents/agent-paths.js";
 import { collectProviderApiKeys } from "../src/agents/live-auth-keys.js";
@@ -18,10 +22,6 @@ import { getShellEnvAppliedKeys } from "../src/infra/shell-env.js";
 import { encodePngRgba, fillPixel } from "../src/media/png-encode.js";
 import { maybeLoadShellEnvForGenerationProviders } from "../src/test-utils/generation-live-test-helpers.js";
 import { loadBundledProviderPlugin as loadBundledProviderPluginFromTestHelper } from "./helpers/media-generation/bundled-provider-builders.js";
-import {
-  registerProviderPlugin,
-  requireRegisteredProvider,
-} from "./helpers/plugins/provider-registration.js";
 
 const LIVE = isLiveTestEnabled();
 const REQUIRE_PROFILE_KEYS =
@@ -54,6 +54,11 @@ function loadBundledProviderPlugin(
 }
 
 const PROVIDER_CASES: LiveProviderCase[] = [
+  {
+    pluginId: "deepinfra",
+    pluginName: "DeepInfra Provider",
+    providerId: "deepinfra",
+  },
   {
     pluginId: "fal",
     pluginName: "fal Provider",

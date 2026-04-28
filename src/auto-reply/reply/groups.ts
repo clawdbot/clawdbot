@@ -7,6 +7,7 @@ import {
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import type { TemplateContext } from "../templating.js";
 import { extractExplicitGroupId } from "./group-id.js";
@@ -217,14 +218,63 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
   return `${providerKey.at(0)?.toUpperCase() ?? ""}${providerKey.slice(1)}`;
 }
 
-export function buildGroupChatContext(params: { sessionCtx: TemplateContext }): string {
+export function buildGroupChatContext(params: {
+  sessionCtx: TemplateContext;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  silentReplyPolicy?: SilentReplyPolicy;
+  silentReplyRewrite?: boolean;
+  silentToken?: string;
+}): string {
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
+  const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
 
   const lines: string[] = [];
   lines.push(`You are in a ${providerLabel} group chat.`);
+  if (messageToolOnly) {
+    lines.push(
+      "Normal final replies are private and are not automatically sent to this group chat. To post visible output here, use the message tool with action=send; the target defaults to this group chat.",
+    );
+  } else {
+    lines.push(
+      "Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group - just reply normally.",
+    );
+  }
   lines.push(
-    "Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group - just reply normally.",
+    "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.",
   );
+  lines.push(
+    "Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.",
+  );
+  const canUseSilentReply =
+    !messageToolOnly &&
+    params.silentToken &&
+    (params.silentReplyPolicy !== "disallow" || params.silentReplyRewrite === true);
+  if (messageToolOnly) {
+    lines.push(
+      "If no visible group response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the group.",
+    );
+  }
+  if (canUseSilentReply) {
+    if (params.silentReplyPolicy === "allow") {
+      lines.push(
+        `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so OpenClaw stays silent.`,
+      );
+      lines.push("Be extremely selective: reply only when directly addressed or clearly helpful.");
+    } else {
+      lines.push(
+        `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so OpenClaw can send a short fallback reply.`,
+      );
+    }
+    lines.push(
+      "Do not add any other words, punctuation, tags, markdown/code blocks, or explanations.",
+    );
+    lines.push(
+      `If you only react or otherwise handle the message without a text reply, your final answer must still be exactly "${params.silentToken}". Never say that you are staying quiet, keeping channel noise low, making a context-only note, or sending no channel reply.`,
+    );
+    lines.push(
+      `Any prose describing silence is wrong; the whole final answer must be only "${params.silentToken}".`,
+    );
+  }
   return lines.join(" ");
 }
 
@@ -282,31 +332,10 @@ export function buildGroupIntro(params: {
   silentReplyPolicy?: SilentReplyPolicy;
   silentReplyRewrite?: boolean;
 }): string {
-  const { activation, canUseSilentReply } = resolveGroupSilentReplyBehavior(params);
+  const { activation } = resolveGroupSilentReplyBehavior(params);
   const activationLine =
     activation === "always"
       ? "Activation: always-on (you receive every group message)."
       : "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included).";
-  const silenceLine =
-    activation === "always" && canUseSilentReply
-      ? params.silentReplyPolicy === "allow"
-        ? `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so OpenClaw stays silent. Do not add any other words, punctuation, tags, markdown/code blocks, or explanations.`
-        : `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so OpenClaw can send a short fallback reply. Do not add any other words, punctuation, tags, markdown/code blocks, or explanations.`
-      : undefined;
-  const toolSilenceLine =
-    activation === "always" && canUseSilentReply
-      ? `If you only react or otherwise handle the message without a text reply, your final answer must still be exactly "${params.silentToken}". Never say that you are staying quiet, keeping channel noise low, making a context-only note, or sending no channel reply.`
-      : undefined;
-  const cautionLine =
-    activation === "always" && params.silentReplyPolicy === "allow"
-      ? "Be extremely selective: reply only when directly addressed or clearly helpful."
-      : undefined;
-  const lurkLine =
-    "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.";
-  const styleLine =
-    "Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.";
-  return [activationLine, silenceLine, toolSilenceLine, cautionLine, lurkLine, styleLine]
-    .filter(Boolean)
-    .join(" ")
-    .concat(" Address the specific sender noted in the message context.");
+  return `${activationLine} Address the specific sender noted in the message context.`;
 }

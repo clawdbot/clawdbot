@@ -1,7 +1,10 @@
-import fs from "node:fs";
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
 import type { GatewayBindMode } from "../config/types.gateway.js";
+import {
+  __resetContainerEnvironmentCacheForTest,
+  isContainerEnvironment,
+} from "../infra/container-environment.js";
 import {
   pickMatchingExternalInterfaceAddress,
   readNetworkInterfaces,
@@ -228,60 +231,10 @@ export function isLocalGatewayAddress(ip: string | undefined): boolean {
   return false;
 }
 
-/**
- * Detect whether the current process is running inside a container
- * (Docker, Podman, or Kubernetes).
- *
- * Uses two reliable heuristics:
- * 1. Presence of well-known container sentinel files such as `/.dockerenv`
- *    (Docker) or `/run/.containerenv` (Podman).
- * 2. Presence of container-related cgroup entries in `/proc/1/cgroup`
- *    (covers Docker, containerd, and Kubernetes pods).
- *
- * The result is cached after the first call so filesystem access
- * happens at most once per process lifetime.
- */
-let _containerCacheResult: boolean | undefined;
-export function isContainerEnvironment(): boolean {
-  if (_containerCacheResult !== undefined) {
-    return _containerCacheResult;
-  }
-  _containerCacheResult = detectContainerEnvironment();
-  return _containerCacheResult;
-}
-
-function detectContainerEnvironment(): boolean {
-  // 1. Check common Docker/Podman container sentinel files.
-  for (const sentinelPath of ["/.dockerenv", "/run/.containerenv", "/var/run/.containerenv"]) {
-    try {
-      fs.accessSync(sentinelPath, fs.constants.F_OK);
-      return true;
-    } catch {
-      // not present — continue
-    }
-  }
-  // 2. /proc/1/cgroup contains docker, containerd, kubepods, or lxc markers.
-  //    Covers both cgroup v1 (/docker/<id>, /kubepods/...) and cgroup v2
-  //    (kubepods.slice, cri-containerd-<id>.scope) path formats.
-  try {
-    const cgroup = fs.readFileSync("/proc/1/cgroup", "utf8");
-    if (
-      /\/docker\/|cri-containerd-[0-9a-f]|containerd\/[0-9a-f]{64}|\/kubepods[/.]|\blxc\b/.test(
-        cgroup,
-      )
-    ) {
-      return true;
-    }
-  } catch {
-    // /proc may not exist (macOS, Windows) — not a container
-  }
-  return false;
-}
-
-/** @internal — test-only helper to reset the cached container detection result. */
-export function __resetContainerCacheForTest(): void {
-  _containerCacheResult = undefined;
-}
+export {
+  isContainerEnvironment,
+  __resetContainerEnvironmentCacheForTest as __resetContainerCacheForTest,
+};
 
 /**
  * Resolves gateway bind host with fallback strategy.

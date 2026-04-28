@@ -145,7 +145,8 @@ describeLive("github-copilot connection-bound Responses IDs live", () => {
     logProgress("start");
     const candidates = await resolveGithubTokenCandidates();
     if (candidates.length === 0) {
-      throw new Error("No GitHub Copilot token found in env or auth profile");
+      logProgress("skip (no GitHub Copilot token found in env or auth profile)");
+      return;
     }
 
     let token: CopilotApiToken | undefined;

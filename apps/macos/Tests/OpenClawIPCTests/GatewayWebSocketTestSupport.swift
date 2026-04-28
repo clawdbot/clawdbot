@@ -45,6 +45,7 @@ enum GatewayWebSocketTestSupport {
               "stateVersion": { "presence": 0, "health": 0 },
               "uptimeMs": 0
             },
+            "auth": { "role": "operator", "scopes": [] },
             "policy": { "maxPayload": 1, "maxBufferedBytes": 1, "tickIntervalMs": 30000 }
           }
         }
@@ -59,14 +60,13 @@ enum GatewayWebSocketTestSupport {
         canRetryWithDeviceToken: Bool = false,
         recommendedNextStep: String? = nil) -> Data
     {
-        let recommendedNextStepJson: String
-        if let recommendedNextStep {
-            recommendedNextStepJson = """
+        let recommendedNextStepJson = if let recommendedNextStep {
+            """
             ,
                           "recommendedNextStep": "\(recommendedNextStep)"
             """
         } else {
-            recommendedNextStepJson = ""
+            ""
         }
         let json = """
         {

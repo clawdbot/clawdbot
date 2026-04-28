@@ -1,7 +1,7 @@
 package ai.openclaw.app.node
 
-import android.content.Context
 import ai.openclaw.app.gateway.GatewaySession
+import android.content.Context
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -15,7 +15,10 @@ internal interface NotificationsStateProvider {
 
   fun requestServiceRebind(context: Context)
 
-  fun executeAction(context: Context, request: NotificationActionRequest): NotificationActionResult
+  fun executeAction(
+    context: Context,
+    request: NotificationActionRequest,
+  ): NotificationActionResult
 }
 
 private object SystemNotificationsStateProvider : NotificationsStateProvider {
@@ -35,9 +38,10 @@ private object SystemNotificationsStateProvider : NotificationsStateProvider {
     DeviceNotificationListenerService.requestServiceRebind(context)
   }
 
-  override fun executeAction(context: Context, request: NotificationActionRequest): NotificationActionResult {
-    return DeviceNotificationListenerService.executeAction(context, request)
-  }
+  override fun executeAction(
+    context: Context,
+    request: NotificationActionRequest,
+  ): NotificationActionResult = DeviceNotificationListenerService.executeAction(context, request)
 }
 
 class NotificationsHandler private constructor(
@@ -54,11 +58,12 @@ class NotificationsHandler private constructor(
   suspend fun handleNotificationsActions(paramsJson: String?): GatewaySession.InvokeResult {
     readSnapshotWithRebind()
 
-    val params = parseParamsObject(paramsJson)
-      ?: return GatewaySession.InvokeResult.error(
-        code = "INVALID_REQUEST",
-        message = "INVALID_REQUEST: expected JSON object",
-      )
+    val params =
+      parseParamsObject(paramsJson)
+        ?: return GatewaySession.InvokeResult.error(
+          code = "INVALID_REQUEST",
+          message = "INVALID_REQUEST: expected JSON object",
+        )
     val key =
       readString(params, "key")
         ?: return GatewaySession.InvokeResult.error(
@@ -123,8 +128,8 @@ class NotificationsHandler private constructor(
     return snapshot
   }
 
-  private fun snapshotPayloadJson(snapshot: DeviceNotificationSnapshot): String {
-    return buildJsonObject {
+  private fun snapshotPayloadJson(snapshot: DeviceNotificationSnapshot): String =
+    buildJsonObject {
       put("enabled", JsonPrimitive(snapshot.enabled))
       put("connected", JsonPrimitive(snapshot.connected))
       put("count", JsonPrimitive(snapshot.notifications.size))
@@ -135,7 +140,6 @@ class NotificationsHandler private constructor(
         ),
       )
     }.toString()
-  }
 
   private fun parseParamsObject(paramsJson: String?): JsonObject? {
     if (paramsJson.isNullOrBlank()) return null
@@ -146,7 +150,10 @@ class NotificationsHandler private constructor(
     }
   }
 
-  private fun readString(params: JsonObject, key: String): String? =
+  private fun readString(
+    params: JsonObject,
+    key: String,
+  ): String? =
     (params[key] as? JsonPrimitive)
       ?.contentOrNull
       ?.trim()

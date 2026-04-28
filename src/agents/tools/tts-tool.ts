@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { textToSpeech } from "../../tts/tts.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
@@ -71,7 +71,7 @@ export function createTtsTool(opts?: {
       const text = readStringParam(params, "text", { required: true });
       const channel = readStringParam(params, "channel");
       const timeoutMs = readTtsTimeoutMs(params);
-      const cfg = opts?.config ?? loadConfig();
+      const cfg = opts?.config ?? getRuntimeConfig();
       const result = await textToSpeech({
         text,
         cfg,

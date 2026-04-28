@@ -133,6 +133,7 @@ export type GatewayWsSharedHandlerParams = {
   browserRateLimiter?: AuthRateLimiter;
   gatewayMethods: string[];
   events: string[];
+  refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
 };
 
 export type AttachGatewayWsConnectionHandlerParams = GatewayWsSharedHandlerParams & {
@@ -168,6 +169,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     browserRateLimiter,
     gatewayMethods,
     events,
+    refreshHealthSnapshot,
     logGateway,
     logHealth,
     logWsControl,
@@ -402,15 +404,20 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       events,
       extraHandlers,
       buildRequestContext,
+      refreshHealthSnapshot,
       send,
       close,
       isClosed: () => closed,
       clearHandshakeTimer: () => clearTimeout(handshakeTimer),
       getClient: () => client,
       setClient: (next) => {
+        if (closed) {
+          return false;
+        }
         releasePreauthBudget();
         client = next;
         clients.add(next);
+        return true;
       },
       setHandshakeState: (next) => {
         handshakeState = next;

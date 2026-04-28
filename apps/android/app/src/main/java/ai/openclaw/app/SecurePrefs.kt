@@ -46,7 +46,8 @@ class SecurePrefs(
     appContext.getSharedPreferences(plainPrefsName, Context.MODE_PRIVATE)
 
   private val masterKey by lazy {
-    MasterKey.Builder(appContext)
+    MasterKey
+      .Builder(appContext)
       .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
       .build()
   }
@@ -420,16 +421,20 @@ class SecurePrefs(
     return plainPrefs.getString(key, null)?.trim()?.takeIf { it.isNotEmpty() }
   }
 
-  fun saveGatewayTlsFingerprint(stableId: String, fingerprint: String) {
+  fun saveGatewayTlsFingerprint(
+    stableId: String,
+    fingerprint: String,
+  ) {
     val key = "gateway.tls.$stableId"
     plainPrefs.edit { putString(key, fingerprint.trim()) }
   }
 
-  fun getString(key: String): String? {
-    return securePrefs.getString(key, null)
-  }
+  fun getString(key: String): String? = securePrefs.getString(key, null)
 
-  fun putString(key: String, value: String) {
+  fun putString(
+    key: String,
+    value: String,
+  ) {
     securePrefs.edit { putString(key, value) }
   }
 
@@ -437,15 +442,17 @@ class SecurePrefs(
     securePrefs.edit { remove(key) }
   }
 
-  private fun createSecurePrefs(context: Context, name: String): SharedPreferences {
-    return EncryptedSharedPreferences.create(
+  private fun createSecurePrefs(
+    context: Context,
+    name: String,
+  ): SharedPreferences =
+    EncryptedSharedPreferences.create(
       context,
       name,
       masterKey,
       EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
       EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
     )
-  }
 
   private fun loadOrCreateInstanceId(): String {
     val existing = plainPrefs.getString("node.instanceId", null)?.trim()
@@ -504,8 +511,7 @@ class SecurePrefs(
             is JsonPrimitive -> item.content.trim().takeIf { it.isNotEmpty() }
             else -> null
           }
-        }
-        .toSet()
+        }.toSet()
     } catch (_: Throwable) {
       emptySet()
     }

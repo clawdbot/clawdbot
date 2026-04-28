@@ -53,6 +53,13 @@ skipped.
 
 The archive payload stores file contents from those source trees, and the embedded `manifest.json` records the resolved absolute source paths plus the archive layout used for each asset.
 
+Installed plugin source and manifest files under the state directory's
+`extensions/` tree are included, but their nested `node_modules/` dependency
+trees are skipped. Those dependencies are rebuildable install artifacts; after
+restoring an archive, use `openclaw plugins update <id>` or reinstall the plugin
+with `openclaw plugins install <spec> --force` when a restored plugin reports
+missing dependencies.
+
 ## Invalid config behavior
 
 `openclaw backup` intentionally bypasses the normal config preflight so it can still help during recovery. Because workspace discovery depends on a valid config, `openclaw backup create` now fails fast when the config file exists but is invalid and workspace backup is still enabled.

@@ -11,6 +11,11 @@ import {
 export type WebProviderContract = "webSearchProviders" | "webFetchProviders";
 export type WebProviderConfigKey = "webSearch" | "webFetch";
 
+export type WebProviderCandidateResolution = {
+  pluginIds: string[] | undefined;
+  manifestRecords?: readonly PluginManifestRecord[];
+};
+
 type WebProviderSortEntry = {
   id: string;
   pluginId: string;
@@ -83,17 +88,33 @@ export function resolveManifestDeclaredWebProviderCandidatePluginIds(params: {
   onlyPluginIds?: readonly string[];
   origin?: PluginManifestRecord["origin"];
 }): string[] | undefined {
+  return resolveManifestDeclaredWebProviderCandidates(params).pluginIds;
+}
+
+export function resolveManifestDeclaredWebProviderCandidates(params: {
+  contract: WebProviderContract;
+  configKey: WebProviderConfigKey;
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  onlyPluginIds?: readonly string[];
+  origin?: PluginManifestRecord["origin"];
+  manifestRecords?: readonly PluginManifestRecord[];
+}): WebProviderCandidateResolution {
   const scopedPluginIds = normalizePluginIdScope(params.onlyPluginIds);
   if (scopedPluginIds?.length === 0) {
-    return [];
+    return { pluginIds: [] };
   }
   const onlyPluginIdSet = createPluginIdScopeSet(scopedPluginIds);
-  const ids = loadInstalledWebProviderManifestRecords({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    pluginIds: scopedPluginIds,
-  })
+  const manifestRecords =
+    params.manifestRecords ??
+    loadInstalledWebProviderManifestRecords({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      pluginIds: scopedPluginIds,
+    });
+  const ids = manifestRecords
     .filter(
       (plugin) =>
         (!params.origin || plugin.origin === params.origin) &&
@@ -103,12 +124,12 @@ export function resolveManifestDeclaredWebProviderCandidatePluginIds(params: {
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
   if (ids.length > 0) {
-    return ids;
+    return { pluginIds: ids, manifestRecords };
   }
   if (params.origin || scopedPluginIds !== undefined) {
-    return [];
+    return { pluginIds: [], manifestRecords };
   }
-  return undefined;
+  return { pluginIds: undefined, manifestRecords };
 }
 
 function resolveBundledWebProviderCompatPluginIds(params: {

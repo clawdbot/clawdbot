@@ -4,7 +4,7 @@
   "description": "OpenClaw Feishu/Lark channel plugin (community maintained by @m1heng)",
   "type": "module",
   "dependencies": {
-    "@larksuiteoapi/node-sdk": "^1.61.1",
+    "@larksuiteoapi/node-sdk": "^1.62.0",
     "typebox": "1.1.33"
   },
   "devDependencies": {

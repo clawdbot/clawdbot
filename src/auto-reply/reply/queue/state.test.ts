@@ -59,4 +59,28 @@ describe("refreshQueuedFollowupSession", () => {
       authProfileIdSource: undefined,
     });
   });
+
+  it("retargets queued runs with user model override source", () => {
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "queue" });
+    const queuedRun: FollowupRun = {
+      prompt: "queued message",
+      enqueuedAt: Date.now(),
+      run: makeRun(),
+    };
+    queue.items.push(queuedRun);
+
+    refreshQueuedFollowupSession({
+      key: QUEUE_KEY,
+      nextProvider: "ollama",
+      nextModel: "qwen3.5:27b",
+      nextModelOverrideSource: "user",
+    });
+
+    expect(queue.items[0]?.run).toMatchObject({
+      provider: "ollama",
+      model: "qwen3.5:27b",
+      hasSessionModelOverride: true,
+      modelOverrideSource: "user",
+    });
+  });
 });

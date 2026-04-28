@@ -1,5 +1,8 @@
 {
   "id": "line",
+  "activation": {
+    "onStartup": false
+  },
   "channels": ["line"],
   "channelEnvVars": {
     "line": ["LINE_CHANNEL_ACCESS_TOKEN", "LINE_CHANNEL_SECRET"]

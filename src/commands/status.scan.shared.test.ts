@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveGatewayProbeSnapshot } from "./status.scan.shared.js";
+import {
+  resolveGatewayProbeSnapshot,
+  resolveSharedMemoryStatusSnapshot,
+} from "./status.scan.shared.js";
 
 const mocks = vi.hoisted(() => ({
   buildGatewayConnectionDetailsWithResolvers: vi.fn(),
@@ -138,5 +141,85 @@ describe("resolveGatewayProbeSnapshot", () => {
 
     expect(result.gatewayProbe?.error).toBe("timeout; warn");
     expect(result.gatewayProbeAuthWarning).toBeUndefined();
+  });
+});
+
+describe("resolveSharedMemoryStatusSnapshot", () => {
+  it("asks custom memory-slot runtimes for status without requiring built-in memorySearch", async () => {
+    const manager = {
+      probeVectorAvailability: vi.fn(async () => true),
+      status: vi.fn(() => ({
+        backend: "builtin" as const,
+        provider: "memory-lancedb-pro",
+        files: 66,
+        chunks: 128,
+        vector: { enabled: true, available: true },
+        fts: { enabled: true, available: true },
+      })),
+      close: vi.fn(async () => {}),
+    };
+    const resolveMemoryConfig = vi.fn(() => null);
+    const getMemorySearchManager = vi.fn(async () => ({ manager }));
+    const requireDefaultStore = vi.fn(() => `/tmp/openclaw-missing-memory-${process.pid}.sqlite`);
+
+    const result = await resolveSharedMemoryStatusSnapshot({
+      cfg: {
+        plugins: {
+          slots: { memory: "memory-lancedb-pro" },
+        },
+        agents: {
+          defaults: {
+            memorySearch: { enabled: false },
+          },
+        },
+      },
+      agentStatus: { defaultId: "main" },
+      memoryPlugin: { enabled: true, slot: "memory-lancedb-pro" },
+      resolveMemoryConfig,
+      getMemorySearchManager,
+      requireDefaultStore,
+    });
+
+    expect(resolveMemoryConfig).not.toHaveBeenCalled();
+    expect(requireDefaultStore).not.toHaveBeenCalled();
+    expect(getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: expect.objectContaining({
+        plugins: expect.objectContaining({
+          slots: { memory: "memory-lancedb-pro" },
+        }),
+      }),
+      agentId: "main",
+      purpose: "status",
+    });
+    expect(manager.probeVectorAvailability).toHaveBeenCalled();
+    expect(manager.status).toHaveBeenCalled();
+    expect(manager.close).toHaveBeenCalled();
+    expect(result).toEqual({
+      agentId: "main",
+      backend: "builtin",
+      provider: "memory-lancedb-pro",
+      files: 66,
+      chunks: 128,
+      vector: { enabled: true, available: true },
+      fts: { enabled: true, available: true },
+    });
+  });
+
+  it("keeps default memory-core on the cold-start store shortcut", async () => {
+    const resolveMemoryConfig = vi.fn(() => null);
+    const getMemorySearchManager = vi.fn(async () => ({ manager: null }));
+
+    const result = await resolveSharedMemoryStatusSnapshot({
+      cfg: {},
+      agentStatus: { defaultId: "main" },
+      memoryPlugin: { enabled: true, slot: "memory-core" },
+      resolveMemoryConfig,
+      getMemorySearchManager,
+      requireDefaultStore: () => `/tmp/openclaw-missing-memory-${process.pid}.sqlite`,
+    });
+
+    expect(result).toBeNull();
+    expect(resolveMemoryConfig).not.toHaveBeenCalled();
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
   });
 });

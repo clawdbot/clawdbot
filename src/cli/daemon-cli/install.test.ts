@@ -7,7 +7,7 @@ const resolveNodeStartupTlsEnvironmentMock = vi.hoisted(() => vi.fn());
 const loadConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn(() => 18789));
-const writeConfigFileMock = vi.hoisted(() => vi.fn());
+const replaceConfigFileMock = vi.hoisted(() => vi.fn());
 const resolveIsNixModeMock = vi.hoisted(() => vi.fn(() => false));
 const resolveSecretInputRefMock = vi.hoisted(() =>
   vi.fn((_value?: unknown): { ref: unknown } => ({ ref: undefined })),
@@ -93,7 +93,7 @@ vi.mock("../../commands/gateway-install-token.persist.runtime.js", () => ({
     snapshot: await readConfigFileSnapshotMock(),
     writeOptions: { expectedConfigPath: "/tmp/openclaw.json" },
   })),
-  writeConfigFile: writeConfigFileMock,
+  replaceConfigFile: replaceConfigFileMock,
 }));
 
 vi.mock("../../config/types.secrets.js", () => ({
@@ -190,7 +190,7 @@ describe("runDaemonInstall", () => {
     resolveNodeStartupTlsEnvironmentMock.mockReset();
     readConfigFileSnapshotMock.mockReset();
     resolveGatewayPortMock.mockClear();
-    writeConfigFileMock.mockReset();
+    replaceConfigFileMock.mockReset();
     resolveIsNixModeMock.mockReset();
     resolveSecretInputRefMock.mockReset();
     resolveGatewayAuthMock.mockReset();
@@ -266,7 +266,7 @@ describe("runDaemonInstall", () => {
     expect(actionState.failed).toEqual([]);
     expect(buildGatewayInstallPlanMock).toHaveBeenCalledTimes(1);
     expectFirstInstallPlanCallOmitsToken();
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
     expect(
       actionState.warnings.some((warning) =>
         warning.includes("gateway.auth.token is SecretRef-managed"),
@@ -300,11 +300,11 @@ describe("runDaemonInstall", () => {
     await runDaemonInstall({ json: true });
 
     expect(actionState.failed).toEqual([]);
-    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
-    const writtenConfig = writeConfigFileMock.mock.calls[0]?.[0] as {
-      gateway?: { auth?: { token?: string } };
+    expect(replaceConfigFileMock).toHaveBeenCalledTimes(1);
+    const writeParams = replaceConfigFileMock.mock.calls[0]?.[0] as {
+      nextConfig?: { gateway?: { auth?: { token?: string } } };
     };
-    expect(writtenConfig.gateway?.auth?.token).toBe("minted-token");
+    expect(writeParams.nextConfig?.gateway?.auth?.token).toBe("minted-token");
     expect(buildGatewayInstallPlanMock).toHaveBeenCalledWith(
       expect.objectContaining({ port: 18789 }),
     );
@@ -408,7 +408,7 @@ describe("runDaemonInstall", () => {
     await runDaemonInstall({ json: true });
 
     expect(buildGatewayInstallPlanMock).toHaveBeenCalledTimes(1);
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
     expect(actionState.emitted.at(-1)).toMatchObject({ result: "already-installed" });
   });

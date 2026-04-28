@@ -89,11 +89,17 @@ export function resolveEmbeddingTimeoutMs(params: {
 
 export function resolveMemoryIndexConcurrency(params: {
   batch: { enabled: boolean; concurrency: number };
-  configuredConcurrency?: number;
+  configuredNonBatchConcurrency?: number;
+  providerId?: string;
 }): number {
-  return params.configuredConcurrency != null || params.batch.enabled
-    ? params.batch.concurrency
-    : EMBEDDING_INDEX_CONCURRENCY;
+  if (params.batch.enabled) {
+    return params.batch.concurrency;
+  }
+  const configured = params.configuredNonBatchConcurrency;
+  if (typeof configured === "number" && Number.isFinite(configured)) {
+    return Math.max(1, Math.floor(configured));
+  }
+  return params.providerId === "ollama" ? 1 : EMBEDDING_INDEX_CONCURRENCY;
 }
 
 export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
@@ -509,7 +515,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   protected getIndexConcurrency(): number {
     return resolveMemoryIndexConcurrency({
       batch: this.batch,
-      configuredConcurrency: this.settings.remote?.batch?.concurrency,
+      configuredNonBatchConcurrency: this.settings.remote?.nonBatchConcurrency,
+      providerId: this.provider?.id,
     });
   }
 

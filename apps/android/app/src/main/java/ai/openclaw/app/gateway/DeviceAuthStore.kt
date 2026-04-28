@@ -19,21 +19,44 @@ private data class PersistedDeviceAuthMetadata(
 )
 
 interface DeviceAuthTokenStore {
-  fun loadEntry(deviceId: String, role: String): DeviceAuthEntry?
-  fun loadToken(deviceId: String, role: String): String? = loadEntry(deviceId, role)?.token
-  fun saveToken(deviceId: String, role: String, token: String, scopes: List<String> = emptyList())
-  fun clearToken(deviceId: String, role: String)
+  fun loadEntry(
+    deviceId: String,
+    role: String,
+  ): DeviceAuthEntry?
+
+  fun loadToken(
+    deviceId: String,
+    role: String,
+  ): String? = loadEntry(deviceId, role)?.token
+
+  fun saveToken(
+    deviceId: String,
+    role: String,
+    token: String,
+    scopes: List<String> = emptyList(),
+  )
+
+  fun clearToken(
+    deviceId: String,
+    role: String,
+  )
 }
 
-class DeviceAuthStore(private val prefs: SecurePrefs) : DeviceAuthTokenStore {
+class DeviceAuthStore(
+  private val prefs: SecurePrefs,
+) : DeviceAuthTokenStore {
   private val json = Json { ignoreUnknownKeys = true }
 
-  override fun loadEntry(deviceId: String, role: String): DeviceAuthEntry? {
+  override fun loadEntry(
+    deviceId: String,
+    role: String,
+  ): DeviceAuthEntry? {
     val key = tokenKey(deviceId, role)
     val token = prefs.getString(key)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
     val normalizedRole = normalizeRole(role)
     val metadata =
-      prefs.getString(metadataKey(deviceId, role))
+      prefs
+        .getString(metadataKey(deviceId, role))
         ?.let { raw ->
           runCatching { json.decodeFromString<PersistedDeviceAuthMetadata>(raw) }.getOrNull()
         }
@@ -45,7 +68,12 @@ class DeviceAuthStore(private val prefs: SecurePrefs) : DeviceAuthTokenStore {
     )
   }
 
-  override fun saveToken(deviceId: String, role: String, token: String, scopes: List<String>) {
+  override fun saveToken(
+    deviceId: String,
+    role: String,
+    token: String,
+    scopes: List<String>,
+  ) {
     val normalizedScopes = normalizeScopes(scopes)
     val key = tokenKey(deviceId, role)
     prefs.putString(key, token.trim())
@@ -60,19 +88,28 @@ class DeviceAuthStore(private val prefs: SecurePrefs) : DeviceAuthTokenStore {
     )
   }
 
-  override fun clearToken(deviceId: String, role: String) {
+  override fun clearToken(
+    deviceId: String,
+    role: String,
+  ) {
     val key = tokenKey(deviceId, role)
     prefs.remove(key)
     prefs.remove(metadataKey(deviceId, role))
   }
 
-  private fun tokenKey(deviceId: String, role: String): String {
+  private fun tokenKey(
+    deviceId: String,
+    role: String,
+  ): String {
     val normalizedDevice = normalizeDeviceId(deviceId)
     val normalizedRole = normalizeRole(role)
     return "gateway.deviceToken.$normalizedDevice.$normalizedRole"
   }
 
-  private fun metadataKey(deviceId: String, role: String): String {
+  private fun metadataKey(
+    deviceId: String,
+    role: String,
+  ): String {
     val normalizedDevice = normalizeDeviceId(deviceId)
     val normalizedRole = normalizeRole(role)
     return "gateway.deviceTokenMeta.$normalizedDevice.$normalizedRole"
@@ -82,11 +119,10 @@ class DeviceAuthStore(private val prefs: SecurePrefs) : DeviceAuthTokenStore {
 
   private fun normalizeRole(role: String): String = role.trim().lowercase()
 
-  private fun normalizeScopes(scopes: List<String>): List<String> {
-    return scopes
+  private fun normalizeScopes(scopes: List<String>): List<String> =
+    scopes
       .map { it.trim() }
       .filter { it.isNotEmpty() }
       .distinct()
       .sorted()
-  }
 }

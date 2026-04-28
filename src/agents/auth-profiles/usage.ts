@@ -45,6 +45,9 @@ const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
   "overloaded",
   "timeout",
   "rate_limit",
+  "empty_response",
+  "no_error_details",
+  "unclassified",
   "unknown",
 ];
 const FAILURE_REASON_SET = new Set<AuthProfileFailureReason>(FAILURE_REASON_PRIORITY);
@@ -89,7 +92,11 @@ function shouldProbeWhamForFailure(
 ): boolean {
   return (
     normalizeProviderId(provider ?? "") === "openai-codex" &&
-    (reason === "rate_limit" || reason === "unknown")
+    (reason === "rate_limit" ||
+      reason === "empty_response" ||
+      reason === "no_error_details" ||
+      reason === "unclassified" ||
+      reason === "unknown")
   );
 }
 

@@ -59,7 +59,11 @@ function createFacadeResolutionKey(params: {
   env?: NodeJS.ProcessEnv;
 }): string {
   const bundledPluginsDir = resolveBundledPluginsDir(params.env ?? process.env);
-  return createFacadeResolutionKeyShared({ ...params, bundledPluginsDir });
+  return createFacadeResolutionKeyShared({
+    ...params,
+    bundledPluginsDir,
+    ...(params.env ? { env: params.env } : {}),
+  });
 }
 
 function resolveRegistryPluginModuleLocation(params: {
@@ -168,6 +172,10 @@ function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule 
 function loadFacadeModuleAtLocationSync<T extends object>(params: {
   location: FacadeModuleLocation;
   trackedPluginId: string | (() => string);
+  runtimeDeps?: {
+    pluginId: string;
+    env?: NodeJS.ProcessEnv;
+  };
   loadModule?: (modulePath: string) => T;
 }): T {
   return loadFacadeModuleAtLocationSyncShared(params);
@@ -203,6 +211,10 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(
   return loadFacadeModuleAtLocationSync<T>({
     location,
     trackedPluginId,
+    runtimeDeps: {
+      pluginId: params.dirName,
+      ...(params.env ? { env: params.env } : {}),
+    },
   });
 }
 

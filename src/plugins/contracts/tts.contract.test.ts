@@ -3,7 +3,7 @@ import {
   describeTtsConfigContract,
   describeTtsProviderRuntimeContract,
   describeTtsSummarizationContract,
-} from "../../../test/helpers/plugins/tts-contract-suites.js";
+} from "./tts-contract-suites.js";
 
 describeTtsAutoApplyContract();
 describeTtsConfigContract();

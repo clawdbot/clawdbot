@@ -1,4 +1,4 @@
-import type { DiscordSlashCommandConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { DiscordSlashCommandConfig } from "openclaw/plugin-sdk/config-types";
 
 export function resolveDiscordSlashCommandConfig(
   raw?: DiscordSlashCommandConfig,

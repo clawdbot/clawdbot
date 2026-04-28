@@ -1,3 +1,3 @@
-import { describeOpenAIProviderRuntimeContract } from "../../test/helpers/plugins/provider-runtime-contract.js";
+import { describeOpenAIProviderRuntimeContract } from "openclaw/plugin-sdk/provider-test-contracts";
 
 describeOpenAIProviderRuntimeContract(() => import("./index.js"));

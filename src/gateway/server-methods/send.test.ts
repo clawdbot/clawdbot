@@ -34,7 +34,7 @@ vi.mock("../../config/config.js", async () => {
     await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
   return {
     ...actual,
-    loadConfig: () => ({}),
+    getRuntimeConfig: () => ({}),
   };
 });
 
@@ -119,6 +119,7 @@ async function loadSendHandlersForTest() {
 const makeContext = (): GatewayRequestContext =>
   ({
     dedupe: new Map(),
+    getRuntimeConfig: () => ({}),
   }) as unknown as GatewayRequestContext;
 
 async function runSend(params: Record<string, unknown>) {

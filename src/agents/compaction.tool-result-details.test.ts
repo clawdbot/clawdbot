@@ -82,6 +82,38 @@ describe("compaction toolResult details stripping", () => {
     expect(serialized).not.toContain('"details"');
   });
 
+  it("does not pass runtime-context custom messages into generateSummary", async () => {
+    const messages = [
+      { role: "user", content: "visible ask", timestamp: 1 },
+      {
+        role: "custom",
+        customType: "openclaw.runtime-context",
+        content: "secret runtime context",
+        display: false,
+        timestamp: 2,
+      },
+      { role: "assistant", content: "visible answer", timestamp: 3 },
+    ] as unknown as AgentMessage[];
+
+    await summarizeWithFallback({
+      messages,
+      model: { id: "mock", name: "mock", contextWindow: 10000, maxTokens: 1000 } as never,
+      apiKey: "test", // pragma: allowlist secret
+      signal: new AbortController().signal,
+      reserveTokens: 100,
+      maxChunkTokens: 5000,
+      contextWindow: 10000,
+    });
+
+    const chunk = (
+      piCodingAgentMocks.generateSummary.mock.calls as unknown as Array<[unknown]>
+    )[0]?.[0];
+    const serialized = JSON.stringify(chunk);
+    expect(serialized).toContain("visible ask");
+    expect(serialized).not.toContain("openclaw.runtime-context");
+    expect(serialized).not.toContain("secret runtime context");
+  });
+
   it("ignores toolResult.details when evaluating oversized messages", () => {
     piCodingAgentMocks.estimateTokens.mockImplementation((message: unknown) => {
       const record = message as { details?: unknown };

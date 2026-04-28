@@ -1,7 +1,8 @@
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../test/helpers/import-fresh.ts";
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.resetModules();
   vi.doUnmock("jiti");
 });
@@ -259,6 +260,39 @@ describe("getCachedPluginJitiLoader", () => {
     expect(jitiLoader).toHaveBeenCalledWith("/repo/dist/extensions/demo/api.js");
   });
 
+  it("normalizes Windows absolute paths before creating and calling jiti", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const jitiLoader = vi.fn(() => ({ fromJiti: true }));
+    const createJiti = vi.fn(() => jitiLoader);
+    vi.doMock("jiti", () => ({ createJiti }));
+    vi.doMock("./native-module-require.js", () => ({
+      isJavaScriptModulePath: () => true,
+      tryNativeRequireJavaScriptModule: () => ({ ok: false }),
+    }));
+    const { getCachedPluginJitiLoader } = await importFreshModule<
+      typeof import("./jiti-loader-cache.js")
+    >(import.meta.url, "./jiti-loader-cache.js?scope=windows-jiti-paths");
+
+    const cache = new Map();
+    const loader = getCachedPluginJitiLoader({
+      cache,
+      modulePath: "C:\\Users\\alice\\openclaw\\dist\\extensions\\feishu\\api.js",
+      importerUrl: "file:///C:/Users/alice/openclaw/dist/src/plugins/public-surface-loader.js",
+      jitiFilename: "C:\\Users\\alice\\openclaw\\dist\\extensions\\feishu\\api.js",
+      tryNative: true,
+    });
+
+    loader("C:\\Users\\alice\\openclaw\\dist\\extensions\\feishu\\api.js");
+
+    expect(createJiti).toHaveBeenCalledWith(
+      "file:///C:/Users/alice/openclaw/dist/extensions/feishu/api.js",
+      expect.objectContaining({ tryNative: true }),
+    );
+    expect(jitiLoader).toHaveBeenCalledWith(
+      "file:///C:/Users/alice/openclaw/dist/extensions/feishu/api.js",
+    );
+  });
+
   it("skips the native-require fast path when tryNative is explicitly false", async () => {
     const jitiLoader = vi.fn(() => ({ fromJiti: true }));
     const createJiti = vi.fn(() => jitiLoader);
@@ -288,6 +322,41 @@ describe("getCachedPluginJitiLoader", () => {
     // so its alias rewrites still apply; native require must not be consulted.
     expect(nativeStub).not.toHaveBeenCalled();
     expect(jitiLoader).toHaveBeenCalledWith("/repo/dist/extensions/demo/api.js");
+  });
+
+  it("normalizes Windows absolute paths when native loading is disabled", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const jitiLoader = vi.fn(() => ({ fromJiti: true }));
+    const createJiti = vi.fn(() => jitiLoader);
+    vi.doMock("jiti", () => ({ createJiti }));
+    const nativeStub = vi.fn(() => ({ ok: true, moduleExport: { fromNative: true } }));
+    vi.doMock("./native-module-require.js", () => ({
+      isJavaScriptModulePath: () => true,
+      tryNativeRequireJavaScriptModule: nativeStub,
+    }));
+    const { getCachedPluginJitiLoader } = await importFreshModule<
+      typeof import("./jiti-loader-cache.js")
+    >(import.meta.url, "./jiti-loader-cache.js?scope=windows-jiti-no-native");
+
+    const cache = new Map();
+    const loader = getCachedPluginJitiLoader({
+      cache,
+      modulePath: "C:\\Users\\alice\\openclaw\\extensions\\feishu\\api.ts",
+      importerUrl: "file:///C:/Users/alice/openclaw/src/plugins/loader.ts",
+      jitiFilename: "C:\\Users\\alice\\openclaw\\extensions\\feishu\\api.ts",
+      tryNative: false,
+    });
+
+    loader("C:\\Users\\alice\\openclaw\\extensions\\feishu\\api.ts");
+
+    expect(nativeStub).not.toHaveBeenCalled();
+    expect(createJiti).toHaveBeenCalledWith(
+      "file:///C:/Users/alice/openclaw/extensions/feishu/api.ts",
+      expect.objectContaining({ tryNative: false }),
+    );
+    expect(jitiLoader).toHaveBeenCalledWith(
+      "file:///C:/Users/alice/openclaw/extensions/feishu/api.ts",
+    );
   });
 
   it("forwards extra loader arguments through to the jiti fallback", async () => {

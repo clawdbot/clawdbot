@@ -301,8 +301,10 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
    * - Bundled channels typically don't use this field
    *   because they can directly import internal modules
    * - External plugins should check for undefined before using
-   * - When provided, this must be a full `createPluginRuntime().channel` surface;
-   *   partial stubs are not supported
+   * - `runtimeContexts` is the stable startup-safe subset. Bundled channels
+   *   may receive only that subset during provider boot.
+   * - External channel plugins that need reply/routing/session helpers receive
+   *   a full `createPluginRuntime().channel` surface from the Gateway.
    *
    * @since Plugin SDK 2026.2.19
    * @see {@link https://docs.openclaw.ai/plugins/building-plugins | Plugin SDK documentation}

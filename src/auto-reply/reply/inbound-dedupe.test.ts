@@ -1,7 +1,7 @@
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
-import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import type { MsgContext } from "../templating.js";
-import { resetInboundDedupe } from "./inbound-dedupe.js";
+import { buildInboundDedupeKey, resetInboundDedupe } from "./inbound-dedupe.js";
 
 const sharedInboundContext: MsgContext = {
   Provider: "discord",
@@ -39,6 +39,20 @@ describe("inbound dedupe", () => {
       inboundA.resetInboundDedupe();
       inboundB.resetInboundDedupe();
     }
+  });
+
+  it("deduplicates inbound messages with equivalent numeric and string thread ids", () => {
+    expect(
+      buildInboundDedupeKey({
+        ...sharedInboundContext,
+        MessageThreadId: 77,
+      }),
+    ).toBe(
+      buildInboundDedupeKey({
+        ...sharedInboundContext,
+        MessageThreadId: "77",
+      }),
+    );
   });
 
   it("shares claim/release state across distinct module instances", async () => {

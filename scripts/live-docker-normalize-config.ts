@@ -1,5 +1,5 @@
 import { loadAndMaybeMigrateDoctorConfig } from "../src/commands/doctor-config-flow.js";
-import { writeConfigFile } from "../src/config/config.js";
+import { replaceConfigFile } from "../src/config/config.js";
 
 const result = await loadAndMaybeMigrateDoctorConfig({
   options: {
@@ -11,5 +11,5 @@ const result = await loadAndMaybeMigrateDoctorConfig({
 });
 
 if (result.shouldWriteConfig) {
-  await writeConfigFile(result.cfg);
+  await replaceConfigFile({ nextConfig: result.cfg });
 }

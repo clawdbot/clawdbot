@@ -14,6 +14,7 @@ const hoisted = vi.hoisted(() => ({
   pruneLegacyStoreKeysMock: vi.fn(),
   registerSubagentRunMock: vi.fn(),
   emitSessionLifecycleEventMock: vi.fn(),
+  resolveAgentConfigMock: vi.fn(),
   configOverride: {} as Record<string, unknown>,
 }));
 
@@ -41,12 +42,12 @@ describe("spawnSubagentDirect seam flow", () => {
   beforeAll(async () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock: hoisted.callGatewayMock,
-      loadConfig: () => hoisted.configOverride,
+      getRuntimeConfig: () => hoisted.configOverride,
       updateSessionStoreMock: hoisted.updateSessionStoreMock,
       pruneLegacyStoreKeysMock: hoisted.pruneLegacyStoreKeysMock,
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
       emitSessionLifecycleEventMock: hoisted.emitSessionLifecycleEventMock,
-      resolveAgentConfig: () => undefined,
+      resolveAgentConfig: hoisted.resolveAgentConfigMock,
       resolveSubagentSpawnModelSelection: () => "openai-codex/gpt-5.4",
       resolveSandboxRuntimeStatus: () => ({ sandboxed: false }),
       sessionStorePath: "/tmp/subagent-spawn-session-store.json",
@@ -61,6 +62,11 @@ describe("spawnSubagentDirect seam flow", () => {
     hoisted.pruneLegacyStoreKeysMock.mockReset();
     hoisted.registerSubagentRunMock.mockReset();
     hoisted.emitSessionLifecycleEventMock.mockReset();
+    hoisted.resolveAgentConfigMock.mockReset();
+    hoisted.resolveAgentConfigMock.mockImplementation(
+      (cfg: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
+        cfg.agents?.list?.find((agent) => agent.id === agentId),
+    );
     hoisted.configOverride = createConfigOverride();
     installAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
 
@@ -74,6 +80,84 @@ describe("spawnSubagentDirect seam flow", () => {
         return store;
       },
     );
+  });
+
+  it("rejects explicit same-agent targets when allowAgents excludes the requester", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+        },
+        list: [
+          {
+            id: "task-manager",
+            workspace: "/tmp/workspace-task-manager",
+            subagents: {
+              allowAgents: ["planner"],
+            },
+          },
+          {
+            id: "planner",
+            workspace: "/tmp/workspace-planner",
+          },
+        ],
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "spawn myself explicitly",
+        agentId: "task-manager",
+      },
+      {
+        agentSessionKey: "agent:task-manager:main",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "forbidden",
+      error: "agentId is not allowed for sessions_spawn (allowed: planner)",
+    });
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "agent" }),
+    );
+  });
+
+  it("allows omitted agentId to default to requester even when allowAgents excludes requester", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+        },
+        list: [
+          {
+            id: "task-manager",
+            workspace: "/tmp/workspace-task-manager",
+            subagents: {
+              allowAgents: ["planner"],
+            },
+          },
+          {
+            id: "planner",
+            workspace: "/tmp/workspace-planner",
+          },
+        ],
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "spawn default target",
+      },
+      {
+        agentSessionKey: "agent:task-manager:main",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      childSessionKey: expect.stringMatching(/^agent:task-manager:subagent:/),
+    });
   });
 
   it("accepts a spawned run across session patching, runtime-model persistence, registry registration, and lifecycle emission", async () => {
@@ -155,6 +239,7 @@ describe("spawnSubagentDirect seam flow", () => {
       sessionKey: childSessionKey,
       provider: "openai-codex",
       model: "gpt-5.4",
+      overrideSource: "user",
     });
     expect(operations.indexOf("store:update")).toBeGreaterThan(-1);
     expect(operations.indexOf("gateway:agent")).toBeGreaterThan(

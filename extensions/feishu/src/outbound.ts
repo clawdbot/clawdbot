@@ -1,15 +1,41 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import {
+  attachChannelToResult,
+  createAttachedChannelResultAdapter,
+} from "openclaw/plugin-sdk/channel-send-result";
+import {
+  interactiveReplyToPresentation,
+  normalizeInteractiveReply,
+  normalizeMessagePresentation,
+  renderMessagePresentationFallbackText,
+  resolveInteractiveTextFallback,
+  type MessagePresentationBlock,
+  type MessagePresentationButton,
+} from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  resolvePayloadMediaUrls,
+  sendPayloadMediaSequenceAndFinalize,
+  sendTextMediaPayload,
+} from "openclaw/plugin-sdk/reply-payload";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { resolveFeishuAccount } from "./accounts.js";
+import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { createFeishuClient } from "./client.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
 import { sendMediaFeishu } from "./media.js";
 import { chunkTextForOutbound, type ChannelOutboundAdapter } from "./outbound-runtime-api.js";
-import { sendMarkdownCardFeishu, sendMessageFeishu, sendStructuredCardFeishu } from "./send.js";
+import {
+  resolveFeishuCardTemplate,
+  sendCardFeishu,
+  sendMarkdownCardFeishu,
+  sendMessageFeishu,
+  sendStructuredCardFeishu,
+} from "./send.js";
+
+const RENDERED_FEISHU_CARD = Symbol("openclaw.renderedFeishuCard");
 
 function normalizePossibleLocalImagePath(text: string | undefined): string | null {
   const raw = text?.trim();
@@ -60,6 +86,313 @@ function normalizePossibleLocalImagePath(text: string | undefined): string | nul
 
 function shouldUseCard(text: string): boolean {
   return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function escapeFeishuCardMarkdownText(text: string): string {
+  return text.replace(/[&<>]/g, (char) => {
+    switch (char) {
+      case "&":
+        return "&amp;";
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
+      default:
+        return char;
+    }
+  });
+}
+
+function resolveSafeFeishuButtonUrl(url: string | undefined): string | undefined {
+  const trimmed = url?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === "https:" || parsed.protocol === "http:" ? trimmed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function markRenderedFeishuCard(card: Record<string, unknown>): Record<string, unknown> {
+  Object.defineProperty(card, RENDERED_FEISHU_CARD, {
+    value: true,
+    enumerable: false,
+  });
+  return card;
+}
+
+function sanitizeNativeFeishuCardButton(button: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(button)) {
+    return undefined;
+  }
+  const text = isRecord(button.text) && typeof button.text.content === "string"
+    ? button.text.content
+    : undefined;
+  if (!text?.trim()) {
+    return undefined;
+  }
+  const style =
+    button.type === "danger" ? "danger" : button.type === "primary" ? "primary" : undefined;
+  const rendered: Record<string, unknown> = {
+    tag: "button",
+    text: { tag: "plain_text", content: text },
+    type: mapFeishuButtonType(style),
+  };
+  const safeUrl = resolveSafeFeishuButtonUrl(
+    typeof button.url === "string" ? button.url : undefined,
+  );
+  if (safeUrl) {
+    rendered.url = safeUrl;
+  }
+  if (isRecord(button.value) && button.value.oc === "ocf1") {
+    rendered.value = button.value;
+  }
+  return rendered.url || rendered.value ? rendered : undefined;
+}
+
+function sanitizeNativeFeishuCardElement(element: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(element) || typeof element.tag !== "string") {
+    return undefined;
+  }
+  if (element.tag === "hr") {
+    return { tag: "hr" };
+  }
+  if (element.tag === "markdown" && typeof element.content === "string") {
+    return { tag: "markdown", content: escapeFeishuCardMarkdownText(element.content) };
+  }
+  if (element.tag === "action" && Array.isArray(element.actions)) {
+    const actions = element.actions
+      .map((action) => sanitizeNativeFeishuCardButton(action))
+      .filter((action): action is Record<string, unknown> => Boolean(action));
+    return actions.length > 0 ? { tag: "action", actions } : undefined;
+  }
+  return undefined;
+}
+
+function sanitizeNativeFeishuCard(card: Record<string, unknown>): Record<string, unknown> | undefined {
+  const body = isRecord(card.body) ? card.body : undefined;
+  const rawElements = Array.isArray(body?.elements) ? body.elements : [];
+  const elements = rawElements
+    .map((element) => sanitizeNativeFeishuCardElement(element))
+    .filter((element): element is Record<string, unknown> => Boolean(element));
+  if (elements.length === 0) {
+    return undefined;
+  }
+
+  const header = isRecord(card.header) ? card.header : undefined;
+  const title = isRecord(header?.title) && typeof header.title.content === "string"
+    ? header.title.content
+    : undefined;
+  return markRenderedFeishuCard({
+    schema: "2.0",
+    config: { width_mode: "fill" },
+    ...(title?.trim()
+      ? {
+          header: {
+            title: { tag: "plain_text", content: title },
+            template:
+              resolveFeishuCardTemplate(
+                typeof header?.template === "string" ? header.template : undefined,
+              ) ?? "blue",
+          },
+        }
+      : {}),
+    body: { elements },
+  });
+}
+
+function readNativeFeishuCard(payload: { channelData?: Record<string, unknown> }) {
+  const feishuData = payload.channelData?.feishu;
+  if (!isRecord(feishuData)) {
+    return undefined;
+  }
+  const card = feishuData.card ?? feishuData.interactiveCard;
+  if (!isRecord(card)) {
+    return undefined;
+  }
+  if ((card as { [RENDERED_FEISHU_CARD]?: true })[RENDERED_FEISHU_CARD] === true) {
+    return card;
+  }
+  return sanitizeNativeFeishuCard(card);
+}
+
+function mapFeishuButtonType(style: MessagePresentationButton["style"]) {
+  if (style === "primary" || style === "success") {
+    return "primary";
+  }
+  if (style === "danger") {
+    return "danger";
+  }
+  return "default";
+}
+
+function buildFeishuPayloadButton(
+  button: MessagePresentationButton,
+): Record<string, unknown> | undefined {
+  const rendered: Record<string, unknown> = {
+    tag: "button",
+    text: {
+      tag: "plain_text",
+      content: button.label,
+    },
+    type: mapFeishuButtonType(button.style),
+  };
+  if (button.url) {
+    const safeUrl = resolveSafeFeishuButtonUrl(button.url);
+    if (safeUrl) {
+      rendered.url = safeUrl;
+    }
+  }
+  if (button.value) {
+    rendered.value = createFeishuCardInteractionEnvelope({
+      k: "quick",
+      a: "feishu.payload.button",
+      q: button.value,
+    });
+  }
+  return rendered.url || rendered.value ? rendered : undefined;
+}
+
+function buildFeishuCardElementForBlock(
+  block: MessagePresentationBlock,
+): Record<string, unknown> | undefined {
+  if (block.type === "text") {
+    return { tag: "markdown", content: escapeFeishuCardMarkdownText(block.text) };
+  }
+  if (block.type === "context") {
+    return {
+      tag: "markdown",
+      content: `<font color='grey'>${escapeFeishuCardMarkdownText(block.text)}</font>`,
+    };
+  }
+  if (block.type === "divider") {
+    return { tag: "hr" };
+  }
+  if (block.type === "buttons") {
+    const actions = block.buttons
+      .map((button) => buildFeishuPayloadButton(button))
+      .filter((button): button is Record<string, unknown> => Boolean(button));
+    if (actions.length === 0) {
+      return undefined;
+    }
+    return {
+      tag: "action",
+      actions,
+    };
+  }
+  const labels = block.options.map((option) => `- ${option.label}`).join("\n");
+  return {
+    tag: "markdown",
+    content: `${escapeFeishuCardMarkdownText(
+      block.placeholder?.trim() || "Options",
+    )}:\n${escapeFeishuCardMarkdownText(labels)}`,
+  };
+}
+
+function buildFeishuPayloadCard(params: {
+  payload: Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0]["payload"];
+  text?: string;
+  identity?: Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0]["identity"];
+}): Record<string, unknown> | undefined {
+  const nativeCard = readNativeFeishuCard(params.payload);
+  if (nativeCard) {
+    return nativeCard;
+  }
+
+  const interactive = normalizeInteractiveReply(params.payload.interactive);
+  const presentation =
+    normalizeMessagePresentation(params.payload.presentation) ??
+    (interactive ? interactiveReplyToPresentation(interactive) : undefined);
+  if (!presentation && !interactive) {
+    return undefined;
+  }
+
+  const text = resolveInteractiveTextFallback({
+    text: params.text ?? params.payload.text,
+    interactive,
+  });
+  const elements: Record<string, unknown>[] = [];
+  if (text?.trim()) {
+    elements.push({ tag: "markdown", content: escapeFeishuCardMarkdownText(text) });
+  }
+  for (const block of presentation?.blocks ?? []) {
+    const element = buildFeishuCardElementForBlock(block);
+    if (element) {
+      elements.push(element);
+    }
+  }
+  if (elements.length === 0) {
+    elements.push({
+      tag: "markdown",
+      content: renderMessagePresentationFallbackText({ text, presentation }),
+    });
+  }
+
+  const identityTitle = params.identity
+    ? params.identity.emoji
+      ? `${params.identity.emoji} ${params.identity.name ?? ""}`.trim()
+      : (params.identity.name ?? "")
+    : "";
+  const title = presentation?.title ?? identityTitle;
+  const template = resolveFeishuCardTemplate(
+    presentation?.tone === "danger"
+      ? "red"
+      : presentation?.tone === "warning"
+        ? "orange"
+        : presentation?.tone === "success"
+          ? "green"
+          : "blue",
+  );
+
+  return markRenderedFeishuCard({
+    schema: "2.0",
+    config: { width_mode: "fill" },
+    ...(title
+      ? {
+          header: {
+            title: { tag: "plain_text", content: title },
+            template: template ?? "blue",
+          },
+        }
+      : {}),
+    body: { elements },
+  });
+}
+
+function renderFeishuPresentationPayload({
+  payload,
+  presentation,
+  ctx,
+}: Parameters<NonNullable<ChannelOutboundAdapter["renderPresentation"]>>[0]) {
+  const card = buildFeishuPayloadCard({
+    payload,
+    text: payload.text,
+    identity: ctx.identity,
+  });
+  if (!card) {
+    return null;
+  }
+  const existingFeishuData = isRecord(payload.channelData?.feishu)
+    ? payload.channelData.feishu
+    : undefined;
+  return {
+    ...payload,
+    text: renderMessagePresentationFallbackText({ text: payload.text, presentation }),
+    channelData: {
+      ...payload.channelData,
+      feishu: {
+        ...existingFeishuData,
+        card,
+      },
+    },
+  };
 }
 
 function resolveReplyToMessageId(params: {
@@ -154,6 +487,90 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
+  presentationCapabilities: {
+    supported: true,
+    buttons: true,
+    selects: false,
+    context: true,
+    divider: true,
+  },
+  renderPresentation: renderFeishuPresentationPayload,
+  sendPayload: async (ctx) => {
+    const card = buildFeishuPayloadCard({
+      payload: ctx.payload,
+      text: ctx.text,
+      identity: ctx.identity,
+    });
+    if (!card) {
+      return await sendTextMediaPayload({
+        channel: "feishu",
+        ctx,
+        adapter: feishuOutbound,
+      });
+    }
+
+    const replyToMessageId = resolveReplyToMessageId({
+      replyToId: ctx.replyToId,
+      threadId: ctx.threadId,
+    });
+    const commentTarget = parseFeishuCommentTarget(ctx.to);
+    if (commentTarget) {
+      return await sendTextMediaPayload({
+        channel: "feishu",
+        ctx: {
+          ...ctx,
+          payload: {
+            ...ctx.payload,
+            text: renderMessagePresentationFallbackText({
+              text: ctx.payload.text,
+              presentation:
+                normalizeMessagePresentation(ctx.payload.presentation) ??
+                (() => {
+                  const interactive = normalizeInteractiveReply(ctx.payload.interactive);
+                  return interactive ? interactiveReplyToPresentation(interactive) : undefined;
+                })(),
+            }),
+            interactive: undefined,
+            presentation: undefined,
+            channelData: undefined,
+          },
+        },
+        adapter: feishuOutbound,
+      });
+    }
+
+    const mediaUrls = resolvePayloadMediaUrls(ctx.payload)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    return attachChannelToResult(
+      "feishu",
+      await sendPayloadMediaSequenceAndFinalize({
+        text: ctx.payload.text ?? "",
+        mediaUrls,
+        send: async ({ mediaUrl }) =>
+          await sendMediaFeishu({
+            cfg: ctx.cfg,
+            to: ctx.to,
+            mediaUrl,
+            accountId: ctx.accountId ?? undefined,
+            mediaLocalRoots: ctx.mediaLocalRoots,
+            replyToMessageId,
+            ...(ctx.payload.audioAsVoice === true || ctx.audioAsVoice === true
+              ? { audioAsVoice: true }
+              : {}),
+          }),
+        finalize: async () =>
+          await sendCardFeishu({
+            cfg: ctx.cfg,
+            to: ctx.to,
+            card,
+            replyToMessageId,
+            replyInThread: ctx.threadId != null && !ctx.replyToId,
+            accountId: ctx.accountId ?? undefined,
+          }),
+      }),
+    );
+  },
   ...createAttachedChannelResultAdapter({
     channel: "feishu",
     sendText: async ({

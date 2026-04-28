@@ -1,6 +1,5 @@
-import { resolveProviderEndpoint } from "../agents/provider-attribution.js";
-
 export const DEFAULT_GOOGLE_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
+const GOOGLE_GENERATIVE_LANGUAGE_HOST = "generativelanguage.googleapis.com";
 
 function trimTrailingSlashes(value: string): string {
   return value.replace(/\/+$/, "");
@@ -17,7 +16,7 @@ export function normalizeGoogleApiBaseUrl(baseUrl?: string): string {
     url.hash = "";
     url.search = "";
     if (
-      resolveProviderEndpoint(url.toString()).endpointClass === "google-generative-ai" &&
+      url.hostname.toLowerCase() === GOOGLE_GENERATIVE_LANGUAGE_HOST &&
       trimTrailingSlashes(url.pathname || "") === ""
     ) {
       url.pathname = "/v1beta";

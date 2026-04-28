@@ -9,7 +9,7 @@ import OpenClawKit
 ///
 /// Both sessions should derive all connection inputs from this config so we
 /// don't accidentally persist gateway-scoped state under different keys.
-struct GatewayConnectConfig: Sendable {
+struct GatewayConnectConfig {
     let url: URL
     let stableID: String
     let tls: GatewayTLSParams?

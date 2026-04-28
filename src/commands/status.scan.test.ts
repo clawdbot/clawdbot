@@ -168,6 +168,15 @@ describe("scanStatus", () => {
     expect(mocks.getMemorySearchManager).not.toHaveBeenCalled();
   });
 
+  it("keeps default text status off plugin compatibility and memory scans", async () => {
+    configureScanStatus({ memoryConfigured: true });
+
+    await scanStatus({ json: false }, {} as never);
+
+    expect(mocks.buildPluginCompatibilityNotices).not.toHaveBeenCalled();
+    expect(mocks.getMemorySearchManager).not.toHaveBeenCalled();
+  });
+
   it("inspects memory backend when memory search is explicitly configured", async () => {
     configureScanStatus({ memoryConfigured: true });
 

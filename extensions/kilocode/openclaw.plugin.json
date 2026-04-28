@@ -1,5 +1,8 @@
 {
   "id": "kilocode",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["kilocode"],
   "modelPricing": {
@@ -37,5 +40,32 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
+  },
+  "modelCatalog": {
+    "providers": {
+      "kilocode": {
+        "baseUrl": "https://api.kilo.ai/api/gateway/",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "kilo/auto",
+            "name": "Kilo Auto",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1000000,
+            "maxTokens": 128000
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "kilocode": "refreshable"
+    }
   }
 }

@@ -91,6 +91,19 @@ describe("createCacheTrace", () => {
     expect(event.system).toBe("");
   });
 
+  it("records raw model run session stages", () => {
+    const { lines, trace } = createMemoryTraceForTest();
+
+    trace?.recordStage("session:raw-model-run", {
+      messages: [],
+      system: "",
+    });
+
+    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+    expect(event.stage).toBe("session:raw-model-run");
+    expect(event.system).toBe("");
+  });
+
   it("records stream context from systemPrompt when wrapping stream functions", () => {
     const lines: string[] = [];
     const trace = createCacheTrace({

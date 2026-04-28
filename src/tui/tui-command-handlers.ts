@@ -403,11 +403,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "think":
         if (!args) {
-          const levels = formatThinkingLevels(
-            state.sessionInfo.modelProvider,
-            state.sessionInfo.model,
-            "|",
-          );
+          const levels =
+            state.sessionInfo.thinkingLevels?.map((level) => level.label).join("|") ||
+            formatThinkingLevels(state.sessionInfo.modelProvider, state.sessionInfo.model, "|");
           chatLog.addSystem(`usage: /think <${levels}>`);
           break;
         }

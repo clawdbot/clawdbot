@@ -1,6 +1,5 @@
 import type { Command } from "commander";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { formatZonedTimestamp } from "openclaw/plugin-sdk/matrix-runtime-shared";
 import type { ChannelSetupInput } from "openclaw/plugin-sdk/setup";
 import { resolveMatrixAccount, resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import { listMatrixOwnDevices, pruneMatrixStaleGatewayDevices } from "./matrix/actions/devices.js";
@@ -30,6 +29,7 @@ import { isOpenClawManagedMatrixDevice } from "./matrix/device-health.js";
 import type { MatrixDirectRoomCandidate } from "./matrix/direct-management.js";
 import { formatMatrixErrorMessage } from "./matrix/errors.js";
 import { applyMatrixProfileUpdate, type MatrixProfileUpdateResult } from "./profile-update.js";
+import { formatZonedTimestamp } from "./runtime-api.js";
 import { getMatrixRuntime } from "./runtime.js";
 import { matrixSetupAdapter } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
@@ -150,7 +150,7 @@ function resolveMatrixCliAccountContext(accountId?: string): {
   accountId: string;
   cfg: CoreConfig;
 } {
-  const cfg = getMatrixRuntime().config.loadConfig() as CoreConfig;
+  const cfg = getMatrixRuntime().config.current() as CoreConfig;
   return {
     accountId: resolveMatrixAuthContext({ cfg, accountId }).accountId,
     cfg,
@@ -284,7 +284,7 @@ async function addMatrixAccount(params: {
   enableEncryption?: boolean;
 }): Promise<MatrixCliAccountAddResult> {
   const runtime = getMatrixRuntime();
-  const cfg = runtime.config.loadConfig() as CoreConfig;
+  const cfg = runtime.config.current() as CoreConfig;
   if (!matrixSetupAdapter.applyAccountConfig) {
     throw new Error("Matrix account setup is unavailable.");
   }
@@ -325,7 +325,10 @@ async function addMatrixAccount(params: {
   if (params.enableEncryption === true) {
     updated = updateMatrixAccountConfig(updated, accountId, { encryption: true });
   }
-  await runtime.config.writeConfigFile(updated as never);
+  await runtime.config.replaceConfigFile({
+    nextConfig: updated as never,
+    afterWrite: { mode: "auto" },
+  });
   const accountConfig = resolveMatrixAccountConfig({ cfg: updated, accountId });
 
   let verificationBootstrap: MatrixCliAccountAddResult["verificationBootstrap"] = {
@@ -362,11 +365,14 @@ async function addMatrixAccount(params: {
       });
       let resolvedAvatarUrl = synced.resolvedAvatarUrl;
       if (synced.convertedAvatarFromHttp && synced.resolvedAvatarUrl) {
-        const latestCfg = runtime.config.loadConfig() as CoreConfig;
+        const latestCfg = runtime.config.current() as CoreConfig;
         const withAvatar = updateMatrixAccountConfig(latestCfg, accountId, {
           avatarUrl: synced.resolvedAvatarUrl,
         });
-        await runtime.config.writeConfigFile(withAvatar as never);
+        await runtime.config.replaceConfigFile({
+          nextConfig: withAvatar as never,
+          afterWrite: { mode: "auto" },
+        });
         resolvedAvatarUrl = synced.resolvedAvatarUrl;
       }
       profile = {
@@ -462,7 +468,7 @@ async function inspectMatrixDirectRoom(params: {
   accountId: string;
   userId: string;
 }): Promise<MatrixCliDirectRoomInspection> {
-  const cfg = getMatrixRuntime().config.loadConfig() as CoreConfig;
+  const cfg = getMatrixRuntime().config.current() as CoreConfig;
   const [{ withResolvedActionClient }, { inspectMatrixDirectRooms }] = await Promise.all([
     loadMatrixActionClientModule(),
     loadMatrixDirectManagementModule(),
@@ -492,7 +498,7 @@ async function repairMatrixDirectRoom(params: {
   accountId: string;
   userId: string;
 }): Promise<MatrixCliDirectRoomRepair> {
-  const cfg = getMatrixRuntime().config.loadConfig() as CoreConfig;
+  const cfg = getMatrixRuntime().config.current() as CoreConfig;
   const account = resolveMatrixAccount({ cfg, accountId: params.accountId });
   const [{ withStartedActionClient }, { repairMatrixDirectRooms }] = await Promise.all([
     loadMatrixActionClientModule(),
@@ -734,7 +740,10 @@ async function setupMatrixEncryption(params: {
     ? updateMatrixAccountConfig(cfg, accountId, { encryption: true })
     : cfg;
   if (encryptionChanged) {
-    await runtime.config.writeConfigFile(updated as never);
+    await runtime.config.replaceConfigFile({
+      nextConfig: updated as never,
+      afterWrite: { mode: "auto" },
+    });
   }
 
   const canUseExistingBootstrap =

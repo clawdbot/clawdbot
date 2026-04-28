@@ -15,7 +15,10 @@ import kotlinx.coroutines.delay
 internal const val PAIRING_AUTO_RETRY_MS = 6_000L
 
 @Composable
-internal fun PairingAutoRetryEffect(enabled: Boolean, onRetry: () -> Unit) {
+internal fun PairingAutoRetryEffect(
+  enabled: Boolean,
+  onRetry: () -> Unit,
+) {
   val lifecycleOwner = LocalLifecycleOwner.current
   var lifecycleStarted by
     remember(lifecycleOwner) {

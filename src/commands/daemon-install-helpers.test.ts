@@ -243,7 +243,7 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.OPENCLAW_WRAPPER).toBe(wrapperPath);
   });
 
-  it("merges safe config env while dropping unsafe values and keeping service precedence", async () => {
+  it("tracks safe config env keys without embedding literal values", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
         HOME: "/Users/service",
@@ -271,17 +271,98 @@ describe("buildGatewayInstallPlan", () => {
       },
     });
 
-    expect(plan.environment.GOOGLE_API_KEY).toBe("test-key");
-    expect(plan.environment.CUSTOM_VAR).toBe("custom-value");
-    expect(plan.environment.SAFE_KEY).toBe("safe-value");
+    expect(plan.environment.GOOGLE_API_KEY).toBeUndefined();
+    expect(plan.environment.CUSTOM_VAR).toBeUndefined();
+    expect(plan.environment.SAFE_KEY).toBeUndefined();
     expect(plan.environment.NODE_OPTIONS).toBeUndefined();
     expect(plan.environment.EMPTY_KEY).toBeUndefined();
     expect(plan.environment.TRIMMED_KEY).toBeUndefined();
     expect(plan.environment.HOME).toBe("/Users/service");
     expect(plan.environment.OPENCLAW_PORT).toBe("3000");
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe(
-      "CUSTOM_VAR,GOOGLE_API_KEY,OPENCLAW_PORT,SAFE_KEY",
+      "CUSTOM_VAR,GOOGLE_API_KEY,SAFE_KEY",
     );
+  });
+
+  it("includes env SecretRef values from config into the service environment", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        DISCORD_BOT_TOKEN: "discord-test-token",
+      }),
+      port: 3000,
+      runtime: "node",
+      config: {
+        channels: {
+          discord: {
+            token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.DISCORD_BOT_TOKEN).toBe("discord-test-token");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+  });
+
+  it("does not embed gateway auth SecretRef values into the service environment", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        OPENCLAW_GATEWAY_TOKEN: "gateway-test-token",
+      }),
+      port: 3000,
+      runtime: "node",
+      config: {
+        gateway: {
+          auth: {
+            token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+  });
+
+  it("does not inline config env SecretRef values already backed by state-dir dotenv", async () => {
+    await writeStateDirDotEnv("DISCORD_BOT_TOKEN=discord-dotenv-token\n", {
+      stateDir: path.join(isolatedHome, ".openclaw"),
+    });
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        DISCORD_BOT_TOKEN: "discord-shell-token",
+      }),
+      port: 3000,
+      runtime: "node",
+      config: {
+        channels: {
+          discord: {
+            token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.DISCORD_BOT_TOKEN).toBeUndefined();
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("DISCORD_BOT_TOKEN");
   });
 
   it("skips auth-profile store load when no auth-profile source exists", async () => {
@@ -328,6 +409,7 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     expect(plan.environment.OPENAI_API_KEY).toBe("sk-openai-test");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
     expect(mocks.hasAnyAuthProfileStoreSource).not.toHaveBeenCalled();
     expect(mocks.loadAuthProfileStoreForSecretsRuntime).not.toHaveBeenCalled();
   });
@@ -393,6 +475,7 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.MISSING_TOKEN).toBeUndefined();
     expect(plan.environment.OPENAI_API_KEY).toBe("sk-openai-test");
     expect(plan.environment.ANTHROPIC_TOKEN).toBe("ant-test-token");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("NODE_OPTIONS"), "Auth profile");
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("GIT_ASKPASS"), "Auth profile");
   });
@@ -409,7 +492,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("merges .env vars with config and service precedence", async () => {
+  it("tracks .env vars with config while preserving service precedence", async () => {
     await writeStateDirDotEnv(
       "BRAVE_API_KEY=BSA-from-env\nOPENROUTER_API_KEY=or-key\nMY_KEY=from-dotenv\nHOME=/from-dotenv\n",
       {
@@ -436,11 +519,14 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       },
     });
 
-    expect(plan.environment.BRAVE_API_KEY).toBe("BSA-from-env");
-    expect(plan.environment.OPENROUTER_API_KEY).toBe("or-key");
-    expect(plan.environment.MY_KEY).toBe("from-config");
+    expect(plan.environment.BRAVE_API_KEY).toBeUndefined();
+    expect(plan.environment.OPENROUTER_API_KEY).toBeUndefined();
+    expect(plan.environment.MY_KEY).toBeUndefined();
     expect(plan.environment.HOME).toBe("/from-service");
     expect(plan.environment.OPENCLAW_PORT).toBe("3000");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe(
+      "BRAVE_API_KEY,MY_KEY,OPENROUTER_API_KEY",
+    );
   });
 
   it("works when .env file does not exist", async () => {
@@ -514,6 +600,66 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     expect(plan.environment.BLOGWATCHER_HOME).toBe("/Users/test/.blogwatcher");
     expect(plan.environment.GOPATH).toBeUndefined();
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+  });
+
+  it("drops legacy inline env values when the key is now managed by .env", async () => {
+    await writeStateDirDotEnv("TAVILY_API_KEY=fresh-dotenv-value\n", {
+      stateDir: path.join(tmpDir, ".openclaw"),
+    });
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      existingEnvironment: {
+        TAVILY_API_KEY: "old-inline-value",
+        CUSTOM_TOOL_HOME: "/Users/test/.custom-tool",
+      },
+    });
+
+    expect(plan.environment.TAVILY_API_KEY).toBeUndefined();
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("TAVILY_API_KEY");
+    expect(plan.environment.CUSTOM_TOOL_HOME).toBe("/Users/test/.custom-tool");
+  });
+
+  it("does not embed auth-profile env refs when the key is already durable", async () => {
+    await writeStateDirDotEnv("OPENAI_API_KEY=dotenv-openai\n", {
+      stateDir: path.join(tmpDir, ".openclaw"),
+    });
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: {
+        HOME: tmpDir,
+        OPENAI_API_KEY: "shell-openai",
+      },
+      port: 3000,
+      runtime: "node",
+      authStore: {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.OPENAI_API_KEY).toBeUndefined();
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("OPENAI_API_KEY");
   });
 });
 

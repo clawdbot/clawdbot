@@ -93,6 +93,12 @@ function emitCompactionSessionLifecycleHooks(params: {
   }
 }
 
+function resolvePositiveTokenCount(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
+
 export async function ensureSkillSnapshot(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -267,8 +273,9 @@ export async function incrementCompactionCount(params: {
     updates.sessionFile = explicitNewSessionFile;
   }
   // If tokensAfter is provided, update the cached token counts to reflect post-compaction state
-  if (tokensAfter != null && tokensAfter > 0) {
-    updates.totalTokens = tokensAfter;
+  const tokensAfterCompaction = resolvePositiveTokenCount(tokensAfter);
+  if (tokensAfterCompaction !== undefined) {
+    updates.totalTokens = tokensAfterCompaction;
     updates.totalTokensFresh = true;
     // Clear input/output breakdown since we only have the total estimate after compaction
     updates.inputTokens = undefined;

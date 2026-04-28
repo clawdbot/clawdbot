@@ -161,6 +161,7 @@ matching `sampleRate` only if your upstream stream is already raw PCM.
     - Provider base URL defaults to `https://api.mistral.ai/v1`.
     - Onboarding default model is `mistral/mistral-large-latest`.
     - Z.AI uses Bearer auth with your API key.
+
   </Accordion>
 </AccordionGroup>
 

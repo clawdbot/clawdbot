@@ -1,5 +1,5 @@
+import { uniqueSortedStrings } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { uniqueSortedStrings } from "../../../test/helpers/plugins/contracts-testkit.js";
 import { withBundledPluginAllowlistCompat } from "../bundled-compat.js";
 import { resolveManifestContractPluginIds } from "../plugin-registry.js";
 import { __testing as providerTesting } from "../providers.js";

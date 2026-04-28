@@ -1,18 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import * as conversationBinding from "./conversation-binding.js";
+import { createInteractiveConversationBindingHelpers } from "./interactive-binding-helpers.js";
 import type {
   DiscordInteractiveHandlerContext,
   DiscordInteractiveHandlerRegistration,
-} from "../../test/helpers/channels/interactive-contract.js";
-import type {
   SlackInteractiveHandlerContext,
   SlackInteractiveHandlerRegistration,
-} from "../../test/helpers/channels/interactive-contract.js";
-import type {
   TelegramInteractiveHandlerContext,
   TelegramInteractiveHandlerRegistration,
-} from "../../test/helpers/channels/interactive-contract.js";
-import * as conversationBinding from "./conversation-binding.js";
-import { createInteractiveConversationBindingHelpers } from "./interactive-binding-helpers.js";
+} from "./interactive-contract.test-helpers.js";
 import {
   clearPluginInteractiveHandlers,
   dispatchPluginInteractiveHandler,

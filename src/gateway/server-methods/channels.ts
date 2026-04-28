@@ -9,7 +9,7 @@ import {
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
-import { loadConfig, readConfigFileSnapshot } from "../../config/config.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getChannelActivity } from "../../infra/channel-activity.js";
@@ -155,7 +155,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
     const timeoutMs = resolveChannelsStatusTimeoutMs({ probe, timeoutMsRaw });
     const cfg = applyPluginAutoEnable({
-      config: loadConfig(),
+      config: context.getRuntimeConfig(),
       env: process.env,
     }).config;
     const runtime = context.getRuntimeSnapshot();
@@ -376,7 +376,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
     }
     try {
       const cfg = applyPluginAutoEnable({
-        config: loadConfig(),
+        config: context.getRuntimeConfig(),
         env: process.env,
       }).config;
       const payload = await startChannelAccount({
@@ -437,7 +437,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
       const payload = await logoutChannelAccount({
         channelId,
         accountId,
-        cfg: snapshot.config ?? {},
+        cfg: context.getRuntimeConfig(),
         context,
         plugin,
       });

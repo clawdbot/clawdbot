@@ -53,6 +53,11 @@ export function handleCompactionEnd(
   const wasAborted = Boolean(evt.aborted);
   if (hasResult && !wasAborted) {
     ctx.incrementCompactionCount();
+    const tokensAfter =
+      typeof evt.result === "object" && evt.result
+        ? (evt.result as { tokensAfter?: unknown }).tokensAfter
+        : undefined;
+    ctx.noteCompactionTokensAfter(tokensAfter);
     const observedCompactionCount = ctx.getCompactionCount();
     void reconcileSessionStoreCompactionCountAfterSuccess({
       sessionKey: ctx.params.sessionKey,

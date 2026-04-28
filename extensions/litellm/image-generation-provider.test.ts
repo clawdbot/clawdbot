@@ -4,19 +4,27 @@ import { buildLitellmImageGenerationProvider } from "./image-generation-provider
 const {
   resolveApiKeyForProviderMock,
   postJsonRequestMock,
+  postMultipartRequestMock,
   assertOkOrThrowHttpErrorMock,
+  createProviderOperationDeadlineMock,
   resolveProviderHttpRequestConfigMock,
+  resolveProviderOperationTimeoutMsMock,
   sanitizeConfiguredModelProviderRequestMock,
 } = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "litellm-key" })),
   postJsonRequestMock: vi.fn(),
+  postMultipartRequestMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
+  createProviderOperationDeadlineMock: vi.fn((params: Record<string, unknown>) => params),
   resolveProviderHttpRequestConfigMock: vi.fn((params) => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl,
     allowPrivateNetwork: Boolean(params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork),
     headers: new Headers(params.defaultHeaders),
     dispatcherPolicy: undefined as unknown,
   })),
+  resolveProviderOperationTimeoutMsMock: vi.fn(
+    (params: Record<string, unknown>) => params.defaultTimeoutMs,
+  ),
   sanitizeConfiguredModelProviderRequestMock: vi.fn((request) => request),
 }));
 
@@ -26,8 +34,11 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
 
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
+  createProviderOperationDeadline: createProviderOperationDeadlineMock,
   postJsonRequest: postJsonRequestMock,
+  postMultipartRequest: postMultipartRequestMock,
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
+  resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
   sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
 }));
 

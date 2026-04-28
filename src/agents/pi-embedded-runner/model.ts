@@ -260,6 +260,16 @@ function resolveProviderTransport(params: {
   };
 }
 
+function resolveConfiguredProviderDefaultApi(
+  providerConfig: InlineProviderConfig | undefined,
+): Api | undefined {
+  const explicit = normalizeResolvedTransportApi(providerConfig?.api);
+  if (explicit) {
+    return explicit;
+  }
+  return providerConfig?.baseUrl ? "openai-completions" : undefined;
+}
+
 function resolveProviderRequestTimeoutMs(timeoutSeconds: unknown): number | undefined {
   if (
     typeof timeoutSeconds !== "number" ||
@@ -516,7 +526,11 @@ function applyConfiguredProviderOverrides(params: {
 
   const resolvedTransport = resolveProviderTransport({
     provider: params.provider,
-    api: metadataOverrideModel?.api ?? providerConfig.api ?? discoveredModel.api,
+    api:
+      metadataOverrideModel?.api ??
+      providerConfig.api ??
+      discoveredModel.api ??
+      resolveConfiguredProviderDefaultApi(providerConfig),
     baseUrl: providerConfig.baseUrl ?? discoveredModel.baseUrl,
     cfg: params.cfg,
     runtimeHooks: params.runtimeHooks,
@@ -530,6 +544,7 @@ function applyConfiguredProviderOverrides(params: {
     api:
       resolvedTransport.api ??
       normalizeResolvedTransportApi(discoveredModel.api) ??
+      resolveConfiguredProviderDefaultApi(providerConfig) ??
       "openai-responses",
     baseUrl: resolvedTransport.baseUrl ?? discoveredModel.baseUrl,
     discoveredHeaders,
@@ -750,7 +765,7 @@ function resolveConfiguredFallbackModel(params: {
   }
   const fallbackTransport = resolveProviderTransport({
     provider,
-    api: providerConfig?.api ?? "openai-responses",
+    api: resolveConfiguredProviderDefaultApi(providerConfig) ?? "openai-responses",
     baseUrl: providerConfig?.baseUrl,
     cfg,
     runtimeHooks,

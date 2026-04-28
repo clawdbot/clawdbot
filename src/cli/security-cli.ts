@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { runSecurityAudit } from "../security/audit.js";
 import { fixSecurityFootguns } from "../security/fix.js";
@@ -65,7 +65,7 @@ export function registerSecurityCli(program: Command) {
       const password = normalizeOptionalString(opts.password);
       const fixResult = opts.fix ? await fixSecurityFootguns().catch((_err) => null) : null;
 
-      const sourceConfig = loadConfig();
+      const sourceConfig = getRuntimeConfig();
       const { resolvedConfig: cfg, diagnostics: secretDiagnostics } =
         await resolveCommandSecretRefsViaGateway({
           config: sourceConfig,

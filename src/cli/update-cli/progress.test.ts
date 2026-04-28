@@ -66,6 +66,16 @@ describe("inferUpdateFailureHints", () => {
     expect(hints.join("\n")).toContain("npm config set prefix ~/.local");
   });
 
+  it("returns EACCES hint for staged package permission failures", () => {
+    const result = makeResult(
+      "global install stage",
+      "EACCES: permission denied, mkdtemp '/usr/local/lib/node_modules/.openclaw-update-stage-'",
+    );
+    const hints = inferUpdateFailureHints(result);
+    expect(hints.join("\n")).toContain("EACCES");
+    expect(hints.join("\n")).toContain("npm config set prefix ~/.local");
+  });
+
   it("returns native optional dependency hint for node-gyp failures", () => {
     const result = makeResult("global update", "node-pre-gyp ERR!\nnode-gyp rebuild failed");
     const hints = inferUpdateFailureHints(result);

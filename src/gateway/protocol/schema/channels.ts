@@ -46,16 +46,117 @@ export const TalkRealtimeSessionParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const TalkRealtimeSessionResultSchema = Type.Object(
+export const TalkRealtimeRelayAudioParamsSchema = Type.Object(
+  {
+    relaySessionId: NonEmptyString,
+    audioBase64: NonEmptyString,
+    timestamp: Type.Optional(Type.Number()),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkRealtimeRelayMarkParamsSchema = Type.Object(
+  {
+    relaySessionId: NonEmptyString,
+    markName: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkRealtimeRelayStopParamsSchema = Type.Object(
+  {
+    relaySessionId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const TalkRealtimeRelayToolResultParamsSchema = Type.Object(
+  {
+    relaySessionId: NonEmptyString,
+    callId: NonEmptyString,
+    result: Type.Unknown(),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkRealtimeRelayOkResultSchema = Type.Object(
+  {
+    ok: Type.Boolean(),
+  },
+  { additionalProperties: false },
+);
+
+const BrowserRealtimeAudioContractSchema = Type.Object(
+  {
+    inputEncoding: Type.Union([Type.Literal("pcm16"), Type.Literal("g711_ulaw")]),
+    inputSampleRateHz: Type.Integer({ minimum: 1 }),
+    outputEncoding: Type.Union([Type.Literal("pcm16"), Type.Literal("g711_ulaw")]),
+    outputSampleRateHz: Type.Integer({ minimum: 1 }),
+  },
+  { additionalProperties: false },
+);
+
+const BrowserRealtimeWebRtcSdpSessionSchema = Type.Object(
   {
     provider: NonEmptyString,
+    transport: Type.Optional(Type.Literal("webrtc-sdp")),
     clientSecret: NonEmptyString,
+    offerUrl: Type.Optional(Type.String()),
     model: Type.Optional(Type.String()),
     voice: Type.Optional(Type.String()),
     expiresAt: Type.Optional(Type.Number()),
   },
   { additionalProperties: false },
 );
+
+const BrowserRealtimeJsonPcmWebSocketSessionSchema = Type.Object(
+  {
+    provider: NonEmptyString,
+    transport: Type.Literal("json-pcm-websocket"),
+    protocol: NonEmptyString,
+    clientSecret: NonEmptyString,
+    websocketUrl: NonEmptyString,
+    audio: BrowserRealtimeAudioContractSchema,
+    initialMessage: Type.Optional(Type.Unknown()),
+    model: Type.Optional(Type.String()),
+    voice: Type.Optional(Type.String()),
+    expiresAt: Type.Optional(Type.Number()),
+  },
+  { additionalProperties: false },
+);
+
+const BrowserRealtimeGatewayRelaySessionSchema = Type.Object(
+  {
+    provider: NonEmptyString,
+    transport: Type.Literal("gateway-relay"),
+    relaySessionId: NonEmptyString,
+    audio: BrowserRealtimeAudioContractSchema,
+    model: Type.Optional(Type.String()),
+    voice: Type.Optional(Type.String()),
+    expiresAt: Type.Optional(Type.Number()),
+  },
+  { additionalProperties: false },
+);
+
+const BrowserRealtimeManagedRoomSessionSchema = Type.Object(
+  {
+    provider: NonEmptyString,
+    transport: Type.Literal("managed-room"),
+    roomUrl: NonEmptyString,
+    token: Type.Optional(Type.String()),
+    model: Type.Optional(Type.String()),
+    voice: Type.Optional(Type.String()),
+    expiresAt: Type.Optional(Type.Number()),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkRealtimeSessionResultSchema = Type.Union([
+  BrowserRealtimeWebRtcSdpSessionSchema,
+  BrowserRealtimeJsonPcmWebSocketSessionSchema,
+  BrowserRealtimeGatewayRelaySessionSchema,
+  BrowserRealtimeManagedRoomSessionSchema,
+]);
 
 const talkProviderFieldSchemas = {
   apiKey: Type.Optional(SecretInputSchema),

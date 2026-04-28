@@ -12,16 +12,83 @@ import {
   emitGatewayRestart,
   isGatewaySigusr1RestartExternallyAllowed,
   markGatewaySigusr1RestartHandled,
+  peekGatewaySigusr1RestartReason,
   scheduleGatewaySigusr1Restart,
   setGatewaySigusr1RestartPolicy,
   setPreRestartDeferralCheck,
 } from "./restart.js";
 import { listTailnetAddresses } from "./tailnet.js";
 
+const relaunchGatewayScheduledTaskMock = vi.hoisted(() => vi.fn());
+const cleanStaleGatewayProcessesSyncMock = vi.hoisted(() => vi.fn());
+const findGatewayPidsOnPortSyncMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./restart-stale-pids.js", () => ({
+  cleanStaleGatewayProcessesSync: (...args: unknown[]) =>
+    cleanStaleGatewayProcessesSyncMock(...args),
+  findGatewayPidsOnPortSync: (...args: unknown[]) => findGatewayPidsOnPortSyncMock(...args),
+}));
+
+vi.mock("./windows-task-restart.js", () => ({
+  relaunchGatewayScheduledTask: (...args: unknown[]) => relaunchGatewayScheduledTaskMock(...args),
+}));
+
+const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+
+function setPlatform(platform: NodeJS.Platform): void {
+  if (!originalPlatformDescriptor) {
+    return;
+  }
+  Object.defineProperty(process, "platform", {
+    ...originalPlatformDescriptor,
+    value: platform,
+  });
+}
+
+function withoutSigusr1Listeners(fn: () => void): void {
+  const listeners = process.listeners("SIGUSR1");
+  process.removeAllListeners("SIGUSR1");
+  try {
+    fn();
+  } finally {
+    process.removeAllListeners("SIGUSR1");
+    for (const listener of listeners) {
+      process.on("SIGUSR1", listener);
+    }
+  }
+}
+
+function withRestartSupervisorEnabled(fn: () => void): void {
+  const originalVitest = process.env.VITEST;
+  const originalNodeEnv = process.env.NODE_ENV;
+  delete process.env.VITEST;
+  delete process.env.NODE_ENV;
+  try {
+    fn();
+  } finally {
+    if (originalVitest === undefined) {
+      delete process.env.VITEST;
+    } else {
+      process.env.VITEST = originalVitest;
+    }
+    if (originalNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  }
+}
+
 describe("infra runtime", () => {
   function setupRestartSignalSuite() {
     beforeEach(() => {
       __testing.resetSigusr1State();
+      relaunchGatewayScheduledTaskMock.mockReset();
+      relaunchGatewayScheduledTaskMock.mockReturnValue({ ok: true, method: "schtasks" });
+      cleanStaleGatewayProcessesSyncMock.mockReset();
+      cleanStaleGatewayProcessesSyncMock.mockReturnValue([]);
+      findGatewayPidsOnPortSyncMock.mockReset();
+      findGatewayPidsOnPortSyncMock.mockReturnValue([]);
       vi.useFakeTimers();
       vi.spyOn(process, "kill").mockImplementation(() => true);
     });
@@ -32,6 +99,9 @@ describe("infra runtime", () => {
       clearConfigCache();
       await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();
+      if (originalPlatformDescriptor) {
+        Object.defineProperty(process, "platform", originalPlatformDescriptor);
+      }
       vi.restoreAllMocks();
     });
   }
@@ -79,6 +149,53 @@ describe("infra runtime", () => {
       }
     });
 
+    it("uses the SIGUSR1 listener path on Windows when the run loop is active", () => {
+      setPlatform("win32");
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        expect(emitGatewayRestart()).toBe(true);
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(relaunchGatewayScheduledTaskMock).not.toHaveBeenCalled();
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("uses the Windows supervisor fallback without leaving a restart cycle in flight", () => {
+      setPlatform("win32");
+      withoutSigusr1Listeners(() => {
+        withRestartSupervisorEnabled(() => {
+          relaunchGatewayScheduledTaskMock.mockReturnValueOnce({ ok: true, method: "schtasks" });
+
+          expect(emitGatewayRestart("windows-fallback")).toBe(true);
+
+          expect(relaunchGatewayScheduledTaskMock).toHaveBeenCalledTimes(1);
+          expect(consumeGatewaySigusr1RestartAuthorization()).toBe(false);
+          const next = scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "next" });
+          expect(next.coalesced).toBe(false);
+          expect(next.mode).toBe("supervisor");
+        });
+      });
+    });
+
+    it("rolls back the Windows supervisor fallback when scheduling fails", () => {
+      setPlatform("win32");
+      withoutSigusr1Listeners(() => {
+        withRestartSupervisorEnabled(() => {
+          relaunchGatewayScheduledTaskMock
+            .mockReturnValueOnce({ ok: false, method: "schtasks", detail: "denied" })
+            .mockReturnValueOnce({ ok: true, method: "schtasks" });
+
+          expect(emitGatewayRestart("windows-fallback")).toBe(false);
+          expect(consumeGatewaySigusr1RestartAuthorization()).toBe(false);
+          expect(emitGatewayRestart("windows-retry")).toBe(true);
+          expect(relaunchGatewayScheduledTaskMock).toHaveBeenCalledTimes(2);
+        });
+      });
+    });
+
     it("coalesces duplicate scheduled restarts into a single pending timer", async () => {
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
@@ -96,6 +213,24 @@ describe("infra runtime", () => {
         await vi.advanceTimersByTimeAsync(1);
         const sigusr1Emits = emitSpy.mock.calls.filter((args) => args[0] === "SIGUSR1");
         expect(sigusr1Emits.length).toBe(1);
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("preserves update restart reason when a scheduled restart coalesces", async () => {
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        const first = scheduleGatewaySigusr1Restart({ delayMs: 1_000, reason: "config.patch" });
+        const second = scheduleGatewaySigusr1Restart({ delayMs: 1_000, reason: "update.run" });
+
+        expect(first.coalesced).toBe(false);
+        expect(second.coalesced).toBe(true);
+
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(peekGatewaySigusr1RestartReason()).toBe("update.run");
       } finally {
         process.removeListener("SIGUSR1", handler);
       }

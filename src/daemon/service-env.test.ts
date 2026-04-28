@@ -13,10 +13,14 @@ import {
 } from "./service-env.js";
 
 describe("getMinimalServicePathParts - Linux user directories", () => {
+  const allExist = (): boolean => true;
+  const noneExist = (): boolean => false;
+
   it("includes user bin directories when HOME is set on Linux", () => {
     const result = getMinimalServicePathParts({
       platform: "linux",
       home: "/home/testuser",
+      existsSync: allExist,
     });
 
     // Should include all common user bin directories
@@ -53,6 +57,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     const result = getMinimalServicePathParts({
       platform: "linux",
       home: "/home/testuser",
+      existsSync: allExist,
     });
 
     const userDirIndex = result.indexOf("/home/testuser/.local/bin");
@@ -68,6 +73,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
       platform: "linux",
       home: "/home/testuser",
       extraDirs: ["/custom/bin"],
+      existsSync: allExist,
     });
 
     const extraDirIndex = result.indexOf("/custom/bin");
@@ -91,6 +97,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
         NVM_DIR: "/opt/nvm",
         FNM_DIR: "/opt/fnm",
       },
+      existsSync: allExist,
     });
 
     expect(result).toContain("/opt/pnpm");
@@ -107,6 +114,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     const result = getMinimalServicePathParts({
       platform: "darwin",
       home: "/Users/testuser",
+      existsSync: allExist,
     });
 
     // Should include common user bin directories
@@ -138,6 +146,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
         NVM_DIR: "/Users/testuser/.nvm",
         PNPM_HOME: "/Users/testuser/Library/pnpm",
       },
+      existsSync: allExist,
     });
 
     // fnm uses aliases/default/bin (not current)
@@ -152,6 +161,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     const result = getMinimalServicePathParts({
       platform: "darwin",
       home: "/Users/testuser",
+      existsSync: allExist,
     });
 
     // fnm on macOS defaults to ~/Library/Application Support/fnm
@@ -169,10 +179,96 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     const result = getMinimalServicePathParts({
       platform: "win32",
       home: "C:\\Users\\testuser",
+      existsSync: allExist,
     });
 
     // Windows returns empty array (uses existing PATH)
     expect(result).toEqual([]);
+  });
+
+  it("omits hard-coded version-manager fallbacks on Linux when missing", () => {
+    const result = getMinimalServicePathParts({
+      platform: "linux",
+      home: "/home/testuser",
+      existsSync: noneExist,
+    });
+
+    expect(result).toContain("/home/testuser/.local/bin");
+    expect(result).toContain("/home/testuser/.npm-global/bin");
+    expect(result).toContain("/home/testuser/bin");
+    expect(result).toContain("/home/testuser/.nix-profile/bin");
+    expect(result).not.toContain("/home/testuser/.volta/bin");
+    expect(result).not.toContain("/home/testuser/.asdf/shims");
+    expect(result).not.toContain("/home/testuser/.bun/bin");
+    expect(result).not.toContain("/home/testuser/.nvm/current/bin");
+    expect(result).not.toContain("/home/testuser/.local/share/fnm/aliases/default/bin");
+    expect(result).not.toContain("/home/testuser/.local/share/fnm/current/bin");
+    expect(result).not.toContain("/home/testuser/.fnm/aliases/default/bin");
+    expect(result).not.toContain("/home/testuser/.fnm/current/bin");
+    expect(result).not.toContain("/home/testuser/.local/share/pnpm");
+  });
+
+  it("omits hard-coded version-manager fallbacks on macOS when missing", () => {
+    const result = getMinimalServicePathParts({
+      platform: "darwin",
+      home: "/Users/testuser",
+      existsSync: noneExist,
+    });
+
+    expect(result).toContain("/Users/testuser/.local/bin");
+    expect(result).toContain("/Users/testuser/.npm-global/bin");
+    expect(result).toContain("/Users/testuser/bin");
+    expect(result).toContain("/Users/testuser/.nix-profile/bin");
+    expect(result).not.toContain("/Users/testuser/.volta/bin");
+    expect(result).not.toContain("/Users/testuser/.asdf/shims");
+    expect(result).not.toContain("/Users/testuser/.bun/bin");
+    expect(result).not.toContain(
+      "/Users/testuser/Library/Application Support/fnm/aliases/default/bin",
+    );
+    expect(result).not.toContain("/Users/testuser/.fnm/aliases/default/bin");
+    expect(result).not.toContain("/Users/testuser/Library/pnpm");
+    expect(result).not.toContain("/Users/testuser/.local/share/pnpm");
+  });
+
+  it("keeps env-configured roots when fallback directories are missing", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "linux",
+      env: {
+        HOME: "/home/testuser",
+        PNPM_HOME: "/opt/pnpm",
+        VOLTA_HOME: "/opt/volta",
+        BUN_INSTALL: "/opt/bun",
+        ASDF_DATA_DIR: "/opt/asdf",
+        NVM_DIR: "/opt/nvm",
+        FNM_DIR: "/opt/fnm",
+      },
+      existsSync: noneExist,
+    });
+
+    expect(result).toContain("/opt/pnpm");
+    expect(result).toContain("/opt/volta/bin");
+    expect(result).toContain("/opt/bun/bin");
+    expect(result).toContain("/opt/asdf/shims");
+    expect(result).toContain("/opt/nvm/current/bin");
+    expect(result).toContain("/opt/fnm/aliases/default/bin");
+    expect(result).toContain("/opt/fnm/current/bin");
+  });
+
+  it("emits only existing hard-coded version-manager fallbacks", () => {
+    const exists = (candidate: string) =>
+      candidate === "/home/testuser/.volta/bin" ||
+      candidate === "/home/testuser/.local/share/fnm/aliases/default/bin";
+    const result = getMinimalServicePathParts({
+      platform: "linux",
+      home: "/home/testuser",
+      existsSync: exists,
+    });
+
+    expect(result).toContain("/home/testuser/.volta/bin");
+    expect(result).toContain("/home/testuser/.local/share/fnm/aliases/default/bin");
+    expect(result).not.toContain("/home/testuser/.bun/bin");
+    expect(result).not.toContain("/home/testuser/.asdf/shims");
+    expect(result).not.toContain("/home/testuser/.fnm/aliases/default/bin");
   });
 });
 
@@ -181,6 +277,7 @@ describe("getMinimalServicePathParts - Nix Home Manager", () => {
     const result = getMinimalServicePathParts({
       platform: "linux",
       home: "/home/testuser",
+      existsSync: () => true,
     });
 
     expect(result).toContain("/home/testuser/.nix-profile/bin");
@@ -190,6 +287,7 @@ describe("getMinimalServicePathParts - Nix Home Manager", () => {
     const result = getMinimalServicePathParts({
       platform: "darwin",
       home: "/Users/testuser",
+      existsSync: () => true,
     });
 
     expect(result).toContain("/Users/testuser/.nix-profile/bin");
@@ -202,6 +300,7 @@ describe("getMinimalServicePathParts - Nix Home Manager", () => {
         HOME: "/home/testuser",
         NIX_PROFILES: "/nix/var/nix/profiles/default /home/testuser/.nix-profile",
       },
+      existsSync: () => true,
     });
 
     const userIdx = result.indexOf("/home/testuser/.nix-profile/bin");
@@ -218,6 +317,7 @@ describe("getMinimalServicePathParts - Nix Home Manager", () => {
         HOME: "/Users/testuser",
         NIX_PROFILES: "/nix/var/nix/profiles/default /Users/testuser/.nix-profile",
       },
+      existsSync: () => true,
     });
 
     const userIdx = result.indexOf("/Users/testuser/.nix-profile/bin");
@@ -234,6 +334,7 @@ describe("getMinimalServicePathParts - Nix Home Manager", () => {
         HOME: "/home/testuser",
         NIX_PROFILES: "/nix/var/nix/profiles/per-user/testuser/profile",
       },
+      existsSync: () => true,
     });
 
     expect(result).toContain("/nix/var/nix/profiles/per-user/testuser/profile/bin");
@@ -246,6 +347,7 @@ describe("getMinimalServicePathParts - Nix Home Manager", () => {
         HOME: "/Users/testuser",
         NIX_PROFILES: "/nix/var/nix/profiles/per-user/testuser/profile",
       },
+      existsSync: () => true,
     });
 
     expect(result).toContain("/nix/var/nix/profiles/per-user/testuser/profile/bin");
@@ -259,6 +361,7 @@ describe("getMinimalServicePathParts - Nix Home Manager", () => {
         NIX_PROFILES:
           "/nix/var/nix/profiles/default /nix/var/nix/profiles/per-user/testuser/custom /home/testuser/.nix-profile",
       },
+      existsSync: () => true,
     });
 
     const userIdx = result.indexOf("/home/testuser/.nix-profile/bin");
@@ -299,6 +402,7 @@ describe("buildMinimalServicePath", () => {
     const result = buildMinimalServicePath({
       platform: "linux",
       env: { HOME: "/home/alice" },
+      existsSync: () => true,
     });
     const parts = splitPath(result, "linux");
 
@@ -332,6 +436,7 @@ describe("buildMinimalServicePath", () => {
     const result = buildMinimalServicePath({
       platform: "linux",
       env: { HOME: "/home/bob" },
+      existsSync: () => true,
     });
     const parts = splitPath(result, "linux");
 
@@ -366,6 +471,7 @@ describe("buildMinimalServicePath", () => {
       platform: "linux",
       extraDirs: ["/home/alice/.nvm/versions/node/v22.22.0/bin"],
       env: { HOME: "/home/alice" },
+      existsSync: () => true,
     });
     const parts = splitPath(result, "linux");
 
@@ -449,7 +555,7 @@ describe("buildServiceEnvironment", () => {
     }
   });
 
-  it("forwards proxy environment variables for launchd/systemd runtime", () => {
+  it("does not persist ambient proxy environment variables for launchd/systemd runtime", () => {
     const env = buildServiceEnvironment({
       env: {
         HOME: "/home/user",
@@ -462,11 +568,23 @@ describe("buildServiceEnvironment", () => {
       port: 18789,
     });
 
-    expect(env.HTTP_PROXY).toBe("http://proxy.local:7890");
-    expect(env.HTTPS_PROXY).toBe("https://proxy.local:7890");
-    expect(env.NO_PROXY).toBe("localhost,127.0.0.1");
-    expect(env.http_proxy).toBe("http://proxy.local:7890");
-    expect(env.all_proxy).toBe("socks5://proxy.local:1080");
+    expect(env.HTTP_PROXY).toBeUndefined();
+    expect(env.HTTPS_PROXY).toBeUndefined();
+    expect(env.NO_PROXY).toBeUndefined();
+    expect(env.http_proxy).toBeUndefined();
+    expect(env.all_proxy).toBeUndefined();
+  });
+
+  it("forwards proxy URL env fallback for installed gateway services", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        OPENCLAW_PROXY_URL: " http://127.0.0.1:3128 ",
+      },
+      port: 18789,
+    });
+
+    expect(env.OPENCLAW_PROXY_URL).toBe("http://127.0.0.1:3128");
   });
 
   it("omits PATH on Windows so Scheduled Tasks can inherit the current shell path", () => {
@@ -529,7 +647,7 @@ describe("buildNodeServiceEnvironment", () => {
     expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
   });
 
-  it("forwards proxy environment variables for node services", () => {
+  it("does not persist ambient proxy environment variables for node services", () => {
     const env = buildNodeServiceEnvironment({
       env: {
         HOME: "/home/user",
@@ -538,8 +656,19 @@ describe("buildNodeServiceEnvironment", () => {
       },
     });
 
-    expect(env.HTTPS_PROXY).toBe("https://proxy.local:7890");
-    expect(env.no_proxy).toBe("localhost,127.0.0.1");
+    expect(env.HTTPS_PROXY).toBeUndefined();
+    expect(env.no_proxy).toBeUndefined();
+  });
+
+  it("forwards proxy URL env fallback for installed node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        OPENCLAW_PROXY_URL: " http://127.0.0.1:3128 ",
+      },
+    });
+
+    expect(env.OPENCLAW_PROXY_URL).toBe("http://127.0.0.1:3128");
   });
 
   it("forwards TMPDIR for node services on Linux", () => {

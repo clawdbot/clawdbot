@@ -33,10 +33,10 @@ const makeConfig = (overrides: Record<string, unknown>) =>
     },
     session: { store: sessionStorePath },
     ...overrides,
-  }) as unknown as ReturnType<typeof import("openclaw/plugin-sdk/config-runtime").loadConfig>;
+  }) as unknown as import("openclaw/plugin-sdk/config-types").OpenClawConfig;
 
 async function runGroupGating(params: {
-  cfg: ReturnType<typeof import("openclaw/plugin-sdk/config-runtime").loadConfig>;
+  cfg: import("openclaw/plugin-sdk/config-types").OpenClawConfig;
   msg: Record<string, unknown>;
   conversationId?: string;
   agentId?: string;

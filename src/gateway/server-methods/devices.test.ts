@@ -294,7 +294,6 @@ describe("deviceHandlers", () => {
       {
         deviceId: " device-1 ",
         role: "operator",
-        token: "new-token",
         scopes: ["operator.pairing"],
         rotatedAtMs: 789,
       },
@@ -329,6 +328,37 @@ describe("deviceHandlers", () => {
         deviceId: " device-1 ",
         role: "operator",
         token: "new-token",
+        scopes: ["operator.pairing"],
+        rotatedAtMs: 789,
+      },
+      undefined,
+    );
+  });
+
+  it("omits rotated tokens when an admin rotates another device token", async () => {
+    mockPairedOperatorDevice();
+    mockRotateOperatorTokenSuccess();
+    const opts = createOptions(
+      "device.token.rotate",
+      {
+        deviceId: "device-1",
+        role: "operator",
+        scopes: ["operator.pairing"],
+      },
+      {
+        client: createClient(["operator.admin", "operator.pairing"], "admin-device", {
+          isDeviceTokenAuth: true,
+        }),
+      },
+    );
+
+    await deviceHandlers["device.token.rotate"](opts);
+
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      {
+        deviceId: "device-1",
+        role: "operator",
         scopes: ["operator.pairing"],
         rotatedAtMs: 789,
       },

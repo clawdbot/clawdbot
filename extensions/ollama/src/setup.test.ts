@@ -1,7 +1,7 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
+import { jsonResponse, requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { jsonResponse, requestBodyText, requestUrl } from "../../../src/test-helpers/http.js";
 import { resetOllamaModelShowInfoCacheForTest } from "./provider-models.js";
 import {
   configureOllamaNonInteractive,
@@ -237,6 +237,21 @@ describe("ollama setup", () => {
     const modelIds = result.config.models?.providers?.ollama?.models?.map((m) => m.id);
     expect(modelIds?.[0]).toBe("gemma4");
     expect(modelIds).toContain("llama3:8b");
+  });
+
+  it("dedupes the suggested local model against a discovered latest tag", async () => {
+    const prompter = createLocalPrompter();
+
+    const fetchMock = createOllamaFetchMock({ tags: ["gemma4:latest", "llama3:8b"] });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await promptAndConfigureOllama({
+      cfg: {},
+      prompter,
+    });
+
+    const modelIds = result.config.models?.providers?.ollama?.models?.map((m) => m.id);
+    expect(modelIds).toEqual(["gemma4:latest", "llama3:8b"]);
   });
 
   it("cloud mode does not hit local Ollama endpoints", async () => {
@@ -536,6 +551,21 @@ describe("ollama setup", () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
+    it("skips pull when an untagged model is available as latest", async () => {
+      const prompter = {} as unknown as WizardPrompter;
+
+      const fetchMock = createOllamaFetchMock({ tags: ["gemma4:latest"] });
+      vi.stubGlobal("fetch", fetchMock);
+
+      await ensureOllamaModelPulled({
+        config: createDefaultOllamaConfig("ollama/gemma4"),
+        model: "ollama/gemma4",
+        prompter,
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
     it("uses baseURL alias when checking and pulling models", async () => {
       const progress = { update: vi.fn(), stop: vi.fn() };
       const prompter = {
@@ -654,6 +684,32 @@ describe("ollama setup", () => {
     expect(result.agents?.defaults?.model).toEqual(
       expect.objectContaining({ primary: "ollama/llama3.2:latest" }),
     );
+  });
+
+  it("uses the discovered latest tag as the non-interactive default without pulling", async () => {
+    const fetchMock = createOllamaFetchMock({ tags: ["gemma4:latest"] });
+    vi.stubGlobal("fetch", fetchMock);
+    const runtime = createRuntime();
+
+    const result = await configureOllamaNonInteractive({
+      nextConfig: {},
+      opts: {
+        customBaseUrl: "http://127.0.0.1:11434",
+      },
+      runtime,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.some((call) => requestUrl(call[0]).endsWith("/api/pull"))).toBe(
+      false,
+    );
+    expect(result.models?.providers?.ollama?.models?.map((model) => model.id)).toEqual([
+      "gemma4:latest",
+    ]);
+    expect(result.agents?.defaults?.model).toEqual(
+      expect.objectContaining({ primary: "ollama/gemma4:latest" }),
+    );
+    expect(runtime.log).toHaveBeenCalledWith("Default Ollama model: gemma4:latest");
   });
 
   it("accepts cloud models in non-interactive mode without pulling", async () => {

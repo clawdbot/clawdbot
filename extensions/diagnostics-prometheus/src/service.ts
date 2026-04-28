@@ -599,6 +599,9 @@ function recordDiagnosticEvent(
         },
       );
       return;
+    case "diagnostic.heartbeat":
+    case "diagnostic.liveness.warning":
+      return;
     case "telemetry.exporter":
       store.counter("openclaw_telemetry_exporter_total", "Telemetry exporter lifecycle events.", {
         exporter: lowCardinalityLabel(evt.exporter),

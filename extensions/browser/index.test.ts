@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import {
   browserPluginNodeHostCommands,
   browserPluginReload,

@@ -87,11 +87,13 @@ curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method npm --ve
 npm i -g openclaw@latest
 ```
 
-When `openclaw update` manages a global npm install, it first runs the normal
-global install command. If that command fails, OpenClaw retries once with
-`--omit=optional`. That retry helps hosts where native optional dependencies
-cannot compile, while keeping the original failure visible if the fallback also
-fails.
+When `openclaw update` manages a global npm install, it installs the target into
+a temporary npm prefix first, verifies the packaged `dist` inventory, then swaps
+the clean package tree into the real global prefix. That avoids npm overlaying a
+new package onto stale files from the old package. If the install command fails,
+OpenClaw retries once with `--omit=optional`. That retry helps hosts where native
+optional dependencies cannot compile, while keeping the original failure visible
+if the fallback also fails.
 
 ```bash
 pnpm add -g openclaw@latest

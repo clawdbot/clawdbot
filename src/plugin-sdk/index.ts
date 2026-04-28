@@ -88,7 +88,7 @@ export type {
   MemoryPluginPublicArtifactsProvider,
 } from "../plugins/memory-state.js";
 export type { CliBackendConfig } from "../config/types.js";
-export * from "./image-generation.js";
+export type * from "./image-generation.js";
 export * from "./music-generation.js";
 export type { SecretInput, SecretRef } from "../config/types.secrets.js";
 export type { RuntimeEnv } from "../runtime.js";
@@ -122,3 +122,4 @@ export {
   delegateCompactionToRuntime,
 } from "../context-engine/delegate.js";
 export { onDiagnosticEvent } from "../infra/diagnostic-events.js";
+export { optionalStringEnum, stringEnum } from "../agents/schema/typebox.js";

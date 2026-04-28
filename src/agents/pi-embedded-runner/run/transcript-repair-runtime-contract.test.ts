@@ -1,10 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   inlineDataUriOrphanLeaf,
   QUEUED_USER_MESSAGE_MARKER,
   structuredOrphanLeaf,
   textOrphanLeaf,
-} from "../../../../test/helpers/agents/transcript-repair-runtime-contract.js";
+} from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mergeOrphanedTrailingUserPrompt } from "./attempt.prompt-helpers.js";
 import {
   DEFAULT_MESSAGE_MERGE_STRATEGY_ID,

@@ -148,6 +148,25 @@ export function resolveFeishuGroupConfig(params: { cfg?: FeishuConfig; groupId?:
   return wildcard;
 }
 
+export function hasExplicitFeishuGroupConfig(params: {
+  cfg?: FeishuConfig;
+  groupId?: string | null;
+}): boolean {
+  const groups = params.cfg?.groups ?? {};
+  const groupId = params.groupId?.trim();
+  if (!groupId) {
+    return false;
+  }
+  if (Object.prototype.hasOwnProperty.call(groups, groupId) && groupId !== "*") {
+    return true;
+  }
+
+  const lowered = normalizeOptionalLowercaseString(groupId) ?? "";
+  return Object.keys(groups).some(
+    (key) => key !== "*" && normalizeOptionalLowercaseString(key) === lowered,
+  );
+}
+
 export function resolveFeishuGroupToolPolicy(params: ChannelGroupContext) {
   const cfg = params.cfg.channels?.feishu;
   if (!cfg) {

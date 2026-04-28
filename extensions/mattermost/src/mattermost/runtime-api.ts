@@ -26,12 +26,12 @@ export {
   listSkillCommandsForAgents,
   resolveControlCommandGate,
 } from "openclaw/plugin-sdk/command-auth";
+export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 export {
-  isDangerousNameMatchingEnabled,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/runtime-group-policy";
 export { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
 export {
   getAgentScopedMediaLocalRoots,

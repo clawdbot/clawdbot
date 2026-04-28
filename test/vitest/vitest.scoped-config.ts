@@ -45,6 +45,10 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
   [
     "acp",
     "agents",
+    "agents-core",
+    "agents-pi-embedded",
+    "agents-support",
+    "agents-tools",
     "auto-reply",
     "auto-reply-core",
     "auto-reply-reply",

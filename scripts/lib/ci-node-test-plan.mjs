@@ -190,7 +190,12 @@ const SPLIT_NODE_SHARDS = new Map([
       },
       {
         shardName: "agentic-agents",
-        configs: ["test/vitest/vitest.agents.config.ts"],
+        configs: [
+          "test/vitest/vitest.agents-core.config.ts",
+          "test/vitest/vitest.agents-pi-embedded.config.ts",
+          "test/vitest/vitest.agents-support.config.ts",
+          "test/vitest/vitest.agents-tools.config.ts",
+        ],
         requiresDist: false,
       },
       {

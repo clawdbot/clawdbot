@@ -70,7 +70,7 @@ private struct InlineImageList: View {
     let images: [ChatMarkdownPreprocessor.InlineImage]
 
     var body: some View {
-        ForEach(images, id: \.id) { item in
+        ForEach(self.images, id: \.id) { item in
             if let img = item.image {
                 OpenClawPlatformImageFactory.image(img)
                     .resizable()

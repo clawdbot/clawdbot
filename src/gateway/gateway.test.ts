@@ -430,7 +430,12 @@ module.exports = {
         expect(resToken.ok).toBe(true);
       } finally {
         await server2.close({ reason: "wizard auth verify" });
-        await fs.rm(tempHome, { recursive: true, force: true });
+        await fs.rm(tempHome, {
+          recursive: true,
+          force: true,
+          maxRetries: 10,
+          retryDelay: 50,
+        });
         envSnapshot.restore();
       }
     },

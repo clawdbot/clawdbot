@@ -5,7 +5,7 @@ import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { __testing as subagentAnnounceTesting } from "./subagent-announce.js";
 import { __testing as subagentControlTesting } from "./subagent-control.js";
 
-export type LoadedConfig = ReturnType<(typeof import("../config/config.js"))["loadConfig"]>;
+export type LoadedConfig = ReturnType<(typeof import("../config/config.js"))["getRuntimeConfig"]>;
 
 export const callGatewayMock: MockFn = vi.fn();
 
@@ -38,7 +38,7 @@ function applySharedSubagentTestDeps() {
   });
   subagentAnnounceTesting.setDepsForTest({
     callGateway: callGatewayForTest,
-    loadConfig: () => configOverride,
+    getRuntimeConfig: () => configOverride,
   });
   queueCleanupTesting.setDepsForTests({
     resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
@@ -55,7 +55,7 @@ vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    loadConfig: () => configOverride,
+    getRuntimeConfig: () => configOverride,
     resolveGatewayPort: () => 18789,
   };
 });

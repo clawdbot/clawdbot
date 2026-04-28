@@ -1,6 +1,6 @@
 import path from "node:path";
+import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it } from "vitest";
-import { createCapturedPluginRegistration } from "../../src/plugins/captured-registration.js";
 import pluginEntry from "./index.js";
 import { HERMES_REASON_INCLUDE_SECRETS } from "./items.js";
 import { buildHermesMigrationProvider } from "./provider.js";

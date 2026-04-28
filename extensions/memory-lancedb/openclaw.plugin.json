@@ -1,12 +1,20 @@
 {
   "id": "memory-lancedb",
+  "activation": {
+    "onStartup": false
+  },
   "kind": "memory",
   "uiHints": {
     "embedding.apiKey": {
-      "label": "OpenAI API Key",
+      "label": "Embedding API Key",
       "sensitive": true,
       "placeholder": "sk-proj-...",
-      "help": "API key for OpenAI embeddings (or use ${OPENAI_API_KEY})"
+      "help": "Optional API key override for OpenAI-compatible embeddings; omit to use configured provider auth"
+    },
+    "embedding.provider": {
+      "label": "Embedding Provider",
+      "placeholder": "openai",
+      "help": "Memory embedding provider adapter to use (for example openai, github-copilot, ollama)"
     },
     "embedding.model": {
       "label": "Embedding Model",
@@ -16,7 +24,7 @@
     "embedding.baseUrl": {
       "label": "Base URL",
       "placeholder": "https://api.openai.com/v1",
-      "help": "Base URL for compatible providers (e.g. http://localhost:11434/v1)",
+      "help": "Optional provider or OpenAI-compatible embedding endpoint base URL",
       "advanced": true
     },
     "embedding.dimensions": {
@@ -48,6 +56,12 @@
       "advanced": true,
       "placeholder": "500"
     },
+    "recallMaxChars": {
+      "label": "Recall Query Max Chars",
+      "help": "Maximum prompt/query length embedded for memory recall. Lower for small local embedding models.",
+      "advanced": true,
+      "placeholder": "1000"
+    },
     "storageOptions": {
       "label": "Storage Options",
       "advanced": true,
@@ -60,9 +74,14 @@
     "properties": {
       "embedding": {
         "type": "object",
+        "minProperties": 1,
         "additionalProperties": false,
+        "minProperties": 1,
         "properties": {
           "apiKey": {
+            "type": "string"
+          },
+          "provider": {
             "type": "string"
           },
           "model": {
@@ -74,8 +93,7 @@
           "dimensions": {
             "type": "number"
           }
-        },
-        "required": ["apiKey"]
+        }
       },
       "dbPath": {
         "type": "string"
@@ -90,6 +108,11 @@
         "type": "object"
       },
       "captureMaxChars": {
+        "type": "number",
+        "minimum": 100,
+        "maximum": 10000
+      },
+      "recallMaxChars": {
         "type": "number",
         "minimum": 100,
         "maximum": 10000

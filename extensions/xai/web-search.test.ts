@@ -1,8 +1,8 @@
+import { createTestWizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { withEnv, withEnvAsync } from "../../test/helpers/plugins/env.js";
-import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { resolveXaiCatalogEntry } from "./model-definitions.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 import { resolveFallbackXaiAuth } from "./src/tool-auth-shared.js";
@@ -115,7 +115,7 @@ describe("xai web search config resolution", () => {
   it("offers plugin-owned xSearch setup after Grok is selected", async () => {
     const provider = createXaiWebSearchProvider();
     const select = vi.fn().mockResolvedValueOnce("yes").mockResolvedValueOnce("grok-4-1-fast");
-    const prompter = createWizardPrompter({
+    const prompter = createTestWizardPrompter({
       select: select as never,
     });
 
@@ -175,7 +175,7 @@ describe("xai web search config resolution", () => {
         },
       },
     };
-    const prompter = createWizardPrompter({});
+    const prompter = createTestWizardPrompter();
 
     const next = await provider.runSetup?.({
       config,

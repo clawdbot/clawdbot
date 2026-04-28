@@ -87,6 +87,10 @@ async function normalizeSentMediaUrlsForDedupe(params: {
   return normalizedUrls;
 }
 
+function shouldKeepPayloadDuringSilentTurn(payload: ReplyPayload): boolean {
+  return payload.audioAsVoice === true && resolveSendableOutboundReplyParts(payload).hasMedia;
+}
+
 export async function buildReplyPayloads(params: {
   payloads: ReplyPayload[];
   isHeartbeat: boolean;
@@ -107,6 +111,7 @@ export async function buildReplyPayloads(params: {
   originatingChannel?: OriginatingChannelType;
   originatingTo?: string;
   accountId?: string;
+  extractMarkdownImages?: boolean;
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
 }): Promise<{ replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean }> {
   let didLogHeartbeatStrip = params.didLogHeartbeatStrip;
@@ -148,6 +153,7 @@ export async function buildReplyPayloads(params: {
           currentMessageId: params.currentMessageId,
           silentToken: SILENT_REPLY_TOKEN,
           parseMode: "always",
+          extractMarkdownImages: params.extractMarkdownImages,
         });
         const mediaNormalizedPayload = await normalizeReplyPayloadMedia({
           payload: parsed.payload,
@@ -163,7 +169,9 @@ export async function buildReplyPayloads(params: {
       }),
     )
   ).filter(isRenderablePayload);
-  const silentFilteredPayloads = params.silentExpected ? [] : replyTaggedPayloads;
+  const silentFilteredPayloads = params.silentExpected
+    ? replyTaggedPayloads.filter(shouldKeepPayloadDuringSilentTurn)
+    : replyTaggedPayloads;
 
   // Drop final payloads only when block streaming succeeded end-to-end.
   // If streaming aborted (e.g., timeout), fall back to final payloads.
@@ -222,8 +230,34 @@ export async function buildReplyPayloads(params: {
     : mediaFilteredPayloads;
   const isDirectlySentBlockPayload = (payload: ReplyPayload) =>
     Boolean(params.directlySentBlockKeys?.has(createBlockReplyContentKey(payload)));
+  const preserveUnsentMediaAfterBlockStream = (payload: ReplyPayload): ReplyPayload | null => {
+    if (payload.isError) {
+      return payload;
+    }
+    const reply = resolveSendableOutboundReplyParts(payload);
+    if (!reply.hasMedia) {
+      return null;
+    }
+    if (!reply.trimmedText) {
+      return payload;
+    }
+    const textOnlyPayload = {
+      ...payload,
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+      audioAsVoice: undefined,
+    };
+    if (!params.blockReplyPipeline?.hasSentPayload(textOnlyPayload)) {
+      return payload;
+    }
+    return {
+      ...payload,
+      text: undefined,
+      audioAsVoice: payload.audioAsVoice || undefined,
+    };
+  };
   const contentSuppressedPayloads = shouldDropFinalPayloads
-    ? dedupedPayloads.filter((payload) => payload.isError)
+    ? dedupedPayloads.flatMap((payload) => preserveUnsentMediaAfterBlockStream(payload) ?? [])
     : params.blockStreamingEnabled
       ? dedupedPayloads.filter(
           (payload) =>
@@ -250,7 +284,9 @@ export async function buildReplyPayloads(params: {
           sentMediaUrls: blockSentMediaUrls,
         })
       : contentSuppressedPayloads;
-  const replyPayloads = suppressMessagingToolReplies ? [] : filteredPayloads;
+  const replyPayloads = suppressMessagingToolReplies
+    ? []
+    : filteredPayloads.filter(isRenderablePayload);
 
   return {
     replyPayloads,

@@ -129,6 +129,7 @@ export type GoogleMeetExportManifest = {
 
 type SetupOptions = {
   json?: boolean;
+  mode?: GoogleMeetMode;
   transport?: GoogleMeetTransport;
 };
 
@@ -1986,10 +1987,11 @@ export function registerGoogleMeetCli(params: {
     .command("setup")
     .description("Show Google Meet transport setup status")
     .option("--transport <transport>", "Transport to check: chrome, chrome-node, or twilio")
+    .option("--mode <mode>", "Mode to check: realtime or transcribe")
     .option("--json", "Print JSON output", false)
     .action(async (options: SetupOptions) => {
       const rt = await params.ensureRuntime();
-      const status = await rt.setupStatus({ transport: options.transport });
+      const status = await rt.setupStatus({ transport: options.transport, mode: options.mode });
       if (options.json) {
         writeStdoutJson(status);
         return;

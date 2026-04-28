@@ -115,7 +115,7 @@ export async function rotateDeviceToken(
   }
   try {
     const res = await state.client.request<{
-      token: string;
+      token?: string;
       role?: string;
       deviceId?: string;
       scopes?: Array<string>;

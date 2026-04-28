@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { resolveTaskRegistryDir, resolveTaskRegistrySqlitePath } from "./task-registry.paths.js";
 import type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
@@ -60,6 +61,7 @@ type TaskRegistryDatabase = {
   db: DatabaseSync;
   path: string;
   statements: TaskRegistryStatements;
+  walMaintenance: SqliteWalMaintenance;
 };
 
 let cachedDatabase: TaskRegistryDatabase | null = null;
@@ -441,13 +443,14 @@ function openTaskRegistryDatabase(): TaskRegistryDatabase {
     return cachedDatabase;
   }
   if (cachedDatabase) {
+    cachedDatabase.walMaintenance.close();
     cachedDatabase.db.close();
     cachedDatabase = null;
   }
   ensureTaskRegistryPermissions(pathname);
   const { DatabaseSync } = requireNodeSqlite();
   const db = new DatabaseSync(pathname);
-  db.exec(`PRAGMA journal_mode = WAL;`);
+  const walMaintenance = configureSqliteWalMaintenance(db);
   db.exec(`PRAGMA synchronous = NORMAL;`);
   db.exec(`PRAGMA busy_timeout = 5000;`);
   ensureSchema(db);
@@ -456,6 +459,7 @@ function openTaskRegistryDatabase(): TaskRegistryDatabase {
     db,
     path: pathname,
     statements: createStatements(db),
+    walMaintenance,
   };
   return cachedDatabase;
 }
@@ -542,6 +546,7 @@ export function closeTaskRegistrySqliteStore() {
   if (!cachedDatabase) {
     return;
   }
+  cachedDatabase.walMaintenance.close();
   cachedDatabase.db.close();
   cachedDatabase = null;
 }

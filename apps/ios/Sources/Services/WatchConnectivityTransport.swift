@@ -21,13 +21,12 @@ private func sendReachableWatchMessage(_ payload: [String: Any], with session: W
             },
             errorHandler: { error in
                 continuation.resume(throwing: error)
-            }
-        )
+            })
     }
 }
 
 final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
-    nonisolated private static let logger = Logger(subsystem: "ai.openclaw", category: "watch.messaging")
+    private nonisolated static let logger = Logger(subsystem: "ai.openclaw", category: "watch.messaging")
 
     private let session: WCSession?
     private let callbacksLock = NSLock()
@@ -228,7 +227,7 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
         }
     }
 
-    nonisolated private static func status(for session: WCSession) -> WatchMessagingStatus {
+    private nonisolated static func status(for session: WCSession) -> WatchMessagingStatus {
         WatchMessagingStatus(
             supported: true,
             paired: session.isPaired,
@@ -237,7 +236,7 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
             activationState: self.activationStateLabel(session.activationState))
     }
 
-    nonisolated private static func activationStateLabel(_ state: WCSessionActivationState) -> String {
+    private nonisolated static func activationStateLabel(_ state: WCSessionActivationState) -> String {
         switch state {
         case .notActivated:
             "notActivated"

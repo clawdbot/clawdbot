@@ -121,7 +121,8 @@ export function registerDefaultAuthTokenSuite(): void {
     });
 
     test("connect (req) handshake returns hello-ok payload", async () => {
-      const { STATE_DIR, createConfigIO } = await import("../config/config.js");
+      const { createConfigIO } = await import("../config/config.js");
+      const { STATE_DIR } = await import("../config/paths.js");
       const ws = await openWs(port);
 
       const res = await connectReq(ws);

@@ -8,11 +8,6 @@ on:
         required: true
         default: main
         type: string
-      workflow_ref:
-        description: Trusted workflow ref used to run child workflows
-        required: false
-        default: main
-        type: string
       provider:
         description: Provider lane for cross-OS onboarding and the end-to-end agent turn
         required: false
@@ -31,8 +26,39 @@ on:
           - fresh
           - upgrade
           - both
+      release_profile:
+        description: Release coverage profile for live/Docker/provider breadth
+        required: false
+        default: full
+        type: choice
+        options:
+          - minimum
+          - stable
+          - full
+      rerun_group:
+        description: Validation group to run
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - ci
+          - release-checks
+          - install-smoke
+          - cross-os
+          - live-e2e
+          - package
+          - qa
+          - qa-parity
+          - qa-live
+          - npm-telegram
       npm_telegram_package_spec:
         description: Optional published package spec for the post-publish Telegram E2E lane
+        required: false
+        default: ""
+        type: string
+      evidence_package_spec:
+        description: Optional published package spec to prove in the private release evidence report
         required: false
         default: ""
         type: string
@@ -70,75 +96,108 @@ jobs:
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
     steps:
-      - name: Checkout target ref
+      - name: Checkout trusted workflow helper
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.ref }}
-          fetch-depth: 0
+          ref: ${{ github.ref_name }}
+          path: workflow
+          fetch-depth: 1
           persist-credentials: false
           submodules: false
 
       - name: Resolve target SHA
         id: resolve
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        env:
+          TARGET_REF: ${{ inputs.ref }}
+        run: |
+          bash workflow/scripts/github/resolve-openclaw-ref.sh \
+            --ref "$TARGET_REF" \
+            --github-output "$GITHUB_OUTPUT"
 
       - name: Summarize target
         env:
           TARGET_REF: ${{ inputs.ref }}
           TARGET_SHA: ${{ steps.resolve.outputs.sha }}
-          WORKFLOW_REF: ${{ inputs.workflow_ref }}
+          CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
+          EVIDENCE_PACKAGE_SPEC: ${{ inputs.evidence_package_spec }}
+          RERUN_GROUP: ${{ inputs.rerun_group }}
         run: |
           {
             echo "## Full release validation"
             echo
             echo "- Target ref: \`${TARGET_REF}\`"
             echo "- Target SHA: \`${TARGET_SHA}\`"
-            echo "- Child workflow ref: \`${WORKFLOW_REF}\`"
-            echo "- Normal CI: \`CI\` with \`target_ref=${TARGET_REF}\`"
-            echo "- Release/live/Docker/package/QA: \`OpenClaw Release Checks\`"
+            echo "- Child workflow ref: \`${CHILD_WORKFLOW_REF}\`"
+            echo "- Rerun group: \`${RERUN_GROUP}\`"
+            if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "ci" ]]; then
+              echo "- Normal CI: \`CI\` with \`target_ref=${TARGET_SHA}\`"
+            else
+              echo "- Normal CI: skipped by rerun group"
+            fi
+            if [[ "$RERUN_GROUP" != "ci" && "$RERUN_GROUP" != "npm-telegram" ]]; then
+              echo "- Release/live/Docker/package/QA: \`OpenClaw Release Checks\`"
+            else
+              echo "- Release/live/Docker/package/QA: skipped by rerun group"
+            fi
             if [[ -n "${NPM_TELEGRAM_PACKAGE_SPEC// }" ]]; then
               echo "- Post-publish Telegram E2E: \`${NPM_TELEGRAM_PACKAGE_SPEC}\`"
             else
               echo "- Post-publish Telegram E2E: skipped because no published package spec was provided"
+            fi
+            if [[ -n "${EVIDENCE_PACKAGE_SPEC// }" ]]; then
+              echo "- Private evidence package proof: \`${EVIDENCE_PACKAGE_SPEC}\`"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   normal_ci:
     name: Run normal full CI
     needs: [resolve_target]
+    if: contains(fromJSON('["all","ci"]'), inputs.rerun_group)
     runs-on: ubuntu-24.04
     timeout-minutes: 240
+    outputs:
+      run_id: ${{ steps.dispatch.outputs.run_id }}
+      url: ${{ steps.dispatch.outputs.url }}
+      conclusion: ${{ steps.dispatch.outputs.conclusion }}
     steps:
       - name: Dispatch and monitor CI
+        id: dispatch
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_REF: ${{ inputs.ref }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
-          WORKFLOW_REF: ${{ inputs.workflow_ref }}
+          CHILD_WORKFLOW_REF: ${{ github.ref_name }}
         run: |
           set -euo pipefail
 
           dispatch_and_wait() {
             local workflow="$1"
-            local workflow_ref="$2"
-            shift 2
+            shift
 
-            local before_json run_id status conclusion url
+            local before_json dispatch_output run_id status conclusion url
             before_json="$(gh run list --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
 
-            gh workflow run "$workflow" --ref "$workflow_ref" "$@"
+            dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
+            printf '%s\n' "$dispatch_output"
+            run_id="$(
+              printf '%s\n' "$dispatch_output" |
+                sed -nE 's#.*actions/runs/([0-9]+).*#\1#p' |
+                tail -n 1
+            )"
 
-            for _ in $(seq 1 60); do
-              run_id="$(
-                BEFORE_IDS="$before_json" gh run list --workflow "$workflow" --event workflow_dispatch --limit 50 --json databaseId,createdAt \
-                  --jq 'map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
-              )"
-              if [[ -n "$run_id" ]]; then
-                break
-              fi
-              sleep 5
-            done
+            if [[ -z "$run_id" ]]; then
+              for _ in $(seq 1 60); do
+                run_id="$(
+                  BEFORE_IDS="$before_json" gh run list --workflow "$workflow" --event workflow_dispatch --limit 50 --json databaseId,createdAt \
+                    --jq 'map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
+                )"
+                if [[ -n "$run_id" ]]; then
+                  break
+                fi
+                sleep 5
+              done
+            fi
 
             if [[ -z "${run_id:-}" ]]; then
               echo "Could not find dispatched run for ${workflow}." >&2
@@ -146,6 +205,7 @@ jobs:
             fi
 
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+            echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
             while true; do
               status="$(gh run view "$run_id" --json status --jq '.status')"
@@ -158,9 +218,10 @@ jobs:
             conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
             url="$(gh run view "$run_id" --json url --jq '.url')"
             echo "${workflow} finished with ${conclusion}: ${url}"
+            echo "url=${url}" >> "$GITHUB_OUTPUT"
+            echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
             if [[ "$conclusion" != "success" ]]; then
-              gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}'
-              exit 1
+              gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
             fi
           }
 
@@ -171,45 +232,60 @@ jobs:
             echo "- Target SHA: \`${TARGET_SHA}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          dispatch_and_wait ci.yml "$WORKFLOW_REF" -f target_ref="$TARGET_REF"
+          dispatch_and_wait ci.yml -f target_ref="$TARGET_SHA"
 
   release_checks:
     name: Run release/live/Docker/QA validation
     needs: [resolve_target]
+    if: contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group)
     runs-on: ubuntu-24.04
     timeout-minutes: 720
+    outputs:
+      run_id: ${{ steps.dispatch.outputs.run_id }}
+      url: ${{ steps.dispatch.outputs.url }}
+      conclusion: ${{ steps.dispatch.outputs.conclusion }}
     steps:
       - name: Dispatch and monitor release checks
+        id: dispatch
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_REF: ${{ inputs.ref }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
-          WORKFLOW_REF: ${{ inputs.workflow_ref }}
+          CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           PROVIDER: ${{ inputs.provider }}
           MODE: ${{ inputs.mode }}
+          RELEASE_PROFILE: ${{ inputs.release_profile }}
+          RERUN_GROUP: ${{ inputs.rerun_group }}
         run: |
           set -euo pipefail
 
           dispatch_and_wait() {
             local workflow="$1"
-            local workflow_ref="$2"
-            shift 2
+            shift
 
-            local before_json run_id status conclusion url
+            local before_json dispatch_output run_id status conclusion url
             before_json="$(gh run list --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
 
-            gh workflow run "$workflow" --ref "$workflow_ref" "$@"
+            dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
+            printf '%s\n' "$dispatch_output"
+            run_id="$(
+              printf '%s\n' "$dispatch_output" |
+                sed -nE 's#.*actions/runs/([0-9]+).*#\1#p' |
+                tail -n 1
+            )"
 
-            for _ in $(seq 1 60); do
-              run_id="$(
-                BEFORE_IDS="$before_json" gh run list --workflow "$workflow" --event workflow_dispatch --limit 50 --json databaseId,createdAt \
-                  --jq 'map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
-              )"
-              if [[ -n "$run_id" ]]; then
-                break
-              fi
-              sleep 5
-            done
+            if [[ -z "$run_id" ]]; then
+              for _ in $(seq 1 60); do
+                run_id="$(
+                  BEFORE_IDS="$before_json" gh run list --workflow "$workflow" --event workflow_dispatch --limit 50 --json databaseId,createdAt \
+                    --jq 'map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
+                )"
+                if [[ -n "$run_id" ]]; then
+                  break
+                fi
+                sleep 5
+              done
+            fi
 
             if [[ -z "${run_id:-}" ]]; then
               echo "Could not find dispatched run for ${workflow}." >&2
@@ -217,21 +293,23 @@ jobs:
             fi
 
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+            echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
             while true; do
               status="$(gh run view "$run_id" --json status --jq '.status')"
               if [[ "$status" == "completed" ]]; then
                 break
               fi
-              sleep 60
+              sleep 30
             done
 
             conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
             url="$(gh run view "$run_id" --json url --jq '.url')"
             echo "${workflow} finished with ${conclusion}: ${url}"
+            echo "url=${url}" >> "$GITHUB_OUTPUT"
+            echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
             if [[ "$conclusion" != "success" ]]; then
-              gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}'
-              exit 1
+              gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
             fi
           }
 
@@ -242,24 +320,40 @@ jobs:
             echo "- Target SHA: \`${TARGET_SHA}\`"
             echo "- Provider: \`${PROVIDER}\`"
             echo "- Cross-OS mode: \`${MODE}\`"
+            echo "- Release profile: \`${RELEASE_PROFILE}\`"
+            echo "- Rerun group: \`${RERUN_GROUP}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          dispatch_and_wait openclaw-release-checks.yml "$WORKFLOW_REF" \
-            -f ref="$TARGET_REF" \
+          child_rerun_group="$RERUN_GROUP"
+          if [[ "$child_rerun_group" == "release-checks" ]]; then
+            child_rerun_group=all
+          fi
+
+          dispatch_and_wait openclaw-release-checks.yml \
+            -f ref="$TARGET_SHA" \
+            -f expected_sha="$TARGET_SHA" \
             -f provider="$PROVIDER" \
-            -f mode="$MODE"
+            -f mode="$MODE" \
+            -f release_profile="$RELEASE_PROFILE" \
+            -f rerun_group="$child_rerun_group"
 
   npm_telegram:
     name: Run post-publish Telegram E2E
     needs: [resolve_target]
-    if: inputs.npm_telegram_package_spec != ''
+    if: inputs.npm_telegram_package_spec != '' && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group)
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    outputs:
+      run_id: ${{ steps.dispatch.outputs.run_id }}
+      url: ${{ steps.dispatch.outputs.url }}
+      conclusion: ${{ steps.dispatch.outputs.conclusion }}
     steps:
       - name: Dispatch and monitor npm Telegram E2E
+        id: dispatch
         env:
           GH_TOKEN: ${{ github.token }}
-          WORKFLOW_REF: ${{ inputs.workflow_ref }}
+          CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+          TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
           PROVIDER_MODE: ${{ inputs.npm_telegram_provider_mode }}
           SCENARIO: ${{ inputs.npm_telegram_scenario }}
@@ -268,12 +362,12 @@ jobs:
 
           before_json="$(gh run list --workflow npm-telegram-beta-e2e.yml --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
 
-          args=(-f package_spec="$PACKAGE_SPEC" -f provider_mode="$PROVIDER_MODE")
+          args=(-f package_spec="$PACKAGE_SPEC" -f harness_ref="$TARGET_SHA" -f provider_mode="$PROVIDER_MODE")
           if [[ -n "${SCENARIO// }" ]]; then
             args+=(-f scenario="$SCENARIO")
           fi
 
-          gh workflow run npm-telegram-beta-e2e.yml --ref "$WORKFLOW_REF" "${args[@]}"
+          gh workflow run npm-telegram-beta-e2e.yml --ref "$CHILD_WORKFLOW_REF" "${args[@]}"
 
           run_id=""
           for _ in $(seq 1 60); do
@@ -293,21 +387,23 @@ jobs:
           fi
 
           echo "Dispatched npm-telegram-beta-e2e.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+          echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
           while true; do
             status="$(gh run view "$run_id" --json status --jq '.status')"
             if [[ "$status" == "completed" ]]; then
               break
             fi
-            sleep 60
+            sleep 30
           done
 
           conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
           url="$(gh run view "$run_id" --json url --jq '.url')"
           echo "npm-telegram-beta-e2e.yml finished with ${conclusion}: ${url}"
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+          echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
           if [[ "$conclusion" != "success" ]]; then
-            gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}'
-            exit 1
+            gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
           fi
 
   summary:
@@ -321,10 +417,15 @@ jobs:
         env:
           RELEASE_PRIVATE_DISPATCH_TOKEN: ${{ secrets.OPENCLAW_RELEASES_PRIVATE_DISPATCH_TOKEN }}
           TARGET_REF: ${{ inputs.ref }}
-          PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
+          PACKAGE_SPEC: ${{ inputs.evidence_package_spec || inputs.npm_telegram_package_spec }}
           GITHUB_RUN_ID_VALUE: ${{ github.run_id }}
+          RELEASE_CHECKS_RESULT: ${{ needs.release_checks.result }}
         run: |
           set -euo pipefail
+          if [[ "$RELEASE_CHECKS_RESULT" == "skipped" ]]; then
+            echo "Release checks were skipped by rerun group; skipping automatic private evidence update."
+            exit 0
+          fi
           if [[ -z "${RELEASE_PRIVATE_DISPATCH_TOKEN// }" ]]; then
             echo "OPENCLAW_RELEASES_PRIVATE_DISPATCH_TOKEN is not configured; skipping automatic private evidence update."
             exit 0
@@ -347,7 +448,7 @@ jobs:
               --arg release_id "$release_id" \
               --arg release_ref "$TARGET_REF" \
               --arg package_spec "$PACKAGE_SPEC" \
-              --arg notes "Automatically requested by Full Release Validation ${GITHUB_RUN_ID_VALUE} after child workflows completed." \
+              --arg notes "Automatically requested by Full Release Validation ${GITHUB_RUN_ID_VALUE} after child workflows completed; the parent summary re-checks current child run conclusions." \
               '{
                 event_type: "openclaw_full_release_validation_completed",
                 client_payload: {
@@ -370,22 +471,94 @@ jobs:
 
       - name: Verify child workflow results
         env:
+          GH_TOKEN: ${{ github.token }}
+          NORMAL_CI_RUN_ID: ${{ needs.normal_ci.outputs.run_id }}
+          RELEASE_CHECKS_RUN_ID: ${{ needs.release_checks.outputs.run_id }}
+          NPM_TELEGRAM_RUN_ID: ${{ needs.npm_telegram.outputs.run_id }}
           NORMAL_CI_RESULT: ${{ needs.normal_ci.result }}
           RELEASE_CHECKS_RESULT: ${{ needs.release_checks.result }}
           NPM_TELEGRAM_RESULT: ${{ needs.npm_telegram.result }}
         run: |
           set -euo pipefail
-          failed=0
-          for item in \
-            "normal_ci=${NORMAL_CI_RESULT}" \
-            "release_checks=${RELEASE_CHECKS_RESULT}" \
-            "npm_telegram=${NPM_TELEGRAM_RESULT}"
-          do
-            name="${item%%=*}"
-            result="${item#*=}"
-            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
-              echo "::error::${name} ended with ${result}"
-              failed=1
+
+          check_child() {
+            local label="$1"
+            local run_id="$2"
+            local required="$3"
+
+            if [[ -z "${run_id// }" ]]; then
+              if [[ "$required" == "0" ]]; then
+                echo "${label}: skipped"
+                return 0
+              fi
+              echo "::error::${label} did not record a child run id."
+              return 1
             fi
-          done
+
+            local status conclusion url attempt
+            status="$(gh run view "$run_id" --json status --jq '.status')"
+            conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
+            url="$(gh run view "$run_id" --json url --jq '.url')"
+            attempt="$(gh run view "$run_id" --json attempt --jq '.attempt')"
+            echo "${label}: ${status}/${conclusion} attempt ${attempt}: ${url}"
+
+            if [[ "$status" != "completed" || "$conclusion" != "success" ]]; then
+              echo "::error::${label} child run ended with ${status}/${conclusion}: ${url}"
+              gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, status, conclusion, url}' || true
+              return 1
+            fi
+          }
+
+          summarize_child_timing() {
+            local label="$1"
+            local run_id="$2"
+            if [[ -z "${run_id// }" ]]; then
+              return 0
+            fi
+
+            {
+              echo
+              echo "### Slowest jobs: ${label}"
+              echo
+              gh run view "$run_id" --json jobs --jq '
+                def ts: fromdateiso8601;
+                "| Job | Result | Minutes |",
+                "| --- | --- | ---: |",
+                ([.jobs[]
+                  | select(.startedAt != "0001-01-01T00:00:00Z" and .completedAt != "0001-01-01T00:00:00Z")
+                  | . + {durationMin: ((((.completedAt | ts) - (.startedAt | ts)) / 60) * 10 | round / 10)}
+                  | {name, conclusion, durationMin}]
+                  | sort_by(.durationMin)
+                  | reverse
+                  | .[0:10]
+                  | map("| `" + (.name | gsub("\\|"; "\\|")) + "` | `" + ((.conclusion // "") | tostring) + "` | " + (.durationMin | tostring) + " |")
+                  | .[])
+              ' || echo "_Unable to summarize jobs for run ${run_id}._"
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          failed=0
+
+          if [[ "$NORMAL_CI_RESULT" == "skipped" && -z "${NORMAL_CI_RUN_ID// }" ]]; then
+            check_child "normal_ci" "" 0 || failed=1
+          else
+            check_child "normal_ci" "$NORMAL_CI_RUN_ID" 1 || failed=1
+          fi
+
+          if [[ "$RELEASE_CHECKS_RESULT" == "skipped" && -z "${RELEASE_CHECKS_RUN_ID// }" ]]; then
+            check_child "release_checks" "" 0 || failed=1
+          else
+            check_child "release_checks" "$RELEASE_CHECKS_RUN_ID" 1 || failed=1
+          fi
+
+          if [[ "$NPM_TELEGRAM_RESULT" == "skipped" && -z "${NPM_TELEGRAM_RUN_ID// }" ]]; then
+            check_child "npm_telegram" "" 0 || failed=1
+          else
+            check_child "npm_telegram" "$NPM_TELEGRAM_RUN_ID" 1 || failed=1
+          fi
+
+          summarize_child_timing "normal_ci" "$NORMAL_CI_RUN_ID"
+          summarize_child_timing "release_checks" "$RELEASE_CHECKS_RUN_ID"
+          summarize_child_timing "npm_telegram" "$NPM_TELEGRAM_RUN_ID"
+
           exit "$failed"

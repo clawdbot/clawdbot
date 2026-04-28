@@ -20,7 +20,12 @@ export type MatrixQaScenarioId =
   | "matrix-subagent-thread-spawn"
   | "matrix-top-level-reply-shape"
   | "matrix-room-thread-reply-override"
+  | "matrix-room-partial-streaming-preview"
   | "matrix-room-quiet-streaming-preview"
+  | "matrix-room-tool-progress-preview"
+  | "matrix-room-tool-progress-preview-opt-out"
+  | "matrix-room-tool-progress-error"
+  | "matrix-room-tool-progress-mention-safety"
   | "matrix-room-block-streaming"
   | "matrix-room-image-understanding-attachment"
   | "matrix-room-generated-image-delivery"
@@ -38,6 +43,12 @@ export type MatrixQaScenarioId =
   | "matrix-reaction-threaded"
   | "matrix-reaction-not-a-reply"
   | "matrix-reaction-redaction-observed"
+  | "matrix-approval-exec-metadata-single-event"
+  | "matrix-approval-exec-metadata-chunked"
+  | "matrix-approval-plugin-metadata-single-event"
+  | "matrix-approval-deny-reaction"
+  | "matrix-approval-thread-target"
+  | "matrix-approval-channel-target-both"
   | "matrix-restart-resume"
   | "matrix-post-restart-room-continue"
   | "matrix-initial-catchup-then-incremental"
@@ -46,6 +57,14 @@ export type MatrixQaScenarioId =
   | "matrix-room-membership-loss"
   | "matrix-homeserver-restart-resume"
   | "matrix-mention-gating"
+  | "matrix-allowbots-default-block"
+  | "matrix-allowbots-true-unmentioned-open-room"
+  | "matrix-allowbots-mentions-mentioned-room"
+  | "matrix-allowbots-mentions-unmentioned-open-room-block"
+  | "matrix-allowbots-mentions-dm-unmentioned"
+  | "matrix-allowbots-room-override-blocks-account-true"
+  | "matrix-allowbots-room-override-enables-account-off"
+  | "matrix-allowbots-self-sender-ignored"
   | "matrix-mxid-prefixed-command-block"
   | "matrix-mention-metadata-spoof-block"
   | "matrix-observer-allowlist-override"
@@ -106,6 +125,7 @@ export type MatrixQaProfile =
   | "transport";
 
 export const MATRIX_QA_BLOCK_ROOM_KEY = "block";
+export const MATRIX_QA_BOT_DM_ROOM_KEY = "bot-dm";
 export const MATRIX_QA_DRIVER_DM_ROOM_KEY = "driver-dm";
 export const MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY = "driver-dm-shared";
 export const MATRIX_QA_E2EE_ROOM_KEY = "e2ee";
@@ -126,6 +146,7 @@ const MATRIX_QA_E2EE_MEDIA_TIMEOUT_MS = 180_000;
 function buildMatrixQaDmTopology(
   rooms: Array<{
     key: string;
+    members?: ["driver" | "observer", "sut"];
     name: string;
   }>,
 ): MatrixQaTopologySpec {
@@ -134,7 +155,7 @@ function buildMatrixQaDmTopology(
     rooms: rooms.map((room) => ({
       key: room.key,
       kind: "dm" as const,
-      members: ["driver", "sut"],
+      members: room.members ?? ["driver", "sut"],
       name: room.name,
     })),
   };
@@ -193,6 +214,14 @@ const MATRIX_QA_SHARED_DM_TOPOLOGY = buildMatrixQaDmTopology([
   {
     key: MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY,
     name: "Matrix QA Driver/SUT Shared DM",
+  },
+]);
+
+const MATRIX_QA_BOT_DM_TOPOLOGY = buildMatrixQaDmTopology([
+  {
+    key: MATRIX_QA_BOT_DM_ROOM_KEY,
+    members: ["observer", "sut"],
+    name: "Matrix QA Observer/SUT Bot DM",
   },
 ]);
 
@@ -261,6 +290,51 @@ const MATRIX_QA_E2EE_CLI_SETUP_CONFIG = {
   startupVerification: "off",
 } satisfies MatrixQaConfigOverrides;
 
+const MATRIX_QA_APPROVAL_CHANNEL_CONFIG = {
+  approvalForwarding: {
+    exec: true,
+  },
+  dm: {
+    enabled: true,
+  },
+  execApprovals: {
+    enabled: true,
+    target: "channel",
+  },
+} satisfies MatrixQaConfigOverrides;
+
+const MATRIX_QA_APPROVAL_CHUNKED_CONFIG = {
+  ...MATRIX_QA_APPROVAL_CHANNEL_CONFIG,
+  chunkMode: "length",
+  textChunkLimit: 280,
+} satisfies MatrixQaConfigOverrides;
+
+const MATRIX_QA_APPROVAL_PLUGIN_CONFIG = {
+  approvalForwarding: {
+    plugin: true,
+  },
+  dm: {
+    enabled: true,
+  },
+  execApprovals: {
+    enabled: true,
+    target: "channel",
+  },
+} satisfies MatrixQaConfigOverrides;
+
+const MATRIX_QA_APPROVAL_BOTH_CONFIG = {
+  approvalForwarding: {
+    exec: true,
+  },
+  dm: {
+    enabled: true,
+  },
+  execApprovals: {
+    enabled: true,
+    target: "both",
+  },
+} satisfies MatrixQaConfigOverrides;
+
 export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   {
     id: "matrix-thread-follow-up",
@@ -318,11 +392,60 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     },
   },
   {
+    id: "matrix-room-partial-streaming-preview",
+    timeoutMs: 45_000,
+    title: "Matrix partial streaming emits text previews before finalizing",
+    configOverrides: {
+      streaming: "partial",
+    },
+  },
+  {
     id: "matrix-room-quiet-streaming-preview",
     timeoutMs: 45_000,
     title: "Matrix quiet streaming emits notice previews before finalizing",
     configOverrides: {
       streaming: "quiet",
+    },
+  },
+  {
+    id: "matrix-room-tool-progress-preview",
+    timeoutMs: 60_000,
+    title: "Matrix streaming folds tool progress into the preview message",
+    configOverrides: {
+      streaming: "quiet",
+      toolProfile: "coding",
+    },
+  },
+  {
+    id: "matrix-room-tool-progress-preview-opt-out",
+    timeoutMs: 60_000,
+    title: "Matrix streaming can opt out of preview tool progress",
+    configOverrides: {
+      streaming: {
+        mode: "quiet",
+        preview: {
+          toolProgress: false,
+        },
+      },
+      toolProfile: "coding",
+    },
+  },
+  {
+    id: "matrix-room-tool-progress-error",
+    timeoutMs: 60_000,
+    title: "Matrix streaming finalizes previews after tool errors",
+    configOverrides: {
+      streaming: "quiet",
+      toolProfile: "coding",
+    },
+  },
+  {
+    id: "matrix-room-tool-progress-mention-safety",
+    timeoutMs: 60_000,
+    title: "Matrix streaming keeps tool-progress mentions inert",
+    configOverrides: {
+      streaming: "partial",
+      toolProfile: "coding",
     },
   },
   {
@@ -465,6 +588,43 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     title: "Matrix reaction removals are observed as redactions",
   },
   {
+    id: "matrix-approval-exec-metadata-single-event",
+    timeoutMs: 75_000,
+    title: "Matrix exec approval prompt carries structured metadata on one event",
+    configOverrides: MATRIX_QA_APPROVAL_CHANNEL_CONFIG,
+  },
+  {
+    id: "matrix-approval-exec-metadata-chunked",
+    timeoutMs: 90_000,
+    title: "Matrix exec approval prompt fallback keeps metadata on the first chunk",
+    configOverrides: MATRIX_QA_APPROVAL_CHUNKED_CONFIG,
+  },
+  {
+    id: "matrix-approval-plugin-metadata-single-event",
+    timeoutMs: 75_000,
+    title: "Matrix plugin approval prompt carries plugin metadata",
+    configOverrides: MATRIX_QA_APPROVAL_PLUGIN_CONFIG,
+  },
+  {
+    id: "matrix-approval-deny-reaction",
+    timeoutMs: 75_000,
+    title: "Matrix approval deny reaction resolves the metadata-bearing event",
+    configOverrides: MATRIX_QA_APPROVAL_CHANNEL_CONFIG,
+  },
+  {
+    id: "matrix-approval-thread-target",
+    timeoutMs: 75_000,
+    title: "Matrix approval prompt preserves thread targeting metadata",
+    configOverrides: MATRIX_QA_APPROVAL_CHANNEL_CONFIG,
+  },
+  {
+    id: "matrix-approval-channel-target-both",
+    timeoutMs: 90_000,
+    title: "Matrix approval target=both delivers channel and DM metadata once",
+    topology: MATRIX_QA_DRIVER_DM_TOPOLOGY,
+    configOverrides: MATRIX_QA_APPROVAL_BOTH_CONFIG,
+  },
+  {
     id: "matrix-restart-resume",
     standardId: "restart-resume",
     timeoutMs: 60_000,
@@ -512,6 +672,110 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     standardId: "mention-gating",
     timeoutMs: 8_000,
     title: "Matrix room message without mention does not trigger",
+  },
+  {
+    id: "matrix-allowbots-default-block",
+    timeoutMs: 8_000,
+    title: "Matrix allowBots default blocks configured bot senders",
+    configOverrides: {
+      configuredBotRoles: ["observer"],
+      groupAllowRoles: ["driver", "observer"],
+    },
+  },
+  {
+    id: "matrix-allowbots-true-unmentioned-open-room",
+    timeoutMs: 45_000,
+    title: "Matrix allowBots=true accepts unmentioned configured bot messages in open rooms",
+    configOverrides: {
+      allowBots: true,
+      configuredBotRoles: ["observer"],
+      groupAllowRoles: ["driver", "observer"],
+      groupsByKey: {
+        [MATRIX_QA_MAIN_ROOM_KEY]: {
+          requireMention: false,
+        },
+      },
+    },
+  },
+  {
+    id: "matrix-allowbots-mentions-mentioned-room",
+    timeoutMs: 45_000,
+    title: "Matrix allowBots=mentions accepts mentioned configured bot messages",
+    configOverrides: {
+      allowBots: "mentions",
+      configuredBotRoles: ["observer"],
+      groupAllowRoles: ["driver", "observer"],
+    },
+  },
+  {
+    id: "matrix-allowbots-mentions-unmentioned-open-room-block",
+    timeoutMs: 8_000,
+    title: "Matrix allowBots=mentions blocks unmentioned configured bot messages in open rooms",
+    configOverrides: {
+      allowBots: "mentions",
+      configuredBotRoles: ["observer"],
+      groupAllowRoles: ["driver", "observer"],
+      groupsByKey: {
+        [MATRIX_QA_MAIN_ROOM_KEY]: {
+          requireMention: false,
+        },
+      },
+    },
+  },
+  {
+    id: "matrix-allowbots-mentions-dm-unmentioned",
+    timeoutMs: 45_000,
+    title: "Matrix allowBots=mentions accepts unmentioned configured bot DMs",
+    topology: MATRIX_QA_BOT_DM_TOPOLOGY,
+    configOverrides: {
+      allowBots: "mentions",
+      configuredBotRoles: ["observer"],
+    },
+  },
+  {
+    id: "matrix-allowbots-room-override-blocks-account-true",
+    timeoutMs: 8_000,
+    title: "Matrix room allowBots=false overrides account allowBots=true",
+    configOverrides: {
+      allowBots: true,
+      configuredBotRoles: ["observer"],
+      groupAllowRoles: ["driver", "observer"],
+      groupsByKey: {
+        [MATRIX_QA_MAIN_ROOM_KEY]: {
+          allowBots: false,
+          requireMention: false,
+        },
+      },
+    },
+  },
+  {
+    id: "matrix-allowbots-room-override-enables-account-off",
+    timeoutMs: 45_000,
+    title: "Matrix room allowBots=mentions overrides account allowBots off",
+    configOverrides: {
+      configuredBotRoles: ["observer"],
+      groupAllowRoles: ["driver", "observer"],
+      groupsByKey: {
+        [MATRIX_QA_MAIN_ROOM_KEY]: {
+          allowBots: "mentions",
+          requireMention: true,
+        },
+      },
+    },
+  },
+  {
+    id: "matrix-allowbots-self-sender-ignored",
+    timeoutMs: 8_000,
+    title: "Matrix allowBots=true still ignores messages from the SUT user id",
+    configOverrides: {
+      allowBots: true,
+      groupAllowRoles: ["driver", "observer", "sut"],
+      groupsByKey: {
+        [MATRIX_QA_MAIN_ROOM_KEY]: {
+          requireMention: false,
+        },
+      },
+    },
   },
   {
     id: "matrix-mxid-prefixed-command-block",
@@ -931,8 +1195,12 @@ const MATRIX_QA_FAST_PROFILE_SCENARIO_IDS = [
   "matrix-thread-isolation",
   "matrix-top-level-reply-shape",
   "matrix-reaction-notification",
+  "matrix-approval-exec-metadata-single-event",
+  "matrix-approval-exec-metadata-chunked",
   "matrix-restart-resume",
   "matrix-mention-gating",
+  "matrix-allowbots-default-block",
+  "matrix-allowbots-mentions-mentioned-room",
   "matrix-allowlist-block",
   "matrix-e2ee-basic-reply",
 ] satisfies MatrixQaScenarioId[];

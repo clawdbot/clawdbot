@@ -1,6 +1,6 @@
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { detectErrorKind, type ErrorKind } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
@@ -19,7 +19,7 @@ import { formatForLog } from "./ws-log.js";
 
 function resolveHeartbeatAckMaxChars(): number {
   try {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     return Math.max(
       0,
       cfg.agents?.defaults?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
@@ -53,7 +53,7 @@ function shouldHideHeartbeatChatOutput(runId: string, sourceRunId?: string): boo
   }
 
   try {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const visibility = resolveHeartbeatVisibility({ cfg, channel: "webchat" });
     return !visibility.showOk;
   } catch {

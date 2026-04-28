@@ -146,6 +146,18 @@ function readHeaderValue(
   return undefined;
 }
 
+function containsEastAsianScript(value: string): boolean {
+  return /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(value);
+}
+
+function recoverUtf8FileNameFromLatin1Header(value: string): string {
+  const recovered = Buffer.from(value, "latin1").toString("utf8");
+  if (recovered !== value && !recovered.includes("\uFFFD") && containsEastAsianScript(recovered)) {
+    return recovered;
+  }
+  return value;
+}
+
 function decodeDispositionFileName(value: string): string | undefined {
   const utf8Match = value.match(/filename\*=UTF-8''([^;]+)/i);
   if (utf8Match?.[1]) {
@@ -157,7 +169,8 @@ function decodeDispositionFileName(value: string): string | undefined {
   }
 
   const plainMatch = value.match(/filename="?([^";]+)"?/i);
-  return plainMatch?.[1]?.trim();
+  const plainFileName = plainMatch?.[1]?.trim();
+  return plainFileName ? recoverUtf8FileNameFromLatin1Header(plainFileName) : undefined;
 }
 
 function extractFeishuDownloadMetadata(response: FeishuDownloadResponse): {

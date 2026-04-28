@@ -1,22 +1,14 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
+import {
+  formatCrestodianOverview,
+  formatCrestodianStartupMessage,
+  loadCrestodianOverview,
+} from "./overview.js";
 
-vi.mock("./probes.js", () => ({
-  probeLocalCommand: vi.fn(async (command: string) => ({
-    command,
-    found: command === "codex",
-    version: command === "codex" ? "codex 1.0.0" : undefined,
-  })),
-  probeGatewayUrl: vi.fn(async (url: string) => ({ reachable: false, url, error: "offline" })),
-}));
-
-vi.mock("../config/config.js", () => ({
-  readConfigFileSnapshot: vi.fn(async () => ({
-    path: "/tmp/openclaw.json",
-    exists: true,
-    valid: true,
-    issues: [],
-    hash: "test-hash",
-    runtimeConfig: {
+describe("loadCrestodianOverview", () => {
+  it("summarizes config, agents, model, tools, and gateway", async () => {
+    const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: { model: { primary: "openai/gpt-5.2" } },
         list: [
@@ -25,37 +17,40 @@ vi.mock("../config/config.js", () => ({
         ],
       },
       gateway: { port: 19001 },
-    },
-    sourceConfig: undefined,
-  })),
-  resolveConfigPath: vi.fn(() => "/tmp/openclaw.json"),
-  resolveGatewayPort: vi.fn((cfg: { gateway?: { port?: number } }) => cfg.gateway?.port ?? 8765),
-}));
-
-vi.mock("../gateway/call.js", () => ({
-  buildGatewayConnectionDetails: vi.fn((input: { config: { gateway?: { port?: number } } }) => ({
-    url: `ws://127.0.0.1:${input.config.gateway?.port ?? 8765}`,
-    urlSource: "local loopback",
-  })),
-}));
-
-describe("loadCrestodianOverview", () => {
-  const previousTestFast = process.env.OPENCLAW_TEST_FAST;
-
-  afterEach(() => {
-    if (previousTestFast === undefined) {
-      delete process.env.OPENCLAW_TEST_FAST;
-    } else {
-      process.env.OPENCLAW_TEST_FAST = previousTestFast;
-    }
-  });
-
-  it("summarizes config, agents, model, tools, and gateway", async () => {
-    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-
-    const { formatCrestodianOverview, formatCrestodianStartupMessage, loadCrestodianOverview } =
-      await import("./overview.js");
-    const overview = await loadCrestodianOverview();
+    };
+    const snapshot: ConfigFileSnapshot = {
+      path: "/tmp/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: runtimeConfig,
+      sourceConfig: runtimeConfig,
+      resolved: runtimeConfig,
+      valid: true,
+      runtimeConfig,
+      config: runtimeConfig,
+      hash: "test-hash",
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    };
+    const overview = await loadCrestodianOverview({
+      env: { OPENCLAW_TEST_FAST: "1" },
+      deps: {
+        readConfigFileSnapshot: async () => snapshot,
+        resolveConfigPath: () => "/tmp/openclaw.json",
+        resolveGatewayPort: (cfg) => cfg?.gateway?.port ?? 8765,
+        buildGatewayConnectionDetails: (input) => ({
+          url: `ws://127.0.0.1:${input.config.gateway?.port ?? 8765}`,
+          urlSource: "local loopback",
+        }),
+        probeLocalCommand: async (command) => ({
+          command,
+          found: command === "codex",
+          version: command === "codex" ? "codex 1.0.0" : undefined,
+        }),
+        probeGatewayUrl: async (url) => ({ reachable: false, url, error: "offline" }),
+      },
+    });
 
     expect(overview.config).toMatchObject({
       exists: true,

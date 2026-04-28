@@ -19,7 +19,7 @@ describe("spawnSubagentDirect runtime model persistence", () => {
   beforeAll(async () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock,
-      loadConfig: () => createSubagentSpawnTestConfig(os.tmpdir()),
+      getRuntimeConfig: () => createSubagentSpawnTestConfig(os.tmpdir()),
       updateSessionStoreMock,
       pruneLegacyStoreKeysMock,
       workspaceDir: os.tmpdir(),
@@ -89,6 +89,7 @@ describe("spawnSubagentDirect runtime model persistence", () => {
       sessionKey: /^agent:main:subagent:/,
       provider: "openai-codex",
       model: "gpt-5.4",
+      overrideSource: "user",
     });
     expect(pruneLegacyStoreKeysMock).toHaveBeenCalledTimes(3);
     expect(operations.indexOf("store:update")).toBeGreaterThan(-1);

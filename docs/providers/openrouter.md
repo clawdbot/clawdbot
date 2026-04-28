@@ -53,12 +53,10 @@ available providers and models, see [/concepts/model-providers](/concepts/model-
 
 Bundled fallback examples:
 
-| Model ref                            | Notes                         |
-| ------------------------------------ | ----------------------------- |
-| `openrouter/auto`                    | OpenRouter automatic routing  |
-| `openrouter/moonshotai/kimi-k2.6`    | Kimi K2.6 via MoonshotAI      |
-| `openrouter/openrouter/healer-alpha` | OpenRouter Healer Alpha route |
-| `openrouter/openrouter/hunter-alpha` | OpenRouter Hunter Alpha route |
+| Model ref                         | Notes                        |
+| --------------------------------- | ---------------------------- |
+| `openrouter/auto`                 | OpenRouter automatic routing |
+| `openrouter/moonshotai/kimi-k2.6` | Kimi K2.6 via MoonshotAI     |
 
 ## Image generation
 
@@ -136,7 +134,9 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
   <Accordion title="Thinking / reasoning injection">
     On supported non-`auto` routes, OpenClaw maps the selected thinking level to
     OpenRouter proxy reasoning payloads. Unsupported model hints and
-    `openrouter/auto` skip that reasoning injection.
+    `openrouter/auto` skip that reasoning injection. Hunter Alpha also skips
+    proxy reasoning for stale configured model refs because OpenRouter could
+    return final answer text in reasoning fields for that retired route.
   </Accordion>
 
   <Accordion title="OpenAI-only request shaping">

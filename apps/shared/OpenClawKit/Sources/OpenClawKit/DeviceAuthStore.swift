@@ -25,7 +25,7 @@ public enum DeviceAuthStore {
 
     public static func loadToken(deviceId: String, role: String) -> DeviceAuthEntry? {
         guard let store = readStore(), store.deviceId == deviceId else { return nil }
-        let role = normalizeRole(role)
+        let role = self.normalizeRole(role)
         return store.tokens[role]
     }
 
@@ -33,10 +33,10 @@ public enum DeviceAuthStore {
         deviceId: String,
         role: String,
         token: String,
-        scopes: [String] = []
-    ) -> DeviceAuthEntry {
-        let normalizedRole = normalizeRole(role)
-        var next = readStore()
+        scopes: [String] = []) -> DeviceAuthEntry
+    {
+        let normalizedRole = self.normalizeRole(role)
+        var next = self.readStore()
         if next?.deviceId != deviceId {
             next = DeviceAuthStoreFile(version: 1, deviceId: deviceId, tokens: [:])
         }
@@ -44,24 +44,23 @@ public enum DeviceAuthStore {
             token: token,
             role: normalizedRole,
             scopes: normalizeScopes(scopes),
-            updatedAtMs: Int(Date().timeIntervalSince1970 * 1000)
-        )
+            updatedAtMs: Int(Date().timeIntervalSince1970 * 1000))
         if next == nil {
             next = DeviceAuthStoreFile(version: 1, deviceId: deviceId, tokens: [:])
         }
         next?.tokens[normalizedRole] = entry
         if let store = next {
-            writeStore(store)
+            self.writeStore(store)
         }
         return entry
     }
 
     public static func clearToken(deviceId: String, role: String) {
         guard var store = readStore(), store.deviceId == deviceId else { return }
-        let normalizedRole = normalizeRole(role)
+        let normalizedRole = self.normalizeRole(role)
         guard store.tokens[normalizedRole] != nil else { return }
         store.tokens.removeValue(forKey: normalizedRole)
-        writeStore(store)
+        self.writeStore(store)
     }
 
     private static func normalizeRole(_ role: String) -> String {
@@ -78,11 +77,11 @@ public enum DeviceAuthStore {
     private static func fileURL() -> URL {
         DeviceIdentityPaths.stateDirURL()
             .appendingPathComponent("identity", isDirectory: true)
-            .appendingPathComponent(fileName, isDirectory: false)
+            .appendingPathComponent(self.fileName, isDirectory: false)
     }
 
     private static func readStore() -> DeviceAuthStoreFile? {
-        let url = fileURL()
+        let url = self.fileURL()
         guard let data = try? Data(contentsOf: url) else { return nil }
         guard let decoded = try? JSONDecoder().decode(DeviceAuthStoreFile.self, from: data) else {
             return nil
@@ -92,7 +91,7 @@ public enum DeviceAuthStore {
     }
 
     private static func writeStore(_ store: DeviceAuthStoreFile) {
-        let url = fileURL()
+        let url = self.fileURL()
         do {
             try FileManager.default.createDirectory(
                 at: url.deletingLastPathComponent(),

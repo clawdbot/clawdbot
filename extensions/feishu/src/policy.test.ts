@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { describe, expect, it } from "vitest";
 import { FeishuConfigSchema } from "./config-schema.js";
 import {
+  hasExplicitFeishuGroupConfig,
   isFeishuGroupAllowed,
   resolveFeishuAllowlistMatch,
   resolveFeishuGroupConfig,
@@ -138,6 +139,29 @@ describe("resolveFeishuGroupConfig", () => {
     });
 
     expect(resolved).toEqual({ requireMention: true });
+  });
+});
+
+describe("hasExplicitFeishuGroupConfig", () => {
+  it("matches direct and case-insensitive group ids", () => {
+    const cfg = createFeishuConfig({
+      groups: {
+        OC_UPPER: { requireMention: true },
+      },
+    });
+
+    expect(hasExplicitFeishuGroupConfig({ cfg, groupId: "OC_UPPER" })).toBe(true);
+    expect(hasExplicitFeishuGroupConfig({ cfg, groupId: "oc_upper" })).toBe(true);
+  });
+
+  it("does not treat wildcard group defaults as explicit admission", () => {
+    const cfg = createFeishuConfig({
+      groups: {
+        "*": { requireMention: false },
+      },
+    });
+
+    expect(hasExplicitFeishuGroupConfig({ cfg, groupId: "oc_any" })).toBe(false);
   });
 });
 

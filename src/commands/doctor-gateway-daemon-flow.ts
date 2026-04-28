@@ -6,6 +6,7 @@ import {
   resolveNodeLaunchAgentLabel,
 } from "../daemon/constants.js";
 import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
+import { findSystemGatewayServices, type ExtraGatewayService } from "../daemon/inspect.js";
 import {
   isLaunchAgentLoaded,
   launchAgentPlistExists,
@@ -32,6 +33,7 @@ import {
   EXTERNAL_SERVICE_REPAIR_NOTE,
   isServiceRepairExternallyManaged,
   resolveServiceRepairPolicy,
+  SERVICE_REPAIR_POLICY_ENV,
 } from "./doctor-service-repair-policy.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 import { formatHealthCheckFailure } from "./health-format.js";
@@ -89,6 +91,16 @@ async function maybeRepairLaunchAgentBootstrap(params: {
 
   note(`${params.title} LaunchAgent repaired.`, `${params.title} LaunchAgent`);
   return true;
+}
+
+function renderBlockingSystemGatewayServices(services: ExtraGatewayService[]): string {
+  return [
+    "System-level OpenClaw gateway service detected while the user gateway service is not installed.",
+    ...services.map((svc) => `- ${svc.label} (${svc.detail})`),
+    "OpenClaw will not install a second user-level gateway service automatically.",
+    "Run `openclaw gateway status --deep` or `openclaw doctor --deep` to inspect duplicate services.",
+    `Set ${SERVICE_REPAIR_POLICY_ENV}=external if a system supervisor owns the gateway lifecycle.`,
+  ].join("\n");
 }
 
 export async function maybeRepairGatewayDaemon(params: {
@@ -171,6 +183,13 @@ export async function maybeRepairGatewayDaemon(params: {
     }
     note("Gateway service not installed.", "Gateway");
     if (params.cfg.gateway?.mode !== "remote") {
+      if (process.platform === "linux") {
+        const systemGatewayServices = await findSystemGatewayServices();
+        if (systemGatewayServices.length > 0) {
+          note(renderBlockingSystemGatewayServices(systemGatewayServices), "Gateway");
+          return;
+        }
+      }
       if (serviceRepairExternal) {
         note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
         return;

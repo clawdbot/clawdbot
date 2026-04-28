@@ -20,6 +20,7 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
 }));
 
 let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
+let buildPluginToolMetadataKey: typeof import("./tools.js").buildPluginToolMetadataKey;
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
 let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
 
@@ -95,6 +96,17 @@ function createOptionalDemoEntry(): MockRegistryToolEntry {
     optional: true,
     source: "/tmp/optional-demo.js",
     factory: () => makeTool("optional_tool"),
+  };
+}
+
+function createMalformedTool(name: string) {
+  return {
+    name,
+    description: `${name} tool`,
+    inputSchema: { type: "object", properties: {} },
+    async execute() {
+      return { content: [{ type: "text", text: "bad" }] };
+    },
   };
 }
 
@@ -194,7 +206,7 @@ function expectConflictingCoreNameResolution(params: {
 
 describe("resolvePluginTools optional tools", () => {
   beforeAll(async () => {
-    ({ resolvePluginTools } = await import("./tools.js"));
+    ({ buildPluginToolMetadataKey, resolvePluginTools } = await import("./tools.js"));
     ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
   });
 
@@ -310,6 +322,44 @@ describe("resolvePluginTools optional tools", () => {
     expectLoaderCall(expectedLoaderCall);
   });
 
+  it("skips malformed plugin tools while keeping valid sibling tools", () => {
+    const registry = setRegistry([
+      {
+        pluginId: "schema-bug",
+        optional: false,
+        source: "/tmp/schema-bug.js",
+        factory: () => [createMalformedTool("broken_tool"), makeTool("valid_tool")],
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["valid_tool"]);
+    expectSingleDiagnosticMessage(
+      registry.diagnostics,
+      "plugin tool is malformed (schema-bug): broken_tool missing parameters object",
+    );
+  });
+
+  it("skips allowlisted optional malformed plugin tools", () => {
+    const registry = setRegistry([
+      {
+        pluginId: "optional-demo",
+        optional: true,
+        source: "/tmp/optional-demo.js",
+        factory: () => createMalformedTool("optional_tool"),
+      },
+    ]);
+
+    const tools = resolveOptionalDemoTools(["optional_tool"]);
+
+    expect(tools).toHaveLength(0);
+    expectSingleDiagnosticMessage(
+      registry.diagnostics,
+      "plugin tool is malformed (optional-demo): optional_tool missing parameters object",
+    );
+  });
+
   it.each([
     {
       name: "loads plugin tools from the auto-enabled config snapshot",
@@ -411,6 +461,21 @@ describe("resolvePluginTools optional tools", () => {
           allowGatewaySubagentBinding: true,
         },
       }),
+    );
+  });
+});
+
+describe("buildPluginToolMetadataKey", () => {
+  beforeAll(async () => {
+    ({ buildPluginToolMetadataKey } = await import("./tools.js"));
+  });
+
+  it("does not collide when ids or names contain separator-like characters", () => {
+    expect(buildPluginToolMetadataKey("plugin", "a\uE000b")).not.toBe(
+      buildPluginToolMetadataKey("plugin\uE000a", "b"),
+    );
+    expect(buildPluginToolMetadataKey("plugin", "a\u0000b")).not.toBe(
+      buildPluginToolMetadataKey("plugin\u0000a", "b"),
     );
   });
 });

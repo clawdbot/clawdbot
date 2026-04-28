@@ -1,8 +1,73 @@
 {
   "id": "stepfun",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["stepfun", "stepfun-plan"],
   "autoEnableWhenConfiguredProviders": ["stepfun", "stepfun-plan"],
+  "modelCatalog": {
+    "providers": {
+      "stepfun": {
+        "baseUrl": "https://api.stepfun.ai/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "step-3.5-flash",
+            "name": "Step 3.5 Flash",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          }
+        ]
+      },
+      "stepfun-plan": {
+        "baseUrl": "https://api.stepfun.ai/step_plan/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "step-3.5-flash",
+            "name": "Step 3.5 Flash",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "step-3.5-flash-2603",
+            "name": "Step 3.5 Flash 2603",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "stepfun": "static",
+      "stepfun-plan": "static"
+    }
+  },
   "providerAuthEnvVars": {
     "stepfun": ["STEPFUN_API_KEY"],
     "stepfun-plan": ["STEPFUN_API_KEY"]

@@ -12,10 +12,8 @@ export {
   normalizeAccountId,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/core";
-export {
-  isDangerousNameMatchingEnabled,
-  type GroupToolPolicyConfig,
-} from "openclaw/plugin-sdk/config-runtime";
+export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+export type { GroupToolPolicyConfig } from "openclaw/plugin-sdk/config-types";
 export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 export {
   isNumericTargetId,

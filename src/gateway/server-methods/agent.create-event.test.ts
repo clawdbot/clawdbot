@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const configMocks = vi.hoisted(() => ({
   storePath: "",
   workspaceDir: "",
-  loadConfig: vi.fn(() => ({
+  getRuntimeConfig: vi.fn(() => ({
     agents: {
       defaults: {
         model: { primary: "anthropic/claude-opus-4-6" },
@@ -25,7 +25,7 @@ const agentIngressMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../config/config.js", () => ({
-  loadConfig: configMocks.loadConfig,
+  getRuntimeConfig: configMocks.getRuntimeConfig,
 }));
 
 vi.mock("../../commands/agent.js", () => ({
@@ -51,7 +51,7 @@ describe("agent handler session create events", () => {
     storePath = path.join(tempDir, "sessions.json");
     configMocks.storePath = storePath;
     configMocks.workspaceDir = tempDir;
-    configMocks.loadConfig.mockClear();
+    configMocks.getRuntimeConfig.mockClear();
     agentIngressMocks.agentCommandFromIngress.mockClear();
     agentIngressMocks.agentCommandFromIngress.mockResolvedValue({ ok: true });
     await fs.writeFile(storePath, "{}\n", "utf8");
@@ -80,6 +80,7 @@ describe("agent handler session create events", () => {
         chatAbortControllers: new Map(),
         addChatRun: vi.fn(),
         registerToolEventRecipient: vi.fn(),
+        getRuntimeConfig: configMocks.getRuntimeConfig,
         getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
         broadcastToConnIds,
       } as never,

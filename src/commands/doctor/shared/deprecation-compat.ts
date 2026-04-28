@@ -58,6 +58,18 @@ function deprecatedCompatRecord<Code extends string>(
 // architecture because ownership and config footprint can shift during rollout.
 export const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   deprecatedCompatRecord({
+    code: "doctor-agent-llm-timeout",
+    owner: "agent-runtime",
+    introduced: "2026-04-27",
+    source: "agents.defaults.llm.idleTimeoutSeconds",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts",
+    replacement: "models.providers.<id>.timeoutSeconds",
+    docsPath: "/gateway/config-agents",
+    tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
+    notes:
+      "The old agent-level idle timeout knob was collapsed into provider request timeout handling.",
+  }),
+  deprecatedCompatRecord({
     code: "doctor-agent-runtime-embedded-harness",
     owner: "agent-runtime",
     introduced: "2026-04-25",
@@ -98,6 +110,18 @@ export const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "agents.defaults.heartbeat and channels.defaults.heartbeat",
     docsPath: "/automation",
     tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
+  }),
+  deprecatedCompatRecord({
+    code: "doctor-mcp-server-type-alias",
+    owner: "config",
+    introduced: "2026-04-27",
+    source: "mcp.servers.*.type",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.mcp.ts",
+    replacement: "mcp.servers.*.transport",
+    docsPath: "/cli/mcp",
+    tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
+    notes:
+      "OpenClaw stores transport names; CLI backends receive their own type fields through runtime adapters.",
   }),
   deprecatedCompatRecord({
     code: "doctor-gateway-bind-host-aliases",

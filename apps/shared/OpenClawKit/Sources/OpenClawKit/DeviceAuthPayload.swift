@@ -16,8 +16,8 @@ public enum GatewayDeviceAuthPayload {
     {
         let scopeString = scopes.joined(separator: ",")
         let authToken = token ?? ""
-        let normalizedPlatform = normalizeMetadataField(platform)
-        let normalizedDeviceFamily = normalizeMetadataField(deviceFamily)
+        let normalizedPlatform = self.normalizeMetadataField(platform)
+        let normalizedDeviceFamily = self.normalizeMetadataField(deviceFamily)
         return [
             "v3",
             deviceId,

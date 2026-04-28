@@ -1,9 +1,9 @@
-import { withFetchPreconnect } from "openclaw/plugin-sdk/testing";
-import { describe, expect, it } from "vitest";
 import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
-} from "../../src/media-understanding/audio.test-helpers.js";
+  withFetchPreconnect,
+} from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it } from "vitest";
 import { describeGeminiVideo, transcribeGeminiAudio } from "./media-understanding-provider.js";
 import { resolveGoogleGenerativeAiHttpRequestConfig } from "./runtime-api.js";
 

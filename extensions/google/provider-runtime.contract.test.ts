@@ -1,3 +1,3 @@
-import { describeGoogleProviderRuntimeContract } from "../../test/helpers/plugins/provider-runtime-contract.js";
+import { describeGoogleProviderRuntimeContract } from "openclaw/plugin-sdk/provider-test-contracts";
 
 describeGoogleProviderRuntimeContract(() => import("./index.js"));

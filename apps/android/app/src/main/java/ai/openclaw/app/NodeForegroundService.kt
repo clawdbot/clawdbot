@@ -140,10 +140,14 @@ class NodeForegroundService : Service() {
     mgr.createNotificationChannel(channel)
   }
 
-  private fun buildNotification(title: String, text: String): Notification {
-    val launchIntent = Intent(this, MainActivity::class.java).apply {
-      flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-    }
+  private fun buildNotification(
+    title: String,
+    text: String,
+  ): Notification {
+    val launchIntent =
+      Intent(this, MainActivity::class.java).apply {
+        flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+      }
     val launchPending =
       PendingIntent.getActivity(
         this,
@@ -161,7 +165,8 @@ class NodeForegroundService : Service() {
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
       )
 
-    return NotificationCompat.Builder(this, CHANNEL_ID)
+    return NotificationCompat
+      .Builder(this, CHANNEL_ID)
       .setSmallIcon(R.mipmap.ic_launcher)
       .setContentTitle(title)
       .setContentText(text)
@@ -233,8 +238,8 @@ internal fun voiceNotificationSuffix(
   manualMicListening: Boolean,
   talkListening: Boolean,
   talkSpeaking: Boolean,
-): String {
-  return when (mode) {
+): String =
+  when (mode) {
     VoiceCaptureMode.TalkMode ->
       when {
         talkSpeaking -> " · Talk: Speaking"
@@ -249,11 +254,11 @@ internal fun voiceNotificationSuffix(
       }
     VoiceCaptureMode.Off -> ""
   }
-}
 
-private fun String?.toVoiceCaptureMode(): VoiceCaptureMode {
-  return VoiceCaptureMode.entries.firstOrNull { it.name == this } ?: VoiceCaptureMode.Off
-}
+private fun String?.toVoiceCaptureMode(): VoiceCaptureMode =
+  VoiceCaptureMode.entries.firstOrNull {
+    it.name == this
+  } ?: VoiceCaptureMode.Off
 
 private data class VoiceNotificationBase(
   val status: String,

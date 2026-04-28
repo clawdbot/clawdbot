@@ -1,5 +1,5 @@
-import { requireRuntimeConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PollInput } from "../runtime-api.js";
 import { getMatrixRuntime } from "../runtime.js";
 import type { CoreConfig } from "../types.js";
@@ -211,8 +211,11 @@ export async function sendMessageMatrix(
       const relation = threadId
         ? buildThreadRelation(threadId, opts.replyToId)
         : buildReplyRelation(opts.replyToId);
+      let pendingExtraContent = opts.extraContent;
       const sendContent = async (content: MatrixOutboundContent) => {
-        const eventId = await client.sendMessage(roomId, content);
+        const contentWithExtra = withMatrixExtraContentFields(content, pendingExtraContent);
+        pendingExtraContent = undefined;
+        const eventId = await client.sendMessage(roomId, contentWithExtra);
         return eventId;
       };
 

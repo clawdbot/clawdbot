@@ -1,7 +1,17 @@
 {
   "id": "openrouter",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["openrouter"],
+  "modelIdNormalization": {
+    "providers": {
+      "openrouter": {
+        "prefixWhenBare": "openrouter"
+      }
+    }
+  },
   "modelPricing": {
     "providers": {
       "openrouter": {
@@ -9,6 +19,19 @@
           "passthroughProviderModel": true
         },
         "liteLLM": false
+      }
+    }
+  },
+  "providerEndpoints": [
+    {
+      "endpointClass": "openrouter",
+      "hostSuffixes": ["openrouter.ai"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "openrouter": {
+        "family": "openrouter"
       }
     }
   },

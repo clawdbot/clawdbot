@@ -1,30 +1,32 @@
 package ai.openclaw.app
 
-import android.content.pm.PackageManager
-import android.content.Intent
 import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import androidx.appcompat.app.AlertDialog
 import androidx.activity.ComponentActivity
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.content.ContextCompat
+import androidx.appcompat.app.AlertDialog
 import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.suspendCancellableCoroutine
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 
-class PermissionRequester(private val activity: ComponentActivity) {
+class PermissionRequester(
+  private val activity: ComponentActivity,
+) {
   private val mutex = Mutex()
   private var pending: CompletableDeferred<Map<String, Boolean>>? = null
   private val mainHandler = Handler(Looper.getMainLooper())
@@ -74,10 +76,10 @@ class PermissionRequester(private val activity: ComponentActivity) {
       // Merge: if something was already granted, treat it as granted even if launcher omitted it.
       val merged =
         permissions.associateWith { perm ->
-        val nowGranted =
-          ContextCompat.checkSelfPermission(activity, perm) == PackageManager.PERMISSION_GRANTED
-        result[perm] == true || nowGranted
-      }
+          val nowGranted =
+            ContextCompat.checkSelfPermission(activity, perm) == PackageManager.PERMISSION_GRANTED
+          result[perm] == true || nowGranted
+        }
 
       val denied =
         merged.filterValues { !it }.keys.filter {
@@ -104,6 +106,7 @@ class PermissionRequester(private val activity: ComponentActivity) {
           observer?.let(lifecycle::removeObserver)
           observer = null
         }
+
         fun finish(result: Boolean?) {
           if (!finished.compareAndSet(false, true)) return
           removeObserver()
@@ -125,7 +128,8 @@ class PermissionRequester(private val activity: ComponentActivity) {
           }
         }
         dialog =
-          AlertDialog.Builder(activity)
+          AlertDialog
+            .Builder(activity)
             .setTitle("Permission required")
             .setMessage(buildRationaleMessage(permissions))
             .setPositiveButton("Continue") { _, _ -> finish(true) }
@@ -154,7 +158,8 @@ class PermissionRequester(private val activity: ComponentActivity) {
       observer = actualObserver
       lifecycle.addObserver(actualObserver)
       dialog =
-        AlertDialog.Builder(activity)
+        AlertDialog
+          .Builder(activity)
           .setTitle("Enable permission in Settings")
           .setMessage(buildSettingsMessage(permissions))
           .setPositiveButton("Open Settings") { _, _ ->
@@ -165,8 +170,7 @@ class PermissionRequester(private val activity: ComponentActivity) {
                 Uri.fromParts("package", activity.packageName, null),
               )
             activity.startActivity(intent)
-          }
-          .setNegativeButton("Cancel", null)
+          }.setNegativeButton("Cancel", null)
           .setOnDismissListener { removeObserver() }
           .show()
     }

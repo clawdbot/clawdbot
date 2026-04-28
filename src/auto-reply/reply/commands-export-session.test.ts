@@ -19,6 +19,7 @@ const hoisted = await vi.hoisted(async () => {
     writeFileSyncMock: vi.fn(),
     mkdirSyncMock: vi.fn(),
     existsSyncMock: vi.fn(() => true),
+    exportHtmlTemplateContents: new Map<string, string>(),
   };
 });
 
@@ -54,8 +55,13 @@ vi.mock("node:fs", async () => {
     mkdirSync: hoisted.mkdirSyncMock,
     writeFileSync: hoisted.writeFileSyncMock,
     readFileSync: vi.fn((filePath: string) => {
-      if (filePath.endsWith("template.html")) {
-        return "<html>{{CSS}}{{JS}}{{SESSION_DATA}}{{MARKED_JS}}{{HIGHLIGHT_JS}}</html>";
+      for (const [suffix, contents] of hoisted.exportHtmlTemplateContents) {
+        if (filePath.endsWith(suffix)) {
+          return contents;
+        }
+      }
+      if (filePath.includes("/export-html/")) {
+        return actual.readFileSync(filePath, "utf8");
       }
       return "";
     }),
@@ -124,6 +130,7 @@ describe("buildExportSessionReply", () => {
       sandboxRuntime: { sandboxed: false, mode: "off" },
     });
     hoisted.existsSyncMock.mockReturnValue(true);
+    hoisted.exportHtmlTemplateContents.clear();
   });
 
   it("resolves store and transcript paths from the target session agent", async () => {
@@ -184,5 +191,61 @@ describe("buildExportSessionReply", () => {
         }),
       }),
     );
+  });
+
+  it("injects scripts and session data through the real export template", async () => {
+    const { buildExportSessionReply } = await import("./commands-export-session.js");
+
+    await buildExportSessionReply(makeParams());
+
+    const html = hoisted.writeFileSyncMock.mock.calls[0]?.[1];
+    expect(typeof html).toBe("string");
+    expect(html).not.toContain("{{CSS}}");
+    expect(html).not.toContain("{{JS}}");
+    expect(html).not.toContain("{{SESSION_DATA}}");
+    expect(html).not.toContain("{{MARKED_JS}}");
+    expect(html).not.toContain("{{HIGHLIGHT_JS}}");
+    expect(html).not.toContain("data-openclaw-export-placeholder");
+    expect(html).toContain(
+      Buffer.from(
+        JSON.stringify({
+          header: null,
+          entries: [],
+          leafId: null,
+          systemPrompt: "system prompt",
+          tools: [],
+        }),
+      ).toString("base64"),
+    );
+    expect(html).toContain('const base64 = document.getElementById("session-data").textContent;');
+  });
+
+  it("preserves replacement text with dollar sequences", async () => {
+    const { buildExportSessionReply } = await import("./commands-export-session.js");
+    hoisted.exportHtmlTemplateContents.set(
+      "template.html",
+      [
+        '<style data-openclaw-export-placeholder="CSS"></style>',
+        '<script id="session-data" type="application/json" data-openclaw-export-placeholder="SESSION_DATA"></script>',
+        '<script data-openclaw-export-placeholder="MARKED_JS"></script>',
+        '<script data-openclaw-export-placeholder="HIGHLIGHT_JS"></script>',
+        '<script data-openclaw-export-placeholder="JS"></script>',
+      ].join(""),
+    );
+    hoisted.exportHtmlTemplateContents.set("template.css", "/* {{THEME_VARS}} */$&$1");
+    hoisted.exportHtmlTemplateContents.set("template.js", "const marker = '$&$1';");
+    hoisted.exportHtmlTemplateContents.set("vendor/marked.min.js", "const markedMarker = '$&$1';");
+    hoisted.exportHtmlTemplateContents.set(
+      "vendor/highlight.min.js",
+      "const highlightMarker = '$&$1';",
+    );
+
+    await buildExportSessionReply(makeParams());
+
+    const html = hoisted.writeFileSyncMock.mock.calls[0]?.[1];
+    expect(html).toContain("$&$1");
+    expect(html).toContain("const marker = '$&$1';");
+    expect(html).toContain("const markedMarker = '$&$1';");
+    expect(html).toContain("const highlightMarker = '$&$1';");
   });
 });

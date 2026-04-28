@@ -24,6 +24,24 @@ describe("status-overview-rows", () => {
     );
   });
 
+  it("marks skipped memory inspection as not checked in fast status output", () => {
+    expect(
+      buildStatusCommandOverviewRows(
+        createStatusCommandOverviewRowsParams({
+          memory: null,
+          memoryPlugin: { enabled: true, slot: "memory-lancedb-pro" },
+        }),
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        {
+          Item: "Memory",
+          Value: "muted(enabled (plugin memory-lancedb-pro) · not checked)",
+        },
+      ]),
+    );
+  });
+
   it("builds status-all overview rows from the shared surface", () => {
     expect(
       buildStatusAllOverviewRows({

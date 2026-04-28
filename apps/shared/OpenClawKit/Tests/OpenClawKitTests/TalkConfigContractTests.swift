@@ -12,6 +12,25 @@ private struct TalkConfigContractFixture: Decodable {
         let payloadValid: Bool
         let expectedSelection: ExpectedSelection?
         let talk: [String: AnyCodable]
+
+        var gatewayResponseTalk: [String: AnyCodable] {
+            guard let expectedSelection else { return self.talk }
+            var config: [String: AnyCodable] = [:]
+            if let voiceId = expectedSelection.voiceId {
+                config["voiceId"] = AnyCodable(voiceId)
+            }
+            if let apiKey = expectedSelection.apiKey {
+                config["apiKey"] = AnyCodable(apiKey)
+            }
+            var response = self.talk
+            response["provider"] = AnyCodable(expectedSelection.provider)
+            response["providers"] = AnyCodable([expectedSelection.provider: config])
+            response["resolved"] = AnyCodable([
+                "provider": AnyCodable(expectedSelection.provider),
+                "config": AnyCodable(config),
+            ])
+            return response
+        }
     }
 
     struct ExpectedSelection: Decodable {
@@ -53,7 +72,7 @@ struct TalkConfigContractTests {
     @Test func selectionFixtures() throws {
         for fixture in try TalkConfigContractFixtureLoader.load().selectionCases {
             let selection = TalkConfigParsing.selectProviderConfig(
-                fixture.talk,
+                fixture.gatewayResponseTalk,
                 defaultProvider: fixture.defaultProvider)
             if let expected = fixture.expectedSelection {
                 #expect(selection != nil)

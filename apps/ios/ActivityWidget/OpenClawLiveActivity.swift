@@ -5,11 +5,11 @@ import WidgetKit
 struct OpenClawLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: OpenClawActivityAttributes.self) { context in
-            lockScreenView(context: context)
+            self.lockScreenView(context: context)
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    statusDot(state: context.state)
+                    self.statusDot(state: context.state)
                 }
                 DynamicIslandExpandedRegion(.center) {
                     Text(context.state.statusText)
@@ -17,25 +17,24 @@ struct OpenClawLiveActivity: Widget {
                         .lineLimit(1)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    trailingView(state: context.state)
+                    self.trailingView(state: context.state)
                 }
             } compactLeading: {
-                statusDot(state: context.state)
+                self.statusDot(state: context.state)
             } compactTrailing: {
                 Text(context.state.statusText)
                     .font(.caption2)
                     .lineLimit(1)
                     .frame(maxWidth: 64)
             } minimal: {
-                statusDot(state: context.state)
+                self.statusDot(state: context.state)
             }
         }
     }
 
-    @ViewBuilder
     private func lockScreenView(context: ActivityViewContext<OpenClawActivityAttributes>) -> some View {
         HStack(spacing: 8) {
-            statusDot(state: context.state)
+            self.statusDot(state: context.state)
                 .frame(width: 10, height: 10)
             VStack(alignment: .leading, spacing: 2) {
                 Text("OpenClaw")
@@ -45,7 +44,7 @@ struct OpenClawLiveActivity: Widget {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            trailingView(state: context.state)
+            self.trailingView(state: context.state)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
@@ -69,10 +68,9 @@ struct OpenClawLiveActivity: Widget {
         }
     }
 
-    @ViewBuilder
     private func statusDot(state: OpenClawActivityAttributes.ContentState) -> some View {
         Circle()
-            .fill(dotColor(state: state))
+            .fill(self.dotColor(state: state))
             .frame(width: 6, height: 6)
     }
 

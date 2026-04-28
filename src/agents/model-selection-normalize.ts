@@ -38,9 +38,11 @@ export {
 function normalizeProviderModelId(
   provider: string,
   model: string,
-  options?: { allowPluginNormalization?: boolean },
+  options?: { allowManifestNormalization?: boolean; allowPluginNormalization?: boolean },
 ): string {
-  const staticModelId = normalizeStaticProviderModelId(provider, model);
+  const staticModelId = normalizeStaticProviderModelId(provider, model, {
+    allowManifestNormalization: options?.allowManifestNormalization,
+  });
   if (options?.allowPluginNormalization === false) {
     return staticModelId;
   }
@@ -56,6 +58,7 @@ function normalizeProviderModelId(
 }
 
 type ModelRefNormalizeOptions = {
+  allowManifestNormalization?: boolean;
   allowPluginNormalization?: boolean;
 };
 

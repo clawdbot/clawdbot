@@ -96,12 +96,20 @@
     "target": "Chutes"
   },
   {
+    "source": "DeepInfra",
+    "target": "DeepInfra"
+  },
+  {
     "source": "Qwen",
     "target": "Qwen"
   },
   {
     "source": "Feishu",
     "target": "Feishu"
+  },
+  {
+    "source": "Yuanbao",
+    "target": "腾讯元宝"
   },
   {
     "source": "WeChat",
@@ -344,6 +352,10 @@
     "target": "Ollama Web 搜索"
   },
   {
+    "source": "Memory LanceDB",
+    "target": "Memory LanceDB"
+  },
+  {
     "source": "onboarding",
     "target": "新手引导"
   },
@@ -452,6 +464,14 @@
     "target": "从 Hermes 迁移"
   },
   {
+    "source": "Migrating from Claude",
+    "target": "从 Claude 迁移"
+  },
+  {
+    "source": "Agent workspace",
+    "target": "Agent 工作区"
+  },
+  {
     "source": "Migration",
     "target": "迁移"
   },
@@ -494,6 +514,18 @@
   {
     "source": "QA Refactor",
     "target": "QA 重构"
+  },
+  {
+    "source": "Matrix QA",
+    "target": "Matrix QA"
+  },
+  {
+    "source": "QA overview",
+    "target": "QA overview"
+  },
+  {
+    "source": "QA channel",
+    "target": "QA channel"
   },
   {
     "source": "Rich Output Protocol",

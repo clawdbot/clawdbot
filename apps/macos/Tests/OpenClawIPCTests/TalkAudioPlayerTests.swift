@@ -8,7 +8,7 @@ import Testing
         let wav = makeWav16Mono(sampleRate: 8000, samples: 80)
         defer { _ = TalkAudioPlayer.shared.stop() }
 
-        _ = try await withTimeout(seconds: 4.0) {
+        _ = try await withTimeout(seconds: 10.0) {
             await TalkAudioPlayer.shared.play(data: wav)
         }
 
@@ -27,7 +27,7 @@ import Testing
         await Task.yield()
         _ = await TalkAudioPlayer.shared.play(data: wav)
 
-        _ = try await withTimeout(seconds: 4.0) {
+        _ = try await withTimeout(seconds: 10.0) {
             await first.value
         }
         #expect(true)

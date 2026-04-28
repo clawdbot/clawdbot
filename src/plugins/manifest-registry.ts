@@ -37,9 +37,11 @@ import {
   type PluginManifestContracts,
   type PluginManifestMediaUnderstandingProviderMetadata,
   type PluginManifestModelCatalog,
+  type PluginManifestModelIdNormalization,
   type PluginManifestModelPricing,
   type PluginManifestModelSupport,
   type PluginManifestProviderEndpoint,
+  type PluginManifestProviderRequest,
   type PluginManifestQaRunner,
   type PluginManifestSetup,
 } from "./manifest.js";
@@ -115,7 +117,9 @@ export type PluginManifestRecord = {
   modelSupport?: PluginManifestModelSupport;
   modelCatalog?: PluginManifestModelCatalog;
   modelPricing?: PluginManifestModelPricing;
+  modelIdNormalization?: PluginManifestModelIdNormalization;
   providerEndpoints?: PluginManifestProviderEndpoint[];
+  providerRequest?: PluginManifestProviderRequest;
   cliBackends: string[];
   syntheticAuthRefs?: string[];
   nonSecretAuthMarkers?: string[];
@@ -341,7 +345,9 @@ function buildRecord(params: {
     modelSupport: params.manifest.modelSupport,
     modelCatalog: params.manifest.modelCatalog,
     modelPricing: params.manifest.modelPricing,
+    modelIdNormalization: params.manifest.modelIdNormalization,
     providerEndpoints: params.manifest.providerEndpoints,
+    providerRequest: params.manifest.providerRequest,
     cliBackends: params.manifest.cliBackends ?? [],
     syntheticAuthRefs: params.manifest.syntheticAuthRefs ?? [],
     nonSecretAuthMarkers: params.manifest.nonSecretAuthMarkers ?? [],
@@ -552,6 +558,34 @@ function resolveDuplicatePrecedenceRank(params: {
   return 4;
 }
 
+function isIntentionalInstalledBundledDuplicate(params: {
+  pluginId: string;
+  left: PluginCandidate;
+  right: PluginCandidate;
+  config?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  installRecords: Record<string, PluginInstallRecord>;
+}): boolean {
+  const leftIsInstalled = matchesInstalledPluginRecord({
+    pluginId: params.pluginId,
+    candidate: params.left,
+    config: params.config,
+    env: params.env,
+    installRecords: params.installRecords,
+  });
+  const rightIsInstalled = matchesInstalledPluginRecord({
+    pluginId: params.pluginId,
+    candidate: params.right,
+    config: params.config,
+    env: params.env,
+    installRecords: params.installRecords,
+  });
+  return (
+    (leftIsInstalled && params.right.origin === "bundled") ||
+    (rightIsInstalled && params.left.origin === "bundled")
+  );
+}
+
 export function loadPluginManifestRegistry(
   params: {
     config?: OpenClawConfig;
@@ -733,6 +767,18 @@ export function loadPluginManifestRegistry(
         records[existing.recordIndex] = record;
         seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
         pushManifestCompatibilityDiagnostics({ record, diagnostics });
+      }
+      if (
+        isIntentionalInstalledBundledDuplicate({
+          pluginId: manifest.id,
+          left: candidate,
+          right: existing.candidate,
+          config,
+          env,
+          installRecords: getInstallRecords(),
+        })
+      ) {
+        continue;
       }
       diagnostics.push({
         level: "warn",

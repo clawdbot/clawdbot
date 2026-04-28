@@ -1,10 +1,7 @@
 import { ChannelType, type Client, type MessageCreateListener } from "@buape/carbon";
 import { Routes, type APIAttachment, type APIStickerItem } from "discord-api-types/v10";
-import {
-  resolveChannelModelOverride,
-  type OpenClawConfig,
-  type ReplyToMode,
-} from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-types";
+import { resolveChannelModelOverride } from "openclaw/plugin-sdk/model-session-runtime";
 import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -389,6 +386,7 @@ export type DiscordAutoThreadContext = {
   To: string;
   OriginatingTo: string;
   SessionKey: string;
+  ModelParentSessionKey?: string;
   ParentSessionKey?: string;
 };
 
@@ -413,14 +411,11 @@ export function resolveDiscordAutoThreadContext(params: {
     channel: params.channel,
     peer: { kind: "channel", id: createdThreadId },
   });
-  const parentSessionKey =
-    params.parentInheritanceEnabled === true
-      ? buildAgentSessionKey({
-          agentId: params.agentId,
-          channel: params.channel,
-          peer: { kind: "channel", id: messageChannelId },
-        })
-      : undefined;
+  const parentSessionKey = buildAgentSessionKey({
+    agentId: params.agentId,
+    channel: params.channel,
+    peer: { kind: "channel", id: messageChannelId },
+  });
 
   return {
     createdThreadId,
@@ -428,7 +423,8 @@ export function resolveDiscordAutoThreadContext(params: {
     To: `channel:${createdThreadId}`,
     OriginatingTo: `channel:${createdThreadId}`,
     SessionKey: threadSessionKey,
-    ...(parentSessionKey ? { ParentSessionKey: parentSessionKey } : {}),
+    ModelParentSessionKey: parentSessionKey,
+    ...(params.parentInheritanceEnabled === true ? { ParentSessionKey: parentSessionKey } : {}),
   };
 }
 

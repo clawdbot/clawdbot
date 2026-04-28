@@ -9,6 +9,8 @@
 /.github/dependabot.yml @openclaw/secops
 /.github/codeql/ @openclaw/secops
 /.github/workflows/codeql.yml @openclaw/secops
+/.github/workflows/codeql-android-critical-security.yml @openclaw/secops
+/.github/workflows/codeql-critical-quality.yml @openclaw/secops
 /src/security/ @openclaw/secops
 /src/secrets/ @openclaw/secops
 /src/config/*secret*.ts @openclaw/secops

@@ -141,6 +141,78 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes group visible reply config changes through channel delivery regressions", () => {
+    expect(
+      resolveChangedTestTargetPlan([
+        "src/config/types.messages.ts",
+        "src/config/zod-schema.core.ts",
+      ]),
+    ).toEqual({
+      mode: "targets",
+      targets: [
+        "src/auto-reply/reply/dispatch-acp.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/followup-runner.test.ts",
+        "src/auto-reply/reply/groups.test.ts",
+        "extensions/discord/src/monitor/message-handler.process.test.ts",
+        "extensions/slack/src/monitor.tool-result.test.ts",
+      ],
+    });
+  });
+
+  it("routes source reply prompt changes through prompt and channel delivery regressions", () => {
+    expect(resolveChangedTestTargetPlan(["src/agents/system-prompt.ts"])).toEqual({
+      mode: "targets",
+      targets: [
+        "src/agents/system-prompt.test.ts",
+        "src/auto-reply/reply/dispatch-acp.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/followup-runner.test.ts",
+        "src/auto-reply/reply/groups.test.ts",
+        "extensions/discord/src/monitor/message-handler.process.test.ts",
+        "extensions/slack/src/monitor.tool-result.test.ts",
+      ],
+    });
+  });
+
+  it("routes source reply delivery mode changes through channel delivery regressions", () => {
+    expect(
+      resolveChangedTestTargetPlan(["src/auto-reply/reply/source-reply-delivery-mode.ts"]),
+    ).toEqual({
+      mode: "targets",
+      targets: [
+        "src/auto-reply/reply/dispatch-acp.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/followup-runner.test.ts",
+        "src/auto-reply/reply/groups.test.ts",
+        "extensions/discord/src/monitor/message-handler.process.test.ts",
+        "extensions/slack/src/monitor.tool-result.test.ts",
+      ],
+    });
+  });
+
+  it("routes channel reply pipeline SDK changes through SDK and channel delivery regressions", () => {
+    expect(resolveChangedTestTargetPlan(["src/plugin-sdk/channel-reply-pipeline.ts"])).toEqual({
+      mode: "targets",
+      targets: [
+        "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
+        "src/auto-reply/reply/dispatch-acp.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/followup-runner.test.ts",
+        "src/auto-reply/reply/groups.test.ts",
+        "extensions/discord/src/monitor/message-handler.process.test.ts",
+        "extensions/slack/src/monitor.tool-result.test.ts",
+      ],
+    });
+  });
+
+  it("routes reply runtime SDK exports through plugin SDK contract tests", () => {
+    expect(resolveChangedTestTargetPlan(["src/plugin-sdk/reply-runtime.ts"])).toEqual({
+      mode: "targets",
+      targets: ["src/plugins/contracts/plugin-sdk-subpaths.test.ts"],
+    });
+  });
+
   it("keeps extension batch runner edits on extension script tests", () => {
     expect(resolveChangedTestTargetPlan(["scripts/test-extension-batch.mjs"])).toEqual({
       mode: "targets",
@@ -225,7 +297,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("keeps shared test helpers cheap by default when no precise target exists", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
-        "test/helpers/channels/plugin.ts",
+        "test/helpers/poll.ts",
       ]),
     ).toEqual([]);
   });
@@ -235,14 +307,24 @@ describe("scripts/test-projects changed-target routing", () => {
       resolveChangedTargetArgs(
         ["--changed", "origin/main"],
         process.cwd(),
-        () => ["test/helpers/channels/plugin.ts"],
+        () => ["test/helpers/poll.ts"],
         { env: { OPENCLAW_TEST_CHANGED_BROAD: "1" } },
       ),
     ).toBeNull();
   });
 
-  it("routes channel helper edits through the tests that import them", () => {
-    expect(resolveChangedTestTargetPlan(["test/helpers/channels/directory-ids.ts"])).toEqual({
+  it("routes channel contract helper edits through the tests that import them", () => {
+    const plan = resolveChangedTestTargetPlan([
+      "src/channels/plugins/contracts/test-helpers/manifest.ts",
+    ]);
+
+    expect(plan.mode).toBe("targets");
+    expect(plan.targets).toContain("src/channels/plugins/contracts/registry.contract.test.ts");
+    expect(plan.targets).not.toContain("extensions/discord/src/directory-contract.test.ts");
+  });
+
+  it("routes channel SDK helper edits through the tests that import them", () => {
+    expect(resolveChangedTestTargetPlan(["src/plugin-sdk/test-helpers/directory-ids.ts"])).toEqual({
       mode: "targets",
       targets: [
         "extensions/discord/src/directory-contract.test.ts",
@@ -254,7 +336,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("routes channel contract helper edits through contract shards", () => {
     const plan = resolveChangedTestTargetPlan([
-      "test/helpers/channels/registry-backed-contract-shards.ts",
+      "src/channels/plugins/contracts/test-helpers/registry-backed-contract-shards.ts",
     ]);
 
     expect(plan.mode).toBe("targets");
@@ -270,7 +352,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("routes precise plugin contract helpers without broad-running every shard", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
-        "test/helpers/plugins/tts-contract-suites.ts",
+        "src/plugins/contracts/tts-contract-suites.ts",
       ]),
     ).toEqual([
       "src/plugins/contracts/core-extension-facade-boundary.test.ts",
@@ -455,7 +537,12 @@ describe("scripts/test-projects changed-target routing", () => {
     ).toEqual({
       mode: "targets",
       targets: [
+        "src/auto-reply/reply/dispatch-acp.test.ts",
         "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/followup-runner.test.ts",
+        "src/auto-reply/reply/groups.test.ts",
+        "extensions/discord/src/monitor/message-handler.process.test.ts",
+        "extensions/slack/src/monitor.tool-result.test.ts",
         "src/auto-reply/reply/effective-reply-route.test.ts",
       ],
     });
@@ -691,9 +778,9 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("uses import-graph targets in default changed mode", () => {
-    expect(
-      resolveChangedTestTargetPlan(["test/helpers/plugins/plugin-registration.ts"]).targets,
-    ).toContain("extensions/openrouter/index.test.ts");
+    expect(resolveChangedTestTargetPlan(["test/helpers/normalize-text.ts"]).targets).toContain(
+      "src/auto-reply/status.test.ts",
+    );
   });
 
   it.each([
@@ -1047,7 +1134,10 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.cli.config.ts",
       "test/vitest/vitest.commands-light.config.ts",
       "test/vitest/vitest.commands.config.ts",
-      "test/vitest/vitest.agents.config.ts",
+      "test/vitest/vitest.agents-core.config.ts",
+      "test/vitest/vitest.agents-pi-embedded.config.ts",
+      "test/vitest/vitest.agents-support.config.ts",
+      "test/vitest/vitest.agents-tools.config.ts",
       "test/vitest/vitest.daemon.config.ts",
       "test/vitest/vitest.plugin-sdk-light.config.ts",
       "test/vitest/vitest.plugin-sdk.config.ts",

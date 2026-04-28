@@ -1,6 +1,3 @@
-import { normalizeOptionalString } from "../../../src/shared/string-coerce.js";
-import { isRecord } from "../../../src/utils.js";
-
 export type JsonObject = Record<string, unknown>;
 
 export type ExternalPluginCompatibility = {
@@ -24,6 +21,18 @@ export const EXTERNAL_CODE_PLUGIN_REQUIRED_FIELD_PATHS = [
   "openclaw.compat.pluginApi",
   "openclaw.build.openclawVersion",
 ] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
 
 function readOpenClawBlock(packageJson: unknown) {
   const root = isRecord(packageJson) ? packageJson : undefined;

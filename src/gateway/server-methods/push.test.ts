@@ -3,11 +3,11 @@ import { ErrorCodes } from "../protocol/index.js";
 import { pushHandlers } from "./push.js";
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({})),
+  getRuntimeConfig: vi.fn(() => ({})),
 }));
 
 vi.mock("../../config/config.js", () => ({
-  loadConfig: mocks.loadConfig,
+  getRuntimeConfig: mocks.getRuntimeConfig,
 }));
 
 vi.mock("../../infra/push-apns.js", () => ({
@@ -99,7 +99,7 @@ function createInvokeParams(params: Record<string, unknown>) {
       await pushHandlers["push.test"]({
         params,
         respond: respond as never,
-        context: {} as never,
+        context: { getRuntimeConfig: () => mocks.getRuntimeConfig() } as never,
         client: null,
         req: { type: "req", id: "req-1", method: "push.test" },
         isWebchatConnect: () => false,
@@ -119,8 +119,8 @@ function expectInvalidRequestResponse(
 
 describe("push.test handler", () => {
   beforeEach(() => {
-    mocks.loadConfig.mockClear();
-    mocks.loadConfig.mockReturnValue({});
+    mocks.getRuntimeConfig.mockClear();
+    mocks.getRuntimeConfig.mockReturnValue({});
     vi.mocked(loadApnsRegistration).mockClear();
     vi.mocked(normalizeApnsEnvironment).mockClear();
     vi.mocked(resolveApnsAuthConfigFromEnv).mockClear();
@@ -163,7 +163,7 @@ describe("push.test handler", () => {
   });
 
   it("sends push test through relay registrations", async () => {
-    mocks.loadConfig.mockReturnValue({
+    mocks.getRuntimeConfig.mockReturnValue({
       gateway: {
         push: {
           apns: {

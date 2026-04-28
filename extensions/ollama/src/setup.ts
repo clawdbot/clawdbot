@@ -420,19 +420,47 @@ function buildOllamaModelsConfig(
   });
 }
 
+function getOllamaLatestDedupeKey(name: string): string {
+  const normalized = normalizeLowercaseStringOrEmpty(name);
+  return normalized.endsWith(":latest") ? normalized.slice(0, -":latest".length) : normalized;
+}
+
+function isExplicitLatestOllamaModel(name: string): boolean {
+  return normalizeLowercaseStringOrEmpty(name).endsWith(":latest");
+}
+
+function shouldReplaceOllamaModelName(existing: string, candidate: string): boolean {
+  return !isExplicitLatestOllamaModel(existing) && isExplicitLatestOllamaModel(candidate);
+}
+
 function mergeUniqueModelNames(...groups: string[][]): string[] {
-  const seen = new Set<string>();
+  const indexByKey = new Map<string, number>();
   const merged: string[] = [];
   for (const group of groups) {
     for (const name of group) {
-      if (seen.has(name)) {
+      const key = getOllamaLatestDedupeKey(name);
+      const existingIndex = indexByKey.get(key);
+      if (existingIndex !== undefined) {
+        if (shouldReplaceOllamaModelName(merged[existingIndex], name)) {
+          merged[existingIndex] = name;
+        }
         continue;
       }
-      seen.add(name);
+      indexByKey.set(key, merged.length);
       merged.push(name);
     }
   }
   return merged;
+}
+
+function findAvailableOllamaModelName(modelName: string, availableModelNames: Iterable<string>) {
+  const wantedKey = getOllamaLatestDedupeKey(modelName);
+  for (const available of availableModelNames) {
+    if (getOllamaLatestDedupeKey(available) === wantedKey) {
+      return available;
+    }
+  }
+  return undefined;
 }
 
 function applyOllamaProviderConfig(
@@ -632,19 +660,20 @@ export async function configureOllamaNonInteractive(params: {
   );
   const discoveredModelsByName = new Map(enrichedModels.map((model) => [model.name, model]));
   const modelNames = models.map((model) => model.name);
-  const orderedModelNames = [
-    ...OLLAMA_SUGGESTED_MODELS_LOCAL,
-    ...modelNames.filter((name) => !OLLAMA_SUGGESTED_MODELS_LOCAL.includes(name)),
-  ];
+  const orderedModelNames = mergeUniqueModelNames(OLLAMA_SUGGESTED_MODELS_LOCAL, modelNames);
 
   const requestedDefaultModelId = explicitModel ?? OLLAMA_SUGGESTED_MODELS_LOCAL[0];
   const availableModelNames = new Set(modelNames);
+  const availableDefaultModelId = findAvailableOllamaModelName(
+    requestedDefaultModelId,
+    availableModelNames,
+  );
   const requestedCloudModel = isOllamaCloudModel(requestedDefaultModelId);
   let pulledRequestedModel = false;
 
   if (requestedCloudModel) {
     availableModelNames.add(requestedDefaultModelId);
-  } else if (!modelNames.includes(requestedDefaultModelId)) {
+  } else if (!availableDefaultModelId) {
     pulledRequestedModel = await pullOllamaModelNonInteractive(
       baseUrl,
       requestedDefaultModelId,
@@ -656,7 +685,7 @@ export async function configureOllamaNonInteractive(params: {
   }
 
   let allModelNames = orderedModelNames;
-  let defaultModelId = requestedDefaultModelId;
+  let defaultModelId = availableDefaultModelId ?? requestedDefaultModelId;
   if (
     (pulledRequestedModel || requestedCloudModel) &&
     !allModelNames.includes(requestedDefaultModelId)
@@ -664,7 +693,7 @@ export async function configureOllamaNonInteractive(params: {
     allModelNames = [...allModelNames, requestedDefaultModelId];
   }
 
-  if (!availableModelNames.has(requestedDefaultModelId)) {
+  if (!findAvailableOllamaModelName(defaultModelId, availableModelNames)) {
     if (availableModelNames.size === 0) {
       params.runtime.error(
         [
@@ -677,7 +706,7 @@ export async function configureOllamaNonInteractive(params: {
     }
 
     defaultModelId =
-      allModelNames.find((name) => availableModelNames.has(name)) ??
+      allModelNames.find((name) => findAvailableOllamaModelName(name, availableModelNames)) ??
       Array.from(availableModelNames)[0];
     params.runtime.log(
       `Ollama model ${requestedDefaultModelId} was not available; using ${defaultModelId} instead.`,
@@ -709,7 +738,12 @@ export async function ensureOllamaModelPulled(params: {
     return;
   }
   const { models } = await fetchOllamaModels(baseUrl);
-  if (models.some((model) => model.name === modelName)) {
+  if (
+    findAvailableOllamaModelName(
+      modelName,
+      models.map((model) => model.name),
+    )
+  ) {
     return;
   }
   if (!(await pullOllamaModel(baseUrl, modelName, params.prompter))) {

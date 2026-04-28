@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth";
 import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth";
-import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,

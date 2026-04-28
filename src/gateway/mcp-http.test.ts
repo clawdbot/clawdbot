@@ -44,7 +44,7 @@ const resolveGatewayScopedToolsMock = vi.hoisted(() =>
 );
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({ session: { mainKey: "main" } }),
+  getRuntimeConfig: () => ({ session: { mainKey: "main" } }),
 }));
 
 vi.mock("../config/sessions.js", () => ({

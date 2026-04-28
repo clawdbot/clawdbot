@@ -44,6 +44,12 @@ import {
   type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps.js";
 import {
+  copyBundledPluginRuntimeRoot,
+  precomputeBundledRuntimeMirrorMetadata,
+  refreshBundledPluginRuntimeMirrorRoot,
+  type PrecomputedBundledRuntimeMirrorMetadata,
+} from "./bundled-runtime-mirror.js";
+import {
   clearPluginCommands,
   listRegisteredPluginCommands,
   restorePluginCommands,
@@ -53,6 +59,7 @@ import {
   listRegisteredCompactionProviders,
   restoreRegisteredCompactionProviders,
 } from "./compaction-provider.js";
+import type { PluginCompatCode } from "./compat/registry.js";
 import {
   applyTestPluginDefaults,
   createPluginActivationSource,
@@ -64,9 +71,10 @@ import {
   type NormalizedPluginsConfig,
   type PluginActivationState,
 } from "./config-state.js";
-import { discoverOpenClawPlugins } from "./discovery.js";
+import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { getGlobalHookRunner, initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { toSafeImportPath } from "./import-specifier.js";
+import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import {
   clearPluginInteractiveHandlers,
@@ -75,7 +83,11 @@ import {
 } from "./interactive-registry.js";
 import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import { PluginLoaderCacheState } from "./loader-cache-state.js";
-import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
+import {
+  loadPluginManifestRegistry,
+  type PluginManifestRecord,
+  type PluginManifestRegistry,
+} from "./manifest-registry.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
 import type { PluginManifestContracts } from "./manifest.js";
 import {
@@ -169,6 +181,7 @@ export type PluginLoadOptions = {
   installBundledRuntimeDeps?: boolean;
   throwOnLoadError?: boolean;
   bundledRuntimeDepsInstaller?: (params: BundledRuntimeDepsInstallParams) => void;
+  manifestRegistry?: PluginManifestRegistry;
 };
 
 const CLI_METADATA_ENTRY_BASENAMES = [
@@ -248,6 +261,20 @@ const LAZY_RUNTIME_REFLECTION_KEYS = [
   "state",
   "modelAuth",
 ] as const satisfies readonly (keyof PluginRuntime)[];
+
+function createPluginCandidatesFromManifestRegistry(
+  manifestRegistry: PluginManifestRegistry,
+): PluginCandidate[] {
+  return manifestRegistry.plugins.map((record) => ({
+    idHint: record.id,
+    rootDir: record.rootDir,
+    source: record.source,
+    origin: record.origin,
+    ...(record.workspaceDir !== undefined ? { workspaceDir: record.workspaceDir } : {}),
+    ...(record.format !== undefined ? { format: record.format } : {}),
+    ...(record.bundleFormat !== undefined ? { bundleFormat: record.bundleFormat } : {}),
+  }));
+}
 
 export function clearPluginLoaderCache(): void {
   pluginLoaderCacheState.clear();
@@ -678,41 +705,53 @@ function mirrorBundledPluginRuntimeRoot(params: {
   pluginRoot: string;
   installRoot: string;
 }): string {
+  const sourceDistRoot = path.dirname(path.dirname(params.pluginRoot));
+  const mirrorParent = path.join(params.installRoot, path.basename(sourceDistRoot), "extensions");
+  const mirrorRoot = path.join(mirrorParent, params.pluginId);
+  const precomputedPluginRootMetadata =
+    path.resolve(mirrorRoot) === path.resolve(params.pluginRoot)
+      ? undefined
+      : precomputeBundledRuntimeMirrorMetadata({ sourceRoot: params.pluginRoot });
+  const precomputedCanonicalPluginRootMetadata =
+    precomputeCanonicalBundledRuntimeDistPluginMetadata({
+      pluginRoot: params.pluginRoot,
+      sourceDistRoot,
+    });
+
   return withBundledRuntimeDepsFilesystemLock(
     params.installRoot,
     BUNDLED_RUNTIME_MIRROR_LOCK_DIR,
     () => {
-      const mirrorParent = prepareBundledPluginRuntimeDistMirror({
+      const preparedMirrorParent = prepareBundledPluginRuntimeDistMirror({
         installRoot: params.installRoot,
         pluginRoot: params.pluginRoot,
+        precomputedCanonicalPluginRootMetadata,
       });
-      const mirrorRoot = path.join(mirrorParent, params.pluginId);
+      const preparedMirrorRoot = path.join(preparedMirrorParent, params.pluginId);
       fs.mkdirSync(params.installRoot, { recursive: true });
       try {
         fs.chmodSync(params.installRoot, 0o755);
       } catch {
         // Best-effort only: staged roots may live on filesystems that reject chmod.
       }
-      fs.mkdirSync(mirrorParent, { recursive: true });
+      fs.mkdirSync(preparedMirrorParent, { recursive: true });
       try {
-        fs.chmodSync(mirrorParent, 0o755);
+        fs.chmodSync(preparedMirrorParent, 0o755);
       } catch {
         // Best-effort only: the access check below will surface non-writable dirs.
       }
-      fs.accessSync(mirrorParent, fs.constants.W_OK);
-      if (path.resolve(mirrorRoot) === path.resolve(params.pluginRoot)) {
-        return mirrorRoot;
+      fs.accessSync(preparedMirrorParent, fs.constants.W_OK);
+      if (path.resolve(preparedMirrorRoot) === path.resolve(params.pluginRoot)) {
+        return preparedMirrorRoot;
       }
-      const tempDir = fs.mkdtempSync(path.join(mirrorParent, `.plugin-${params.pluginId}-`));
-      const stagedRoot = path.join(tempDir, "plugin");
-      try {
-        copyBundledPluginRuntimeRoot(params.pluginRoot, stagedRoot);
-        fs.rmSync(mirrorRoot, { recursive: true, force: true });
-        fs.renameSync(stagedRoot, mirrorRoot);
-      } finally {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      }
-      return mirrorRoot;
+      refreshBundledPluginRuntimeMirrorRoot({
+        pluginId: params.pluginId,
+        sourceRoot: params.pluginRoot,
+        targetRoot: preparedMirrorRoot,
+        tempDirParent: preparedMirrorParent,
+        precomputedSourceMetadata: precomputedPluginRootMetadata,
+      });
+      return preparedMirrorRoot;
     },
   );
 }
@@ -720,6 +759,7 @@ function mirrorBundledPluginRuntimeRoot(params: {
 function prepareBundledPluginRuntimeDistMirror(params: {
   installRoot: string;
   pluginRoot: string;
+  precomputedCanonicalPluginRootMetadata?: PrecomputedBundledRuntimeMirrorMetadata;
 }): string {
   const sourceExtensionsRoot = path.dirname(params.pluginRoot);
   const sourceDistRoot = path.dirname(sourceExtensionsRoot);
@@ -738,6 +778,7 @@ function prepareBundledPluginRuntimeDistMirror(params: {
       installRoot: params.installRoot,
       pluginRoot: params.pluginRoot,
       sourceRuntimeDistRoot: sourceDistRoot,
+      precomputedSourceMetadata: params.precomputedCanonicalPluginRootMetadata,
     });
   }
   ensureOpenClawPluginSdkAlias(mirrorDistRoot);
@@ -798,6 +839,7 @@ function mirrorCanonicalBundledRuntimeDistRoot(params: {
   installRoot: string;
   pluginRoot: string;
   sourceRuntimeDistRoot: string;
+  precomputedSourceMetadata?: PrecomputedBundledRuntimeMirrorMetadata;
 }): void {
   const sourceCanonicalDistRoot = path.join(path.dirname(params.sourceRuntimeDistRoot), "dist");
   if (!fs.existsSync(sourceCanonicalDistRoot)) {
@@ -819,17 +861,33 @@ function mirrorCanonicalBundledRuntimeDistRoot(params: {
     return;
   }
   const targetCanonicalPluginRoot = path.join(targetCanonicalDistRoot, "extensions", pluginId);
-  const tempDir = fs.mkdtempSync(
-    path.join(path.dirname(targetCanonicalPluginRoot), `.plugin-${pluginId}-`),
-  );
-  const stagedRoot = path.join(tempDir, "plugin");
-  try {
-    copyBundledPluginRuntimeRoot(sourceCanonicalPluginRoot, stagedRoot);
-    fs.rmSync(targetCanonicalPluginRoot, { recursive: true, force: true });
-    fs.renameSync(stagedRoot, targetCanonicalPluginRoot);
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+  refreshBundledPluginRuntimeMirrorRoot({
+    pluginId,
+    sourceRoot: sourceCanonicalPluginRoot,
+    targetRoot: targetCanonicalPluginRoot,
+    tempDirParent: path.dirname(targetCanonicalPluginRoot),
+    precomputedSourceMetadata: params.precomputedSourceMetadata,
+  });
+}
+
+function precomputeCanonicalBundledRuntimeDistPluginMetadata(params: {
+  pluginRoot: string;
+  sourceDistRoot: string;
+}): PrecomputedBundledRuntimeMirrorMetadata | undefined {
+  if (path.basename(params.sourceDistRoot) !== "dist-runtime") {
+    return undefined;
   }
+  const pluginId = path.basename(params.pluginRoot);
+  const sourceCanonicalPluginRoot = path.join(
+    path.dirname(params.sourceDistRoot),
+    "dist",
+    "extensions",
+    pluginId,
+  );
+  if (!fs.existsSync(sourceCanonicalPluginRoot)) {
+    return undefined;
+  }
+  return precomputeBundledRuntimeMirrorMetadata({ sourceRoot: sourceCanonicalPluginRoot });
 }
 
 function ensureBundledRuntimeDistPackageJson(mirrorDistRoot: string): void {
@@ -838,38 +896,6 @@ function ensureBundledRuntimeDistPackageJson(mirrorDistRoot: string): void {
     return;
   }
   writeRuntimeJsonFile(packageJsonPath, { type: "module" });
-}
-
-function copyBundledPluginRuntimeRoot(sourceRoot: string, targetRoot: string): void {
-  if (path.resolve(sourceRoot) === path.resolve(targetRoot)) {
-    return;
-  }
-  fs.mkdirSync(targetRoot, { recursive: true, mode: 0o755 });
-  for (const entry of fs.readdirSync(sourceRoot, { withFileTypes: true })) {
-    if (entry.name === "node_modules") {
-      continue;
-    }
-    const sourcePath = path.join(sourceRoot, entry.name);
-    const targetPath = path.join(targetRoot, entry.name);
-    if (entry.isDirectory()) {
-      copyBundledPluginRuntimeRoot(sourcePath, targetPath);
-      continue;
-    }
-    if (entry.isSymbolicLink()) {
-      fs.symlinkSync(fs.readlinkSync(sourcePath), targetPath);
-      continue;
-    }
-    if (!entry.isFile()) {
-      continue;
-    }
-    fs.copyFileSync(sourcePath, targetPath);
-    try {
-      const sourceMode = fs.statSync(sourcePath).mode;
-      fs.chmodSync(targetPath, sourceMode | 0o600);
-    } catch {
-      // Readable copied files are enough for plugin loading.
-    }
-  }
 }
 
 function writeRuntimeJsonFile(targetPath: string, value: unknown): void {
@@ -1772,7 +1798,9 @@ function createPluginRecord(params: {
   origin: PluginRecord["origin"];
   workspaceDir?: string;
   enabled: boolean;
+  compat?: readonly PluginCompatCode[];
   activationState?: PluginActivationState;
+  syntheticAuthRefs?: string[];
   configSchema: boolean;
   contracts?: PluginManifestContracts;
 }): PluginRecord {
@@ -1789,10 +1817,12 @@ function createPluginRecord(params: {
     origin: params.origin,
     workspaceDir: params.workspaceDir,
     enabled: params.enabled,
+    compat: params.compat,
     explicitlyEnabled: params.activationState?.explicitlyEnabled,
     activated: params.activationState?.activated,
     activationSource: params.activationState?.source,
     activationReason: params.activationState?.reason,
+    syntheticAuthRefs: params.syntheticAuthRefs ?? [],
     status: params.enabled ? "loaded" : "disabled",
     toolNames: [],
     hookNames: [],
@@ -2345,21 +2375,29 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       activateGlobalSideEffects: shouldActivate,
     });
 
-    const discovery = discoverOpenClawPlugins({
-      workspaceDir: options.workspaceDir,
-      extraPaths: normalized.loadPaths,
-      cache: options.cache,
-      env,
-    });
-    const manifestRegistry = loadPluginManifestRegistry({
-      config: cfg,
-      workspaceDir: options.workspaceDir,
-      cache: options.cache,
-      env,
-      candidates: discovery.candidates,
-      diagnostics: discovery.diagnostics,
-      installRecords: Object.keys(installRecords).length > 0 ? installRecords : undefined,
-    });
+    const suppliedManifestRegistry = options.manifestRegistry;
+    const discovery = suppliedManifestRegistry
+      ? {
+          candidates: createPluginCandidatesFromManifestRegistry(suppliedManifestRegistry),
+          diagnostics: [] as PluginDiagnostic[],
+        }
+      : discoverOpenClawPlugins({
+          workspaceDir: options.workspaceDir,
+          extraPaths: normalized.loadPaths,
+          cache: options.cache,
+          env,
+        });
+    const manifestRegistry =
+      suppliedManifestRegistry ??
+      loadPluginManifestRegistry({
+        config: cfg,
+        workspaceDir: options.workspaceDir,
+        cache: options.cache,
+        env,
+        candidates: discovery.candidates,
+        diagnostics: discovery.diagnostics,
+        installRecords: Object.keys(installRecords).length > 0 ? installRecords : undefined,
+      });
     pushDiagnostics(registry.diagnostics, manifestRegistry.diagnostics);
     warnWhenAllowlistIsOpen({
       emitWarning: shouldActivate,
@@ -2442,7 +2480,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           origin: candidate.origin,
           workspaceDir: candidate.workspaceDir,
           enabled: false,
+          compat: collectPluginManifestCompatCodes(manifestRecord),
           activationState,
+          syntheticAuthRefs: manifestRecord.syntheticAuthRefs,
           configSchema: Boolean(manifestRecord.configSchema),
           contracts: manifestRecord.contracts,
         });
@@ -2475,7 +2515,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         origin: candidate.origin,
         workspaceDir: candidate.workspaceDir,
         enabled: enableState.enabled,
+        compat: collectPluginManifestCompatCodes(manifestRecord),
         activationState,
+        syntheticAuthRefs: manifestRecord.syntheticAuthRefs,
         configSchema: Boolean(manifestRecord.configSchema),
         contracts: manifestRecord.contracts,
       });
@@ -3347,7 +3389,9 @@ export async function loadOpenClawPluginCliRegistry(
         origin: candidate.origin,
         workspaceDir: candidate.workspaceDir,
         enabled: false,
+        compat: collectPluginManifestCompatCodes(manifestRecord),
         activationState,
+        syntheticAuthRefs: manifestRecord.syntheticAuthRefs,
         configSchema: Boolean(manifestRecord.configSchema),
         contracts: manifestRecord.contracts,
       });
@@ -3380,7 +3424,9 @@ export async function loadOpenClawPluginCliRegistry(
       origin: candidate.origin,
       workspaceDir: candidate.workspaceDir,
       enabled: enableState.enabled,
+      compat: collectPluginManifestCompatCodes(manifestRecord),
       activationState,
+      syntheticAuthRefs: manifestRecord.syntheticAuthRefs,
       configSchema: Boolean(manifestRecord.configSchema),
       contracts: manifestRecord.contracts,
     });

@@ -31,3 +31,4 @@ export {
   MODELSTUDIO_MODEL_CATALOG,
 } from "./models.js";
 export { buildModelStudioProvider, buildQwenProvider } from "./provider-catalog.js";
+export { createQwenThinkingWrapper, wrapQwenProviderStream } from "./stream.js";

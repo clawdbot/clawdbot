@@ -123,6 +123,38 @@ export function resolveEffectivePromptTokens(
   return base + output + estimate;
 }
 
+export function resolveMemoryFlushModelFallbackOptions(
+  run: FollowupRun["run"],
+  model?: string,
+  configOverride: FollowupRun["run"]["config"] = run.config,
+) {
+  const options = resolveModelFallbackOptions(run, configOverride);
+  const override = normalizeOptionalString(model);
+  if (!override) {
+    return options;
+  }
+  // A memory-flush maintenance model is an exact override: do not let a failed
+  // local flush silently fall through to the paid active conversation fallback.
+  const slashIdx = override.indexOf("/");
+  if (slashIdx > 0) {
+    const overrideProvider = override.slice(0, slashIdx).trim();
+    const overrideModel = override.slice(slashIdx + 1).trim();
+    if (overrideProvider && overrideModel) {
+      return {
+        ...options,
+        provider: overrideProvider,
+        model: overrideModel,
+        fallbacksOverride: [],
+      };
+    }
+  }
+  return {
+    ...options,
+    model: override,
+    fallbacksOverride: [],
+  };
+}
+
 export type SessionTranscriptUsageSnapshot = {
   promptTokens?: number;
   outputTokens?: number;
@@ -796,7 +828,11 @@ export async function runMemoryFlushIfNeeded(params: {
   let postCompactionSessionFile: string | undefined;
   try {
     await memoryDeps.runWithModelFallback({
-      ...resolveModelFallbackOptions(params.followupRun.run),
+      ...resolveMemoryFlushModelFallbackOptions(
+        params.followupRun.run,
+        activeMemoryFlushPlan.model,
+        params.cfg,
+      ),
       runId: flushRunId,
       run: async (provider, model, runOptions) => {
         const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
@@ -818,6 +854,7 @@ export async function runMemoryFlushIfNeeded(params: {
           trigger: "memory",
           memoryFlushWritePath,
           prompt: activeMemoryFlushPlan.prompt,
+          transcriptPrompt: "",
           extraSystemPrompt: flushSystemPrompt,
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature:

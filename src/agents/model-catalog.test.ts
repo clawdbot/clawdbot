@@ -5,8 +5,10 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 type PiSdkModule = typeof import("./pi-model-discovery.js");
 
 let __setModelCatalogImportForTest: typeof import("./model-catalog.js").__setModelCatalogImportForTest;
+let findModelCatalogEntry: typeof import("./model-catalog.js").findModelCatalogEntry;
 let findModelInCatalog: typeof import("./model-catalog.js").findModelInCatalog;
 let loadModelCatalog: typeof import("./model-catalog.js").loadModelCatalog;
+let modelSupportsInput: typeof import("./model-catalog.js").modelSupportsInput;
 let resetModelCatalogCacheForTest: typeof import("./model-catalog.js").resetModelCatalogCacheForTest;
 let augmentCatalogMock: ReturnType<typeof vi.fn>;
 let ensureOpenClawModelsJsonMock: ReturnType<typeof vi.fn>;
@@ -73,8 +75,10 @@ describe("loadModelCatalog", () => {
 
     ({
       __setModelCatalogImportForTest,
+      findModelCatalogEntry,
       findModelInCatalog,
       loadModelCatalog,
+      modelSupportsInput,
       resetModelCatalogCacheForTest,
     } = await import("./model-catalog.js"));
     const providerRuntime = await import("../plugins/provider-runtime.runtime.js");
@@ -366,6 +370,75 @@ describe("loadModelCatalog", () => {
     ).toHaveLength(1);
   });
 
+  it("includes configured provider models missing from discovery", async () => {
+    mockSingleOpenAiCatalogModel();
+
+    const result = await loadModelCatalog({
+      config: {
+        models: {
+          providers: {
+            modelscope: {
+              baseUrl: "https://api-inference.modelscope.cn/v1",
+              models: [
+                {
+                  id: "Qwen/Qwen3.5-35B-A3B",
+                  name: "Qwen3.5 35B",
+                  input: ["text", "image"],
+                  reasoning: true,
+                  contextWindow: 128_000,
+                  maxTokens: 8192,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "modelscope",
+        id: "Qwen/Qwen3.5-35B-A3B",
+        name: "Qwen3.5 35B",
+        input: ["text", "image"],
+        reasoning: true,
+        contextWindow: 128_000,
+      }),
+    );
+  });
+
+  it("dedupes configured models against discovered provider aliases", async () => {
+    mockPiDiscoveryModels([{ id: "glm-5", provider: "z.ai", name: "GLM-5" }]);
+
+    const result = await loadModelCatalog({
+      config: {
+        models: {
+          providers: {
+            "z-ai": {
+              baseUrl: "https://api.z.ai/v1",
+              models: [
+                {
+                  id: "glm-5",
+                  name: "Configured GLM-5",
+                  input: ["text", "image"],
+                  reasoning: false,
+                  contextWindow: 128_000,
+                  maxTokens: 8192,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    const matches = result.filter((entry) => findModelInCatalog([entry], "z-ai", "glm-5"));
+    expect(matches).toHaveLength(1);
+    expect(matches[0]).toMatchObject({ provider: "z.ai", id: "glm-5", name: "GLM-5" });
+  });
+
   it("does not add unrelated models when provider plugins return nothing", async () => {
     mockSingleOpenAiCatalogModel();
 
@@ -412,5 +485,24 @@ describe("loadModelCatalog", () => {
       id: "glm-5",
       name: "GLM-5",
     });
+  });
+
+  it("resolves catalog entries with explicit providers and unique providerless matches", () => {
+    const catalog = [
+      { provider: "first", id: "shared", name: "First", input: ["text"] },
+      { provider: "second", id: "shared", name: "Second", input: ["text", "image"] },
+      { provider: "modelscope", id: "qwen/qwen3.5-35b-a3b", name: "Qwen", input: ["text"] },
+    ] satisfies Awaited<ReturnType<typeof loadModelCatalog>>;
+
+    expect(findModelCatalogEntry(catalog, { provider: "second", modelId: "SHARED" })).toEqual(
+      catalog[1],
+    );
+    expect(
+      findModelCatalogEntry(catalog, { provider: "modelscope", modelId: "Qwen/Qwen3.5-35B-A3B" }),
+    ).toEqual(catalog[2]);
+    expect(findModelCatalogEntry(catalog, { modelId: "shared" })).toBeUndefined();
+    expect(findModelCatalogEntry(catalog, { modelId: "Qwen/Qwen3.5-35B-A3B" })).toEqual(catalog[2]);
+    expect(modelSupportsInput(catalog[1], "image")).toBe(true);
+    expect(modelSupportsInput(catalog[2], "image")).toBe(false);
   });
 });

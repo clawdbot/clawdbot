@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
-import type { RealtimeVoiceBridge } from "./provider-types.js";
+import {
+  REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+  type RealtimeVoiceBridge,
+} from "./provider-types.js";
 import { createRealtimeVoiceBridgeSession } from "./session-runtime.js";
 
 function makeBridge(overrides: Partial<RealtimeVoiceBridge> = {}): RealtimeVoiceBridge {
@@ -52,6 +55,28 @@ describe("realtime voice bridge session runtime", () => {
     expect(sendAudio).toHaveBeenCalledWith(Buffer.from([1, 2]));
     expect(clearAudio).toHaveBeenCalled();
     expect(sendMark).toHaveBeenCalledWith("mark-1");
+  });
+
+  it("passes the requested audio format to the provider bridge", () => {
+    let request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "test",
+      label: "Test",
+      isConfigured: () => true,
+      createBridge: (nextRequest) => {
+        request = nextRequest;
+        return makeBridge();
+      },
+    };
+
+    createRealtimeVoiceBridgeSession({
+      provider,
+      providerConfig: {},
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      audioSink: { sendAudio: vi.fn() },
+    });
+
+    expect(request?.audioFormat).toEqual(REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ);
   });
 
   it("can acknowledge provider marks without transport mark support", () => {
@@ -142,6 +167,29 @@ describe("realtime voice bridge session runtime", () => {
 
     expect(bridge.triggerGreeting).toHaveBeenCalledWith("Say hello");
     expect(onToolCall).toHaveBeenCalledWith(event, session);
+  });
+
+  it("forwards tool result continuation options to the provider bridge", () => {
+    const bridge = makeBridge();
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "test",
+      label: "Test",
+      isConfigured: () => true,
+      createBridge: () => bridge,
+    };
+    const session = createRealtimeVoiceBridgeSession({
+      provider,
+      providerConfig: {},
+      audioSink: { sendAudio: vi.fn() },
+    });
+
+    session.submitToolResult("call-1", { status: "working" }, { willContinue: true });
+
+    expect(bridge.submitToolResult).toHaveBeenCalledWith(
+      "call-1",
+      { status: "working" },
+      { willContinue: true },
+    );
   });
 
   it("does not expose session callbacks until the provider returns its bridge", () => {

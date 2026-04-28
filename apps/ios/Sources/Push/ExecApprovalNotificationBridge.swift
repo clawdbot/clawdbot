@@ -1,7 +1,7 @@
 import Foundation
-import UserNotifications
+@preconcurrency import UserNotifications
 
-struct ExecApprovalNotificationPrompt: Sendable, Equatable {
+struct ExecApprovalNotificationPrompt: Equatable {
     let approvalId: String
 }
 
@@ -38,8 +38,7 @@ enum ExecApprovalNotificationBridge {
 
     static func parsePrompt(
         actionIdentifier: String,
-        userInfo: [AnyHashable: Any]
-    ) -> ExecApprovalNotificationPrompt?
+        userInfo: [AnyHashable: Any]) -> ExecApprovalNotificationPrompt?
     {
         guard actionIdentifier == UNNotificationDefaultActionIdentifier
             || actionIdentifier == self.reviewActionIdentifier
@@ -54,8 +53,7 @@ enum ExecApprovalNotificationBridge {
     @MainActor
     static func handleResolvedPushIfNeeded(
         userInfo: [AnyHashable: Any],
-        notificationCenter: NotificationCentering
-    ) async -> Bool
+        notificationCenter: NotificationCentering) async -> Bool
     {
         guard self.payloadKind(userInfo: userInfo) == self.resolvedKind,
               let approvalId = self.approvalID(from: userInfo)
@@ -70,8 +68,8 @@ enum ExecApprovalNotificationBridge {
     @MainActor
     static func removeNotifications(
         forApprovalID approvalId: String,
-        notificationCenter: NotificationCentering
-    ) async {
+        notificationCenter: NotificationCentering) async
+    {
         let normalizedID = approvalId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedID.isEmpty else { return }
 

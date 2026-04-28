@@ -94,9 +94,7 @@ export function formatComputerUseStatus(status: CodexComputerUseStatus): string 
   const lines = [
     `Computer Use: ${status.ready ? "ready" : status.enabled ? "not ready" : "disabled"}`,
   ];
-  lines.push(
-    `Plugin: ${status.pluginName}${status.installed ? " (installed)" : " (not installed)"}`,
-  );
+  lines.push(`Plugin: ${status.pluginName} (${computerUsePluginState(status)})`);
   lines.push(
     `MCP server: ${status.mcpServerName}${
       status.mcpServerAvailable ? ` (${status.tools.length} tools)` : " (unavailable)"
@@ -110,6 +108,13 @@ export function formatComputerUseStatus(status: CodexComputerUseStatus): string 
   }
   lines.push(status.message);
   return lines.join("\n");
+}
+
+function computerUsePluginState(status: CodexComputerUseStatus): string {
+  if (!status.installed) {
+    return "not installed";
+  }
+  return status.pluginEnabled ? "installed" : "installed, disabled";
 }
 
 export function formatList(response: JsonValue | undefined, label: string): string {

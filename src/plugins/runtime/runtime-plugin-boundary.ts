@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "../jiti-loader-cache.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
 import { shouldPreferNativeJiti } from "../sdk-alias.js";
@@ -20,7 +20,7 @@ type CachedPluginBoundaryLoaderParams = {
 
 export function readPluginBoundaryConfigSafely() {
   try {
-    return loadConfig();
+    return getRuntimeConfig();
   } catch {
     return {};
   }

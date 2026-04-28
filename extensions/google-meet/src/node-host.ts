@@ -270,42 +270,46 @@ function startChrome(params: Record<string, unknown>) {
     throw new Error("url required");
   }
   const timeoutMs = readNumber(params.joinTimeoutMs, 30_000);
-  assertBlackHoleAvailable(Math.min(timeoutMs, 10_000));
-
-  const healthCommand = readStringArray(params.audioBridgeHealthCommand);
-  if (healthCommand) {
-    const health = runCommandWithTimeout(healthCommand, timeoutMs);
-    if (health.code !== 0) {
-      throw new Error(
-        `Chrome audio bridge health check failed: ${health.stderr || health.stdout || health.code}`,
-      );
-    }
-  }
+  const mode = readString(params.mode);
 
   let bridgeId: string | undefined;
   let audioBridge: { type: "external-command" | "node-command-pair" } | undefined;
-  const bridgeCommand = readStringArray(params.audioBridgeCommand);
-  if (bridgeCommand) {
-    const bridge = runCommandWithTimeout(bridgeCommand, timeoutMs);
-    if (bridge.code !== 0) {
-      throw new Error(
-        `failed to start Chrome audio bridge: ${bridge.stderr || bridge.stdout || bridge.code}`,
-      );
+  if (mode === "realtime") {
+    assertBlackHoleAvailable(Math.min(timeoutMs, 10_000));
+
+    const healthCommand = readStringArray(params.audioBridgeHealthCommand);
+    if (healthCommand) {
+      const health = runCommandWithTimeout(healthCommand, timeoutMs);
+      if (health.code !== 0) {
+        throw new Error(
+          `Chrome audio bridge health check failed: ${health.stderr || health.stdout || health.code}`,
+        );
+      }
     }
-    audioBridge = { type: "external-command" };
-  } else if (params.mode === "realtime") {
-    const session = startCommandPair({
-      inputCommand: readStringArray(params.audioInputCommand) ?? [
-        ...DEFAULT_GOOGLE_MEET_AUDIO_INPUT_COMMAND,
-      ],
-      outputCommand: readStringArray(params.audioOutputCommand) ?? [
-        ...DEFAULT_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND,
-      ],
-      url,
-      mode: readString(params.mode),
-    });
-    bridgeId = session.id;
-    audioBridge = { type: "node-command-pair" };
+
+    const bridgeCommand = readStringArray(params.audioBridgeCommand);
+    if (bridgeCommand) {
+      const bridge = runCommandWithTimeout(bridgeCommand, timeoutMs);
+      if (bridge.code !== 0) {
+        throw new Error(
+          `failed to start Chrome audio bridge: ${bridge.stderr || bridge.stdout || bridge.code}`,
+        );
+      }
+      audioBridge = { type: "external-command" };
+    } else {
+      const session = startCommandPair({
+        inputCommand: readStringArray(params.audioInputCommand) ?? [
+          ...DEFAULT_GOOGLE_MEET_AUDIO_INPUT_COMMAND,
+        ],
+        outputCommand: readStringArray(params.audioOutputCommand) ?? [
+          ...DEFAULT_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND,
+        ],
+        url,
+        mode,
+      });
+      bridgeId = session.id;
+      audioBridge = { type: "node-command-pair" };
+    }
   }
 
   if (params.launch !== false) {

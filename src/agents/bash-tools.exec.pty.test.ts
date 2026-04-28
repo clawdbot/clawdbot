@@ -23,21 +23,6 @@ function currentNodeEvalCommand(source: string): string {
   return process.platform === "win32" ? `& ${node} -e ${script}` : `${node} -e ${script}`;
 }
 
-async function runPtyCommand(command: string) {
-  const handle = await runExecProcess({
-    command,
-    workdir: process.cwd(),
-    env: currentEnv(),
-    usePty: true,
-    warnings: [],
-    maxOutput: 20_000,
-    pendingMaxOutput: 20_000,
-    notifyOnExit: false,
-    timeoutSec: 5,
-  });
-  return await handle.promise;
-}
-
 async function startPtySession(command: string) {
   const processTool = createProcessTool();
   const run = await runExecProcess({
@@ -58,8 +43,11 @@ async function startPtySession(command: string) {
 async function waitForSessionCompletion(params: {
   processTool: ReturnType<typeof createProcessTool>;
   sessionId: string;
-  expectedText: string;
+  expectedText: string | string[];
 }) {
+  const expectedTexts = Array.isArray(params.expectedText)
+    ? params.expectedText
+    : [params.expectedText];
   await expect
     .poll(
       async () => {
@@ -72,7 +60,9 @@ async function waitForSessionCompletion(params: {
           return false;
         }
         expect(details.status).toBe("completed");
-        expect(details.aggregated ?? "").toContain(params.expectedText);
+        for (const expectedText of expectedTexts) {
+          expect(details.aggregated ?? "").toContain(expectedText);
+        }
         return true;
       },
       {
@@ -83,20 +73,22 @@ async function waitForSessionCompletion(params: {
     .toBe(true);
 }
 
-test("exec supports pty output and OPENCLAW_SHELL", async () => {
-  const result = await runPtyCommand(
-    currentNodeEvalCommand('process.stdout.write(`ok:${process.env.OPENCLAW_SHELL || ""}`)'),
-  );
-
-  expect(result.status).toBe("completed");
-  expect(result.aggregated).toContain("ok");
-  expect(result.aggregated).toContain("exec");
-});
-
-test("process send-keys and submit send Enter for pty sessions", async () => {
+test("exec supports pty output, OPENCLAW_SHELL, send-keys, and submit", async () => {
   const { processTool, sessionId } = await startPtySession(
     currentNodeEvalCommand(
-      "const dataEvent=String.fromCharCode(100,97,116,97);const submitted=String.fromCharCode(115,117,98,109,105,116,116,101,100);let first=false;process.stdin.on(dataEvent,d=>{process.stdout.write(d);if(d.includes(10)||d.includes(13)){if(first){process.stdout.write(submitted);process.exit(0);}first=true;}});",
+      [
+        "process.stdout.write(`ok:${process.env.OPENCLAW_SHELL || ''}`);",
+        "const dataEvent=String.fromCharCode(100,97,116,97);",
+        "const submitted=String.fromCharCode(115,117,98,109,105,116,116,101,100);",
+        "let first=false;",
+        "process.stdin.on(dataEvent,d=>{",
+        "process.stdout.write(d);",
+        "if(d.includes(10)||d.includes(13)){",
+        "if(first){process.stdout.write(submitted);process.exit(0);}",
+        "first=true;",
+        "}",
+        "});",
+      ].join(""),
     ),
   );
 
@@ -111,5 +103,9 @@ test("process send-keys and submit send Enter for pty sessions", async () => {
     sessionId,
   });
 
-  await waitForSessionCompletion({ processTool, sessionId, expectedText: "submitted" });
+  await waitForSessionCompletion({
+    processTool,
+    sessionId,
+    expectedText: ["submitted", "ok", "exec"],
+  });
 });

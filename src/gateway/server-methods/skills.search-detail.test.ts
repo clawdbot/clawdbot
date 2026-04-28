@@ -4,7 +4,7 @@ const searchSkillsFromClawHubMock = vi.fn();
 const fetchClawHubSkillDetailMock = vi.fn();
 
 vi.mock("../../config/config.js", () => ({
-  loadConfig: vi.fn(() => ({})),
+  getRuntimeConfig: vi.fn(() => ({})),
   writeConfigFile: vi.fn(),
 }));
 

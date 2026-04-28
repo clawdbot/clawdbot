@@ -4,7 +4,7 @@ import Testing
 @testable import OpenClaw
 
 struct MacNodeModeCoordinatorTests {
-    @Test func remoteModeDoesNotAdvertiseBrowserProxy() {
+    @Test func `remote mode does not advertise browser proxy`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
             browserControlEnabled: true,
             cameraEnabled: false,
@@ -18,7 +18,7 @@ struct MacNodeModeCoordinatorTests {
         #expect(commands.contains(OpenClawSystemCommand.notify.rawValue))
     }
 
-    @Test func localModeAdvertisesBrowserProxyWhenEnabled() {
+    @Test func `local mode advertises browser proxy when enabled`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
             browserControlEnabled: true,
             cameraEnabled: false,

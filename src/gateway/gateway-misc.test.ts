@@ -86,6 +86,44 @@ describe("GatewayClient", () => {
     expect(last?.opts).toEqual(expect.objectContaining({ maxPayload: 25 * 1024 * 1024 }));
   });
 
+  test("uses an explicit direct agent for control-plane WebSocket connections", () => {
+    const client = new GatewayClient({ url: "ws://127.0.0.1:1" });
+    client.start();
+    const last = wsMockState.last as { opts: { agent?: unknown } } | null;
+
+    expect(last?.opts.agent).toBeDefined();
+    expect(last?.opts.agent).not.toBe(
+      (global as unknown as { GLOBAL_AGENT?: { HTTP_PROXY?: unknown } }).GLOBAL_AGENT,
+    );
+  });
+
+  test("uses an explicit direct agent for IPv6 loopback control-plane WebSocket connections", () => {
+    const client = new GatewayClient({ url: "ws://[::1]:1" });
+    client.start();
+    const last = wsMockState.last as { opts: { agent?: unknown } } | null;
+
+    expect(last?.opts.agent).toBeDefined();
+  });
+
+  test("does not use the direct control-plane bypass for localhost hostnames", () => {
+    const client = new GatewayClient({ url: "ws://localhost:1" });
+    client.start();
+    const last = wsMockState.last as { opts: { agent?: unknown } } | null;
+
+    expect(last?.opts.agent).toBeUndefined();
+  });
+
+  test("does not force a direct agent for remote Gateway WebSocket connections", () => {
+    const client = new GatewayClient({
+      url: "wss://gateway.example.com",
+      tlsFingerprint: "SHA256:AA:BB",
+    });
+    client.start();
+    const last = wsMockState.last as { opts: { agent?: unknown } } | null;
+
+    expect(last?.opts.agent).toBeUndefined();
+  });
+
   it("returns 404 for missing static asset paths instead of SPA fallback", async () => {
     await withControlUiRoot({ faviconSvg: "<svg/>" }, async (tmp) => {
       const { res } = makeControlUiResponse();

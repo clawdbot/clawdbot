@@ -13,6 +13,7 @@ import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 vi.mock("../config/config.js", async () => {
   const mocks = await import("../gateway/gateway-connection.test-mocks.js");
   return {
+    getRuntimeConfig: mocks.loadConfigMock,
     loadConfig: mocks.loadConfigMock,
     resolveConfigPath: mocks.resolveConfigPathMock,
     resolveGatewayPort: mocks.resolveGatewayPortMock,

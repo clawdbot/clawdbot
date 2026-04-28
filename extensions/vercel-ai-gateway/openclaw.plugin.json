@@ -1,7 +1,28 @@
 {
   "id": "vercel-ai-gateway",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["vercel-ai-gateway"],
+  "modelIdNormalization": {
+    "providers": {
+      "vercel-ai-gateway": {
+        "aliases": {
+          "opus-4.6": "claude-opus-4-6",
+          "opus-4.5": "claude-opus-4-5",
+          "sonnet-4.6": "claude-sonnet-4-6",
+          "sonnet-4.5": "claude-sonnet-4-5"
+        },
+        "prefixWhenBareAfterAliasStartsWith": [
+          {
+            "modelPrefix": "claude-",
+            "prefix": "anthropic"
+          }
+        ]
+      }
+    }
+  },
   "modelPricing": {
     "providers": {
       "vercel-ai-gateway": {

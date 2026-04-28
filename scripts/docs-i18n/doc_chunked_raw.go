@@ -187,6 +187,9 @@ func validateDocChunkTranslation(source, translated string) error {
 	if hasUnexpectedTopLevelProtocolWrapper(source, translated) {
 		return fmt.Errorf("protocol token leaked: top-level wrapper")
 	}
+	if err := validateNoTranslationTranscriptArtifacts(source, translated); err != nil {
+		return err
+	}
 	sourceLower := strings.ToLower(source)
 	translatedLower := strings.ToLower(translated)
 	for _, token := range docsProtocolTokens {

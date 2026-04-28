@@ -84,6 +84,10 @@ Gateway → Client:
     "server": { "version": "…", "connId": "…" },
     "features": { "methods": ["…"], "events": ["…"] },
     "snapshot": { "…": "…" },
+    "auth": {
+      "role": "operator",
+      "scopes": ["operator.read", "operator.write"]
+    },
     "policy": {
       "maxPayload": 26214400,
       "maxBufferedBytes": 52428800,
@@ -94,12 +98,11 @@ Gateway → Client:
 ```
 
 `server`, `features`, `snapshot`, and `policy` are all required by the schema
-(`src/gateway/protocol/schema/frames.ts`). `canvasHostUrl` is optional. `auth`
-reports the negotiated role/scopes when available, and includes `deviceToken`
-when the gateway issues one.
+(`src/gateway/protocol/schema/frames.ts`). `auth` is also required and reports
+the negotiated role/scopes. `canvasHostUrl` is optional.
 
-When no device token is issued, `hello-ok.auth` can still report the negotiated
-permissions:
+When no device token is issued, `hello-ok.auth` reports the negotiated
+permissions without token fields:
 
 ```json
 {
@@ -252,6 +255,40 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 - `system-presence` returns entries keyed by device identity.
 - Presence entries include `deviceId`, `roles`, and `scopes` so UIs can show a single row per device
   even when it connects as both **operator** and **node**.
+- `node.list` includes optional `lastSeenAtMs` and `lastSeenReason` fields. Connected nodes report
+  their current connection time as `lastSeenAtMs` with reason `connect`; paired nodes can also report
+  durable background presence when a trusted node event updates their pairing metadata.
+
+### Node background alive event
+
+Nodes may call `node.event` with `event: "node.presence.alive"` to record that a paired node was
+alive during a background wake without marking it connected.
+
+```json
+{
+  "event": "node.presence.alive",
+  "payloadJSON": "{\"trigger\":\"silent_push\",\"sentAtMs\":1737264000000,\"displayName\":\"Peter's iPhone\",\"version\":\"2026.4.28\",\"platform\":\"iOS 18.4.0\",\"deviceFamily\":\"iPhone\",\"modelIdentifier\":\"iPhone17,1\",\"pushTransport\":\"relay\"}"
+}
+```
+
+`trigger` is a closed enum: `background`, `silent_push`, `bg_app_refresh`,
+`significant_location`, `manual`, or `connect`. Unknown trigger strings are normalized to
+`background` by the gateway before persistence. The event is durable only for authenticated node
+device sessions; device-less or unpaired sessions return `handled: false`.
+
+Successful gateways return a structured result:
+
+```json
+{
+  "ok": true,
+  "event": "node.presence.alive",
+  "handled": true,
+  "reason": "persisted"
+}
+```
+
+Older gateways may still return `{ "ok": true }` for `node.event`; clients should treat that as an
+acknowledged RPC, not as durable presence persistence.
 
 ## Broadcast event scoping
 
@@ -282,16 +319,18 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `system-event` appends a system event and can update/broadcast presence context.
     - `last-heartbeat` returns the latest persisted heartbeat event.
     - `set-heartbeats` toggles heartbeat processing on the gateway.
+
   </Accordion>
 
   <Accordion title="Models and usage">
-    - `models.list` returns the runtime-allowed model catalog.
+    - `models.list` returns the runtime-allowed model catalog. Pass `{ "view": "configured" }` for picker-sized configured models (`agents.defaults.models` first, then `models.providers.*.models`), or `{ "view": "all" }` for the full catalog.
     - `usage.status` returns provider usage windows/remaining quota summaries.
     - `usage.cost` returns aggregated cost usage summaries for a date range.
-    - `doctor.memory.status` returns vector-memory / embedding readiness for the active default agent workspace.
+    - `doctor.memory.status` returns vector-memory / cached embedding readiness for the active default agent workspace. Pass `{ "probe": true }` or `{ "deep": true }` only when the caller explicitly wants a live embedding provider ping.
     - `sessions.usage` returns per-session usage summaries.
     - `sessions.usage.timeseries` returns timeseries usage for one session.
     - `sessions.usage.logs` returns usage log entries for one session.
+
   </Accordion>
 
   <Accordion title="Channels and login helpers">
@@ -302,11 +341,13 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `push.test` sends a test APNs push to a registered iOS node.
     - `voicewake.get` returns the stored wake-word triggers.
     - `voicewake.set` updates wake-word triggers and broadcasts the change.
+
   </Accordion>
 
   <Accordion title="Messaging and logs">
     - `send` is the direct outbound-delivery RPC for channel/account/thread-targeted sends outside the chat runner.
     - `logs.tail` returns the configured gateway file-log tail with cursor/limit and max-byte controls.
+
   </Accordion>
 
   <Accordion title="Talk and TTS">
@@ -318,6 +359,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `tts.enable` and `tts.disable` toggle TTS prefs state.
     - `tts.setProvider` updates the preferred TTS provider.
     - `tts.convert` runs one-shot text-to-speech conversion.
+
   </Accordion>
 
   <Accordion title="Secrets, config, update, and wizard">
@@ -330,7 +372,9 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `config.schema` returns the live config schema payload used by Control UI and CLI tooling: schema, `uiHints`, version, and generation metadata, including plugin + channel schema metadata when the runtime can load it. The schema includes field `title` / `description` metadata derived from the same labels and help text used by the UI, including nested object, wildcard, array-item, and `anyOf` / `oneOf` / `allOf` composition branches when matching field documentation exists.
     - `config.schema.lookup` returns a path-scoped lookup payload for one config path: normalized path, a shallow schema node, matched hint + `hintPath`, and immediate child summaries for UI/CLI drill-down. Lookup schema nodes keep the user-facing docs and common validation fields (`title`, `description`, `type`, `enum`, `const`, `format`, `pattern`, numeric/string/array/object bounds, and flags like `additionalProperties`, `deprecated`, `readOnly`, `writeOnly`). Child summaries expose `key`, normalized `path`, `type`, `required`, `hasChildren`, plus the matched `hint` / `hintPath`.
     - `update.run` runs the gateway update flow and schedules a restart only when the update itself succeeded.
+    - `update.status` returns the latest cached update restart sentinel, including the post-restart running version when available.
     - `wizard.start`, `wizard.next`, `wizard.status`, and `wizard.cancel` expose the onboarding wizard over WS RPC.
+
   </Accordion>
 
   <Accordion title="Agent and workspace helpers">
@@ -339,6 +383,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `agents.files.list`, `agents.files.get`, and `agents.files.set` manage the bootstrap workspace files exposed for an agent.
     - `agent.identity.get` returns the effective assistant identity for an agent or session.
     - `agent.wait` waits for a run to finish and returns the terminal snapshot when available.
+
   </Accordion>
 
   <Accordion title="Session control">
@@ -355,6 +400,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `sessions.reset`, `sessions.delete`, and `sessions.compact` perform session maintenance.
     - `sessions.get` returns the full stored session row.
     - Chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and `chat.inject`. `chat.history` is display-normalized for UI clients: inline directive tags are stripped from visible text, plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks) and leaked ASCII/full-width model control tokens are stripped, pure silent-token assistant rows such as exact `NO_REPLY` / `no_reply` are omitted, and oversized rows can be replaced with placeholders.
+
   </Accordion>
 
   <Accordion title="Device pairing and device tokens">
@@ -362,10 +408,11 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `device.pair.approve`, `device.pair.reject`, and `device.pair.remove` manage device-pairing records.
     - `device.token.rotate` rotates a paired device token within its approved role and caller scope bounds.
     - `device.token.revoke` revokes a paired device token within its approved role and caller scope bounds.
+
   </Accordion>
 
   <Accordion title="Node pairing, invoke, and pending work">
-    - `node.pair.request`, `node.pair.list`, `node.pair.approve`, `node.pair.reject`, and `node.pair.verify` cover node pairing and bootstrap verification.
+    - `node.pair.request`, `node.pair.list`, `node.pair.approve`, `node.pair.reject`, `node.pair.remove`, and `node.pair.verify` cover node pairing and bootstrap verification.
     - `node.list` and `node.describe` return known/connected node state.
     - `node.rename` updates a paired node label.
     - `node.invoke` forwards a command to a connected node.
@@ -374,6 +421,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `node.canvas.capability.refresh` refreshes scoped canvas-capability tokens.
     - `node.pending.pull` and `node.pending.ack` are the connected-node queue APIs.
     - `node.pending.enqueue` and `node.pending.drain` manage durable pending work for offline/disconnected nodes.
+
   </Accordion>
 
   <Accordion title="Approval families">
@@ -382,11 +430,13 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `exec.approvals.get` and `exec.approvals.set` manage gateway exec approval policy snapshots.
     - `exec.approvals.node.get` and `exec.approvals.node.set` manage node-local exec approval policy via node relay commands.
     - `plugin.approval.request`, `plugin.approval.list`, `plugin.approval.waitDecision`, and `plugin.approval.resolve` cover plugin-defined approval flows.
+
   </Accordion>
 
   <Accordion title="Automation, skills, and tools">
     - Automation: `wake` schedules an immediate or next-heartbeat wake text injection; `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`, `cron.run`, `cron.runs` manage scheduled work.
     - Skills and tools: `commands.list`, `skills.*`, `tools.catalog`, `tools.effective`.
+
   </Accordion>
 </AccordionGroup>
 
@@ -460,6 +510,14 @@ enumeration of `src/gateway/server-methods/*.ts`.
     the default agent workspace.
   - Config mode patches `skills.entries.<skillKey>` values such as `enabled`,
     `apiKey`, and `env`.
+
+### `models.list` views
+
+`models.list` accepts an optional `view` parameter:
+
+- Omitted or `"default"`: current runtime behavior. If `agents.defaults.models` is configured, the response is the allowed catalog; otherwise the response is the full Gateway catalog.
+- `"configured"`: picker-sized behavior. If `agents.defaults.models` is configured, it still wins. Otherwise the response uses explicit `models.providers.*.models` entries, falling back to the full catalog only when no configured model rows exist.
+- `"all"`: full Gateway catalog, bypassing `agents.defaults.models`. Use this for diagnostics and discovery UIs, not normal model pickers.
 
 ## Exec approvals
 
@@ -549,6 +607,10 @@ rather than the pre-handshake defaults.
   reused when the client is reusing the stored per-device token.
 - Device tokens can be rotated/revoked via `device.token.rotate` and
   `device.token.revoke` (requires `operator.pairing` scope).
+- `device.token.rotate` returns rotation metadata. It echoes the replacement
+  bearer token only for same-device calls that are already authenticated with
+  that device token, so token-only clients can persist their replacement before
+  reconnecting. Shared/admin rotations do not echo the bearer token.
 - Token issuance, rotation, and revocation stay bounded to the approved role set
   recorded in that device's pairing entry; token mutation cannot expand or
   target a device role that pairing approval never granted.

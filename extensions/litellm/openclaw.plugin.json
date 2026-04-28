@@ -1,5 +1,8 @@
 {
   "id": "litellm",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["litellm"],
   "providerAuthEnvVars": {

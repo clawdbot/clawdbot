@@ -162,12 +162,16 @@ describe("config footprint guardrails", () => {
     );
   });
 
-  it("keeps bundled channel schemas as a fixed legacy SDK compatibility surface", () => {
+  it("keeps bundled channel schemas out of the generic channel config SDK surface", () => {
     const source = readSource("src/plugin-sdk/channel-config-schema.ts");
-    const legacySection = source.slice(source.indexOf("Legacy bundled channel schema exports"));
+    const bundledSource = readSource("src/plugin-sdk/bundled-channel-config-schema.ts");
+    const legacySource = readSource("src/plugin-sdk/channel-config-schema-legacy.ts");
+    const bundledSection = bundledSource.slice(
+      bundledSource.indexOf("Bundled-channel config schemas"),
+    );
     const bundledSchemaExportBlocks = Array.from(
-      legacySection.matchAll(
-        /export \{(?<exports>[\s\S]*?)\} from "\.\.\/config\/zod-schema\.providers-(?:core|whatsapp)\.js";/g,
+      bundledSection.matchAll(
+        /export \{(?<exports>[^}]*)\} from "\.\.\/config\/zod-schema\.providers-(?:core|whatsapp)\.js";/g,
       ),
     )
       .map((match) => match.groups?.exports)
@@ -190,6 +194,13 @@ describe("config footprint guardrails", () => {
       "TelegramConfigSchema",
       "WhatsAppConfigSchema",
     ]);
-    expect(source).toContain("Legacy bundled channel schema exports");
+    for (const schemaName of exportedSchemaNames) {
+      expect(source).not.toContain(schemaName);
+    }
+    expect(bundledSource).toContain("Bundled-channel config schemas");
+    expect(bundledSource).toContain("openclaw/plugin-sdk/channel-config-schema");
+    expect(legacySource).toContain("Deprecated bundled-channel compatibility surface");
+    expect(legacySource).toContain("openclaw/plugin-sdk/bundled-channel-config-schema");
+    expect(legacySource).toContain('export * from "./bundled-channel-config-schema.js";');
   });
 });

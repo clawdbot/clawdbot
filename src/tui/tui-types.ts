@@ -47,6 +47,7 @@ export type ResponseUsageMode = "on" | "off" | "tokens" | "full";
 
 export type SessionInfo = {
   thinkingLevel?: string;
+  thinkingLevels?: Array<{ id: string; label: string }>;
   fastMode?: boolean;
   verboseLevel?: string;
   traceLevel?: string;

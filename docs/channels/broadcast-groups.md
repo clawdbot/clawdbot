@@ -168,6 +168,7 @@ Control how agents process messages:
     - All listed agents process the message.
     - Each agent has its own session key and isolated context.
     - Agents process in parallel (default) or sequentially.
+
   </Step>
   <Step title="If not in broadcast list">
     Normal routing applies (first matching binding).

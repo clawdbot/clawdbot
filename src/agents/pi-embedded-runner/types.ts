@@ -12,6 +12,12 @@ export type EmbeddedPiAgentMeta = {
   cliSessionBinding?: CliSessionBinding;
   compactionCount?: number;
   /**
+   * Token count estimate after the most recent successful auto-compaction.
+   * Used as the freshest context snapshot when the follow-up model call omits
+   * usage metadata.
+   */
+  compactionTokensAfter?: number;
+  /**
    * Prompt/context snapshot from the latest model request. Prefer this for
    * context-window utilization because provider usage totals can include cached
    * and completion tokens that are useful for billing but noisy as live context.
@@ -124,6 +130,7 @@ export type EmbeddedPiRunMeta = {
   livenessState?: EmbeddedRunLivenessState;
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
   terminalReplyKind?: "silent-empty";
+  yielded?: boolean;
   error?: {
     kind:
       | "context_overflow"

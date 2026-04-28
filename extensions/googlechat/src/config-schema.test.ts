@@ -1,5 +1,5 @@
-import { GoogleChatConfigSchema } from "openclaw/plugin-sdk/googlechat";
 import { describe, expect, it } from "vitest";
+import { GoogleChatConfigSchema } from "../runtime-api.js";
 
 describe("googlechat config schema", () => {
   it("accepts serviceAccount refs", () => {

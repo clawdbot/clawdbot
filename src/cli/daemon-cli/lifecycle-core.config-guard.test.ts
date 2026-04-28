@@ -11,6 +11,7 @@ const readConfigFileSnapshotMock = vi.fn();
 const loadConfig = vi.fn(() => ({}));
 
 vi.mock("../../config/config.js", () => ({
+  getRuntimeConfig: () => loadConfig(),
   loadConfig: () => loadConfig(),
   readConfigFileSnapshot: () => readConfigFileSnapshotMock(),
 }));

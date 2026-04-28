@@ -13,6 +13,11 @@ type MemoryToolRuntime = typeof import("./tools.runtime.js");
 type MemorySearchManagerResult = Awaited<
   ReturnType<(typeof import("./memory/index.js"))["getMemorySearchManager"]>
 >;
+type MemoryToolOptions = {
+  config?: OpenClawConfig;
+  getConfig?: () => OpenClawConfig | undefined;
+  agentSessionKey?: string;
+};
 
 let memoryToolRuntimePromise: Promise<MemoryToolRuntime> | null = null;
 
@@ -44,11 +49,8 @@ export const MemoryGetSchema = Type.Object({
   ),
 });
 
-export function resolveMemoryToolContext(options: {
-  config?: OpenClawConfig;
-  agentSessionKey?: string;
-}) {
-  const cfg = options.config;
+export function resolveMemoryToolContext(options: MemoryToolOptions) {
+  const cfg = options.getConfig?.() ?? options.config;
   if (!cfg) {
     return null;
   }
@@ -79,7 +81,7 @@ export async function getMemoryManagerContext(params: {
 export async function getMemoryManagerContextWithPurpose(params: {
   cfg: OpenClawConfig;
   agentId: string;
-  purpose?: "default" | "status";
+  purpose?: "default" | "status" | "cli";
 }): Promise<
   | {
       manager: NonNullable<MemorySearchManagerResult["manager"]>;
@@ -98,10 +100,7 @@ export async function getMemoryManagerContextWithPurpose(params: {
 }
 
 export function createMemoryTool(params: {
-  options: {
-    config?: OpenClawConfig;
-    agentSessionKey?: string;
-  };
+  options: MemoryToolOptions;
   label: string;
   name: string;
   description: string;
@@ -117,7 +116,10 @@ export function createMemoryTool(params: {
     name: params.name,
     description: params.description,
     parameters: params.parameters,
-    execute: params.execute(ctx),
+    execute: async (toolCallId, toolParams) => {
+      const latestCtx = resolveMemoryToolContext(params.options) ?? ctx;
+      return await params.execute(latestCtx)(toolCallId, toolParams);
+    },
   };
 }
 

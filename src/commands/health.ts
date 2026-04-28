@@ -1,13 +1,16 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { projectSafeChannelAccountSnapshotFields } from "../channels/account-snapshot-fields.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
 import { withProgress } from "../cli/progress.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
+import type { ChannelRuntimeSnapshot } from "../gateway/server-channel-runtime.types.js";
 import { info } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -254,10 +257,11 @@ async function resolveHealthAccountContext(params: {
 export async function getHealthSnapshot(params?: {
   timeoutMs?: number;
   probe?: boolean;
+  includeSensitive?: boolean;
+  runtimeSnapshot?: ChannelRuntimeSnapshot;
 }): Promise<HealthSummary> {
   const timeoutMs = params?.timeoutMs;
-  const { loadConfig } = await loadConfigModule();
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const { defaultAgentId, ordered } = resolveAgentOrder(cfg);
   const channelBindings = buildChannelAccountBindings(cfg);
   const sessionCache = new Map<string, HealthSummary["sessions"]>();
@@ -285,6 +289,7 @@ export async function getHealthSnapshot(params?: {
   const start = Date.now();
   const cappedTimeout = timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : Math.max(50, timeoutMs);
   const doProbe = params?.probe !== false;
+  const includeSensitive = params?.includeSensitive !== false;
   const channels: Record<string, ChannelHealthSummary> = {};
   const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
     includeSetupRuntimeFallback: false,
@@ -362,12 +367,16 @@ export async function getHealthSnapshot(params?: {
         debugHealth("probe.bot", { channel: plugin.id, accountId, username: bot.username });
       }
 
+      const runtimeSnapshot =
+        params?.runtimeSnapshot?.channelAccounts[plugin.id]?.[accountId] ??
+        (accountId === defaultAccountId ? params?.runtimeSnapshot?.channels[plugin.id] : undefined);
       const snapshot: ChannelAccountSnapshot = {
+        ...projectSafeChannelAccountSnapshotFields(runtimeSnapshot),
         accountId,
         enabled,
         configured,
       };
-      if (probe !== undefined) {
+      if (includeSensitive && probe !== undefined) {
         snapshot.probe = probe;
       }
       if (lastProbeAt) {
@@ -384,15 +393,20 @@ export async function getHealthSnapshot(params?: {
         : undefined;
       const record =
         summary && typeof summary === "object"
-          ? (summary as ChannelAccountHealthSummary)
+          ? ({ ...snapshot, ...summary } as ChannelAccountHealthSummary)
           : ({
+              ...snapshot,
               accountId,
               configured,
-              probe,
-              lastProbeAt,
             } satisfies ChannelAccountHealthSummary);
       if (record.configured === undefined) {
         record.configured = configured;
+      }
+      if (includeSensitive && record.probe === undefined && probe !== undefined) {
+        record.probe = probe;
+      }
+      if (!includeSensitive) {
+        delete record.probe;
       }
       if (record.lastProbeAt === undefined && lastProbeAt) {
         record.lastProbeAt = lastProbeAt;
@@ -437,7 +451,14 @@ export async function getHealthSnapshot(params?: {
 }
 
 export async function healthCommand(
-  opts: { json?: boolean; timeoutMs?: number; verbose?: boolean; config?: OpenClawConfig },
+  opts: {
+    json?: boolean;
+    timeoutMs?: number;
+    verbose?: boolean;
+    config?: OpenClawConfig;
+    token?: string;
+    password?: string;
+  },
   runtime: RuntimeEnv,
 ) {
   const cfg = opts.config ?? (await readBestEffortHealthConfig());
@@ -454,6 +475,8 @@ export async function healthCommand(
         params: opts.verbose ? { probe: true } : undefined,
         timeoutMs: opts.timeoutMs,
         config: cfg,
+        token: opts.token,
+        password: opts.password,
       }),
   );
   // Gateway reachability defines success; channel issues are reported but not fatal here.

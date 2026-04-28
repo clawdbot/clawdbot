@@ -1,5 +1,8 @@
 {
   "id": "document-extract",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "name": "Document Extraction",
   "description": "Extract text and fallback page images from local document attachments.",

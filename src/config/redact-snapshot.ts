@@ -455,9 +455,13 @@ export function redactConfigSnapshot(
   }
   // Also redact the resolved config (contains values after ${ENV} substitution)
   const redactedResolved = redactConfigObject(snapshot.resolved, uiHints);
+  const { pluginMetadataSnapshot: _pluginMetadataSnapshot, ...publicSnapshot } =
+    snapshot as typeof snapshot & {
+      pluginMetadataSnapshot?: unknown;
+    };
 
   return {
-    ...snapshot,
+    ...publicSnapshot,
     sourceConfig: redactedResolved,
     runtimeConfig: redactedConfig,
     config: redactedConfig,

@@ -1,6 +1,6 @@
 import fs from "node:fs";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../test/helpers/import-fresh.js";
 import {
   emitDiagnosticEvent,
   onDiagnosticEvent,
@@ -191,7 +191,7 @@ describe("stuck session diagnostics threshold", () => {
           enabled: true,
         },
       },
-      { emitMemorySample },
+      { emitMemorySample, sampleLiveness: () => null },
     );
 
     vi.advanceTimersByTime(30_000);
@@ -201,6 +201,93 @@ describe("stuck session diagnostics threshold", () => {
     vi.advanceTimersByTime(30_000);
 
     expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample: true });
+  });
+
+  it("emits idle liveness warnings into the stability recorder", () => {
+    const emitMemorySample = createEmitMemorySampleMock();
+    const events: string[] = [];
+    const unsubscribe = onDiagnosticEvent((event) => events.push(event.type));
+
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+          },
+        },
+        {
+          emitMemorySample,
+          sampleLiveness: () => ({
+            reasons: ["cpu"],
+            intervalMs: 30_000,
+            eventLoopDelayP99Ms: 12,
+            eventLoopDelayMaxMs: 22,
+            eventLoopUtilization: 0.99,
+            cpuUserMs: 29_000,
+            cpuSystemMs: 1_000,
+            cpuTotalMs: 30_000,
+            cpuCoreRatio: 1,
+          }),
+        },
+      );
+
+      vi.advanceTimersByTime(30_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events).toContain("diagnostic.liveness.warning");
+    expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample: true });
+    expect(getDiagnosticStabilitySnapshot({ limit: 10 }).events).toContainEqual(
+      expect.objectContaining({
+        type: "diagnostic.liveness.warning",
+        level: "warning",
+        reason: "cpu",
+        durationMs: 30_000,
+        count: 1,
+        eventLoopDelayP99Ms: 12,
+        eventLoopDelayMaxMs: 22,
+        eventLoopUtilization: 0.99,
+        cpuCoreRatio: 1,
+        active: 0,
+        waiting: 0,
+        queued: 0,
+      }),
+    );
+  });
+
+  it("throttles repeated liveness warnings", () => {
+    const events: string[] = [];
+    const unsubscribe = onDiagnosticEvent((event) => events.push(event.type));
+
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+          },
+        },
+        {
+          emitMemorySample: createEmitMemorySampleMock(),
+          sampleLiveness: () => ({
+            reasons: ["event_loop_delay"],
+            intervalMs: 30_000,
+            eventLoopDelayP99Ms: 1_500,
+            eventLoopDelayMaxMs: 2_000,
+          }),
+        },
+      );
+
+      vi.advanceTimersByTime(30_000);
+      vi.advanceTimersByTime(90_000);
+      expect(events.filter((event) => event === "diagnostic.liveness.warning")).toHaveLength(1);
+
+      vi.advanceTimersByTime(30_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events.filter((event) => event === "diagnostic.liveness.warning")).toHaveLength(2);
   });
 
   it("does not start the heartbeat when diagnostics are disabled by config", () => {

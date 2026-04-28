@@ -7,6 +7,7 @@ vi.mock("../../gateway/call.js", () => ({
 let isResolvedSessionVisibleToRequester: typeof import("./sessions-resolution.js").isResolvedSessionVisibleToRequester;
 let looksLikeSessionId: typeof import("./sessions-resolution.js").looksLikeSessionId;
 let looksLikeSessionKey: typeof import("./sessions-resolution.js").looksLikeSessionKey;
+let resolveCurrentSessionClientAlias: typeof import("./sessions-resolution.js").resolveCurrentSessionClientAlias;
 let resolveDisplaySessionKey: typeof import("./sessions-resolution.js").resolveDisplaySessionKey;
 let resolveInternalSessionKey: typeof import("./sessions-resolution.js").resolveInternalSessionKey;
 let resolveMainSessionAlias: typeof import("./sessions-resolution.js").resolveMainSessionAlias;
@@ -19,6 +20,7 @@ beforeAll(async () => {
     isResolvedSessionVisibleToRequester,
     looksLikeSessionId,
     looksLikeSessionKey,
+    resolveCurrentSessionClientAlias,
     resolveDisplaySessionKey,
     resolveInternalSessionKey,
     resolveMainSessionAlias,
@@ -104,6 +106,22 @@ describe("session key display/internal mapping", () => {
     expect(resolveInternalSessionKey({ key: "current", alias: "global", mainKey: "main" })).toBe(
       "current",
     );
+  });
+
+  it("maps interactive client ids to the requester session", () => {
+    expect(
+      resolveCurrentSessionClientAlias({
+        key: "openclaw-tui",
+        requesterInternalKey: "agent:main:main",
+      }),
+    ).toBe("agent:main:main");
+    expect(resolveCurrentSessionClientAlias({ key: "openclaw-tui" })).toBeUndefined();
+    expect(
+      resolveCurrentSessionClientAlias({
+        key: "node-host",
+        requesterInternalKey: "agent:main:main",
+      }),
+    ).toBeUndefined();
   });
 });
 
@@ -302,5 +320,23 @@ describe("resolveSessionReference", () => {
       },
     });
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats the TUI client label as the requester session", async () => {
+    await expect(
+      resolveSessionReference({
+        sessionKey: "openclaw-tui",
+        alias: "main",
+        mainKey: "main",
+        requesterInternalKey: "agent:main:main",
+        restrictToSpawned: false,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      key: "agent:main:main",
+      displayKey: "agent:main:main",
+      resolvedViaSessionId: false,
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 });

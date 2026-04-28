@@ -15,7 +15,6 @@ export const expectedAugmentedOpenaiCodexCatalogEntries = [
   { provider: "openai", id: "gpt-5.4-nano", name: "gpt-5.4-nano" },
   { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
   { provider: "openai-codex", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
-  { provider: "openai-codex", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
 ];
 
 export const expectedAugmentedOpenaiCodexCatalogEntriesWithGpt55 = [
@@ -24,6 +23,11 @@ export const expectedAugmentedOpenaiCodexCatalogEntriesWithGpt55 = [
   { provider: "openai-codex", id: "gpt-5.5-pro", name: "gpt-5.5-pro" },
   ...expectedAugmentedOpenaiCodexCatalogEntries.slice(4),
 ];
+
+export const expectedOpenaiPluginCodexCatalogEntriesWithGpt55 =
+  expectedAugmentedOpenaiCodexCatalogEntriesWithGpt55.filter(
+    (entry) => !(entry.provider === "openai-codex" && entry.id === "gpt-5.4-mini"),
+  );
 
 export function expectCodexMissingAuthHint(
   buildProviderMissingAuthMessageWithPlugin: (params: {
@@ -48,31 +52,6 @@ export function expectCodexMissingAuthHint(
       },
     }),
   ).toContain(expectedModel);
-}
-
-export function expectCodexBuiltInSuppression(
-  resolveProviderBuiltInModelSuppression: (params: {
-    env: NodeJS.ProcessEnv;
-    context: {
-      env: NodeJS.ProcessEnv;
-      provider: string;
-      modelId: string;
-    };
-  }) => unknown,
-) {
-  expect(
-    resolveProviderBuiltInModelSuppression({
-      env: process.env,
-      context: {
-        env: process.env,
-        provider: "azure-openai-responses",
-        modelId: "gpt-5.3-codex-spark",
-      },
-    }),
-  ).toMatchObject({
-    suppress: true,
-    errorMessage: expect.stringContaining("gpt-5.3-codex-spark"),
-  });
 }
 
 export async function expectAugmentedCodexCatalog(

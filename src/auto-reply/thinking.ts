@@ -205,21 +205,30 @@ export function supportsXHighThinking(provider?: string | null, model?: string |
   return supportsThinkingLevel(provider, model, "xhigh");
 }
 
-export function listThinkingLevels(provider?: string | null, model?: string | null): ThinkLevel[] {
-  const profile = resolveThinkingProfile({ provider, model });
+export function listThinkingLevels(
+  provider?: string | null,
+  model?: string | null,
+  catalog?: ThinkingCatalogEntry[],
+): ThinkLevel[] {
+  const profile = resolveThinkingProfile({ provider, model, catalog });
   return profile.levels.map((level) => level.id);
 }
 
 export function listThinkingLevelOptions(
   provider?: string | null,
   model?: string | null,
+  catalog?: ThinkingCatalogEntry[],
 ): ThinkingLevelOption[] {
-  const profile = resolveThinkingProfile({ provider, model });
+  const profile = resolveThinkingProfile({ provider, model, catalog });
   return profile.levels.map(({ id, label }) => ({ id, label }));
 }
 
-export function listThinkingLevelLabels(provider?: string | null, model?: string | null): string[] {
-  return listThinkingLevelOptions(provider, model).map((level) => level.label);
+export function listThinkingLevelLabels(
+  provider?: string | null,
+  model?: string | null,
+  catalog?: ThinkingCatalogEntry[],
+): string[] {
+  return listThinkingLevelOptions(provider, model, catalog).map((level) => level.label);
 }
 
 export function formatThinkingLevels(

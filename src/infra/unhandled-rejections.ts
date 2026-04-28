@@ -88,6 +88,8 @@ const TRANSIENT_SQLITE_CODES = new Set([
 
 const TRANSIENT_SQLITE_ERRCODES = new Set([5, 6, 10, 14]);
 
+const BENIGN_UNCAUGHT_EXCEPTION_CODES = new Set(["EPIPE", "EIO"]);
+
 const TRANSIENT_NETWORK_MESSAGE_CODE_RE =
   /\b(ECONNRESET|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ESOCKETTIMEDOUT|ECONNABORTED|EPIPE|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|EPROTO|UND_ERR_CONNECT_TIMEOUT|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT|UND_ERR_SOCKET|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT)\b/i;
 
@@ -337,6 +339,16 @@ export function isTransientSqliteError(err: unknown): boolean {
 
 export function isTransientUnhandledRejectionError(err: unknown): boolean {
   return isTransientNetworkError(err) || isTransientSqliteError(err);
+}
+
+export function isBenignUncaughtExceptionError(err: unknown): boolean {
+  for (const candidate of collectNestedUnhandledErrorCandidates(err)) {
+    const code = extractErrorCodeOrErrno(candidate);
+    if (code && BENIGN_UNCAUGHT_EXCEPTION_CODES.has(code)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {

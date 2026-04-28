@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { createServer } from "node:net";
@@ -11,6 +11,7 @@ type GatewayBenchCase = {
   env?: Record<string, string>;
   id: string;
   name: string;
+  pluginActivationOnStartup?: boolean;
   pluginCount?: number;
 };
 
@@ -23,6 +24,7 @@ type GatewaySample = {
   exitCode: number | null;
   firstOutputMs: number | null;
   healthz: ProbeResult;
+  maxRssMb: number | null;
   outputTail: string;
   readyLogMs: number | null;
   readyz: ProbeResult;
@@ -45,6 +47,7 @@ type CaseResult = {
   summary: {
     firstOutputMs: SummaryStats | null;
     healthzMs: SummaryStats | null;
+    maxRssMb: SummaryStats | null;
     readyLogMs: SummaryStats | null;
     readyzMs: SummaryStats | null;
     startupTrace: Record<string, SummaryStats>;
@@ -127,6 +130,24 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
     id: "fiftyPlugins",
     name: "gateway, 50 manifest plugins",
     env: { OPENCLAW_SKIP_CHANNELS: "1" },
+    pluginCount: 50,
+    config: BASE_CONFIG,
+  },
+  {
+    id: "fiftyPluginsFutureStrict",
+    name: "gateway, 50 manifest plugins with legacy startup fallback disabled",
+    env: {
+      OPENCLAW_DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS: "1",
+      OPENCLAW_SKIP_CHANNELS: "1",
+    },
+    pluginCount: 50,
+    config: BASE_CONFIG,
+  },
+  {
+    id: "fiftyStartupLazyPlugins",
+    name: "gateway, 50 startup-lazy manifest plugins",
+    env: { OPENCLAW_SKIP_CHANNELS: "1" },
+    pluginActivationOnStartup: false,
     pluginCount: 50,
     config: BASE_CONFIG,
   },
@@ -253,6 +274,11 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]): C
           .map((sample) => sample.healthz.ms)
           .filter((value): value is number => typeof value === "number"),
       ),
+      maxRssMb: summarizeNumbers(
+        samples
+          .map((sample) => sample.maxRssMb)
+          .filter((value): value is number => typeof value === "number"),
+      ),
       readyLogMs: summarizeNumbers(
         samples
           .map((sample) => sample.readyLogMs)
@@ -275,11 +301,25 @@ function formatMs(value: number | null): string {
   return `${value.toFixed(1)}ms`;
 }
 
+function formatMb(value: number | null): string {
+  if (value == null) {
+    return "n/a";
+  }
+  return `${value.toFixed(1)}MB`;
+}
+
 function formatStats(stats: SummaryStats | null): string {
   if (!stats) {
     return "n/a";
   }
   return `p50=${formatMs(stats.p50)} avg=${formatMs(stats.avg)} min=${formatMs(stats.min)} max=${formatMs(stats.max)}`;
+}
+
+function formatMemoryStats(stats: SummaryStats | null): string {
+  if (!stats) {
+    return "n/a";
+  }
+  return `p50=${formatMb(stats.p50)} avg=${formatMb(stats.avg)} min=${formatMb(stats.min)} max=${formatMb(stats.max)}`;
 }
 
 async function getFreePort(): Promise<number> {
@@ -341,7 +381,7 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function writePluginFixtures(root: string, count: number): string[] {
+function writePluginFixtures(root: string, count: number, activationOnStartup?: boolean): string[] {
   const files: string[] = [];
   const pluginsDir = path.join(root, "plugins");
   mkdirSync(pluginsDir, { recursive: true });
@@ -353,7 +393,17 @@ function writePluginFixtures(root: string, count: number): string[] {
     writeFileSync(entry, `module.exports = { id: ${JSON.stringify(id)}, register() {} };\n`);
     writeFileSync(
       path.join(pluginDir, "openclaw.plugin.json"),
-      `${JSON.stringify({ id, configSchema: { type: "object", additionalProperties: false } }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          id,
+          ...(activationOnStartup === undefined
+            ? {}
+            : { activation: { onStartup: activationOnStartup } }),
+          configSchema: { type: "object", additionalProperties: false },
+        },
+        null,
+        2,
+      )}\n`,
     );
     files.push(entry);
   }
@@ -361,7 +411,9 @@ function writePluginFixtures(root: string, count: number): string[] {
 }
 
 function writeConfig(root: string, benchCase: GatewayBenchCase): string {
-  const pluginPaths = benchCase.pluginCount ? writePluginFixtures(root, benchCase.pluginCount) : [];
+  const pluginPaths = benchCase.pluginCount
+    ? writePluginFixtures(root, benchCase.pluginCount, benchCase.pluginActivationOnStartup)
+    : [];
   const config = {
     ...benchCase.config,
     plugins: {
@@ -400,6 +452,7 @@ function sanitizedEnv(
     OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
     OPENCLAW_HOME: root,
     OPENCLAW_LOCAL_CHECK: "0",
+    OPENCLAW_NO_RESPAWN: "1",
     OPENCLAW_STATE_DIR: path.join(root, "state"),
     OPENCLAW_TEST_DISABLE_UPDATE_CHECK: "1",
     ...benchCase.env,
@@ -458,6 +511,10 @@ function collectStartupTrace(line: string, startupTrace: Record<string, number>)
   }
 }
 
+function hasGatewayReadyLog(line: string): boolean {
+  return /\[gateway\] (?:http server listening|ready \()/.test(line);
+}
+
 function parseStartupTraceMetrics(raw: string): Array<{ key: string; value: number }> {
   const metrics: Array<{ key: string; value: number }> = [];
   for (const part of raw.trim().split(/\s+/u)) {
@@ -475,6 +532,21 @@ function parseStartupTraceMetrics(raw: string): Array<{ key: string; value: numb
   return metrics;
 }
 
+function readProcessRssMb(pid: number | undefined): number | null {
+  if (!pid || process.platform === "win32") {
+    return null;
+  }
+  const result = spawnSync("ps", ["-o", "rss=", "-p", String(pid)], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  const rssKb = Number.parseInt(result.stdout.trim(), 10);
+  return Number.isFinite(rssKb) && rssKb > 0 ? rssKb / 1024 : null;
+}
+
 async function runGatewaySample(options: {
   benchCase: GatewayBenchCase;
   entry: string;
@@ -489,6 +561,7 @@ async function runGatewaySample(options: {
   const startupTrace: Record<string, number> = {};
   const output: string[] = [];
   let firstOutputMs: number | null = null;
+  let maxRssMb: number | null = null;
   let readyLogMs: number | null = null;
   let childExited = false;
 
@@ -510,6 +583,15 @@ async function runGatewaySample(options: {
     ],
     { cwd: process.cwd(), detached: process.platform !== "win32", env },
   );
+  const sampleRss = () => {
+    const rssMb = readProcessRssMb(child.pid);
+    if (rssMb != null) {
+      maxRssMb = maxRssMb == null ? rssMb : Math.max(maxRssMb, rssMb);
+    }
+  };
+  sampleRss();
+  const rssTimer = setInterval(sampleRss, 100);
+  rssTimer.unref?.();
   const childExitPromise = new Promise<{ exitCode: number | null; signal: string | null }>(
     (resolve) => {
       child.once("exit", (exitCode, signal) => {
@@ -529,7 +611,7 @@ async function runGatewaySample(options: {
       output.splice(0, output.length - 20);
     }
     for (const line of text.split(/\r?\n/u)) {
-      if (line.includes("ready (") && readyLogMs == null) {
+      if (hasGatewayReadyLog(line) && readyLogMs == null) {
         readyLogMs = performance.now() - startAt;
       }
       collectStartupTrace(line, startupTrace);
@@ -555,6 +637,8 @@ async function runGatewaySample(options: {
     }),
   ]);
   const exit = await stopChild(child);
+  clearInterval(rssTimer);
+  sampleRss();
   await childExitPromise.catch(() => null);
   rmSync(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
 
@@ -562,6 +646,7 @@ async function runGatewaySample(options: {
     exitCode: exit.exitCode,
     firstOutputMs,
     healthz,
+    maxRssMb,
     outputTail: output.join("").split(/\r?\n/u).slice(-20).join("\n"),
     readyLogMs,
     readyz,
@@ -588,11 +673,11 @@ async function runCase(options: {
     if (index >= options.warmup) {
       samples.push(sample);
       console.log(
-        `[gateway-startup-bench] ${options.benchCase.id} run ${samples.length}/${options.runs}: healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)} readyLog=${formatMs(sample.readyLogMs)}`,
+        `[gateway-startup-bench] ${options.benchCase.id} run ${samples.length}/${options.runs}: healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)} readyLog=${formatMs(sample.readyLogMs)} rss=${formatMb(sample.maxRssMb)}`,
       );
     } else {
       console.log(
-        `[gateway-startup-bench] ${options.benchCase.id} warmup ${index + 1}/${options.warmup}: healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)}`,
+        `[gateway-startup-bench] ${options.benchCase.id} warmup ${index + 1}/${options.warmup}: healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)} rss=${formatMb(sample.maxRssMb)}`,
       );
     }
   }
@@ -605,6 +690,7 @@ function printResult(result: CaseResult): void {
   console.log(`  /healthz:     ${formatStats(result.summary.healthzMs)}`);
   console.log(`  ready log:    ${formatStats(result.summary.readyLogMs)}`);
   console.log(`  /readyz:      ${formatStats(result.summary.readyzMs)}`);
+  console.log(`  max RSS:      ${formatMemoryStats(result.summary.maxRssMb)}`);
   const trace = Object.entries(result.summary.startupTrace)
     .filter(([name]) => !name.endsWith(".total"))
     .toSorted((a, b) => (b[1].avg ?? 0) - (a[1].avg ?? 0))

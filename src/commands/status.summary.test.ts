@@ -34,6 +34,10 @@ vi.mock("../config/io.js", () => ({
   loadConfig: vi.fn(() => ({})),
 }));
 
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: vi.fn(() => ({})),
+}));
+
 vi.mock("../gateway/agent-list.js", () => ({
   listGatewayAgentsBasic: vi.fn(() => ({
     defaultId: "main",

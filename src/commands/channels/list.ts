@@ -114,7 +114,7 @@ export async function channelsListCommand(
   const includeUsage = opts.usage !== false;
 
   const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
-    includeSetupRuntimeFallback: false,
+    includeSetupRuntimeFallback: true,
   });
 
   const authStore = loadAuthProfileStoreWithoutExternalProfiles();

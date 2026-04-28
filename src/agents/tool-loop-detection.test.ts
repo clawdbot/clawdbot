@@ -254,6 +254,16 @@ describe("tool-loop-detection", () => {
       expect(timestamp).toBeLessThanOrEqual(after);
     });
 
+    it("records run id when provided", () => {
+      const state = createState();
+
+      recordToolCall(state, "tool", { arg: 1 }, "call-run", enabledLoopDetectionConfig, {
+        runId: "run-1",
+      });
+
+      expect(state.toolCallHistory?.[0]?.runId).toBe("run-1");
+    });
+
     it("respects configured historySize", () => {
       const state = createState();
 
@@ -291,6 +301,59 @@ describe("tool-loop-detection", () => {
         { path: "/new-file.txt" },
         enabledLoopDetectionConfig,
       );
+      expect(result.stuck).toBe(false);
+    });
+
+    it("ignores repeated history from other runs", () => {
+      const state = createState();
+      const params = { path: "/same.txt" };
+
+      for (let i = 0; i < WARNING_THRESHOLD; i += 1) {
+        recordToolCall(state, "read", params, `old-run-${i}`, enabledLoopDetectionConfig, {
+          runId: "heartbeat-1",
+        });
+      }
+
+      const result = detectToolCallLoop(state, "read", params, enabledLoopDetectionConfig, {
+        runId: "heartbeat-2",
+      });
+
+      expect(result.stuck).toBe(false);
+    });
+
+    it("detects repeated history within the same run", () => {
+      const state = createState();
+      const params = { path: "/same.txt" };
+
+      for (let i = 0; i < WARNING_THRESHOLD; i += 1) {
+        recordToolCall(state, "read", params, `same-run-${i}`, enabledLoopDetectionConfig, {
+          runId: "run-1",
+        });
+      }
+
+      const result = detectToolCallLoop(state, "read", params, enabledLoopDetectionConfig, {
+        runId: "run-1",
+      });
+
+      expect(result.stuck).toBe(true);
+      if (result.stuck) {
+        expect(result.detector).toBe("generic_repeat");
+        expect(result.count).toBe(WARNING_THRESHOLD);
+      }
+    });
+
+    it("keeps scoped and unscoped history isolated", () => {
+      const state = createState();
+      const params = { path: "/same.txt" };
+
+      for (let i = 0; i < WARNING_THRESHOLD; i += 1) {
+        recordToolCall(state, "read", params, `scoped-${i}`, enabledLoopDetectionConfig, {
+          runId: "run-1",
+        });
+      }
+
+      const result = detectToolCallLoop(state, "read", params, enabledLoopDetectionConfig);
+
       expect(result.stuck).toBe(false);
     });
 
@@ -462,6 +525,134 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    it("blocks repeated completed exec calls despite volatile runtime details", () => {
+      const state = createState();
+      const params = { command: "grafana-api.sh datasources" };
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          {
+            content: [{ type: "text", text: "Loki\nPrometheus" }],
+            details: {
+              status: "completed",
+              exitCode: 0,
+              durationMs: 100 + index,
+              cwd: `/tmp/run-${index}`,
+              aggregated: "Loki\nPrometheus",
+            },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("global_circuit_breaker");
+      }
+    });
+
+    it("blocks repeated running exec calls despite volatile session details and text", () => {
+      const state = createState();
+      const params = { command: "tail -f /var/log/app.log", yieldMs: 1000 };
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          {
+            content: [
+              {
+                type: "text",
+                text: `Command still running (session sess-${index}, pid ${1000 + index})`,
+              },
+            ],
+            details: {
+              status: "running",
+              sessionId: `sess-${index}`,
+              pid: 1000 + index,
+              startedAt: Date.now() + index,
+              cwd: `/tmp/run-${index}`,
+              tail: "(no new output)",
+            },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("global_circuit_breaker");
+      }
+    });
+
+    it("keeps changing exec output below the global no-progress breaker", () => {
+      const state = createState();
+      const params = { command: "date" };
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          {
+            content: [{ type: "text", text: `tick ${index}` }],
+            details: {
+              status: "completed",
+              exitCode: 0,
+              durationMs: 100 + index,
+              aggregated: `tick ${index}`,
+            },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+        expect(loopResult.detector).toBe("generic_repeat");
+      }
+    });
+
+    it("keeps changing empty-output exec failures below the global no-progress breaker", () => {
+      const state = createState();
+      const params = { command: "openclaw flaky-helper" };
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          {
+            content: [{ type: "text", text: `Runtime failed before spawn: attempt ${index}` }],
+            details: {
+              status: "failed",
+              exitCode: null,
+              durationMs: 100 + index,
+              aggregated: "",
+            },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+        expect(loopResult.detector).toBe("generic_repeat");
+      }
+    });
+
     it("does not block repeated unknown-tool failures before the unknown-tool threshold", () => {
       const state = createState();
       const toolName = "exec";
@@ -618,6 +809,28 @@ describe("tool-loop-detection", () => {
       const entry = state.toolCallHistory?.find((call) => call.toolCallId === toolCallId);
       expect(typeof entry?.resultHash).toBe("string");
       expect(entry?.resultHash?.length).toBe(64);
+    });
+
+    it("does not attach outcomes to matching calls from other runs", () => {
+      const state = createState();
+      const params = { path: "/same.txt" };
+      recordToolCall(state, "read", params, "call-1", enabledLoopDetectionConfig, {
+        runId: "run-1",
+      });
+
+      recordToolCallOutcome(state, {
+        toolName: "read",
+        toolParams: params,
+        toolCallId: "call-1",
+        result: { content: [{ type: "text", text: "same output" }] },
+        config: enabledLoopDetectionConfig,
+        runId: "run-2",
+      });
+
+      expect(state.toolCallHistory).toHaveLength(2);
+      expect(state.toolCallHistory?.[0]?.resultHash).toBeUndefined();
+      expect(state.toolCallHistory?.[1]?.runId).toBe("run-2");
+      expect(state.toolCallHistory?.[1]?.resultHash).toBeTypeOf("string");
     });
 
     it("handles empty history", () => {

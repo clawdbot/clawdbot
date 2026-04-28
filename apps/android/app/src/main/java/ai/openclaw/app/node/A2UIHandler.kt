@@ -1,6 +1,5 @@
 package ai.openclaw.app.node
 
-import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -13,12 +12,11 @@ class A2UIHandler(
   private val getNodeCanvasHostUrl: () -> String?,
   private val getOperatorCanvasHostUrl: () -> String?,
 ) {
-  fun isTrustedCanvasActionUrl(rawUrl: String?): Boolean {
-    return CanvasActionTrust.isTrustedCanvasActionUrl(
+  fun isTrustedCanvasActionUrl(rawUrl: String?): Boolean =
+    CanvasActionTrust.isTrustedCanvasActionUrl(
       rawUrl = rawUrl,
       trustedA2uiUrls = listOfNotNull(resolveA2uiHostUrl()),
     )
-  }
 
   fun resolveA2uiHostUrl(): String? {
     val nodeRaw = getNodeCanvasHostUrl()?.trim().orEmpty()
@@ -26,7 +24,7 @@ class A2UIHandler(
     val raw = if (nodeRaw.isNotBlank()) nodeRaw else operatorRaw
     if (raw.isBlank()) return null
     val base = raw.trimEnd('/')
-    return "${base}/__openclaw__/a2ui/?platform=android"
+    return "$base/__openclaw__/a2ui/?platform=android"
   }
 
   suspend fun ensureA2uiReady(a2uiUrl: String): Boolean {
@@ -50,7 +48,10 @@ class A2UIHandler(
     return false
   }
 
-  fun decodeA2uiMessages(command: String, paramsJson: String?): String {
+  fun decodeA2uiMessages(
+    command: String,
+    paramsJson: String?,
+  ): String {
     val raw = paramsJson?.trim().orEmpty()
     if (raw.isBlank()) throw IllegalArgumentException("INVALID_REQUEST: paramsJSON required")
 
@@ -76,8 +77,7 @@ class A2UIHandler(
                 ?: throw IllegalArgumentException("A2UI JSONL line ${idx + 1}: expected a JSON object")
             validateA2uiV0_8(msg, idx + 1)
             msg
-          }
-          .toList()
+          }.toList()
       return JsonArray(messages).toString()
     }
 
@@ -86,14 +86,17 @@ class A2UIHandler(
       arr.mapIndexed { idx, el ->
         val msg =
           el as? JsonObject
-            ?: throw IllegalArgumentException("A2UI messages[${idx}]: expected a JSON object")
+            ?: throw IllegalArgumentException("A2UI messages[$idx]: expected a JSON object")
         validateA2uiV0_8(msg, idx + 1)
         msg
       }
     return JsonArray(out).toString()
   }
 
-  private fun validateA2uiV0_8(msg: JsonObject, lineNumber: Int) {
+  private fun validateA2uiV0_8(
+    msg: JsonObject,
+    lineNumber: Int,
+  ) {
     if (msg.containsKey("createSurface")) {
       throw IllegalArgumentException(
         "A2UI JSONL line $lineNumber: looks like A2UI v0.9 (`createSurface`). Canvas supports v0.8 messages only.",
@@ -135,19 +138,18 @@ class A2UIHandler(
       })()
       """
 
-    fun a2uiApplyMessagesJS(messagesJson: String): String {
-      return """
-        (() => {
-          try {
-            const host = globalThis.openclawA2UI;
-            if (!host) return { ok: false, error: "missing openclawA2UI" };
-            const messages = $messagesJson;
-            return host.applyMessages(messages);
-          } catch (e) {
-            return { ok: false, error: String(e?.message ?? e) };
-          }
-        })()
+    fun a2uiApplyMessagesJS(messagesJson: String): String =
+      """
+      (() => {
+        try {
+          const host = globalThis.openclawA2UI;
+          if (!host) return { ok: false, error: "missing openclawA2UI" };
+          const messages = $messagesJson;
+          return host.applyMessages(messages);
+        } catch (e) {
+          return { ok: false, error: String(e?.message ?? e) };
+        }
+      })()
       """.trimIndent()
-    }
   }
 }

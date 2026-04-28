@@ -20,6 +20,7 @@ const writeGatewayRestartIntentSync = vi.fn();
 const clearGatewayRestartIntentSync = vi.fn();
 
 vi.mock("../../config/config.js", () => ({
+  getRuntimeConfig: () => loadConfig(),
   loadConfig: () => loadConfig(),
   readBestEffortConfig: async () => loadConfig(),
 }));

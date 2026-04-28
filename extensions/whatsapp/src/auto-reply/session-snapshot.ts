@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
 import {
   evaluateSessionFreshness,
@@ -10,10 +11,8 @@ import {
   resolveStorePath,
 } from "./config.runtime.js";
 
-type LoadConfigFn = typeof import("./config.runtime.js").loadConfig;
-
 export function getSessionSnapshot(
-  cfg: ReturnType<LoadConfigFn>,
+  cfg: OpenClawConfig,
   from: string,
   _isHeartbeat = false,
   ctx?: {

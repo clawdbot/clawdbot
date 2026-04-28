@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const applyPluginAutoEnableMock = vi.hoisted(() => vi.fn());
 const getActivePluginRegistryMock = vi.hoisted(() => vi.fn());
@@ -23,7 +23,7 @@ vi.mock("../plugins/runtime/metadata-registry-loader.js", () => ({
     loadPluginMetadataRegistrySnapshotMock(...args),
 }));
 
-let collectPluginSecurityAuditFindings: typeof import("./audit.js").collectPluginSecurityAuditFindings;
+const { collectPluginSecurityAuditFindings } = await import("./audit.js");
 
 function createAuditContext(params: {
   sourceConfig: Parameters<typeof collectPluginSecurityAuditFindings>[0]["sourceConfig"];
@@ -48,10 +48,6 @@ function createAuditContext(params: {
 }
 
 describe("security audit read-only plugin scope", () => {
-  beforeAll(async () => {
-    ({ collectPluginSecurityAuditFindings } = await import("./audit.js"));
-  });
-
   beforeEach(() => {
     applyPluginAutoEnableMock.mockReset();
     getActivePluginRegistryMock.mockReset();

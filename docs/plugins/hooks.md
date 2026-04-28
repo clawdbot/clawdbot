@@ -52,6 +52,11 @@ export default definePluginEntry({
 Hook handlers run sequentially in descending `priority`. Same-priority hooks
 keep registration order.
 
+Each hook receives `event.context.pluginConfig`, the resolved config for the
+plugin that registered that handler. Use it for hook decisions that need
+current plugin options; OpenClaw injects it per handler without mutating the
+shared event object seen by other plugins.
+
 ## Hook catalog
 
 Hooks are grouped by the surface they extend. Names in **bold** accept a
@@ -61,11 +66,13 @@ observation-only.
 **Agent turn**
 
 - `before_model_resolve` — override provider or model before session messages load
+- `agent_turn_prepare` — consume queued plugin turn injections and add same-turn context before prompt hooks
 - `before_prompt_build` — add dynamic context or system-prompt text before the model call
 - `before_agent_start` — compatibility-only combined phase; prefer the two hooks above
 - **`before_agent_reply`** — short-circuit the model turn with a synthetic reply or silence
 - **`before_agent_finalize`** — inspect the natural final answer and request one more model pass
 - `agent_end` — observe final messages, success state, and run duration
+- `heartbeat_prompt_contribution` — add heartbeat-only context for background monitor and lifecycle plugins
 
 **Conversation observation**
 
@@ -148,6 +155,13 @@ Rules:
 - `onResolution` receives the resolved approval decision — `allow-once`,
   `allow-always`, `deny`, `timeout`, or `cancelled`.
 
+Bundled plugins that need host-level policy can register trusted tool policies
+with `api.registerTrustedToolPolicy(...)`. These run before ordinary
+`before_tool_call` hooks and before external plugin decisions. Use them only
+for host-trusted gates such as workspace policy, budget enforcement, or
+reserved workflow safety. External plugins should use normal `before_tool_call`
+hooks.
+
 ### Tool result persistence
 
 Tool results can include structured `details` for UI rendering, diagnostics,
@@ -169,9 +183,15 @@ Use the phase-specific hooks for new plugins:
 
 - `before_model_resolve`: receives only the current prompt and attachment
   metadata. Return `providerOverride` or `modelOverride`.
+- `agent_turn_prepare`: receives the current prompt, prepared session messages,
+  and any exactly-once queued injections drained for this session. Return
+  `prependContext` or `appendContext`.
 - `before_prompt_build`: receives the current prompt and session messages.
-  Return `prependContext`, `systemPrompt`, `prependSystemContext`, or
-  `appendSystemContext`.
+  Return `prependContext`, `appendContext`, `systemPrompt`,
+  `prependSystemContext`, or `appendSystemContext`.
+- `heartbeat_prompt_contribution`: runs only for heartbeat turns and returns
+  `prependContext` or `appendContext`. It is intended for background monitors
+  that need to summarize current state without changing user-initiated turns.
 
 `before_agent_start` remains for compatibility. Prefer the explicit hooks above
 so your plugin does not depend on a legacy combined phase.
@@ -181,6 +201,12 @@ identify the active run. The same value is also available on `ctx.runId`.
 Cron-driven runs also expose `ctx.jobId` (the originating cron job id) so
 plugin hooks can scope metrics, side effects, or state to a specific scheduled
 job.
+
+`agent_end` is an observation hook and runs fire-and-forget after the turn. The
+hook runner applies a 30 second timeout so a wedged plugin or embedding
+endpoint cannot leave the hook promise pending forever. A timeout is logged and
+OpenClaw continues; it does not cancel plugin-owned network work unless the
+plugin also uses its own abort signal.
 
 Use `model_call_started` and `model_call_ended` for provider-call telemetry
 that should not receive raw prompts, history, responses, headers, request
@@ -214,8 +240,31 @@ Non-bundled plugins that need `llm_input`, `llm_output`,
 }
 ```
 
-Prompt-mutating hooks can be disabled per plugin with
-`plugins.entries.<id>.hooks.allowPromptInjection=false`.
+Prompt-mutating hooks and durable next-turn injections can be disabled per plugin
+with `plugins.entries.<id>.hooks.allowPromptInjection=false`.
+
+### Session extensions and next-turn injections
+
+Workflow plugins can persist small JSON-compatible session state with
+`api.registerSessionExtension(...)` and update it through the Gateway
+`sessions.pluginPatch` method. Session rows project registered extension state
+through `pluginExtensions`, letting Control UI and other clients render
+plugin-owned status without learning plugin internals.
+
+Use `api.enqueueNextTurnInjection(...)` when a plugin needs durable context to
+reach the next model turn exactly once. OpenClaw drains queued injections before
+prompt hooks, drops expired injections, and deduplicates by `idempotencyKey`
+per plugin. This is the right seam for approval resumes, policy summaries,
+background monitor deltas, and command continuations that should be visible to
+the model on the next turn but should not become permanent system prompt text.
+
+Cleanup semantics are part of the contract. Session extension cleanup and
+runtime lifecycle cleanup callbacks receive `reset`, `delete`, `disable`, or
+`restart`. The host removes the owning plugin's persistent session extension
+state and pending next-turn injections for reset/delete/disable; restart keeps
+durable session state while cleanup callbacks let plugins release scheduler
+jobs, run context, and other out-of-band resources for the old runtime
+generation.
 
 ## Message hooks
 

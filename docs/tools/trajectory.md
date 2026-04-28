@@ -64,6 +64,7 @@ Runtime events include:
 - `trace.metadata`
 - `context.compiled`
 - `prompt.submitted`
+- `model.fallback_step`, including the source model, next model, failure reason/detail, chain position, and whether fallback advanced, succeeded, or exhausted the chain
 - `model.completed`
 - `trace.artifacts`
 - `session.ended`
@@ -128,6 +129,11 @@ export OPENCLAW_TRAJECTORY_DIR=/var/lib/openclaw/trajectories
 
 When this variable is set, OpenClaw writes one JSONL file per session id in that
 directory.
+
+Session maintenance removes trajectory sidecars when their owning session entry
+is pruned, capped, or evicted by the sessions disk budget. Runtime files outside
+the sessions directory are removed only when the pointer target still proves it
+belongs to that session.
 
 ## Disable capture
 

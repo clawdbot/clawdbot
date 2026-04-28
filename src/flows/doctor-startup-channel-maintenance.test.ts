@@ -1,17 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { maybeRunDoctorStartupChannelMaintenance } from "./doctor-startup-channel-maintenance.js";
 
-const runChannelPluginStartupMaintenance = vi.hoisted(() => vi.fn());
-
-vi.mock("../channels/plugins/lifecycle-startup.js", () => ({
-  runChannelPluginStartupMaintenance,
-}));
-
 describe("doctor startup channel maintenance", () => {
-  beforeEach(() => {
-    runChannelPluginStartupMaintenance.mockClear();
-  });
-
   it("runs Matrix startup migration during repair flows", async () => {
     const cfg = {
       channels: {
@@ -22,17 +12,21 @@ describe("doctor startup channel maintenance", () => {
         },
       },
     };
-    const runtime = { log: vi.fn(), error: vi.fn() };
+    const calls: unknown[] = [];
+    const runtime = { log() {}, error() {} };
 
     await maybeRunDoctorStartupChannelMaintenance({
       cfg,
       env: { OPENCLAW_TEST: "1" },
+      runChannelPluginStartupMaintenance: async (input) => {
+        calls.push(input);
+      },
       runtime,
       shouldRepair: true,
     });
 
-    expect(runChannelPluginStartupMaintenance).toHaveBeenCalledTimes(1);
-    expect(runChannelPluginStartupMaintenance).toHaveBeenCalledWith(
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual(
       expect.objectContaining({
         cfg,
         env: { OPENCLAW_TEST: "1" },
@@ -47,12 +41,17 @@ describe("doctor startup channel maintenance", () => {
   });
 
   it("skips startup migration outside repair flows", async () => {
+    const calls: unknown[] = [];
+
     await maybeRunDoctorStartupChannelMaintenance({
       cfg: { channels: { matrix: {} } },
-      runtime: { log: vi.fn(), error: vi.fn() },
+      runChannelPluginStartupMaintenance: async (input) => {
+        calls.push(input);
+      },
+      runtime: { log() {}, error() {} },
       shouldRepair: false,
     });
 
-    expect(runChannelPluginStartupMaintenance).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
   });
 });

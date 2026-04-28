@@ -106,6 +106,13 @@ The byte guard requires `truncateAfterCompaction: true`. Without transcript rota
 ### Successor transcripts
 
 When `agents.defaults.compaction.truncateAfterCompaction` is enabled, OpenClaw does not rewrite the existing transcript in place. It creates a new active successor transcript from the compaction summary, preserved state, and unsummarized tail, then keeps the previous JSONL as the archived checkpoint source.
+Successor transcripts also drop exact duplicate long user turns that arrive
+inside a short retry window, so channel retry storms are not carried into the
+next active transcript after compaction.
+
+Pre-compaction checkpoints are retained only while they stay below OpenClaw's
+checkpoint size cap; oversized active transcripts still compact, but OpenClaw
+skips the large debug snapshot instead of doubling disk usage.
 
 ### Compaction notices
 
@@ -125,7 +132,23 @@ By default, compaction runs silently. Set `notifyUser` to show brief status mess
 
 ### Memory flush
 
-Before compaction, OpenClaw can run a **silent memory flush** turn to store durable notes to disk. See [Memory](/concepts/memory) for details and config.
+Before compaction, OpenClaw can run a **silent memory flush** turn to store durable notes to disk. Set `agents.defaults.compaction.memoryFlush.model` when this housekeeping turn should use a local model instead of the active conversation model:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "memoryFlush": {
+          "model": "ollama/qwen3:8b"
+        }
+      }
+    }
+  }
+}
+```
+
+The memory-flush model override is exact and does not inherit the active session fallback chain. See [Memory](/concepts/memory) for details and config.
 
 ## Pluggable compaction providers
 

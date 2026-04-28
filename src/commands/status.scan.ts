@@ -63,18 +63,22 @@ export async function scanStatus(
       });
 
       progress.setLabel("Checking plugins…");
-      const pluginCompatibility = buildPluginCompatibilitySnapshotNotices({ config: overview.cfg });
+      const pluginCompatibility = opts.all
+        ? buildPluginCompatibilitySnapshotNotices({ config: overview.cfg })
+        : [];
       progress.tick();
 
       progress.setLabel("Checking memory and sessions…");
       const result = await executeStatusScanFromOverview({
         overview,
         resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) =>
-          await resolveStatusMemoryStatusSnapshot({
-            cfg,
-            agentStatus,
-            memoryPlugin,
-          }),
+          opts.all
+            ? await resolveStatusMemoryStatusSnapshot({
+                cfg,
+                agentStatus,
+                memoryPlugin,
+              })
+            : null,
         channelIssues: overview.channelIssues,
         channels: overview.channels,
         pluginCompatibility,

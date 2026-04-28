@@ -1,5 +1,5 @@
+import { runDirectImportSmoke } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { describe, expect, it } from "vitest";
-import { runDirectImportSmoke } from "../../test/helpers/plugins/direct-smoke.js";
 
 describe("irc bundled api seams", () => {
   it("loads narrow public api modules in direct smoke", async () => {

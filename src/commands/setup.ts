@@ -29,11 +29,14 @@ type SetupCommandDeps = {
   ) => void | Promise<void>;
   mkdir?: (dir: string, options: { recursive: true }) => Promise<unknown>;
   resolveSessionTranscriptsDir?: () => string | Promise<string>;
-  writeConfigFile?: (config: OpenClawConfig) => Promise<void>;
+  replaceConfigFile?: (params: {
+    nextConfig: OpenClawConfig;
+    afterWrite: { mode: "auto" };
+  }) => Promise<unknown>;
 };
 
 type AgentWorkspaceModule = typeof import("../agents/workspace.js");
-type ConfigIOModule = typeof import("../config/io.js");
+type ConfigIOModule = typeof import("../config/config.js");
 type ConfigLoggingModule = typeof import("../config/logging.js");
 
 let agentWorkspaceModulePromise: Promise<AgentWorkspaceModule> | undefined;
@@ -46,7 +49,7 @@ function loadAgentWorkspaceModule(): Promise<AgentWorkspaceModule> {
 }
 
 function loadConfigIOModule(): Promise<ConfigIOModule> {
-  configIOModulePromise ??= import("../config/io.js");
+  configIOModulePromise ??= import("../config/config.js");
   return configIOModulePromise;
 }
 
@@ -80,8 +83,11 @@ async function ensureDefaultAgentWorkspace(
 }
 
 async function writeDefaultConfigFile(config: OpenClawConfig): Promise<void> {
-  const { writeConfigFile } = await loadConfigIOModule();
-  await writeConfigFile(config);
+  const { replaceConfigFile } = await loadConfigIOModule();
+  await replaceConfigFile({
+    nextConfig: config,
+    afterWrite: { mode: "auto" },
+  });
 }
 
 async function formatDefaultConfigPath(configPath: string): Promise<string> {
@@ -154,7 +160,12 @@ export async function setupCommand(
     defaults.workspace !== workspace ||
     cfg.gateway?.mode !== next.gateway?.mode
   ) {
-    await (deps.writeConfigFile ?? writeDefaultConfigFile)(next);
+    const replaceConfig =
+      deps.replaceConfigFile ?? ((params) => writeDefaultConfigFile(params.nextConfig));
+    await replaceConfig({
+      nextConfig: next,
+      afterWrite: { mode: "auto" },
+    });
     if (!existingRaw.exists) {
       const formatConfigPath = deps.formatConfigPath ?? formatDefaultConfigPath;
       runtime.log(`Wrote ${await formatConfigPath(configPath)}`);

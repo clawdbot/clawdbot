@@ -26,11 +26,12 @@ const browserConfigMocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("openclaw/plugin-sdk/browser-config-runtime", () => ({
+vi.mock("../sdk-config.js", () => ({
+  getRuntimeConfig: configMocks.loadConfig,
   loadConfig: configMocks.loadConfig,
 }));
 
-vi.mock("openclaw/plugin-sdk/browser-node-runtime", () => ({
+vi.mock("../sdk-node-runtime.js", () => ({
   withTimeout: vi.fn(
     async (
       run: (signal: AbortSignal | undefined) => Promise<unknown>,
@@ -65,7 +66,7 @@ vi.mock("openclaw/plugin-sdk/browser-node-runtime", () => ({
   ),
 }));
 
-vi.mock("openclaw/plugin-sdk/browser-setup-tools", () => ({
+vi.mock("../sdk-setup-tools.js", () => ({
   detectMime: vi.fn(async () => "image/png"),
 }));
 

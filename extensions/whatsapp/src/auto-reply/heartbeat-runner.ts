@@ -7,10 +7,10 @@ import {
   canonicalizeMainSessionAlias,
   emitHeartbeatEvent,
   formatError,
+  getRuntimeConfig,
   getChildLogger,
   getReplyFromConfig,
   hasOutboundReplyContent,
-  loadConfig,
   loadSessionStore,
   normalizeMainKey,
   redactIdentifier,
@@ -29,14 +29,14 @@ import {
 } from "./heartbeat-runner.runtime.js";
 import { getSessionSnapshot } from "./session-snapshot.js";
 
-function resolveDefaultAgentIdFromConfig(cfg: ReturnType<typeof loadConfig>): string {
+function resolveDefaultAgentIdFromConfig(cfg: ReturnType<typeof getRuntimeConfig>): string {
   const agents = cfg.agents?.list ?? [];
   const chosen = agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? "main";
   return normalizeOptionalLowercaseString(chosen) ?? "main";
 }
 
 export async function runWebHeartbeatOnce(opts: {
-  cfg?: ReturnType<typeof loadConfig>;
+  cfg?: ReturnType<typeof getRuntimeConfig>;
   to: string;
   verbose?: boolean;
   replyResolver?: typeof getReplyFromConfig;
@@ -56,7 +56,7 @@ export async function runWebHeartbeatOnce(opts: {
     to: redactedTo,
   });
 
-  const cfg = cfgOverride ?? loadConfig();
+  const cfg = cfgOverride ?? getRuntimeConfig();
 
   // Resolve heartbeat visibility settings for WhatsApp
   const visibility = resolveHeartbeatVisibility({ cfg, channel: "whatsapp" });
@@ -323,7 +323,7 @@ export async function runWebHeartbeatOnce(opts: {
 }
 
 export function resolveHeartbeatRecipients(
-  cfg: ReturnType<typeof loadConfig>,
+  cfg: ReturnType<typeof getRuntimeConfig>,
   opts: { to?: string; all?: boolean; accountId?: string } = {},
 ) {
   return resolveWhatsAppHeartbeatRecipients(cfg, opts);

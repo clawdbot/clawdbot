@@ -1,5 +1,8 @@
 {
   "id": "firecrawl",
+  "activation": {
+    "onStartup": false
+  },
   "providerAuthEnvVars": {
     "firecrawl": ["FIRECRAWL_API_KEY"]
   },

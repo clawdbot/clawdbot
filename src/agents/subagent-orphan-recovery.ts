@@ -10,7 +10,7 @@
  */
 
 import crypto from "node:crypto";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import {
   loadSessionStore,
   resolveAgentIdFromSessionKey,
@@ -258,7 +258,7 @@ export async function recoverOrphanedSubagentSessions(params: {
       return result;
     }
 
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const storeCache = new Map<string, Record<string, SessionEntry>>();
 
     for (const [runId, runRecord] of activeRuns.entries()) {

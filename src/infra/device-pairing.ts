@@ -89,11 +89,13 @@ export type PairedDevice = {
   tokens?: Record<string, DeviceAuthToken>;
   createdAtMs: number;
   approvedAtMs: number;
+  lastSeenAtMs?: number;
+  lastSeenReason?: string;
 };
 
 export type PairedDeviceMetadataPatch = Pick<
   PairedDevice,
-  "displayName" | "clientId" | "clientMode" | "remoteIp"
+  "displayName" | "clientId" | "clientMode" | "remoteIp" | "lastSeenAtMs" | "lastSeenReason"
 >;
 
 export type DevicePairingList = {
@@ -793,13 +795,13 @@ export async function updatePairedDeviceMetadata(
   deviceId: string,
   patch: Partial<PairedDeviceMetadataPatch>,
   baseDir?: string,
-): Promise<void> {
+): Promise<boolean> {
   return await withLock(async () => {
     const state = await loadState(baseDir);
     const normalizedDeviceId = normalizeDeviceId(deviceId);
     const existing = state.pairedByDeviceId[normalizedDeviceId];
     if (!existing) {
-      return;
+      return false;
     }
     const next = { ...existing };
     if ("displayName" in patch) {
@@ -814,8 +816,15 @@ export async function updatePairedDeviceMetadata(
     if ("remoteIp" in patch) {
       next.remoteIp = patch.remoteIp;
     }
+    if ("lastSeenAtMs" in patch) {
+      next.lastSeenAtMs = patch.lastSeenAtMs;
+    }
+    if ("lastSeenReason" in patch) {
+      next.lastSeenReason = patch.lastSeenReason;
+    }
     state.pairedByDeviceId[normalizedDeviceId] = next;
     await persistState(state, baseDir, "paired");
+    return true;
   });
 }
 

@@ -26,12 +26,42 @@ class DeviceHandlerTest {
     assertTrue(result.ok)
     val payload = parsePayload(result.payloadJson)
     assertEquals("Android", payload.getValue("systemName").jsonPrimitive.content)
-    assertTrue(payload.getValue("deviceName").jsonPrimitive.content.isNotBlank())
-    assertTrue(payload.getValue("modelIdentifier").jsonPrimitive.content.isNotBlank())
-    assertTrue(payload.getValue("systemVersion").jsonPrimitive.content.isNotBlank())
-    assertTrue(payload.getValue("appVersion").jsonPrimitive.content.isNotBlank())
-    assertTrue(payload.getValue("appBuild").jsonPrimitive.content.isNotBlank())
-    assertTrue(payload.getValue("locale").jsonPrimitive.content.isNotBlank())
+    assertTrue(
+      payload
+        .getValue("deviceName")
+        .jsonPrimitive.content
+        .isNotBlank(),
+    )
+    assertTrue(
+      payload
+        .getValue("modelIdentifier")
+        .jsonPrimitive.content
+        .isNotBlank(),
+    )
+    assertTrue(
+      payload
+        .getValue("systemVersion")
+        .jsonPrimitive.content
+        .isNotBlank(),
+    )
+    assertTrue(
+      payload
+        .getValue("appVersion")
+        .jsonPrimitive.content
+        .isNotBlank(),
+    )
+    assertTrue(
+      payload
+        .getValue("appBuild")
+        .jsonPrimitive.content
+        .isNotBlank(),
+    )
+    assertTrue(
+      payload
+        .getValue("locale")
+        .jsonPrimitive.content
+        .isNotBlank(),
+    )
   }
 
   @Test
@@ -54,9 +84,21 @@ class DeviceHandlerTest {
     }
     battery.getValue("lowPowerModeEnabled").jsonPrimitive.boolean
 
-    val totalBytes = storage.getValue("totalBytes").jsonPrimitive.content.toLong()
-    val freeBytes = storage.getValue("freeBytes").jsonPrimitive.content.toLong()
-    val usedBytes = storage.getValue("usedBytes").jsonPrimitive.content.toLong()
+    val totalBytes =
+      storage
+        .getValue("totalBytes")
+        .jsonPrimitive.content
+        .toLong()
+    val freeBytes =
+      storage
+        .getValue("freeBytes")
+        .jsonPrimitive.content
+        .toLong()
+    val usedBytes =
+      storage
+        .getValue("usedBytes")
+        .jsonPrimitive.content
+        .toLong()
     assertTrue(totalBytes >= 0L)
     assertTrue(freeBytes >= 0L)
     assertTrue(usedBytes >= 0L)
@@ -221,7 +263,12 @@ class DeviceHandlerTest {
 
     assertTrue(result.ok)
     val payload = parsePayload(result.payloadJson)
-    val callLog = payload.getValue("permissions").jsonObject.getValue("callLog").jsonObject
+    val callLog =
+      payload
+        .getValue("permissions")
+        .jsonObject
+        .getValue("callLog")
+        .jsonObject
     assertEquals("denied", callLog.getValue("status").jsonPrimitive.content)
     assertTrue(!callLog.getValue("promptable").jsonPrimitive.boolean)
   }
@@ -241,9 +288,21 @@ class DeviceHandlerTest {
 
     val pressure = memory.getValue("pressure").jsonPrimitive.content
     assertTrue(pressure in setOf("normal", "moderate", "high", "critical", "unknown"))
-    val totalRamBytes = memory.getValue("totalRamBytes").jsonPrimitive.content.toLong()
-    val availableRamBytes = memory.getValue("availableRamBytes").jsonPrimitive.content.toLong()
-    val usedRamBytes = memory.getValue("usedRamBytes").jsonPrimitive.content.toLong()
+    val totalRamBytes =
+      memory
+        .getValue("totalRamBytes")
+        .jsonPrimitive.content
+        .toLong()
+    val availableRamBytes =
+      memory
+        .getValue("availableRamBytes")
+        .jsonPrimitive.content
+        .toLong()
+    val usedRamBytes =
+      memory
+        .getValue("usedRamBytes")
+        .jsonPrimitive.content
+        .toLong()
     assertTrue(totalRamBytes >= 0L)
     assertTrue(availableRamBytes >= 0L)
     assertTrue(usedRamBytes >= 0L)

@@ -1,5 +1,8 @@
 {
   "id": "voyage",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "contracts": {
     "memoryEmbeddingProviders": ["voyage"]

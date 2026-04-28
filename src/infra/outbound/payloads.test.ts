@@ -642,6 +642,44 @@ describe("OutboundPayloadPlan projections", () => {
     const plan = createOutboundPayloadPlan(matrix);
     expect(projectOutboundPayloadPlanForMirror(plan)).toEqual(resolveMirrorProjection(matrix));
   });
+
+  it("keeps markdown images as text unless extraction is enabled", () => {
+    const input = "Tech: ![Node.js](https://img.shields.io/badge/Node.js-339933)";
+
+    expect(
+      projectOutboundPayloadPlanForDelivery(createOutboundPayloadPlan([{ text: input }])),
+    ).toEqual([
+      {
+        text: input,
+        mediaUrl: undefined,
+        mediaUrls: undefined,
+        replyToId: undefined,
+        replyToCurrent: undefined,
+        replyToTag: false,
+        audioAsVoice: false,
+      },
+    ]);
+  });
+
+  it("extracts markdown images when the outbound channel opts in", () => {
+    const input = "Chart ![chart](https://example.com/chart.png) now";
+
+    expect(
+      projectOutboundPayloadPlanForDelivery(
+        createOutboundPayloadPlan([{ text: input }], { extractMarkdownImages: true }),
+      ),
+    ).toEqual([
+      {
+        text: "Chart now",
+        mediaUrl: "https://example.com/chart.png",
+        mediaUrls: ["https://example.com/chart.png"],
+        replyToId: undefined,
+        replyToCurrent: undefined,
+        replyToTag: false,
+        audioAsVoice: false,
+      },
+    ]);
+  });
 });
 
 describe("formatOutboundPayloadLog", () => {

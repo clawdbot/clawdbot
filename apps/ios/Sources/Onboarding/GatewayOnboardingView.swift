@@ -95,7 +95,6 @@ private struct AutoDetectStep: View {
         }
         return nil
     }
-
 }
 
 private struct ManualEntryStep: View {
@@ -229,7 +228,7 @@ private struct ManualEntryStep: View {
     private func manualPortValue() -> Int? {
         let trimmed = self.manualPortText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        return Int(trimmed.filter { $0.isNumber })
+        return Int(trimmed.filter(\.isNumber))
     }
 
     private func resetManualForm() {
@@ -334,7 +333,6 @@ private func resetGatewayConnectionState(
 }
 
 @MainActor
-@ViewBuilder
 private func gatewayConnectionStatusSection(
     appModel: NodeAppModel,
     gatewayController: GatewayConnectionController,
@@ -373,8 +371,8 @@ private struct ConnectionStatusBox: View {
 
     static func defaultLines(
         appModel: NodeAppModel,
-        gatewayController: GatewayConnectionController
-    ) -> [String] {
+        gatewayController: GatewayConnectionController) -> [String]
+    {
         var lines: [String] = [
             "gateway: \(appModel.gatewayDisplayStatusText)",
             "discovery: \(gatewayController.discoveryStatusText)",

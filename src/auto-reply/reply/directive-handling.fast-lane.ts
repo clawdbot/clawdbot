@@ -78,6 +78,7 @@ export async function applyInlineDirectivesFastLane(
     aliasIndex,
     allowedModelKeys,
     allowedModelCatalog,
+    thinkingCatalog: await modelState.resolveThinkingCatalog(),
     resetModelOverride,
     provider,
     model,

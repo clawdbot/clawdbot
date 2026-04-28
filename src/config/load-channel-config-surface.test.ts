@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { loadChannelConfigSurfaceModule } from "../../scripts/load-channel-config-surface.ts";
-import { importFreshModule } from "../../test/helpers/import-fresh.ts";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 
 async function importLoaderWithMissingBun() {

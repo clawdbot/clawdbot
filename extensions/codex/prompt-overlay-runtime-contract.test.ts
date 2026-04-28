@@ -1,10 +1,10 @@
-import { describe, expect, it } from "vitest";
 import {
   codexPromptOverlayContext,
   GPT5_CONTRACT_MODEL_ID,
   NON_GPT5_CONTRACT_MODEL_ID,
   sharedGpt5PersonalityConfig,
-} from "../../test/helpers/agents/prompt-overlay-runtime-contract.js";
+} from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { describe, expect, it } from "vitest";
 import { buildCodexProvider } from "./provider.js";
 
 describe("Codex prompt overlay runtime contract", () => {

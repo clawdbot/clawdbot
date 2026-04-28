@@ -1,3 +1,4 @@
+import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { buildMediaUnderstandingManifestMetadataRegistry } from "./manifest-metadata.js";
@@ -36,20 +37,38 @@ export const CLI_OUTPUT_MAX_BUFFER = 5 * MB;
 export const DEFAULT_MEDIA_CONCURRENCY = 2;
 
 let defaultRegistryCache: Map<string, MediaUnderstandingProvider> | null = null;
-const configRegistryCache = new WeakMap<OpenClawConfig, Map<string, MediaUnderstandingProvider>>();
+const configRegistryCache = new Map<string, Map<string, MediaUnderstandingProvider>>();
+const MAX_CONFIG_REGISTRY_CACHE_ENTRIES = 32;
+
+function cacheConfigRegistry(
+  key: string,
+  registry: Map<string, MediaUnderstandingProvider>,
+): Map<string, MediaUnderstandingProvider> {
+  if (
+    !configRegistryCache.has(key) &&
+    configRegistryCache.size >= MAX_CONFIG_REGISTRY_CACHE_ENTRIES
+  ) {
+    const oldestKey = configRegistryCache.keys().next().value;
+    if (oldestKey) {
+      configRegistryCache.delete(oldestKey);
+    }
+  }
+  configRegistryCache.set(key, registry);
+  return registry;
+}
 
 function resolveDefaultRegistry(cfg?: OpenClawConfig) {
   if (!cfg) {
     defaultRegistryCache ??= buildMediaUnderstandingManifestMetadataRegistry();
     return defaultRegistryCache;
   }
-  const cached = configRegistryCache.get(cfg);
+  const cacheKey = resolveRuntimeConfigCacheKey(cfg);
+  const cached = configRegistryCache.get(cacheKey);
   if (cached) {
     return cached;
   }
   const registry = buildMediaUnderstandingManifestMetadataRegistry(cfg);
-  configRegistryCache.set(cfg, registry);
-  return registry;
+  return cacheConfigRegistry(cacheKey, registry);
 }
 
 function providerHasDeclaredCapability(

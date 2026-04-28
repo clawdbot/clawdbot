@@ -1,7 +1,8 @@
 import type { BaseProbeResult, BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
-import { type OpenClawConfig, withEnvAsync } from "openclaw/plugin-sdk/testing";
+import { expectDirectoryIds } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, expectTypeOf, it } from "vitest";
-import { expectDirectoryIds } from "../../../test/helpers/channels/directory-ids.js";
 import {
   listTelegramDirectoryGroupsFromConfig,
   listTelegramDirectoryPeersFromConfig,

@@ -45,6 +45,9 @@ export type MemoryEmbeddingProviderCreateOptions = {
     headers?: Record<string, string>;
   };
   model: string;
+  inputType?: string;
+  queryInputType?: string;
+  documentInputType?: string;
   local?: {
     modelPath?: string;
     modelCacheDir?: string;

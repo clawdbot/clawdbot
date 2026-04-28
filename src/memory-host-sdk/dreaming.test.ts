@@ -1,16 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-
-const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
-const resolveAgentWorkspaceDir = vi.hoisted(() =>
-  vi.fn((_cfg: OpenClawConfig, agentId: string) => `/workspace/${agentId}`),
-);
-
-vi.mock("../agents/agent-scope.js", () => ({
-  resolveDefaultAgentId,
-  resolveAgentWorkspaceDir,
-}));
-
 import {
   formatMemoryDreamingDay,
   isSameMemoryDreamingDay,
@@ -28,6 +17,7 @@ describe("memory dreaming host helpers", () => {
           enabled: true,
           frequency: "0 */4 * * *",
           timezone: "Europe/London",
+          model: " anthropic/claude-sonnet-4-6 ",
           storage: {
             mode: "both",
             separateReports: true,
@@ -49,6 +39,10 @@ describe("memory dreaming host helpers", () => {
     expect(resolved.enabled).toBe(true);
     expect(resolved.frequency).toBe("0 */4 * * *");
     expect(resolved.timezone).toBe("Europe/London");
+    expect(resolved.execution.defaults.model).toBe("anthropic/claude-sonnet-4-6");
+    expect(resolved.phases.light.execution.model).toBe("anthropic/claude-sonnet-4-6");
+    expect(resolved.phases.deep.execution.model).toBe("anthropic/claude-sonnet-4-6");
+    expect(resolved.phases.rem.execution.model).toBe("anthropic/claude-sonnet-4-6");
     expect(resolved.storage).toEqual({
       mode: "both",
       separateReports: true,
@@ -62,6 +56,33 @@ describe("memory dreaming host helpers", () => {
       recencyHalfLifeDays: 21,
       maxAgeDays: 30,
     });
+  });
+
+  it("lets execution defaults and phase execution override the top-level dreaming model", () => {
+    const resolved = resolveMemoryDreamingConfig({
+      pluginConfig: {
+        dreaming: {
+          model: "anthropic/claude-haiku-4-5",
+          execution: {
+            defaults: {
+              model: "openai/gpt-5.4",
+            },
+          },
+          phases: {
+            rem: {
+              execution: {
+                model: "xai/grok-4.1-fast",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolved.execution.defaults.model).toBe("openai/gpt-5.4");
+    expect(resolved.phases.light.execution.model).toBe("openai/gpt-5.4");
+    expect(resolved.phases.deep.execution.model).toBe("openai/gpt-5.4");
+    expect(resolved.phases.rem.execution.model).toBe("xai/grok-4.1-fast");
   });
 
   it("falls back to cfg timezone and deep defaults", () => {
@@ -132,19 +153,13 @@ describe("memory dreaming host helpers", () => {
   });
 
   it("dedupes shared workspaces across all configured agents", () => {
-    resolveAgentWorkspaceDir.mockImplementation((_cfg: OpenClawConfig, agentId: string) => {
-      if (agentId === "alpha") {
-        return "/workspace/shared";
-      }
-      if (agentId === "gamma") {
-        return "/workspace/shared";
-      }
-      return `/workspace/${agentId}`;
-    });
-
     const cfg = {
       agents: {
-        list: [{ id: "alpha" }, { id: "beta" }, { id: "gamma" }],
+        list: [
+          { id: "alpha", workspace: "/workspace/shared" },
+          { id: "beta", workspace: "/workspace/beta" },
+          { id: "gamma", workspace: "/workspace/shared" },
+        ],
       },
     } as OpenClawConfig;
 
@@ -161,13 +176,18 @@ describe("memory dreaming host helpers", () => {
   });
 
   it("uses default agent fallback and timezone-aware day helpers", () => {
-    resolveDefaultAgentId.mockReturnValue("fallback");
-    const cfg = {} as OpenClawConfig;
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: "/workspace",
+        },
+      },
+    } as OpenClawConfig;
 
     expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual([
       {
-        workspaceDir: "/workspace/fallback",
-        agentIds: ["fallback"],
+        workspaceDir: "/workspace",
+        agentIds: ["main"],
       },
     ]);
 

@@ -23,6 +23,7 @@ vi.mock("../../config/sessions/main-session.js", () => ({
 
 vi.mock("../agent-scope.js", () => ({
   listAgentIds: () => hoisted.listAgentIdsMock(),
+  resolveDefaultAgentId: () => "main",
 }));
 
 const { resolveSessionKeyForRequest, resolveStoredSessionKeyForSessionId } =

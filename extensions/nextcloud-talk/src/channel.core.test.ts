@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   nextcloudTalkConfigAdapter,
   nextcloudTalkPairingTextAdapter,
@@ -6,16 +6,6 @@ import {
 } from "./channel.adapters.js";
 import { NextcloudTalkConfigSchema } from "./config-schema.js";
 import type { CoreConfig } from "./types.js";
-
-vi.mock("../../../test/helpers/config/bundled-channel-config-runtime.js", () => ({
-  getBundledChannelRuntimeMap: () => new Map(),
-  getBundledChannelConfigSchemaMap: () => new Map(),
-}));
-
-vi.mock("../../../src/channels/plugins/bundled.js", () => ({
-  bundledChannelPlugins: [],
-  bundledChannelSetupPlugins: [],
-}));
 
 describe("nextcloud talk channel core", () => {
   it("accepts SecretRef botSecret and apiPassword at top-level", () => {

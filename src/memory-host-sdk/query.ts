@@ -1,1 +1,1 @@
-export { extractKeywords, isQueryStopWordToken } from "./host/query-expansion.js";
+export * from "../../packages/memory-host-sdk/src/query.js";

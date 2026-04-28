@@ -46,8 +46,12 @@ export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
   return getSubCliEntryDescriptors();
 }
 
-export async function registerSubCliByName(program: Command, name: string): Promise<boolean> {
-  if (await registerSubCliByNameCore(program, name)) {
+export async function registerSubCliByName(
+  program: Command,
+  name: string,
+  argv: string[] = process.argv,
+): Promise<boolean> {
+  if (await registerSubCliByNameCore(program, name, argv)) {
     return true;
   }
   return registerCommandGroupByName(program, resolveSubCliCommandGroups(), name);

@@ -1,8 +1,8 @@
-import OpenClawProtocol
 import Foundation
+import OpenClawProtocol
 import OSLog
 
-private struct NodeInvokeRequestPayload: Codable, Sendable {
+private struct NodeInvokeRequestPayload: Codable {
     var id: String
     var nodeId: String
     var command: String
@@ -19,7 +19,7 @@ private func replaceCanvasCapabilityInScopedHostUrl(scopedUrl: String, capabilit
     let nextSlash = suffix.firstIndex(of: "/")
     let nextQuery = suffix.firstIndex(of: "?")
     let nextFragment = suffix.firstIndex(of: "#")
-    let capabilityEnd = [nextSlash, nextQuery, nextFragment].compactMap { $0 }.min() ?? scopedUrl.endIndex
+    let capabilityEnd = [nextSlash, nextQuery, nextFragment].compactMap(\.self).min() ?? scopedUrl.endIndex
     guard capabilityStart < capabilityEnd else { return nil }
     return String(scopedUrl[..<capabilityStart]) + capability + String(scopedUrl[capabilityEnd...])
 }
@@ -55,12 +55,11 @@ func canonicalizeCanvasHostUrl(raw: String?, activeURL: URL?) -> String? {
     return parsed.string ?? trimmed
 }
 
-
 public actor GatewayNodeSession {
     private let logger = Logger(subsystem: "ai.openclaw", category: "node.gateway")
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
-    private static let defaultInvokeTimeoutMs = 30_000
+    private static let defaultInvokeTimeoutMs = 30000
     private var channel: GatewayChannelActor?
     private var activeURL: URL?
     private var activeToken: String?
@@ -79,8 +78,8 @@ public actor GatewayNodeSession {
     static func invokeWithTimeout(
         request: BridgeInvokeRequest,
         timeoutMs: Int?,
-        onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse
-    ) async -> BridgeInvokeResponse {
+        onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse) async -> BridgeInvokeResponse
+    {
         let timeoutLogger = Logger(subsystem: "ai.openclaw", category: "node.gateway")
         let timeout: Int = {
             if let timeoutMs { return max(0, timeoutMs) }
@@ -144,13 +143,14 @@ public actor GatewayNodeSession {
                     ok: false,
                     error: OpenClawNodeError(
                         code: .unavailable,
-                        message: "node invoke timed out")
-                ))
+                        message: "node invoke timed out")))
             }
         }
-        timeoutLogger.info("node invoke race resolved id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
+        timeoutLogger
+            .info("node invoke race resolved id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
         return response
     }
+
     private var serverEventSubscribers: [UUID: AsyncStream<EventFrame>.Continuation] = [:]
     private var canvasHostUrl: String?
 
@@ -201,8 +201,8 @@ public actor GatewayNodeSession {
         sessionBox: WebSocketSessionBox?,
         onConnected: @escaping @Sendable () async -> Void,
         onDisconnected: @escaping @Sendable (String) async -> Void,
-        onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse
-    ) async throws {
+        onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse) async throws
+    {
         let nextOptionsKey = self.connectOptionsKey(connectOptions)
         let shouldReconnect = self.activeURL != url ||
             self.activeToken != token ||
@@ -273,7 +273,7 @@ public actor GatewayNodeSession {
         self.canvasHostUrl
     }
 
-    public func refreshNodeCanvasCapability(timeoutMs: Int = 8_000) async -> Bool {
+    public func refreshNodeCanvasCapability(timeoutMs: Int = 8000) async -> Bool {
         guard let channel = self.channel else { return false }
         do {
             let data = try await channel.request(
@@ -455,8 +455,7 @@ public actor GatewayNodeSession {
             let response = await Self.invokeWithTimeout(
                 request: req,
                 timeoutMs: request.timeoutMs,
-                onInvoke: onInvoke
-            )
+                onInvoke: onInvoke)
             self.logger.info(
                 "node invoke completed id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
             await self.sendInvokeResult(request: request, response: response)

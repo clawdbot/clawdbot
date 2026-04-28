@@ -23,34 +23,49 @@ export function resolveLlmIdleTimeoutMs(params?: {
   cfg?: OpenClawConfig;
   trigger?: EmbeddedRunTrigger;
   runTimeoutMs?: number;
+  modelRequestTimeoutMs?: number;
 }): number {
   const clampTimeoutMs = (valueMs: number) => Math.min(Math.floor(valueMs), MAX_SAFE_TIMEOUT_MS);
   const clampImplicitTimeoutMs = (valueMs: number) =>
     clampTimeoutMs(Math.min(valueMs, DEFAULT_LLM_IDLE_TIMEOUT_MS));
-  const raw = params?.cfg?.agents?.defaults?.llm?.idleTimeoutSeconds;
-  // 0 means explicitly disabled (no timeout).
-  if (raw === 0) {
-    return 0;
-  }
-  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
-    return clampTimeoutMs(raw * 1000);
-  }
 
   const runTimeoutMs = params?.runTimeoutMs;
   if (typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0) {
     if (runTimeoutMs >= MAX_SAFE_TIMEOUT_MS) {
       return 0;
     }
-    return clampImplicitTimeoutMs(runTimeoutMs);
   }
 
   const agentTimeoutSeconds = params?.cfg?.agents?.defaults?.timeoutSeconds;
-  if (
+  const agentTimeoutMs =
     typeof agentTimeoutSeconds === "number" &&
     Number.isFinite(agentTimeoutSeconds) &&
     agentTimeoutSeconds > 0
+      ? agentTimeoutSeconds * 1000
+      : undefined;
+  const timeoutBounds = [runTimeoutMs, agentTimeoutMs].filter(
+    (value): value is number =>
+      typeof value === "number" &&
+      Number.isFinite(value) &&
+      value > 0 &&
+      value < MAX_SAFE_TIMEOUT_MS,
+  );
+
+  const modelRequestTimeoutMs = params?.modelRequestTimeoutMs;
+  if (
+    typeof modelRequestTimeoutMs === "number" &&
+    Number.isFinite(modelRequestTimeoutMs) &&
+    modelRequestTimeoutMs > 0
   ) {
-    return clampImplicitTimeoutMs(agentTimeoutSeconds * 1000);
+    return clampTimeoutMs(Math.min(modelRequestTimeoutMs, ...timeoutBounds));
+  }
+
+  if (typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0) {
+    return clampImplicitTimeoutMs(runTimeoutMs);
+  }
+
+  if (agentTimeoutMs !== undefined) {
+    return clampImplicitTimeoutMs(agentTimeoutMs);
   }
 
   if (params?.trigger === "cron") {

@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { parseByteSize } from "../../cli/parse-bytes.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -11,9 +9,11 @@ const log = createSubsystemLogger("sessions/store");
 
 const DEFAULT_SESSION_PRUNE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
 const DEFAULT_SESSION_MAX_ENTRIES = 500;
-const DEFAULT_SESSION_ROTATE_BYTES = 10_485_760; // 10 MB
 const DEFAULT_SESSION_MAINTENANCE_MODE: SessionMaintenanceMode = "enforce";
 const DEFAULT_SESSION_DISK_BUDGET_HIGH_WATER_RATIO = 0.8;
+const STRICT_ENTRY_MAINTENANCE_MAX_ENTRIES = 49;
+const MIN_BATCHED_ENTRY_MAINTENANCE_SLACK = 25;
+const BATCHED_ENTRY_MAINTENANCE_SLACK_RATIO = 0.1;
 
 export type SessionMaintenanceWarning = {
   activeSessionKey: string;
@@ -29,7 +29,6 @@ export type ResolvedSessionMaintenanceConfig = {
   mode: SessionMaintenanceMode;
   pruneAfterMs: number;
   maxEntries: number;
-  rotateBytes: number;
   resetArchiveRetentionMs: number | null;
   maxDiskBytes: number | null;
   highWaterBytes: number | null;
@@ -45,19 +44,6 @@ function resolvePruneAfterMs(maintenance?: SessionMaintenanceConfig): number {
     return parseDurationMs(normalized, { defaultUnit: "d" });
   } catch {
     return DEFAULT_SESSION_PRUNE_AFTER_MS;
-  }
-}
-
-function resolveRotateBytes(maintenance?: SessionMaintenanceConfig): number {
-  const raw = maintenance?.rotateBytes;
-  const normalized = normalizeStringifiedOptionalString(raw);
-  if (!normalized) {
-    return DEFAULT_SESSION_ROTATE_BYTES;
-  }
-  try {
-    return parseByteSize(normalized, { defaultUnit: "b" });
-  } catch {
-    return DEFAULT_SESSION_ROTATE_BYTES;
   }
 }
 
@@ -141,11 +127,35 @@ export function resolveMaintenanceConfigFromInput(
     mode: maintenance?.mode ?? DEFAULT_SESSION_MAINTENANCE_MODE,
     pruneAfterMs,
     maxEntries: maintenance?.maxEntries ?? DEFAULT_SESSION_MAX_ENTRIES,
-    rotateBytes: resolveRotateBytes(maintenance),
     resetArchiveRetentionMs: resolveResetArchiveRetentionMs(maintenance, pruneAfterMs),
     maxDiskBytes,
     highWaterBytes: resolveHighWaterBytes(maintenance, maxDiskBytes),
   };
+}
+
+export function resolveSessionEntryMaintenanceHighWater(maxEntries: number): number {
+  if (!Number.isSafeInteger(maxEntries) || maxEntries <= 0) {
+    return 1;
+  }
+  if (maxEntries <= STRICT_ENTRY_MAINTENANCE_MAX_ENTRIES) {
+    return maxEntries + 1;
+  }
+  const slack = Math.max(
+    MIN_BATCHED_ENTRY_MAINTENANCE_SLACK,
+    Math.ceil(maxEntries * BATCHED_ENTRY_MAINTENANCE_SLACK_RATIO),
+  );
+  return maxEntries + slack;
+}
+
+export function shouldRunSessionEntryMaintenance(params: {
+  entryCount: number;
+  maxEntries: number;
+  force?: boolean;
+}): boolean {
+  if (params.force) {
+    return true;
+  }
+  return params.entryCount >= resolveSessionEntryMaintenanceHighWater(params.maxEntries);
 }
 
 /**
@@ -304,75 +314,4 @@ export function capEntryCount(
     log.info("capped session entry count", { removed: toRemove.length, maxEntries });
   }
   return toRemove.length;
-}
-
-async function getSessionFileSize(storePath: string): Promise<number | null> {
-  try {
-    const stat = await fs.promises.stat(storePath);
-    return stat.size;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Rotate the sessions file if it exceeds the configured size threshold.
- * Copies the current file to `sessions.json.bak.{timestamp}` and cleans up
- * old rotation backups, keeping only the 3 most recent `.bak.*` files.
- */
-export async function rotateSessionFile(
-  storePath: string,
-  overrideBytes?: number,
-): Promise<boolean> {
-  const maxBytes = overrideBytes ?? resolveMaintenanceConfigFromInput().rotateBytes;
-
-  // Check current file size (file may not exist yet).
-  const fileSize = await getSessionFileSize(storePath);
-  if (fileSize == null) {
-    return false;
-  }
-
-  if (fileSize <= maxBytes) {
-    return false;
-  }
-
-  // Keep the live store authoritative until the caller's later atomic write succeeds.
-  // A rename would remove sessions.json and create a crash window where startup sees
-  // an empty store; a copy gives us a backup without changing the live file.
-  const backupPath = `${storePath}.bak.${Date.now()}`;
-  try {
-    await fs.promises.copyFile(storePath, backupPath);
-    log.info("backed up session store file before rotation", {
-      backupPath: path.basename(backupPath),
-      sizeBytes: fileSize,
-    });
-  } catch (err) {
-    // If backup creation fails (e.g. file disappeared), skip rotation backup only.
-    log.warn("session store rotation backup failed", { err });
-    return false;
-  }
-
-  // Clean up old backups — keep only the 3 most recent .bak.* files.
-  try {
-    const dir = path.dirname(storePath);
-    const baseName = path.basename(storePath);
-    const files = await fs.promises.readdir(dir);
-    const backups = files
-      .filter((f) => f.startsWith(`${baseName}.bak.`))
-      .toSorted()
-      .toReversed();
-
-    const maxBackups = 3;
-    if (backups.length > maxBackups) {
-      const toDelete = backups.slice(maxBackups);
-      for (const old of toDelete) {
-        await fs.promises.unlink(path.join(dir, old)).catch(() => undefined);
-      }
-      log.info("cleaned up old session store backups", { deleted: toDelete.length });
-    }
-  } catch {
-    // Best-effort cleanup; don't fail the write.
-  }
-
-  return true;
 }

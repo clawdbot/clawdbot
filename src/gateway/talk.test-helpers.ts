@@ -11,6 +11,7 @@ export type TalkSpeakTestPayload = {
 
 export async function invokeTalkSpeakDirect(params: Record<string, unknown>) {
   const { talkHandlers } = await import("./server-methods/talk.js");
+  const { getRuntimeConfig } = await import("../config/config.js");
   let response:
     | {
         ok: boolean;
@@ -26,7 +27,7 @@ export async function invokeTalkSpeakDirect(params: Record<string, unknown>) {
     respond: (ok, payload, error) => {
       response = { ok, payload, error };
     },
-    context: {} as never,
+    context: { getRuntimeConfig: getRuntimeConfig } as never,
   });
   return response;
 }

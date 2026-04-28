@@ -3,14 +3,43 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getPlatformAdapter } from "../adapter/index.js";
 import type { SsrfPolicyConfig } from "../adapter/types.js";
+import { MediaFileType } from "../types.js";
 import { formatErrorMessage } from "./format.js";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-normalize.js";
 
-/** Maximum file size accepted by the QQ Bot API. */
+/** Maximum file size accepted by the QQ Bot one-shot upload API (base64 direct). */
 export const MAX_UPLOAD_SIZE = 20 * 1024 * 1024;
 
-/** Threshold used to treat an upload as a large file. */
+/** Absolute upper bound enforced on the chunked upload path (matches server policy). */
+export const CHUNKED_UPLOAD_MAX_SIZE = 100 * 1024 * 1024;
+
+/** Threshold used to treat an upload as a large file (dispatch to chunked path). */
 export const LARGE_FILE_THRESHOLD = 5 * 1024 * 1024;
+
+/**
+ * Per-{@link MediaFileType} upload metadata: the QQ Open Platform size
+ * ceiling and the Chinese display name used in user-facing error messages.
+ *
+ * Keyed by the enum value so call sites read as
+ * `MEDIA_FILE_TYPE_INFO[MediaFileType.IMAGE].maxSize`, and adding a new
+ * type forces both fields to be supplied in a single place.
+ */
+export const MEDIA_FILE_TYPE_INFO: Record<MediaFileType, { maxSize: number; name: string }> = {
+  [MediaFileType.IMAGE]: { maxSize: 30 * 1024 * 1024, name: "图片" },
+  [MediaFileType.VIDEO]: { maxSize: 100 * 1024 * 1024, name: "视频" },
+  [MediaFileType.VOICE]: { maxSize: 20 * 1024 * 1024, name: "语音" },
+  [MediaFileType.FILE]: { maxSize: 100 * 1024 * 1024, name: "文件" },
+};
+
+/** Return the Chinese display name for a media file type code. Defaults to "文件". */
+export function getFileTypeName(fileType: number): string {
+  return MEDIA_FILE_TYPE_INFO[fileType as MediaFileType]?.name ?? "文件";
+}
+
+/** Return the upload ceiling for a given media file type. Defaults to 100MB. */
+export function getMaxUploadSize(fileType: number): number {
+  return MEDIA_FILE_TYPE_INFO[fileType as MediaFileType]?.maxSize ?? CHUNKED_UPLOAD_MAX_SIZE;
+}
 
 const QQBOT_MEDIA_HOSTNAME_ALLOWLIST = [
   // QQ rich media
@@ -103,29 +132,50 @@ export function formatFileSize(bytes: number): string {
 /** Infer a MIME type from the file extension. */
 export function getMimeType(filePath: string): string {
   const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
-  const mimeTypes: Record<string, string> = {
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".png": "image/png",
-    ".gif": "image/gif",
-    ".webp": "image/webp",
-    ".bmp": "image/bmp",
-    ".mp4": "video/mp4",
-    ".mov": "video/quicktime",
-    ".avi": "video/x-msvideo",
-    ".mkv": "video/x-matroska",
-    ".webm": "video/webm",
-    ".pdf": "application/pdf",
-    ".doc": "application/msword",
-    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    ".xls": "application/vnd.ms-excel",
-    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    ".zip": "application/zip",
-    ".tar": "application/x-tar",
-    ".gz": "application/gzip",
-    ".txt": "text/plain",
-  };
-  return mimeTypes[ext] ?? "application/octet-stream";
+  return MIME_TYPES[ext] ?? "application/octet-stream";
+}
+
+/** Canonical ext → MIME table. Single source of truth. */
+const MIME_TYPES: Record<string, string> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".bmp": "image/bmp",
+  ".mp4": "video/mp4",
+  ".mov": "video/quicktime",
+  ".avi": "video/x-msvideo",
+  ".mkv": "video/x-matroska",
+  ".webm": "video/webm",
+  ".pdf": "application/pdf",
+  ".doc": "application/msword",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".xls": "application/vnd.ms-excel",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".zip": "application/zip",
+  ".tar": "application/x-tar",
+  ".gz": "application/gzip",
+  ".txt": "text/plain",
+};
+
+/** Extensions accepted as image uploads by the QQ Bot media pipeline. */
+const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"]);
+
+/**
+ * Return the image MIME type for a local file path, or `null` if the
+ * extension is not in the supported image whitelist.
+ *
+ * Use this instead of `getMimeType` when the caller must enforce
+ * "image formats only" as a business rule (e.g. constructing a
+ * `data:image/...;base64,` URL).
+ */
+export function getImageMimeType(filePath: string): string | null {
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
+  if (!IMAGE_EXTENSIONS.has(ext)) {
+    return null;
+  }
+  return MIME_TYPES[ext] ?? null;
 }
 
 /** Download a remote file into a local directory. */

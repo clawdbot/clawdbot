@@ -172,7 +172,7 @@ export async function statusCommand(
     usage: opts.usage,
     deep: opts.deep,
     gatewayReachable,
-    includeSecurityAudit: true,
+    includeSecurityAudit: opts.all === true || opts.deep === true,
     resolveSecurityAudit: async (input) =>
       await withProgress(
         {

@@ -21,6 +21,21 @@ export type MatrixQaObservedEventAttachment = {
   kind: "audio" | "file" | "image" | "sticker" | "video";
 };
 
+export type MatrixQaObservedApproval = {
+  agentId?: string;
+  allowedDecisions?: string[];
+  commandTextPreview?: string;
+  hasCommandText?: boolean;
+  id: string;
+  kind: "exec" | "plugin";
+  pluginId?: string;
+  severity?: string;
+  state?: string;
+  toolName?: string;
+  type?: string;
+  version?: number;
+};
+
 export type MatrixQaObservedEvent = {
   kind: MatrixQaObservedEventKind;
   roomId: string;
@@ -48,7 +63,11 @@ export type MatrixQaObservedEvent = {
     key?: string;
   };
   attachment?: MatrixQaObservedEventAttachment;
+  approval?: MatrixQaObservedApproval;
 };
+
+const MATRIX_QA_APPROVAL_METADATA_KEY = "com.openclaw.approval";
+const MATRIX_QA_APPROVAL_COMMAND_PREVIEW_CHARS = 160;
 
 function normalizeMentionUserIds(value: unknown) {
   return Array.isArray(value)
@@ -130,6 +149,54 @@ function resolveMatrixQaAttachmentSummary(params: {
   };
 }
 
+function normalizeMatrixQaApprovalAllowedDecisions(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    : undefined;
+}
+
+function normalizeMatrixQaApprovalMetadata(value: unknown): MatrixQaObservedApproval | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const metadata = value as Record<string, unknown>;
+  const id = typeof metadata.id === "string" ? metadata.id.trim() : "";
+  const kind = metadata.kind;
+  if (!id || (kind !== "exec" && kind !== "plugin")) {
+    return undefined;
+  }
+  const commandText =
+    typeof metadata.commandText === "string" ? metadata.commandText.trim() : undefined;
+  const commandPreview =
+    typeof metadata.commandPreview === "string" ? metadata.commandPreview.trim() : undefined;
+  const commandTextPreview = (commandPreview || commandText)?.slice(
+    0,
+    MATRIX_QA_APPROVAL_COMMAND_PREVIEW_CHARS,
+  );
+  return {
+    id,
+    kind,
+    ...(typeof metadata.agentId === "string" ? { agentId: metadata.agentId } : {}),
+    ...(typeof metadata.state === "string" ? { state: metadata.state } : {}),
+    ...(typeof metadata.type === "string" ? { type: metadata.type } : {}),
+    ...(typeof metadata.version === "number" ? { version: metadata.version } : {}),
+    ...(metadata.allowedDecisions
+      ? { allowedDecisions: normalizeMatrixQaApprovalAllowedDecisions(metadata.allowedDecisions) }
+      : {}),
+    ...(commandText ? { hasCommandText: true } : {}),
+    ...(commandTextPreview ? { commandTextPreview } : {}),
+    ...(kind === "plugin" && typeof metadata.pluginId === "string"
+      ? { pluginId: metadata.pluginId }
+      : {}),
+    ...(kind === "plugin" && typeof metadata.severity === "string"
+      ? { severity: metadata.severity }
+      : {}),
+    ...(kind === "plugin" && typeof metadata.toolName === "string"
+      ? { toolName: metadata.toolName }
+      : {}),
+  };
+}
+
 export function normalizeMatrixQaObservedEvent(
   roomId: string,
   event: MatrixQaRoomEvent,
@@ -177,6 +244,9 @@ export function normalizeMatrixQaObservedEvent(
     filename: normalizedFilename,
     msgtype: normalizedMsgtype,
   });
+  const approval = normalizeMatrixQaApprovalMetadata(
+    messageContent[MATRIX_QA_APPROVAL_METADATA_KEY] ?? content[MATRIX_QA_APPROVAL_METADATA_KEY],
+  );
 
   return {
     kind: resolveMatrixQaObservedEventKind({ msgtype: normalizedMsgtype, type }),
@@ -222,6 +292,7 @@ export function normalizeMatrixQaObservedEvent(
         }
       : {}),
     ...(attachment ? { attachment } : {}),
+    ...(approval ? { approval } : {}),
   };
 }
 

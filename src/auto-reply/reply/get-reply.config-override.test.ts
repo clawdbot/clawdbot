@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   buildGetReplyCtx,
@@ -16,11 +16,11 @@ const mocks = vi.hoisted(() => ({
 registerGetReplyRuntimeOverrides(mocks);
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
-let loadConfigMock: typeof import("../../config/config.js").loadConfig;
+let loadConfigMock: typeof import("../../config/config.js").getRuntimeConfig;
 
 async function loadGetReplyRuntimeForTest() {
   ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
-  ({ loadConfig: loadConfigMock } = await import("../../config/config.js"));
+  ({ getRuntimeConfig: loadConfigMock } = await import("../../config/config.js"));
 }
 
 describe("getReplyFromConfig configOverride", () => {
@@ -40,7 +40,7 @@ describe("getReplyFromConfig configOverride", () => {
     vi.unstubAllEnvs();
   });
 
-  it("merges configOverride over fresh loadConfig()", async () => {
+  it("merges configOverride over fresh getRuntimeConfig()", async () => {
     vi.mocked(loadConfigMock).mockReturnValue({
       channels: {
         telegram: {
@@ -62,6 +62,33 @@ describe("getReplyFromConfig configOverride", () => {
       },
     } as OpenClawConfig);
 
+    expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
+  });
+
+  it("uses complete configOverride without reloading config", async () => {
+    const { withFullRuntimeReplyConfig } = await import("./get-reply-fast-path.js");
+    vi.mocked(loadConfigMock).mockImplementation(() => {
+      throw new Error("getRuntimeConfig should not be called for complete runtime config");
+    });
+
+    await getReplyFromConfig(
+      buildGetReplyCtx(),
+      undefined,
+      withFullRuntimeReplyConfig({
+        channels: {
+          telegram: {
+            botToken: "resolved-telegram-token",
+          },
+        },
+        agents: {
+          defaults: {
+            userTimezone: "America/New_York",
+          },
+        },
+      } satisfies OpenClawConfig),
+    );
+
+    expect(loadConfigMock).not.toHaveBeenCalled();
     expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
   });
 });

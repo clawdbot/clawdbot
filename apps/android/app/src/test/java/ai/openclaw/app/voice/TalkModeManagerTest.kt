@@ -4,7 +4,6 @@ import ai.openclaw.app.gateway.DeviceAuthEntry
 import ai.openclaw.app.gateway.DeviceAuthTokenStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewaySession
-import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -17,6 +16,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import java.util.concurrent.atomic.AtomicLong
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -100,43 +100,61 @@ class TalkModeManagerTest {
   }
 
   @Suppress("UNCHECKED_CAST")
-  private fun playbackGeneration(manager: TalkModeManager): AtomicLong {
-    return readPrivateField(manager, "playbackGeneration") as AtomicLong
-  }
+  private fun playbackGeneration(manager: TalkModeManager): AtomicLong = readPrivateField(manager, "playbackGeneration") as AtomicLong
 
-  private fun setPrivateField(target: Any, name: String, value: Any?) {
+  private fun setPrivateField(
+    target: Any,
+    name: String,
+    value: Any?,
+  ) {
     val field = target.javaClass.getDeclaredField(name)
     field.isAccessible = true
     field.set(target, value)
   }
 
-  private fun readPrivateField(target: Any, name: String): Any? {
+  private fun readPrivateField(
+    target: Any,
+    name: String,
+  ): Any? {
     val field = target.javaClass.getDeclaredField(name)
     field.isAccessible = true
     return field.get(target)
   }
 
-  private fun chatFinalPayload(runId: String, text: String): String {
-    return """
-      {
-        "runId": "$runId",
-        "sessionKey": "main",
-        "state": "final",
-        "message": {
-          "role": "assistant",
-          "content": [
-            { "type": "text", "text": "$text" }
-          ]
-        }
+  private fun chatFinalPayload(
+    runId: String,
+    text: String,
+  ): String =
+    """
+    {
+      "runId": "$runId",
+      "sessionKey": "main",
+      "state": "final",
+      "message": {
+        "role": "assistant",
+        "content": [
+          { "type": "text", "text": "$text" }
+        ]
       }
+    }
     """.trimIndent()
-  }
 }
 
 private class InMemoryDeviceAuthStore : DeviceAuthTokenStore {
-  override fun loadEntry(deviceId: String, role: String): DeviceAuthEntry? = null
+  override fun loadEntry(
+    deviceId: String,
+    role: String,
+  ): DeviceAuthEntry? = null
 
-  override fun saveToken(deviceId: String, role: String, token: String, scopes: List<String>) = Unit
+  override fun saveToken(
+    deviceId: String,
+    role: String,
+    token: String,
+    scopes: List<String>,
+  ) = Unit
 
-  override fun clearToken(deviceId: String, role: String) = Unit
+  override fun clearToken(
+    deviceId: String,
+    role: String,
+  ) = Unit
 }

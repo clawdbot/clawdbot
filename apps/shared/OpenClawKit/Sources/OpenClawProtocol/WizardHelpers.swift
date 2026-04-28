@@ -74,11 +74,11 @@ public func anyCodableBool(_ value: AnyCodable?) -> Bool {
 public func anyCodableArray(_ value: AnyCodable?) -> [AnyCodable] {
     switch value?.value {
     case let arr as [AnyCodable]:
-        return arr
+        arr
     case let arr as [Any]:
-        return arr.map { AnyCodable($0) }
+        arr.map { AnyCodable($0) }
     default:
-        return []
+        []
     }
 }
 

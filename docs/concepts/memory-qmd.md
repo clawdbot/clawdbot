@@ -43,7 +43,7 @@ OpenClaw creates a self-contained QMD home under
 `~/.openclaw/agents/<agentId>/qmd/` and manages the sidecar lifecycle
 automatically -- collections, updates, and embedding runs are handled for you.
 It prefers current QMD collection and MCP query shapes, but still falls back to
-legacy `--mask` collection flags and older MCP tool names when needed.
+alternate collection pattern flags and older MCP tool names when needed.
 Boot-time reconciliation also recreates stale managed collections back to their
 canonical patterns when an older QMD collection with the same name is still
 present.
@@ -51,19 +51,58 @@ present.
 ## How the sidecar works
 
 - OpenClaw creates collections from your workspace memory files and any
-  configured `memory.qmd.paths`, then runs `qmd update` + `qmd embed` on boot
-  and periodically (default every 5 minutes).
+  configured `memory.qmd.paths`, then runs `qmd update` on boot and
+  periodically (default every 5 minutes). Semantic modes also run `qmd embed`.
 - The default workspace collection tracks `MEMORY.md` plus the `memory/`
   tree. Lowercase `memory.md` is not indexed as a root memory file.
 - Boot refresh runs in the background so chat startup is not blocked.
 - Searches use the configured `searchMode` (default: `search`; also supports
-  `vsearch` and `query`). If a mode fails, OpenClaw retries with `qmd query`.
+  `vsearch` and `query`). `search` is BM25-only, so OpenClaw skips semantic
+  vector readiness probes and embedding maintenance in that mode. If a mode
+  fails, OpenClaw retries with `qmd query`.
+- With QMD releases that advertise multi-collection filters, OpenClaw groups
+  same-source collections into one QMD search invocation. Older QMD releases
+  keep the compatible per-collection fallback.
 - If QMD fails entirely, OpenClaw falls back to the builtin SQLite engine.
+  Repeated chat-turn attempts back off briefly after an open failure so a
+  missing binary or broken sidecar dependency does not create a retry storm;
+  `openclaw memory status` and one-shot CLI probes still recheck QMD directly.
 
 <Info>
 The first search may be slow -- QMD auto-downloads GGUF models (~2 GB) for
 reranking and query expansion on the first `qmd query` run.
 </Info>
+
+## Search performance and compatibility
+
+OpenClaw keeps the QMD search path compatible with both current and older QMD
+installs.
+
+On startup, OpenClaw checks the installed QMD help text once per manager. If the
+binary advertises support for multiple collection filters, OpenClaw searches all
+same-source collections with one command:
+
+```bash
+qmd search "router notes" --json -n 10 -c memory-root-main -c memory-dir-main
+```
+
+This avoids starting one QMD subprocess for every durable-memory collection.
+Session transcript collections stay in their own source group, so mixed
+`memory` + `sessions` searches still give the result diversifier input from both
+sources.
+
+Older QMD builds only accept one collection filter. When OpenClaw detects one
+of those builds, it keeps the compatibility path and searches each collection
+separately before merging and deduplicating results.
+
+To inspect the installed contract manually, run:
+
+```bash
+qmd --help | grep -i collection
+```
+
+Current QMD help says collection filters can target one or more collections.
+Older help usually describes a single collection.
 
 ## Model overrides
 
@@ -161,8 +200,36 @@ with no extra dependencies.
 runs as a service, create a symlink:
 `sudo ln -s ~/.bun/bin/qmd /usr/local/bin/qmd`.
 
+If `qmd --version` works in your shell but OpenClaw still reports
+`spawn qmd ENOENT`, the gateway process likely has a different `PATH` than your
+interactive shell. Pin the binary explicitly:
+
+```json5
+{
+  memory: {
+    backend: "qmd",
+    qmd: {
+      command: "/absolute/path/to/qmd",
+    },
+  },
+}
+```
+
+Use `command -v qmd` in the environment where QMD is installed, then recheck
+with `openclaw memory status --deep`.
+
 **First search very slow?** QMD downloads GGUF models on first use. Pre-warm
 with `qmd query "test"` using the same XDG dirs OpenClaw uses.
+
+**Many QMD subprocesses during search?** Update QMD if possible. OpenClaw uses
+one process for same-source multi-collection searches only when the installed
+QMD advertises support for multiple `-c` filters; otherwise it keeps the older
+per-collection fallback for correctness.
+
+**BM25-only QMD still trying to build llama.cpp?** Set
+`memory.qmd.searchMode = "search"`. OpenClaw treats that mode as lexical-only,
+does not run QMD vector status probes or embedding maintenance, and leaves
+semantic readiness checks to `vsearch` or `query` setups.
 
 **Search times out?** Increase `memory.qmd.limits.timeoutMs` (default: 4000ms).
 Set to `120000` for slower hardware.

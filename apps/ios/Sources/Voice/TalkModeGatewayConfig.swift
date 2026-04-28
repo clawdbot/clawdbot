@@ -20,8 +20,8 @@ enum TalkModeGatewayConfigParser {
         config: [String: Any],
         defaultProvider: String,
         defaultModelIdFallback: String,
-        defaultSilenceTimeoutMs: Int
-    ) -> TalkModeGatewayConfigState {
+        defaultSilenceTimeoutMs: Int) -> TalkModeGatewayConfigState
+    {
         let talk = TalkConfigParsing.bridgeFoundationDictionary(config["talk"] as? [String: Any])
         let selection = TalkConfigParsing.selectProviderConfig(
             talk,

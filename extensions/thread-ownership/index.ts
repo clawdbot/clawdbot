@@ -1,4 +1,4 @@
-import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/config-runtime";
+import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   definePluginEntry,
@@ -83,9 +83,11 @@ export default definePluginEntry({
   description: "Slack thread claim coordination for multi-agent setups",
   register(api: OpenClawPluginApi) {
     const resolveCurrentState = () => {
-      const currentConfig = api.runtime.config?.loadConfig?.() ?? api.config;
+      const currentConfig = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
       const livePluginCfg = resolveLivePluginConfigObject(
-        api.runtime.config?.loadConfig,
+        api.runtime.config?.current
+          ? () => api.runtime.config.current() as OpenClawConfig
+          : undefined,
         "thread-ownership",
         isThreadOwnershipConfig(api.pluginConfig)
           ? (api.pluginConfig as Record<string, unknown>)

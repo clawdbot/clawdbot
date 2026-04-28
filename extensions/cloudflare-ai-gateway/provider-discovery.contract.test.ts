@@ -1,3 +1,3 @@
-import { describeCloudflareAiGatewayProviderDiscoveryContract } from "../../test/helpers/plugins/provider-discovery-contract.js";
+import { describeCloudflareAiGatewayProviderDiscoveryContract } from "openclaw/plugin-sdk/provider-test-contracts";
 
 describeCloudflareAiGatewayProviderDiscoveryContract(() => import("./index.js"));

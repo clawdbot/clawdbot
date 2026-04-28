@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig, writeConfigFile } from "../config/config.js";
+import { getRuntimeConfig, writeConfigFile } from "../config/config.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -98,11 +98,11 @@ describe("secrets runtime snapshot gateway-auth integration", () => {
         });
 
         activateSecretsRuntimeSnapshot(prepared);
-        expect(loadConfig().gateway?.auth?.token).toBe("gateway-runtime-token");
+        expect(getRuntimeConfig().gateway?.auth?.token).toBe("gateway-runtime-token");
 
         await expect(
           writeConfigFile({
-            ...loadConfig(),
+            ...getRuntimeConfig(),
             gateway: {
               auth: {
                 mode: "token",
@@ -114,7 +114,7 @@ describe("secrets runtime snapshot gateway-auth integration", () => {
 
         const activeAfterFailure = getActiveSecretsRuntimeSnapshot();
         expect(activeAfterFailure).not.toBeNull();
-        expect(loadConfig().gateway?.auth?.token).toBe("gateway-runtime-token");
+        expect(getRuntimeConfig().gateway?.auth?.token).toBe("gateway-runtime-token");
         expect(activeAfterFailure?.sourceConfig.gateway?.auth?.token).toEqual(initialTokenRef);
 
         const persistedConfig = JSON.parse(

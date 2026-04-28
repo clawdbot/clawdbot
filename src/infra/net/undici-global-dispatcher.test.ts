@@ -15,6 +15,7 @@ const {
   }
 
   class EnvHttpProxyAgent {
+    public readonly capturedHttpProxy = process.env.HTTP_PROXY;
     constructor(public readonly options?: Record<string, unknown>) {}
   }
 
@@ -60,7 +61,8 @@ vi.mock("node:net", () => ({
 }));
 
 vi.mock("./proxy-env.js", () => ({
-  hasEnvHttpProxyConfigured: vi.fn(() => false),
+  hasEnvHttpProxyAgentConfigured: vi.fn(() => false),
+  resolveEnvHttpProxyAgentOptions: vi.fn(() => undefined),
 }));
 
 vi.mock("../wsl.js", () => ({
@@ -68,10 +70,11 @@ vi.mock("../wsl.js", () => ({
 }));
 
 import { isWSL2Sync } from "../wsl.js";
-import { hasEnvHttpProxyConfigured } from "./proxy-env.js";
+import { hasEnvHttpProxyAgentConfigured, resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
 let DEFAULT_UNDICI_STREAM_TIMEOUT_MS: typeof import("./undici-global-dispatcher.js").DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
 let ensureGlobalUndiciEnvProxyDispatcher: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciEnvProxyDispatcher;
 let ensureGlobalUndiciStreamTimeouts: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciStreamTimeouts;
+let forceResetGlobalDispatcher: typeof import("./undici-global-dispatcher.js").forceResetGlobalDispatcher;
 let resetGlobalUndiciStreamTimeoutsForTests: typeof import("./undici-global-dispatcher.js").resetGlobalUndiciStreamTimeoutsForTests;
 let undiciGlobalDispatcherModule: typeof import("./undici-global-dispatcher.js");
 
@@ -82,6 +85,7 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
       DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
       ensureGlobalUndiciEnvProxyDispatcher,
       ensureGlobalUndiciStreamTimeouts,
+      forceResetGlobalDispatcher,
       resetGlobalUndiciStreamTimeoutsForTests,
     } = undiciGlobalDispatcherModule);
   });
@@ -91,7 +95,8 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     resetGlobalUndiciStreamTimeoutsForTests();
     setCurrentDispatcher(new Agent());
     getDefaultAutoSelectFamily.mockReturnValue(undefined);
-    vi.mocked(hasEnvHttpProxyConfigured).mockReturnValue(false);
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(false);
+    vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue(undefined);
   });
 
   it("replaces default Agent dispatcher with extended stream timeouts", () => {
@@ -125,6 +130,28 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
       autoSelectFamily: false,
       autoSelectFamilyAttemptTimeout: 300,
     });
+  });
+
+  it("preserves explicit env proxy options when replacing EnvHttpProxyAgent dispatcher", () => {
+    vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
+      httpProxy: "socks5://proxy.test:1080",
+      httpsProxy: "socks5://proxy.test:1080",
+    });
+    setCurrentDispatcher(new EnvHttpProxyAgent());
+
+    ensureGlobalUndiciStreamTimeouts();
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+    expect(next).toBeInstanceOf(EnvHttpProxyAgent);
+    expect(next.options).toEqual(
+      expect.objectContaining({
+        httpProxy: "socks5://proxy.test:1080",
+        httpsProxy: "socks5://proxy.test:1080",
+        bodyTimeout: DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
+        headersTimeout: DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
+      }),
+    );
   });
 
   it("records timeout bridge but does not override unsupported custom proxy dispatcher types", () => {
@@ -201,11 +228,12 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
     vi.clearAllMocks();
     resetGlobalUndiciStreamTimeoutsForTests();
     setCurrentDispatcher(new Agent());
-    vi.mocked(hasEnvHttpProxyConfigured).mockReturnValue(false);
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(false);
+    vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue(undefined);
   });
 
   it("installs EnvHttpProxyAgent when env HTTP proxy is configured on a default Agent", () => {
-    vi.mocked(hasEnvHttpProxyConfigured).mockReturnValue(true);
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
 
     ensureGlobalUndiciEnvProxyDispatcher();
 
@@ -213,8 +241,26 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
     expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
   });
 
+  it("installs EnvHttpProxyAgent with explicit ALL_PROXY fallback options", () => {
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
+    vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
+      httpProxy: "socks5://proxy.test:1080",
+      httpsProxy: "socks5://proxy.test:1080",
+    });
+
+    ensureGlobalUndiciEnvProxyDispatcher();
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+    expect(next).toBeInstanceOf(EnvHttpProxyAgent);
+    expect(next.options).toEqual({
+      httpProxy: "socks5://proxy.test:1080",
+      httpsProxy: "socks5://proxy.test:1080",
+    });
+  });
+
   it("does not override unsupported custom proxy dispatcher types", () => {
-    vi.mocked(hasEnvHttpProxyConfigured).mockReturnValue(true);
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
     setCurrentDispatcher(new ProxyAgent("http://proxy.test:8080"));
 
     ensureGlobalUndiciEnvProxyDispatcher();
@@ -223,7 +269,7 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
   });
 
   it("retries proxy bootstrap after an unsupported dispatcher later becomes a default Agent", () => {
-    vi.mocked(hasEnvHttpProxyConfigured).mockReturnValue(true);
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
     setCurrentDispatcher(new ProxyAgent("http://proxy.test:8080"));
 
     ensureGlobalUndiciEnvProxyDispatcher();
@@ -237,7 +283,7 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
   });
 
   it("is idempotent after proxy bootstrap succeeds", () => {
-    vi.mocked(hasEnvHttpProxyConfigured).mockReturnValue(true);
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
 
     ensureGlobalUndiciEnvProxyDispatcher();
     ensureGlobalUndiciEnvProxyDispatcher();
@@ -246,7 +292,7 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
   });
 
   it("reinstalls env proxy if an external change later reverts the dispatcher to Agent", () => {
-    vi.mocked(hasEnvHttpProxyConfigured).mockReturnValue(true);
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
 
     ensureGlobalUndiciEnvProxyDispatcher();
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
@@ -256,6 +302,60 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
     expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
+  });
+});
+
+describe("forceResetGlobalDispatcher", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetGlobalUndiciStreamTimeoutsForTests();
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(false);
+    vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue(undefined);
+  });
+
+  it("replaces an EnvHttpProxyAgent with a direct Agent when proxy env is cleared", () => {
+    setCurrentDispatcher(new EnvHttpProxyAgent());
+
+    forceResetGlobalDispatcher();
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    expect(getCurrentDispatcher()).toBeInstanceOf(Agent);
+  });
+
+  it("replaces a stale EnvHttpProxyAgent when restored proxy env is still configured", () => {
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
+    vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
+      httpProxy: "http://proxy-b.example:8080",
+      httpsProxy: "http://proxy-b.example:8080",
+    });
+    setCurrentDispatcher(new EnvHttpProxyAgent());
+
+    forceResetGlobalDispatcher();
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
+    expect((getCurrentDispatcher() as { options?: Record<string, unknown> }).options).toEqual({
+      httpProxy: "http://proxy-b.example:8080",
+      httpsProxy: "http://proxy-b.example:8080",
+    });
+  });
+
+  it("preserves ALL_PROXY-only EnvHttpProxyAgent options when resetting", () => {
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
+    vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
+      httpProxy: "http://proxy-all.example:3128",
+      httpsProxy: "http://proxy-all.example:3128",
+    });
+    setCurrentDispatcher(new EnvHttpProxyAgent());
+
+    forceResetGlobalDispatcher();
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
+    expect((getCurrentDispatcher() as { options?: Record<string, unknown> }).options).toEqual({
+      httpProxy: "http://proxy-all.example:3128",
+      httpsProxy: "http://proxy-all.example:3128",
+    });
   });
 });
 

@@ -53,6 +53,10 @@
   },
   "redirects": [
     {
+      "source": "/install/migrating-matrix",
+      "destination": "/channels/matrix-migration"
+    },
+    {
       "source": "/help/gpt54-codex-agentic-parity",
       "destination": "/help/gpt55-codex-agentic-parity"
     },
@@ -339,6 +343,14 @@
     {
       "source": "/bonjour",
       "destination": "/gateway/bonjour"
+    },
+    {
+      "source": "/gateway/config-tts",
+      "destination": "/tools/tts"
+    },
+    {
+      "source": "/gateway/observability",
+      "destination": "/gateway/opentelemetry"
     },
     {
       "source": "/browser",
@@ -976,6 +988,22 @@
                 "pages": ["install/index", "install/installer", "install/node"]
               },
               {
+                "group": "Maintenance",
+                "pages": [
+                  "install/updating",
+                  {
+                    "group": "Migrating",
+                    "pages": [
+                      "install/migrating",
+                      "install/migrating-claude",
+                      "install/migrating-hermes"
+                    ]
+                  },
+                  "install/uninstall",
+                  "install/development-channels"
+                ]
+              },
+              {
                 "group": "Containers",
                 "pages": [
                   "install/ansible",
@@ -1008,17 +1036,6 @@
                 ]
               },
               {
-                "group": "Maintenance",
-                "pages": [
-                  "install/updating",
-                  "install/migrating",
-                  "install/migrating-hermes",
-                  "install/migrating-matrix",
-                  "install/uninstall",
-                  "install/development-channels"
-                ]
-              },
-              {
                 "group": "Advanced setup",
                 "pages": ["start/setup", "pi-dev"]
               }
@@ -1044,6 +1061,7 @@
                   "channels/imessage",
                   "channels/bluebubbles",
                   "channels/matrix",
+                  "channels/matrix-migration",
                   "channels/matrix-push-rules"
                 ]
               },
@@ -1103,13 +1121,15 @@
                   "concepts/oauth",
                   "start/bootstrapping",
                   "concepts/experimental-features",
-                  "concepts/qa-e2e-automation"
+                  "concepts/qa-e2e-automation",
+                  "concepts/qa-matrix"
                 ]
               },
               {
                 "group": "Sessions and memory",
                 "pages": [
                   "concepts/session",
+                  "concepts/channel-docking",
                   "concepts/session-pruning",
                   "concepts/session-tool",
                   {
@@ -1160,10 +1180,12 @@
                   "plugins/community",
                   "plugins/bundles",
                   "plugins/codex-harness",
+                  "plugins/codex-computer-use",
                   "plugins/google-meet",
                   "plugins/webhooks",
                   "plugins/voice-call",
                   "plugins/memory-wiki",
+                  "plugins/memory-lancedb",
                   "plugins/message-presentation",
                   "plugins/skill-workshop",
                   "plugins/zalouser",
@@ -1309,6 +1331,7 @@
                   "providers/cloudflare-ai-gateway",
                   "providers/comfy",
                   "providers/deepgram",
+                  "providers/deepinfra",
                   "providers/deepseek",
                   "providers/elevenlabs",
                   "providers/fal",
@@ -1498,6 +1521,7 @@
               {
                 "group": "Security",
                 "pages": [
+                  "security/network-proxy",
                   "security/formal-verification",
                   "security/THREAT-MODEL-ATLAS",
                   "security/CONTRIBUTING-THREAT-MODEL"

@@ -47,6 +47,35 @@ type GlobalFetchPatchTarget = typeof globalThis & {
   [DEBUG_PROXY_FETCH_PATCH_KEY]?: GlobalFetchPatchedState;
 };
 
+type DebugProxyCaptureStoreLike = Pick<
+  ReturnType<typeof getDebugProxyCaptureStore>,
+  "upsertSession" | "endSession" | "recordEvent"
+>;
+
+export type DebugProxyCaptureRuntimeDeps = {
+  getStore?: (dbPath: string, blobDir: string) => DebugProxyCaptureStoreLike;
+  closeStore?: typeof closeDebugProxyCaptureStore;
+  persistEventPayload?: (
+    store: DebugProxyCaptureStoreLike,
+    payload: Parameters<typeof persistEventPayload>[1],
+  ) => ReturnType<typeof persistEventPayload>;
+  safeJsonString?: typeof safeJsonString;
+  fetchTarget?: typeof globalThis;
+};
+
+function resolveRuntimeDeps(deps: DebugProxyCaptureRuntimeDeps = {}) {
+  return {
+    getStore: deps.getStore ?? getDebugProxyCaptureStore,
+    closeStore: deps.closeStore ?? closeDebugProxyCaptureStore,
+    persistEventPayload:
+      deps.persistEventPayload ??
+      ((store, payload) =>
+        persistEventPayload(store as ReturnType<typeof getDebugProxyCaptureStore>, payload)),
+    safeJsonString: deps.safeJsonString ?? safeJsonString,
+    fetchTarget: deps.fetchTarget ?? globalThis,
+  };
+}
+
 function protocolFromUrl(rawUrl: string): CaptureProtocol {
   try {
     const url = new URL(rawUrl);
@@ -129,51 +158,59 @@ function createHttpCaptureEventBase(params: {
   };
 }
 
-function installDebugProxyGlobalFetchPatch(settings: DebugProxySettings): void {
-  if (typeof globalThis.fetch !== "function") {
+function installDebugProxyGlobalFetchPatch(
+  settings: DebugProxySettings,
+  deps: DebugProxyCaptureRuntimeDeps = {},
+): void {
+  const runtime = resolveRuntimeDeps(deps);
+  const fetchTarget = runtime.fetchTarget as GlobalFetchPatchTarget;
+  if (typeof fetchTarget.fetch !== "function") {
     return;
   }
-  const patched = globalThis as GlobalFetchPatchTarget;
-  if (patched[DEBUG_PROXY_FETCH_PATCH_KEY]) {
+  if (fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY]) {
     return;
   }
-  const originalFetch = globalThis.fetch.bind(globalThis);
-  patched[DEBUG_PROXY_FETCH_PATCH_KEY] = { originalFetch };
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const originalFetch = fetchTarget.fetch.bind(fetchTarget);
+  fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY] = { originalFetch };
+  fetchTarget.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = resolveUrlString(input);
     try {
       const response = await originalFetch(input, init);
       if (url && /^https?:/i.test(url)) {
-        captureHttpExchange({
-          url,
-          method:
-            (typeof Request !== "undefined" && input instanceof Request
-              ? input.method
-              : undefined) ??
-            init?.method ??
-            "GET",
-          requestHeaders:
-            (typeof Request !== "undefined" && input instanceof Request
-              ? input.headers
-              : undefined) ?? (init?.headers as Headers | Record<string, string> | undefined),
-          requestBody:
-            (typeof Request !== "undefined" && input instanceof Request
-              ? (input as Request & { body?: BodyInit | null }).body
-              : undefined) ??
-            (init as (RequestInit & { body?: BodyInit | null }) | undefined)?.body ??
-            null,
-          response,
-          transport: "http",
-          meta: {
-            captureOrigin: "global-fetch",
-            source: settings.sourceProcess,
+        captureHttpExchange(
+          {
+            url,
+            method:
+              (typeof Request !== "undefined" && input instanceof Request
+                ? input.method
+                : undefined) ??
+              init?.method ??
+              "GET",
+            requestHeaders:
+              (typeof Request !== "undefined" && input instanceof Request
+                ? input.headers
+                : undefined) ?? (init?.headers as Headers | Record<string, string> | undefined),
+            requestBody:
+              (typeof Request !== "undefined" && input instanceof Request
+                ? (input as Request & { body?: BodyInit | null }).body
+                : undefined) ??
+              (init as (RequestInit & { body?: BodyInit | null }) | undefined)?.body ??
+              null,
+            response,
+            transport: "http",
+            meta: {
+              captureOrigin: "global-fetch",
+              source: settings.sourceProcess,
+            },
           },
-        });
+          settings,
+          deps,
+        );
       }
       return response;
     } catch (error) {
       if (url && /^https?:/i.test(url)) {
-        const store = getDebugProxyCaptureStore(settings.dbPath, settings.blobDir);
+        const store = runtime.getStore(settings.dbPath, settings.blobDir);
         const parsed = new URL(url);
         store.recordEvent({
           sessionId: settings.sessionId,
@@ -193,7 +230,7 @@ function installDebugProxyGlobalFetchPatch(settings: DebugProxySettings): void {
           host: parsed.host,
           path: `${parsed.pathname}${parsed.search}`,
           errorText: error instanceof Error ? error.message : String(error),
-          metaJson: safeJsonString({ captureOrigin: "global-fetch" }),
+          metaJson: runtime.safeJsonString({ captureOrigin: "global-fetch" }),
         });
       }
       throw error;
@@ -201,26 +238,30 @@ function installDebugProxyGlobalFetchPatch(settings: DebugProxySettings): void {
   }) as typeof globalThis.fetch;
 }
 
-function uninstallDebugProxyGlobalFetchPatch(): void {
-  const patched = globalThis as GlobalFetchPatchTarget;
-  const state = patched[DEBUG_PROXY_FETCH_PATCH_KEY];
+function uninstallDebugProxyGlobalFetchPatch(deps: DebugProxyCaptureRuntimeDeps = {}): void {
+  const fetchTarget = resolveRuntimeDeps(deps).fetchTarget as GlobalFetchPatchTarget;
+  const state = fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY];
   if (!state) {
     return;
   }
-  globalThis.fetch = state.originalFetch;
-  delete patched[DEBUG_PROXY_FETCH_PATCH_KEY];
+  fetchTarget.fetch = state.originalFetch;
+  delete fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY];
 }
 
 export function isDebugProxyGlobalFetchPatchInstalled(): boolean {
   return Boolean((globalThis as GlobalFetchPatchTarget)[DEBUG_PROXY_FETCH_PATCH_KEY]);
 }
 
-export function initializeDebugProxyCapture(mode: string, resolved?: DebugProxySettings): void {
+export function initializeDebugProxyCapture(
+  mode: string,
+  resolved?: DebugProxySettings,
+  deps: DebugProxyCaptureRuntimeDeps = {},
+): void {
   const settings = resolved ?? resolveDebugProxySettings();
   if (!settings.enabled) {
     return;
   }
-  getDebugProxyCaptureStore(settings.dbPath, settings.blobDir).upsertSession({
+  resolveRuntimeDeps(deps).getStore(settings.dbPath, settings.blobDir).upsertSession({
     id: settings.sessionId,
     startedAt: Date.now(),
     mode,
@@ -230,41 +271,50 @@ export function initializeDebugProxyCapture(mode: string, resolved?: DebugProxyS
     dbPath: settings.dbPath,
     blobDir: settings.blobDir,
   });
-  installDebugProxyGlobalFetchPatch(settings);
+  installDebugProxyGlobalFetchPatch(settings, deps);
 }
 
-export function finalizeDebugProxyCapture(resolved?: DebugProxySettings): void {
+export function finalizeDebugProxyCapture(
+  resolved?: DebugProxySettings,
+  deps: DebugProxyCaptureRuntimeDeps = {},
+): void {
   const settings = resolved ?? resolveDebugProxySettings();
   if (!settings.enabled) {
     return;
   }
-  getDebugProxyCaptureStore(settings.dbPath, settings.blobDir).endSession(settings.sessionId);
-  uninstallDebugProxyGlobalFetchPatch();
-  closeDebugProxyCaptureStore();
+  const runtime = resolveRuntimeDeps(deps);
+  runtime.getStore(settings.dbPath, settings.blobDir).endSession(settings.sessionId);
+  uninstallDebugProxyGlobalFetchPatch(deps);
+  runtime.closeStore();
 }
 
-export function captureHttpExchange(params: {
-  url: string;
-  method: string;
-  requestHeaders?: Headers | Record<string, string> | undefined;
-  requestBody?: BodyInit | Buffer | string | null;
-  response: Response;
-  transport?: "http" | "sse";
-  flowId?: string;
-  meta?: Record<string, unknown>;
-}): void {
-  const settings = resolveDebugProxySettings();
+export function captureHttpExchange(
+  params: {
+    url: string;
+    method: string;
+    requestHeaders?: Headers | Record<string, string> | undefined;
+    requestBody?: BodyInit | Buffer | string | null;
+    response: Response;
+    transport?: "http" | "sse";
+    flowId?: string;
+    meta?: Record<string, unknown>;
+  },
+  resolved?: DebugProxySettings,
+  deps: DebugProxyCaptureRuntimeDeps = {},
+): void {
+  const settings = resolved ?? resolveDebugProxySettings();
   if (!settings.enabled) {
     return;
   }
-  const store = getDebugProxyCaptureStore(settings.dbPath, settings.blobDir);
+  const runtime = resolveRuntimeDeps(deps);
+  const store = runtime.getStore(settings.dbPath, settings.blobDir);
   const flowId = params.flowId ?? randomUUID();
   const url = new URL(params.url);
   const requestBody =
     typeof params.requestBody === "string" || Buffer.isBuffer(params.requestBody)
       ? params.requestBody
       : null;
-  const requestPayload = persistEventPayload(store, {
+  const requestPayload = runtime.persistEventPayload(store, {
     data: requestBody,
     contentType:
       params.requestHeaders instanceof Headers
@@ -286,8 +336,8 @@ export function captureHttpExchange(params: {
       params.requestHeaders instanceof Headers
         ? (params.requestHeaders.get("content-type") ?? undefined)
         : params.requestHeaders?.["content-type"],
-    headersJson: safeJsonString(redactedCaptureHeaders(params.requestHeaders)),
-    metaJson: safeJsonString(params.meta),
+    headersJson: runtime.safeJsonString(redactedCaptureHeaders(params.requestHeaders)),
+    metaJson: runtime.safeJsonString(params.meta),
     ...requestPayload,
   });
   const cloneable =
@@ -313,9 +363,9 @@ export function captureHttpExchange(params: {
           : undefined,
       headersJson:
         params.response.headers && typeof params.response.headers.entries === "function"
-          ? safeJsonString(redactedCaptureHeaders(params.response.headers))
+          ? runtime.safeJsonString(redactedCaptureHeaders(params.response.headers))
           : undefined,
-      metaJson: safeJsonString({ ...params.meta, bodyCapture: "unavailable" }),
+      metaJson: runtime.safeJsonString({ ...params.meta, bodyCapture: "unavailable" }),
     });
     return;
   }
@@ -323,7 +373,7 @@ export function captureHttpExchange(params: {
     .clone()
     .arrayBuffer()
     .then((buffer) => {
-      const responsePayload = persistEventPayload(store, {
+      const responsePayload = runtime.persistEventPayload(store, {
         data: Buffer.from(buffer),
         contentType: params.response.headers.get("content-type") ?? undefined,
       });
@@ -340,8 +390,8 @@ export function captureHttpExchange(params: {
         }),
         status: params.response.status,
         contentType: params.response.headers.get("content-type") ?? undefined,
-        headersJson: safeJsonString(redactedCaptureHeaders(params.response.headers)),
-        metaJson: safeJsonString(params.meta),
+        headersJson: runtime.safeJsonString(redactedCaptureHeaders(params.response.headers)),
+        metaJson: runtime.safeJsonString(params.meta),
         ...responsePayload,
       });
     })

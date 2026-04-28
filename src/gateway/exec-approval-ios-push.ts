@@ -1,4 +1,4 @@
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import {
   hasEffectivePairedDeviceRole,
   listDevicePairing,
@@ -139,7 +139,7 @@ async function resolveDeliveryPlan(params: {
 
   let relayConfig: ApnsRelayConfig | undefined;
   if (needsRelay) {
-    const relay = resolveApnsRelayConfigFromEnv(process.env, loadConfig().gateway);
+    const relay = resolveApnsRelayConfigFromEnv(process.env, getRuntimeConfig().gateway);
     if (relay.ok) {
       relayConfig = relay.value;
     } else {

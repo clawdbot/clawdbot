@@ -1,6 +1,8 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.BuildConfig
+import ai.openclaw.app.SensitiveFeatureConfig
+import ai.openclaw.app.gateway.GatewaySession
 import android.Manifest
 import android.app.ActivityManager
 import android.content.Context
@@ -16,18 +18,16 @@ import android.os.PowerManager
 import android.os.StatFs
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
-import ai.openclaw.app.gateway.GatewaySession
-import java.util.Locale
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.util.Locale
 
 class DeviceHandler(
   private val appContext: Context,
-  private val smsEnabled: Boolean = BuildConfig.OPENCLAW_ENABLE_SMS,
-  private val callLogEnabled: Boolean = BuildConfig.OPENCLAW_ENABLE_CALL_LOG,
+  private val smsEnabled: Boolean = SensitiveFeatureConfig.smsEnabled,
+  private val callLogEnabled: Boolean = SensitiveFeatureConfig.callLogEnabled,
 ) {
   companion object {
     internal fun hasAnySmsCapability(
@@ -35,19 +35,16 @@ class DeviceHandler(
       telephonyAvailable: Boolean,
       smsSendGranted: Boolean,
       smsReadGranted: Boolean,
-    ): Boolean {
-      return smsEnabled && telephonyAvailable && (smsSendGranted || smsReadGranted)
-    }
+    ): Boolean = smsEnabled && telephonyAvailable && (smsSendGranted || smsReadGranted)
 
     internal fun isSmsPromptable(
       smsEnabled: Boolean,
       telephonyAvailable: Boolean,
       smsSendGranted: Boolean,
       smsReadGranted: Boolean,
-    ): Boolean {
-      return smsEnabled && telephonyAvailable && (!smsSendGranted || !smsReadGranted)
-    }
+    ): Boolean = smsEnabled && telephonyAvailable && (!smsSendGranted || !smsReadGranted)
   }
+
   private data class BatterySnapshot(
     val status: Int,
     val plugged: Int,
@@ -55,21 +52,13 @@ class DeviceHandler(
     val temperatureC: Double?,
   )
 
-  fun handleDeviceStatus(_paramsJson: String?): GatewaySession.InvokeResult {
-    return GatewaySession.InvokeResult.ok(statusPayloadJson())
-  }
+  fun handleDeviceStatus(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(statusPayloadJson())
 
-  fun handleDeviceInfo(_paramsJson: String?): GatewaySession.InvokeResult {
-    return GatewaySession.InvokeResult.ok(infoPayloadJson())
-  }
+  fun handleDeviceInfo(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(infoPayloadJson())
 
-  fun handleDevicePermissions(_paramsJson: String?): GatewaySession.InvokeResult {
-    return GatewaySession.InvokeResult.ok(permissionsPayloadJson())
-  }
+  fun handleDevicePermissions(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(permissionsPayloadJson())
 
-  fun handleDeviceHealth(_paramsJson: String?): GatewaySession.InvokeResult {
-    return GatewaySession.InvokeResult.ok(healthPayloadJson())
-  }
+  fun handleDeviceHealth(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(healthPayloadJson())
 
   private fun statusPayloadJson(): String {
     val battery = readBatterySnapshot()
@@ -133,14 +122,20 @@ class DeviceHandler(
     val model = Build.MODEL?.trim().orEmpty()
     val manufacturer = Build.MANUFACTURER?.trim().orEmpty()
     val modelIdentifier = Build.DEVICE?.trim().orEmpty()
-    val systemVersion = Build.VERSION.RELEASE?.trim().orEmpty()
+    val systemVersion =
+      Build.VERSION.RELEASE
+        ?.trim()
+        .orEmpty()
     val locale = Locale.getDefault().toLanguageTag().trim()
     val appVersion = BuildConfig.VERSION_NAME.trim()
     val appBuild = BuildConfig.VERSION_CODE.toString()
 
     return buildJsonObject {
       put("deviceName", JsonPrimitive(model.ifEmpty { "Android" }))
-      put("modelIdentifier", JsonPrimitive(modelIdentifier.ifEmpty { listOf(manufacturer, model).filter { it.isNotEmpty() }.joinToString(" ") }))
+      put(
+        "modelIdentifier",
+        JsonPrimitive(modelIdentifier.ifEmpty { listOf(manufacturer, model).filter { it.isNotEmpty() }.joinToString(" ") }),
+      )
       put("systemName", JsonPrimitive("Android"))
       put("systemVersion", JsonPrimitive(systemVersion.ifEmpty { Build.VERSION.SDK_INT.toString() }))
       put("appVersion", JsonPrimitive(appVersion.ifEmpty { "dev" }))
@@ -200,7 +195,17 @@ class DeviceHandler(
               put(
                 "status",
                 JsonPrimitive(
-                  if (hasAnySmsCapability(smsEnabled, canSendSms, smsSendGranted, smsReadGranted)) "granted" else "denied",
+                  if (hasAnySmsCapability(
+                      smsEnabled,
+                      canSendSms,
+                      smsSendGranted,
+                      smsReadGranted,
+                    )
+                  ) {
+                    "granted"
+                  } else {
+                    "denied"
+                  },
                 ),
               )
               put("promptable", JsonPrimitive(isSmsPromptable(smsEnabled, canSendSms, smsSendGranted, smsReadGranted)))
@@ -367,24 +372,22 @@ class DeviceHandler(
     return rawLevel.toDouble() / rawScale.toDouble()
   }
 
-  private fun mapBatteryState(status: Int): String {
-    return when (status) {
+  private fun mapBatteryState(status: Int): String =
+    when (status) {
       BatteryManager.BATTERY_STATUS_CHARGING -> "charging"
       BatteryManager.BATTERY_STATUS_FULL -> "full"
       BatteryManager.BATTERY_STATUS_DISCHARGING, BatteryManager.BATTERY_STATUS_NOT_CHARGING -> "unplugged"
       else -> "unknown"
     }
-  }
 
-  private fun mapChargingType(plugged: Int): String {
-    return when (plugged) {
+  private fun mapChargingType(plugged: Int): String =
+    when (plugged) {
       BatteryManager.BATTERY_PLUGGED_AC -> "ac"
       BatteryManager.BATTERY_PLUGGED_USB -> "usb"
       BatteryManager.BATTERY_PLUGGED_WIRELESS -> "wireless"
       BatteryManager.BATTERY_PLUGGED_DOCK -> "dock"
       else -> "none"
     }
-  }
 
   private fun mapThermalState(powerManager: PowerManager?): String {
     val thermal = powerManager?.currentThermalStatus ?: return "nominal"
@@ -394,7 +397,8 @@ class DeviceHandler(
       PowerManager.THERMAL_STATUS_SEVERE -> "serious"
       PowerManager.THERMAL_STATUS_CRITICAL,
       PowerManager.THERMAL_STATUS_EMERGENCY,
-      PowerManager.THERMAL_STATUS_SHUTDOWN -> "critical"
+      PowerManager.THERMAL_STATUS_SHUTDOWN,
+      -> "critical"
       else -> "nominal"
     }
   }
@@ -408,19 +412,24 @@ class DeviceHandler(
     }
   }
 
-  private fun permissionStateJson(granted: Boolean, promptableWhenDenied: Boolean) =
-    buildJsonObject {
-      put("status", JsonPrimitive(if (granted) "granted" else "denied"))
-      put("promptable", JsonPrimitive(!granted && promptableWhenDenied))
-    }
-
-  private fun hasPermission(permission: String): Boolean {
-    return (
-      ContextCompat.checkSelfPermission(appContext, permission) == PackageManager.PERMISSION_GRANTED
-      )
+  private fun permissionStateJson(
+    granted: Boolean,
+    promptableWhenDenied: Boolean,
+  ) = buildJsonObject {
+    put("status", JsonPrimitive(if (granted) "granted" else "denied"))
+    put("promptable", JsonPrimitive(!granted && promptableWhenDenied))
   }
 
-  private fun mapMemoryPressure(totalBytes: Long, availableBytes: Long, lowMemory: Boolean): String {
+  private fun hasPermission(permission: String): Boolean =
+    (
+      ContextCompat.checkSelfPermission(appContext, permission) == PackageManager.PERMISSION_GRANTED
+    )
+
+  private fun mapMemoryPressure(
+    totalBytes: Long,
+    availableBytes: Long,
+    lowMemory: Boolean,
+  ): String {
     if (totalBytes <= 0L) return if (lowMemory) "critical" else "unknown"
     if (lowMemory) return "critical"
     val freeRatio = availableBytes.toDouble() / totalBytes.toDouble()

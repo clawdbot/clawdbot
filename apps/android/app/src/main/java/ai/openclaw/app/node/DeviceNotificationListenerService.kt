@@ -1,5 +1,9 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.NotificationBurstLimiter
+import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.allowsPackage
+import ai.openclaw.app.isWithinQuietHours
 import android.app.Notification
 import android.app.NotificationManager
 import android.app.RemoteInput
@@ -8,10 +12,7 @@ import android.content.Context
 import android.content.Intent
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
-import ai.openclaw.app.NotificationBurstLimiter
-import ai.openclaw.app.SecurePrefs
-import ai.openclaw.app.allowsPackage
-import ai.openclaw.app.isWithinQuietHours
+import androidx.core.content.edit
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -38,8 +39,8 @@ data class DeviceNotificationEntry(
   val isClearable: Boolean,
 )
 
-internal fun DeviceNotificationEntry.toJsonObject(): JsonObject {
-  return buildJsonObject {
+internal fun DeviceNotificationEntry.toJsonObject(): JsonObject =
+  buildJsonObject {
     put("key", JsonPrimitive(key))
     put("packageName", JsonPrimitive(packageName))
     put("postTimeMs", JsonPrimitive(postTimeMs))
@@ -51,7 +52,6 @@ internal fun DeviceNotificationEntry.toJsonObject(): JsonObject {
     category?.let { put("category", JsonPrimitive(it)) }
     channelId?.let { put("channelId", JsonPrimitive(it)) }
   }
-}
 
 data class DeviceNotificationSnapshot(
   val enabled: Boolean,
@@ -77,9 +77,7 @@ data class NotificationActionResult(
   val message: String? = null,
 )
 
-internal fun actionRequiresClearableNotification(kind: NotificationActionKind): Boolean {
-  return kind == NotificationActionKind.Dismiss
-}
+internal fun actionRequiresClearableNotification(kind: NotificationActionKind): Boolean = kind == NotificationActionKind.Dismiss
 
 private object DeviceNotificationStore {
   private val lock = Any()
@@ -193,8 +191,8 @@ class DeviceNotificationListenerService : NotificationListenerService() {
     emitNotificationsChanged(payload)
   }
 
-  private fun notificationChangedPayload(entry: DeviceNotificationEntry): String? {
-    return notificationChangedPayload(
+  private fun notificationChangedPayload(entry: DeviceNotificationEntry): String? =
+    notificationChangedPayload(
       entry = entry,
       change = "posted",
       key = entry.key,
@@ -203,7 +201,6 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       isOngoing = entry.isOngoing,
       isClearable = entry.isClearable,
     )
-  }
 
   private fun notificationChangedPayload(
     entry: DeviceNotificationEntry?,
@@ -284,28 +281,30 @@ class DeviceNotificationListenerService : NotificationListenerService() {
     private const val recentPackagesPref = "notifications.forwarding.recentPackages"
     private const val legacyRecentPackagesPref = "notifications.recentPackages"
     private const val recentPackagesLimit = 64
+
     @Volatile private var activeService: DeviceNotificationListenerService? = null
+
     @Volatile private var nodeEventSink: ((event: String, payloadJson: String?) -> Unit)? = null
 
-    private fun serviceComponent(context: Context): ComponentName {
-      return ComponentName(context, DeviceNotificationListenerService::class.java)
-    }
+    private fun serviceComponent(context: Context): ComponentName = ComponentName(context, DeviceNotificationListenerService::class.java)
 
     fun setNodeEventSink(sink: ((event: String, payloadJson: String?) -> Unit)?) {
       nodeEventSink = sink
     }
 
-    private fun recentPackagesPrefs(context: Context) =
-      context.applicationContext.getSharedPreferences("openclaw.secure", Context.MODE_PRIVATE)
+    private fun recentPackagesPrefs(context: Context) = context.applicationContext.getSharedPreferences("openclaw.secure", Context.MODE_PRIVATE)
 
     private fun migrateLegacyRecentPackagesIfNeeded(context: Context) {
       val prefs = recentPackagesPrefs(context)
       val hasNew = prefs.contains(recentPackagesPref)
       val legacy = prefs.getString(legacyRecentPackagesPref, null)?.trim().orEmpty()
       if (!hasNew && legacy.isNotEmpty()) {
-        prefs.edit().putString(recentPackagesPref, legacy).remove(legacyRecentPackagesPref).apply()
+        prefs.edit {
+          putString(recentPackagesPref, legacy)
+          remove(legacyRecentPackagesPref)
+        }
       } else if (hasNew && prefs.contains(legacyRecentPackagesPref)) {
-        prefs.edit().remove(legacyRecentPackagesPref).apply()
+        prefs.edit { remove(legacyRecentPackagesPref) }
       }
     }
 
@@ -325,9 +324,10 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       return manager.isNotificationListenerAccessGranted(serviceComponent(context))
     }
 
-    fun snapshot(context: Context, enabled: Boolean = isAccessEnabled(context)): DeviceNotificationSnapshot {
-      return DeviceNotificationStore.snapshot(enabled = enabled)
-    }
+    fun snapshot(
+      context: Context,
+      enabled: Boolean = isAccessEnabled(context),
+    ): DeviceNotificationSnapshot = DeviceNotificationStore.snapshot(enabled = enabled)
 
     fun requestServiceRebind(context: Context) {
       runCatching {
@@ -335,7 +335,10 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       }
     }
 
-    fun executeAction(context: Context, request: NotificationActionRequest): NotificationActionResult {
+    fun executeAction(
+      context: Context,
+      request: NotificationActionRequest,
+    ): NotificationActionResult {
       if (!isAccessEnabled(context)) {
         return NotificationActionResult(
           ok = false,
@@ -343,12 +346,13 @@ class DeviceNotificationListenerService : NotificationListenerService() {
           message = "NOTIFICATIONS_DISABLED: enable notification access in system Settings",
         )
       }
-      val service = activeService
-        ?: return NotificationActionResult(
-          ok = false,
-          code = "NOTIFICATIONS_UNAVAILABLE",
-          message = "NOTIFICATIONS_UNAVAILABLE: notification listener not connected",
-        )
+      val service =
+        activeService
+          ?: return NotificationActionResult(
+            ok = false,
+            code = "NOTIFICATIONS_UNAVAILABLE",
+            message = "NOTIFICATIONS_UNAVAILABLE: notification listener not connected",
+          )
       return service.executeActionInternal(request)
     }
 
@@ -364,13 +368,16 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       if (normalized.isEmpty() || normalized == service.packageName) return
       migrateLegacyRecentPackagesIfNeeded(service.applicationContext)
       val prefs = recentPackagesPrefs(service.applicationContext)
-      val existing = prefs.getString(recentPackagesPref, null).orEmpty()
-        .split(',')
-        .map { it.trim() }
-        .filter { it.isNotEmpty() && it != normalized }
-        .take(recentPackagesLimit - 1)
+      val existing =
+        prefs
+          .getString(recentPackagesPref, null)
+          .orEmpty()
+          .split(',')
+          .map { it.trim() }
+          .filter { it.isNotEmpty() && it != normalized }
+          .take(recentPackagesLimit - 1)
       val updated = listOf(normalized) + existing
-      prefs.edit().putString(recentPackagesPref, updated.joinToString(",")).apply()
+      prefs.edit { putString(recentPackagesPref, updated.joinToString(",")) }
     }
   }
 
@@ -393,12 +400,13 @@ class DeviceNotificationListenerService : NotificationListenerService() {
 
     return when (request.kind) {
       NotificationActionKind.Open -> {
-        val pendingIntent = sbn.notification.contentIntent
-          ?: return NotificationActionResult(
-            ok = false,
-            code = "ACTION_UNAVAILABLE",
-            message = "ACTION_UNAVAILABLE: notification has no open action",
-          )
+        val pendingIntent =
+          sbn.notification.contentIntent
+            ?: return NotificationActionResult(
+              ok = false,
+              code = "ACTION_UNAVAILABLE",
+              message = "ACTION_UNAVAILABLE: notification has no open action",
+            )
         runCatching {
           pendingIntent.send()
         }.fold(

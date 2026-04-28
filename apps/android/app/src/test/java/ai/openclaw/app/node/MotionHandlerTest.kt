@@ -61,7 +61,14 @@ class MotionHandlerTest : NodeHandlerRobolectricTest() {
       val payload = Json.parseToJsonElement(result.payloadJson ?: error("missing payload")).jsonObject
       val activities = payload.getValue("activities").jsonArray
       assertEquals(1, activities.size)
-      assertEquals("high", activities.first().jsonObject.getValue("confidence").jsonPrimitive.content)
+      assertEquals(
+        "high",
+        activities
+          .first()
+          .jsonObject
+          .getValue("confidence")
+          .jsonPrimitive.content,
+      )
     }
 
   @Test
@@ -118,12 +125,18 @@ private class FakeMotionDataSource(
 
   override fun hasPermission(context: Context): Boolean = hasPermission
 
-  override suspend fun activity(context: Context, request: MotionActivityRequest): MotionActivityRecord {
+  override suspend fun activity(
+    context: Context,
+    request: MotionActivityRequest,
+  ): MotionActivityRecord {
     activityError?.let { throw it }
     return activityRecord
   }
 
-  override suspend fun pedometer(context: Context, request: MotionPedometerRequest): PedometerRecord {
+  override suspend fun pedometer(
+    context: Context,
+    request: MotionPedometerRequest,
+  ): PedometerRecord {
     pedometerError?.let { throw it }
     return pedometerRecord
   }

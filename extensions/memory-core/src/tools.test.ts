@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  getMemorySearchManagerMockConfigs,
   resetMemoryToolMockState,
   setMemoryBackend,
   setMemorySearchImpl,
 } from "./memory-tool-manager-mock.js";
+import { createMemorySearchTool } from "./tools.js";
 import {
+  asOpenClawConfig,
   createMemorySearchToolOrThrow,
   expectUnavailableMemorySearchDetails,
 } from "./tools.test-helpers.js";
@@ -102,5 +105,49 @@ describe("memory_search unavailable payloads", () => {
     expect((result.details as { debug?: { searchMs?: number } }).debug?.searchMs).toEqual(
       expect.any(Number),
     );
+  });
+
+  it("re-resolves config when executing a previously created tool", async () => {
+    const startupConfig = asOpenClawConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "ollama",
+            model: "nomic-embed-text",
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+      memory: {
+        backend: "builtin",
+      },
+    });
+    const patchedConfig = asOpenClawConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            model: "text-embedding-3-small",
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+      memory: {
+        backend: "builtin",
+      },
+    });
+    let liveConfig = startupConfig;
+    const tool = createMemorySearchTool({
+      config: startupConfig,
+      getConfig: () => liveConfig,
+    });
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+
+    liveConfig = patchedConfig;
+    await tool.execute("patched-config", { query: "provider switch" });
+
+    expect(getMemorySearchManagerMockConfigs()).toEqual([patchedConfig]);
   });
 });

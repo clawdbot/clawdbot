@@ -1,1 +1,5 @@
-export { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../config/commands.js";
+export {
+  isNativeCommandsExplicitlyDisabled,
+  resolveNativeCommandsEnabled,
+  resolveNativeSkillsEnabled,
+} from "../config/commands.js";

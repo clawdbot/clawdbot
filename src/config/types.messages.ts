@@ -4,6 +4,11 @@ import type { TtsConfig } from "./types.tts.js";
 export type GroupChatConfig = {
   mentionPatterns?: string[];
   historyLimit?: number;
+  /**
+   * Controls how group/channel turns produce visible room replies.
+   * Default: "message_tool".
+   */
+  visibleReplies?: "automatic" | "message_tool";
 };
 
 export type DmConfig = {

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   createAgentToolResultMiddlewareRunner,
   createCodexAppServerToolResultExtensionRunner,
@@ -21,6 +22,7 @@ function createTempDir(): string {
 }
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   cleanupTempPluginTestEnvironment(tempDirs, originalBundledPluginsDir);
 });
 
@@ -189,6 +191,56 @@ export default { id: "tool-result-middleware", register(api) {
 
     expect(listAgentToolResultMiddlewares("pi")).toHaveLength(1);
     expect(listAgentToolResultMiddlewares("codex")).toHaveLength(1);
+  });
+
+  it("lazily loads bundled middleware owners from manifest contracts", async () => {
+    const tmp = createTempDir();
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tmp;
+
+    writeTempPlugin({
+      dir: tmp,
+      id: "tool-result-middleware",
+      filename: "index.mjs",
+      manifest: {
+        activation: {
+          onStartup: false,
+        },
+        contracts: {
+          agentToolResultMiddleware: ["codex"],
+        },
+      },
+      body: `export default { id: "tool-result-middleware", register(api) {
+  api.registerAgentToolResultMiddleware(async (event) => ({
+    result: { ...event.result, content: [{ type: "text", text: event.toolName + " lazily compacted" }] }
+  }), { runtimes: ["codex"] });
+} };`,
+    });
+
+    setRuntimeConfigSnapshot({
+      plugins: {
+        entries: {
+          "tool-result-middleware": {
+            enabled: true,
+          },
+        },
+      },
+    });
+    resetActivePluginRegistryForTest();
+
+    expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
+
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" });
+    const result = await runner.applyToolResultMiddleware({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      toolCallId: "call-1",
+      toolName: "exec",
+      args: { command: "git status" },
+      result: { content: [{ type: "text", text: "raw" }], details: {} },
+    });
+
+    expect(result.content).toEqual([{ type: "text", text: "exec lazily compacted" }]);
+    expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
   });
 });
 

@@ -1,12 +1,13 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import { formatRelativeTimestamp } from "../format.ts";
+import { formatRelativeTimestamp, parseSessionKeyParts } from "../format.ts";
 import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import { normalizeThinkLevel } from "../thinking.ts";
 import type {
+  AgentIdentityResult,
   GatewaySessionRow,
   GatewayThinkingLevelOption,
   SessionCompactionCheckpoint,
@@ -23,6 +24,7 @@ export type SessionsProps = {
   includeUnknown: boolean;
   basePath: string;
   searchQuery: string;
+  agentIdentityById: Record<string, AgentIdentityResult>;
   sortColumn: "key" | "kind" | "updated" | "tokens";
   sortDir: "asc" | "desc";
   page: number;
@@ -80,6 +82,15 @@ const FAST_LEVELS = [
 const REASONING_LEVELS = ["", "off", "on", "stream"] as const;
 const PAGE_SIZES = [10, 25, 50, 100] as const;
 
+function getAgentIdentity(
+  agentIdentityById: Record<string, AgentIdentityResult>,
+  agentId: string,
+): AgentIdentityResult | null {
+  return Object.prototype.hasOwnProperty.call(agentIdentityById, agentId)
+    ? (agentIdentityById[agentId] ?? null)
+    : null;
+}
+
 function normalizeThinkingOptionValue(raw: string): string {
   return normalizeThinkLevel(raw) ?? normalizeLowercaseStringOrEmpty(raw);
 }
@@ -133,7 +144,11 @@ function resolveThinkLevelPatchValue(value: string): string | null {
   return value;
 }
 
-function filterRows(rows: GatewaySessionRow[], query: string): GatewaySessionRow[] {
+function filterRows(
+  rows: GatewaySessionRow[],
+  query: string,
+  agentIdentityById: Record<string, AgentIdentityResult>,
+): GatewaySessionRow[] {
   const q = normalizeLowercaseStringOrEmpty(query);
   if (!q) {
     return rows;
@@ -143,7 +158,14 @@ function filterRows(rows: GatewaySessionRow[], query: string): GatewaySessionRow
     const label = normalizeLowercaseStringOrEmpty(row.label);
     const kind = normalizeLowercaseStringOrEmpty(row.kind);
     const displayName = normalizeLowercaseStringOrEmpty(row.displayName);
-    return key.includes(q) || label.includes(q) || kind.includes(q) || displayName.includes(q);
+    if (key.includes(q) || label.includes(q) || kind.includes(q) || displayName.includes(q)) {
+      return true;
+    }
+    const keyParts = parseSessionKeyParts(row.key);
+    const identityName = keyParts
+      ? normalizeLowercaseStringOrEmpty(getAgentIdentity(agentIdentityById, keyParts.agentId)?.name)
+      : "";
+    return identityName.includes(q);
   });
 }
 
@@ -216,7 +238,7 @@ function formatCheckpointDelta(checkpoint: SessionCompactionCheckpoint): string 
 
 export function renderSessions(props: SessionsProps) {
   const rawRows = props.result?.sessions ?? [];
-  const filtered = filterRows(rawRows, props.searchQuery);
+  const filtered = filterRows(rawRows, props.searchQuery, props.agentIdentityById);
   const sorted = sortRows(filtered, props.sortColumn, props.sortDir);
   const totalRows = sorted.length;
   const totalPages = Math.max(1, Math.ceil(totalRows / props.pageSize));
@@ -328,7 +350,7 @@ export function renderSessions(props: SessionsProps) {
           <div class="data-table-search">
             <input
               type="text"
-              placeholder="Filter by key, label, kind…"
+              placeholder="Filter by key, agent, label, kind…"
               .value=${props.searchQuery}
               @input=${(e: Event) => props.onSearchChange((e.target as HTMLInputElement).value)}
             />
@@ -460,6 +482,17 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const showDisplayName = Boolean(
     displayName && displayName !== row.key && displayName !== trimmedLabel,
   );
+  const keyParts = parseSessionKeyParts(row.key);
+  const agentIdentity = keyParts
+    ? getAgentIdentity(props.agentIdentityById, keyParts.agentId)
+    : null;
+  const identityEmoji = normalizeOptionalString(agentIdentity?.emoji) ?? "";
+  const identityName = normalizeOptionalString(agentIdentity?.name) ?? "";
+  const friendlyKeyLabel =
+    identityName && keyParts
+      ? `${identityEmoji ? `${identityEmoji} ` : ""}${identityName} (${keyParts.channel})`
+      : null;
+  const keyCellTitle = friendlyKeyLabel ?? row.key;
   const canLink = row.kind !== "global";
   const chatUrl = canLink
     ? `${pathForTab("chat", props.basePath)}?session=${encodeURIComponent(row.key)}`
@@ -484,7 +517,10 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         />
       </td>
       <td class="data-table-key-col">
-        <div class="mono session-key-cell">
+        <div
+          class=${friendlyKeyLabel ? "session-key-cell" : "mono session-key-cell"}
+          title=${keyCellTitle}
+        >
           ${canLink
             ? html`<a
                 href=${chatUrl}
@@ -505,9 +541,9 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                     props.onNavigateToChat(row.key);
                   }
                 }}
-                >${row.key}</a
+                >${friendlyKeyLabel ?? row.key}</a
               >`
-            : row.key}
+            : (friendlyKeyLabel ?? row.key)}
           ${showDisplayName
             ? html`<span class="muted session-key-display-name">${displayName}</span>`
             : nothing}

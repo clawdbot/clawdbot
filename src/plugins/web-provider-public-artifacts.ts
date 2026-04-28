@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { PluginLoadOptions } from "./loader.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 import type { PluginWebFetchProviderEntry, PluginWebSearchProviderEntry } from "./types.js";
 import { resolveBundledWebFetchResolutionConfig } from "./web-fetch-providers.shared.js";
@@ -9,7 +10,7 @@ import {
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
 } from "./web-provider-public-artifacts.explicit.js";
-import { resolveManifestDeclaredWebProviderCandidatePluginIds } from "./web-provider-resolution-shared.js";
+import { resolveManifestDeclaredWebProviderCandidates } from "./web-provider-resolution-shared.js";
 import { resolveBundledWebSearchResolutionConfig } from "./web-search-providers.shared.js";
 
 type BundledWebProviderPublicArtifactParams = {
@@ -20,6 +21,11 @@ type BundledWebProviderPublicArtifactParams = {
   onlyPluginIds?: readonly string[];
 };
 
+type BundledCandidateResolution = {
+  pluginIds: string[];
+  manifestRecords?: readonly PluginManifestRecord[];
+};
+
 function resolveBundledCandidatePluginIds(params: {
   contract: "webSearchProviders" | "webFetchProviders";
   configKey: "webSearch" | "webFetch";
@@ -28,25 +34,31 @@ function resolveBundledCandidatePluginIds(params: {
   env?: PluginLoadOptions["env"];
   bundledAllowlistCompat?: boolean;
   onlyPluginIds?: readonly string[];
-}): string[] {
+}): BundledCandidateResolution {
   if (params.onlyPluginIds && params.onlyPluginIds.length > 0) {
-    return [...new Set(params.onlyPluginIds)].toSorted((left, right) => left.localeCompare(right));
+    return {
+      pluginIds: [...new Set(params.onlyPluginIds)].toSorted((left, right) =>
+        left.localeCompare(right),
+      ),
+    };
   }
   const resolvedConfig =
     params.contract === "webSearchProviders"
       ? resolveBundledWebSearchResolutionConfig(params).config
       : resolveBundledWebFetchResolutionConfig(params).config;
-  return (
-    resolveManifestDeclaredWebProviderCandidatePluginIds({
-      contract: params.contract,
-      configKey: params.configKey,
-      config: resolvedConfig,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      onlyPluginIds: params.onlyPluginIds,
-      origin: "bundled",
-    }) ?? []
-  );
+  const candidates = resolveManifestDeclaredWebProviderCandidates({
+    contract: params.contract,
+    configKey: params.configKey,
+    config: resolvedConfig,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    onlyPluginIds: params.onlyPluginIds,
+    origin: "bundled",
+  });
+  return {
+    pluginIds: candidates.pluginIds ?? [],
+    ...(candidates.manifestRecords ? { manifestRecords: candidates.manifestRecords } : {}),
+  };
 }
 
 function resolveBundledManifestRecordsByPluginId(params: {
@@ -54,16 +66,20 @@ function resolveBundledManifestRecordsByPluginId(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
   onlyPluginIds: readonly string[];
+  manifestRecords?: readonly PluginManifestRecord[];
 }) {
   const allowedPluginIds = new Set(params.onlyPluginIds);
-  return new Map(
+  const manifestRecords =
+    params.manifestRecords ??
     loadPluginManifestRegistryForPluginRegistry({
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
       includeDisabled: true,
-    })
-      .plugins.filter((record) => record.origin === "bundled" && allowedPluginIds.has(record.id))
+    }).plugins;
+  return new Map(
+    manifestRecords
+      .filter((record) => record.origin === "bundled" && allowedPluginIds.has(record.id))
       .map((record) => [record.id, record] as const),
   );
 }
@@ -80,11 +96,11 @@ export function resolveBundledWebSearchProvidersFromPublicArtifacts(
     bundledAllowlistCompat: params.bundledAllowlistCompat,
     onlyPluginIds: params.onlyPluginIds,
   });
-  if (pluginIds.length === 0) {
+  if (pluginIds.pluginIds.length === 0) {
     return [];
   }
   const directProviders = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
-    onlyPluginIds: pluginIds,
+    onlyPluginIds: pluginIds.pluginIds,
   });
   if (directProviders) {
     return directProviders;
@@ -93,10 +109,11 @@ export function resolveBundledWebSearchProvidersFromPublicArtifacts(
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    onlyPluginIds: pluginIds,
+    onlyPluginIds: pluginIds.pluginIds,
+    manifestRecords: pluginIds.manifestRecords,
   });
   const providers: PluginWebSearchProviderEntry[] = [];
-  for (const pluginId of pluginIds) {
+  for (const pluginId of pluginIds.pluginIds) {
     const record = recordsByPluginId.get(pluginId);
     if (!record) {
       return null;
@@ -125,11 +142,11 @@ export function resolveBundledWebFetchProvidersFromPublicArtifacts(
     bundledAllowlistCompat: params.bundledAllowlistCompat,
     onlyPluginIds: params.onlyPluginIds,
   });
-  if (pluginIds.length === 0) {
+  if (pluginIds.pluginIds.length === 0) {
     return [];
   }
   const directProviders = resolveBundledExplicitWebFetchProvidersFromPublicArtifacts({
-    onlyPluginIds: pluginIds,
+    onlyPluginIds: pluginIds.pluginIds,
   });
   if (directProviders) {
     return directProviders;
@@ -138,10 +155,11 @@ export function resolveBundledWebFetchProvidersFromPublicArtifacts(
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    onlyPluginIds: pluginIds,
+    onlyPluginIds: pluginIds.pluginIds,
+    manifestRecords: pluginIds.manifestRecords,
   });
   const providers: PluginWebFetchProviderEntry[] = [];
-  for (const pluginId of pluginIds) {
+  for (const pluginId of pluginIds.pluginIds) {
     const record = recordsByPluginId.get(pluginId);
     if (!record) {
       return null;

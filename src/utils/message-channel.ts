@@ -24,7 +24,10 @@ export {
 } from "./message-channel-normalize.js";
 export {
   INTERNAL_MESSAGE_CHANNEL,
+  INTERNAL_NON_DELIVERY_CHANNELS,
+  isInternalNonDeliveryChannel,
   type InternalMessageChannel,
+  type InternalNonDeliveryChannel,
 } from "./message-channel-constants.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,

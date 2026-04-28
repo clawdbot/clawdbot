@@ -18,7 +18,7 @@ let gatewayConfig: {
 let authCheckCalls = 0;
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({
+  getRuntimeConfig: () => ({
     gateway: gatewayConfig,
   }),
 }));

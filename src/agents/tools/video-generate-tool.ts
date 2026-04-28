@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
@@ -800,7 +800,7 @@ export function createVideoGenerateTool(options?: {
   fsPolicy?: ToolFsPolicy;
   scheduleBackgroundWork?: VideoGenerateBackgroundScheduler;
 }): AnyAgentTool | null {
-  const cfg: OpenClawConfig = options?.config ?? loadConfig();
+  const cfg: OpenClawConfig = options?.config ?? getRuntimeConfig();
   const videoGenerationModelConfig = resolveVideoGenerationModelConfigForTool({
     cfg,
     agentDir: options?.agentDir,

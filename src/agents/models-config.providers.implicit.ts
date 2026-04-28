@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
@@ -22,7 +23,7 @@ import {
   createProviderApiKeyResolver,
   createProviderAuthResolver,
 } from "./models-config.providers.secrets.js";
-import { findNormalizedProviderValue } from "./provider-id.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "./provider-id.js";
 
 const log = createSubsystemLogger("agents/model-providers");
 
@@ -43,6 +44,9 @@ type ImplicitProviderParams = {
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
+  providerDiscoveryProviderIds?: readonly string[];
+  providerDiscoveryTimeoutMs?: number;
 };
 
 type ImplicitProviderContext = ImplicitProviderParams & {
@@ -71,6 +75,7 @@ function resolveProviderDiscoveryFilter(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   resolveOwners?: (provider: string) => readonly string[] | undefined;
+  providerIds?: readonly string[];
 }): string[] | undefined {
   const { config, workspaceDir, env } = params;
   const testRaw = env.OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS?.trim();
@@ -80,6 +85,18 @@ function resolveProviderDiscoveryFilter(params: {
       .map((value) => value.trim())
       .filter(Boolean);
     return ids.length > 0 ? [...new Set(ids)] : undefined;
+  }
+  const scopedProviderIds = params.providerIds
+    ?.map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  if (scopedProviderIds) {
+    return resolveProviderPluginScopeFromProviderIds({
+      providerIds: scopedProviderIds,
+      config,
+      workspaceDir,
+      env,
+      resolveOwners: params.resolveOwners,
+    });
   }
   const live =
     env.OPENCLAW_LIVE_TEST === "1" || env.OPENCLAW_LIVE_GATEWAY === "1" || env.LIVE === "1";
@@ -100,15 +117,31 @@ function resolveProviderDiscoveryFilter(params: {
   if (ids.length === 0) {
     return undefined;
   }
+  return resolveProviderPluginScopeFromProviderIds({
+    providerIds: ids,
+    config,
+    workspaceDir,
+    env,
+    resolveOwners: params.resolveOwners,
+  });
+}
+
+function resolveProviderPluginScopeFromProviderIds(params: {
+  providerIds: readonly string[];
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  resolveOwners?: (provider: string) => readonly string[] | undefined;
+}): string[] {
   const pluginIds = new Set<string>();
-  for (const id of ids) {
+  for (const id of params.providerIds) {
     const owners =
       params.resolveOwners?.(id) ??
       resolveOwningPluginIdsForProvider({
         provider: id,
-        config,
-        workspaceDir,
-        env,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
       }) ??
       [];
     if (owners.length > 0) {
@@ -119,9 +152,75 @@ function resolveProviderDiscoveryFilter(params: {
     }
     pluginIds.add(id);
   }
-  return pluginIds.size > 0
-    ? [...pluginIds].toSorted((left, right) => left.localeCompare(right))
+  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
+}
+
+function resolvePluginMetadataProviderOwners(
+  pluginMetadataSnapshot: Pick<PluginMetadataSnapshot, "owners"> | undefined,
+  provider: string,
+): readonly string[] | undefined {
+  if (!pluginMetadataSnapshot) {
+    return undefined;
+  }
+  const normalizedProvider = normalizeProviderId(provider);
+  if (!normalizedProvider) {
+    return undefined;
+  }
+  const owners = new Set<string>();
+  appendNormalizedPluginMetadataOwners(
+    owners,
+    pluginMetadataSnapshot.owners.providers ?? new Map(),
+    provider,
+    normalizedProvider,
+  );
+  appendNormalizedPluginMetadataOwners(
+    owners,
+    pluginMetadataSnapshot.owners.modelCatalogProviders ?? new Map(),
+    provider,
+    normalizedProvider,
+  );
+  appendNormalizedPluginMetadataOwners(
+    owners,
+    pluginMetadataSnapshot.owners.setupProviders ?? new Map(),
+    provider,
+    normalizedProvider,
+  );
+  appendNormalizedPluginMetadataOwners(
+    owners,
+    pluginMetadataSnapshot.owners.cliBackends ?? new Map(),
+    provider,
+    normalizedProvider,
+  );
+  return owners.size > 0
+    ? [...owners].toSorted((left, right) => left.localeCompare(right))
     : undefined;
+}
+
+function appendNormalizedPluginMetadataOwners(
+  target: Set<string>,
+  ownerMap: ReadonlyMap<string, readonly string[]>,
+  provider: string,
+  normalizedProvider: string,
+): void {
+  for (const owner of ownerMap.get(provider) ?? []) {
+    target.add(owner);
+  }
+  if (normalizedProvider !== provider) {
+    for (const owner of ownerMap.get(normalizedProvider) ?? []) {
+      target.add(owner);
+    }
+  }
+  for (const [ownedId, owners] of ownerMap.entries()) {
+    if (
+      ownedId !== provider &&
+      ownedId !== normalizedProvider &&
+      normalizeProviderId(ownedId) === normalizedProvider
+    ) {
+      for (const owner of owners) {
+        target.add(owner);
+      }
+    }
+  }
 }
 
 export function resolveProviderDiscoveryFilterForTest(params: {
@@ -129,8 +228,16 @@ export function resolveProviderDiscoveryFilterForTest(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   resolveOwners?: (provider: string) => readonly string[] | undefined;
+  providerIds?: readonly string[];
 }): string[] | undefined {
   return resolveProviderDiscoveryFilter(params);
+}
+
+export function resolvePluginMetadataProviderOwnersForTest(
+  pluginMetadataSnapshot: Pick<PluginMetadataSnapshot, "owners"> | undefined,
+  provider: string,
+): readonly string[] | undefined {
+  return resolvePluginMetadataProviderOwners(pluginMetadataSnapshot, provider);
 }
 
 function mergeImplicitProviderSet(
@@ -256,7 +363,7 @@ async function resolvePluginImplicitProviders(
       resolveProviderApiKey: resolveCatalogProviderApiKey,
       resolveProviderAuth: (providerId, options) =>
         ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
-      timeoutMs: resolveLiveProviderCatalogTimeoutMs(ctx.env),
+      timeoutMs: ctx.providerDiscoveryTimeoutMs ?? resolveLiveProviderCatalogTimeoutMs(ctx.env),
     });
     if (!result) {
       continue;
@@ -367,7 +474,14 @@ export async function resolveImplicitProviders(
       config: params.config,
       workspaceDir: params.workspaceDir,
       env,
+      resolveOwners: params.pluginMetadataSnapshot
+        ? (provider) => resolvePluginMetadataProviderOwners(params.pluginMetadataSnapshot, provider)
+        : undefined,
+      providerIds: params.providerDiscoveryProviderIds,
     }),
+    ...(params.pluginMetadataSnapshot
+      ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+      : {}),
   });
 
   for (const order of PLUGIN_DISCOVERY_ORDERS) {

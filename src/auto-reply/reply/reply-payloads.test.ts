@@ -159,6 +159,30 @@ describe("shouldSuppressMessagingToolReplies", () => {
     ).toBe(false);
   });
 
+  it("suppresses when only one side carries the account id", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "telegram",
+        originatingTo: "123",
+        accountId: "work",
+        messagingToolSentTargets: [{ tool: "message", provider: "telegram", to: "123" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("does not suppress when route accounts differ", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "telegram",
+        originatingTo: "123",
+        accountId: "work",
+        messagingToolSentTargets: [
+          { tool: "message", provider: "telegram", to: "123", accountId: "personal" },
+        ],
+      }),
+    ).toBe(false);
+  });
+
   it("suppresses telegram topic-origin replies when explicit threadId matches", () => {
     installTelegramSuppressionRegistry();
     expect(

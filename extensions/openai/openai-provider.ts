@@ -77,8 +77,6 @@ const OPENAI_MODERN_MODEL_IDS = [
   OPENAI_GPT_54_NANO_MODEL_ID,
   "gpt-5.2",
 ] as const;
-const OPENAI_DIRECT_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
-const SUPPRESSED_SPARK_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
 function shouldUseOpenAIResponsesTransport(params: {
   provider: string;
   api?: string | null;
@@ -259,18 +257,6 @@ export function buildOpenAIProvider(): ProviderPlugin {
         return undefined;
       }
       return 'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.5, or set OPENAI_API_KEY for direct OpenAI API access.';
-    },
-    suppressBuiltInModel: (ctx) => {
-      if (
-        !SUPPRESSED_SPARK_PROVIDERS.has(normalizeProviderId(ctx.provider)) ||
-        normalizeLowercaseStringOrEmpty(ctx.modelId) !== OPENAI_DIRECT_SPARK_MODEL_ID
-      ) {
-        return undefined;
-      }
-      return {
-        suppress: true,
-        errorMessage: `Unknown model: ${ctx.provider}/${OPENAI_DIRECT_SPARK_MODEL_ID}. ${OPENAI_DIRECT_SPARK_MODEL_ID} is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.`,
-      };
     },
     augmentModelCatalog: (ctx) => {
       const openAiGpt55ProTemplate = findCatalogTemplate({

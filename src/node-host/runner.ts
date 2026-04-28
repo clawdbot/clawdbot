@@ -1,4 +1,4 @@
-import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { GatewayClient, type GatewayReconnectPausedInfo } from "../gateway/client.js";
 import { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
@@ -198,13 +198,13 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const gateway: NodeHostGatewayConfig = {
     host: opts.gatewayHost,
     port: opts.gatewayPort,
-    tls: opts.gatewayTls ?? loadConfig().gateway?.tls?.enabled ?? false,
+    tls: opts.gatewayTls ?? getRuntimeConfig().gateway?.tls?.enabled ?? false,
     tlsFingerprint: opts.gatewayTlsFingerprint,
   };
   config.gateway = gateway;
   await saveNodeHostConfig(config);
 
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   await ensureNodeHostPluginRegistry({ config: cfg, env: process.env });
   const pluginNodeHost = listRegisteredNodeHostCapsAndCommands();
   const { token, password } = await resolveNodeHostGatewayCredentials({

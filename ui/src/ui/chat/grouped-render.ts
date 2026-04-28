@@ -19,14 +19,9 @@ import { resolveLocalUserName } from "../user-identity.ts";
 export { resolveAssistantTextAvatar } from "../views/agents-utils.ts";
 import { renderChatAvatar } from "./chat-avatar.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
-import {
-  extractTextCached,
-  extractThinkingCached,
-  formatReasoningMarkdown,
-} from "./message-extract.ts";
+import { extractThinkingCached, formatReasoningMarkdown } from "./message-extract.ts";
 import { isToolResultMessage, normalizeMessage } from "./message-normalizer.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
-import { isTtsSupported, speakText, stopTts, isTtsSpeaking } from "./speech.ts";
 import {
   extractToolCards,
   renderExpandedToolCardContent,
@@ -465,7 +460,6 @@ export function renderMessageGroup(
         <div class="chat-group-footer">
           <span class="chat-sender-name">${who}</span>
           ${renderChatTimestamp(group.timestamp)} ${renderMessageMeta(meta)}
-          ${normalizedRole === "assistant" && isTtsSupported() ? renderTtsButton(group) : nothing}
           ${opts.onDelete
             ? renderDeleteButton(opts.onDelete, normalizedRole === "user" ? "left" : "right")
             : nothing}
@@ -609,17 +603,6 @@ function renderMessageMeta(meta: GroupMeta | null) {
   `;
 }
 
-function extractGroupText(group: MessageGroup): string {
-  const parts: string[] = [];
-  for (const { message } of group.messages) {
-    const text = extractTextCached(message);
-    if (text?.trim()) {
-      parts.push(text.trim());
-    }
-  }
-  return parts.join("\n\n");
-}
-
 const SKIP_DELETE_CONFIRM_KEY = "openclaw:skipDeleteConfirm";
 
 type DeleteConfirmSide = "left" | "right";
@@ -694,48 +677,6 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
         ${icons.trash ?? icons.x}
       </button>
     </span>
-  `;
-}
-
-function renderTtsButton(group: MessageGroup) {
-  return html`
-    <button
-      class="btn btn--xs chat-tts-btn"
-      type="button"
-      title=${isTtsSpeaking() ? "Stop speaking" : "Read aloud"}
-      aria-label=${isTtsSpeaking() ? "Stop speaking" : "Read aloud"}
-      @click=${(e: Event) => {
-        const btn = e.currentTarget as HTMLButtonElement;
-        if (isTtsSpeaking()) {
-          stopTts();
-          btn.classList.remove("chat-tts-btn--active");
-          btn.title = "Read aloud";
-          return;
-        }
-        const text = extractGroupText(group);
-        if (!text) {
-          return;
-        }
-        btn.classList.add("chat-tts-btn--active");
-        btn.title = "Stop speaking";
-        speakText(text, {
-          onEnd: () => {
-            if (btn.isConnected) {
-              btn.classList.remove("chat-tts-btn--active");
-              btn.title = "Read aloud";
-            }
-          },
-          onError: () => {
-            if (btn.isConnected) {
-              btn.classList.remove("chat-tts-btn--active");
-              btn.title = "Read aloud";
-            }
-          },
-        });
-      }}
-    >
-      ${icons.volume2}
-    </button>
   `;
 }
 

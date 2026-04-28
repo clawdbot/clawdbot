@@ -12,6 +12,7 @@ import {
   getChannelRuntimeContext,
   watchChannelRuntimeContexts,
 } from "./channel-runtime-context.js";
+import { isExecApprovalChannelRuntimeTerminalStartError } from "./exec-approval-channel-runtime.js";
 
 type ApprovalBootstrapHandler = ChannelApprovalHandler;
 const APPROVAL_HANDLER_BOOTSTRAP_RETRY_MS = 1_000;
@@ -117,6 +118,10 @@ export async function startChannelApprovalHandlerBootstrap(params: {
       await startHandlerForContext(context, generation);
     } catch (error) {
       if (generation === activeGeneration) {
+        if (isExecApprovalChannelRuntimeTerminalStartError(error)) {
+          logger.error(`native approval handler disabled: ${String(error)}`);
+          return;
+        }
         logger.error(`failed to start native approval handler: ${String(error)}`);
         scheduleRetryForContext(context, generation);
       }
@@ -155,7 +160,11 @@ export async function startChannelApprovalHandlerBootstrap(params: {
   if (existingContext !== undefined) {
     clearRetryTimer();
     invalidateActiveHandler();
-    await startHandlerForContext(existingContext, activeGeneration);
+    const generation = activeGeneration;
+    spawn(
+      "failed to start native approval handler",
+      startHandlerForRegisteredContext(existingContext, generation),
+    );
   }
 
   return async () => {

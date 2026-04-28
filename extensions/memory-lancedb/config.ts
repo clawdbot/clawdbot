@@ -4,9 +4,9 @@ import { join } from "node:path";
 
 export type MemoryConfig = {
   embedding: {
-    provider: "openai";
+    provider: string;
     model: string;
-    apiKey: string;
+    apiKey?: string;
     baseUrl?: string;
     dimensions?: number;
   };
@@ -15,6 +15,7 @@ export type MemoryConfig = {
   autoCapture?: boolean;
   autoRecall?: boolean;
   captureMaxChars?: number;
+  recallMaxChars?: number;
   storageOptions?: Record<string, string>;
 };
 
@@ -23,6 +24,7 @@ export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 
 const DEFAULT_MODEL = "text-embedding-3-small";
 export const DEFAULT_CAPTURE_MAX_CHARS = 500;
+export const DEFAULT_RECALL_MAX_CHARS = 1000;
 const LEGACY_STATE_DIRS: string[] = [];
 
 function resolveDefaultDbPath(): string {
@@ -56,6 +58,7 @@ const EMBEDDING_DIMENSIONS: Record<string, number> = {
   "text-embedding-3-small": 1536,
   "text-embedding-3-large": 3072,
 };
+const EMBEDDING_CONFIG_KEYS = ["provider", "apiKey", "model", "baseUrl", "dimensions"] as const;
 
 function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], label: string) {
   const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
@@ -106,26 +109,39 @@ export const memoryConfigSchema = {
         "autoCapture",
         "autoRecall",
         "captureMaxChars",
+        "recallMaxChars",
         "storageOptions",
       ],
       "memory config",
     );
 
     const embedding = cfg.embedding as Record<string, unknown> | undefined;
-    if (!embedding || typeof embedding.apiKey !== "string") {
-      throw new Error("embedding.apiKey is required");
+    if (!embedding || typeof embedding !== "object" || Array.isArray(embedding)) {
+      throw new Error("embedding config required");
     }
-    assertAllowedKeys(embedding, ["apiKey", "model", "baseUrl", "dimensions"], "embedding config");
+    assertAllowedKeys(embedding, [...EMBEDDING_CONFIG_KEYS], "embedding config");
+    if (Object.keys(embedding).length === 0) {
+      throw new Error("embedding config must include at least one setting");
+    }
 
     const model = resolveEmbeddingModel(embedding);
+    const provider = typeof embedding.provider === "string" ? embedding.provider.trim() : "openai";
+    if (!provider) {
+      throw new Error("embedding.provider must not be empty");
+    }
 
     const captureMaxChars =
       typeof cfg.captureMaxChars === "number" ? Math.floor(cfg.captureMaxChars) : undefined;
+    const recallMaxChars =
+      typeof cfg.recallMaxChars === "number" ? Math.floor(cfg.recallMaxChars) : undefined;
     if (
       typeof captureMaxChars === "number" &&
       (captureMaxChars < 100 || captureMaxChars > 10_000)
     ) {
       throw new Error("captureMaxChars must be between 100 and 10000");
+    }
+    if (typeof recallMaxChars === "number" && (recallMaxChars < 100 || recallMaxChars > 10_000)) {
+      throw new Error("recallMaxChars must be between 100 and 10000");
     }
 
     const dreaming =
@@ -156,9 +172,9 @@ export const memoryConfigSchema = {
 
     return {
       embedding: {
-        provider: "openai",
+        provider,
         model,
-        apiKey: resolveEnvVars(embedding.apiKey),
+        apiKey: typeof embedding.apiKey === "string" ? resolveEnvVars(embedding.apiKey) : undefined,
         baseUrl:
           typeof embedding.baseUrl === "string" ? resolveEnvVars(embedding.baseUrl) : undefined,
         dimensions: typeof embedding.dimensions === "number" ? embedding.dimensions : undefined,
@@ -168,20 +184,26 @@ export const memoryConfigSchema = {
       autoCapture: cfg.autoCapture === true,
       autoRecall: cfg.autoRecall !== false,
       captureMaxChars: captureMaxChars ?? DEFAULT_CAPTURE_MAX_CHARS,
+      recallMaxChars: recallMaxChars ?? DEFAULT_RECALL_MAX_CHARS,
       ...(storageOptions ? { storageOptions } : {}),
     };
   },
   uiHints: {
+    "embedding.provider": {
+      label: "Embedding Provider",
+      placeholder: "openai",
+      help: "Memory embedding provider adapter to use (for example openai, github-copilot, ollama)",
+    },
     "embedding.apiKey": {
       label: "OpenAI API Key",
       sensitive: true,
       placeholder: "sk-proj-...",
-      help: "API key for OpenAI embeddings (or use ${OPENAI_API_KEY})",
+      help: "Optional API key override for OpenAI-compatible embeddings; omit to use configured provider auth",
     },
     "embedding.baseUrl": {
       label: "Base URL",
       placeholder: "https://api.openai.com/v1",
-      help: "Base URL for compatible providers (e.g. http://localhost:11434/v1)",
+      help: "Optional provider or OpenAI-compatible embedding endpoint base URL",
       advanced: true,
     },
     "embedding.dimensions": {
@@ -214,6 +236,12 @@ export const memoryConfigSchema = {
       help: "Maximum message length eligible for auto-capture",
       advanced: true,
       placeholder: String(DEFAULT_CAPTURE_MAX_CHARS),
+    },
+    recallMaxChars: {
+      label: "Recall Query Max Chars",
+      help: "Maximum prompt/query length embedded for memory recall. Lower for small local embedding models.",
+      advanced: true,
+      placeholder: String(DEFAULT_RECALL_MAX_CHARS),
     },
     storageOptions: {
       label: "Storage Options",

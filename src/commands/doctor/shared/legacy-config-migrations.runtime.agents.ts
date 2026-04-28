@@ -69,6 +69,15 @@ const LEGACY_AGENT_RUNTIME_POLICY_RULES: LegacyConfigRule[] = [
   },
 ];
 
+const LEGACY_AGENT_LLM_TIMEOUT_RULES: LegacyConfigRule[] = [
+  {
+    path: ["agents", "defaults", "llm"],
+    message:
+      'agents.defaults.llm is legacy; use models.providers.<id>.timeoutSeconds for slow model/provider timeouts. Run "openclaw doctor --fix".',
+    match: (value) => getRecord(value) !== null,
+  },
+];
+
 function sandboxScopeFromPerSession(perSession: boolean): "session" | "shared" {
   return perSession ? "session" : "shared";
 }
@@ -194,6 +203,21 @@ function migrateLegacyAgentRuntimePolicy(
 }
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "agents.defaults.llm->models.providers.timeoutSeconds",
+    describe: "Remove legacy agents.defaults.llm timeout config",
+    legacyRules: LEGACY_AGENT_LLM_TIMEOUT_RULES,
+    apply: (raw, changes) => {
+      const defaults = getRecord(getRecord(raw.agents)?.defaults);
+      if (!defaults || getRecord(defaults.llm) === null) {
+        return;
+      }
+      delete defaults.llm;
+      changes.push(
+        "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds.",
+      );
+    },
+  }),
   defineLegacyConfigMigration({
     id: "agents.embeddedHarness->agentRuntime",
     describe: "Move legacy embeddedHarness runtime policy to agentRuntime",

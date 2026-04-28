@@ -5,7 +5,7 @@ import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared
 import {
   danger,
   defaultRuntime,
-  loadConfig,
+  getRuntimeConfig,
   shortenHomePath,
   type SnapshotResult,
 } from "./core-api.js";
@@ -81,7 +81,7 @@ export function registerBrowserInspectCommands(
       const configMode =
         !formatWasExplicit &&
         format === "ai" &&
-        loadConfig().browser?.snapshotDefaults?.mode === "efficient"
+        getRuntimeConfig().browser?.snapshotDefaults?.mode === "efficient"
           ? "efficient"
           : undefined;
       const mode = opts.efficient === true || opts.mode === "efficient" ? "efficient" : configMode;

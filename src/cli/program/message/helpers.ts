@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { resolveMessageSecretScope } from "../../../cli/message-secret-scope.js";
 import { messageCommand } from "../../../commands/message.js";
 import { danger, setVerbose } from "../../../globals.js";
 import { CHANNEL_TARGET_DESCRIPTION } from "../../../infra/outbound/channel-target.js";
@@ -6,7 +7,7 @@ import { runGlobalGatewayStopSafely } from "../../../plugins/hook-runner-global.
 import { defaultRuntime } from "../../../runtime.js";
 import { runCommandWithRuntime } from "../../cli-utils.js";
 import { createDefaultDeps } from "../../deps.js";
-import { ensurePluginRegistryLoaded } from "../../plugin-registry.js";
+import { ensurePluginRegistryLoaded, type PluginRegistryScope } from "../../plugin-registry.js";
 
 export type MessageCliHelpers = {
   withMessageBase: (command: Command) => Command;
@@ -31,6 +32,20 @@ async function runPluginStopHooks(): Promise<void> {
   });
 }
 
+function resolveMessagePluginLoadOptions(
+  opts: Record<string, unknown>,
+): { scope: PluginRegistryScope; onlyChannelIds?: string[] } | undefined {
+  const scopedChannel = resolveMessageSecretScope({
+    channel: opts.channel,
+    target: opts.target,
+    targets: opts.targets,
+  }).channel;
+  if (scopedChannel) {
+    return { scope: "configured-channels", onlyChannelIds: [scopedChannel] };
+  }
+  return { scope: "configured-channels" };
+}
+
 export function createMessageCliHelpers(
   message: Command,
   messageChannelOptions: string,
@@ -50,7 +65,7 @@ export function createMessageCliHelpers(
 
   const runMessageAction = async (action: string, opts: Record<string, unknown>) => {
     setVerbose(Boolean(opts.verbose));
-    ensurePluginRegistryLoaded();
+    ensurePluginRegistryLoaded(resolveMessagePluginLoadOptions(opts));
     const deps = createDefaultDeps();
     let failed = false;
     await runCommandWithRuntime(

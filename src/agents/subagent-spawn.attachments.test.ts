@@ -20,7 +20,7 @@ let subagentSpawnModule: Awaited<ReturnType<typeof loadSubagentSpawnModuleForTes
 beforeAll(async () => {
   subagentSpawnModule = await loadSubagentSpawnModuleForTest({
     callGatewayMock,
-    loadConfig: () => configOverride,
+    getRuntimeConfig: () => configOverride,
     updateSessionStoreMock,
     workspaceDir: workspaceDirOverride || os.tmpdir(),
   });

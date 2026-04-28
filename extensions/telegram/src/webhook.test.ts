@@ -442,6 +442,60 @@ describe("startTelegramWebhook", () => {
     );
   });
 
+  it("keeps local listener alive and retries when setWebhook has a recoverable startup failure", async () => {
+    const runtimeLog = vi.fn();
+    const runtimeError = vi.fn();
+    setWebhookSpy.mockRejectedValueOnce(new TypeError("fetch failed")).mockResolvedValueOnce(true);
+
+    await withStartedWebhook(
+      {
+        secret: TELEGRAM_SECRET,
+        path: TELEGRAM_WEBHOOK_PATH,
+        runtime: { log: runtimeLog, error: runtimeError, exit: vi.fn() },
+        webhookRegistrationRetryPolicy: {
+          initialMs: 0,
+          maxMs: 0,
+          factor: 1,
+          jitter: 0,
+        },
+      },
+      async ({ port }) => {
+        const health = await fetch(`http://127.0.0.1:${port}/healthz`);
+        expect(health.status).toBe(200);
+        expect(stopSpy).not.toHaveBeenCalled();
+        expect(runtimeError).toHaveBeenCalledWith(
+          expect.stringContaining("telegram setWebhook failed: fetch failed"),
+        );
+        await vi.waitFor(() => expect(setWebhookSpy).toHaveBeenCalledTimes(2));
+        expect(runtimeLog).toHaveBeenCalledWith("telegram setWebhook retry 1 scheduled in 0ms");
+        expect(runtimeLog).toHaveBeenCalledWith(
+          expect.stringContaining("webhook advertised to telegram on http://"),
+        );
+      },
+    );
+  });
+
+  it("fails startup when setWebhook has a non-recoverable rejection", async () => {
+    const runtimeError = vi.fn();
+    const error = Object.assign(new Error("unauthorized"), { error_code: 401 });
+    setWebhookSpy.mockRejectedValueOnce(error);
+
+    await expect(
+      startTelegramWebhook({
+        token: TELEGRAM_TOKEN,
+        port: 0,
+        secret: TELEGRAM_SECRET,
+        path: TELEGRAM_WEBHOOK_PATH,
+        runtime: { log: vi.fn(), error: runtimeError, exit: vi.fn() },
+      }),
+    ).rejects.toThrow("unauthorized");
+
+    expect(stopSpy).toHaveBeenCalledTimes(1);
+    expect(runtimeError).toHaveBeenCalledWith(
+      expect.stringContaining("telegram setWebhook failed: unauthorized"),
+    );
+  });
+
   it("registers webhook with certificate when webhookCertPath is provided", async () => {
     setWebhookSpy.mockClear();
     await withStartedWebhook(

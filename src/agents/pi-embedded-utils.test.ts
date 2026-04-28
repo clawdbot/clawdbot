@@ -563,7 +563,7 @@ File contents here`,
       {
         name: "unclosed think tag",
         text: "<think>Pensando sobre el problema...",
-        expected: "",
+        expected: "Pensando sobre el problema...",
       },
       {
         name: "thinking tag",

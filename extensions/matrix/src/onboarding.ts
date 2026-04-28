@@ -1,7 +1,5 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import type { DmPolicy } from "openclaw/plugin-sdk/config-runtime";
-import type { WizardPrompter } from "openclaw/plugin-sdk/matrix-runtime-shared";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import type { DmPolicy } from "openclaw/plugin-sdk/config-types";
 import {
   type ChannelSetupDmPolicy,
   type ChannelSetupWizardAdapter,
@@ -34,6 +32,7 @@ import {
 } from "./matrix/client/url-validation.js";
 import { resolveMatrixConfigFieldPath, updateMatrixAccountConfig } from "./matrix/config-update.js";
 import { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./matrix/deps.js";
+import type { RuntimeEnv, WizardPrompter } from "./runtime-api.js";
 import { moveSingleMatrixAccountConfigToNamedAccount } from "./setup-config.js";
 import { resolveMatrixSetupDmAllowFrom } from "./setup-dm-policy.js";
 import type { CoreConfig, MatrixConfig } from "./types.js";

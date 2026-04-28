@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendInvalidRequest, sendJson, sendMethodNotAllowed } from "./http-common.js";
@@ -55,7 +55,7 @@ async function authorizeRequest(
 }
 
 function loadAgentModelIds(): string[] {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const defaultAgentId = resolveDefaultAgentId(cfg);
   const ids = new Set<string>([OPENCLAW_MODEL_ID, OPENCLAW_DEFAULT_MODEL_ID]);
   ids.add(`openclaw/${defaultAgentId}`);

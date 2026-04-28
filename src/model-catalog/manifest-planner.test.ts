@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { planManifestModelCatalogRows } from "./index.js";
+import { planManifestModelCatalogRows, planManifestModelCatalogSuppressions } from "./index.js";
 
 describe("manifest model catalog planner", () => {
   it("builds manifest rows from plugin-owned catalog providers", () => {
@@ -92,6 +92,57 @@ describe("manifest model catalog planner", () => {
     expect(plan.conflicts).toEqual([]);
   });
 
+  it("plans alias-filtered rows from owned provider catalogs", () => {
+    const plan = planManifestModelCatalogRows({
+      providerFilter: "azure-openai-responses",
+      registry: {
+        plugins: [
+          {
+            id: "openai",
+            providers: ["openai"],
+            modelCatalog: {
+              aliases: {
+                "azure-openai-responses": {
+                  provider: "openai",
+                  api: "azure-openai-responses",
+                  baseUrl: "https://example.openai.azure.com/openai/v1",
+                },
+              },
+              discovery: {
+                openai: "static",
+              },
+              providers: {
+                openai: {
+                  api: "openai-responses",
+                  baseUrl: "https://api.openai.com/v1",
+                  models: [{ id: "gpt-5.4", name: "GPT-5.4" }],
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(plan.entries).toEqual([
+      expect.objectContaining({
+        pluginId: "openai",
+        provider: "azure-openai-responses",
+        discovery: "static",
+      }),
+    ]);
+    expect(plan.rows).toEqual([
+      expect.objectContaining({
+        provider: "azure-openai-responses",
+        id: "gpt-5.4",
+        ref: "azure-openai-responses/gpt-5.4",
+        mergeKey: "azure-openai-responses::gpt-5.4",
+        api: "azure-openai-responses",
+        baseUrl: "https://example.openai.azure.com/openai/v1",
+      }),
+    ]);
+  });
+
   it("reports duplicate provider/model keys and excludes conflicted rows", () => {
     const plan = planManifestModelCatalogRows({
       registry: {
@@ -139,5 +190,66 @@ describe("manifest model catalog planner", () => {
       mergeKey: "openai::gpt-5.5",
       name: "GPT-5.5",
     });
+  });
+});
+
+describe("manifest model catalog suppression planner", () => {
+  it("plans suppressions for owned providers and declared provider aliases", () => {
+    const plan = planManifestModelCatalogSuppressions({
+      registry: {
+        plugins: [
+          {
+            id: "openai",
+            providers: ["openai", "openai-codex"],
+            modelCatalog: {
+              aliases: {
+                "azure-openai-responses": {
+                  provider: "openai",
+                },
+              },
+              suppressions: [
+                {
+                  provider: "openai",
+                  model: "gpt-5.3-codex-spark",
+                  reason: "Use openai/gpt-5.5.",
+                  when: {
+                    baseUrlHosts: ["api.openai.com"],
+                  },
+                },
+                {
+                  provider: "azure-openai-responses",
+                  model: "GPT-5.3-Codex-Spark",
+                  reason: "Use openai/gpt-5.5.",
+                },
+                {
+                  provider: "openrouter",
+                  model: "foreign-row",
+                },
+              ],
+            },
+          },
+        ],
+      },
+    });
+
+    expect(plan.suppressions).toEqual([
+      {
+        pluginId: "openai",
+        provider: "azure-openai-responses",
+        model: "gpt-5.3-codex-spark",
+        mergeKey: "azure-openai-responses::gpt-5.3-codex-spark",
+        reason: "Use openai/gpt-5.5.",
+      },
+      {
+        pluginId: "openai",
+        provider: "openai",
+        model: "gpt-5.3-codex-spark",
+        mergeKey: "openai::gpt-5.3-codex-spark",
+        reason: "Use openai/gpt-5.5.",
+        when: {
+          baseUrlHosts: ["api.openai.com"],
+        },
+      },
+    ]);
   });
 });

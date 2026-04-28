@@ -36,6 +36,7 @@ export {
   applyAnthropicPayloadPolicyToParams,
   buildCopilotDynamicHeaders,
   composeProviderStreamWrappers,
+  createAnthropicThinkingPrefillPayloadWrapper,
   createBedrockNoCacheWrapper,
   createMoonshotThinkingWrapper,
   createToolStreamWrapper,
@@ -43,10 +44,12 @@ export {
   defaultToolStreamExtraParams,
   hasCopilotVisionInput,
   isAnthropicBedrockModel,
+  isOpenAICompatibleThinkingEnabled,
   type ProviderStreamWrapperFactory,
   resolveAnthropicPayloadPolicy,
   resolveMoonshotThinkingType,
   streamWithPayloadPatch,
+  stripTrailingAnthropicAssistantPrefillWhenThinking,
 } from "./provider-stream-shared.js";
 
 export type ProviderStreamFamily =

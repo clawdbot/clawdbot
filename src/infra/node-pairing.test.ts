@@ -5,7 +5,9 @@ import {
   approveNodePairing,
   getPairedNode,
   listNodePairing,
+  removePairedNode,
   requestNodePairing,
+  updatePairedNodeMetadata,
   verifyNodeToken,
 } from "./node-pairing.js";
 import { resolvePairingPaths } from "./pairing-files.js";
@@ -152,6 +154,32 @@ describe("node pairing tokens", () => {
     });
   });
 
+  test("removes paired nodes without disturbing pending requests", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+      const pending = await requestNodePairing(
+        {
+          nodeId: "node-2",
+          platform: "darwin",
+        },
+        baseDir,
+      );
+
+      await expect(removePairedNode("node-1", baseDir)).resolves.toEqual({ nodeId: "node-1" });
+      await expect(removePairedNode("node-1", baseDir)).resolves.toBeNull();
+      await expect(getPairedNode("node-1", baseDir)).resolves.toBeNull();
+      await expect(listNodePairing(baseDir)).resolves.toEqual({
+        pending: [
+          expect.objectContaining({
+            requestId: pending.request.requestId,
+            nodeId: "node-2",
+          }),
+        ],
+        paired: [],
+      });
+    });
+  });
+
   test("requires the right scopes to approve node requests", async () => {
     await withNodePairingDir(async (baseDir) => {
       const systemRunRequest = await requestNodePairing(
@@ -221,6 +249,33 @@ describe("node pairing tokens", () => {
         ),
       ).rejects.toThrow(/paired\.json/);
       await expect(fs.readFile(pairedPath, "utf8")).resolves.toBe("{not-json}");
+    });
+  });
+
+  test("updates paired node last-seen metadata and reports missing nodes", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+
+      await expect(
+        updatePairedNodeMetadata(
+          "node-1",
+          {
+            lastSeenAtMs: 1234,
+            lastSeenReason: "silent_push",
+          },
+          baseDir,
+        ),
+      ).resolves.toBe(true);
+      await expect(updatePairedNodeMetadata("missing", { lastSeenAtMs: 1 }, baseDir)).resolves.toBe(
+        false,
+      );
+
+      await expect(getPairedNode("node-1", baseDir)).resolves.toEqual(
+        expect.objectContaining({
+          lastSeenAtMs: 1234,
+          lastSeenReason: "silent_push",
+        }),
+      );
     });
   });
 });

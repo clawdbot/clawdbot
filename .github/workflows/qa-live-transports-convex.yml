@@ -81,12 +81,13 @@ jobs:
     needs: authorize_actor
     runs-on: blacksmith-8vcpu-ubuntu-2404
     outputs:
-      selected_sha: ${{ steps.validate.outputs.selected_sha }}
+      selected_revision: ${{ steps.validate.outputs.selected_revision }}
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
     steps:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
           fetch-depth: 0
 
@@ -98,27 +99,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          selected_sha="$(git rev-parse HEAD)"
+          selected_revision="$(git rev-parse HEAD)"
           trusted_reason=""
 
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
 
-          if git merge-base --is-ancestor "$selected_sha" refs/remotes/origin/main; then
+          if git merge-base --is-ancestor "$selected_revision" refs/remotes/origin/main; then
             trusted_reason="main-ancestor"
-          elif git tag --points-at "$selected_sha" | grep -Eq '^v'; then
+          elif git tag --points-at "$selected_revision" | grep -Eq '^v'; then
             trusted_reason="release-tag"
           elif [[ "$INPUT_REF" =~ ^release/[0-9]{4}\.[0-9]+\.[0-9]+$ ]]; then
             git fetch --no-tags origin "+refs/heads/${INPUT_REF}:refs/remotes/origin/${INPUT_REF}"
             release_branch_sha="$(git rev-parse "refs/remotes/origin/${INPUT_REF}")"
-            if [[ "$selected_sha" == "$release_branch_sha" ]]; then
+            if [[ "$selected_revision" == "$release_branch_sha" ]]; then
               trusted_reason="release-branch-head"
             fi
           else
             pr_head_count="$(
               gh api \
                 -H "Accept: application/vnd.github+json" \
-                "repos/${GITHUB_REPOSITORY}/commits/${selected_sha}/pulls" \
-                --jq '[.[] | select(.state == "open" and .head.repo.full_name == "'"${GITHUB_REPOSITORY}"'" and .head.sha == "'"${selected_sha}"'")] | length'
+                "repos/${GITHUB_REPOSITORY}/commits/${selected_revision}/pulls" \
+                --jq '[.[] | select(.state == "open" and .head.repo.full_name == "'"${GITHUB_REPOSITORY}"'" and .head.sha == "'"${selected_revision}"'")] | length'
             )"
             if [[ "$pr_head_count" != "0" ]]; then
               trusted_reason="open-pr-head"
@@ -126,16 +127,16 @@ jobs:
           fi
 
           if [[ -z "$trusted_reason" ]]; then
-            echo "Ref '${INPUT_REF}' resolved to $selected_sha, which is not trusted for this secret-bearing QA run." >&2
+            echo "Ref '${INPUT_REF}' resolved to $selected_revision, which is not trusted for this secret-bearing QA run." >&2
             echo "Allowed refs must be on main, point to a release tag, match a release branch head, or match an open PR head in ${GITHUB_REPOSITORY}." >&2
             exit 1
           fi
 
-          echo "selected_sha=$selected_sha" >> "$GITHUB_OUTPUT"
+          echo "selected_revision=$selected_revision" >> "$GITHUB_OUTPUT"
           echo "trusted_reason=$trusted_reason" >> "$GITHUB_OUTPUT"
           {
             echo "Validated ref: \`${INPUT_REF}\`"
-            echo "Resolved SHA: \`$selected_sha\`"
+            echo "Resolved SHA: \`$selected_revision\`"
             echo "Trust reason: \`$trusted_reason\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -157,7 +158,8 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          persist-credentials: false
+          ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           fetch-depth: 1
 
       - name: Setup Node environment
@@ -220,7 +222,8 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          persist-credentials: false
+          ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           fetch-depth: 1
 
       - name: Setup Node environment
@@ -259,15 +262,20 @@ jobs:
           output_dir=".artifacts/qa-e2e/matrix-live-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
 
-          pnpm openclaw qa matrix \
+          matrix_args=(
             --repo-root . \
             --output-dir "${output_dir}" \
             --provider-mode live-frontier \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --profile "${INPUT_MATRIX_PROFILE}" \
-            --fast \
-            --fail-fast
+            --fast
+          )
+          if pnpm openclaw qa matrix --help 2>/dev/null | grep -F -q -- "--fail-fast"; then
+            matrix_args+=(--fail-fast)
+          fi
+
+          pnpm openclaw qa matrix "${matrix_args[@]}"
 
       - name: Upload Matrix QA artifacts
         if: always()
@@ -298,7 +306,8 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          persist-credentials: false
+          ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           fetch-depth: 1
 
       - name: Setup Node environment
@@ -336,15 +345,20 @@ jobs:
           output_dir=".artifacts/qa-e2e/matrix-live-${{ matrix.profile }}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
 
-          pnpm openclaw qa matrix \
+          matrix_args=(
             --repo-root . \
             --output-dir "${output_dir}" \
             --provider-mode live-frontier \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --profile "${{ matrix.profile }}" \
-            --fast \
-            --fail-fast
+            --fast
+          )
+          if pnpm openclaw qa matrix --help 2>/dev/null | grep -F -q -- "--fail-fast"; then
+            matrix_args+=(--fail-fast)
+          fi
+
+          pnpm openclaw qa matrix "${matrix_args[@]}"
 
       - name: Upload Matrix QA shard artifacts
         if: always()
@@ -365,7 +379,8 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          persist-credentials: false
+          ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           fetch-depth: 1
 
       - name: Setup Node environment
@@ -457,7 +472,8 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          persist-credentials: false
+          ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           fetch-depth: 1
 
       - name: Setup Node environment

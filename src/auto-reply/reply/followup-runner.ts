@@ -3,7 +3,6 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -27,6 +26,7 @@ import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import {
   resolveQueuedReplyExecutionConfig,
   resolveQueuedReplyRuntimeConfig,
+  resolveModelFallbackOptions,
   resolveRunAuthProfile,
 } from "./agent-runner-utils.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
@@ -263,16 +263,9 @@ export function createFollowupRunner(params: {
       try {
         const outcomePlan = buildAgentRuntimeOutcomePlan();
         const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
+          ...resolveModelFallbackOptions(run, runtimeConfig),
           cfg: runtimeConfig,
-          provider: run.provider,
-          model: run.model,
           runId,
-          agentDir: run.agentDir,
-          fallbacksOverride: resolveRunModelFallbacksOverride({
-            cfg: runtimeConfig,
-            agentId: run.agentId,
-            sessionKey: run.sessionKey,
-          }),
           classifyResult: ({ result, provider, model }) =>
             outcomePlan.classifyRunResult({ result, provider, model }),
           run: async (provider, model, runOptions) => {
@@ -312,6 +305,8 @@ export function createFollowupRunner(params: {
                 prompt: queued.prompt,
                 transcriptPrompt: queued.transcriptPrompt,
                 extraSystemPrompt: run.extraSystemPrompt,
+                silentReplyPromptMode: run.silentReplyPromptMode,
+                sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
                 ownerNumbers: run.ownerNumbers,
                 enforceFinalTag: run.enforceFinalTag,
                 allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
@@ -452,6 +447,7 @@ export function createFollowupRunner(params: {
           sessionKey,
           storePath,
           amount: autoCompactionCount,
+          compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           contextTokensUsed,
           newSessionId: runResult.meta?.agentMeta?.sessionId,
@@ -476,6 +472,13 @@ export function createFollowupRunner(params: {
             text: `🧹 Auto-compaction complete${suffix}.`,
           });
         }
+      }
+
+      if (run.sourceReplyDeliveryMode === "message_tool_only") {
+        logVerbose(
+          "followup queue: automatic source delivery suppressed by sourceReplyDeliveryMode: message_tool_only",
+        );
+        return;
       }
 
       await sendFollowupPayloads(finalPayloads, effectiveQueued, {

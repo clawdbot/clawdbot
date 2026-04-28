@@ -28,6 +28,7 @@ import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
+import { renderExecOutputText } from "./bash-tools.exec-output.js";
 import {
   DEFAULT_MAX_OUTPUT,
   DEFAULT_PATH,
@@ -84,7 +85,7 @@ function buildExecForegroundResult(params: {
       cwd: params.cwd,
     });
   }
-  return textResult(`${warningText}${params.outcome.aggregated || "(no output)"}`, {
+  return textResult(`${warningText}${renderExecOutputText(params.outcome.aggregated)}`, {
     status: "completed",
     exitCode: params.outcome.exitCode,
     durationMs: params.outcome.durationMs,
@@ -1073,7 +1074,69 @@ function parseExecApprovalShellCommand(raw: string): ParsedExecApprovalCommand |
   };
 }
 
-function rejectExecApprovalShellCommand(command: string): void {
+function normalizeCommandBaseName(token: string | undefined): string {
+  if (!token) {
+    return "";
+  }
+  const base = normalizeLowercaseStringOrEmpty(token.split(/[\\/]/u).at(-1));
+  return base.replace(/\.(?:cmd|exe)$/u, "");
+}
+
+function stripOpenClawPackageRunner(argv: string[]): string[] {
+  const commandName = normalizeCommandBaseName(argv[0]);
+  if (commandName === "openclaw") {
+    return argv;
+  }
+  if (
+    (commandName === "pnpm" || commandName === "npm" || commandName === "yarn") &&
+    normalizeCommandBaseName(argv[1]) === "openclaw"
+  ) {
+    return argv.slice(1);
+  }
+  if (
+    (commandName === "pnpm" || commandName === "npm" || commandName === "yarn") &&
+    (argv[1] === "exec" || argv[1] === "dlx" || argv[1] === "run") &&
+    normalizeCommandBaseName(argv[2]) === "openclaw"
+  ) {
+    return argv.slice(2);
+  }
+  if (commandName === "npx" || commandName === "bunx") {
+    let idx = 1;
+    while (idx < argv.length) {
+      const token = argv[idx];
+      if (token === "--") {
+        idx += 1;
+        break;
+      }
+      if (!token.startsWith("-") || token === "-") {
+        break;
+      }
+      idx += 1;
+      if ((token === "-p" || token === "--package") && idx < argv.length) {
+        idx += 1;
+      }
+    }
+    if (normalizeCommandBaseName(argv[idx]) === "openclaw") {
+      return argv.slice(idx);
+    }
+  }
+  return argv;
+}
+
+function parseOpenClawChannelsLoginShellCommand(raw: string): boolean {
+  const argv = splitShellArgs(raw);
+  if (!argv) {
+    return false;
+  }
+  const openclawArgv = stripOpenClawPackageRunner(argv);
+  return (
+    normalizeCommandBaseName(openclawArgv[0]) === "openclaw" &&
+    (openclawArgv[1] === "channels" || openclawArgv[1] === "channel") &&
+    openclawArgv[2] === "login"
+  );
+}
+
+function rejectUnsafeControlShellCommand(command: string): void {
   const isEnvAssignmentToken = (token: string): boolean =>
     /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(token);
   const shellWrappers = new Set(["bash", "dash", "fish", "ksh", "sh", "zsh"]);
@@ -1294,15 +1357,22 @@ function rejectExecApprovalShellCommand(command: string): void {
           return argv ? buildCandidates(argv) : [line];
         });
   for (const candidate of candidates) {
-    if (!parseExecApprovalShellCommand(candidate)) {
-      continue;
+    if (parseExecApprovalShellCommand(candidate)) {
+      throw new Error(
+        [
+          "exec cannot run /approve commands.",
+          "Show the /approve command to the user as chat text, or route it through the approval command handler instead of shell execution.",
+        ].join(" "),
+      );
     }
-    throw new Error(
-      [
-        "exec cannot run /approve commands.",
-        "Show the /approve command to the user as chat text, or route it through the approval command handler instead of shell execution.",
-      ].join(" "),
-    );
+    if (parseOpenClawChannelsLoginShellCommand(candidate)) {
+      throw new Error(
+        [
+          "exec cannot run interactive OpenClaw channel login commands.",
+          "Run `openclaw channels login` in a terminal on the gateway host, or use the channel-specific login agent tool when available (for WhatsApp: `whatsapp_login`).",
+        ].join(" "),
+      );
+    }
   }
 }
 
@@ -1531,7 +1601,7 @@ export function createExecTool(
         const rawWorkdir = explicitWorkdir ?? defaultWorkdir ?? process.cwd();
         workdir = resolveWorkdir(rawWorkdir, warnings);
       }
-      rejectExecApprovalShellCommand(params.command);
+      rejectUnsafeControlShellCommand(params.command);
 
       const inheritedBaseEnv = coerceEnv(process.env);
       const hostEnvResult =
@@ -1676,11 +1746,7 @@ export function createExecTool(
       }
 
       const explicitTimeoutSec = typeof params.timeout === "number" ? params.timeout : null;
-      const backgroundTimeoutBypass =
-        allowBackground && explicitTimeoutSec === null && (backgroundRequested || yieldRequested);
-      const effectiveTimeout = backgroundTimeoutBypass
-        ? null
-        : (explicitTimeoutSec ?? defaultTimeoutSec);
+      const effectiveTimeout = explicitTimeoutSec ?? defaultTimeoutSec;
       const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const usePty = params.pty === true && !sandbox;
 
@@ -1816,5 +1882,6 @@ export function createExecTool(
 export const execTool = createExecTool();
 
 export const __testing = {
+  parseOpenClawChannelsLoginShellCommand,
   validateScriptFileForShellBleed,
 };

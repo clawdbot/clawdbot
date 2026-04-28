@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseImageGenerationModelRef } from "../../image-generation/model-ref.js";
 import {
@@ -566,7 +566,7 @@ export function createImageGenerateTool(options?: {
   sandbox?: ImageGenerateSandboxConfig;
   fsPolicy?: ToolFsPolicy;
 }): AnyAgentTool | null {
-  const cfg = options?.config ?? loadConfig();
+  const cfg = options?.config ?? getRuntimeConfig();
   const imageGenerationModelConfig = resolveImageGenerationModelConfigForTool({
     cfg,
     agentDir: options?.agentDir,

@@ -1,5 +1,8 @@
 {
   "id": "exa",
+  "activation": {
+    "onStartup": false
+  },
   "providerAuthEnvVars": {
     "exa": ["EXA_API_KEY"]
   },

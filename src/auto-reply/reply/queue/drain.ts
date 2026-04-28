@@ -1,3 +1,4 @@
+import { channelRouteCompactKey } from "../../../plugin-sdk/channel-route.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import {
@@ -134,11 +135,8 @@ function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string
   if (!isRoutableChannel(channel) || !to) {
     return { cross: true };
   }
-  // Support both number (Telegram topic IDs) and string (Slack thread_ts) thread IDs.
-  const threadKey = threadId != null && threadId !== "" ? String(threadId) : "";
-  return {
-    key: [channel, to, accountId || "", threadKey].join("|"),
-  };
+  const key = channelRouteCompactKey({ channel, to, accountId, threadId });
+  return key ? { key } : { cross: true };
 }
 
 export function scheduleFollowupDrain(

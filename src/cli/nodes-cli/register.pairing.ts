@@ -73,6 +73,30 @@ export function registerNodesPairingCommands(nodes: Command) {
 
   nodesCallOpts(
     nodes
+      .command("remove")
+      .description("Remove a paired node entry")
+      .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
+      .action(async (opts: NodesRpcOpts) => {
+        await runNodesCommand("remove", async () => {
+          const nodeId = await resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
+          if (!nodeId) {
+            defaultRuntime.error("--node required");
+            defaultRuntime.exit(1);
+            return;
+          }
+          const result = await callGatewayCli("node.pair.remove", opts, { nodeId });
+          if (opts.json) {
+            defaultRuntime.writeJson(result);
+            return;
+          }
+          const { warn } = getNodesTheme();
+          defaultRuntime.log(warn(`Removed paired node ${nodeId}`));
+        });
+      }),
+  );
+
+  nodesCallOpts(
+    nodes
       .command("rename")
       .description("Rename a paired node (display name override)")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")

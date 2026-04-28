@@ -106,7 +106,7 @@ function providerPluginStub(
 }
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const ensureWorkspaceAndSessions = vi.hoisted(() => vi.fn(async () => {}));
-const writeConfigFile = vi.hoisted(() => vi.fn(async () => {}));
+const replaceConfigFile = vi.hoisted(() => vi.fn(async () => ({ config: {} })));
 const resolveGatewayPort = vi.hoisted(() =>
   vi.fn((_cfg?: unknown, env?: NodeJS.ProcessEnv) => {
     const raw = env?.OPENCLAW_GATEWAY_PORT ?? process.env.OPENCLAW_GATEWAY_PORT;
@@ -210,7 +210,7 @@ vi.mock("../config/config.js", () => ({
   DEFAULT_GATEWAY_PORT: 18789,
   createConfigIO,
   resolveGatewayPort,
-  writeConfigFile,
+  replaceConfigFile,
 }));
 
 vi.mock("../commands/onboard-helpers.js", () => ({
@@ -458,7 +458,7 @@ describe("runSetupWizard", () => {
 
   it("persists skipBootstrap and skips workspace bootstrap creation when requested", async () => {
     ensureWorkspaceAndSessions.mockClear();
-    writeConfigFile.mockClear();
+    replaceConfigFile.mockClear();
 
     const workspaceDir = await makeCaseDir("skip-bootstrap-");
     const prompter = buildWizardPrompter({});
@@ -482,12 +482,14 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
-    expect(writeConfigFile).toHaveBeenCalledWith(
+    expect(replaceConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({
-        agents: expect.objectContaining({
-          defaults: expect.objectContaining({
-            skipBootstrap: true,
-            workspace: workspaceDir,
+        nextConfig: expect.objectContaining({
+          agents: expect.objectContaining({
+            defaults: expect.objectContaining({
+              skipBootstrap: true,
+              workspace: workspaceDir,
+            }),
           }),
         }),
       }),

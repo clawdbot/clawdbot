@@ -1,10 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { isLiveTestEnabled } from "../../src/agents/live-test-helpers.js";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
-} from "../../test/helpers/plugins/provider-registration.js";
-import { normalizeTranscriptForMatch } from "../../test/helpers/stt-live-audio.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { normalizeTranscriptForMatch } from "openclaw/plugin-sdk/provider-test-contracts";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
@@ -12,6 +12,17 @@ const GOOGLE_API_KEY =
   process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim() || "";
 const LIVE = isLiveTestEnabled() && GOOGLE_API_KEY.length > 0;
 const describeLive = LIVE ? describe : describe.skip;
+
+function isTransientGeminiSearchError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  if (error.name === "AbortError") {
+    return true;
+  }
+  const message = error.message.toLowerCase();
+  return message.includes("timeout") || message.includes("aborted");
+}
 
 const registerGooglePlugin = () =>
   registerProviderPlugin({
@@ -87,10 +98,26 @@ describeLive("google plugin live", () => {
     const provider = createGeminiWebSearchProvider();
     const tool = provider.createTool?.({
       config: {},
-      searchConfig: { gemini: { apiKey: GOOGLE_API_KEY }, cacheTtlMinutes: 0 },
+      searchConfig: { gemini: { apiKey: GOOGLE_API_KEY }, cacheTtlMinutes: 0, timeoutSeconds: 90 },
     } as never);
 
-    const result = await tool?.execute({ query: "OpenClaw GitHub", count: 1 });
+    let result: { provider?: string; content?: unknown; citations?: unknown } | undefined;
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        result = await tool?.execute({ query: "OpenClaw GitHub", count: 1 });
+        lastError = undefined;
+        break;
+      } catch (error) {
+        lastError = error;
+        if (!isTransientGeminiSearchError(error) || attempt === 1) {
+          throw error;
+        }
+      }
+    }
+    if (lastError) {
+      throw lastError;
+    }
 
     expect(result?.provider).toBe("gemini");
     expect(typeof result?.content).toBe("string");

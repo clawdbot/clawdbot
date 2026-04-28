@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { withStateDirEnv } from "../../../src/test-helpers/state-dir-env.js";
 import {
   deleteTelegramUpdateOffset,
   readTelegramUpdateOffset,

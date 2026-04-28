@@ -10,11 +10,17 @@ import kotlinx.serialization.json.contentOrNull
 
 const val DEFAULT_SEAM_COLOR_ARGB: Long = 0xFF4F7A9A
 
-data class Quad<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
+data class Quad<A, B, C, D>(
+  val first: A,
+  val second: B,
+  val third: C,
+  val fourth: D,
+)
 
 fun String.toJsonString(): String {
   val escaped =
-    this.replace("\\", "\\\\")
+    this
+      .replace("\\", "\\\\")
       .replace("\"", "\\\"")
       .replace("\n", "\\n")
       .replace("\r", "\\r")
@@ -32,18 +38,30 @@ fun parseJsonParamsObject(paramsJson: String?): JsonObject? {
   }
 }
 
-fun readJsonPrimitive(params: JsonObject?, key: String): JsonPrimitive? = params?.get(key) as? JsonPrimitive
+fun readJsonPrimitive(
+  params: JsonObject?,
+  key: String,
+): JsonPrimitive? = params?.get(key) as? JsonPrimitive
 
-fun parseJsonInt(params: JsonObject?, key: String): Int? =
-  readJsonPrimitive(params, key)?.contentOrNull?.toIntOrNull()
+fun parseJsonInt(
+  params: JsonObject?,
+  key: String,
+): Int? = readJsonPrimitive(params, key)?.contentOrNull?.toIntOrNull()
 
-fun parseJsonDouble(params: JsonObject?, key: String): Double? =
-  readJsonPrimitive(params, key)?.contentOrNull?.toDoubleOrNull()
+fun parseJsonDouble(
+  params: JsonObject?,
+  key: String,
+): Double? = readJsonPrimitive(params, key)?.contentOrNull?.toDoubleOrNull()
 
-fun parseJsonString(params: JsonObject?, key: String): String? =
-  readJsonPrimitive(params, key)?.contentOrNull
+fun parseJsonString(
+  params: JsonObject?,
+  key: String,
+): String? = readJsonPrimitive(params, key)?.contentOrNull
 
-fun parseJsonBooleanFlag(params: JsonObject?, key: String): Boolean? {
+fun parseJsonBooleanFlag(
+  params: JsonObject?,
+  key: String,
+): Boolean? {
   val value = readJsonPrimitive(params, key)?.contentOrNull?.trim()?.lowercase() ?: return null
   return when (value) {
     "true" -> true
@@ -79,6 +97,4 @@ fun normalizeMainKey(raw: String?): String? {
   return if (trimmed.isEmpty()) null else trimmed
 }
 
-fun isCanonicalMainSessionKey(key: String): Boolean {
-  return key == "main"
-}
+fun isCanonicalMainSessionKey(key: String): Boolean = key == "main"

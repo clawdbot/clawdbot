@@ -68,7 +68,13 @@ export async function handleDiscordMessageAction(
   const resolveChannelId = () => resolveDiscordChannelId(readTarget());
 
   if (action === "send") {
-    const to = readStringParam(params, "to", { required: true });
+    const to =
+      readStringParam(params, "to") ??
+      readStringParam(params, "target") ??
+      readCurrentDiscordTarget(ctx.toolContext);
+    if (!to) {
+      throw new Error("Discord channel target is required (use channel:<id>).");
+    }
     const asVoice = readBooleanParam(params, "asVoice") === true;
     const rawComponents =
       buildDiscordPresentationComponents(normalizeMessagePresentation(params.presentation)) ??

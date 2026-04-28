@@ -8,9 +8,8 @@ object DeviceNames {
   fun bestDefaultNodeName(context: Context): String {
     val deviceName =
       runCatching {
-          Settings.Global.getString(context.contentResolver, "device_name")
-        }
-        .getOrNull()
+        Settings.Global.getString(context.contentResolver, "device_name")
+      }.getOrNull()
         ?.trim()
         .orEmpty()
 

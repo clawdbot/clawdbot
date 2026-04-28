@@ -370,7 +370,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(warning?.message).toContain(path.join(configDir, "index.ts"));
   });
 
-  it("reports explicit installed globals as the effective duplicate winner", () => {
+  it("suppresses duplicate warnings for explicit installed globals overriding bundled plugins", () => {
     const bundledDir = makeTempDir();
     const globalDir = makeTempDir();
     const manifest = { id: "zalouser", configSchema: { type: "object" } };
@@ -399,11 +399,41 @@ describe("loadPluginManifestRegistry", () => {
       ],
     });
 
-    expect(
-      registry.diagnostics.some((diag) =>
-        diag.message.includes("bundled plugin will be overridden by global plugin"),
-      ),
-    ).toBe(true);
+    expect(countDuplicateWarnings(registry)).toBe(0);
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.origin).toBe("global");
+  });
+
+  it("suppresses duplicate warnings when the installed global is discovered before bundled", () => {
+    const bundledDir = makeTempDir();
+    const globalDir = makeTempDir();
+    const manifest = { id: "zalouser", configSchema: { type: "object" } };
+    writeManifest(bundledDir, manifest);
+    writeManifest(globalDir, manifest);
+
+    const registry = loadPluginManifestRegistry({
+      cache: false,
+      installRecords: {
+        zalouser: {
+          source: "npm",
+          installPath: globalDir,
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "zalouser",
+          rootDir: globalDir,
+          origin: "global",
+        }),
+        createPluginCandidate({
+          idHint: "zalouser",
+          rootDir: bundledDir,
+          origin: "bundled",
+        }),
+      ],
+    });
+
+    expect(countDuplicateWarnings(registry)).toBe(0);
     expect(registry.plugins).toHaveLength(1);
     expect(registry.plugins[0]?.origin).toBe("global");
   });
@@ -421,9 +451,50 @@ describe("loadPluginManifestRegistry", () => {
         {
           endpointClass: "openai-public",
           hosts: ["API.OPENAI.COM", ""],
+          hostSuffixes: [".openai.azure.com"],
           baseUrls: ["https://api.openai.com/v1"],
+          googleVertexRegion: "global",
+          googleVertexRegionHostSuffix: "-aiplatform.googleapis.com",
         },
       ],
+      modelIdNormalization: {
+        providers: {
+          openai: {
+            aliases: {
+              "gpt-latest": "gpt-5.4",
+            },
+            stripPrefixes: ["openai/"],
+            prefixWhenBare: "openai",
+            prefixWhenBareAfterAliasStartsWith: [
+              {
+                modelPrefix: "gpt-",
+                prefix: "openai",
+              },
+              {
+                modelPrefix: "",
+                prefix: "ignored",
+              },
+            ],
+          },
+          ignored: {
+            prefixWhenBare: "ignored",
+          },
+        },
+      },
+      providerRequest: {
+        providers: {
+          openai: {
+            family: "openai-family",
+            compatibilityFamily: "moonshot",
+            openAICompletions: {
+              supportsStreamingUsage: true,
+            },
+          },
+          ignored: {
+            family: "ignored",
+          },
+        },
+      },
       syntheticAuthRefs: ["openai-cli"],
       nonSecretAuthMarkers: ["openai-cli"],
       providerAuthAliases: {
@@ -455,9 +526,40 @@ describe("loadPluginManifestRegistry", () => {
       {
         endpointClass: "openai-public",
         hosts: ["api.openai.com"],
+        hostSuffixes: [".openai.azure.com"],
         baseUrls: ["https://api.openai.com/v1"],
+        googleVertexRegion: "global",
+        googleVertexRegionHostSuffix: "-aiplatform.googleapis.com",
       },
     ]);
+    expect(registry.plugins[0]?.modelIdNormalization).toEqual({
+      providers: {
+        openai: {
+          aliases: {
+            "gpt-latest": "gpt-5.4",
+          },
+          stripPrefixes: ["openai/"],
+          prefixWhenBare: "openai",
+          prefixWhenBareAfterAliasStartsWith: [
+            {
+              modelPrefix: "gpt-",
+              prefix: "openai",
+            },
+          ],
+        },
+      },
+    });
+    expect(registry.plugins[0]?.providerRequest).toEqual({
+      providers: {
+        openai: {
+          family: "openai-family",
+          compatibilityFamily: "moonshot",
+          openAICompletions: {
+            supportsStreamingUsage: true,
+          },
+        },
+      },
+    });
     expect(registry.plugins[0]?.syntheticAuthRefs).toEqual(["openai-cli"]);
     expect(registry.plugins[0]?.nonSecretAuthMarkers).toEqual(["openai-cli"]);
     expect(registry.plugins[0]?.providerAuthAliases).toEqual({
@@ -991,6 +1093,7 @@ describe("loadPluginManifestRegistry", () => {
         onCommands: ["models"],
         onChannels: ["web"],
         onRoutes: ["gateway-webhook"],
+        onConfigPaths: ["browser"],
         onCapabilities: ["provider", "tool"],
       },
       setup: {
@@ -1019,6 +1122,7 @@ describe("loadPluginManifestRegistry", () => {
       onCommands: ["models"],
       onChannels: ["web"],
       onRoutes: ["gateway-webhook"],
+      onConfigPaths: ["browser"],
       onCapabilities: ["provider", "tool"],
     });
     expect(registry.plugins[0]?.setup).toEqual({

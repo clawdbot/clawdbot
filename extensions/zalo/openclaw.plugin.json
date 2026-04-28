@@ -1,5 +1,8 @@
 {
   "id": "zalo",
+  "activation": {
+    "onStartup": false
+  },
   "channels": ["zalo"],
   "channelEnvVars": {
     "zalo": ["ZALO_BOT_TOKEN", "ZALO_WEBHOOK_SECRET"]

@@ -1,8 +1,15 @@
 import { createRequire } from "node:module";
+import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  configureSqliteWalMaintenance,
+  type SqliteWalMaintenance,
+  type SqliteWalMaintenanceOptions,
+} from "../../infra/sqlite-wal.js";
 import { installProcessWarningFilter } from "../../infra/warning-filter.js";
 
 const require = createRequire(import.meta.url);
+const sqliteWalMaintenanceByDb = new WeakMap<DatabaseSync, SqliteWalMaintenance>();
 
 export function requireNodeSqlite(): typeof import("node:sqlite") {
   installProcessWarningFilter();
@@ -17,4 +24,26 @@ export function requireNodeSqlite(): typeof import("node:sqlite") {
       { cause: err },
     );
   }
+}
+
+export function configureMemorySqliteWalMaintenance(
+  db: DatabaseSync,
+  options?: SqliteWalMaintenanceOptions,
+): SqliteWalMaintenance {
+  const existing = sqliteWalMaintenanceByDb.get(db);
+  if (existing) {
+    return existing;
+  }
+  const maintenance = configureSqliteWalMaintenance(db, options);
+  sqliteWalMaintenanceByDb.set(db, maintenance);
+  return maintenance;
+}
+
+export function closeMemorySqliteWalMaintenance(db: DatabaseSync): boolean {
+  const maintenance = sqliteWalMaintenanceByDb.get(db);
+  if (!maintenance) {
+    return true;
+  }
+  sqliteWalMaintenanceByDb.delete(db);
+  return maintenance.close();
 }

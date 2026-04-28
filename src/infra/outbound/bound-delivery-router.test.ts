@@ -105,7 +105,17 @@ describe("bound delivery router", () => {
       expected: {
         binding: null,
         mode: "fallback",
-        reason: "ambiguous-without-requester",
+        reason: "missing-requester",
+      },
+    },
+    {
+      name: "fails closed when requester signal is missing even with a single binding",
+      bindings: [createRuntimeBinding(TARGET_SESSION_KEY, "thread-1", 1)],
+      failClosed: true,
+      expected: {
+        binding: null,
+        mode: "fallback",
+        reason: "missing-requester",
       },
     },
     {

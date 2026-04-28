@@ -1,5 +1,5 @@
+import { createSendCfgThreadingRuntime } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createSendCfgThreadingRuntime } from "../../../test/helpers/plugins/send-config.js";
 import type { IrcClient } from "./client.js";
 import { setIrcRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
@@ -40,8 +40,8 @@ vi.mock("./protocol.js", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
-  const original = (await vi.importActual("openclaw/plugin-sdk/config-runtime")) as Record<
+vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
+  const original = (await vi.importActual("openclaw/plugin-sdk/plugin-config-runtime")) as Record<
     string,
     unknown
   >;

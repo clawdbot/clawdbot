@@ -1,4 +1,3 @@
-import { describe, expect, it } from "vitest";
 import {
   GPT5_CONTRACT_MODEL_ID,
   GPT5_PREFIXED_CONTRACT_MODEL_ID,
@@ -9,7 +8,8 @@ import {
   OPENAI_CONTRACT_PROVIDER_ID,
   openAiPluginPersonalityConfig,
   sharedGpt5PersonalityConfig,
-} from "../../test/helpers/agents/prompt-overlay-runtime-contract.js";
+} from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { describe, expect, it } from "vitest";
 import { resolveGpt5SystemPromptContribution } from "./gpt5-prompt-overlay.js";
 
 describe("GPT-5 prompt overlay runtime contract", () => {

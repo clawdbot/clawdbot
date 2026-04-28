@@ -7,8 +7,12 @@ const hoisted = vi.hoisted(() => ({
   loadCombinedSessionStoreForGatewayMock: vi.fn(),
 }));
 
-vi.mock("../config/config.js", () => ({
-  loadConfig: () => hoisted.loadConfigMock(),
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: () => hoisted.loadConfigMock(),
+}));
+
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: () => hoisted.loadConfigMock(),
 }));
 
 vi.mock("./session-utils.js", async () => {

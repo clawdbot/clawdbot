@@ -9,6 +9,7 @@ import {
   setGatewayNodesRuntime,
   setGatewaySubagentRuntime,
 } from "../plugins/runtime/gateway-bindings.js";
+import { mergeActivationSectionsIntoRuntimeConfig } from "./plugin-activation-runtime-config.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 import {
   createGatewayNodesRuntime,
@@ -78,7 +79,13 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
       ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
       : {}),
   });
-  const resolvedConfig = autoEnabled.config;
+  const resolvedConfig =
+    activationSourceConfig === params.cfg
+      ? autoEnabled.config
+      : mergeActivationSectionsIntoRuntimeConfig({
+          runtimeConfig: params.cfg,
+          activationConfig: autoEnabled.config,
+        });
   installGatewayPluginRuntimeEnvironment(resolvedConfig);
   const loaded = loadGatewayPlugins({
     cfg: resolvedConfig,

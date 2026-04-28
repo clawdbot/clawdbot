@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 
 // launchd applies ThrottleInterval to any rapid relaunch, including
 // intentional gateway restarts. Keep it low so CLI restarts and forced
@@ -23,6 +24,54 @@ const plistUnescape = (value: string): string =>
     .replaceAll("&lt;", "<")
     .replaceAll("&amp;", "&");
 
+function parseGeneratedEnvValue(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("'") || !trimmed.endsWith("'")) {
+    return trimmed;
+  }
+  return trimmed.slice(1, -1).replaceAll("'\\''", "'");
+}
+
+async function readLaunchAgentEnvironmentFile(
+  programArguments: string[],
+): Promise<Record<string, string>> {
+  const envFilePath = programArguments[1];
+  if (!programArguments[0]?.endsWith("-env-wrapper.sh") || !envFilePath) {
+    return {};
+  }
+  let content = "";
+  try {
+    content = await fs.readFile(envFilePath, "utf8");
+  } catch {
+    return {};
+  }
+  const environment: Record<string, string> = {};
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) {
+      continue;
+    }
+    const match = line.match(/^export\s+([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (!match) {
+      continue;
+    }
+    const key = match[1];
+    const value = match[2];
+    if (!key || value === undefined) {
+      continue;
+    }
+    environment[key] = parseGeneratedEnvValue(value);
+  }
+  return environment;
+}
+
+function unwrapGeneratedEnvWrapperArgs(programArguments: string[]): string[] {
+  if (!programArguments[0]?.endsWith("-env-wrapper.sh") || !programArguments[1]) {
+    return programArguments;
+  }
+  return programArguments.slice(2);
+}
+
 const renderEnvDict = (env: Record<string, string | undefined> | undefined): string => {
   if (!env) {
     return "";
@@ -46,6 +95,7 @@ export async function readLaunchAgentProgramArgumentsFromFile(plistPath: string)
   programArguments: string[];
   workingDirectory?: string;
   environment?: Record<string, string>;
+  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource>;
   sourcePath?: string;
 } | null> {
   try {
@@ -62,7 +112,7 @@ export async function readLaunchAgentProgramArgumentsFromFile(plistPath: string)
     );
     const workingDirectory = workingDirMatch ? plistUnescape(workingDirMatch[1] ?? "").trim() : "";
     const envMatch = plist.match(/<key>EnvironmentVariables<\/key>\s*<dict>([\s\S]*?)<\/dict>/i);
-    const environment: Record<string, string> = {};
+    const inlineEnvironment: Record<string, string> = {};
     if (envMatch) {
       for (const pair of envMatch[1].matchAll(
         /<key>([\s\S]*?)<\/key>\s*<string>([\s\S]*?)<\/string>/gi,
@@ -72,13 +122,28 @@ export async function readLaunchAgentProgramArgumentsFromFile(plistPath: string)
           continue;
         }
         const value = plistUnescape(pair[2] ?? "").trim();
-        environment[key] = value;
+        inlineEnvironment[key] = value;
       }
     }
+    const fileEnvironment = await readLaunchAgentEnvironmentFile(args);
+    const effectiveProgramArguments = unwrapGeneratedEnvWrapperArgs(args);
+    const environment = { ...inlineEnvironment, ...fileEnvironment };
+    const environmentValueSources: Record<string, GatewayServiceEnvironmentValueSource> = {};
+    for (const key of Object.keys(inlineEnvironment)) {
+      environmentValueSources[key] = Object.hasOwn(fileEnvironment, key)
+        ? "inline-and-file"
+        : "inline";
+    }
+    for (const key of Object.keys(fileEnvironment)) {
+      environmentValueSources[key] = Object.hasOwn(inlineEnvironment, key)
+        ? "inline-and-file"
+        : "file";
+    }
     return {
-      programArguments: args.filter(Boolean),
+      programArguments: effectiveProgramArguments.filter(Boolean),
       ...(workingDirectory ? { workingDirectory } : {}),
       ...(Object.keys(environment).length > 0 ? { environment } : {}),
+      ...(Object.keys(environmentValueSources).length > 0 ? { environmentValueSources } : {}),
       sourcePath: plistPath,
     };
   } catch {

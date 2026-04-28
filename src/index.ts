@@ -6,6 +6,7 @@ import { runFatalErrorHooks } from "./infra/fatal-error-hooks.js";
 import { isMainModule } from "./infra/is-main.js";
 import {
   installUnhandledRejectionHandler,
+  isBenignUncaughtExceptionError,
   isUncaughtExceptionHandled,
 } from "./infra/unhandled-rejections.js";
 
@@ -90,6 +91,13 @@ if (isMain) {
 
   process.on("uncaughtException", (error) => {
     if (isUncaughtExceptionHandled(error)) {
+      return;
+    }
+    if (isBenignUncaughtExceptionError(error)) {
+      console.warn(
+        "[openclaw] Non-fatal uncaught exception (continuing):",
+        formatUncaughtError(error),
+      );
       return;
     }
     console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));

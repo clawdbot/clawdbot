@@ -237,6 +237,10 @@ describe("readScheduledTaskCommand", () => {
             NODE_ENV: "production",
             OPENCLAW_PORT: "18789",
           },
+          environmentValueSources: {
+            NODE_ENV: "inline",
+            OPENCLAW_PORT: "inline",
+          },
           sourcePath: resolveTaskScriptPath(env),
         });
       },

@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   auditGatewayServiceConfig,
   checkTokenDrift,
+  readGatewayServiceCommandPort,
   SERVICE_AUDIT_CODES,
 } from "./service-audit.js";
 import { buildMinimalServicePath } from "./service-env.js";
+import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 
 function hasIssue(
   audit: Awaited<ReturnType<typeof auditGatewayServiceConfig>>,
@@ -15,24 +17,30 @@ function hasIssue(
 
 function createGatewayAudit({
   expectedGatewayToken,
+  expectedManagedServiceEnvKeys,
   path = "/usr/local/bin:/usr/bin:/bin",
   serviceToken,
+  extraEnvironment,
   environmentValueSources,
 }: {
   expectedGatewayToken?: string;
+  expectedManagedServiceEnvKeys?: Iterable<string>;
   path?: string;
   serviceToken?: string;
-  environmentValueSources?: Record<string, "file" | "inline">;
+  extraEnvironment?: Record<string, string>;
+  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource>;
 } = {}) {
   return auditGatewayServiceConfig({
     env: { HOME: "/tmp" },
     platform: "linux",
     expectedGatewayToken,
+    expectedManagedServiceEnvKeys,
     command: {
       programArguments: ["/usr/bin/node", "gateway"],
       environment: {
         PATH: path,
         ...(serviceToken ? { OPENCLAW_GATEWAY_TOKEN: serviceToken } : {}),
+        ...extraEnvironment,
       },
       ...(environmentValueSources ? { environmentValueSources } : {}),
     },
@@ -93,7 +101,7 @@ describe("auditGatewayServiceConfig", () => {
   });
 
   it("accepts Linux minimal PATH with user directories", async () => {
-    const env = { HOME: "/home/testuser", PNPM_HOME: "/opt/pnpm" };
+    const env = { HOME: "/tmp/openclaw-testuser", PNPM_HOME: "/opt/pnpm" };
     const minimalPath = buildMinimalServicePath({ platform: "linux", env });
     const audit = await auditGatewayServiceConfig({
       env,
@@ -113,7 +121,10 @@ describe("auditGatewayServiceConfig", () => {
   });
 
   it("accepts Linux fnm aliases/default without requiring the legacy current symlink", async () => {
-    const env = { HOME: "/home/testuser", FNM_DIR: "/home/testuser/.local/share/fnm" };
+    const env = {
+      HOME: "/tmp/openclaw-testuser",
+      FNM_DIR: "/tmp/openclaw-testuser/.local/share/fnm",
+    };
     const pathParts = buildMinimalServicePath({ platform: "linux", env })
       .split(":")
       .filter((entry) => !entry.includes("/fnm/current/bin"));
@@ -132,7 +143,10 @@ describe("auditGatewayServiceConfig", () => {
   });
 
   it("accepts Linux fnm current symlink without requiring aliases/default", async () => {
-    const env = { HOME: "/home/testuser", FNM_DIR: "/home/testuser/.local/share/fnm" };
+    const env = {
+      HOME: "/tmp/openclaw-testuser",
+      FNM_DIR: "/tmp/openclaw-testuser/.local/share/fnm",
+    };
     const pathParts = buildMinimalServicePath({ platform: "linux", env })
       .split(":")
       .filter((entry) => !entry.includes("/fnm/aliases/default/bin"));
@@ -148,6 +162,54 @@ describe("auditGatewayServiceConfig", () => {
     expect(
       audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayPathMissingDirs),
     ).toBe(false);
+  });
+
+  it("reads gateway service ports from split and equals-form arguments", () => {
+    expect(
+      readGatewayServiceCommandPort(["/usr/bin/node", "entry.js", "gateway", "--port", "18888"]),
+    ).toBe(18888);
+    expect(
+      readGatewayServiceCommandPort(["/usr/bin/node", "entry.js", "gateway", "--port=18889"]),
+    ).toBe(18889);
+    expect(readGatewayServiceCommandPort(["/usr/bin/node", "entry.js", "gateway"])).toBe(undefined);
+    expect(
+      readGatewayServiceCommandPort(["/usr/bin/node", "entry.js", "gateway", "--port=0"]),
+    ).toBe(undefined);
+  });
+
+  it("flags gateway service port drift from the expected config port", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "win32",
+      expectedPort: 18888,
+      command: {
+        programArguments: ["/usr/bin/node", "entry.js", "gateway", "--port", "18789"],
+        environment: {},
+      },
+    });
+
+    const issue = audit.issues.find(
+      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPortMismatch,
+    );
+    expect(issue).toMatchObject({
+      message: "Gateway service port does not match current gateway config.",
+      detail: "18789 -> 18888",
+      level: "recommended",
+    });
+  });
+
+  it("accepts gateway service ports that match the expected config port", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "win32",
+      expectedPort: 18888,
+      command: {
+        programArguments: ["/usr/bin/node", "entry.js", "gateway", "--port=18888"],
+        environment: {},
+      },
+    });
+
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPortMismatch)).toBe(false);
   });
 
   it("flags gateway token mismatch when service token is stale", async () => {
@@ -182,6 +244,128 @@ describe("auditGatewayServiceConfig", () => {
       },
     });
     expectTokenAudit(audit, { embedded: false, mismatch: false });
+  });
+
+  it("treats tokens present inline and in EnvironmentFile as embedded", async () => {
+    const audit = await createGatewayAudit({
+      expectedGatewayToken: "new-token",
+      serviceToken: "old-token",
+      environmentValueSources: {
+        OPENCLAW_GATEWAY_TOKEN: "inline-and-file",
+      },
+    });
+    expectTokenAudit(audit, { embedded: true, mismatch: true });
+  });
+
+  it("flags inline managed service env values from the service key list", async () => {
+    const audit = await createGatewayAudit({
+      extraEnvironment: {
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY,OPENROUTER_API_KEY",
+        TAVILY_API_KEY: "tvly-test",
+        OPENROUTER_API_KEY: "or-test",
+      },
+    });
+
+    const issue = audit.issues.find(
+      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded,
+    );
+    expect(issue?.detail).toContain("OPENROUTER_API_KEY");
+    expect(issue?.detail).toContain("TAVILY_API_KEY");
+  });
+
+  it("flags inline managed values expected by the current install plan for old services", async () => {
+    const audit = await createGatewayAudit({
+      expectedManagedServiceEnvKeys: ["TAVILY_API_KEY"],
+      extraEnvironment: {
+        TAVILY_API_KEY: "tvly-test",
+      },
+    });
+
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded)).toBe(true);
+  });
+
+  it("does not flag managed env values loaded from EnvironmentFile", async () => {
+    const audit = await createGatewayAudit({
+      expectedManagedServiceEnvKeys: ["TAVILY_API_KEY"],
+      extraEnvironment: {
+        TAVILY_API_KEY: "tvly-test",
+      },
+      environmentValueSources: {
+        TAVILY_API_KEY: "file",
+      },
+    });
+
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded)).toBe(false);
+  });
+
+  it("flags managed env values present inline even when an EnvironmentFile overrides them", async () => {
+    const audit = await createGatewayAudit({
+      expectedManagedServiceEnvKeys: ["TAVILY_API_KEY"],
+      extraEnvironment: {
+        TAVILY_API_KEY: "tvly-test",
+      },
+      environmentValueSources: {
+        TAVILY_API_KEY: "inline-and-file",
+      },
+    });
+
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded)).toBe(true);
+  });
+
+  it("flags inline proxy environment values embedded in the service", async () => {
+    const audit = await createGatewayAudit({
+      extraEnvironment: {
+        HTTP_PROXY: "http://proxy.local:7890",
+        HTTPS_PROXY: "https://proxy.local:7890",
+        NO_PROXY: "localhost,127.0.0.1",
+      },
+    });
+
+    const issue = audit.issues.find(
+      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded,
+    );
+    expect(issue?.detail).toContain("HTTP_PROXY");
+    expect(issue?.detail).toContain("HTTPS_PROXY");
+    expect(issue?.detail).toContain("NO_PROXY");
+  });
+
+  it("flags lowercase inline proxy environment values using portable key names", async () => {
+    const audit = await createGatewayAudit({
+      extraEnvironment: {
+        https_proxy: "https://proxy.local:7890",
+      },
+    });
+
+    const issue = audit.issues.find(
+      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded,
+    );
+    expect(issue?.detail).toContain("HTTPS_PROXY");
+  });
+
+  it("does not flag proxy values loaded only from EnvironmentFile", async () => {
+    const audit = await createGatewayAudit({
+      extraEnvironment: {
+        HTTP_PROXY: "http://proxy.local:7890",
+      },
+      environmentValueSources: {
+        HTTP_PROXY: "file",
+      },
+    });
+
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded)).toBe(false);
+  });
+
+  it("flags proxy values present inline even when an EnvironmentFile overrides them", async () => {
+    const audit = await createGatewayAudit({
+      extraEnvironment: {
+        HTTP_PROXY: "http://proxy.local:7890",
+      },
+      environmentValueSources: {
+        HTTP_PROXY: "inline-and-file",
+      },
+    });
+
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded)).toBe(true);
   });
 });
 

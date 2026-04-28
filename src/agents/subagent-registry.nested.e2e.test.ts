@@ -5,7 +5,7 @@ vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    loadConfig: vi.fn(() => ({
+    getRuntimeConfig: vi.fn(() => ({
       agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
     })),
   };

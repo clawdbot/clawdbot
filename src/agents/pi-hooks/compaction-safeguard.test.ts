@@ -1433,6 +1433,13 @@ describe("compaction-safeguard recent-turn preservation", () => {
       preparation: {
         messagesToSummarize: [
           { role: "user", content: "older context", timestamp: 1 },
+          {
+            role: "custom",
+            customType: "openclaw.runtime-context",
+            content: "secret runtime context",
+            display: false,
+            timestamp: 1.5,
+          } as unknown as AgentMessage,
           { role: "assistant", content: "older reply", timestamp: 2 } as unknown as AgentMessage,
           { role: "user", content: "latest ask status", timestamp: 3 },
           {
@@ -1831,6 +1838,9 @@ describe("compaction-safeguard recent-turn preservation", () => {
         },
       }),
     );
+    const providerMessages = providerSummarize.mock.calls[0]?.[0]?.messages ?? [];
+    expect(JSON.stringify(providerMessages)).not.toContain("openclaw.runtime-context");
+    expect(JSON.stringify(providerMessages)).not.toContain("secret runtime context");
     expect(compaction.summary).toContain("provider summary body");
     expect(compaction.summary).toContain("**Turn Context (split turn):**");
     expect(compaction.summary).toContain("prefix request that was split out");

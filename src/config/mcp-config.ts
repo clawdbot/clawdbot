@@ -1,6 +1,10 @@
 import { isRecord } from "../utils.js";
 import { readSourceConfigSnapshot } from "./io.js";
-import { normalizeConfiguredMcpServers, type ConfigMcpServers } from "./mcp-config-normalize.js";
+import {
+  canonicalizeConfiguredMcpServer,
+  normalizeConfiguredMcpServers,
+  type ConfigMcpServers,
+} from "./mcp-config-normalize.js";
 import { replaceConfigFile } from "./mutate.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
@@ -65,7 +69,7 @@ export async function setConfiguredMcpServer(params: {
 
   const next = structuredClone(loaded.config);
   const servers = normalizeConfiguredMcpServers(next.mcp?.servers);
-  servers[name] = { ...params.server };
+  servers[name] = canonicalizeConfiguredMcpServer(params.server);
   next.mcp = {
     ...next.mcp,
     servers,

@@ -1,15 +1,15 @@
 package ai.openclaw.app.node
 
-import android.os.Build
 import ai.openclaw.app.BuildConfig
+import ai.openclaw.app.LocationMode
 import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.VoiceWakeMode
 import ai.openclaw.app.gateway.GatewayClientInfo
 import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayTlsParams
 import ai.openclaw.app.gateway.isLoopbackGatewayHost
-import ai.openclaw.app.LocationMode
-import ai.openclaw.app.VoiceWakeMode
+import android.os.Build
 
 class ConnectionManager(
   private val prefs: SecurePrefs,
@@ -115,22 +115,27 @@ class ConnectionManager(
     }
   }
 
-  fun resolveModelIdentifier(): String? {
-    return listOfNotNull(Build.MANUFACTURER, Build.MODEL)
+  fun resolveModelIdentifier(): String? =
+    listOfNotNull(Build.MANUFACTURER, Build.MODEL)
       .joinToString(" ")
       .trim()
       .ifEmpty { null }
-  }
 
   fun buildUserAgent(): String {
     val version = resolvedVersionName()
-    val release = Build.VERSION.RELEASE?.trim().orEmpty()
+    val release =
+      Build.VERSION.RELEASE
+        ?.trim()
+        .orEmpty()
     val releaseLabel = if (release.isEmpty()) "unknown" else release
     return "OpenClawAndroid/$version (Android $releaseLabel; SDK ${Build.VERSION.SDK_INT})"
   }
 
-  fun buildClientInfo(clientId: String, clientMode: String): GatewayClientInfo {
-    return GatewayClientInfo(
+  fun buildClientInfo(
+    clientId: String,
+    clientMode: String,
+  ): GatewayClientInfo =
+    GatewayClientInfo(
       id = clientId,
       displayName = prefs.displayName.value,
       version = resolvedVersionName(),
@@ -140,10 +145,9 @@ class ConnectionManager(
       deviceFamily = "Android",
       modelIdentifier = resolveModelIdentifier(),
     )
-  }
 
-  fun buildNodeConnectOptions(): GatewayConnectOptions {
-    return GatewayConnectOptions(
+  fun buildNodeConnectOptions(): GatewayConnectOptions =
+    GatewayConnectOptions(
       role = "node",
       scopes = emptyList(),
       caps = buildCapabilities(),
@@ -152,10 +156,9 @@ class ConnectionManager(
       client = buildClientInfo(clientId = "openclaw-android", clientMode = "node"),
       userAgent = buildUserAgent(),
     )
-  }
 
-  fun buildOperatorConnectOptions(): GatewayConnectOptions {
-    return GatewayConnectOptions(
+  fun buildOperatorConnectOptions(): GatewayConnectOptions =
+    GatewayConnectOptions(
       role = "operator",
       scopes = listOf("operator.read", "operator.write", "operator.talk.secrets"),
       caps = emptyList(),
@@ -164,7 +167,6 @@ class ConnectionManager(
       client = buildClientInfo(clientId = "openclaw-android", clientMode = "ui"),
       userAgent = buildUserAgent(),
     )
-  }
 
   fun resolveTlsParams(endpoint: GatewayEndpoint): GatewayTlsParams? {
     val stored = prefs.loadGatewayTlsFingerprint(endpoint.stableId)

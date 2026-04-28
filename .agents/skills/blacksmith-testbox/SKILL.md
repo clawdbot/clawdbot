@@ -293,9 +293,15 @@ checks that need parity or remote state.
 5. If tests fail, fix code and re-run against the same warm box.
 6. If you changed dependency manifests (package.json, etc.), prepend
    the install command: `blacksmith testbox run --id <ID> "npm install && npm test"`
-7. If you need artifacts (coverage reports, build outputs, etc.), download them:
+7. If a narrow PR reports a full sync or the box was reused/expired, sanity
+   check the remote copy before a slow gate:
+   `blacksmith testbox run --id <ID> "pnpm testbox:sanity"`.
+   If it reports missing root files or mass tracked deletions, stop the box and
+   warm a fresh one. Use `OPENCLAW_TESTBOX_ALLOW_MASS_DELETIONS=1` only for an
+   intentional large deletion PR.
+8. If you need artifacts (coverage reports, build outputs, etc.), download them:
    `blacksmith testbox download --id <ID> coverage/ ./coverage/`
-8. Once green, commit and push.
+9. Once green, commit and push.
 
 ## OpenClaw full test suite
 
@@ -313,6 +319,12 @@ Observed full-suite time on Blacksmith Testbox is about 3-4 minutes:
 When validating before commit/push in maintainer Testbox mode, run
 `pnpm check:changed` inside the warmed box first when appropriate, then the full
 suite with the profile above if broad confidence is needed.
+
+Run `pnpm testbox:sanity` inside the warmed box before the broad command when
+the sync looks suspicious. It checks that root files such as `pnpm-lock.yaml`
+still exist and fails on 200 or more tracked deletions. That catches stale or
+corrupted rsync state before dependency install or Vitest failures hide the real
+problem.
 
 ## Examples
 

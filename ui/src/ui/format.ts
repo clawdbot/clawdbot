@@ -110,3 +110,28 @@ export function formatTokens(tokens: number | null | undefined, fallback = "0"):
   const m = tokens / 1_000_000;
   return m < 10 ? `${m.toFixed(1)}M` : `${Math.round(m)}M`;
 }
+
+export function parseSessionKeyParts(
+  key: string,
+): { agentId: string; channel: string; accountId: string } | null {
+  if (!key.startsWith("agent:")) {
+    return null;
+  }
+  const rest = key.slice("agent:".length);
+  const firstColon = rest.indexOf(":");
+  if (firstColon < 1) {
+    return null;
+  }
+  const agentId = rest.slice(0, firstColon);
+  const afterAgent = rest.slice(firstColon + 1);
+  const secondColon = afterAgent.indexOf(":");
+  if (secondColon < 1) {
+    return null;
+  }
+  const channel = afterAgent.slice(0, secondColon);
+  const accountId = afterAgent.slice(secondColon + 1);
+  if (!accountId) {
+    return null;
+  }
+  return { agentId, channel, accountId };
+}

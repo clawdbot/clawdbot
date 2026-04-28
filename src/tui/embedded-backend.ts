@@ -4,7 +4,7 @@ import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { buildAllowedModelSet, resolveThinkingDefault } from "../agents/model-selection.js";
 import { createDefaultDeps } from "../cli/deps.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
 import {
   projectRecentChatDisplayMessages,
@@ -243,7 +243,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async listSessions(opts?: Parameters<TuiBackend["listSessions"]>[0]): Promise<TuiSessionList> {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
     return listSessionsFromStore({
       cfg,
@@ -254,13 +254,13 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async listAgents(): Promise<TuiAgentsList> {
-    return listAgentsForGateway(loadConfig()) as TuiAgentsList;
+    return listAgentsForGateway(getRuntimeConfig()) as TuiAgentsList;
   }
 
   async patchSession(
     opts: Parameters<TuiBackend["patchSession"]>[0],
   ): Promise<SessionsPatchResult> {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const target = resolveGatewaySessionStoreTarget({ cfg, key: opts.key });
     const applied = await updateSessionStore(target.storePath, async (store) => {
       const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
@@ -315,7 +315,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   async listModels(): Promise<TuiModelChoice[]> {
     const catalog = await loadGatewayModelCatalog();
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const { allowedCatalog } = buildAllowedModelSet({
       cfg,
       catalog,

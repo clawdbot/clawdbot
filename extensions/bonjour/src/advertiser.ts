@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
+import os from "node:os";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { classifyCiaoProcessError, type CiaoProcessErrorClassification } from "./ciao.js";
@@ -79,7 +80,12 @@ type BonjourAdvertiserDeps = {
 
 const WATCHDOG_INTERVAL_MS = 5_000;
 const REPAIR_DEBOUNCE_MS = 30_000;
-const STUCK_ANNOUNCING_MS = 8_000;
+// Real-world LAN announce phase typically takes 12-13s on Mac/iOS networks. The
+// previous 8s threshold was triggering false-positive teardowns on every gateway
+// restart in such environments. 20s gives healthy networks plenty of room while
+// still catching genuinely stuck advertisers (announce that never completes).
+// See https://github.com/openclaw/openclaw/issues/72481
+const STUCK_ANNOUNCING_MS = 20_000;
 const MAX_CONSECUTIVE_RESTARTS = 3;
 const BONJOUR_ANNOUNCED_STATE = "announced";
 const CIAO_SELF_PROBE_RETRY_FRAGMENT =
@@ -160,9 +166,50 @@ function isDisabledByEnv() {
   return false;
 }
 
+function resolveSystemMdnsHostname(): string | null {
+  let raw: string;
+  try {
+    raw = os.hostname();
+  } catch {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const firstLabel =
+    trimmed
+      .replace(/\.local$/i, "")
+      .split(".")[0]
+      ?.trim() ?? "";
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(firstLabel)) {
+    return null;
+  }
+  return firstLabel;
+}
+
+const MAX_DNS_LABEL_BYTES = 63;
+const utf8Encoder = new TextEncoder();
+
+function truncateToDnsLabel(name: string, fallback = "OpenClaw"): string {
+  const encoded = utf8Encoder.encode(name);
+  if (encoded.byteLength <= MAX_DNS_LABEL_BYTES) {
+    return name;
+  }
+  for (let end = MAX_DNS_LABEL_BYTES; end > 0; end -= 1) {
+    try {
+      const decoded = new TextDecoder("utf-8", { fatal: true }).decode(encoded.subarray(0, end));
+      return decoded.replace(/-+$/, "").trim() || fallback;
+    } catch {
+      // Try the next shorter prefix until the byte slice ends on a UTF-8 boundary.
+    }
+  }
+  return fallback;
+}
+
 function safeServiceName(name: string) {
   const trimmed = name.trim();
-  return trimmed.length > 0 ? trimmed : "OpenClaw";
+  return trimmed.length > 0 ? truncateToDnsLabel(trimmed) : "OpenClaw";
 }
 
 function prettifyInstanceName(name: string) {
@@ -317,6 +364,13 @@ export async function startGatewayBonjourAdvertiser(
 
       if (classification.kind === "cancellation") {
         logger.debug(`bonjour: ignoring unhandled ciao rejection: ${classification.formatted}`);
+      } else if (classification.kind === "interface-enumeration-failure") {
+        // Restricted sandboxes can refuse os.networkInterfaces(); mDNS cannot
+        // function without it, so surface a single warning and skip recovery.
+        // Recovery would just re-enter the same failing syscall.
+        logger.warn(
+          `bonjour: disabling mDNS — networkInterfaces() unavailable in this environment: ${classification.formatted}`,
+        );
       } else {
         const label =
           classification.kind === "netmask-assertion" ? "netmask assertion" : "interface assertion";
@@ -328,12 +382,15 @@ export async function startGatewayBonjourAdvertiser(
     cleanupUnhandledRejection = deps.registerUnhandledRejectionHandler?.(handleCiaoProcessError);
     cleanupUncaughtException = deps.registerUncaughtExceptionHandler?.(handleCiaoProcessError);
 
-    const hostnameRaw = process.env.OPENCLAW_MDNS_HOSTNAME?.trim() || "openclaw";
-    const hostname =
+    const hostnameRaw =
+      process.env.OPENCLAW_MDNS_HOSTNAME?.trim() || resolveSystemMdnsHostname() || "openclaw";
+    const hostname = truncateToDnsLabel(
       hostnameRaw
         .replace(/\.local$/i, "")
         .split(".")[0]
-        .trim() || "openclaw";
+        .trim() || "openclaw",
+      "openclaw",
+    );
     const instanceName =
       typeof opts.instanceName === "string" && opts.instanceName.trim()
         ? opts.instanceName.trim()

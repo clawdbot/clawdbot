@@ -108,6 +108,13 @@ export const th: TranslationMap = {
       lightningHelp: "ที่อยู่ Lightning สำหรับทิป (LUD-16)",
     },
   },
+  lazyView: {
+    loadingTitle: "กำลังโหลดแผง",
+    errorTitle: "โหลดแผงไม่สำเร็จ",
+    errorSubtitle: "โหลดหน้าใหม่เพื่อโหลดบันเดิล Control UI ล่าสุด หรือลองอีกครั้งหากคำขอเครือข่ายล้มเหลว",
+    retry: "ลองอีกครั้ง",
+    unknownError: "ข้อผิดพลาดในการโหลดโมดูลที่ไม่ทราบสาเหตุ",
+  },
   nodes: {
     binding: {
       loadConfigHint: "โหลด config เพื่อแก้ไขการผูก",

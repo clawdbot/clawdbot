@@ -93,7 +93,6 @@ class SecurePrefsNotificationForwardingTest {
     assertEquals("06:45", prefs.notificationForwardingQuietEnd.value)
   }
 
-
   @Test
   fun getNotificationForwardingPolicy_readsLatestQuietHoursImmediately() {
     val context = RuntimeEnvironment.getApplication()
@@ -129,5 +128,4 @@ class SecurePrefsNotificationForwardingTest {
     assertFalse(policy.enabled)
     assertEquals(NotificationPackageFilterMode.Blocklist, policy.mode)
   }
-
 }

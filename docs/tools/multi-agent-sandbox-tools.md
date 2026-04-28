@@ -225,6 +225,7 @@ The filtering order is:
     - If `agents.list[].tools.sandbox.tools` is set, it replaces `tools.sandbox.tools` for that agent.
     - If `agents.list[].tools.profile` is set, it overrides `tools.profile` for that agent.
     - Provider tool keys accept either `provider` (e.g. `google-antigravity`) or `provider/model` (e.g. `openai/gpt-5.4`).
+
   </Accordion>
   <Accordion title="Empty allowlist behavior">
     If any explicit allowlist in that chain leaves the run with no callable tools, OpenClaw stops before submitting the prompt to the model. This is intentional: an agent configured with a missing tool such as `agents.list[].tools.allow: ["query_db"]` should fail loudly until the plugin that registers `query_db` is enabled, not continue as a text-only agent.
@@ -353,6 +354,7 @@ After configuring multi-agent sandbox and tools:
   <Step title="Test tool restrictions">
     - Send a message requiring restricted tools.
     - Verify the agent cannot use denied tools.
+
   </Step>
   <Step title="Monitor logs">
     ```bash
@@ -369,15 +371,18 @@ After configuring multi-agent sandbox and tools:
   <Accordion title="Agent not sandboxed despite `mode: 'all'`">
     - Check if there's a global `agents.defaults.sandbox.mode` that overrides it.
     - Agent-specific config takes precedence, so set `agents.list[].sandbox.mode: "all"`.
+
   </Accordion>
   <Accordion title="Tools still available despite deny list">
     - Check tool filtering order: global → agent → sandbox → subagent.
     - Each level can only further restrict, not grant back.
     - Verify with logs: `[tools] filtering tools for agent:${agentId}`.
+
   </Accordion>
   <Accordion title="Container not isolated per agent">
     - Set `scope: "agent"` in agent-specific sandbox config.
     - Default is `"session"` which creates one container per session.
+
   </Accordion>
 </AccordionGroup>
 

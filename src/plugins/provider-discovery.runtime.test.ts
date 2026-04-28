@@ -3,14 +3,19 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { ProviderPlugin } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  loadPluginManifestRegistry: vi.fn(),
+  loadPluginRegistrySnapshot: vi.fn(),
+  loadPluginManifestRegistryForInstalledIndex: vi.fn(),
   resolveDiscoveredProviderPluginIds: vi.fn(),
   resolvePluginProviders: vi.fn(),
   loadSource: vi.fn(),
 }));
 
-vi.mock("./manifest-registry.js", () => ({
-  loadPluginManifestRegistry: mocks.loadPluginManifestRegistry,
+vi.mock("./plugin-registry.js", () => ({
+  loadPluginRegistrySnapshot: mocks.loadPluginRegistrySnapshot,
+}));
+
+vi.mock("./manifest-registry-installed.js", () => ({
+  loadPluginManifestRegistryForInstalledIndex: mocks.loadPluginManifestRegistryForInstalledIndex,
 }));
 
 vi.mock("./providers.js", () => ({
@@ -77,8 +82,9 @@ function createProvider(params: { id: string; mode: "static" | "catalog" }): Pro
 describe("resolvePluginDiscoveryProvidersRuntime", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
     mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["deepseek"]);
-    mocks.loadPluginManifestRegistry.mockReturnValue({
+    mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [createManifestPlugin("deepseek")],
       diagnostics: [],
     });
@@ -110,7 +116,7 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
       "kilocode",
       "unused",
     ]);
-    mocks.loadPluginManifestRegistry.mockReturnValue({
+    mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [
         createManifestPlugin("codex"),
         createManifestPlugin("deepseek"),
@@ -140,6 +146,69 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     expect(mocks.resolvePluginProviders).toHaveBeenCalledWith(
       expect.objectContaining({
         onlyPluginIds: ["deepseek", "kilocode"],
+      }),
+    );
+  });
+
+  it("shares one registry snapshot and manifest registry between provider id discovery and entry loading", () => {
+    const registry = { plugins: [] };
+    const manifestRegistry = {
+      plugins: [createManifestPlugin("deepseek")],
+      diagnostics: [],
+    };
+    mocks.loadPluginRegistrySnapshot.mockReturnValue(registry);
+    mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(manifestRegistry);
+    mocks.loadSource.mockReturnValue(createProvider({ id: "deepseek", mode: "catalog" }));
+
+    resolvePluginDiscoveryProvidersRuntime({ config: {}, env: {} as NodeJS.ProcessEnv });
+
+    expect(mocks.loadPluginRegistrySnapshot).toHaveBeenCalledOnce();
+    expect(mocks.loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledWith({
+      index: registry,
+      config: {},
+      workspaceDir: undefined,
+      env: {},
+      includeDisabled: true,
+    });
+    expect(mocks.loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
+    expect(mocks.resolveDiscoveredProviderPluginIds).toHaveBeenCalledWith(
+      expect.objectContaining({
+        registry,
+        manifestRegistry,
+      }),
+    );
+  });
+
+  it("uses a provided plugin metadata snapshot without rebuilding registry metadata", () => {
+    const registry = { plugins: [] };
+    const manifestRegistry = {
+      plugins: [createManifestPlugin("deepseek")],
+      diagnostics: [],
+    };
+    mocks.loadSource.mockReturnValue(createProvider({ id: "deepseek", mode: "catalog" }));
+
+    expect(
+      resolvePluginDiscoveryProvidersRuntime({
+        config: {},
+        env: {} as NodeJS.ProcessEnv,
+        pluginMetadataSnapshot: {
+          index: registry as never,
+          manifestRegistry,
+        },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        id: "deepseek",
+        pluginId: "deepseek",
+      }),
+    ]);
+
+    expect(mocks.loadPluginRegistrySnapshot).not.toHaveBeenCalled();
+    expect(mocks.loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
+    expect(mocks.resolveDiscoveredProviderPluginIds).toHaveBeenCalledWith(
+      expect.objectContaining({
+        registry,
+        manifestRegistry,
       }),
     );
   });

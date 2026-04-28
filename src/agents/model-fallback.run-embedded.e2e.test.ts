@@ -12,7 +12,11 @@ import {
   createResolvedEmbeddedRunnerModel,
   makeEmbeddedRunnerAttempt,
 } from "./test-helpers/pi-embedded-runner-e2e-fixtures.js";
-import { installEmbeddedRunnerBaseE2eMocks } from "./test-helpers/pi-embedded-runner-e2e-mocks.js";
+import {
+  installEmbeddedRunnerBackoffE2eMocks,
+  installEmbeddedRunnerBaseE2eMocks,
+  installEmbeddedRunnerFastRunE2eMocks,
+} from "./test-helpers/pi-embedded-runner-e2e-mocks.js";
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
@@ -25,28 +29,6 @@ const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
   sleepWithAbortMock: vi.fn(async (_ms: number, _abortSignal?: AbortSignal) => undefined),
 }));
 
-vi.mock("./pi-embedded-runner/run/attempt.js", async () => {
-  const actual = await vi.importActual<typeof import("./pi-embedded-runner/run/attempt.js")>(
-    "./pi-embedded-runner/run/attempt.js",
-  );
-  return {
-    ...actual,
-    runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
-  };
-});
-
-vi.mock("../infra/backoff.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/backoff.js")>("../infra/backoff.js");
-  return {
-    ...actual,
-    computeBackoff: (
-      policy: { initialMs: number; maxMs: number; factor: number; jitter: number },
-      attempt: number,
-    ) => computeBackoffMock(policy, attempt),
-    sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => sleepWithAbortMock(ms, abortSignal),
-  };
-});
-
 vi.mock("./models-config.js", async () => {
   const mod = await vi.importActual<typeof import("./models-config.js")>("./models-config.js");
   return {
@@ -57,20 +39,17 @@ vi.mock("./models-config.js", async () => {
 
 const installRunEmbeddedMocks = () => {
   installEmbeddedRunnerBaseE2eMocks();
+  installEmbeddedRunnerFastRunE2eMocks({
+    runEmbeddedAttempt: (params) => runEmbeddedAttemptMock(params),
+  });
+  installEmbeddedRunnerBackoffE2eMocks({
+    computeBackoff: (policy, attempt) => computeBackoffMock(policy, attempt),
+    sleepWithAbort: (ms, abortSignal) => sleepWithAbortMock(ms, abortSignal),
+  });
   vi.doMock("./pi-embedded-runner/model.js", () => ({
     resolveModelAsync: async (provider: string, modelId: string) =>
       createResolvedEmbeddedRunnerModel(provider, modelId),
   }));
-  vi.doMock("../plugins/provider-runtime.js", async () => {
-    const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
-      "../plugins/provider-runtime.js",
-    );
-    return {
-      ...actual,
-      prepareProviderRuntimeAuth: vi.fn(async () => undefined),
-      resolveProviderCapabilitiesWithPlugin: vi.fn(() => undefined),
-    };
-  });
 };
 
 let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;

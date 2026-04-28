@@ -17,6 +17,7 @@ export function normalizeReplyPayloadDirectives(params: {
   silentToken?: string;
   trimLeadingWhitespace?: boolean;
   parseMode?: ReplyDirectiveParseMode;
+  extractMarkdownImages?: boolean;
 }): { payload: ReplyPayload; isSilent: boolean } {
   const parseMode = params.parseMode ?? "always";
   const silentToken = params.silentToken ?? SILENT_REPLY_TOKEN;
@@ -27,12 +28,14 @@ export function normalizeReplyPayloadDirectives(params: {
     (parseMode === "auto" &&
       (sourceText.includes("[[") ||
         /media:/i.test(sourceText) ||
+        (params.extractMarkdownImages === true && /!\[[^\]]*]\(/.test(sourceText)) ||
         sourceText.includes(silentToken)));
 
   const parsed = shouldParse
     ? parseReplyDirectives(sourceText, {
         currentMessageId: params.currentMessageId,
         silentToken,
+        extractMarkdownImages: params.extractMarkdownImages,
       })
     : undefined;
 

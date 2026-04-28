@@ -6,6 +6,7 @@ import {
   assertNoBundledRuntimeDepsStagingDebris,
   collectBundledRuntimeDepsStagingDebrisPaths,
   collectPackageDistInventoryErrors,
+  LOCAL_BUILD_METADATA_DIST_PATHS,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   collectPackageDistInventory,
   isBundledRuntimeDepsInstallStagePath,
@@ -92,6 +93,9 @@ describe("package dist inventory", () => {
         "discord",
         ".openclaw-runtime-deps-stamp.json",
       );
+      const [omittedBuildStamp, omittedRuntimePostBuildStamp] = LOCAL_BUILD_METADATA_DIST_PATHS.map(
+        (relativePath) => path.join(packageRoot, relativePath),
+      );
       const omittedRuntimeDepsTempFile = path.join(
         packageRoot,
         "dist",
@@ -151,6 +155,8 @@ describe("package dist inventory", () => {
       await fs.writeFile(omittedQaLabTypes, "export {};\n", "utf8");
       await fs.writeFile(omittedQaRuntimeChunk, "export {};\n", "utf8");
       await fs.writeFile(omittedRuntimeDepsStamp, "{}\n", "utf8");
+      await fs.writeFile(omittedBuildStamp, "{}\n", "utf8");
+      await fs.writeFile(omittedRuntimePostBuildStamp, "{}\n", "utf8");
       await fs.writeFile(omittedRuntimeDepsTempFile, "module.exports = 1;\n", "utf8");
       await fs.symlink(path.join(packageRoot, "color-support.js"), omittedRuntimeDepsTempSymlink);
       await fs.symlink(

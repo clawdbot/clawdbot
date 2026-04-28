@@ -1,9 +1,14 @@
+import {
+  registerProviderPlugin,
+  registerSingleProviderPlugin,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it, vi } from "vitest";
-import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
-import { registerProviderPlugin } from "../../test/helpers/plugins/provider-registration.js";
-import { expectPassthroughReplayPolicy } from "../../test/helpers/provider-replay-policy.ts";
 import openrouterPlugin from "./index.js";
-import { buildOpenrouterProvider } from "./provider-catalog.js";
+import {
+  buildOpenrouterProvider,
+  isOpenRouterProxyReasoningUnsupportedModel,
+} from "./provider-catalog.js";
 
 describe("openrouter provider hooks", () => {
   it("registers OpenRouter speech alongside model and media providers", async () => {
@@ -24,6 +29,18 @@ describe("openrouter provider hooks", () => {
     expect(buildOpenrouterProvider().models?.map((model) => model.id)).toContain(
       "moonshotai/kimi-k2.6",
     );
+  });
+
+  it("does not include retired stealth models in the bundled catalog", () => {
+    expect(buildOpenrouterProvider().models?.map((model) => model.id)).not.toEqual(
+      expect.arrayContaining(["openrouter/hunter-alpha", "openrouter/healer-alpha"]),
+    );
+  });
+
+  it("keeps stale Hunter Alpha configs out of OpenRouter proxy reasoning", () => {
+    expect(isOpenRouterProxyReasoningUnsupportedModel("openrouter/hunter-alpha")).toBe(true);
+    expect(isOpenRouterProxyReasoningUnsupportedModel("openrouter/hunter-alpha:free")).toBe(true);
+    expect(isOpenRouterProxyReasoningUnsupportedModel("openrouter/healer-alpha")).toBe(false);
   });
 
   it("owns passthrough-gemini replay policy for Gemini-backed models", async () => {
@@ -89,6 +106,26 @@ describe("openrouter provider hooks", () => {
     });
 
     expect(
+      provider.normalizeResolvedModel?.({
+        provider: "openrouter",
+        model: {
+          provider: "openrouter",
+          id: "openrouter/hunter-alpha",
+          name: "Hunter Alpha",
+          api: "openai-completions",
+          baseUrl: "https://openrouter.ai/api/v1",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 1_048_576,
+          maxTokens: 65_536,
+        },
+      } as never),
+    ).toMatchObject({
+      reasoning: false,
+    });
+
+    expect(
       provider.normalizeTransport?.({
         provider: "openrouter",
         api: "openai-completions",
@@ -140,5 +177,44 @@ describe("openrouter provider hooks", () => {
         },
       },
     });
+  });
+
+  it("does not inject OpenRouter reasoning for Hunter Alpha", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    let capturedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn = vi.fn(
+      (
+        ...args: Parameters<import("@mariozechner/pi-agent-core").StreamFn>
+      ): ReturnType<import("@mariozechner/pi-agent-core").StreamFn> => {
+        void args[2]?.onPayload?.({}, args[0]);
+        return { async *[Symbol.asyncIterator]() {} } as never;
+      },
+    );
+
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "openrouter",
+      modelId: "openrouter/hunter-alpha",
+      streamFn: baseStreamFn,
+      thinkingLevel: "high",
+    } as never);
+
+    void wrapped?.(
+      {
+        provider: "openrouter",
+        api: "openai-completions",
+        id: "openrouter/hunter-alpha",
+        compat: {},
+      } as never,
+      { messages: [] } as never,
+      {
+        onPayload: (payload: unknown) => {
+          capturedPayload = payload as Record<string, unknown>;
+          return payload;
+        },
+      } as never,
+    );
+
+    expect(capturedPayload).toEqual({});
+    expect(baseStreamFn).toHaveBeenCalledOnce();
   });
 });

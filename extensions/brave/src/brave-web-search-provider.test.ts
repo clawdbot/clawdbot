@@ -1,6 +1,6 @@
 import fs from "node:fs";
+import { validateJsonSchemaValue } from "openclaw/plugin-sdk/config-schema";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { validateJsonSchemaValue } from "../../../src/plugins/schema-validator.js";
 import { __testing } from "../test-api.js";
 import { createBraveWebSearchProvider } from "./brave-web-search-provider.js";
 

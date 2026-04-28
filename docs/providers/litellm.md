@@ -30,6 +30,12 @@ read_when:
         ```bash
         openclaw onboard --auth-choice litellm-api-key
         ```
+
+        For non-interactive setup against a remote proxy, pass the proxy URL explicitly:
+
+        ```bash
+        openclaw onboard --non-interactive --auth-choice litellm-api-key --litellm-api-key "$LITELLM_API_KEY" --custom-base-url "https://litellm.example/v1"
+        ```
       </Step>
     </Steps>
 

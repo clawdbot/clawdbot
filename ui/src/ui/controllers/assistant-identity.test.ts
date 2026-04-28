@@ -2,7 +2,60 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { loadLocalAssistantIdentity } from "../storage.ts";
-import { setAssistantAvatarOverride } from "./assistant-identity.ts";
+import { loadAssistantIdentity, setAssistantAvatarOverride } from "./assistant-identity.ts";
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
+
+describe("loadAssistantIdentity", () => {
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", createStorageMock());
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("ignores stale identity responses after the active session changes", async () => {
+    const first = createDeferred<unknown>();
+    const second = createDeferred<unknown>();
+    const request = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const state: Parameters<typeof loadAssistantIdentity>[0] = {
+      client: { request } as never,
+      connected: true,
+      sessionKey: "agent:main:main",
+      assistantName: "Main",
+      assistantAvatar: null,
+      assistantAgentId: "main",
+    };
+
+    const firstLoad = loadAssistantIdentity(state);
+    state.sessionKey = "agent:worker:main";
+    const secondLoad = loadAssistantIdentity(state);
+
+    second.resolve({ agentId: "worker", name: "Worker", avatar: "W" });
+    await secondLoad;
+    expect(state.assistantName).toBe("Worker");
+    expect(state.assistantAgentId).toBe("worker");
+
+    first.resolve({ agentId: "main", name: "Main After", avatar: "M" });
+    await firstLoad;
+
+    expect(state.assistantName).toBe("Worker");
+    expect(state.assistantAvatar).toBe("W");
+    expect(state.assistantAgentId).toBe("worker");
+    expect(request).toHaveBeenNthCalledWith(1, "agent.identity.get", {
+      sessionKey: "agent:main:main",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "agent.identity.get", {
+      sessionKey: "agent:worker:main",
+    });
+  });
+});
 
 describe("setAssistantAvatarOverride", () => {
   beforeEach(() => {

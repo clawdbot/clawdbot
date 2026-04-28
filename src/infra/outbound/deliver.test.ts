@@ -1235,6 +1235,54 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("keeps markdown images as text for channels that do not opt in", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-text", roomId: "!room" });
+
+    await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "Tech: ![Node.js](https://img.shields.io/badge/Node.js-339933)" }],
+      deps: { matrix: sendMatrix },
+    });
+
+    expect(sendMatrix).toHaveBeenCalledWith(
+      "!room:example",
+      "Tech: ![Node.js](https://img.shields.io/badge/Node.js-339933)",
+      expect.not.objectContaining({ mediaUrl: expect.any(String) }),
+    );
+  });
+
+  it("extracts markdown images for channels that opt in", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-media", roomId: "!room" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { ...matrixOutboundForTest, extractMarkdownImages: true },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "Chart ![chart](https://example.com/chart.png) now" }],
+      deps: { matrix: sendMatrix },
+    });
+
+    expect(sendMatrix).toHaveBeenCalledWith(
+      "!room:example",
+      "Chart now",
+      expect.objectContaining({ mediaUrl: "https://example.com/chart.png" }),
+    );
+  });
+
   it("normalizes payloads and drops empty entries", () => {
     const normalized = normalizeOutboundPayloads([
       { text: "hi" },

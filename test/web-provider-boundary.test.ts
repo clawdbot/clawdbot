@@ -1,3 +1,4 @@
+import { BUNDLED_PLUGIN_PATH_PREFIX } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import {
   collectWebFetchProviderBoundaryViolations,
@@ -7,7 +8,6 @@ import {
   collectWebSearchProviderBoundaryInventory,
   main as webSearchMain,
 } from "../scripts/check-web-search-provider-boundaries.mjs";
-import { BUNDLED_PLUGIN_PATH_PREFIX } from "./helpers/bundled-plugin-paths.js";
 import { createCapturedIo } from "./helpers/captured-io.js";
 
 const webFetchViolationsPromise = collectWebFetchProviderBoundaryViolations();

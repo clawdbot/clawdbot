@@ -141,6 +141,12 @@ export type GatewayTrustedProxyConfig = {
    * Example: ["nick@example.com", "admin@company.org"]
    */
   allowUsers?: string[];
+  /**
+   * Allow loopback proxy sources (127.0.0.1, ::1) in trusted-proxy mode.
+   * Default false; enable only when a same-host reverse proxy is the intended
+   * trust boundary and direct Gateway access is otherwise locked down.
+   */
+  allowLoopback?: boolean;
 };
 
 export type GatewayAuthConfig = {

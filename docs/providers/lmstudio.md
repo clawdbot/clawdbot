@@ -104,7 +104,7 @@ LM Studio is streaming-usage compatible. When it does not emit an OpenAI-shaped
 `usage` object, OpenClaw recovers token counts from llama.cpp-style
 `timings.prompt_n` / `timings.predicted_n` metadata instead.
 
-Same behavior applies to these OpenAI-compatible local backends:
+Same streaming usage behavior applies to these OpenAI-compatible local backends:
 
 - vLLM
 - SGLang
@@ -113,6 +113,14 @@ Same behavior applies to these OpenAI-compatible local backends:
 - Jan
 - TabbyAPI
 - text-generation-webui
+
+### Thinking compatibility
+
+When LM Studio's `/api/v1/models` discovery reports model-specific reasoning
+options, OpenClaw preserves those native values in model compat metadata. For
+binary thinking models that advertise `allowed_options: ["off", "on"]`,
+OpenClaw maps disabled thinking to `off` and enabled `/think` levels to `on`
+instead of sending OpenAI-only values such as `low` or `medium`.
 
 ### Explicit configuration
 
@@ -189,7 +197,7 @@ Use the LM Studio host's reachable address, keep `/v1`, and make sure LM Studio 
 }
 ```
 
-Unlike generic OpenAI-compatible providers, `lmstudio` automatically trusts its configured local/private endpoint for guarded model requests. If you use a custom provider id instead of `lmstudio`, set `models.providers.<id>.request.allowPrivateNetwork: true` explicitly.
+Unlike generic OpenAI-compatible providers, `lmstudio` automatically trusts its configured local/private endpoint for guarded model requests. Custom loopback provider IDs such as `localhost` or `127.0.0.1` are also trusted automatically; for LAN, tailnet, or private DNS custom provider IDs, set `models.providers.<id>.request.allowPrivateNetwork: true` explicitly.
 
 ## Related
 

@@ -1,13 +1,13 @@
 {
-  "originHash" : "7a8088405ec5e396c14d737c110ff5651ff25dabcd437a0fee92e57018c5360a",
+  "originHash" : "45e1ade868f67cf9cac4811c3b8c8b7dab7cef3f932ddebac6e292fdf9d6973c",
   "pins" : [
     {
       "identity" : "axorcist",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/steipete/AXorcist.git",
       "state" : {
-        "revision" : "c75d06f7f93e264a9786edc2b78c04973061cb2f",
-        "version" : "0.1.0"
+        "revision" : "289d403c53ce26cdd2fcb2bfb8672cd43adc2b43",
+        "version" : "0.1.2"
       }
     },
     {
@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/steipete/Commander.git",
       "state" : {
-        "revision" : "9e349575c8e3c6745e81fe19e5bb5efa01b078ce",
-        "version" : "0.2.1"
+        "revision" : "ae2ce746b386ff94b26648cfe5625cfa8d02639b",
+        "version" : "0.2.2"
       }
     },
     {
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/steipete/ElevenLabsKit",
       "state" : {
-        "revision" : "7e3c948d8340abe3977014f3de020edf221e9269",
-        "version" : "0.1.0"
+        "revision" : "0f1e4c039bd0e22b03c0cb7f43c00c1865858f0b",
+        "version" : "0.1.1"
       }
     },
     {
@@ -42,8 +42,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/steipete/Peekaboo.git",
       "state" : {
-        "branch" : "main",
-        "revision" : "8659b70d386d02f831e277386b3216023ccc707e"
+        "revision" : "bb57c83935ebc27aae69a23042a9f9fe6ca8e404",
+        "version" : "3.0.0-beta4"
       }
     },
     {

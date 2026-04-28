@@ -21,15 +21,16 @@ import type { HandleCommandsParams } from "./commands-types.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const validateConfigObjectWithPluginsMock = vi.hoisted(() => vi.fn());
-const writeConfigFileMock = vi.hoisted(() => vi.fn());
+const replaceConfigFileMock = vi.hoisted(() => vi.fn());
 const readChannelAllowFromStoreMock = vi.hoisted(() => vi.fn());
 const addChannelAllowFromStoreEntryMock = vi.hoisted(() => vi.fn());
 const removeChannelAllowFromStoreEntryMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../config/config.js", () => ({
+  getRuntimeConfig: () => ({}),
   readConfigFileSnapshot: readConfigFileSnapshotMock,
   validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
-  writeConfigFile: writeConfigFileMock,
+  replaceConfigFile: replaceConfigFileMock,
 }));
 
 vi.mock("../../pairing/pairing-store.js", () => ({
@@ -187,10 +188,10 @@ beforeEach(() => {
     ok: true,
     config,
   }));
-  writeConfigFileMock.mockImplementation(async (config: unknown) => {
+  replaceConfigFileMock.mockImplementation(async (params: { nextConfig: unknown }) => {
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
     if (configPath) {
-      await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
+      await fs.writeFile(configPath, JSON.stringify(params.nextConfig, null, 2), "utf-8");
     }
   });
   readChannelAllowFromStoreMock.mockResolvedValue([]);
@@ -405,7 +406,7 @@ describe("handleAllowlistCommand", () => {
   });
 
   it("blocks config-targeted edits when the target account disables writes", async () => {
-    const previousWriteCount = writeConfigFileMock.mock.calls.length;
+    const previousWriteCount = replaceConfigFileMock.mock.calls.length;
     const cfg = {
       commands: { text: true, config: true },
       channels: {
@@ -431,7 +432,7 @@ describe("handleAllowlistCommand", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("channels.telegram.accounts.work.configWrites=true");
-    expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount);
+    expect(replaceConfigFileMock.mock.calls.length).toBe(previousWriteCount);
   });
 
   it("honors the configured default account when gating omitted-account config edits", async () => {
@@ -453,7 +454,7 @@ describe("handleAllowlistCommand", () => {
       ]),
     );
 
-    const previousWriteCount = writeConfigFileMock.mock.calls.length;
+    const previousWriteCount = replaceConfigFileMock.mock.calls.length;
     const cfg = {
       commands: { text: true, config: true },
       channels: {
@@ -479,7 +480,7 @@ describe("handleAllowlistCommand", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("channels.telegram.accounts.work.configWrites=true");
-    expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount);
+    expect(replaceConfigFileMock.mock.calls.length).toBe(previousWriteCount);
   });
 
   it("blocks allowlist writes from authorized non-owner senders", async () => {
@@ -511,7 +512,7 @@ describe("handleAllowlistCommand", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply).toBeUndefined();
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
     expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
   });
 
@@ -534,7 +535,7 @@ describe("handleAllowlistCommand", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply).toBeUndefined();
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
     expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
   });
 
@@ -583,7 +584,7 @@ describe("handleAllowlistCommand", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Invalid account id");
     expect((Object.prototype as Record<string, unknown>).allowFrom).toBeUndefined();
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 
   it("removes DM allowlist entries from canonical allowFrom and deletes legacy dm.allowFrom", async () => {

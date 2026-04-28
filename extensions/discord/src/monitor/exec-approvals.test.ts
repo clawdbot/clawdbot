@@ -1,5 +1,5 @@
 import type { ButtonInteraction, ComponentData } from "@buape/carbon";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveApprovalOverGatewayMock = vi.hoisted(() => vi.fn());

@@ -277,8 +277,6 @@ export type AgentDefaultsConfig = {
   cliBackends?: Record<string, CliBackendConfig>;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
   contextPruning?: AgentContextPruningConfig;
-  /** LLM timeout configuration. */
-  llm?: AgentLlmConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
   /** Embedded Pi runner hardening and compatibility controls. */
@@ -495,6 +493,8 @@ export type AgentCompactionConfig = {
 export type AgentCompactionMemoryFlushConfig = {
   /** Enable the pre-compaction memory flush (default: true). */
   enabled?: boolean;
+  /** Optional provider/model override used only for pre-compaction memory flush turns. */
+  model?: string;
   /** Run the memory flush when context is within this many tokens of the compaction threshold. */
   softThresholdTokens?: number;
   /**
@@ -506,17 +506,4 @@ export type AgentCompactionMemoryFlushConfig = {
   prompt?: string;
   /** System prompt appended for the memory flush turn. */
   systemPrompt?: string;
-};
-
-/**
- * LLM timeout configuration.
- */
-export type AgentLlmConfig = {
-  /**
-   * Idle timeout for LLM streaming responses in seconds.
-   * If no token is received within this time, the request is aborted.
-   * Set to 0 to disable (never timeout).
-   * If unset, OpenClaw uses the default LLM idle timeout.
-   */
-  idleTimeoutSeconds?: number;
 };

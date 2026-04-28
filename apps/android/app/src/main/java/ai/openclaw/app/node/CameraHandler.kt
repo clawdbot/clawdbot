@@ -1,9 +1,9 @@
 package ai.openclaw.app.node
 
-import android.content.Context
-import ai.openclaw.app.CameraHudKind
 import ai.openclaw.app.BuildConfig
+import ai.openclaw.app.CameraHudKind
 import ai.openclaw.app.gateway.GatewaySession
+import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withContext
@@ -16,8 +16,7 @@ import kotlinx.serialization.json.put
 
 internal const val CAMERA_CLIP_MAX_RAW_BYTES: Long = 18L * 1024L * 1024L
 
-internal fun isCameraClipWithinPayloadLimit(rawBytes: Long): Boolean =
-  rawBytes in 0L..CAMERA_CLIP_MAX_RAW_BYTES
+internal fun isCameraClipWithinPayloadLimit(rawBytes: Long): Boolean = rawBytes in 0L..CAMERA_CLIP_MAX_RAW_BYTES
 
 class CameraHandler(
   private val appContext: Context,
@@ -27,8 +26,8 @@ class CameraHandler(
   private val triggerCameraFlash: () -> Unit,
   private val invokeErrorFromThrowable: (err: Throwable) -> Pair<String, String>,
 ) {
-  suspend fun handleList(_paramsJson: String?): GatewaySession.InvokeResult {
-    return try {
+  suspend fun handleList(_paramsJson: String?): GatewaySession.InvokeResult =
+    try {
       val devices = camera.listDevices()
       val payload =
         buildJsonObject {
@@ -53,10 +52,10 @@ class CameraHandler(
       val (code, message) = invokeErrorFromThrowable(err)
       GatewaySession.InvokeResult.error(code = code, message = message)
     }
-  }
 
   suspend fun handleSnap(paramsJson: String?): GatewaySession.InvokeResult {
     val logFile = if (BuildConfig.DEBUG) java.io.File(appContext.cacheDir, "camera_debug.log") else null
+
     fun camLog(msg: String) {
       if (!BuildConfig.DEBUG) return
       val ts = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())
@@ -95,6 +94,7 @@ class CameraHandler(
 
   suspend fun handleClip(paramsJson: String?): GatewaySession.InvokeResult {
     val clipLogFile = if (BuildConfig.DEBUG) java.io.File(appContext.cacheDir, "camera_debug.log") else null
+
     fun clipLog(msg: String) {
       if (!BuildConfig.DEBUG) return
       val ts = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())
@@ -133,18 +133,19 @@ class CameraHandler(
         )
       }
 
-      val bytes = withContext(Dispatchers.IO) {
-        try {
-          filePayload.file.readBytes()
-        } finally {
-          filePayload.file.delete()
+      val bytes =
+        withContext(Dispatchers.IO) {
+          try {
+            filePayload.file.readBytes()
+          } finally {
+            filePayload.file.delete()
+          }
         }
-      }
       val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
       clipLog("returning base64 payload")
       showCameraHud("Clip captured", CameraHudKind.Success, 1800)
       return GatewaySession.InvokeResult.ok(
-        """{"format":"mp4","base64":"$base64","durationMs":${filePayload.durationMs},"hasAudio":${filePayload.hasAudio}}"""
+        """{"format":"mp4","base64":"$base64","durationMs":${filePayload.durationMs},"hasAudio":${filePayload.hasAudio}}""",
       )
     } catch (err: Throwable) {
       clipLog("outer error: ${err::class.java.simpleName}: ${err.message}")

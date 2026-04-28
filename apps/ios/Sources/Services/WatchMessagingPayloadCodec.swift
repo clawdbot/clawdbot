@@ -21,7 +21,7 @@ enum WatchMessagingPayloadCodec {
             "title": params.title,
             "body": params.body,
             "priority": params.priority?.rawValue ?? OpenClawNotificationPriority.active.rawValue,
-            "sentAtMs": nowMs(),
+            "sentAtMs": self.nowMs(),
         ]
         if let promptId = nonEmpty(params.promptId) {
             payload["promptId"] = promptId
@@ -88,7 +88,7 @@ enum WatchMessagingPayloadCodec {
     {
         var payload: [String: Any] = [
             "type": OpenClawWatchPayloadType.execApprovalPrompt.rawValue,
-            "approval": encodeExecApprovalItem(message.approval),
+            "approval": self.encodeExecApprovalItem(message.approval),
         ]
         if let sentAtMs = message.sentAtMs {
             payload["sentAtMs"] = sentAtMs
@@ -140,7 +140,7 @@ enum WatchMessagingPayloadCodec {
     {
         var payload: [String: Any] = [
             "type": OpenClawWatchPayloadType.execApprovalSnapshot.rawValue,
-            "approvals": message.approvals.map(encodeExecApprovalItem),
+            "approvals": message.approvals.map(self.encodeExecApprovalItem),
         ]
         if let sentAtMs = message.sentAtMs {
             payload["sentAtMs"] = sentAtMs
@@ -161,11 +161,11 @@ enum WatchMessagingPayloadCodec {
         guard let actionId = nonEmpty(payload["actionId"] as? String) else {
             return nil
         }
-        let promptId = nonEmpty(payload["promptId"] as? String) ?? "unknown"
-        let replyId = nonEmpty(payload["replyId"] as? String) ?? UUID().uuidString
-        let actionLabel = nonEmpty(payload["actionLabel"] as? String)
-        let sessionKey = nonEmpty(payload["sessionKey"] as? String)
-        let note = nonEmpty(payload["note"] as? String)
+        let promptId = self.nonEmpty(payload["promptId"] as? String) ?? "unknown"
+        let replyId = self.nonEmpty(payload["replyId"] as? String) ?? UUID().uuidString
+        let actionLabel = self.nonEmpty(payload["actionLabel"] as? String)
+        let sessionKey = self.nonEmpty(payload["sessionKey"] as? String)
+        let note = self.nonEmpty(payload["note"] as? String)
         let sentAtMs = (payload["sentAtMs"] as? Int) ?? (payload["sentAtMs"] as? NSNumber)?.intValue
 
         return WatchQuickReplyEvent(
@@ -192,7 +192,7 @@ enum WatchMessagingPayloadCodec {
         else {
             return nil
         }
-        let replyId = nonEmpty(payload["replyId"] as? String) ?? UUID().uuidString
+        let replyId = self.nonEmpty(payload["replyId"] as? String) ?? UUID().uuidString
         let sentAtMs = (payload["sentAtMs"] as? Int) ?? (payload["sentAtMs"] as? NSNumber)?.intValue
         return WatchExecApprovalResolveEvent(
             replyId: replyId,
@@ -209,7 +209,7 @@ enum WatchMessagingPayloadCodec {
         guard (payload["type"] as? String) == OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue else {
             return nil
         }
-        let requestId = nonEmpty(payload["requestId"] as? String) ?? UUID().uuidString
+        let requestId = self.nonEmpty(payload["requestId"] as? String) ?? UUID().uuidString
         let sentAtMs = (payload["sentAtMs"] as? Int) ?? (payload["sentAtMs"] as? NSNumber)?.intValue
         return WatchExecApprovalSnapshotRequestEvent(
             requestId: requestId,

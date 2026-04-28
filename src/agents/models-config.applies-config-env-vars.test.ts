@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { unsetEnv, withTempEnv } from "./models-config.e2e-harness.js";
-import { resolveProvidersForModelsJsonWithDeps } from "./models-config.plan.js";
+import {
+  planOpenClawModelsJsonWithDeps,
+  resolveProvidersForModelsJsonWithDeps,
+} from "./models-config.plan.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 const TEST_ENV_VAR = "OPENCLAW_MODELS_CONFIG_TEST_ENV";
@@ -72,6 +76,113 @@ async function resolveProvidersAndCaptureDiscoveryEnv(cfg: OpenClawConfig) {
 }
 
 describe("models-config", () => {
+  it("threads plugin metadata snapshots into implicit provider discovery", async () => {
+    const pluginMetadataSnapshot = {
+      index: { plugins: [] },
+      manifestRegistry: { plugins: [], diagnostics: [] },
+      owners: { providers: new Map() },
+    } as unknown as Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
+    let observedSnapshot:
+      | Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">
+      | undefined;
+
+    await resolveProvidersForModelsJsonWithDeps(
+      {
+        cfg: { models: { providers: {} } },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+        pluginMetadataSnapshot,
+      },
+      {
+        resolveImplicitProviders: async ({ pluginMetadataSnapshot: receivedSnapshot }) => {
+          observedSnapshot = receivedSnapshot;
+          return {};
+        },
+      },
+    );
+
+    expect(observedSnapshot).toBe(pluginMetadataSnapshot);
+  });
+
+  it("threads workspace scope into implicit provider discovery", async () => {
+    let observedWorkspaceDir: string | undefined;
+
+    await resolveProvidersForModelsJsonWithDeps(
+      {
+        cfg: { models: { providers: {} } },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+        workspaceDir: "/tmp/openclaw-workspace",
+      },
+      {
+        resolveImplicitProviders: async ({ workspaceDir }) => {
+          observedWorkspaceDir = workspaceDir;
+          return {};
+        },
+      },
+    );
+
+    expect(observedWorkspaceDir).toBe("/tmp/openclaw-workspace");
+  });
+
+  it("threads startup provider discovery scope into implicit provider discovery", async () => {
+    let observedProviderIds: readonly string[] | undefined;
+    let observedTimeoutMs: number | undefined;
+
+    await resolveProvidersForModelsJsonWithDeps(
+      {
+        cfg: { models: { providers: {} } },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+        providerDiscoveryProviderIds: ["openai"],
+        providerDiscoveryTimeoutMs: 5000,
+      },
+      {
+        resolveImplicitProviders: async ({
+          providerDiscoveryProviderIds,
+          providerDiscoveryTimeoutMs,
+        }) => {
+          observedProviderIds = providerDiscoveryProviderIds;
+          observedTimeoutMs = providerDiscoveryTimeoutMs;
+          return {};
+        },
+      },
+    );
+
+    expect(observedProviderIds).toEqual(["openai"]);
+    expect(observedTimeoutMs).toBe(5000);
+  });
+
+  it("threads plugin metadata snapshots through models.json planning", async () => {
+    const pluginMetadataSnapshot = {
+      index: { plugins: [] },
+      manifestRegistry: { plugins: [], diagnostics: [] },
+      owners: { providers: new Map() },
+    } as unknown as Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
+    let observedSnapshot:
+      | Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">
+      | undefined;
+
+    await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: { models: { providers: {} } },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+        existingRaw: "",
+        existingParsed: null,
+        pluginMetadataSnapshot,
+      },
+      {
+        resolveImplicitProviders: async ({ pluginMetadataSnapshot: receivedSnapshot }) => {
+          observedSnapshot = receivedSnapshot;
+          return {};
+        },
+      },
+    );
+
+    expect(observedSnapshot).toBe(pluginMetadataSnapshot);
+  });
+
   it("uses config env.vars entries for implicit provider discovery without mutating process.env", async () => {
     await withTempEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR], async () => {
       unsetEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR]);

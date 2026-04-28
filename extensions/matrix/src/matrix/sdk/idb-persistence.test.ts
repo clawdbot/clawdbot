@@ -5,7 +5,7 @@ import path from "node:path";
 import {
   drainFileLockStateForTest,
   resetFileLockStateForTest,
-} from "openclaw/plugin-sdk/infra-runtime";
+} from "openclaw/plugin-sdk/file-lock";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { persistIdbToDisk, restoreIdbFromDisk } from "./idb-persistence.js";
 import {

@@ -325,6 +325,30 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(input)).toBe("Visible intro.\n\nVisible outro.");
   });
 
+  it("strips copied next-turn runtime context prefaces from user-facing text", () => {
+    const input = [
+      "OpenClaw runtime context for the immediately preceding user message.",
+      "This context is runtime-generated, not user-authored. Keep internal details private.",
+      "",
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "secret runtime context",
+      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "",
+      "Visible reply.",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Visible reply.");
+  });
+
+  it("strips copied runtime event prefaces when no visible text remains", () => {
+    const input = [
+      "OpenClaw runtime event.",
+      "This context is runtime-generated, not user-authored. Keep internal details private.",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("");
+  });
+
   it("does not strip ordinary text that merely mentions internal marker strings", () => {
     const input = [
       "The literal header `OpenClaw runtime context (internal):` appears in this note.",

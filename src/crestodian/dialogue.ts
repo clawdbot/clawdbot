@@ -5,9 +5,10 @@ import {
   parseCrestodianOperation,
   type CrestodianOperation,
 } from "./operations.js";
-import type { CrestodianOverview } from "./overview.js";
+import { loadCrestodianOverview, type CrestodianOverview } from "./overview.js";
 
 export type CrestodianDialogueOptions = {
+  loadOverview?: typeof loadCrestodianOverview;
   planWithAssistant?: CrestodianAssistantPlanner;
 };
 
@@ -28,8 +29,7 @@ export async function resolveCrestodianOperation(
   if (!shouldAskAssistant(input, operation)) {
     return operation;
   }
-  const { loadCrestodianOverview } = await import("./overview.js");
-  const overview = await loadCrestodianOverview();
+  const overview = await (opts.loadOverview ?? loadCrestodianOverview)();
   const planner = opts.planWithAssistant ?? (await import("./assistant.js")).planCrestodianCommand;
   const plan = await planner({ input, overview });
   if (!plan) {

@@ -12,6 +12,7 @@ const INTENTS = {
   PUBLIC_GUILD_MESSAGES: 1 << 30,
   DIRECT_MESSAGE: 1 << 12,
   GROUP_AND_C2C: 1 << 25,
+  /** Button interaction callbacks (INTERACTION_CREATE). */
   INTERACTION: 1 << 26,
 } as const;
 
@@ -94,6 +95,23 @@ export const GatewayEvent = {
   C2C_MESSAGE_CREATE: "C2C_MESSAGE_CREATE",
   AT_MESSAGE_CREATE: "AT_MESSAGE_CREATE",
   DIRECT_MESSAGE_CREATE: "DIRECT_MESSAGE_CREATE",
+  /** Group message that explicitly @-mentions the bot. */
   GROUP_AT_MESSAGE_CREATE: "GROUP_AT_MESSAGE_CREATE",
+  /**
+   * Group message that does NOT mention the bot. Still dispatched to the
+   * pipeline so the group history buffer and the `requireMention=false`
+   * path can observe it.
+   */
+  GROUP_MESSAGE_CREATE: "GROUP_MESSAGE_CREATE",
   INTERACTION_CREATE: "INTERACTION_CREATE",
+} as const;
+
+// ============ Interaction Type Constants ============
+
+/** Interaction sub-types carried in `InteractionEvent.data.type`. */
+export const InteractionType = {
+  /** Remote config query — bot reports its current claw_cfg snapshot. */
+  CONFIG_QUERY: 2001,
+  /** Remote config update — caller pushes new settings. */
+  CONFIG_UPDATE: 2002,
 } as const;

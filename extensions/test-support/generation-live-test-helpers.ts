@@ -1,1 +1,1 @@
-export { maybeLoadShellEnvForGenerationProviders } from "../../src/test-utils/generation-live-test-helpers.js";
+export { maybeLoadShellEnvForGenerationProviders } from "openclaw/plugin-sdk/test-env";

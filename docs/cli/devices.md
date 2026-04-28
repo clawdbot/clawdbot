@@ -102,7 +102,10 @@ caller already has.
 openclaw devices rotate --device <deviceId> --role operator --scope operator.read --scope operator.write
 ```
 
-Returns the new token payload as JSON.
+Returns rotation metadata as JSON. If the caller is rotating its own token while
+authenticated with that device token, the response also includes the replacement
+token so the client can persist it before reconnecting. Shared/admin rotations
+do not echo the bearer token.
 
 ### `openclaw devices revoke --device <id> --role <role>`
 

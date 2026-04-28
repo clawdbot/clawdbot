@@ -1,5 +1,5 @@
+import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import { bundledPluginRoot } from "../../test/helpers/bundled-plugin-paths.js";
 import tsdownConfig from "../../tsdown.config.ts";
 
 type TsdownConfigEntry = {
@@ -67,7 +67,10 @@ describe("tsdown config", () => {
         "agents/model-catalog.runtime",
         "agents/models-config.runtime",
         "subagent-registry.runtime",
+        "task-registry-control.runtime",
         "agents/pi-model-discovery-runtime",
+        "link-understanding/apply.runtime",
+        "media-understanding/apply.runtime",
         "index",
         "commands/status.summary.runtime",
         "plugins/provider-discovery.runtime",

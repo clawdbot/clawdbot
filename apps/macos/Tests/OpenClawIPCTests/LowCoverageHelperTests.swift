@@ -140,20 +140,22 @@ struct LowCoverageHelperTests {
     }
 
     @Test func `port guardian remote mode does not kill docker`() {
+        let port = GatewayEnvironment.gatewayPort()
+
         #expect(PortGuardian._testIsExpected(
             command: "com.docker.backend",
             fullCommand: "com.docker.backend",
-            port: 18789, mode: .remote) == true)
+            port: port, mode: .remote) == true)
 
         #expect(PortGuardian._testIsExpected(
             command: "ssh",
-            fullCommand: "ssh -L 18789:localhost:18789 user@host",
-            port: 18789, mode: .remote) == true)
+            fullCommand: "ssh -L \(port):localhost:\(port) user@host",
+            port: port, mode: .remote) == true)
 
         #expect(PortGuardian._testIsExpected(
             command: "podman",
             fullCommand: "podman",
-            port: 18789, mode: .remote) == true)
+            port: port, mode: .remote) == true)
     }
 
     @Test func `port guardian local mode still rejects unexpected`() {
@@ -181,14 +183,20 @@ struct LowCoverageHelperTests {
     @Test func `port guardian remote mode report accepts any listener`() {
         let dockerReport = PortGuardian._testBuildReport(
             port: 18789, mode: .remote,
-            listeners: [(pid: 99, command: "com.docker.backend",
-                         fullCommand: "com.docker.backend", user: "me")])
+            listeners: [(
+                pid: 99,
+                command: "com.docker.backend",
+                fullCommand: "com.docker.backend",
+                user: "me")])
         #expect(dockerReport.offenders.isEmpty)
 
         let localDockerReport = PortGuardian._testBuildReport(
             port: 18789, mode: .local,
-            listeners: [(pid: 99, command: "com.docker.backend",
-                         fullCommand: "com.docker.backend", user: "me")])
+            listeners: [(
+                pid: 99,
+                command: "com.docker.backend",
+                fullCommand: "com.docker.backend",
+                user: "me")])
         #expect(!localDockerReport.offenders.isEmpty)
     }
 

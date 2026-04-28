@@ -121,6 +121,9 @@ const mocks = vi.hoisted(() => {
   };
 });
 
+vi.unmock("./server-restart-sentinel.js");
+vi.resetModules();
+
 vi.mock("../agents/agent-scope.js", () => ({
   resolveSessionAgentId: mocks.resolveSessionAgentId,
 }));

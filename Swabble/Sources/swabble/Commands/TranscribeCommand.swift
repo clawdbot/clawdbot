@@ -5,6 +5,7 @@ import Speech
 import Swabble
 
 @MainActor
+@available(macOS 26.0, *)
 struct TranscribeCommand: ParsableCommand {
     @Argument(help: "Path to audio/video file") var inputFile: String = ""
     @Option(name: .long("locale"), help: "Locale identifier", parsing: .singleValue) var locale: String = Locale.current

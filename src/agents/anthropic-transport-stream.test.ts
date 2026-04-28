@@ -27,6 +27,32 @@ function createSseResponse(events: Record<string, unknown>[] = []): Response {
   });
 }
 
+function createStalledSseResponse(params: { onCancel: (reason: unknown) => void }): Response {
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(
+        encoder.encode(
+          'data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":1,"output_tokens":0}}}\n\n',
+        ),
+      );
+    },
+    cancel(reason) {
+      params.onCancel(reason);
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+function delay<T>(ms: number, value: T): Promise<T> {
+  return new Promise((resolve) => {
+    setTimeout(() => resolve(value), ms);
+  });
+}
+
 function latestAnthropicRequest() {
   const [, init] = guardedFetchMock.mock.calls.at(-1) ?? [];
   const body = init?.body;
@@ -36,10 +62,16 @@ function latestAnthropicRequest() {
   };
 }
 
+function latestAnthropicRequestHeaders() {
+  return new Headers(latestAnthropicRequest().init?.headers);
+}
+
 function makeAnthropicTransportModel(
   params: {
     id?: string;
     name?: string;
+    provider?: string;
+    baseUrl?: string;
     reasoning?: boolean;
     maxTokens?: number;
     headers?: Record<string, string>;
@@ -51,8 +83,8 @@ function makeAnthropicTransportModel(
       id: params.id ?? "claude-sonnet-4-6",
       name: params.name ?? "Claude Sonnet 4.6",
       api: "anthropic-messages",
-      provider: "anthropic",
-      baseUrl: "https://api.anthropic.com",
+      provider: params.provider ?? "anthropic",
+      baseUrl: params.baseUrl ?? "https://api.anthropic.com",
       reasoning: params.reasoning ?? true,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -133,6 +165,97 @@ describe("anthropic transport stream", () => {
       model: "claude-sonnet-4-6",
       stream: true,
     });
+    expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBe(
+      "fine-grained-tool-streaming-2025-05-14",
+    );
+  });
+
+  it("does not add implicit Anthropic beta headers for custom compatible API-key endpoints", async () => {
+    const model = makeAnthropicTransportModel({
+      provider: "anthropic",
+      baseUrl: "https://custom-proxy.example",
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(guardedFetchMock).toHaveBeenCalledWith(
+      "https://custom-proxy.example/v1/messages",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBeNull();
+  });
+
+  it("does not add implicit Anthropic beta headers for custom compatible OAuth endpoints", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({
+        provider: "anthropic",
+        baseUrl: "https://custom-proxy.example",
+      }),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-oat-token",
+      } as AnthropicStreamOptions,
+    );
+
+    const headers = latestAnthropicRequestHeaders();
+    expect(headers.get("authorization")).toBe("Bearer sk-ant-oat-token");
+    expect(headers.get("anthropic-beta")).toBeNull();
+  });
+
+  it("keeps Anthropic beta headers for direct Anthropic OAuth endpoints", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-oat-token",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBe(
+      "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14",
+    );
+  });
+
+  it("recognizes schemeless api.anthropic.com base URLs as direct Anthropic", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({ baseUrl: "api.anthropic.com" }),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBe(
+      "fine-grained-tool-streaming-2025-05-14",
+    );
+  });
+
+  it("does not add implicit Anthropic beta headers for foreign hosts mentioning api.anthropic.com", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({ baseUrl: "https://attacker.example/api.anthropic.com" }),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBeNull();
   });
 
   it("ignores non-positive runtime maxTokens overrides and falls back to the model limit", async () => {
@@ -309,6 +432,47 @@ describe("anthropic transport stream", () => {
     );
   });
 
+  it("skips malformed tools when building Anthropic payloads", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+        tools: [
+          {
+            name: "bad_plugin_tool",
+            description: "missing schema",
+            execute: async () => ({ content: [{ type: "text", text: "bad" }] }),
+          },
+          {
+            name: "good_plugin_tool",
+            description: "valid schema",
+            parameters: {
+              type: "object",
+              properties: {
+                query: { type: "string" },
+              },
+              required: ["query"],
+            },
+          },
+        ],
+      } as unknown as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload.tools).toEqual([
+      expect.objectContaining({
+        name: "good_plugin_tool",
+        input_schema: expect.objectContaining({
+          properties: {
+            query: { type: "string" },
+          },
+        }),
+      }),
+    ]);
+  });
+
   it("coerces replayed malformed tool-call args to an object for Anthropic payloads", async () => {
     const model = makeAnthropicTransportModel({
       requestTransport: {
@@ -364,6 +528,171 @@ describe("anthropic transport stream", () => {
         }),
       ]),
     );
+  });
+
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", " \n\t "],
+    ["invalid-surrogate-only", String.fromCharCode(0xd83d)],
+  ])("replaces %s text-only tool results with a non-empty payload", async (_label, text) => {
+    await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            content: [{ type: "toolCall", id: "tool_1", name: "quiet", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "tool_1",
+            content: [{ type: "text", text }],
+            isError: false,
+          },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_result",
+              tool_use_id: "tool_1",
+              content: "(no output)",
+              is_error: false,
+            }),
+          ]),
+        }),
+      ]),
+    );
+  });
+
+  it("drops empty text blocks from image tool results before Anthropic payloads", async () => {
+    const imageData = Buffer.from("image").toString("base64");
+
+    await runTransportStream(
+      makeAnthropicTransportModel({ id: "claude-sonnet-4-6" }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            content: [{ type: "toolCall", id: "tool_1", name: "screenshot", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "tool_1",
+            content: [
+              { type: "text", text: "" },
+              { type: "image", data: imageData, mimeType: "image/png" },
+            ],
+            isError: false,
+          },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_result",
+              tool_use_id: "tool_1",
+              content: [
+                { type: "text", text: "(see attached image)" },
+                {
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: "image/png",
+                    data: imageData,
+                  },
+                },
+              ],
+              is_error: false,
+            }),
+          ]),
+        }),
+      ]),
+    );
+  });
+
+  it("cancels stalled SSE body reads when the abort signal fires mid-stream", async () => {
+    const controller = new AbortController();
+    const abortReason = new Error("anthropic test abort");
+    let cancelReason: unknown;
+    guardedFetchMock.mockResolvedValueOnce(
+      createStalledSseResponse({
+        onCancel: (reason) => {
+          cancelReason = reason;
+        },
+      }),
+    );
+
+    setTimeout(() => controller.abort(abortReason), 50);
+
+    const timedOut = Symbol("timed out");
+    const startedAt = Date.now();
+    const result = await Promise.race([
+      runTransportStream(
+        makeAnthropicTransportModel(),
+        { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+        { apiKey: "sk-ant-api", signal: controller.signal } as AnthropicStreamOptions,
+      ),
+      delay(1_000, timedOut),
+    ]);
+
+    if (result === timedOut) {
+      throw new Error("Anthropic SSE stream did not abort within 1000ms");
+    }
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(result.stopReason).toBe("aborted");
+    expect(result.errorMessage).toBe("anthropic test abort");
+    expect(cancelReason).toBe(abortReason);
+  });
+
+  it("treats already-aborted signals as abort errors before reading SSE chunks", async () => {
+    const controller = new AbortController();
+    const abortReason = new Error("pre-aborted stream");
+    let cancelReason: unknown;
+    guardedFetchMock.mockResolvedValueOnce(
+      createStalledSseResponse({
+        onCancel: (reason) => {
+          cancelReason = reason;
+        },
+      }),
+    );
+    controller.abort(abortReason);
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api", signal: controller.signal } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("aborted");
+    expect(result.errorMessage).toBe("pre-aborted stream");
+    expect(cancelReason).toBe(abortReason);
   });
 
   it("maps adaptive thinking effort for Claude 4.6 transport runs", async () => {

@@ -1,0 +1,16 @@
+{
+  "id": "migrate-claude",
+  "activation": {
+    "onStartup": false
+  },
+  "name": "Claude Migration",
+  "description": "Imports Claude Code and Claude Desktop instructions, MCP servers, skills, and safe configuration into OpenClaw.",
+  "contracts": {
+    "migrationProviders": ["claude"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

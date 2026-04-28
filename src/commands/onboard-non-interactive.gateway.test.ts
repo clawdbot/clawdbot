@@ -456,6 +456,44 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
+  it("passes pinned gateway auth through non-interactive health checks", async () => {
+    await withStateDir("state-local-daemon-health-auth-", async (stateDir) => {
+      const token = "tok_noninteractive_health";
+      waitForGatewayReachableMock = vi.fn(async () => ({ ok: true }));
+
+      await runNonInteractiveSetup(
+        {
+          ...createLocalDaemonSetupOptions(stateDir),
+          gatewayAuth: "token",
+          gatewayToken: token,
+        },
+        runtime,
+      );
+
+      expect(waitForGatewayReachableMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          token,
+          password: undefined,
+        }),
+      );
+      expect(healthCommandMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          token,
+          password: undefined,
+          config: expect.objectContaining({
+            gateway: expect.objectContaining({
+              auth: expect.objectContaining({
+                mode: "token",
+                token,
+              }),
+            }),
+          }),
+        }),
+        expect.any(Object),
+      );
+    });
+  }, 60_000);
+
   it("uses longer Windows health timings for daemon install probes", () => {
     expect(resolveInstallDaemonGatewayHealthTiming("win32")).toEqual({
       deadlineMs: 90_000,

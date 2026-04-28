@@ -733,9 +733,9 @@ describe("classifyFailoverReason", () => {
     ).toBeNull();
   });
 
-  it("classifies OpenAI Responses unknown-no-details message as unknown", () => {
+  it("classifies OpenAI Responses unknown-no-details message distinctly", () => {
     const message = "Unknown error (no error details in response)";
-    expect(classifyFailoverReason(message)).toBe("unknown");
+    expect(classifyFailoverReason(message)).toBe("no_error_details");
     expect(isFailoverErrorMessage(message)).toBe(true);
   });
 
@@ -1266,6 +1266,62 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("auth_permanent");
   });
+
+  it("classifies Chinese provider error messages correctly", () => {
+    // ZhipuAI/GLM error code 1234: "网络错误" (network error) — real production error
+    // from https://github.com/openclaw/openclaw/issues/56242
+    expect(
+      classifyFailoverReason(
+        "LLM error 1234: 网络错误，错误id：202603281427587491f4467f1c4712，请联系客服。 (request_id: 202603281427587491f4467f1c4712)",
+      ),
+    ).toBe("timeout");
+    expect(
+      classifyFailoverReason(
+        '{"error":{"code":"1234","message":"网络错误，错误id：abc123，请联系客服。"},"request_id":"abc123"}',
+      ),
+    ).toBe("timeout");
+
+    // Network/connection errors
+    expect(classifyFailoverReason("网络异常，请稍后重试")).toBe("timeout");
+    expect(classifyFailoverReason("连接超时")).toBe("timeout");
+    expect(classifyFailoverReason("请求超时，请重试")).toBe("timeout");
+    expect(classifyFailoverReason("服务暂时不可用")).toBe("timeout");
+    expect(classifyFailoverReason("连接错误")).toBe("timeout");
+    expect(classifyFailoverReason("服务繁忙，请稍后再试")).toBe("timeout");
+
+    // Server errors
+    expect(classifyFailoverReason("内部错误")).toBe("timeout");
+    expect(classifyFailoverReason("服务器错误")).toBe("timeout");
+    expect(classifyFailoverReason("服务器内部错误")).toBe("timeout");
+    expect(classifyFailoverReason("系统错误，请稍后重试")).toBe("timeout");
+    expect(classifyFailoverReason("系统繁忙")).toBe("timeout");
+    expect(classifyFailoverReason("系统异常")).toBe("timeout");
+
+    // Rate limit errors
+    expect(classifyFailoverReason("请求过于频繁，请稍后重试")).toBe("rate_limit");
+    expect(classifyFailoverReason("调用频率超限")).toBe("rate_limit");
+    expect(classifyFailoverReason("频率限制")).toBe("rate_limit");
+    expect(classifyFailoverReason("配额不足")).toBe("rate_limit");
+    expect(classifyFailoverReason("配额已用尽")).toBe("rate_limit");
+    expect(classifyFailoverReason("额度不足，请充值")).toBe("rate_limit");
+    expect(classifyFailoverReason("额度已用尽")).toBe("rate_limit");
+
+    // Billing errors
+    expect(classifyFailoverReason("余额不足，请充值")).toBe("billing");
+    expect(classifyFailoverReason("账户余额不足")).toBe("billing");
+    expect(classifyFailoverReason("账户已欠费")).toBe("billing");
+
+    // Auth errors
+    expect(classifyFailoverReason("无权访问该模型")).toBe("auth");
+    expect(classifyFailoverReason("403 您无权访问glm-5.1。")).toBe("auth");
+    expect(classifyFailoverReason("认证失败")).toBe("auth");
+    expect(classifyFailoverReason("鉴权失败，请检查API Key")).toBe("auth");
+    expect(classifyFailoverReason("密钥无效")).toBe("auth");
+
+    // Overloaded errors
+    expect(classifyFailoverReason("服务过载，请稍后重试")).toBe("overloaded");
+    expect(classifyFailoverReason("当前负载过高")).toBe("overloaded");
+  });
 });
 
 describe("classifyProviderRuntimeFailureKind", () => {
@@ -1374,6 +1430,16 @@ describe("classifyProviderRuntimeFailureKind", () => {
     expect(
       classifyProviderRuntimeFailureKind("401 input item ID does not belong to this connection"),
     ).toBe("replay_invalid");
+  });
+
+  it("splits ambiguous provider runtime failures instead of collapsing to unknown", () => {
+    expect(classifyProviderRuntimeFailureKind({})).toBe("empty_response");
+    expect(classifyProviderRuntimeFailureKind("Unknown error (no error details in response)")).toBe(
+      "no_error_details",
+    );
+    expect(classifyProviderRuntimeFailureKind("provider sent a strange opaque failure")).toBe(
+      "unclassified",
+    );
   });
 
   it("does not classify generic config errors that mention proxy settings as proxy failures", () => {

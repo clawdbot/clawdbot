@@ -4,5 +4,5 @@ export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/core";
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/runtime-group-policy";
 export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";

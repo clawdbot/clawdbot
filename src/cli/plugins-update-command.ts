@@ -1,4 +1,4 @@
-import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
+import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -22,7 +22,7 @@ export async function runPluginUpdateCommand(params: {
   opts: { all?: boolean; dryRun?: boolean; dangerouslyForceUnsafeInstall?: boolean };
 }) {
   const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
   const cfgWithPluginInstallRecords = withPluginInstallRecords(cfg, pluginInstallRecords);
   const logger = {

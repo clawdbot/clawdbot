@@ -1,48 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
-
-const { resolvePluginConfigContractsByIdMock } = vi.hoisted(() => ({
-  resolvePluginConfigContractsByIdMock: vi.fn(),
-}));
-
-vi.mock("../plugins/config-contracts.js", () => ({
-  collectPluginConfigContractMatches: ({
-    pathPattern,
-    root,
-  }: {
-    pathPattern: string;
-    root: Record<string, unknown>;
-  }) => (Object.hasOwn(root, pathPattern) ? [{ path: pathPattern, value: root[pathPattern] }] : []),
-  resolvePluginConfigContractsById: resolvePluginConfigContractsByIdMock,
-}));
+import { collectEnabledInsecureOrDangerousFlagsFromContracts } from "./dangerous-config-flags-core.js";
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
 describe("collectEnabledInsecureOrDangerousFlags", () => {
-  beforeEach(() => {
-    resolvePluginConfigContractsByIdMock.mockReset();
-    resolvePluginConfigContractsByIdMock.mockReturnValue(new Map());
-  });
-
   it("collects manifest-declared dangerous plugin config values", () => {
-    resolvePluginConfigContractsByIdMock.mockReturnValue(
-      new Map([
-        [
-          "acpx",
-          {
-            configContracts: {
-              dangerousFlags: [{ path: "permissionMode", equals: "approve-all" }],
-            },
-          },
-        ],
-      ]),
-    );
-
     expect(
-      collectEnabledInsecureOrDangerousFlags(
+      collectEnabledInsecureOrDangerousFlagsFromContracts(
         asConfig({
           plugins: {
             entries: {
@@ -54,26 +21,25 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
             },
           },
         }),
+        {
+          configContractsById: new Map([
+            [
+              "acpx",
+              {
+                configContracts: {
+                  dangerousFlags: [{ path: "permissionMode", equals: "approve-all" }],
+                },
+              },
+            ],
+          ]),
+        },
       ),
     ).toContain("plugins.entries.acpx.config.permissionMode=approve-all");
   });
 
   it("ignores plugin config values that are not declared as dangerous", () => {
-    resolvePluginConfigContractsByIdMock.mockReturnValue(
-      new Map([
-        [
-          "other",
-          {
-            configContracts: {
-              dangerousFlags: [{ path: "mode", equals: "danger" }],
-            },
-          },
-        ],
-      ]),
-    );
-
     expect(
-      collectEnabledInsecureOrDangerousFlags(
+      collectEnabledInsecureOrDangerousFlagsFromContracts(
         asConfig({
           plugins: {
             entries: {
@@ -85,13 +51,25 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
             },
           },
         }),
+        {
+          configContractsById: new Map([
+            [
+              "other",
+              {
+                configContracts: {
+                  dangerousFlags: [{ path: "mode", equals: "danger" }],
+                },
+              },
+            ],
+          ]),
+        },
       ),
     ).toEqual([]);
   });
 
   it("collects dangerous sandbox, hook, browser, and fs flags", () => {
     expect(
-      collectEnabledInsecureOrDangerousFlags(
+      collectEnabledInsecureOrDangerousFlagsFromContracts(
         asConfig({
           agents: {
             defaults: {
@@ -142,7 +120,7 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
 
   it("uses stable agent ids for per-agent dangerous sandbox flags", () => {
     expect(
-      collectEnabledInsecureOrDangerousFlags(
+      collectEnabledInsecureOrDangerousFlagsFromContracts(
         asConfig({
           agents: {
             list: [
@@ -166,7 +144,7 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
     );
 
     expect(
-      collectEnabledInsecureOrDangerousFlags(
+      collectEnabledInsecureOrDangerousFlagsFromContracts(
         asConfig({
           agents: {
             list: [

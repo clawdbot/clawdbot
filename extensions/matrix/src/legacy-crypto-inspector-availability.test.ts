@@ -7,7 +7,7 @@ const availabilityState = vi.hoisted(() => ({
 }));
 
 vi.mock("node:fs", async () => {
-  const { mockNodeBuiltinModule } = await import("../../../test/helpers/node-builtin-mocks.js");
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
   return mockNodeBuiltinModule(
     () => vi.importActual<typeof import("node:fs")>("node:fs"),
     {

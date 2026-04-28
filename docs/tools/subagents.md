@@ -75,12 +75,14 @@ requester chat when the run finishes.
     - On completion, the sub-agent announces a summary/result message back to the requester chat channel.
     - Completion is push-based. Once spawned, do **not** poll `/subagents list`, `sessions_list`, or `sessions_history` in a loop just to wait for it to finish; inspect status only on-demand for debugging or intervention.
     - On completion, OpenClaw best-effort closes tracked browser tabs/processes opened by that sub-agent session before the announce cleanup flow continues.
+
   </Accordion>
   <Accordion title="Manual-spawn delivery resilience">
     - OpenClaw tries direct `agent` delivery first with a stable idempotency key.
     - If direct delivery fails, it falls back to queue routing.
     - If queue routing is still not available, the announce is retried with a short exponential backoff before final give-up.
     - Completion delivery keeps the resolved requester route: thread-bound or conversation-bound completion routes win when available; if the completion origin only provides a channel, OpenClaw fills the missing target/account from the requester session's resolved route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery still works.
+
   </Accordion>
   <Accordion title="Completion handoff metadata">
     The completion handoff to the requester session is runtime-generated
@@ -98,6 +100,7 @@ requester chat when the run finishes.
     - `/subagents spawn` is one-shot mode (`mode: "run"`). For persistent thread-bound sessions, use `sessions_spawn` with `thread: true` and `mode: "session"`.
     - For ACP harness sessions (Claude Code, Gemini CLI, OpenCode, or explicit Codex ACP/acpx), use `sessions_spawn` with `runtime: "acp"` when the tool advertises that runtime. See [ACP delivery model](/tools/acp-agents#delivery-model) when debugging completions or agent-to-agent loops. When the `codex` plugin is enabled, Codex chat/thread control should prefer `/codex ...` over ACP unless the user explicitly asks for ACP/acpx.
     - OpenClaw hides `runtime: "acp"` until ACP is enabled, the requester is not sandboxed, and a backend plugin such as `acpx` is loaded. `runtime: "acp"` expects an external ACP harness id, or an `agents.list[]` entry with `runtime.type="acp"`; use the default sub-agent runtime for normal OpenClaw config agents from `agents_list`.
+
   </Accordion>
 </AccordionGroup>
 
@@ -119,6 +122,14 @@ replacement for writing a clear task prompt.
 Starts a sub-agent run with `deliver: false` on the global `subagent` lane,
 then runs an announce step and posts the announce reply to the requester
 chat channel.
+
+Availability depends on the caller's effective tool policy. The `coding` and
+`full` profiles expose `sessions_spawn` by default. The `messaging` profile
+does not; add `tools.alsoAllow: ["sessions_spawn", "sessions_yield",
+"subagents"]` or use `tools.profile: "coding"` for agents that should delegate
+work. Channel/group, provider, sandbox, and per-agent allow/deny policies can
+still remove the tool after the profile stage. Use `/tools` from the same
+session to confirm the effective tool list.
 
 **Defaults:**
 
@@ -236,7 +247,7 @@ See [Configuration reference](/gateway/configuration-reference) and
 ### Allowlist
 
 <ParamField path="agents.list[].subagents.allowAgents" type="string[]">
-  List of agent ids that can be targeted via `agentId` (`["*"]` allows any). Default: only the requester agent.
+  List of agent ids that can be targeted via explicit `agentId` (`["*"]` allows any). Default: only the requester agent. If you set a list and still want the requester to spawn itself with `agentId`, include the requester id in the list.
 </ParamField>
 <ParamField path="agents.defaults.subagents.allowAgents" type="string[]">
   Default target-agent allowlist used when the requester agent does not set its own `subagents.allowAgents`.

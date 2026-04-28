@@ -1,68 +1,50 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const { fetchWithSsrFGuardMock, shouldUseEnvHttpProxyForUrlMock } = vi.hoisted(() => ({
-  fetchWithSsrFGuardMock: vi.fn(),
-  shouldUseEnvHttpProxyForUrlMock: vi.fn(() => false),
-}));
-
-vi.mock("../../../../src/infra/net/fetch-guard.js", async () => {
-  const actual = await vi.importActual<typeof import("../../../../src/infra/net/fetch-guard.js")>(
-    "../../../../src/infra/net/fetch-guard.js",
-  );
-  return {
-    ...actual,
-    fetchWithSsrFGuard: fetchWithSsrFGuardMock,
-  };
-});
-
-vi.mock("../../../../src/infra/net/proxy-env.js", async () => {
-  const actual = await vi.importActual<typeof import("../../../../src/infra/net/proxy-env.js")>(
-    "../../../../src/infra/net/proxy-env.js",
-  );
-  return {
-    ...actual,
-    shouldUseEnvHttpProxyForUrl: shouldUseEnvHttpProxyForUrlMock,
-  };
-});
-
-import { GUARDED_FETCH_MODE } from "../../../../src/infra/net/fetch-guard.js";
-import { withRemoteHttpResponse } from "./remote-http.js";
+import { describe, expect, it } from "vitest";
+import { MEMORY_REMOTE_TRUSTED_ENV_PROXY_MODE, withRemoteHttpResponse } from "./remote-http.js";
 
 describe("package withRemoteHttpResponse", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    shouldUseEnvHttpProxyForUrlMock.mockReturnValue(false);
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response("ok", { status: 200 }),
-      finalUrl: "https://memory.example/v1",
-      release: vi.fn(async () => {}),
-    });
-  });
+  function makeFetchDeps({ useEnvProxy = false }: { useEnvProxy?: boolean } = {}) {
+    const calls: unknown[] = [];
+    return {
+      calls,
+      fetchWithSsrFGuardImpl: async (params: unknown) => {
+        calls.push(params);
+        return {
+          response: new Response("ok", { status: 200 }),
+          finalUrl: "https://memory.example/v1",
+          release: async () => {},
+        };
+      },
+      shouldUseEnvHttpProxyForUrlImpl: () => useEnvProxy,
+    };
+  }
 
   it("uses trusted env proxy mode when the target will use EnvHttpProxyAgent", async () => {
-    shouldUseEnvHttpProxyForUrlMock.mockReturnValue(true);
+    const deps = makeFetchDeps({ useEnvProxy: true });
 
     await withRemoteHttpResponse({
       url: "https://memory.example/v1/embeddings",
       onResponse: async () => undefined,
+      ...deps,
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+    expect(deps.calls[0]).toEqual(
       expect.objectContaining({
         url: "https://memory.example/v1/embeddings",
-        mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+        mode: MEMORY_REMOTE_TRUSTED_ENV_PROXY_MODE,
       }),
     );
   });
 
   it("keeps strict guarded fetch mode when proxy env would not proxy the target", async () => {
+    const deps = makeFetchDeps();
+
     await withRemoteHttpResponse({
       url: "https://internal.corp.example/v1/embeddings",
       onResponse: async () => undefined,
+      ...deps,
     });
 
-    const call = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
-    expect(call).toBeDefined();
-    expect(call).not.toHaveProperty("mode");
+    expect(deps.calls[0]).toBeDefined();
+    expect(deps.calls[0]).not.toHaveProperty("mode");
   });
 });

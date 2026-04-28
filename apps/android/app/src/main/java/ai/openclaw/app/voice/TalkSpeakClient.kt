@@ -15,11 +15,17 @@ internal data class TalkSpeakAudio(
 )
 
 internal sealed interface TalkSpeakResult {
-  data class Success(val audio: TalkSpeakAudio) : TalkSpeakResult
+  data class Success(
+    val audio: TalkSpeakAudio,
+  ) : TalkSpeakResult
 
-  data class FallbackToLocal(val message: String) : TalkSpeakResult
+  data class FallbackToLocal(
+    val message: String,
+  ) : TalkSpeakResult
 
-  data class Failure(val message: String) : TalkSpeakResult
+  data class Failure(
+    val message: String,
+  ) : TalkSpeakResult
 }
 
 internal class TalkSpeakClient(
@@ -27,7 +33,10 @@ internal class TalkSpeakClient(
   private val json: Json = Json { ignoreUnknownKeys = true },
   private val requestDetailed: (suspend (String, String, Long) -> GatewaySession.RpcResult)? = null,
 ) {
-  suspend fun synthesize(text: String, directive: TalkDirective?): TalkSpeakResult {
+  suspend fun synthesize(
+    text: String,
+    directive: TalkDirective?,
+  ): TalkSpeakResult {
     val response =
       try {
         performRequest(
@@ -111,8 +120,11 @@ internal data class TalkSpeakRequest(
   val latencyTier: Int? = null,
 ) {
   companion object {
-    fun from(text: String, directive: TalkDirective?): TalkSpeakRequest {
-      return TalkSpeakRequest(
+    fun from(
+      text: String,
+      directive: TalkDirective?,
+    ): TalkSpeakRequest =
+      TalkSpeakRequest(
         text = text,
         voiceId = directive?.voiceId,
         modelId = directive?.modelId,
@@ -128,7 +140,6 @@ internal data class TalkSpeakRequest(
         language = directive?.language,
         latencyTier = directive?.latencyTier,
       )
-    }
   }
 }
 

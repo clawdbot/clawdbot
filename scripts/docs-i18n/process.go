@@ -65,8 +65,8 @@ func processFile(ctx context.Context, translator docsTranslator, tm *Translation
 			TextHash:   seg.TextHash,
 			Text:       seg.Text,
 			Translated: translated,
-			Provider:   docsPiProvider(),
-			Model:      docsPiModel(),
+			Provider:   docsI18nProvider(),
+			Model:      docsI18nModel(),
 			SrcLang:    srcLang,
 			TgtLang:    tgtLang,
 			UpdatedAt:  time.Now().UTC().Format(time.RFC3339),
@@ -122,8 +122,8 @@ func encodeFrontMatter(frontData map[string]any, relPath string, source []byte) 
 	frontData["x-i18n"] = map[string]any{
 		"source_path":  relPath,
 		"source_hash":  hashBytes(source),
-		"provider":     docsPiProvider(),
-		"model":        docsPiModel(),
+		"provider":     docsI18nProvider(),
+		"model":        docsI18nModel(),
 		"workflow":     workflowVersion,
 		"generated_at": time.Now().UTC().Format(time.RFC3339),
 	}
@@ -229,8 +229,8 @@ func translateSnippet(ctx context.Context, translator docsTranslator, tm *Transl
 		TextHash:   textHash,
 		Text:       textValue,
 		Translated: translated,
-		Provider:   docsPiProvider(),
-		Model:      docsPiModel(),
+		Provider:   docsI18nProvider(),
+		Model:      docsI18nModel(),
 		SrcLang:    srcLang,
 		TgtLang:    tgtLang,
 		UpdatedAt:  time.Now().UTC().Format(time.RFC3339),
@@ -249,6 +249,9 @@ func validateFrontmatterScalarTranslation(source, translated string) error {
 	lower := strings.ToLower(trimmed)
 	if strings.Contains(lower, "<frontmatter>") || strings.Contains(lower, "</frontmatter>") || strings.Contains(lower, "<body>") || strings.Contains(lower, "</body>") {
 		return fmt.Errorf("tagged document wrapper detected")
+	}
+	if err := validateNoTranslationTranscriptArtifacts(source, trimmed); err != nil {
+		return err
 	}
 	if strings.Contains(trimmed, "[[[FM_") {
 		return fmt.Errorf("frontmatter marker leaked into scalar translation")

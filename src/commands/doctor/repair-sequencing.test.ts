@@ -76,6 +76,13 @@ vi.mock("./shared/stale-plugin-config.js", () => ({
   }),
 }));
 
+vi.mock("./shared/invalid-plugin-config.js", () => ({
+  maybeRepairInvalidPluginConfig: (cfg: OpenClawConfig) => ({
+    config: cfg,
+    changes: [],
+  }),
+}));
+
 vi.mock("./shared/legacy-tools-by-sender.js", () => ({
   maybeRepairLegacyToolsBySenderKeys: (cfg: OpenClawConfig) => {
     const channels = cfg.channels as Record<string, unknown> | undefined;

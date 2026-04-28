@@ -1,5 +1,8 @@
 {
   "id": "msteams",
+  "activation": {
+    "onStartup": false
+  },
   "channels": ["msteams"],
   "channelEnvVars": {
     "msteams": ["MSTEAMS_APP_ID", "MSTEAMS_APP_PASSWORD", "MSTEAMS_TENANT_ID"]

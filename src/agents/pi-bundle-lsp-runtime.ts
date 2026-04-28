@@ -3,11 +3,13 @@ import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logDebug, logWarn } from "../logger.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
+import { killProcessTree } from "../process/kill-tree.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { loadEmbeddedPiLspConfig } from "./embedded-pi-lsp.js";
 import {
   resolveStdioMcpServerLaunchConfig,
   describeStdioMcpServerLaunchConfig,
+  type StdioMcpServerLaunchConfig,
 } from "./mcp-stdio.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -17,10 +19,17 @@ type LspSession = {
   serverName: string;
   process: ChildProcess;
   requestId: number;
-  pendingRequests: Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>;
+  pendingRequests: Map<number, PendingLspRequest>;
   buffer: string;
   initialized: boolean;
   capabilities: LspServerCapabilities;
+  disposed: boolean;
+};
+
+type PendingLspRequest = {
+  resolve: (v: unknown) => void;
+  reject: (e: Error) => void;
+  timeout: ReturnType<typeof setTimeout>;
 };
 
 type LspServerCapabilities = {
@@ -43,6 +52,55 @@ type LspPositionParams = {
   line: number;
   character: number;
 };
+
+const LSP_SHUTDOWN_GRACE_MS = 500;
+const LSP_PROCESS_TREE_KILL_GRACE_MS = 1_000;
+const activeBundleLspSessions = new Set<LspSession>();
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(resolve, Math.max(1, ms));
+    timeout.unref?.();
+  });
+}
+
+function spawnLspServerProcess(config: StdioMcpServerLaunchConfig): ChildProcess {
+  return spawn(config.command, config.args ?? [], {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env, ...config.env },
+    cwd: config.cwd,
+    detached: process.platform !== "win32",
+    windowsHide: process.platform === "win32",
+  });
+}
+
+function createLspSession(serverName: string, child: ChildProcess): LspSession {
+  return {
+    serverName,
+    process: child,
+    requestId: 0,
+    pendingRequests: new Map(),
+    buffer: "",
+    initialized: false,
+    capabilities: {},
+    disposed: false,
+  };
+}
+
+function registerActiveLspSession(session: LspSession): void {
+  activeBundleLspSessions.add(session);
+}
+
+function attachLspProcessHandlers(session: LspSession): void {
+  session.process.stdout?.setEncoding("utf-8");
+  session.process.stdout?.on("data", (chunk: string) => handleIncomingData(session, chunk));
+  session.process.stderr?.setEncoding("utf-8");
+  session.process.stderr?.on("data", (chunk: string) => {
+    for (const line of chunk.split(/\r?\n/).filter(Boolean)) {
+      logDebug(`bundle-lsp:${session.serverName}: ${line.trim()}`);
+    }
+  });
+}
 
 function encodeLspMessage(body: unknown): string {
   const json = JSON.stringify(body);
@@ -89,18 +147,17 @@ function parseLspMessages(buffer: string): { messages: unknown[]; remaining: str
 function sendRequest(session: LspSession, method: string, params?: unknown): Promise<unknown> {
   const id = ++session.requestId;
   return new Promise((resolve, reject) => {
-    session.pendingRequests.set(id, { resolve, reject });
-    const message = { jsonrpc: "2.0", id, method, params };
-    const encoded = encodeLspMessage(message);
-    session.process.stdin?.write(encoded, "utf-8");
-
-    // Timeout after 10 seconds
-    setTimeout(() => {
+    const timeout = setTimeout(() => {
       if (session.pendingRequests.has(id)) {
         session.pendingRequests.delete(id);
         reject(new Error(`LSP request ${method} timed out`));
       }
     }, 10_000);
+    timeout.unref?.();
+    session.pendingRequests.set(id, { resolve, reject, timeout });
+    const message = { jsonrpc: "2.0", id, method, params };
+    const encoded = encodeLspMessage(message);
+    session.process.stdin?.write(encoded, "utf-8");
   });
 }
 
@@ -119,6 +176,7 @@ function handleIncomingData(session: LspSession, chunk: string) {
       const pending = session.pendingRequests.get(record.id);
       if (pending) {
         session.pendingRequests.delete(record.id);
+        clearTimeout(pending.timeout);
         if ("error" in record) {
           pending.reject(new Error(JSON.stringify(record.error)));
         } else {
@@ -157,10 +215,32 @@ async function initializeSession(session: LspSession): Promise<LspServerCapabili
   return result?.capabilities ?? {};
 }
 
+function hasLspProcessExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+function terminateLspProcessTree(session: LspSession): void {
+  const pid = session.process.pid;
+  if (pid && !hasLspProcessExited(session.process)) {
+    killProcessTree(pid, { graceMs: LSP_PROCESS_TREE_KILL_GRACE_MS });
+    return;
+  }
+  if (!hasLspProcessExited(session.process)) {
+    session.process.kill("SIGTERM");
+  }
+}
+
 async function disposeSession(session: LspSession) {
+  if (session.disposed) {
+    return;
+  }
+  session.disposed = true;
+  activeBundleLspSessions.delete(session);
+
   if (session.initialized) {
     try {
-      await sendRequest(session, "shutdown").catch(() => {});
+      const shutdown = sendRequest(session, "shutdown").catch(() => undefined);
+      await Promise.race([shutdown, delay(LSP_SHUTDOWN_GRACE_MS)]);
       session.process.stdin?.write(
         encodeLspMessage({ jsonrpc: "2.0", method: "exit", params: null }),
         "utf-8",
@@ -170,10 +250,15 @@ async function disposeSession(session: LspSession) {
     }
   }
   for (const [, pending] of session.pendingRequests) {
+    clearTimeout(pending.timeout);
     pending.reject(new Error("LSP session disposed"));
   }
   session.pendingRequests.clear();
-  session.process.kill();
+  terminateLspProcessTree(session);
+}
+
+async function disposeSessions(sessions: Iterable<LspSession>): Promise<void> {
+  await Promise.allSettled(Array.from(sessions, (session) => disposeSession(session)));
 }
 
 function createLspPositionTool(params: {
@@ -325,32 +410,12 @@ export async function createBundleLspToolRuntime(params: {
         continue;
       }
       const launchConfig = launch.config;
+      let session: LspSession | undefined;
 
       try {
-        const child = spawn(launchConfig.command, launchConfig.args ?? [], {
-          stdio: ["pipe", "pipe", "pipe"],
-          env: { ...process.env, ...launchConfig.env },
-          cwd: launchConfig.cwd,
-        });
-
-        const session: LspSession = {
-          serverName,
-          process: child,
-          requestId: 0,
-          pendingRequests: new Map(),
-          buffer: "",
-          initialized: false,
-          capabilities: {},
-        };
-
-        child.stdout?.setEncoding("utf-8");
-        child.stdout?.on("data", (chunk: string) => handleIncomingData(session, chunk));
-        child.stderr?.setEncoding("utf-8");
-        child.stderr?.on("data", (chunk: string) => {
-          for (const line of chunk.split(/\r?\n/).filter(Boolean)) {
-            logDebug(`bundle-lsp:${serverName}: ${line.trim()}`);
-          }
-        });
+        session = createLspSession(serverName, spawnLspServerProcess(launchConfig));
+        registerActiveLspSession(session);
+        attachLspProcessHandlers(session);
 
         const capabilities = await initializeSession(session);
         session.capabilities = capabilities;
@@ -380,6 +445,9 @@ export async function createBundleLspToolRuntime(params: {
           `bundle-lsp: started "${serverName}" (${describeStdioMcpServerLaunchConfig(launchConfig)}) with ${serverTools.length} tools`,
         );
       } catch (error) {
+        if (session) {
+          await disposeSession(session);
+        }
         logWarn(
           `bundle-lsp: failed to start server "${serverName}" (${describeStdioMcpServerLaunchConfig(launchConfig)}): ${String(error)}`,
         );
@@ -393,11 +461,15 @@ export async function createBundleLspToolRuntime(params: {
         capabilities: s.capabilities,
       })),
       dispose: async () => {
-        await Promise.allSettled(sessions.map((session) => disposeSession(session)));
+        await disposeSessions(sessions);
       },
     };
   } catch (error) {
-    await Promise.allSettled(sessions.map((session) => disposeSession(session)));
+    await disposeSessions(sessions);
     throw error;
   }
+}
+
+export async function disposeAllBundleLspRuntimes(): Promise<void> {
+  await disposeSessions(activeBundleLspSessions);
 }

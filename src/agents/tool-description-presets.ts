@@ -60,6 +60,7 @@ export function describeSessionsSpawnTool(options?: { acpAvailable?: boolean }):
 export function describeSessionStatusTool(): string {
   return [
     "Show a /status-equivalent session status card for the current or another visible session, including usage, time, cost when available, and linked background task context.",
+    'Use `sessionKey="current"` for the current session; do not use UI/client labels such as `openclaw-tui` as session keys.',
     "Optional `model` sets a per-session model override; `model=default` resets overrides.",
     "Use this for questions like what model is active or how a session is configured.",
   ].join(" ");

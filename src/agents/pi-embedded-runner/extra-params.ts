@@ -462,51 +462,13 @@ function resolveChatTemplateKwargsParam(
   return Object.keys(chatTemplateKwargs).length > 0 ? chatTemplateKwargs : undefined;
 }
 
-function isVllmNemotronModel(model: ProviderRuntimeModel): boolean {
-  return (
-    model.api === "openai-completions" &&
-    typeof model.provider === "string" &&
-    model.provider.toLowerCase() === "vllm" &&
-    typeof model.id === "string" &&
-    /\bnemotron-3(?:[-_](?:nano|super|ultra))?\b/i.test(model.id)
-  );
-}
-
-function resolveOpenAICompletionsChatTemplateKwargs(params: {
-  model: ProviderRuntimeModel;
-  thinkingLevel?: ThinkLevel;
-  configured?: Record<string, unknown>;
-}): Record<string, unknown> | undefined {
-  const defaults =
-    params.thinkingLevel === "off" && isVllmNemotronModel(params.model)
-      ? {
-          enable_thinking: false,
-          force_nonempty_content: true,
-        }
-      : undefined;
-  const merged = {
-    ...defaults,
-    ...params.configured,
-  };
-  return Object.keys(merged).length > 0 ? merged : undefined;
-}
-
 function createOpenAICompletionsChatTemplateKwargsWrapper(params: {
   baseStreamFn: StreamFn | undefined;
-  configured?: Record<string, unknown>;
-  thinkingLevel?: ThinkLevel;
+  configured: Record<string, unknown>;
 }): StreamFn {
   const underlying = params.baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     if (model.api !== "openai-completions") {
-      return underlying(model, context, options);
-    }
-    const chatTemplateKwargs = resolveOpenAICompletionsChatTemplateKwargs({
-      model: model as ProviderRuntimeModel,
-      thinkingLevel: params.thinkingLevel,
-      configured: params.configured,
-    });
-    if (!chatTemplateKwargs) {
       return underlying(model, context, options);
     }
     return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
@@ -514,11 +476,11 @@ function createOpenAICompletionsChatTemplateKwargsWrapper(params: {
       if (existing && typeof existing === "object" && !Array.isArray(existing)) {
         payloadObj.chat_template_kwargs = {
           ...(existing as Record<string, unknown>),
-          ...chatTemplateKwargs,
+          ...params.configured,
         };
         return;
       }
-      payloadObj.chat_template_kwargs = chatTemplateKwargs;
+      payloadObj.chat_template_kwargs = params.configured;
     });
   };
 }
@@ -614,11 +576,10 @@ function applyPostPluginStreamWrappers(
     "chatTemplateKwargs",
   );
   const configuredChatTemplateKwargs = resolveChatTemplateKwargsParam(rawChatTemplateKwargs);
-  if (configuredChatTemplateKwargs || ctx.thinkingLevel === "off") {
+  if (configuredChatTemplateKwargs) {
     ctx.agent.streamFn = createOpenAICompletionsChatTemplateKwargsWrapper({
       baseStreamFn: ctx.agent.streamFn,
       configured: configuredChatTemplateKwargs,
-      thinkingLevel: ctx.thinkingLevel,
     });
   }
 
@@ -721,6 +682,8 @@ export function applyExtraParamsToAgent(
     config: cfg,
     context: {
       config: cfg,
+      agentDir,
+      workspaceDir,
       provider,
       modelId,
       extraParams: effectiveExtraParams,

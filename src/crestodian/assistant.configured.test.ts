@@ -1,22 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-
-const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
-const prepareSimpleCompletionModelForAgentMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../config/config.js", () => ({
-  readConfigFileSnapshot: readConfigFileSnapshotMock,
-}));
-
-vi.mock("../agents/simple-completion-runtime.js", () => ({
-  prepareSimpleCompletionModelForAgent: prepareSimpleCompletionModelForAgentMock,
-  completeWithPreparedSimpleCompletionModel: vi.fn(),
-}));
-
-const { planCrestodianCommandWithConfiguredModel } = await import("./assistant.js");
+import { planCrestodianCommandWithConfiguredModel } from "./assistant.js";
 
 describe("Crestodian configured-model planner", () => {
   it("skips the configured model path when no config file exists", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({
+    const readConfigFileSnapshot = vi.fn(async () => ({
       path: "/tmp/openclaw.json",
       exists: false,
       raw: null,
@@ -27,8 +14,10 @@ describe("Crestodian configured-model planner", () => {
       runtimeConfig: {},
       config: {},
       issues: [],
+      legacyIssues: [],
       warnings: [],
-    });
+    }));
+    const prepareSimpleCompletionModelForAgent = vi.fn();
 
     await expect(
       planCrestodianCommandWithConfiguredModel({
@@ -58,9 +47,13 @@ describe("Crestodian configured-model planner", () => {
             sourceUrl: "https://github.com/openclaw/openclaw",
           },
         },
+        deps: {
+          readConfigFileSnapshot,
+          prepareSimpleCompletionModelForAgent,
+        },
       }),
     ).resolves.toBeNull();
 
-    expect(prepareSimpleCompletionModelForAgentMock).not.toHaveBeenCalled();
+    expect(prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
   });
 });

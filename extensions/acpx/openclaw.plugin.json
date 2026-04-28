@@ -1,5 +1,8 @@
 {
   "id": "acpx",
+  "activation": {
+    "onStartup": true
+  },
   "enabledByDefault": true,
   "name": "ACPX Runtime",
   "description": "Embedded ACP runtime backend with plugin-owned session and transport management.",

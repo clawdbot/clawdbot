@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  hasEnvHttpProxyAgentConfigured,
   hasEnvHttpProxyConfigured,
   hasProxyEnvConfigured,
   matchesNoProxy,
+  resolveEnvHttpProxyAgentOptions,
   resolveEnvHttpProxyUrl,
   shouldUseEnvHttpProxyForUrl,
 } from "./proxy-env.js";
@@ -93,6 +95,55 @@ describe("resolveEnvHttpProxyUrl", () => {
   ])("$name", ({ protocol, env, expectedUrl, expectedConfigured }) => {
     expect(resolveEnvHttpProxyUrl(protocol, env)).toBe(expectedUrl);
     expect(hasEnvHttpProxyConfigured(protocol, env)).toBe(expectedConfigured);
+  });
+});
+
+describe("resolveEnvHttpProxyAgentOptions", () => {
+  it.each([
+    {
+      name: "maps HTTPS_PROXY to httpsProxy only",
+      env: { HTTPS_PROXY: "http://https-proxy.test:8443" } as NodeJS.ProcessEnv,
+      expected: { httpsProxy: "http://https-proxy.test:8443" },
+    },
+    {
+      name: "uses HTTP_PROXY as HTTPS fallback",
+      env: { HTTP_PROXY: "http://http-proxy.test:8080" } as NodeJS.ProcessEnv,
+      expected: {
+        httpProxy: "http://http-proxy.test:8080",
+        httpsProxy: "http://http-proxy.test:8080",
+      },
+    },
+    {
+      name: "uses ALL_PROXY for both protocols",
+      env: { ALL_PROXY: "socks5://all-proxy.test:1080" } as NodeJS.ProcessEnv,
+      expected: {
+        httpProxy: "socks5://all-proxy.test:1080",
+        httpsProxy: "socks5://all-proxy.test:1080",
+      },
+    },
+    {
+      name: "lets protocol-specific proxy override ALL_PROXY",
+      env: {
+        ALL_PROXY: "socks5://all-proxy.test:1080",
+        HTTP_PROXY: "http://http-proxy.test:8080",
+        HTTPS_PROXY: "http://https-proxy.test:8443",
+      } as NodeJS.ProcessEnv,
+      expected: {
+        httpProxy: "http://http-proxy.test:8080",
+        httpsProxy: "http://https-proxy.test:8443",
+      },
+    },
+    {
+      name: "treats empty lower-case all_proxy as authoritative over upper-case ALL_PROXY",
+      env: {
+        all_proxy: "",
+        ALL_PROXY: "socks5://upper-all-proxy.test:1080",
+      } as NodeJS.ProcessEnv,
+      expected: undefined,
+    },
+  ])("$name", ({ env, expected }) => {
+    expect(resolveEnvHttpProxyAgentOptions(env)).toEqual(expected);
+    expect(hasEnvHttpProxyAgentConfigured(env)).toBe(expected !== undefined);
   });
 });
 

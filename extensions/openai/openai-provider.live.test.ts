@@ -155,8 +155,11 @@ describeLive("buildOpenAIProvider live", () => {
 
       const response = await client.responses.create({
         model: normalized?.id ?? liveCase.modelId,
-        input: "Reply with exactly OK.",
-        max_output_tokens: 16,
+        instructions: "Return exactly OK and no other text.",
+        input: "Return exactly OK.",
+        max_output_tokens: 64,
+        reasoning: { effort: "none" },
+        text: { verbosity: "low" },
       });
 
       expect(response.output_text.trim()).toMatch(/^OK[.!]?$/);

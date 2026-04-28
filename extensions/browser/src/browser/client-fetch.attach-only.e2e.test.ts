@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { clearConfigCache } from "../../../../src/config/config.js";
+import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempHomeEnv } from "../../test-support.js";
+import { stopBrowserControlService } from "../control-service.js";
 import { fetchBrowserJson } from "./client-fetch.js";
 
 type TempHome = {
@@ -14,8 +15,16 @@ type TempHome = {
 describe("browser client fetch attachOnly diagnostics", () => {
   let tempHome: TempHome | undefined;
 
+  beforeEach(async () => {
+    vi.useRealTimers();
+    await stopBrowserControlService();
+    clearRuntimeConfigSnapshot();
+  });
+
   afterEach(async () => {
-    clearConfigCache();
+    vi.useRealTimers();
+    await stopBrowserControlService();
+    clearRuntimeConfigSnapshot();
     await tempHome?.restore();
     tempHome = undefined;
   });
@@ -53,7 +62,7 @@ describe("browser client fetch attachOnly diagnostics", () => {
       ),
     );
     process.env.OPENCLAW_CONFIG_PATH = configPath;
-    clearConfigCache();
+    clearRuntimeConfigSnapshot();
 
     try {
       const thrown = await fetchBrowserJson("/tabs?profile=hung", { timeoutMs: 200 }).catch(

@@ -1,5 +1,5 @@
+import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import { bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
 import { isUnitConfigTestFile } from "./vitest/vitest.unit-paths.mjs";
 
 describe("isUnitConfigTestFile", () => {

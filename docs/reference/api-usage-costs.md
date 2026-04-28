@@ -84,8 +84,8 @@ See [Models](/providers/models) for pricing config and [Token use & costs](/refe
 
 Inbound media can be summarized/transcribed before the reply runs. This uses model/provider APIs.
 
-- Audio: OpenAI / Groq / Deepgram / Google / Mistral.
-- Image: OpenAI / OpenRouter / Anthropic / Google / MiniMax / Moonshot / Qwen / Z.AI.
+- Audio: OpenAI / Groq / Deepgram / DeepInfra / Google / Mistral.
+- Image: OpenAI / OpenRouter / Anthropic / DeepInfra / Google / MiniMax / Moonshot / Qwen / Z.AI.
 - Video: Google / Qwen / Moonshot.
 
 See [Media understanding](/nodes/media-understanding).
@@ -94,8 +94,8 @@ See [Media understanding](/nodes/media-understanding).
 
 Shared generation capabilities can also spend provider keys:
 
-- Image generation: OpenAI / Google / fal / MiniMax
-- Video generation: Qwen
+- Image generation: OpenAI / Google / DeepInfra / fal / MiniMax
+- Video generation: DeepInfra / Qwen
 
 Image generation can infer an auth-backed provider default when
 `agents.defaults.imageGenerationModel` is unset. Video generation currently
@@ -113,6 +113,7 @@ Semantic memory search uses **embedding APIs** when configured for remote provid
 - `memorySearch.provider = "gemini"` → Gemini embeddings
 - `memorySearch.provider = "voyage"` → Voyage embeddings
 - `memorySearch.provider = "mistral"` → Mistral embeddings
+- `memorySearch.provider = "deepinfra"` → DeepInfra embeddings
 - `memorySearch.provider = "lmstudio"` → LM Studio embeddings (local/self-hosted)
 - `memorySearch.provider = "ollama"` → Ollama embeddings (local/self-hosted; typically no hosted API billing)
 - Optional fallback to a remote provider if local embeddings fail

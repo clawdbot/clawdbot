@@ -1,6 +1,6 @@
 type PathEnvKey = "PATH" | "Path" | "PATHEXT" | "Pathext";
 
-export { createWindowsCmdShimFixture } from "openclaw/plugin-sdk/testing";
+export { createWindowsCmdShimFixture } from "openclaw/plugin-sdk/test-env";
 const PATH_ENV_KEYS = ["PATH", "Path", "PATHEXT", "Pathext"] as const;
 
 export type PlatformPathEnvSnapshot = {

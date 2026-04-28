@@ -117,6 +117,14 @@ describe("SafeGatewayPlugin.connect()", () => {
     }
   });
 
+  it("leaves Carbon autoInteractions disabled so OpenClaw owns interaction handoff", () => {
+    const plugin = createPlugin();
+
+    expect((plugin as unknown as { options?: { autoInteractions?: boolean } }).options).toEqual(
+      expect.objectContaining({ autoInteractions: false }),
+    );
+  });
+
   it("clears stale firstHeartbeatTimeout before delegating to super when isConnecting=true", () => {
     const plugin = createPlugin();
 

@@ -60,6 +60,7 @@ prepare_gates() {
 
   if [ "$has_changelog_update" = "true" ]; then
     normalize_pr_changelog_entries "$pr"
+    validate_changelog_attribution_policy
   fi
 
   if [ "$changelog_required" = "true" ]; then

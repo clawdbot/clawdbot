@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import JSON5 from "json5";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadPluginManifest, MAX_PLUGIN_MANIFEST_BYTES } from "./manifest.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -11,6 +12,7 @@ function makeTempDir() {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -31,6 +33,24 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     if (result.ok) {
       expect(result.manifest.id).toBe("demo");
     }
+  });
+
+  it("uses native JSON parsing for standard JSON manifests", () => {
+    const json5Parse = vi.spyOn(JSON5, "parse");
+    const dir = makeTempDir();
+    fs.writeFileSync(
+      path.join(dir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "strict-json",
+        configSchema: { type: "object" },
+      }),
+      "utf-8",
+    );
+
+    const result = loadPluginManifest(dir, false);
+
+    expect(result.ok).toBe(true);
+    expect(json5Parse).not.toHaveBeenCalled();
   });
 
   it("parses a manifest with trailing commas", () => {
@@ -107,6 +127,7 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     const json5Content = `{
   id: "openai",
   activation: {
+    onStartup: false,
     onProviders: ["openai", "", "openai-codex"],
     onCommands: ["models", ""],
     onChannels: ["web", ""],
@@ -130,6 +151,7 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.manifest.activation).toEqual({
+        onStartup: false,
         onProviders: ["openai", "openai-codex"],
         onCommands: ["models"],
         onChannels: ["web"],

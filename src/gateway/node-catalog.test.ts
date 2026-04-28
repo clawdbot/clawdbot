@@ -135,6 +135,8 @@ describe("gateway/node-catalog", () => {
         pathEnv: "/usr/bin:/bin",
         approvedAtMs: 100,
         connectedAtMs,
+        lastSeenAtMs: connectedAtMs,
+        lastSeenReason: "connect",
         paired: true,
         connected: true,
       }),
@@ -171,6 +173,8 @@ describe("gateway/node-catalog", () => {
           platform: "darwin",
           caps: ["system"],
           commands: ["system.run"],
+          lastSeenAtMs: 456,
+          lastSeenReason: "silent_push",
           createdAtMs: 1,
           approvedAtMs: 123,
         },
@@ -193,8 +197,58 @@ describe("gateway/node-catalog", () => {
         caps: ["system"],
         commands: ["system.run"],
         approvedAtMs: 123,
+        lastSeenAtMs: 456,
+        lastSeenReason: "silent_push",
         paired: true,
         connected: false,
+      }),
+    );
+  });
+
+  it("uses the newest durable last-seen source for offline nodes", () => {
+    const catalog = createKnownNodeCatalog({
+      pairedDevices: [
+        {
+          deviceId: "ios-1",
+          publicKey: "public-key",
+          displayName: "iPhone",
+          role: "node",
+          roles: ["node"],
+          tokens: {
+            node: {
+              token: "current-token",
+              role: "node",
+              scopes: [],
+              createdAtMs: 1,
+            },
+          },
+          lastSeenAtMs: 300,
+          lastSeenReason: "silent_push",
+          createdAtMs: 1,
+          approvedAtMs: 10,
+        },
+      ],
+      pairedNodes: [
+        {
+          nodeId: "ios-1",
+          token: "node-token",
+          platform: "ios",
+          caps: [],
+          commands: [],
+          lastConnectedAtMs: 200,
+          lastSeenAtMs: 100,
+          lastSeenReason: "bg_app_refresh",
+          createdAtMs: 1,
+          approvedAtMs: 11,
+        },
+      ],
+      connectedNodes: [],
+    });
+
+    expect(getKnownNode(catalog, "ios-1")).toEqual(
+      expect.objectContaining({
+        lastSeenAtMs: 300,
+        lastSeenReason: "silent_push",
       }),
     );
   });

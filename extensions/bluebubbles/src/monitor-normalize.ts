@@ -1,4 +1,4 @@
-import { parseFiniteNumber } from "openclaw/plugin-sdk/infra-runtime";
+import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import {
   asNullableRecord,
   normalizeLowercaseStringOrEmpty,

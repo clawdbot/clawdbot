@@ -14,6 +14,7 @@ export type CacheTraceStage =
   | "cache:result"
   | "cache:state"
   | "session:loaded"
+  | "session:raw-model-run"
   | "session:sanitized"
   | "session:limited"
   | "prompt:before"

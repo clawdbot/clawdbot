@@ -289,6 +289,32 @@ function composeDocsConfig() {
   };
 }
 
+function pruneOrphanLocaleDocs(targetDocsDir) {
+  let pruned = 0;
+  for (const locale of GENERATED_LOCALES) {
+    const localeDir = path.join(targetDocsDir, locale.dir);
+    if (!fs.existsSync(localeDir)) {
+      continue;
+    }
+    for (const filePath of walkMarkdownFiles(localeDir)) {
+      const relativeToLocale = path.relative(localeDir, filePath);
+      // The English source file lives at docs/<relativeToLocale> with either .md or .mdx.
+      const englishBase = path.join(SOURCE_DOCS_DIR, relativeToLocale);
+      const englishMd = englishBase.replace(/\.mdx?$/i, ".md");
+      const englishMdx = englishBase.replace(/\.mdx?$/i, ".mdx");
+      if (fs.existsSync(englishMd) || fs.existsSync(englishMdx)) {
+        continue;
+      }
+      fs.rmSync(filePath, { force: true });
+      pruned += 1;
+    }
+  }
+
+  if (pruned > 0) {
+    console.log(`Pruned ${pruned} orphan localized doc(s) with no matching English source file.`);
+  }
+}
+
 function repairGeneratedLocaleDocs(targetDocsDir) {
   let repaired = 0;
   for (const locale of GENERATED_LOCALES) {
@@ -345,6 +371,7 @@ function syncDocsTree(targetRoot) {
     }
   }
 
+  pruneOrphanLocaleDocs(targetDocsDir);
   repairGeneratedLocaleDocs(targetDocsDir);
   writeJson(path.join(targetDocsDir, "docs.json"), composeDocsConfig());
 }

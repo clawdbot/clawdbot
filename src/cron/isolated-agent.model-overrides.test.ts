@@ -169,7 +169,7 @@ describe("runCronIsolatedAgentTurn model overrides", () => {
       });
 
       expect(res.status).toBe("error");
-      expect(res.error).toMatch("invalid model");
+      expect(res.error).toMatch("cron payload.model 'openai/' rejected: invalid model");
       expect(vi.mocked(runEmbeddedPiAgent)).not.toHaveBeenCalled();
     });
   });

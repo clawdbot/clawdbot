@@ -1,4 +1,3 @@
-import { note } from "openclaw/plugin-sdk/browser-setup-tools";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   parseBrowserMajorVersion,
@@ -9,6 +8,7 @@ import {
 import { resolveBrowserConfig } from "./browser/config.js";
 import type { OpenClawConfig } from "./config/config.js";
 import { asRecord } from "./record-shared.js";
+import { note } from "./sdk-setup-tools.js";
 
 const CHROME_MCP_MIN_MAJOR = 144;
 const REMOTE_DEBUGGING_PAGES = [

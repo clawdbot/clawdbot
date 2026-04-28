@@ -1,5 +1,8 @@
 {
   "id": "elevenlabs",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providerAuthEnvVars": {
     "elevenlabs": ["ELEVENLABS_API_KEY", "XI_API_KEY"]

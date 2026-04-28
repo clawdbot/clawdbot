@@ -1,8 +1,10 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  registerProviderPlugin,
+  registerSingleProviderPlugin,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
-import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
-import { registerProviderPlugin } from "../../test/helpers/plugins/provider-registration.js";
 import plugin from "./index.js";
 import setupPlugin from "./setup-api.js";
 import {

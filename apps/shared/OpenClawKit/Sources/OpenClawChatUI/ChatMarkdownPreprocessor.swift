@@ -1,9 +1,9 @@
 import Foundation
 
 enum ChatMarkdownPreprocessor {
-    // Keep in sync with `src/auto-reply/reply/strip-inbound-meta.ts`
-    // (`INBOUND_META_SENTINELS`), and extend parser expectations in
-    // `ChatMarkdownPreprocessorTests` when sentinels change.
+    /// Keep in sync with `src/auto-reply/reply/strip-inbound-meta.ts`
+    /// (`INBOUND_META_SENTINELS`), and extend parser expectations in
+    /// `ChatMarkdownPreprocessorTests` when sentinels change.
     private static let inboundContextHeaders = [
         "Conversation info (untrusted metadata):",
         "Sender (untrusted metadata):",
@@ -152,11 +152,13 @@ enum ChatMarkdownPreprocessor {
         for index in lines.indices {
             let currentLine = lines[index]
 
-            if !inMetaBlock && self.shouldStripTrailingUntrustedContext(lines: lines, index: index) {
+            if !inMetaBlock, self.shouldStripTrailingUntrustedContext(lines: lines, index: index) {
                 break
             }
 
-            if !inMetaBlock && self.inboundContextHeaders.contains(currentLine.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            if !inMetaBlock,
+               self.inboundContextHeaders.contains(currentLine.trimmingCharacters(in: .whitespacesAndNewlines))
+            {
                 let nextLine = index + 1 < lines.count ? lines[index + 1] : nil
                 if nextLine?.trimmingCharacters(in: .whitespacesAndNewlines) != "```json" {
                     outputLines.append(currentLine)
@@ -168,7 +170,7 @@ enum ChatMarkdownPreprocessor {
             }
 
             if inMetaBlock {
-                if !inFencedJson && currentLine.trimmingCharacters(in: .whitespacesAndNewlines) == "```json" {
+                if !inFencedJson, currentLine.trimmingCharacters(in: .whitespacesAndNewlines) == "```json" {
                     inFencedJson = true
                     continue
                 }

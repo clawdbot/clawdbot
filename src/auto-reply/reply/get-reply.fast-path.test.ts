@@ -31,12 +31,12 @@ vi.mock("../../agents/workspace.js", () => ({
 registerGetReplyRuntimeOverrides(mocks);
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
-let loadConfigMock: typeof import("../../config/config.js").loadConfig;
+let loadConfigMock: typeof import("../../config/config.js").getRuntimeConfig;
 let runPreparedReplyMock: typeof import("./get-reply-run.js").runPreparedReply;
 
 async function loadGetReplyRuntimeForTest() {
   ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
-  ({ loadConfig: loadConfigMock } = await import("../../config/config.js"));
+  ({ getRuntimeConfig: loadConfigMock } = await import("../../config/config.js"));
   ({ runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js"));
 }
 
@@ -69,7 +69,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(vi.mocked(loadConfigMock)).not.toHaveBeenCalled();
   });
 
-  it("skips loadConfig, workspace bootstrap, and session bootstrap for marked test configs", async () => {
+  it("skips getRuntimeConfig, workspace bootstrap, and session bootstrap for marked test configs", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fast-reply-"));
     const cfg = markCompleteReplyConfig({
       agents: {
@@ -96,7 +96,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     );
   });
 
-  it("still merges partial config overrides against loadConfig()", async () => {
+  it("still merges partial config overrides against getRuntimeConfig()", async () => {
     vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
     vi.mocked(loadConfigMock).mockReturnValue({
       channels: {

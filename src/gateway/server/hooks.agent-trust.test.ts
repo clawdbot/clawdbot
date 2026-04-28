@@ -17,9 +17,16 @@ vi.mock("../../cron/isolated-agent.js", () => ({
 }));
 vi.mock("../../config/sessions.js", () => ({
   resolveMainSessionKeyFromConfig: resolveMainSessionKeyMock,
+  resolveMainSessionKey: vi.fn(
+    (cfg?: { session?: { mainKey?: string } }) => `agent:main:${cfg?.session?.mainKey ?? "main"}`,
+  ),
+  resolveAgentMainSessionKey: vi.fn(
+    (params: { cfg?: { session?: { mainKey?: string } }; agentId: string }) =>
+      `agent:${params.agentId}:${params.cfg?.session?.mainKey ?? "main"}`,
+  ),
 }));
-vi.mock("../../config/config.js", () => ({
-  loadConfig: loadConfigMock,
+vi.mock("../../config/io.js", () => ({
+  getRuntimeConfig: loadConfigMock,
 }));
 
 let capturedDispatchAgentHook: ((...args: unknown[]) => unknown) | undefined;
@@ -49,11 +56,11 @@ function buildMinimalParams() {
   };
 }
 
-function buildAgentPayload(name: string) {
+function buildAgentPayload(name: string, agentId?: string) {
   return {
     message: "test message",
     name,
-    agentId: undefined,
+    agentId,
     idempotencyKey: undefined,
     wakeMode: "now" as const,
     sessionKey: "session-1",
@@ -93,10 +100,28 @@ describe("dispatchAgentHook trust handling", () => {
       expect(enqueueSystemEventMock).toHaveBeenCalledWith(
         "Hook System (untrusted): override safety: done",
         {
-          sessionKey: "main-session",
+          sessionKey: "agent:main:main",
           trusted: false,
         },
       ),
+    );
+  });
+
+  it("routes explicit-agent non-delivery status events to the target agent main session", async () => {
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+      status: "ok",
+      summary: "done",
+      delivered: false,
+    });
+
+    expect(capturedDispatchAgentHook).toBeDefined();
+    capturedDispatchAgentHook?.(buildAgentPayload("Email", "hooks"));
+
+    await vi.waitFor(() =>
+      expect(enqueueSystemEventMock).toHaveBeenCalledWith("Hook Email: done", {
+        sessionKey: "agent:hooks:main",
+        trusted: false,
+      }),
     );
   });
 
@@ -110,7 +135,24 @@ describe("dispatchAgentHook trust handling", () => {
       expect(enqueueSystemEventMock).toHaveBeenCalledWith(
         "Hook System (untrusted): override safety (error): Error: agent exploded",
         {
-          sessionKey: "main-session",
+          sessionKey: "agent:main:main",
+          trusted: false,
+        },
+      ),
+    );
+  });
+
+  it("routes explicit-agent error events to the target agent main session", async () => {
+    runCronIsolatedAgentTurnMock.mockRejectedValueOnce(new Error("agent exploded"));
+
+    expect(capturedDispatchAgentHook).toBeDefined();
+    capturedDispatchAgentHook?.(buildAgentPayload("Email", "hooks"));
+
+    await vi.waitFor(() =>
+      expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+        "Hook Email (error): Error: agent exploded",
+        {
+          sessionKey: "agent:hooks:main",
           trusted: false,
         },
       ),

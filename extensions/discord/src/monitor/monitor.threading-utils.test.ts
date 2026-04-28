@@ -292,6 +292,11 @@ describe("resolveDiscordAutoThreadContext", () => {
         createdThreadId: "thread",
         expectedNull: false,
         parentInheritanceEnabled: false,
+        expectedModelParentSessionKey: buildAgentSessionKey({
+          agentId: "agent",
+          channel: "discord",
+          peer: { kind: "channel", id: "parent" },
+        }),
         expectedParentSessionKey: undefined,
       },
       {
@@ -299,6 +304,11 @@ describe("resolveDiscordAutoThreadContext", () => {
         createdThreadId: "thread",
         expectedNull: false,
         parentInheritanceEnabled: true,
+        expectedModelParentSessionKey: buildAgentSessionKey({
+          agentId: "agent",
+          channel: "discord",
+          peer: { kind: "channel", id: "parent" },
+        }),
         expectedParentSessionKey: buildAgentSessionKey({
           agentId: "agent",
           channel: "discord",
@@ -333,6 +343,9 @@ describe("resolveDiscordAutoThreadContext", () => {
         }),
       );
       expect(context?.ParentSessionKey, testCase.name).toBe(testCase.expectedParentSessionKey);
+      expect(context?.ModelParentSessionKey, testCase.name).toBe(
+        testCase.expectedModelParentSessionKey,
+      );
     }
   });
 });
@@ -511,6 +524,11 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
           channel: "discord",
           peer: { kind: "channel", id: "thread" },
         }),
+        expectedModelParentSessionKey: buildAgentSessionKey({
+          agentId: "agent",
+          channel: "discord",
+          peer: { kind: "channel", id: "parent" },
+        }),
         expectedParentSessionKey: undefined,
       },
       {
@@ -524,6 +542,11 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
           agentId: "agent",
           channel: "discord",
           peer: { kind: "channel", id: "thread" },
+        }),
+        expectedModelParentSessionKey: buildAgentSessionKey({
+          agentId: "agent",
+          channel: "discord",
+          peer: { kind: "channel", id: "parent" },
         }),
         expectedParentSessionKey: buildAgentSessionKey({
           agentId: "agent",
@@ -565,6 +588,9 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
         expect(plan.autoThreadContext?.SessionKey, testCase.name).toBe(testCase.expectedSessionKey);
         expect(plan.autoThreadContext?.ParentSessionKey, testCase.name).toBe(
           testCase.expectedParentSessionKey,
+        );
+        expect(plan.autoThreadContext?.ModelParentSessionKey, testCase.name).toBe(
+          testCase.expectedModelParentSessionKey,
         );
       }
     }

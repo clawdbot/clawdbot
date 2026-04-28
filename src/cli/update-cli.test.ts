@@ -22,6 +22,8 @@ const readPackageName = vi.fn();
 const readPackageVersion = vi.fn();
 const resolveGlobalManager = vi.fn();
 const serviceLoaded = vi.fn();
+const serviceStop = vi.fn();
+const serviceRestart = vi.fn();
 const prepareRestartScript = vi.fn();
 const runRestartScript = vi.fn();
 const mockedRunDaemonInstall = vi.fn();
@@ -187,6 +189,8 @@ vi.mock("../daemon/service.js", () => ({
     isLoaded: (...args: unknown[]) => serviceLoaded(...args),
     readCommand: (...args: unknown[]) => serviceReadCommand(...args),
     readRuntime: (...args: unknown[]) => serviceReadRuntime(...args),
+    stop: (...args: unknown[]) => serviceStop(...args),
+    restart: (...args: unknown[]) => serviceRestart(...args),
   })),
 }));
 
@@ -470,6 +474,8 @@ describe("update-cli", () => {
     readPackageName.mockResolvedValue("openclaw");
     readPackageVersion.mockResolvedValue("1.0.0");
     resolveGlobalManager.mockResolvedValue("npm");
+    serviceStop.mockResolvedValue(undefined);
+    serviceRestart.mockResolvedValue({ outcome: "completed" });
     serviceLoaded.mockResolvedValue(false);
     serviceReadCommand.mockImplementation(async () =>
       (await serviceLoaded()) ? { programArguments: ["openclaw", "gateway", "run"] } : null,
@@ -547,6 +553,31 @@ describe("update-cli", () => {
         timeout: 30_000,
       }),
     );
+  });
+
+  it("logs friendly hint with manual refresh command when completion cache write times out", async () => {
+    const root = createCaseDir("openclaw-completion-timeout-msg");
+    pathExists.mockResolvedValue(true);
+    const timeoutErr = Object.assign(new Error("spawnSync /usr/bin/node ETIMEDOUT"), {
+      code: "ETIMEDOUT",
+    });
+    vi.mocked(spawnSync).mockReturnValueOnce({
+      pid: 0,
+      output: [],
+      stdout: "",
+      stderr: "",
+      status: null,
+      signal: null,
+      error: timeoutErr,
+    });
+    vi.mocked(runtimeCapture.log).mockClear();
+
+    await updateCliShared.tryWriteCompletionCache(root, false);
+
+    const logs = vi.mocked(runtimeCapture.log).mock.calls.map((call) => String(call[0]));
+    expect(logs.some((line) => line.includes("timed out after 30s"))).toBe(true);
+    expect(logs.some((line) => line.includes("openclaw completion --write-state"))).toBe(true);
+    expect(logs.some((line) => line.includes("Error: spawnSync"))).toBe(false);
   });
 
   it("respawns into the updated package root before running post-update tasks", async () => {
@@ -1078,6 +1109,32 @@ describe("update-cli", () => {
     ).toContain("Low disk space near");
   });
 
+  it("refuses package updates from inside the gateway service process", async () => {
+    mockPackageInstallStatus(createCaseDir("openclaw-update"));
+
+    await withEnvAsync(
+      {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+      async () => {
+        await updateCommand({ yes: true });
+      },
+    );
+
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Package updates cannot run from inside the gateway service process.",
+      ),
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).not.toHaveBeenCalledWith(
+      ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
+      expect.any(Object),
+    );
+  });
+
   it("blocks package updates when the target requires a newer Node runtime", async () => {
     mockPackageInstallStatus(createCaseDir("openclaw-update"));
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
@@ -1201,6 +1258,88 @@ describe("update-cli", () => {
     expect(logs.join("\n")).toContain("expected installed version 2026.3.23-2, found 2026.3.23");
   });
 
+  it("stops package post-update work when staged npm install verification fails", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-staged-fail-"));
+    const prefix = path.join(tempDir, "prefix");
+    const nodeModules = path.join(prefix, "lib", "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    mockPackageInstallStatus(pkgRoot);
+    readPackageVersion.mockResolvedValue("2026.4.20");
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "latest",
+      version: "2026.4.25",
+    });
+    await fs.mkdir(path.join(pkgRoot, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(pkgRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.20" }),
+      "utf-8",
+    );
+    await fs.writeFile(path.join(pkgRoot, "dist", "index.js"), "export {};\n", "utf-8");
+    await writePackageDistInventory(pkgRoot);
+
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
+        return {
+          stdout: `${nodeModules}\n`,
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      if (
+        Array.isArray(argv) &&
+        argv[0] === "npm" &&
+        argv[1] === "i" &&
+        argv.includes("--prefix")
+      ) {
+        const stagePrefix = argv[argv.indexOf("--prefix") + 1];
+        if (typeof stagePrefix !== "string") {
+          throw new Error("missing stage prefix");
+        }
+        const stageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
+        await fs.mkdir(path.join(stageRoot, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(stageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2026.4.25" }),
+          "utf-8",
+        );
+        await fs.writeFile(path.join(stageRoot, "dist", "index.js"), "export {};\n", "utf-8");
+        await writePackageDistInventory(stageRoot);
+        await fs.writeFile(
+          path.join(stageRoot, "dist", "stale-runtime.js"),
+          "export {};\n",
+          "utf-8",
+        );
+      }
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+
+    await updateCommand({ yes: true, restart: false });
+
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(runCommandWithTimeout).not.toHaveBeenCalledWith(
+      [expect.stringMatching(/node/), expect.any(String), "doctor", "--non-interactive", "--fix"],
+      expect.any(Object),
+    );
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    await expect(fs.readFile(path.join(pkgRoot, "package.json"), "utf-8")).resolves.toContain(
+      '"version":"2026.4.20"',
+    );
+    const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
+    expect(logs.join("\n")).toContain("global install verify");
+    expect(logs.join("\n")).toContain("unexpected packaged dist file dist/stale-runtime.js");
+  });
+
   it("marks package post-update doctor as update-in-progress", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-package-"));
     const nodeModules = path.join(tempDir, "node_modules");
@@ -1254,6 +1393,85 @@ describe("update-cli", () => {
         }),
       }),
     );
+  });
+
+  it("stops a running managed gateway before package replacement", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-stop-service-"));
+    const nodeModules = path.join(tempDir, "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    const entryPath = path.join(pkgRoot, "dist", "index.js");
+    mockPackageInstallStatus(pkgRoot);
+    await fs.mkdir(path.dirname(entryPath), { recursive: true });
+    await fs.writeFile(
+      path.join(pkgRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.21" }),
+      "utf-8",
+    );
+    await fs.writeFile(entryPath, "export {};\n", "utf-8");
+    await writePackageDistInventory(pkgRoot);
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 4242,
+      state: "running",
+    });
+    pathExists.mockImplementation(async (candidate: string) => {
+      try {
+        await fs.access(candidate);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
+        return {
+          stdout: `${nodeModules}\n`,
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+
+    await updateCommand({ yes: true });
+
+    const npmInstallCallIndex = vi
+      .mocked(runCommandWithTimeout)
+      .mock.calls.findIndex(
+        (call) => Array.isArray(call[0]) && call[0][0] === "npm" && call[0][1] === "i",
+      );
+    const npmInstallCallOrder =
+      vi.mocked(runCommandWithTimeout).mock.invocationCallOrder[npmInstallCallIndex];
+    expect(serviceStop).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: expect.objectContaining({
+          OPENCLAW_SERVICE_MARKER: "openclaw",
+          OPENCLAW_SERVICE_KIND: "gateway",
+        }),
+      }),
+    );
+    const serviceStopCallOrder = serviceStop.mock.invocationCallOrder[0];
+    expect(serviceStopCallOrder).toBeDefined();
+    expect(npmInstallCallOrder).toBeDefined();
+    expect(serviceStopCallOrder).toBeLessThan(npmInstallCallOrder);
   });
 
   it("refreshes package installs even when the current version already matches the target", async () => {
@@ -1466,7 +1684,7 @@ describe("update-cli", () => {
           isOwningNpmCommand(argv[0], brewPrefix) &&
           argv[1] === "i" &&
           argv[2] === "-g" &&
-          argv[3] === "openclaw@latest",
+          argv.includes("openclaw@latest"),
       );
 
     expect(installCall).toBeDefined();

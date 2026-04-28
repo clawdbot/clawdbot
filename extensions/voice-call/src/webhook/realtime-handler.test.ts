@@ -20,16 +20,17 @@ function makeRequest(url: string, host = "gateway.ts.net"): http.IncomingMessage
   return req;
 }
 
-function makeBridge(): RealtimeVoiceBridge {
+function makeBridge(overrides: Partial<RealtimeVoiceBridge> = {}): RealtimeVoiceBridge {
   return {
     connect: async () => {},
     sendAudio: () => {},
     setMediaTimestamp: () => {},
-    submitToolResult: () => {},
+    submitToolResult: vi.fn(),
     acknowledgeMark: () => {},
     close: () => {},
     isConnected: () => true,
     triggerGreeting: () => {},
+    ...overrides,
   };
 }
 
@@ -203,6 +204,128 @@ describe("RealtimeCallHandler path routing", () => {
             to: "+15550009999",
           }),
         );
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("submits continuing responses only for realtime agent consult calls", async () => {
+    let callbacks:
+      | {
+          onToolCall?: (event: {
+            itemId: string;
+            callId: string;
+            name: string;
+            args: unknown;
+          }) => void;
+        }
+      | undefined;
+    let resolveConsult: ((value: unknown) => void) | undefined;
+    const submitToolResult = vi.fn();
+    const bridge = makeBridge({
+      supportsToolResultContinuation: true,
+      submitToolResult,
+    });
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        callbacks = request;
+        return bridge;
+      },
+    );
+    const getCallByProviderCallId = vi.fn(
+      (): CallRecord => ({
+        callId: "call-1",
+        providerCallId: "CA-tool",
+        provider: "twilio",
+        direction: "inbound",
+        state: "ringing",
+        from: "+15550001234",
+        to: "+15550009999",
+        startedAt: Date.now(),
+        transcript: [],
+        processedEventIds: [],
+        metadata: {},
+      }),
+    );
+    const handler = makeHandler(undefined, {
+      manager: {
+        getCallByProviderCallId,
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    handler.registerToolHandler(
+      "openclaw_agent_consult",
+      () =>
+        new Promise((resolve) => {
+          resolveConsult = resolve;
+        }),
+    );
+    handler.registerToolHandler("custom_lookup", async () => ({ ok: true }));
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-tool", callSid: "CA-tool" },
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(createBridge).toHaveBeenCalled();
+        });
+
+        callbacks?.onToolCall?.({
+          itemId: "item-1",
+          callId: "consult-call",
+          name: "openclaw_agent_consult",
+          args: { question: "Are the basement lights on?" },
+        });
+
+        await vi.waitFor(() => {
+          expect(submitToolResult).toHaveBeenCalledWith(
+            "consult-call",
+            expect.objectContaining({
+              status: "working",
+              tool: "openclaw_agent_consult",
+            }),
+            { willContinue: true },
+          );
+        });
+        expect(submitToolResult).toHaveBeenCalledTimes(1);
+
+        resolveConsult?.({ text: "The basement lights are on." });
+
+        await vi.waitFor(() => {
+          expect(submitToolResult).toHaveBeenLastCalledWith(
+            "consult-call",
+            {
+              text: "The basement lights are on.",
+            },
+            undefined,
+          );
+        });
+
+        submitToolResult.mockClear();
+        callbacks?.onToolCall?.({
+          itemId: "item-2",
+          callId: "custom-call",
+          name: "custom_lookup",
+          args: {},
+        });
+
+        await vi.waitFor(() => {
+          expect(submitToolResult).toHaveBeenCalledWith("custom-call", { ok: true }, undefined);
+        });
+        expect(submitToolResult).not.toHaveBeenCalledWith("custom-call", expect.anything(), {
+          willContinue: true,
+        });
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();

@@ -1,5 +1,8 @@
 {
   "id": "diagnostics-otel",
+  "activation": {
+    "onStartup": true
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

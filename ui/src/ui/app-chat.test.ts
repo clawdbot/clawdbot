@@ -2,6 +2,12 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatHost } from "./app-chat.ts";
+import {
+  getChatAttachmentDataUrl,
+  getChatAttachmentPreviewUrl,
+  registerChatAttachmentPayload,
+  resetChatAttachmentPayloadStoreForTest,
+} from "./chat/attachment-payload-store.ts";
 import type { GatewaySessionRow, SessionsListResult } from "./types.ts";
 
 const { setLastActiveSessionKeyMock } = vi.hoisted(() => ({
@@ -14,17 +20,21 @@ vi.mock("./app-last-active-session.ts", () => ({
 
 let handleSendChat: typeof import("./app-chat.ts").handleSendChat;
 let steerQueuedChatMessage: typeof import("./app-chat.ts").steerQueuedChatMessage;
+let navigateChatInputHistory: typeof import("./app-chat.ts").navigateChatInputHistory;
 let handleAbortChat: typeof import("./app-chat.ts").handleAbortChat;
 let refreshChatAvatar: typeof import("./app-chat.ts").refreshChatAvatar;
 let clearPendingQueueItemsForRun: typeof import("./app-chat.ts").clearPendingQueueItemsForRun;
+let removeQueuedMessage: typeof import("./app-chat.ts").removeQueuedMessage;
 
 async function loadChatHelpers(): Promise<void> {
   ({
     handleSendChat,
     steerQueuedChatMessage,
+    navigateChatInputHistory,
     handleAbortChat,
     refreshChatAvatar,
     clearPendingQueueItemsForRun,
+    removeQueuedMessage,
   } = await import("./app-chat.ts"));
 }
 
@@ -39,12 +49,20 @@ function requestUrl(input: string | URL | Request): string {
 }
 
 function makeHost(overrides?: Partial<ChatHost>): ChatHost {
-  return {
+  const host = {
     client: null,
     chatMessages: [],
     chatStream: null,
+    chatStreamSegments: [],
+    chatToolMessages: [],
     connected: true,
+    chatLoading: false,
     chatMessage: "",
+    chatLocalInputHistoryBySession: {},
+    chatInputHistorySessionKey: null,
+    chatInputHistoryItems: null,
+    chatInputHistoryIndex: -1,
+    chatDraftBeforeHistory: null,
     chatAttachments: [],
     chatQueue: [],
     chatRunId: null,
@@ -63,9 +81,13 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     chatModelsLoading: false,
     chatModelCatalog: [],
     refreshSessionsAfterChat: new Set<string>(),
+    toolStreamById: new Map(),
+    toolStreamOrder: [],
+    toolStreamSyncTimer: null,
     updateComplete: Promise.resolve(),
     ...overrides,
   };
+  return host as ChatHost;
 }
 
 function createSessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
@@ -103,6 +125,7 @@ describe("refreshChatAvatar", () => {
   });
 
   afterEach(() => {
+    resetChatAttachmentPayloadStoreForTest();
     vi.unstubAllGlobals();
   });
 
@@ -493,6 +516,8 @@ describe("handleSendChat", () => {
     expect(host.chatStream).toBe("Working...");
     expect(host.chatMessages).toEqual([]);
     expect(host.chatMessage).toBe("");
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("/btw what changed?");
   });
 
   it("sends /btw without adopting a main chat run when idle", async () => {
@@ -519,6 +544,49 @@ describe("handleSendChat", () => {
     expect(host.chatRunId).toBeNull();
     expect(host.chatMessages).toEqual([]);
     expect(host.chatMessage).toBe("");
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("/btw summarize this");
+  });
+
+  it("keeps queued normal messages recallable before transcript history catches up", async () => {
+    const host = makeHost({
+      chatMessage: "queued while busy",
+      chatRunId: "run-1",
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatQueue).toHaveLength(1);
+    expect(host.chatQueue[0]?.text).toBe("queued while busy");
+    expect(host.chatMessage).toBe("");
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("queued while busy");
+  });
+
+  it("coalesces duplicate in-flight chat submits before the gateway acknowledges them", async () => {
+    const sent = createDeferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method === "chat.send") {
+        return sent.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+    });
+
+    const first = handleSendChat(host, "same prompt");
+    const second = handleSendChat(host, "same prompt");
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(host.chatQueue).toEqual([]);
+    expect(host.chatMessages).toHaveLength(1);
+
+    sent.resolve({ runId: host.chatRunId, status: "started" });
+    await Promise.all([first, second]);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(host.chatMessages).toHaveLength(1);
   });
 
   it("restores the BTW draft when detached send fails", async () => {
@@ -669,6 +737,75 @@ describe("handleSendChat", () => {
         text: "follow up",
       }),
     ]);
+  });
+
+  it("drops sent attachment payload bytes while keeping the optimistic preview URL", async () => {
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static createObjectURL = vi.fn(() => "blob:brief");
+        static revokeObjectURL = vi.fn();
+      },
+    );
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started", runId: "run-1" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const file = new File(["%PDF-1.4\n"], "brief.pdf", { type: "application/pdf" });
+    const attachment = registerChatAttachmentPayload({
+      attachment: {
+        id: "att-1",
+        mimeType: "application/pdf",
+        fileName: "brief.pdf",
+        sizeBytes: file.size,
+      },
+      dataUrl: "data:application/pdf;base64,JVBERi0xLjQK",
+      file,
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatAttachments: [attachment],
+      chatMessage: "summarize",
+    });
+
+    await handleSendChat(host);
+
+    expect(getChatAttachmentDataUrl(attachment)).toBeNull();
+    expect(getChatAttachmentPreviewUrl(attachment)).toBe("blob:brief");
+    expect(JSON.stringify(host.chatMessages)).not.toContain("JVBERi0xLjQK");
+  });
+
+  it("releases queued attachment payloads when the queued item is removed", async () => {
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static createObjectURL = vi.fn(() => "blob:queued");
+        static revokeObjectURL = revokeObjectURL;
+      },
+    );
+    const file = new File(["%PDF-1.4\n"], "brief.pdf", { type: "application/pdf" });
+    const attachment = registerChatAttachmentPayload({
+      attachment: {
+        id: "queued-att",
+        mimeType: "application/pdf",
+        fileName: "brief.pdf",
+        sizeBytes: file.size,
+      },
+      dataUrl: "data:application/pdf;base64,JVBERi0xLjQK",
+      file,
+    });
+    const host = makeHost({
+      chatQueue: [{ id: "queued", text: "later", createdAt: 1, attachments: [attachment] }],
+    });
+
+    removeQueuedMessage(host, "queued");
+
+    expect(host.chatQueue).toEqual([]);
+    expect(getChatAttachmentDataUrl(attachment)).toBeNull();
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:queued");
   });
 });
 

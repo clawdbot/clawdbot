@@ -5,6 +5,7 @@ import {
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
   createAnthropicServiceTierWrapper,
+  createAnthropicThinkingPrefillWrapper,
   wrapAnthropicProviderStream,
 } from "./stream-wrappers.js";
 
@@ -112,6 +113,55 @@ describe("anthropic stream wrappers", () => {
     const captured = runComposedAnthropicProviderStream("sk-ant-api-123");
     expect(captured.headers?.["anthropic-beta"]).toContain(CONTEXT_1M_BETA);
     expect(captured.payload).toMatchObject({ service_tier: "auto" });
+  });
+});
+
+describe("createAnthropicThinkingPrefillWrapper", () => {
+  function runThinkingPrefillWrapper(payload: Record<string, unknown>): Record<string, unknown> {
+    const wrapper = createAnthropicThinkingPrefillWrapper(((_model, _context, options) => {
+      options?.onPayload?.(payload as never, {} as never);
+      return {} as never;
+    }) as StreamFn);
+    void wrapper({ provider: "anthropic", api: "anthropic-messages" } as never, {} as never, {});
+    return payload;
+  }
+
+  it("removes trailing assistant prefill when extended thinking is enabled", () => {
+    const warn = vi.spyOn(__testing.log, "warn").mockImplementation(() => undefined);
+    const payload = runThinkingPrefillWrapper({
+      thinking: { type: "enabled", budget_tokens: 1024 },
+      messages: [
+        { role: "user", content: "Return JSON." },
+        { role: "assistant", content: "{" },
+      ],
+    });
+
+    expect(payload.messages).toEqual([{ role: "user", content: "Return JSON." }]);
+    expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it("keeps assistant prefill when thinking is disabled", () => {
+    const payload = runThinkingPrefillWrapper({
+      thinking: { type: "disabled" },
+      messages: [
+        { role: "user", content: "Return JSON." },
+        { role: "assistant", content: "{" },
+      ],
+    });
+
+    expect(payload.messages).toHaveLength(2);
+  });
+
+  it("keeps trailing assistant tool use turns", () => {
+    const payload = runThinkingPrefillWrapper({
+      thinking: { type: "adaptive" },
+      messages: [
+        { role: "user", content: "Read a file." },
+        { role: "assistant", content: [{ type: "tool_use", id: "toolu_1", name: "Read" }] },
+      ],
+    });
+
+    expect(payload.messages).toHaveLength(2);
   });
 });
 

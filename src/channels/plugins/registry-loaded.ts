@@ -1,4 +1,7 @@
-import type { ActiveChannelPluginRuntimeShape } from "../../plugins/channel-registry-state.types.js";
+import type {
+  ActiveChannelPluginRuntimeShape,
+  ActivePluginChannelRegistration,
+} from "../../plugins/channel-registry-state.types.js";
 import {
   getActivePluginChannelRegistryFromState,
   getActivePluginChannelRegistryVersionFromState,
@@ -11,11 +14,16 @@ export type LoadedChannelPlugin = ActiveChannelPluginRuntimeShape & {
   meta: NonNullable<ActiveChannelPluginRuntimeShape["meta"]>;
 };
 
+export type LoadedChannelPluginEntry = ActivePluginChannelRegistration & {
+  plugin: LoadedChannelPlugin;
+};
+
 type CachedChannelPlugins = {
   registryVersion: number;
   registryRef: object | null;
   sorted: LoadedChannelPlugin[];
   byId: Map<string, LoadedChannelPlugin>;
+  entriesById: Map<string, LoadedChannelPluginEntry>;
 };
 
 const EMPTY_CHANNEL_PLUGIN_CACHE: CachedChannelPlugins = {
@@ -23,6 +31,7 @@ const EMPTY_CHANNEL_PLUGIN_CACHE: CachedChannelPlugins = {
   registryRef: null,
   sorted: [],
   byId: new Map(),
+  entriesById: new Map(),
 };
 
 let cachedChannelPlugins = EMPTY_CHANNEL_PLUGIN_CACHE;
@@ -63,11 +72,13 @@ function resolveCachedChannelPlugins(): CachedChannelPlugins {
   }
 
   const channelPlugins: LoadedChannelPlugin[] = [];
+  const pluginEntries: LoadedChannelPluginEntry[] = [];
   if (registry && Array.isArray(registry.channels)) {
     for (const entry of registry.channels) {
       const plugin = coerceLoadedChannelPlugin(entry?.plugin);
       if (plugin) {
         channelPlugins.push(plugin);
+        pluginEntries.push({ ...entry, plugin });
       }
     }
   }
@@ -83,8 +94,14 @@ function resolveCachedChannelPlugins(): CachedChannelPlugins {
     return a.id.localeCompare(b.id);
   });
   const byId = new Map<string, LoadedChannelPlugin>();
+  const entriesById = new Map<string, LoadedChannelPluginEntry>();
+  const unsortedEntriesById = new Map(pluginEntries.map((entry) => [entry.plugin.id, entry]));
   for (const plugin of sorted) {
     byId.set(plugin.id, plugin);
+    const entry = unsortedEntriesById.get(plugin.id);
+    if (entry) {
+      entriesById.set(plugin.id, entry);
+    }
   }
 
   const next: CachedChannelPlugins = {
@@ -92,6 +109,7 @@ function resolveCachedChannelPlugins(): CachedChannelPlugins {
     registryRef: registry,
     sorted,
     byId,
+    entriesById,
   };
   cachedChannelPlugins = next;
   return next;
@@ -107,4 +125,12 @@ export function getLoadedChannelPluginById(id: string): LoadedChannelPlugin | un
     return undefined;
   }
   return resolveCachedChannelPlugins().byId.get(resolvedId);
+}
+
+export function getLoadedChannelPluginEntryById(id: string): LoadedChannelPluginEntry | undefined {
+  const resolvedId = normalizeOptionalString(id) ?? "";
+  if (!resolvedId) {
+    return undefined;
+  }
+  return resolveCachedChannelPlugins().entriesById.get(resolvedId);
 }

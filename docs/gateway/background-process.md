@@ -17,7 +17,7 @@ Key parameters:
 - `command` (required)
 - `yieldMs` (default 10000): auto‑background after this delay
 - `background` (bool): background immediately
-- `timeout` (seconds, default 1800): kill the process after this timeout
+- `timeout` (seconds, default `tools.exec.timeoutSec`): kill the process after this timeout; set `timeout: 0` only to disable the exec process timeout for that call
 - `elevated` (bool): run outside the sandbox if elevated mode is enabled/allowed (`gateway` by default, or `node` when the exec target is `node`)
 - Need a real TTY? Set `pty: true`.
 - `workdir`, `env`
@@ -26,6 +26,7 @@ Behavior:
 
 - Foreground runs return output directly.
 - When backgrounded (explicit or timeout), the tool returns `status: "running"` + `sessionId` and a short tail.
+- Background and `yieldMs` runs inherit `tools.exec.timeoutSec` unless the call provides an explicit `timeout`.
 - Output is kept in memory until the session is polled or cleared.
 - If the `process` tool is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`.
 - Spawned exec commands receive `OPENCLAW_SHELL=exec` for context-aware shell/profile rules.

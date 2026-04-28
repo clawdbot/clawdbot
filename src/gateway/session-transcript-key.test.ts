@@ -14,7 +14,7 @@ const {
 }));
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: loadConfigMock,
+  getRuntimeConfig: loadConfigMock,
 }));
 
 vi.mock("./session-utils.js", () => ({

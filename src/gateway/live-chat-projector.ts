@@ -13,23 +13,13 @@ import {
 
 export { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 
-function appendUniqueSuffix(base: string, suffix: string): string {
-  if (!suffix) {
-    return base;
+export const MAX_LIVE_CHAT_BUFFER_CHARS = 500_000;
+
+function capLiveAssistantBuffer(text: string): string {
+  if (text.length <= MAX_LIVE_CHAT_BUFFER_CHARS) {
+    return text;
   }
-  if (!base) {
-    return suffix;
-  }
-  if (base.endsWith(suffix)) {
-    return base;
-  }
-  const maxOverlap = Math.min(base.length, suffix.length);
-  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
-    if (base.slice(-overlap) === suffix.slice(0, overlap)) {
-      return base + suffix.slice(overlap);
-    }
-  }
-  return base + suffix;
+  return text.slice(-MAX_LIVE_CHAT_BUFFER_CHARS);
 }
 
 export function resolveMergedAssistantText(params: {
@@ -39,20 +29,20 @@ export function resolveMergedAssistantText(params: {
 }): string {
   const { previousText, nextText, nextDelta } = params;
   if (nextText && previousText) {
-    if (nextText.startsWith(previousText)) {
-      return nextText;
+    if (nextText.startsWith(previousText) && nextText.length > previousText.length) {
+      return capLiveAssistantBuffer(nextText);
     }
     if (previousText.startsWith(nextText) && !nextDelta) {
-      return previousText;
+      return capLiveAssistantBuffer(previousText);
     }
   }
   if (nextDelta) {
-    return appendUniqueSuffix(previousText, nextDelta);
+    return capLiveAssistantBuffer(previousText + nextDelta);
   }
   if (nextText) {
-    return nextText;
+    return capLiveAssistantBuffer(nextText);
   }
-  return previousText;
+  return capLiveAssistantBuffer(previousText);
 }
 
 export function normalizeLiveAssistantEventText(params: { text: string; delta?: unknown }): {

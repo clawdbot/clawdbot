@@ -1,3 +1,4 @@
+import type { AudioConvertPort } from "../adapter/audio.port.js";
 import { downloadFile } from "../utils/file-utils.js";
 import { getQQBotMediaDir } from "../utils/platform.js";
 import { normalizeOptionalString } from "../utils/string-normalize.js";
@@ -5,31 +6,8 @@ import { transcribeAudio, resolveSTTConfig } from "../utils/stt.js";
 // Re-export formatVoiceText from core/.
 export { formatVoiceText } from "../utils/voice-text.js";
 
-// ---- Injected audio-convert dependencies ----
-
-/** Audio conversion interface — implemented by the upper-layer audio-convert module. */
-export interface AudioConvertAdapter {
-  convertSilkToWav(
-    silkPath: string,
-    outputDir: string,
-  ): Promise<{ wavPath: string; duration: number } | null>;
-  isVoiceAttachment(att: { content_type: string; filename?: string }): boolean;
-  formatDuration(seconds: number): string;
-}
-
-let _audioAdapter: AudioConvertAdapter | null = null;
-
-/** Register the audio conversion adapter — called by gateway startup. */
-export function registerAudioConvertAdapter(adapter: AudioConvertAdapter): void {
-  _audioAdapter = adapter;
-}
-
-function getAudioAdapter(): AudioConvertAdapter {
-  if (!_audioAdapter) {
-    throw new Error("AudioConvertAdapter not registered — call registerAudioConvertAdapter first");
-  }
-  return _audioAdapter;
-}
+// Re-export the port type for convenience.
+export type { AudioConvertPort } from "../adapter/audio.port.js";
 
 export interface RawAttachment {
   content_type: string;
@@ -57,6 +35,7 @@ export interface ProcessedAttachments {
 interface ProcessContext {
   accountId: string;
   cfg: unknown;
+  audioConvert: AudioConvertPort;
   log?: {
     info: (msg: string) => void;
     error: (msg: string) => void;
@@ -85,7 +64,7 @@ export async function processAttachments(
     return EMPTY_RESULT;
   }
 
-  const { accountId: _accountId, cfg, log } = ctx;
+  const { accountId: _accountId, cfg, log, audioConvert } = ctx;
   const downloadDir = getQQBotMediaDir("downloads");
 
   const imageUrls: string[] = [];
@@ -101,7 +80,7 @@ export async function processAttachments(
   // Phase 1: download all attachments in parallel.
   const downloadTasks = attachments.map(async (att) => {
     const attUrl = att.url?.startsWith("//") ? `https:${att.url}` : att.url;
-    const isVoice = getAudioAdapter().isVoiceAttachment(att);
+    const isVoice = audioConvert.isVoiceAttachment(att);
     const wavUrl =
       isVoice && att.voice_wav_url
         ? att.voice_wav_url.startsWith("//")
@@ -163,6 +142,7 @@ export async function processAttachments(
             asrReferText,
             cfg,
             downloadDir,
+            audioConvert,
             log,
           );
         }
@@ -276,6 +256,7 @@ async function processVoiceAttachment(
   asrReferText: string,
   cfg: unknown,
   downloadDir: string,
+  audioConvert: AudioConvertPort,
   log: ProcessContext["log"],
 ): Promise<VoiceResult> {
   const wavUrl = att.voice_wav_url
@@ -312,11 +293,11 @@ async function processVoiceAttachment(
   if (!audioPath) {
     log?.debug?.(`Voice attachment: ${att.filename}, converting SILK→WAV...`);
     try {
-      const wavResult = await getAudioAdapter().convertSilkToWav(localPath, downloadDir);
+      const wavResult = await audioConvert.convertSilkToWav(localPath, downloadDir);
       if (wavResult) {
         audioPath = wavResult.wavPath;
         log?.debug?.(
-          `Voice converted: ${wavResult.wavPath} (${getAudioAdapter().formatDuration(wavResult.duration)})`,
+          `Voice converted: ${wavResult.wavPath} (${audioConvert.formatDuration(wavResult.duration)})`,
         );
       } else {
         audioPath = localPath;

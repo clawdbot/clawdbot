@@ -96,5 +96,4 @@ class OpenClawProtocolConstantsTest {
   fun callLogCommandsUseStableStrings() {
     assertEquals("callLog.search", OpenClawCallLogCommand.Search.rawValue)
   }
-
 }

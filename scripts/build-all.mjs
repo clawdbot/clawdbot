@@ -13,8 +13,18 @@ const BUILD_CACHE_VERSION = 2;
 export const BUILD_ALL_STEPS = [
   { label: "canvas:a2ui:bundle", kind: "pnpm", pnpmArgs: ["canvas:a2ui:bundle"] },
   { label: "tsdown", kind: "node", args: ["scripts/tsdown-build.mjs"] },
+  {
+    label: "check-cli-bootstrap-imports",
+    kind: "node",
+    args: ["scripts/check-cli-bootstrap-imports.mjs"],
+  },
   { label: "runtime-postbuild", kind: "node", args: ["scripts/runtime-postbuild.mjs"] },
   { label: "build-stamp", kind: "node", args: ["scripts/build-stamp.mjs"] },
+  {
+    label: "runtime-postbuild-stamp",
+    kind: "node",
+    args: ["scripts/runtime-postbuild-stamp.mjs"],
+  },
   {
     label: "build:plugin-sdk:dts",
     kind: "pnpm",
@@ -91,8 +101,10 @@ export const BUILD_ALL_PROFILES = {
   ciArtifacts: [
     "canvas:a2ui:bundle",
     "tsdown",
+    "check-cli-bootstrap-imports",
     "runtime-postbuild",
     "build-stamp",
+    "runtime-postbuild-stamp",
     "build:plugin-sdk:dts",
     "write-plugin-sdk-entry-dts",
     "check-plugin-sdk-exports",
@@ -103,7 +115,13 @@ export const BUILD_ALL_PROFILES = {
     "write-cli-startup-metadata",
     "write-cli-compat",
   ],
-  gatewayWatch: ["tsdown", "runtime-postbuild", "build-stamp"],
+  gatewayWatch: [
+    "tsdown",
+    "check-cli-bootstrap-imports",
+    "runtime-postbuild",
+    "build-stamp",
+    "runtime-postbuild-stamp",
+  ],
 };
 
 export function resolveBuildAllSteps(profile = "full") {

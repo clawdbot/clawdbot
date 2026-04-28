@@ -37,14 +37,17 @@ It does not install or modify anything on the remote host.
       - Config only
       - Config + credentials + sessions
       - Full reset (also removes workspace)
+
   </Step>
   <Step title="Model and auth">
     - Full option matrix is in [Auth and model options](#auth-and-model-options).
+
   </Step>
   <Step title="Workspace">
     - Default `~/.openclaw/workspace` (configurable).
     - Seeds workspace files needed for first-run bootstrap ritual.
     - Workspace layout: [Agent workspace](/concepts/agent-workspace).
+
   </Step>
   <Step title="Gateway">
     - Prompts for port, bind, auth mode, and tailscale exposure.
@@ -58,6 +61,7 @@ It does not install or modify anything on the remote host.
       - Cannot be combined with `--gateway-token`.
     - Disable auth only if you fully trust every local process.
     - Non-loopback binds still require auth.
+
   </Step>
   <Step title="Channels">
     - [WhatsApp](/channels/whatsapp): optional QR login
@@ -81,18 +85,22 @@ It does not install or modify anything on the remote host.
       - If task creation is denied, OpenClaw falls back to a per-user Startup-folder login item and starts the gateway immediately.
       - Scheduled Tasks remain preferred because they provide better supervisor status.
     - Runtime selection: Node (recommended; required for WhatsApp and Telegram). Bun is not recommended.
+
   </Step>
   <Step title="Health check">
     - Starts gateway (if needed) and runs `openclaw health`.
     - `openclaw status --deep` adds the live gateway health probe to status output, including channel probes when supported.
+
   </Step>
   <Step title="Skills">
     - Reads available skills and checks requirements.
     - Lets you choose node manager: npm, pnpm, or bun.
     - Installs optional dependencies (some use Homebrew on macOS).
+
   </Step>
   <Step title="Finish">
     - Summary and next steps, including iOS, Android, and macOS app options.
+
   </Step>
 </Steps>
 
@@ -119,6 +127,7 @@ What you set:
 - Discovery hints:
   - macOS: Bonjour (`dns-sd`)
   - Linux: Avahi (`avahi-browse`)
+
 </Note>
 
 ## Auth and model options
@@ -202,6 +211,7 @@ What you set:
     - `--custom-api-key` (optional; falls back to `CUSTOM_API_KEY`)
     - `--custom-provider-id` (optional)
     - `--custom-compatibility <openai|anthropic>` (optional; default `openai`)
+    - `--custom-image-input` / `--custom-text-input` (optional; override inferred model input capability)
 
   </Accordion>
   <Accordion title="Skip">
@@ -212,6 +222,7 @@ What you set:
 Model behavior:
 
 - Pick default model from detected options, or enter provider and model manually.
+- Custom-provider onboarding infers image support for common model IDs and asks only when the model name is unknown.
 - When onboarding starts from a provider auth choice, the model picker prefers
   that provider automatically. For Volcengine and BytePlus, the same preference
   also matches their coding-plan variants (`volcengine-plan/*`,

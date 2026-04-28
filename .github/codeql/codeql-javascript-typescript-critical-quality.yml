@@ -1,0 +1,54 @@
+name: openclaw-codeql-javascript-typescript-critical-quality
+
+disable-default-queries: true
+
+queries:
+  - uses: security-and-quality
+
+query-filters:
+  - include:
+      problem.severity:
+        - error
+  - exclude:
+      tags:
+        - security
+
+paths:
+  - src/agents/*auth*.ts
+  - src/agents/**/*auth*.ts
+  - src/agents/auth-health*.ts
+  - src/agents/auth-profiles
+  - src/agents/bash-tools.exec-host-shared.ts
+  - src/agents/sandbox
+  - src/agents/sandbox.ts
+  - src/agents/sandbox-*.ts
+  - src/config
+  - src/cron/service/jobs.ts
+  - src/cron/stagger.ts
+  - src/gateway/*auth*.ts
+  - src/gateway/**/*auth*.ts
+  - src/gateway/*secret*.ts
+  - src/gateway/**/*secret*.ts
+  - src/gateway/protocol/**/*secret*.ts
+  - src/gateway/resolve-configured-secret-input-string*.ts
+  - src/gateway/security-path*.ts
+  - src/gateway/server-methods/secrets*.ts
+  - src/infra/secret-file*.ts
+  - src/secrets
+  - src/security
+
+paths-ignore:
+  - "**/node_modules"
+  - "**/coverage"
+  - "**/*.generated.ts"
+  - "**/*.bundle.js"
+  - "**/*-runtime.js"
+  - "**/*.test.ts"
+  - "**/*.test.tsx"
+  - "**/*.e2e.test.ts"
+  - "**/*.e2e.test.tsx"
+  - "**/*test-support*"
+  - "**/*test-helper*"
+  - "**/*mock*"
+  - "**/*fixture*"
+  - "**/*bench*"

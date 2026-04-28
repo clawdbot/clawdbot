@@ -1,10 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   ANTHROPIC_CFG,
   ANTHROPIC_STORE,
 } from "./auth-profiles.resolve-auth-profile-order.fixtures.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+
+vi.mock("./provider-auth-aliases.js", () => ({
+  resolveProviderIdForAuth: (provider: string) =>
+    provider.trim().toLowerCase() === "z.ai" ? "zai" : provider.trim().toLowerCase(),
+}));
 
 function makeApiKeyStore(provider: string, profileIds: string[]): AuthProfileStore {
   return {

@@ -1,5 +1,8 @@
 {
   "id": "irc",
+  "activation": {
+    "onStartup": false
+  },
   "channels": ["irc"],
   "channelEnvVars": {
     "irc": [

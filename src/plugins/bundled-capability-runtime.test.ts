@@ -5,9 +5,6 @@ describe("buildVitestCapabilityShimAliasMap", () => {
   it("keeps scoped and unscoped capability shim aliases aligned", () => {
     const aliasMap = buildVitestCapabilityShimAliasMap();
 
-    expect(aliasMap["openclaw/plugin-sdk/llm-task"]).toBe(
-      aliasMap["@openclaw/plugin-sdk/llm-task"],
-    );
     expect(aliasMap["openclaw/plugin-sdk/config-runtime"]).toBe(
       aliasMap["@openclaw/plugin-sdk/config-runtime"],
     );

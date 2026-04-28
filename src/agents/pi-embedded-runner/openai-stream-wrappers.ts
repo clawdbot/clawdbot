@@ -7,7 +7,7 @@ import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/
 import {
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
-} from "../codex-native-web-search.js";
+} from "../codex-native-web-search-core.js";
 import { flattenCompletionMessagesToStringContent } from "../openai-completions-string-content.js";
 import { resolveOpenAIReasoningEffortForModel } from "../openai-reasoning-effort.js";
 import {

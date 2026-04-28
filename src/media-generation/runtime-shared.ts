@@ -11,7 +11,7 @@ import {
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { getProviderEnvVars as getDefaultProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type {
   MediaGenerationNormalizationMetadataInput,
@@ -504,7 +504,9 @@ export function buildNoCapabilityModelConfiguredMessage(params: {
   modelConfigKey: string;
   providers: Array<{ id: string; defaultModel?: string | null }>;
   fallbackSampleRef?: string;
+  getProviderEnvVars?: typeof getDefaultProviderEnvVars;
 }): string {
+  const getProviderEnvVars = params.getProviderEnvVars ?? getDefaultProviderEnvVars;
   const sampleModel = params.providers.find(
     (provider) =>
       normalizeOptionalString(provider.id) && normalizeOptionalString(provider.defaultModel),

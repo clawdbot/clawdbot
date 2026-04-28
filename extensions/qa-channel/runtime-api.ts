@@ -1,3 +1,21 @@
-export * from "./src/runtime-api.js";
+export {
+  buildChannelConfigSchema,
+  buildChannelOutboundSessionRoute,
+  type ChannelGatewayContext,
+  type ChannelMessageActionAdapter,
+  type ChannelMessageActionName,
+  type ChannelPlugin,
+  createChatChannelPlugin,
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+  createPluginRuntimeStore,
+  defineChannelPluginEntry,
+  dispatchInboundReplyWithBase,
+  getChatChannelMeta,
+  jsonResult,
+  type OpenClawConfig,
+  type PluginRuntime,
+  readStringParam,
+  type RuntimeEnv,
+} from "./src/runtime-api.js";
 export { getQaChannelRuntime, setQaChannelRuntime } from "./src/runtime.js";
-export * from "./src/runtime.js";

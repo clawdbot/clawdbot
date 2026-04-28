@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
-} from "../../../test/helpers/plugins/contracts-testkit.js";
+} from "openclaw/plugin-sdk/plugin-test-contracts";
+import { describe, expect, it } from "vitest";
 import { getRegisteredMemoryEmbeddingProvider } from "../memory-embedding-providers.js";
 
 describe("memory embedding provider registration", () => {

@@ -3,7 +3,11 @@ import type {
   ContextEnginePromptCacheInfo,
   ContextEngineRuntimeContext,
 } from "../../../context-engine/types.js";
+import { drainPluginNextTurnInjectionContext } from "../../../plugins/host-hook-state.js";
+import { buildPluginAgentTurnPrepareContext } from "../../../plugins/host-hooks.js";
 import type {
+  PluginAgentTurnPrepareResult,
+  PluginNextTurnInjectionRecord,
   PluginHookAgentContext,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforePromptBuildResult,
@@ -22,7 +26,25 @@ import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export type PromptBuildHookRunner = {
-  hasHooks: (hookName: "before_prompt_build" | "before_agent_start") => boolean;
+  hasHooks: (
+    hookName:
+      | "agent_turn_prepare"
+      | "heartbeat_prompt_contribution"
+      | "before_prompt_build"
+      | "before_agent_start",
+  ) => boolean;
+  runAgentTurnPrepare?: (
+    event: {
+      prompt: string;
+      messages: unknown[];
+      queuedInjections: PluginNextTurnInjectionRecord[];
+    },
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginAgentTurnPrepareResult | undefined>;
+  runHeartbeatPromptContribution?: (
+    event: { sessionKey?: string; agentId?: string; heartbeatName?: string },
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginAgentTurnPrepareResult | undefined>;
   runBeforePromptBuild: (
     event: { prompt: string; messages: unknown[] },
     ctx: PluginHookAgentContext,
@@ -33,13 +55,95 @@ export type PromptBuildHookRunner = {
   ) => Promise<PluginHookBeforeAgentStartResult | undefined>;
 };
 
+// Cache drained next-turn injections by runId so retry attempts within the
+// same run reuse the first-attempt drain rather than calling drain again
+// (which destructively consumes from the session store and would return [] on
+// retry, dropping injection context). The cache is bounded to keep memory flat
+// across long-lived processes; entries are evicted FIFO once the cap is hit.
+const PROMPT_BUILD_DRAIN_CACHE_MAX = 256;
+const promptBuildDrainCache = new Map<string, PluginNextTurnInjectionRecord[]>();
+
+function rememberDrainedInjections(
+  runId: string,
+  injections: PluginNextTurnInjectionRecord[],
+): void {
+  if (promptBuildDrainCache.has(runId)) {
+    promptBuildDrainCache.delete(runId);
+  } else if (promptBuildDrainCache.size >= PROMPT_BUILD_DRAIN_CACHE_MAX) {
+    const oldest = promptBuildDrainCache.keys().next().value;
+    if (oldest !== undefined) {
+      promptBuildDrainCache.delete(oldest);
+    }
+  }
+  promptBuildDrainCache.set(runId, injections);
+}
+
+/**
+ * Releases the per-run drained-injection cache. Call when a run terminates so
+ * the cap stays headroom for active runs.
+ */
+export function forgetPromptBuildDrainCacheForRun(runId: string | undefined): void {
+  if (runId) {
+    promptBuildDrainCache.delete(runId);
+  }
+}
+
 export async function resolvePromptBuildHookResult(params: {
+  config: OpenClawConfig;
   prompt: string;
   messages: unknown[];
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
   legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
 }): Promise<PluginHookBeforePromptBuildResult> {
+  const runId = params.hookCtx.runId;
+  const cachedInjections = runId ? promptBuildDrainCache.get(runId) : undefined;
+  const queuedContext = cachedInjections
+    ? {
+        queuedInjections: cachedInjections,
+        ...buildPluginAgentTurnPrepareContext({ queuedInjections: cachedInjections }),
+      }
+    : await drainPluginNextTurnInjectionContext({
+        cfg: params.config,
+        sessionKey: params.hookCtx.sessionKey,
+      });
+  if (runId && !cachedInjections) {
+    rememberDrainedInjections(runId, queuedContext.queuedInjections);
+  }
+  const turnPrepareResult =
+    params.hookRunner?.runAgentTurnPrepare && params.hookRunner.hasHooks("agent_turn_prepare")
+      ? await params.hookRunner
+          .runAgentTurnPrepare(
+            {
+              prompt: params.prompt,
+              messages: params.messages,
+              queuedInjections: queuedContext.queuedInjections,
+            },
+            params.hookCtx,
+          )
+          .catch((hookErr: unknown) => {
+            log.warn(`agent_turn_prepare hook failed: ${String(hookErr)}`);
+            return undefined;
+          })
+      : undefined;
+  const heartbeatContribution =
+    params.hookCtx.trigger === "heartbeat" &&
+    params.hookRunner?.runHeartbeatPromptContribution &&
+    params.hookRunner.hasHooks("heartbeat_prompt_contribution")
+      ? await params.hookRunner
+          .runHeartbeatPromptContribution(
+            {
+              sessionKey: params.hookCtx.sessionKey,
+              agentId: params.hookCtx.agentId,
+              heartbeatName: "heartbeat",
+            },
+            params.hookCtx,
+          )
+          .catch((hookErr: unknown) => {
+            log.warn(`heartbeat_prompt_contribution hook failed: ${String(hookErr)}`);
+            return undefined;
+          })
+      : undefined;
   const promptBuildResult = params.hookRunner?.hasHooks("before_prompt_build")
     ? await params.hookRunner
         .runBeforePromptBuild(
@@ -75,8 +179,18 @@ export async function resolvePromptBuildHookResult(params: {
   return {
     systemPrompt: promptBuildResult?.systemPrompt ?? legacyResult?.systemPrompt,
     prependContext: joinPresentTextSegments([
+      queuedContext.prependContext,
+      turnPrepareResult?.prependContext,
+      heartbeatContribution?.prependContext,
       promptBuildResult?.prependContext,
       legacyResult?.prependContext,
+    ]),
+    appendContext: joinPresentTextSegments([
+      queuedContext.appendContext,
+      turnPrepareResult?.appendContext,
+      heartbeatContribution?.appendContext,
+      promptBuildResult?.appendContext,
+      legacyResult?.appendContext,
     ]),
     prependSystemContext: joinPresentTextSegments([
       promptBuildResult?.prependSystemContext,

@@ -1,7 +1,23 @@
 {
   "id": "opencode",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["opencode"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "opencode-native",
+      "hostSuffixes": ["opencode.ai"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "opencode": {
+        "family": "opencode"
+      }
+    }
+  },
   "providerAuthEnvVars": {
     "opencode": ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"]
   },

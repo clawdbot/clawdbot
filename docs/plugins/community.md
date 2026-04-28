@@ -130,6 +130,20 @@ formatting, built-in access control, and document/meeting/messaging skills.
 openclaw plugins install @wecom/wecom-openclaw-plugin
 ```
 
+### Yuanbao
+
+Yuanbao channel plugin for OpenClaw by the Tencent Yuanbao team. Powered by
+WebSocket persistent connections, it supports direct messages & group chats,
+streaming replies, proactive messaging, image/file/audio/video processing,
+Markdown formatting, built-in access control, and slash-command menus.
+
+- **npm:** `openclaw-plugin-yuanbao`
+- **repo:** [github.com/yb-claw/openclaw-plugin-yuanbao](https://github.com/yb-claw/openclaw-plugin-yuanbao)
+
+```bash
+openclaw plugins install openclaw-plugin-yuanbao
+```
+
 ## Submit your plugin
 
 We welcome community plugins that are useful, documented, and safe to operate.

@@ -3,6 +3,7 @@ import { DEFAULT_CRON_FORM } from "../app-defaults.ts";
 import {
   addCronJob,
   cancelCronEdit,
+  loadCronModelSuggestions,
   loadCronJobsPage,
   loadCronRuns,
   loadMoreCronRuns,
@@ -58,6 +59,27 @@ function createState(overrides: Partial<CronState> = {}): CronState {
 }
 
 describe("cron controller", () => {
+  it("loads model suggestions from the configured model view", async () => {
+    const request = vi.fn(async () => ({
+      models: [
+        { id: "z-model", provider: "zai" },
+        { id: "a-model", provider: "anthropic" },
+        { id: "z-model", provider: "other" },
+        { provider: "missing-id" },
+      ],
+    }));
+    const state = {
+      client: { request } as unknown as CronState["client"],
+      connected: true,
+      cronModelSuggestions: [],
+    };
+
+    await loadCronModelSuggestions(state);
+
+    expect(request).toHaveBeenCalledWith("models.list", { view: "configured" });
+    expect(state.cronModelSuggestions).toEqual(["a-model", "z-model"]);
+  });
+
   it("normalizes stale announce mode when session/payload no longer support announce", () => {
     const normalized = normalizeCronFormState({
       ...DEFAULT_CRON_FORM,

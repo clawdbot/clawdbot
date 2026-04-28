@@ -3,7 +3,9 @@ import http from "node:http";
 import type { Duplex } from "node:stream";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  buildRealtimeVoiceAgentConsultWorkingResponse,
   createRealtimeVoiceBridgeSession,
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   type RealtimeVoiceBridgeSession,
   type RealtimeVoiceProviderConfig,
   type RealtimeVoiceProviderPlugin,
@@ -410,6 +412,17 @@ export class RealtimeCallHandler {
     args: unknown,
   ): Promise<void> {
     const handler = this.toolHandlers.get(name);
+    if (
+      handler &&
+      name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME &&
+      bridge.bridge.supportsToolResultContinuation
+    ) {
+      bridge.submitToolResult(
+        bridgeCallId,
+        buildRealtimeVoiceAgentConsultWorkingResponse("caller"),
+        { willContinue: true },
+      );
+    }
     const result = !handler
       ? { error: `Tool "${name}" not available` }
       : await handler(args, callId).catch((error: unknown) => ({

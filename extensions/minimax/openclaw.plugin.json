@@ -1,5 +1,8 @@
 {
   "id": "minimax",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "legacyPluginIds": ["minimax-portal-auth"],
   "providers": ["minimax", "minimax-portal"],

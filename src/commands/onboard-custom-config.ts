@@ -18,10 +18,70 @@ const DEFAULT_MAX_TOKENS = 4096;
 // Azure OpenAI uses the Responses API which supports larger defaults
 const AZURE_DEFAULT_CONTEXT_WINDOW = 400_000;
 const AZURE_DEFAULT_MAX_TOKENS = 16_384;
+type CustomModelInput = "text" | "image";
+export type CustomModelImageInputInference = {
+  supportsImageInput: boolean;
+  confidence: "known" | "unknown";
+};
 
 function normalizeContextWindowForCustomModel(value: unknown): number {
   const parsed = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : 0;
   return parsed >= CONTEXT_WINDOW_HARD_MIN_TOKENS ? parsed : CONTEXT_WINDOW_HARD_MIN_TOKENS;
+}
+
+function customModelInputs(supportsImageInput: boolean): CustomModelInput[] {
+  return supportsImageInput ? ["text", "image"] : ["text"];
+}
+
+export function resolveCustomModelImageInputInference(
+  modelId: string,
+): CustomModelImageInputInference {
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
+  if (!normalized) {
+    return { supportsImageInput: false, confidence: "unknown" };
+  }
+  const matchesKnownVision =
+    /\b(?:gpt-4o|gpt-4\.1|gpt-[5-9]|o[134])\b/.test(normalized) ||
+    /\bclaude-(?:3|4|sonnet|opus|haiku)\b/.test(normalized) ||
+    /\bgemini\b/.test(normalized) ||
+    /\b(?:qwen[\w.-]*-?vl|qwen-vl)\b/.test(normalized) ||
+    /\b(?:vision|llava|pixtral|internvl|mllama|minicpm-v|glm-4v)\b/.test(normalized) ||
+    /(?:^|[-_/])vl(?:[-_/]|$)/.test(normalized);
+  if (matchesKnownVision) {
+    return { supportsImageInput: true, confidence: "known" };
+  }
+
+  const matchesKnownText =
+    /\b(?:llama\d*|deepseek|mistral|mixtral|kimi|moonshot|codestral|devstral|phi|qwq|codellama)\b/.test(
+      normalized,
+    ) || /\bqwen(?!.*(?:vl|vision))/.test(normalized);
+  if (matchesKnownText) {
+    return { supportsImageInput: false, confidence: "known" };
+  }
+
+  return { supportsImageInput: false, confidence: "unknown" };
+}
+
+export function inferCustomModelSupportsImageInput(modelId: string): boolean {
+  return resolveCustomModelImageInputInference(modelId).supportsImageInput;
+}
+
+function resolveCustomModelSupportsImageInput(params: {
+  modelId: string;
+  explicit?: boolean;
+  fallback: boolean;
+  inferKnownModels: boolean;
+}): boolean {
+  return (
+    params.explicit ??
+    ((): boolean => {
+      if (!params.inferKnownModels) {
+        return params.fallback;
+      }
+      const inference = resolveCustomModelImageInputInference(params.modelId);
+      return inference.confidence === "known" ? inference.supportsImageInput : params.fallback;
+    })()
+  );
 }
 
 function isAzureFoundryUrl(baseUrl: string): boolean {
@@ -112,6 +172,7 @@ export type ApplyCustomApiConfigParams = {
   apiKey?: SecretInput;
   providerId?: string;
   alias?: string;
+  supportsImageInput?: boolean;
 };
 
 export type ParseNonInteractiveCustomApiFlagsParams = {
@@ -120,6 +181,7 @@ export type ParseNonInteractiveCustomApiFlagsParams = {
   compatibility?: string;
   apiKey?: string;
   providerId?: string;
+  supportsImageInput?: boolean;
 };
 
 export type ParsedNonInteractiveCustomApiFlags = {
@@ -128,6 +190,7 @@ export type ParsedNonInteractiveCustomApiFlags = {
   compatibility: CustomApiCompatibility;
   apiKey?: string;
   providerId?: string;
+  supportsImageInput?: boolean;
 };
 
 export type CustomApiErrorCode =
@@ -439,6 +502,9 @@ export function parseNonInteractiveCustomApiFlags(
     compatibility: parseCustomApiCompatibility(params.compatibility),
     ...(apiKey ? { apiKey } : {}),
     ...(providerId ? { providerId } : {}),
+    ...(params.supportsImageInput === undefined
+      ? {}
+      : { supportsImageInput: params.supportsImageInput }),
   };
 }
 
@@ -487,15 +553,25 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
   const hasModel = existingModels.some((model) => model.id === modelId);
   const isLikelyReasoningModel = isAzure && /\b(o[134]|gpt-([5-9]|\d{2,}))\b/i.test(modelId);
+  const explicitInput =
+    params.supportsImageInput === undefined
+      ? undefined
+      : customModelInputs(params.supportsImageInput);
+  const generatedInput = customModelInputs(
+    resolveCustomModelSupportsImageInput({
+      modelId,
+      explicit: params.supportsImageInput,
+      fallback: isAzure && isLikelyReasoningModel,
+      inferKnownModels: !isAzure,
+    }),
+  );
   const nextModel = isAzure
     ? {
         id: modelId,
         name: `${modelId} (Custom Provider)`,
         contextWindow: AZURE_DEFAULT_CONTEXT_WINDOW,
         maxTokens: AZURE_DEFAULT_MAX_TOKENS,
-        input: isLikelyReasoningModel
-          ? (["text", "image"] as Array<"text" | "image">)
-          : (["text"] as ["text"]),
+        input: generatedInput,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         reasoning: isLikelyReasoningModel,
         compat: { supportsStore: false },
@@ -505,7 +581,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
         name: `${modelId} (Custom Provider)`,
         contextWindow: DEFAULT_CONTEXT_WINDOW,
         maxTokens: DEFAULT_MAX_TOKENS,
-        input: ["text"] as ["text"],
+        input: generatedInput,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         reasoning: false,
       };
@@ -515,6 +591,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
           ? {
               ...model,
               ...(isAzure ? nextModel : {}),
+              ...(explicitInput ? { input: explicitInput } : {}),
               name: model.name ?? nextModel.name,
               cost: model.cost ?? nextModel.cost,
               contextWindow: normalizeContextWindowForCustomModel(model.contextWindow),

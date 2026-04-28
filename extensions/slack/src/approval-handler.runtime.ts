@@ -8,11 +8,9 @@ import type {
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  buildApprovalInteractiveReplyFromActionDescriptors,
-  type ExecApprovalRequest,
-} from "openclaw/plugin-sdk/infra-runtime";
+import { buildApprovalInteractiveReplyFromActionDescriptors } from "openclaw/plugin-sdk/approval-reply-runtime";
+import type { ExecApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { logError, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   isSlackExecApprovalClientEnabled,

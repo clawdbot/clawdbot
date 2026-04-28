@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import {
@@ -175,10 +176,44 @@ function pathContainsNodeModulesSegment(relativePath: string): boolean {
     .includes("node_modules");
 }
 
+function isTrustedOpenClawPeerSymlink(relativePath: string): boolean {
+  const segments = relativePath.split(/[\\/]+/);
+  return (
+    (segments.length === 2 && segments[0] === "node_modules" && segments[1] === "openclaw") ||
+    (segments.length === 3 &&
+      segments[0] === "node_modules" &&
+      segments[1] === ".bin" &&
+      segments[2] === "openclaw")
+  );
+}
+
+async function resolveTrustedHostOpenClawRootRealPath(): Promise<string | null> {
+  const hostRoot = resolveOpenClawPackageRootSync({
+    argv1: process.argv[1],
+    cwd: process.cwd(),
+    moduleUrl: import.meta.url,
+  });
+  if (!hostRoot) {
+    return null;
+  }
+  return await fs.realpath(hostRoot).catch(() => path.resolve(hostRoot));
+}
+
+function isTrustedHostOpenClawPath(params: {
+  resolvedTargetPath: string;
+  trustedHostOpenClawRootRealPath: string | null;
+}): boolean {
+  return (
+    params.trustedHostOpenClawRootRealPath !== null &&
+    isPathInside(params.trustedHostOpenClawRootRealPath, params.resolvedTargetPath)
+  );
+}
+
 async function inspectNodeModulesSymlinkTarget(params: {
   rootRealPath: string;
   symlinkPath: string;
   symlinkRelativePath: string;
+  trustedHostOpenClawRootRealPath: string | null;
 }): Promise<
   Pick<PackageManifestTraversalResult, "blockedDirectoryFinding" | "blockedFileFinding">
 > {
@@ -195,6 +230,18 @@ async function inspectNodeModulesSymlinkTarget(params: {
   }
 
   if (!isPathInside(params.rootRealPath, resolvedTargetPath)) {
+    // Workspace package managers can leave peer links back to the OpenClaw host
+    // package. Trust only the exact peer-link shapes and only when the resolved
+    // target stays inside the host package root.
+    if (
+      isTrustedOpenClawPeerSymlink(params.symlinkRelativePath) &&
+      isTrustedHostOpenClawPath({
+        resolvedTargetPath,
+        trustedHostOpenClawRootRealPath: params.trustedHostOpenClawRootRealPath,
+      })
+    ) {
+      return {};
+    }
     throw new Error(
       `manifest dependency scan found node_modules symlink target outside install root at ${params.symlinkRelativePath}`,
     );
@@ -286,6 +333,7 @@ async function collectPackageManifestPaths(
 ): Promise<PackageManifestTraversalResult> {
   const limits = resolvePackageManifestTraversalLimits();
   const rootRealPath = await fs.realpath(rootDir).catch(() => rootDir);
+  const trustedHostOpenClawRootRealPath = await resolveTrustedHostOpenClawRootRealPath();
   const queue: Array<{ depth: number; dir: string }> = [{ depth: 0, dir: rootDir }];
   const packageManifestPaths: string[] = [];
   const visitedDirectories = new Set<string>();
@@ -355,6 +403,7 @@ async function collectPackageManifestPaths(
             rootRealPath,
             symlinkPath: nextPath,
             symlinkRelativePath: relativeNextPath,
+            trustedHostOpenClawRootRealPath,
           });
           if (symlinkTargetInspection.blockedDirectoryFinding) {
             firstBlockedDirectoryFinding ??= symlinkTargetInspection.blockedDirectoryFinding;
@@ -480,6 +529,7 @@ async function scanDirectoryTarget(params: {
 }): Promise<BuiltinInstallScan> {
   try {
     const scanSummary = await scanDirectoryWithSummary(params.path, {
+      excludeTestFiles: true,
       includeFiles: params.includeFiles,
     });
     const builtinScan = buildBuiltinScanFromSummary(scanSummary);

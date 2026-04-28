@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import type { Bot } from "grammy";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import {
   getTelegramSendTestMocks,
   importTelegramSendModule,
@@ -489,6 +489,31 @@ describe("sendMessageTelegram", () => {
         }),
       );
     }
+  });
+
+  it("normalizes full Telegram bot endpoint apiRoot before send clients reach grammY", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            foo: {
+              apiRoot: "https://api.telegram.org/bot123456:ABC/",
+            },
+          },
+        },
+      },
+    };
+    loadConfig.mockReturnValue(cfg);
+    botApi.sendMessage.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", "hi", { cfg, token: "tok", accountId: "foo" });
+
+    expect(botCtorSpy).toHaveBeenCalledWith(
+      "tok",
+      expect.objectContaining({
+        client: expect.objectContaining({ apiRoot: "https://api.telegram.org" }),
+      }),
+    );
   });
 
   it("falls back to plain text when Telegram rejects HTML and preserves send params", async () => {

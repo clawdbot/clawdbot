@@ -1,7 +1,23 @@
 {
   "id": "github-copilot",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["github-copilot"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "github-copilot-native",
+      "hostSuffixes": [".githubcopilot.com"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "github-copilot": {
+        "family": "github-copilot"
+      }
+    }
+  },
   "contracts": {
     "memoryEmbeddingProviders": ["github-copilot"]
   },

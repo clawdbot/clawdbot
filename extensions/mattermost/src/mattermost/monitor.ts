@@ -41,6 +41,7 @@ import {
 import {
   evaluateMattermostMentionGate,
   mapMattermostChannelTypeToChatType,
+  resolveMattermostTrustedChatKind,
 } from "./monitor-gating.js";
 import {
   formatInboundFromLabel,
@@ -94,6 +95,7 @@ import { deactivateSlashCommands, getSlashCommandState } from "./slash-state.js"
 export {
   evaluateMattermostMentionGate,
   mapMattermostChannelTypeToChatType,
+  resolveMattermostTrustedChatKind,
 } from "./monitor-gating.js";
 export type {
   MattermostMentionGateInput,
@@ -231,9 +233,13 @@ function channelChatType(kind: ChatType): "direct" | "group" | "channel" {
 }
 
 export function resolveMattermostReplyRootId(params: {
+  kind: ChatType;
   threadRootId?: string;
   replyToId?: string;
 }): string | undefined {
+  if (params.kind === "direct") {
+    return undefined;
+  }
   const threadRootId = normalizeOptionalString(params.threadRootId);
   if (threadRootId) {
     return threadRootId;
@@ -242,12 +248,14 @@ export function resolveMattermostReplyRootId(params: {
 }
 
 export function canFinalizeMattermostPreviewInPlace(params: {
+  kind: ChatType;
   previewRootId?: string;
   threadRootId?: string;
   replyToId?: string;
 }): boolean {
   return (
     resolveMattermostReplyRootId({
+      kind: params.kind,
       threadRootId: params.threadRootId,
       replyToId: params.replyToId,
     }) === params.previewRootId?.trim()
@@ -275,6 +283,7 @@ type MattermostDraftPreviewState = {
 type MattermostDraftPreviewDeliverParams = {
   payload: ReplyPayload;
   info: { kind: "tool" | "block" | "final" };
+  kind: ChatType;
   client: MattermostClient;
   draftStream: Pick<
     ReturnType<typeof createMattermostDraftStream>,
@@ -313,6 +322,7 @@ export async function deliverMattermostReplyWithDraftPreview(
         typeof previewFinalText !== "string" ||
         payload.isError ||
         !canFinalizeMattermostPreviewInPlace({
+          kind: params.kind,
           previewRootId: params.effectiveReplyToId,
           threadRootId: params.effectiveReplyToId,
           replyToId: payload.replyToId,
@@ -345,12 +355,12 @@ export function resolveMattermostEffectiveReplyToId(params: {
   replyToMode: "off" | "first" | "all" | "batched";
   threadRootId?: string | null;
 }): string | undefined {
+  if (params.kind === "direct") {
+    return undefined;
+  }
   const threadRootId = normalizeOptionalString(params.threadRootId);
   if (threadRootId && params.replyToMode !== "off") {
     return threadRootId;
-  }
-  if (params.kind === "direct") {
-    return undefined;
   }
   const postId = normalizeOptionalString(params.postId);
   if (!postId) {
@@ -424,7 +434,7 @@ function buildMattermostWsUrl(baseUrl: string): string {
 export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}): Promise<void> {
   const core = getMattermostRuntime();
   const runtime = resolveRuntime(opts);
-  const cfg = opts.config ?? core.config.loadConfig();
+  const cfg = (opts.config ?? core.config.current()) as OpenClawConfig;
   const account = resolveMattermostAccount({
     cfg,
     accountId: opts.accountId,
@@ -707,6 +717,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 accountId: account.accountId,
                 agentId: route.agentId,
                 replyToId: resolveMattermostReplyRootId({
+                  kind,
                   threadRootId: threadContext.effectiveReplyToId,
                   replyToId: payload.replyToId,
                 }),
@@ -915,6 +926,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             accountId: account.accountId,
             agentId: params.route.agentId,
             replyToId: resolveMattermostReplyRootId({
+              kind: params.kind,
               threadRootId: params.effectiveReplyToId,
               replyToId: trimmedPayload.replyToId,
             }),
@@ -1208,8 +1220,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         }
 
         const channelInfo = await resolveChannelInfo(channelId);
-        const channelType = payload.data?.channel_type ?? channelInfo?.type ?? undefined;
-        const kind = mapMattermostChannelTypeToChatType(channelType);
+        const kind = resolveMattermostTrustedChatKind({
+          channelType: channelInfo?.type,
+        });
         const chatType = channelChatType(kind);
 
         const senderName =
@@ -1475,16 +1488,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           directId: senderId,
         });
 
-        const preview = bodyText.replace(/\s+/g, " ").slice(0, 160);
-        const inboundLabel =
-          kind === "direct"
-            ? `Mattermost DM from ${senderName}`
-            : `Mattermost message in ${roomLabel} from ${senderName}`;
-        core.system.enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
-          sessionKey,
-          contextKey: `mattermost:message:${channelId}:${post.id ?? "unknown"}`,
-        });
-
         const textWithId = `${bodyText}\n[mattermost message id: ${post.id ?? "unknown"} channel: ${channelId}]`;
         const body = core.channel.reply.formatInboundEnvelope({
           channel: "Mattermost",
@@ -1695,6 +1698,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               await deliverMattermostReplyWithDraftPreview({
                 payload,
                 info,
+                kind,
                 client,
                 draftStream,
                 effectiveReplyToId,
@@ -1710,6 +1714,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                     accountId: account.accountId,
                     agentId: route.agentId,
                     replyToId: resolveMattermostReplyRootId({
+                      kind,
                       threadRootId: effectiveReplyToId,
                       replyToId: payload.replyToId,
                     }),

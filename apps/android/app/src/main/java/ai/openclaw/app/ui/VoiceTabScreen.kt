@@ -1,5 +1,9 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.VoiceCaptureMode
+import ai.openclaw.app.voice.VoiceConversationEntry
+import ai.openclaw.app.voice.VoiceConversationRole
 import android.Manifest
 import android.app.Activity
 import android.content.Context
@@ -69,10 +73,6 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import ai.openclaw.app.MainViewModel
-import ai.openclaw.app.VoiceCaptureMode
-import ai.openclaw.app.voice.VoiceConversationEntry
-import ai.openclaw.app.voice.VoiceConversationRole
 import kotlin.math.max
 
 @Composable
@@ -283,7 +283,14 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
             modifier = Modifier.size(60.dp),
             colors =
               ButtonDefaults.buttonColors(
-                containerColor = if (micCooldown) mobileTextSecondary else if (micEnabled) mobileDanger else mobileAccent,
+                containerColor =
+                  if (micCooldown) {
+                    mobileTextSecondary
+                  } else if (micEnabled) {
+                    mobileDanger
+                  } else {
+                    mobileAccent
+                  },
                 contentColor = Color.White,
                 disabledContainerColor = mobileTextSecondary,
                 disabledContentColor = Color.White.copy(alpha = 0.5f),
@@ -463,7 +470,10 @@ private fun ThinkingDots(color: Color) {
 }
 
 @Composable
-private fun ThinkingDot(alpha: Float, color: Color) {
+private fun ThinkingDot(
+  alpha: Float,
+  color: Color,
+) {
   Surface(
     modifier = Modifier.size(6.dp).alpha(alpha),
     shape = CircleShape,
@@ -471,12 +481,11 @@ private fun ThinkingDot(alpha: Float, color: Color) {
   ) {}
 }
 
-private fun Context.hasRecordAudioPermission(): Boolean {
-  return (
+private fun Context.hasRecordAudioPermission(): Boolean =
+  (
     ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
       PackageManager.PERMISSION_GRANTED
-    )
-}
+  )
 
 private fun Context.findActivity(): Activity? =
   when (this) {

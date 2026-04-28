@@ -1,6 +1,6 @@
 import { isIP } from "node:net";
-import { type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { makeProxyFetch } from "openclaw/plugin-sdk/infra-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";

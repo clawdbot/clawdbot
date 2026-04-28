@@ -57,6 +57,22 @@ type OllamaEmbeddingClientConfig = Omit<OllamaEmbeddingClient, "embedBatch">;
 
 export const DEFAULT_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text";
 
+const QUERY_INSTRUCTION_TEMPLATES = [
+  {
+    prefix: "qwen3-embedding",
+    template:
+      "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:{query}",
+  },
+  {
+    prefix: "nomic-embed-text",
+    template: "search_query: {query}",
+  },
+  {
+    prefix: "mxbai-embed-large",
+    template: "Represent this sentence for searching relevant passages: {query}",
+  },
+] as const;
+
 function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
   const sanitized = vec.map((value) => (Number.isFinite(value) ? value : 0));
   const magnitude = Math.sqrt(sanitized.reduce((sum, value) => sum + value * value, 0));
@@ -91,6 +107,14 @@ function normalizeEmbeddingModel(model: string, providerId?: string): string {
     return DEFAULT_OLLAMA_EMBEDDING_MODEL;
   }
   return normalizeOllamaWireModelId(trimmed, providerId);
+}
+
+function applyQueryInstructionTemplate(model: string, queryText: string): string {
+  const normalizedModel = model.trim().toLowerCase();
+  const match = QUERY_INSTRUCTION_TEMPLATES.find(({ prefix }) =>
+    normalizedModel.startsWith(prefix),
+  );
+  return match ? match.template.replace("{query}", () => queryText) : queryText;
 }
 
 function resolveConfiguredProvider(options: OllamaEmbeddingOptions) {
@@ -319,10 +343,13 @@ export async function createOllamaEmbeddingProvider(
     return embedding;
   };
 
+  const embedQuery = async (text: string): Promise<number[]> =>
+    await embedOne(applyQueryInstructionTemplate(client.model, text));
+
   const provider: OllamaEmbeddingProvider = {
     id: "ollama",
     model: client.model,
-    embedQuery: embedOne,
+    embedQuery,
     embedBatch: async (texts) => (texts.length === 0 ? [] : await embedMany(texts)),
   };
 

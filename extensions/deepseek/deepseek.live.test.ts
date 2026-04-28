@@ -6,12 +6,12 @@ import {
   type Context,
   type Model,
 } from "@mariozechner/pi-ai";
-import { describe, expect, it } from "vitest";
 import {
   createSingleUserPromptMessage,
   extractNonEmptyAssistantText,
   isLiveTestEnabled,
-} from "../../src/agents/live-test-helpers.js";
+} from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it } from "vitest";
 import { buildDeepSeekProvider } from "./provider-catalog.js";
 import { createDeepSeekV4ThinkingWrapper } from "./stream.js";
 

@@ -7,15 +7,19 @@ import android.location.Location
 import android.location.LocationManager
 import android.os.CancellationSignal
 import androidx.core.content.ContextCompat
-import java.time.Instant
-import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
-import kotlinx.coroutines.suspendCancellableCoroutine
+import java.time.Instant
+import java.time.format.DateTimeFormatter
 
-class LocationCaptureManager(private val context: Context) {
-  data class Payload(val payloadJson: String)
+class LocationCaptureManager(
+  private val context: Context,
+) {
+  data class Payload(
+    val payloadJson: String,
+  )
 
   suspend fun getLocation(
     desiredProviders: List<String>,
@@ -98,15 +102,16 @@ class LocationCaptureManager(private val context: Context) {
     val resolved =
       providers.firstOrNull { manager.isProviderEnabled(it) }
         ?: throw IllegalStateException("LOCATION_UNAVAILABLE: no providers available")
-    val location = withTimeout(timeoutMs.coerceAtLeast(1)) {
-      suspendCancellableCoroutine<Location?> { cont ->
-        val signal = CancellationSignal()
-        cont.invokeOnCancellation { signal.cancel() }
-        manager.getCurrentLocation(resolved, signal, context.mainExecutor) { location ->
-          cont.resume(location) { _, _, _ -> }
+    val location =
+      withTimeout(timeoutMs.coerceAtLeast(1)) {
+        suspendCancellableCoroutine<Location?> { cont ->
+          val signal = CancellationSignal()
+          cont.invokeOnCancellation { signal.cancel() }
+          manager.getCurrentLocation(resolved, signal, context.mainExecutor) { location ->
+            cont.resume(location) { _, _, _ -> }
+          }
         }
       }
-    }
     return location ?: throw IllegalStateException("LOCATION_UNAVAILABLE: no fix")
   }
 }

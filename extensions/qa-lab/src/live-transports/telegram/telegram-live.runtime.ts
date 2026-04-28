@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -118,6 +118,7 @@ export type TelegramQaRunResult = {
   reportPath: string;
   summaryPath: string;
   observedMessagesPath: string;
+  gatewayDebugDirPath?: string;
   scenarios: TelegramQaScenarioResult[];
 };
 
@@ -664,6 +665,7 @@ function renderTelegramQaMarkdown(params: {
   credentialSource: "convex" | "env";
   redactMetadata: boolean;
   groupId: string;
+  gatewayDebugDirPath?: string;
   startedAt: string;
   finishedAt: string;
   scenarios: TelegramQaScenarioResult[];
@@ -688,6 +690,12 @@ function renderTelegramQaMarkdown(params: {
     if (scenario.rttMs !== undefined) {
       lines.push(`- RTT: ${scenario.rttMs}ms`);
     }
+    lines.push("");
+  }
+  if (params.gatewayDebugDirPath) {
+    lines.push("## Gateway Debug");
+    lines.push("");
+    lines.push(`- Preserved at: \`${params.gatewayDebugDirPath}\``);
     lines.push("");
   }
   if (params.cleanupIssues.length > 0) {
@@ -1094,6 +1102,8 @@ export async function runTelegramQaLive(params: {
   const startedAt = new Date().toISOString();
   const scenarioResults: TelegramQaScenarioResult[] = [];
   const cleanupIssues: string[] = [];
+  const gatewayDebugDirPath = path.join(outputDir, "gateway-debug");
+  let preservedGatewayDebugArtifacts = false;
   let canaryFailure: string | null = null;
   try {
     if (params.sutOpenClawCommand && params.preflightInstalledOnboarding === true) {
@@ -1296,7 +1306,13 @@ export async function runTelegramQaLive(params: {
       }
     } finally {
       try {
-        await gatewayHarness.stop();
+        const shouldPreserveGatewayDebugArtifacts = scenarioResults.some(
+          (scenario) => scenario.status === "fail",
+        );
+        await gatewayHarness.stop(
+          shouldPreserveGatewayDebugArtifacts ? { preserveToDir: gatewayDebugDirPath } : undefined,
+        );
+        preservedGatewayDebugArtifacts = shouldPreserveGatewayDebugArtifacts;
       } catch (error) {
         appendLiveLaneIssue(cleanupIssues, "live gateway cleanup", error);
       }
@@ -1352,6 +1368,7 @@ export async function runTelegramQaLive(params: {
       credentialSource: credentialLease.source,
       redactMetadata: redactPublicMetadata,
       groupId: redactPublicMetadata ? "<redacted>" : runtimeEnv.groupId,
+      gatewayDebugDirPath: preservedGatewayDebugArtifacts ? gatewayDebugDirPath : undefined,
       startedAt,
       finishedAt,
       scenarios: scenarioResults,
@@ -1379,6 +1396,7 @@ export async function runTelegramQaLive(params: {
     report: reportPath,
     summary: summaryPath,
     observedMessages: observedMessagesPath,
+    ...(preservedGatewayDebugArtifacts ? { gatewayDebug: gatewayDebugDirPath } : {}),
   };
   if (canaryFailure) {
     throw new Error(
@@ -1403,6 +1421,7 @@ export async function runTelegramQaLive(params: {
     reportPath,
     summaryPath,
     observedMessagesPath,
+    ...(preservedGatewayDebugArtifacts ? { gatewayDebugDirPath } : {}),
     scenarios: scenarioResults,
   };
 }

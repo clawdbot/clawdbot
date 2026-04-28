@@ -1,5 +1,8 @@
 {
   "id": "gradium",
+  "activation": {
+    "onStartup": false
+  },
   "providerAuthEnvVars": {
     "gradium": ["GRADIUM_API_KEY"]
   },

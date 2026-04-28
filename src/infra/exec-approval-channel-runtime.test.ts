@@ -25,6 +25,7 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 let createExecApprovalChannelRuntime: typeof import("./exec-approval-channel-runtime.js").createExecApprovalChannelRuntime;
+let ExecApprovalChannelRuntimeTerminalStartError: typeof import("./exec-approval-channel-runtime.js").ExecApprovalChannelRuntimeTerminalStartError;
 
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -116,7 +117,8 @@ afterEach(() => {
 });
 
 beforeAll(async () => {
-  ({ createExecApprovalChannelRuntime } = await import("./exec-approval-channel-runtime.js"));
+  ({ createExecApprovalChannelRuntime, ExecApprovalChannelRuntimeTerminalStartError } =
+    await import("./exec-approval-channel-runtime.js"));
 });
 
 describe("createExecApprovalChannelRuntime", () => {
@@ -285,6 +287,84 @@ describe("createExecApprovalChannelRuntime", () => {
 
     expect(mockCreateOperatorApprovalsGatewayClient).toHaveBeenCalledTimes(2);
     expect(mockGatewayClientStarts).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits through retryable connect auth errors until hello succeeds", async () => {
+    const authError = Object.assign(new Error("gateway token mismatch"), {
+      details: {
+        code: "AUTH_TOKEN_MISMATCH",
+        canRetryWithDeviceToken: true,
+      },
+    });
+    mockCreateOperatorApprovalsGatewayClient.mockImplementationOnce(async (params) => ({
+      start: () => {
+        mockGatewayClientStarts();
+        params.onConnectError?.(authError);
+        queueMicrotask(() => {
+          params.onHelloOk?.({ type: "hello-ok" } as never);
+        });
+      },
+      stop: mockGatewayClientStops,
+      request: mockGatewayClientRequests,
+    }));
+    const runtime = createExecApprovalChannelRuntime({
+      label: "test/exec-approvals",
+      clientDisplayName: "Test Exec Approvals",
+      cfg: {} as never,
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      deliverRequested: async () => [],
+      finalizeResolved: async () => undefined,
+    });
+
+    await expect(runtime.start()).resolves.toBeUndefined();
+
+    expect(mockGatewayClientStarts).toHaveBeenCalledTimes(1);
+    expect(loggerMocks.error).toHaveBeenCalledWith("connect error: gateway token mismatch");
+  });
+
+  it("surfaces reconnect pauses as terminal startup errors", async () => {
+    const authError = Object.assign(new Error("pairing required"), {
+      details: {
+        code: "PAIRING_REQUIRED",
+      },
+    });
+    mockCreateOperatorApprovalsGatewayClient.mockImplementationOnce(async (params) => ({
+      start: () => {
+        mockGatewayClientStarts();
+        params.onConnectError?.(authError);
+        params.onReconnectPaused?.({
+          code: 1008,
+          reason: "pairing required",
+          detailCode: "PAIRING_REQUIRED",
+        });
+        params.onClose?.(1008, "pairing required");
+      },
+      stop: mockGatewayClientStops,
+      request: mockGatewayClientRequests,
+    }));
+    const runtime = createExecApprovalChannelRuntime({
+      label: "test/exec-approvals",
+      clientDisplayName: "Test Exec Approvals",
+      cfg: {} as never,
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      deliverRequested: async () => [],
+      finalizeResolved: async () => undefined,
+    });
+
+    let caught: unknown;
+    await runtime.start().catch((error) => {
+      caught = error;
+    });
+
+    expect(caught).toBeInstanceOf(ExecApprovalChannelRuntimeTerminalStartError);
+    expect(caught).toMatchObject({
+      detailCode: "PAIRING_REQUIRED",
+    });
+
+    expect(mockGatewayClientStarts).toHaveBeenCalledTimes(1);
+    expect(mockGatewayClientStops).toHaveBeenCalledTimes(1);
   });
 
   it("does not leave a gateway client running when stop wins the startup race", async () => {

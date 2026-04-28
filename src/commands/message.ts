@@ -6,7 +6,7 @@ import { getScopedChannelsCommandSecretTargets } from "../cli/command-secret-tar
 import { resolveMessageSecretScope } from "../cli/message-secret-scope.js";
 import { createOutboundSendDeps, type CliDeps } from "../cli/outbound-send-deps.js";
 import { withProgress } from "../cli/progress.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
@@ -31,7 +31,7 @@ export async function messageCommand(
   deps: CliDeps,
   runtime: RuntimeEnv,
 ) {
-  const loadedRaw = loadConfig();
+  const loadedRaw = getRuntimeConfig();
   const scope = resolveMessageSecretScope({
     channel: opts.channel,
     target: opts.target,

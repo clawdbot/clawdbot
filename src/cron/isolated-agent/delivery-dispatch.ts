@@ -18,6 +18,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -311,7 +312,7 @@ function buildDirectCronDeliveryIdempotencyKey(params: {
   const threadId =
     params.delivery.threadId == null || params.delivery.threadId === ""
       ? ""
-      : String(params.delivery.threadId);
+      : (stringifyRouteThreadId(params.delivery.threadId) ?? "");
   const accountId = params.delivery.accountId?.trim() ?? "";
   const normalizedTo = normalizeDeliveryTarget(params.delivery.channel, params.delivery.to);
   return `cron-direct-delivery:v1:${executionId}:${params.delivery.channel}:${accountId}:${normalizedTo}:${threadId}`;

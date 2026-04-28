@@ -39,8 +39,8 @@ struct MacNodeBrowserProxyTests {
         #expect(tabs[0]["id"] as? String == "tab-1")
     }
 
-    // Regression test: nested POST bodies must serialize without __SwiftValue crashes.
-    @Test func postRequestSerializesNestedBodyWithoutCrash() async throws {
+    /// Regression test: nested POST bodies must serialize without __SwiftValue crashes.
+    @Test func `post request serializes nested body without crash`() async throws {
         actor BodyCapture {
             private var body: Data?
 
@@ -84,7 +84,7 @@ struct MacNodeBrowserProxyTests {
         #expect(arr.count == 2)
     }
 
-    @Test func requestReportsActionableUnavailableWhenControlServiceIsMissing() async throws {
+    @Test func `request reports actionable unavailable when control service is missing`() async throws {
         let proxy = MacNodeBrowserProxy(
             endpointProvider: {
                 MacNodeBrowserProxy.Endpoint(

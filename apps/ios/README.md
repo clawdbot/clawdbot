@@ -213,7 +213,7 @@ See `apps/ios/VERSIONING.md` for the detailed spec.
 - The relay registration is bound to the gateway identity fetched from `gateway.identity.get`, so another gateway cannot reuse that stored registration.
 - The app persists the relay handle metadata locally so reconnects can republish the gateway registration without re-registering on every connect.
 - If the relay base URL changes in a later build, the app refreshes the relay registration instead of reusing the old relay origin.
-- Relay mode requires a reachable relay base URL and uses App Attest plus the app receipt during registration.
+- Relay mode requires a reachable relay base URL and uses App Attest plus a StoreKit app transaction JWS during registration.
 - Gateway-side relay sending is configured through `gateway.push.apns.relay.baseUrl` in `openclaw.json`. `OPENCLAW_APNS_RELAY_BASE_URL` remains a temporary env override only.
 
 ## Official Build Relay Trust Model
@@ -222,7 +222,7 @@ See `apps/ios/VERSIONING.md` for the detailed spec.
   - The app must pair with the gateway and establish both node and operator sessions.
   - The operator session is used to fetch `gateway.identity.get`.
 - `iOS -> relay`
-  - The app registers with the relay over HTTPS using App Attest plus the app receipt.
+  - The app registers with the relay over HTTPS using App Attest plus a StoreKit app transaction JWS.
   - The relay requires the official production/TestFlight distribution path, which is why local
     Xcode/dev installs cannot use the hosted relay.
 - `gateway delegation`
@@ -246,6 +246,10 @@ gateway can only send pushes for iOS devices that paired with that gateway.
 - Chat + Talk surfaces through the operator gateway session.
 - iPhone node commands in foreground: camera snap/clip, canvas present/navigate/eval/snapshot, screen record, location, contacts, calendar, reminders, photos, motion, local notifications.
 - Share extension deep-link forwarding into the connected gateway session.
+
+## Computer Use Relationship
+
+The iOS app is not a Codex Computer Use backend. Computer Use and `cua-driver mcp` are macOS desktop-control paths; iOS exposes device capabilities as OpenClaw node commands through the gateway. Agents can drive the iPhone canvas, camera, screen, location, voice, and other node capabilities with `node.invoke`, subject to iOS foreground/background limits.
 
 ## Location Automation Use Case (Testing)
 

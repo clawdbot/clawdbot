@@ -1,9 +1,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
-import { startGatewayModelPricingRefresh } from "./model-pricing-cache.js";
+import { isGatewayModelPricingEnabled } from "./model-pricing-config.js";
 
 type GatewayRuntimeServiceLogger = {
   child: (name: string) => {
@@ -88,11 +89,43 @@ function recoverPendingSessionDeliveries(params: {
   timer.unref?.();
 }
 
+function startGatewayModelPricingRefreshOnDemand(params: {
+  config: OpenClawConfig;
+  pluginLookUpTable?: Pick<PluginLookUpTable, "index" | "manifestRegistry">;
+  log: GatewayRuntimeServiceLogger;
+}): () => void {
+  if (!isGatewayModelPricingEnabled(params.config)) {
+    return () => {};
+  }
+  let stopped = false;
+  let stopRefresh: (() => void) | undefined;
+  void (async () => {
+    const { startGatewayModelPricingRefresh } = await import("./model-pricing-cache.js");
+    if (stopped) {
+      return;
+    }
+    stopRefresh = startGatewayModelPricingRefresh({
+      config: params.config,
+      ...(params.pluginLookUpTable ? { pluginLookUpTable: params.pluginLookUpTable } : {}),
+    });
+    if (stopped) {
+      stopRefresh();
+      stopRefresh = undefined;
+    }
+  })().catch((err) => params.log.error(`Model pricing refresh failed to start: ${String(err)}`));
+  return () => {
+    stopped = true;
+    stopRefresh?.();
+    stopRefresh = undefined;
+  };
+}
+
 export function startGatewayRuntimeServices(params: {
   minimalTestGateway: boolean;
   cfgAtStart: OpenClawConfig;
   channelManager: GatewayChannelManager;
   log: GatewayRuntimeServiceLogger;
+  pluginLookUpTable?: Pick<PluginLookUpTable, "index" | "manifestRegistry">;
 }): {
   heartbeatRunner: HeartbeatRunner;
   channelHealthMonitor: ChannelHealthMonitor | null;
@@ -108,7 +141,11 @@ export function startGatewayRuntimeServices(params: {
     channelHealthMonitor,
     stopModelPricingRefresh:
       !params.minimalTestGateway && !isVitestRuntimeEnv()
-        ? startGatewayModelPricingRefresh({ config: params.cfgAtStart })
+        ? startGatewayModelPricingRefreshOnDemand({
+            config: params.cfgAtStart,
+            ...(params.pluginLookUpTable ? { pluginLookUpTable: params.pluginLookUpTable } : {}),
+            log: params.log,
+          })
         : () => {},
   };
 }

@@ -21,13 +21,15 @@ class NodeApp : Application() {
     super.onCreate()
     if (BuildConfig.DEBUG) {
       StrictMode.setThreadPolicy(
-        StrictMode.ThreadPolicy.Builder()
+        StrictMode.ThreadPolicy
+          .Builder()
           .detectAll()
           .penaltyLog()
           .build(),
       )
       StrictMode.setVmPolicy(
-        StrictMode.VmPolicy.Builder()
+        StrictMode.VmPolicy
+          .Builder()
           .detectAll()
           .penaltyLog()
           .build(),

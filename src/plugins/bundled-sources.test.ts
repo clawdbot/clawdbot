@@ -1,5 +1,5 @@
+import { bundledPluginRootAt } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { bundledPluginRootAt } from "../../test/helpers/bundled-plugin-paths.js";
 import {
   findBundledPluginSource,
   findBundledPluginSourceInMap,

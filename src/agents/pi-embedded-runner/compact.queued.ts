@@ -321,6 +321,7 @@ function buildCompactionContextEngineRuntimeContext(params: {
       reasoningLevel: params.params.reasoningLevel,
       bashElevated: params.params.bashElevated,
       extraSystemPrompt: params.params.extraSystemPrompt,
+      sourceReplyDeliveryMode: params.params.sourceReplyDeliveryMode,
       ownerNumbers: params.params.ownerNumbers,
     }),
     tokenBudget: params.contextTokenBudget,

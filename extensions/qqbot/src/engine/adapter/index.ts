@@ -1,25 +1,71 @@
 /**
- * Platform adapter interface — abstracts framework-specific capabilities
- * so core/ modules remain portable between the built-in and standalone versions.
+ * Engine adapter layer — all external dependency interfaces unified here.
  *
- * Each version implements this interface in its own `bootstrap/adapter/` directory
- * and calls `registerPlatformAdapter()` during startup.
+ * This directory is the **single source of truth** for every interface
+ * the engine uses to talk to the outside world.
  *
- * core/ modules access platform capabilities via `getPlatformAdapter()`.
+ * ## Two-layer DI architecture
  *
- * ## Lazy initialization
+ * ### Layer 1: EngineAdapters (构造参数注入 — preferred)
  *
- * When the adapter has not been explicitly registered yet, `getPlatformAdapter()`
- * will invoke the factory registered via `registerPlatformAdapterFactory()` to
- * create and register the adapter on first access. This eliminates fragile
- * dependency on side-effect import ordering — the adapter is guaranteed to be
- * available whenever any engine module needs it, regardless of which code path
- * triggers the first access.
+ * Used for capabilities consumed within the pipeline call stack.
+ * Injected once via {@link CoreGatewayContext.adapters}, threaded
+ * through {@link InboundPipelineDeps.adapters}, consumed by stages.
+ *
+ * - {@link HistoryPort} — group history record/build/clear
+ * - {@link MentionGatePort} — mention + command gate evaluation
+ * - {@link AudioConvertPort} — inbound SILK→WAV conversion
+ * - {@link OutboundAudioPort} — outbound WAV→SILK conversion
+ * - {@link CommandsPort} — slash-command version/approve dependencies
+ *
+ * ### Layer 2: PlatformAdapter (global singleton — leaf utilities)
+ *
+ * Used by leaf utility functions (`file-utils`, `image-size`,
+ * `platform`, `config/resolve`) that sit outside the pipeline and
+ * cannot receive a `deps` parameter. Registered once at startup.
+ *
+ * - {@link PlatformAdapter} — SSRF, secrets, media fetch, temp dir
  */
 
 import type { FetchMediaOptions, FetchMediaResult, SecretInputRef } from "./types.js";
 
-/** Platform adapter that core/ modules use for framework-specific operations. */
+// ============ Re-exports (port interfaces) ============
+
+export type { HistoryPort, HistoryEntryLike } from "./history.port.js";
+export type {
+  MentionGatePort,
+  MentionFacts,
+  MentionPolicy,
+  MentionGateDecision,
+  ImplicitMentionKind,
+} from "./mention-gate.port.js";
+export type { AudioConvertPort, OutboundAudioPort } from "./audio.port.js";
+export type { CommandsPort, ApproveRuntimeGetter } from "./commands.port.js";
+
+// ============ EngineAdapters (aggregated port injection) ============
+
+/**
+ * Aggregated adapter ports injected via `CoreGatewayContext.adapters`.
+ *
+ * All fields are required — the bridge layer must provide every adapter.
+ * The engine no longer falls back to built-in implementations.
+ */
+export interface EngineAdapters {
+  /** Group history record/build/clear — backed by SDK `reply-history`. */
+  history: import("./history.port.js").HistoryPort;
+  /** Mention + command gate evaluation — backed by SDK `channel-mention-gating`. */
+  mentionGate: import("./mention-gate.port.js").MentionGatePort;
+  /** Inbound audio conversion (SILK→WAV, voice detection). */
+  audioConvert: import("./audio.port.js").AudioConvertPort;
+  /** Outbound audio conversion (WAV→SILK, audio detection). */
+  outboundAudio: import("./audio.port.js").OutboundAudioPort;
+  /** Slash-command dependencies (version, approve runtime). */
+  commands: import("./commands.port.js").CommandsPort;
+}
+
+// ============ PlatformAdapter (global singleton — leaf utilities) ============
+
+/** Platform adapter that leaf utilities use for framework-specific operations. */
 export interface PlatformAdapter {
   /** Validate that a remote URL is safe to fetch (SSRF protection). */
   validateRemoteUrl(url: string, options?: { allowPrivate?: boolean }): Promise<void>;

@@ -1,26 +1,36 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
 const (
-	translateMaxAttempts     = 3
-	translateBaseDelay       = 15 * time.Second
-	defaultPromptTimeout     = 2 * time.Minute
-	envDocsI18nPromptTimeout = "OPENCLAW_DOCS_I18N_PROMPT_TIMEOUT"
+	translateMaxAttempts       = 3
+	translateBaseDelay         = 15 * time.Second
+	defaultPromptTimeout       = 2 * time.Minute
+	envDocsI18nPromptTimeout   = "OPENCLAW_DOCS_I18N_PROMPT_TIMEOUT"
+	envDocsI18nCodexExecutable = "OPENCLAW_DOCS_I18N_CODEX_EXECUTABLE"
 )
 
 var errEmptyTranslation = errors.New("empty translation")
 
-type PiTranslator struct {
-	client        docsPiPromptClient
-	clientFactory docsPiClientFactory
+var translateRetryDelay = func(attempt int) time.Duration {
+	return translateBaseDelay * time.Duration(attempt)
+}
+
+type CodexTranslator struct {
+	systemPrompt string
+	thinking     string
+	runPrompt    codexPromptRunner
 }
 
 type docsTranslator interface {
@@ -31,40 +41,32 @@ type docsTranslator interface {
 
 type docsTranslatorFactory func(string, string, []GlossaryEntry, string) (docsTranslator, error)
 
-type docsPiPromptClient interface {
-	promptRunner
-	Close() error
+type codexPromptRunner func(context.Context, codexPromptRequest) (string, error)
+
+type codexPromptRequest struct {
+	SystemPrompt string
+	Message      string
+	Model        string
+	Thinking     string
 }
 
-type docsPiClientFactory func(context.Context) (docsPiPromptClient, error)
-
-func NewPiTranslator(srcLang, tgtLang string, glossary []GlossaryEntry, thinking string) (*PiTranslator, error) {
-	options := docsPiClientOptions{
-		SystemPrompt: translationPrompt(srcLang, tgtLang, glossary),
-		Thinking:     normalizeThinking(thinking),
-	}
-	clientFactory := func(ctx context.Context) (docsPiPromptClient, error) {
-		return startDocsPiClient(ctx, options)
-	}
-	client, err := clientFactory(context.Background())
-	if err != nil {
-		return nil, err
-	}
-	return &PiTranslator{client: client, clientFactory: clientFactory}, nil
+func NewCodexTranslator(srcLang, tgtLang string, glossary []GlossaryEntry, thinking string) (*CodexTranslator, error) {
+	return &CodexTranslator{
+		systemPrompt: translationPrompt(srcLang, tgtLang, glossary),
+		thinking:     normalizeThinking(thinking),
+		runPrompt:    runCodexExecPrompt,
+	}, nil
 }
 
-func (t *PiTranslator) Translate(ctx context.Context, text, srcLang, tgtLang string) (string, error) {
+func (t *CodexTranslator) Translate(ctx context.Context, text, srcLang, tgtLang string) (string, error) {
 	return t.translate(ctx, text, t.translateMasked)
 }
 
-func (t *PiTranslator) TranslateRaw(ctx context.Context, text, srcLang, tgtLang string) (string, error) {
+func (t *CodexTranslator) TranslateRaw(ctx context.Context, text, srcLang, tgtLang string) (string, error) {
 	return t.translate(ctx, text, t.translateRaw)
 }
 
-func (t *PiTranslator) translate(ctx context.Context, text string, run func(context.Context, string) (string, error)) (string, error) {
-	if t.client == nil {
-		return "", errors.New("pi client unavailable")
-	}
+func (t *CodexTranslator) translate(ctx context.Context, text string, run func(context.Context, string) (string, error)) (string, error) {
 	prefix, core, suffix := splitWhitespace(text)
 	if core == "" {
 		return text, nil
@@ -78,7 +80,7 @@ func (t *PiTranslator) translate(ctx context.Context, text string, run func(cont
 	return prefix + translated + suffix, nil
 }
 
-func (t *PiTranslator) translateWithRetry(ctx context.Context, run func(context.Context) (string, error)) (string, error) {
+func (t *CodexTranslator) translateWithRetry(ctx context.Context, run func(context.Context) (string, error)) (string, error) {
 	var lastErr error
 	for attempt := 0; attempt < translateMaxAttempts; attempt++ {
 		translated, err := run(ctx)
@@ -90,13 +92,7 @@ func (t *PiTranslator) translateWithRetry(ctx context.Context, run func(context.
 		}
 		lastErr = err
 		if attempt+1 < translateMaxAttempts {
-			if shouldRestartPiClientForError(err) {
-				if err := t.restartClient(ctx); err != nil {
-					return "", fmt.Errorf("%w (pi client restart failed: %v)", lastErr, err)
-				}
-				continue
-			}
-			delay := translateBaseDelay * time.Duration(attempt+1)
+			delay := translateRetryDelay(attempt + 1)
 			if err := sleepWithContext(ctx, delay); err != nil {
 				return "", err
 			}
@@ -105,16 +101,16 @@ func (t *PiTranslator) translateWithRetry(ctx context.Context, run func(context.
 	return "", lastErr
 }
 
-func (t *PiTranslator) translateMasked(ctx context.Context, core string) (string, error) {
+func (t *CodexTranslator) translateMasked(ctx context.Context, core string) (string, error) {
 	state := NewPlaceholderState(core)
 	placeholders := make([]string, 0, 8)
 	mapping := map[string]string{}
 	masked := maskMarkdown(core, state.Next, &placeholders, mapping)
-	resText, err := runPrompt(ctx, t.client, masked)
+	resText, err := t.prompt(ctx, masked)
 	if err != nil {
 		return "", err
 	}
-	translated := strings.TrimSpace(resText)
+	translated := stripCodexI18nInputWrappers(strings.TrimSpace(resText))
 	if translated == "" {
 		return "", errEmptyTranslation
 	}
@@ -124,16 +120,38 @@ func (t *PiTranslator) translateMasked(ctx context.Context, core string) (string
 	return unmaskMarkdown(translated, placeholders, mapping), nil
 }
 
-func (t *PiTranslator) translateRaw(ctx context.Context, core string) (string, error) {
-	resText, err := runPrompt(ctx, t.client, core)
+func (t *CodexTranslator) translateRaw(ctx context.Context, core string) (string, error) {
+	resText, err := t.prompt(ctx, core)
 	if err != nil {
 		return "", err
 	}
-	translated := strings.TrimSpace(resText)
+	translated := stripCodexI18nInputWrappers(strings.TrimSpace(resText))
 	if translated == "" {
 		return "", errEmptyTranslation
 	}
 	return translated, nil
+}
+
+func stripCodexI18nInputWrappers(text string) string {
+	replacer := strings.NewReplacer(
+		"<openclaw_docs_i18n_input>", "",
+		"</openclaw_docs_i18n_input>", "",
+	)
+	return strings.TrimSpace(replacer.Replace(text))
+}
+
+func (t *CodexTranslator) prompt(ctx context.Context, message string) (string, error) {
+	if t.runPrompt == nil {
+		return "", errors.New("codex prompt runner unavailable")
+	}
+	promptCtx, cancel := context.WithTimeout(ctx, docsI18nPromptTimeout())
+	defer cancel()
+	return t.runPrompt(promptCtx, codexPromptRequest{
+		SystemPrompt: t.systemPrompt,
+		Message:      message,
+		Model:        docsI18nModel(),
+		Thinking:     t.thinking,
+	})
 }
 
 func isRetryableTranslateError(err error) bool {
@@ -147,44 +165,133 @@ func isRetryableTranslateError(err error) bool {
 		return true
 	}
 	message := strings.ToLower(err.Error())
-	if strings.Contains(message, "authentication failed") {
+	if strings.Contains(message, "authentication failed") || strings.Contains(message, "invalid_api_key") || strings.Contains(message, "api key") {
 		return false
 	}
 	return strings.Contains(message, "placeholder missing") ||
 		strings.Contains(message, "rate limit") ||
 		strings.Contains(message, "429") ||
-		shouldRestartPiClientForError(err)
+		strings.Contains(message, "500") ||
+		strings.Contains(message, "502") ||
+		strings.Contains(message, "503") ||
+		strings.Contains(message, "504") ||
+		strings.Contains(message, "temporarily unavailable") ||
+		strings.Contains(message, "connection reset") ||
+		strings.Contains(message, "stream")
 }
 
-func shouldRestartPiClientForError(err error) bool {
-	if err == nil {
-		return false
+func runCodexExecPrompt(ctx context.Context, req codexPromptRequest) (string, error) {
+	outputFile, err := os.CreateTemp("", "openclaw-docs-i18n-codex-*.txt")
+	if err != nil {
+		return "", err
 	}
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "pi error: terminated") ||
-		strings.Contains(message, "stopreason=cancelled") ||
-		strings.Contains(message, "stopreason=canceled") ||
-		strings.Contains(message, "stopreason=aborted") ||
-		strings.Contains(message, "stopreason=terminated") ||
-		strings.Contains(message, "stopreason=error") ||
-		strings.Contains(message, "pi process closed") ||
-		strings.Contains(message, "pi event stream closed")
+	outputPath := outputFile.Name()
+	_ = outputFile.Close()
+	defer os.Remove(outputPath)
+
+	codexHomeBase, err := isolatedCodexHomeBase()
+	if err != nil {
+		return "", err
+	}
+	codexHome, err := os.MkdirTemp(codexHomeBase, "codex-home-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(codexHome)
+	if err := writeCodexAuthFile(codexHome); err != nil {
+		return "", err
+	}
+
+	args := []string{
+		"exec",
+		"--model", req.Model,
+		"-c", fmt.Sprintf("model_reasoning_effort=%q", normalizeThinking(req.Thinking)),
+		"-c", `service_tier="fast"`,
+		"--sandbox", "read-only",
+		"--ignore-rules",
+		"--skip-git-repo-check",
+		"--output-last-message", outputPath,
+		"-",
+	}
+	command := exec.CommandContext(ctx, docsCodexExecutable(), args...)
+	command.Stdin = strings.NewReader(buildCodexTranslationPrompt(req.SystemPrompt, req.Message))
+	command.Env = append(os.Environ(), "CODEX_HOME="+codexHome)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		return "", fmt.Errorf("codex exec failed: %w (%s)", err, previewCommandOutput(stdout.String(), stderr.String()))
+	}
+
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		return "", err
+	}
+	translated := strings.TrimSpace(string(data))
+	if translated == "" {
+		return "", errEmptyTranslation
+	}
+	return translated, nil
 }
 
-func (t *PiTranslator) restartClient(ctx context.Context) error {
-	if t.clientFactory == nil {
-		return errors.New("pi client restart unavailable")
+func writeCodexAuthFile(codexHome string) error {
+	apiKey := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
+	if apiKey == "" {
+		return nil
 	}
-	if t.client != nil {
-		_ = t.client.Close()
-		t.client = nil
-	}
-	client, err := t.clientFactory(ctx)
+	data, err := json.Marshal(map[string]string{
+		"auth_mode":      "apikey",
+		"OPENAI_API_KEY": apiKey,
+	})
 	if err != nil {
 		return err
 	}
-	t.client = client
-	return nil
+	return os.WriteFile(filepath.Join(codexHome, "auth.json"), append(data, '\n'), 0o600)
+}
+
+func isolatedCodexHomeBase() (string, error) {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil || strings.TrimSpace(cacheDir) == "" {
+		homeDir, homeErr := os.UserHomeDir()
+		if homeErr != nil {
+			return "", err
+		}
+		cacheDir = filepath.Join(homeDir, ".cache")
+	}
+	base := filepath.Join(cacheDir, "openclaw-docs-i18n")
+	if err := os.MkdirAll(base, 0o700); err != nil {
+		return "", err
+	}
+	return base, nil
+}
+
+func docsCodexExecutable() string {
+	if executable := strings.TrimSpace(os.Getenv(envDocsI18nCodexExecutable)); executable != "" {
+		return executable
+	}
+	return "codex"
+}
+
+func buildCodexTranslationPrompt(systemPrompt, message string) string {
+	return strings.TrimSpace(systemPrompt) + "\n\n" +
+		"Translate the exact input below. Return only the translated text, with no code fences, no tool calls, no reasoning, and no commentary.\n\n" +
+		"<openclaw_docs_i18n_input>\n" +
+		message +
+		"\n</openclaw_docs_i18n_input>\n"
+}
+
+func previewCommandOutput(stdout, stderr string) string {
+	combined := strings.TrimSpace(strings.Join([]string{stdout, stderr}, "\n"))
+	if combined == "" {
+		return "no output"
+	}
+	combined = strings.Join(strings.Fields(combined), " ")
+	const limit = 500
+	if len(combined) <= limit {
+		return combined
+	}
+	return combined[:limit] + "..."
 }
 
 func sleepWithContext(ctx context.Context, delay time.Duration) error {
@@ -198,42 +305,11 @@ func sleepWithContext(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-func (t *PiTranslator) Close() {
-	if t.client != nil {
-		_ = t.client.Close()
-	}
-}
-
-type promptRunner interface {
-	Prompt(context.Context, string) (string, error)
-	Stderr() string
-}
-
-func runPrompt(ctx context.Context, client promptRunner, message string) (string, error) {
-	promptCtx, cancel := context.WithTimeout(ctx, docsI18nPromptTimeout())
-	defer cancel()
-
-	result, err := client.Prompt(promptCtx, message)
-	if err != nil {
-		return "", decoratePromptError(err, client.Stderr())
-	}
-	return result, nil
-}
-
-func decoratePromptError(err error, stderr string) error {
-	if err == nil {
-		return nil
-	}
-	trimmed := strings.TrimSpace(stderr)
-	if trimmed == "" {
-		return err
-	}
-	return fmt.Errorf("%w (pi stderr: %s)", err, trimmed)
-}
+func (t *CodexTranslator) Close() {}
 
 func normalizeThinking(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "low", "high":
+	case "low", "medium", "high", "xhigh":
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return "high"

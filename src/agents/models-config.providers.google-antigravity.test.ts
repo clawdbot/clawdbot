@@ -1,6 +1,41 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { normalizeProviderSpecificConfig } from "./models-config.providers.policy.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
+
+vi.mock("../plugins/provider-runtime.js", () => {
+  function normalizeGoogleModelIdForProvider(provider: string, modelId: string): string {
+    if (provider === "google-antigravity") {
+      return /^(gemini-3(?:[.-]1)?-pro)$/.test(modelId) ? `${modelId}-low` : modelId;
+    }
+    if (provider === "google-vertex" && modelId === "gemini-3.1-flash-lite") {
+      return "gemini-3.1-flash-lite-preview";
+    }
+    return modelId;
+  }
+
+  return {
+    applyProviderNativeStreamingUsageCompatWithPlugin: () => undefined,
+    normalizeProviderConfigWithPlugin: (params: {
+      context: { provider: string; providerConfig?: ProviderConfig };
+    }) => {
+      const providerConfig = params.context.providerConfig;
+      if (!providerConfig?.models) {
+        return undefined;
+      }
+      let changed = false;
+      const models = providerConfig.models.map((model) => {
+        const normalizedId = normalizeGoogleModelIdForProvider(params.context.provider, model.id);
+        if (normalizedId === model.id) {
+          return model;
+        }
+        changed = true;
+        return { ...model, id: normalizedId, name: normalizedId };
+      });
+      return changed ? { ...providerConfig, models } : undefined;
+    },
+    resolveProviderConfigApiKeyWithPlugin: () => undefined,
+  };
+});
 
 function buildModel(id: string): NonNullable<ProviderConfig["models"]>[number] {
   return {

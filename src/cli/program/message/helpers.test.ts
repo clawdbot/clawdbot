@@ -96,9 +96,44 @@ describe("runMessageAction", () => {
   it("calls exit(0) after successful message delivery", async () => {
     await runSendAction();
 
-    expect(ensurePluginRegistryLoaded).toHaveBeenCalledOnce();
+    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
+      scope: "configured-channels",
+      onlyChannelIds: ["discord"],
+    });
     expect(exitMock).toHaveBeenCalledOnce();
     expect(exitMock).toHaveBeenCalledWith(0);
+  });
+
+  it("loads configured channel plugins when no target channel is known yet", async () => {
+    await runSendAction({ channel: undefined });
+
+    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
+      scope: "configured-channels",
+    });
+  });
+
+  it("narrows plugin loading from a channel-prefixed target", async () => {
+    await runSendAction({ channel: undefined, target: "telegram:12345" });
+
+    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
+      scope: "configured-channels",
+      onlyChannelIds: ["telegram"],
+    });
+  });
+
+  it("loads configured channel plugins for mixed broadcast target prefixes", async () => {
+    const runMessageAction = createRunMessageAction();
+
+    await expect(
+      runMessageAction("broadcast", {
+        targets: ["discord:channel:1", "telegram:123"],
+        message: "hi",
+      }),
+    ).rejects.toThrow("exit");
+
+    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
+      scope: "configured-channels",
+    });
   });
 
   it("runs gateway_stop hooks before exit when registered", async () => {

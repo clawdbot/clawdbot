@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { buildConfiguredAcpSessionKey } from "./persistent-bindings.types.js";
 
@@ -43,11 +43,8 @@ const baseCfg = {
 
 let resetAcpSessionInPlace: typeof import("./persistent-bindings.lifecycle.js").resetAcpSessionInPlace;
 
-beforeAll(async () => {
-  ({ resetAcpSessionInPlace } = await import("./persistent-bindings.lifecycle.js"));
-});
-
-beforeEach(() => {
+beforeEach(async () => {
+  vi.resetModules();
   managerMocks.resolveSession.mockReset().mockReturnValue({ kind: "none" });
   managerMocks.closeSession.mockReset().mockResolvedValue({
     runtimeClosed: true,
@@ -57,6 +54,7 @@ beforeEach(() => {
   managerMocks.updateSessionRuntimeOptions.mockReset().mockResolvedValue(undefined);
   sessionMetaMocks.readAcpSessionEntry.mockReset().mockReturnValue(undefined);
   resolveMocks.resolveConfiguredAcpBindingSpecBySessionKey.mockReset().mockReturnValue(null);
+  ({ resetAcpSessionInPlace } = await import("./persistent-bindings.lifecycle.js"));
 });
 
 describe("resetAcpSessionInPlace", () => {

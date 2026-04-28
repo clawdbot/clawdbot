@@ -3,6 +3,7 @@ import { replaceConfigFile, resolveGatewayPort } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewayAuthToken } from "../../gateway/auth-token-resolution.js";
+import { resolveConfiguredSecretInputString } from "../../gateway/resolve-configured-secret-input-string.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../daemon-runtime.js";
 import { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } from "../onboard-config.js";
@@ -95,7 +96,21 @@ async function collectGatewayHealthFailureDiagnostics(): Promise<
 
 export async function resolveGatewayHealthProbeToken(
   nextConfig: OpenClawConfig,
-): Promise<{ token?: string; unresolvedRefReason?: string }> {
+): Promise<{ token?: string; password?: string; unresolvedRefReason?: string }> {
+  if (nextConfig.gateway?.auth?.mode === "password") {
+    const resolved = await resolveConfiguredSecretInputString({
+      config: nextConfig,
+      env: process.env,
+      value: nextConfig.gateway.auth.password,
+      path: "gateway.auth.password",
+      unresolvedReasonStyle: "detailed",
+    });
+    return {
+      password: resolved.value,
+      unresolvedRefReason: resolved.unresolvedRefReason,
+    };
+  }
+
   const resolved = await resolveGatewayAuthToken({
     cfg: nextConfig,
     env: process.env,
@@ -269,6 +284,7 @@ export async function runNonInteractiveLocalSetup(params: {
     const probe = await waitForGatewayReachable({
       url: links.wsUrl,
       token: probeAuth.token,
+      password: probeAuth.password,
       deadlineMs: opts.installDaemon
         ? installDaemonGatewayHealthTiming.deadlineMs
         : ATTACH_EXISTING_GATEWAY_HEALTH_DEADLINE_MS,
@@ -318,6 +334,9 @@ export async function runNonInteractiveLocalSetup(params: {
         timeoutMs: opts.installDaemon
           ? installDaemonGatewayHealthTiming.healthCommandTimeoutMs
           : 10_000,
+        config: nextConfig,
+        token: probeAuth.token,
+        password: probeAuth.password,
       },
       runtime,
     );

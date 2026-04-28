@@ -22,6 +22,7 @@ Channel selection:
 - `--channel` required if more than one channel is configured.
 - If exactly one channel is configured, it becomes the default.
 - Values: `discord|googlechat|imessage|matrix|mattermost|msteams|signal|slack|telegram|whatsapp` (Mattermost requires plugin)
+- `openclaw message` resolves the selected channel to its owning plugin when `--channel` or a channel-prefixed target is present; otherwise it loads configured channel plugins for default-channel inference.
 
 Target formats (`--target`):
 

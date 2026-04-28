@@ -1,8 +1,9 @@
+import { resolveOpenClawAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, describe, expect, it } from "vitest";
-import { resolveOpenClawAgentDir } from "../../src/agents/agent-paths.js";
-import { isLiveTestEnabled } from "../../src/agents/live-test-helpers.js";
-import { loadConfig } from "../../src/config/config.js";
-import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import plugin from "./index.js";
 import { getComfyConfig, isComfyCapabilityConfigured } from "./workflow-runtime.js";
 
@@ -31,7 +32,7 @@ function withPluginsEnabled<T>(cfg: T): T {
 }
 
 describeLive("comfy live", () => {
-  let cfg = {} as ReturnType<typeof loadConfig>;
+  let cfg = {} as OpenClawConfig;
   let agentDir = "";
   const imageProviders: Array<{ id: string; generateImage: Function; isConfigured?: Function }> =
     [];
@@ -40,7 +41,7 @@ describeLive("comfy live", () => {
     [];
 
   beforeAll(async () => {
-    cfg = withPluginsEnabled(loadConfig());
+    cfg = withPluginsEnabled(getRuntimeConfig());
     agentDir = resolveOpenClawAgentDir();
     plugin.register(
       createTestPluginApi({

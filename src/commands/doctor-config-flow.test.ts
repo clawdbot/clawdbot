@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempHome } from "../../test/helpers/temp-home.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import {
   getDoctorConfigInputForTest,
@@ -156,6 +156,11 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
     }
 
     migrateThreadBinding(next.session, changes, "session");
+    const sessionMaintenance = asRecord(asRecord(next.session)?.maintenance);
+    if (sessionMaintenance && "rotateBytes" in sessionMaintenance) {
+      delete sessionMaintenance.rotateBytes;
+      changes.push("Removed deprecated session.maintenance.rotateBytes.");
+    }
     const channels = asRecord(next.channels);
     for (const [channelId, channelRaw] of Object.entries(channels ?? {})) {
       if (channelId === "defaults") {
@@ -331,6 +336,14 @@ vi.mock("../config/legacy.js", () => {
           issues,
           ["session", "threadBindings", "ttlHours"],
           'session.threadBindings.ttlHours is legacy; use session.threadBindings.idleHours. Run "openclaw doctor --fix".',
+        );
+      }
+      const sessionMaintenance = asRecord(asRecord(root.session)?.maintenance);
+      if (sessionMaintenance && "rotateBytes" in sessionMaintenance) {
+        addIssue(
+          issues,
+          ["session", "maintenance"],
+          'session.maintenance.rotateBytes is deprecated and ignored; run "openclaw doctor --fix" to remove it.',
         );
       }
       const xSearch = asRecord(asRecord(asRecord(root.tools)?.web)?.x_search);
@@ -1563,6 +1576,11 @@ describe("doctor config flow", () => {
         bridge: { bind: "auto" },
         gateway: { auth: { mode: "token", token: "ok", extra: true } },
         agents: { list: [{ id: "pi" }] },
+        session: {
+          maintenance: {
+            rotateBytes: "10mb",
+          },
+        },
         browser: {
           relayBindHost: "0.0.0.0",
           profiles: {
@@ -2304,6 +2322,9 @@ describe("doctor config flow", () => {
         bind?: string;
       };
       session?: {
+        maintenance?: {
+          rotateBytes?: unknown;
+        };
         threadBindings?: {
           idleHours?: number;
           ttlHours?: number;
@@ -2348,6 +2369,7 @@ describe("doctor config flow", () => {
       every: "30m",
     });
     expect(cfg.gateway?.bind).toBe("lan");
+    expect(cfg.session?.maintenance?.rotateBytes).toBeUndefined();
     expect(cfg.session?.threadBindings).toMatchObject({
       idleHours: 24,
     });
@@ -2414,6 +2436,9 @@ describe("doctor config flow", () => {
             },
           },
           session: {
+            maintenance: {
+              rotateBytes: "10mb",
+            },
             threadBindings: {
               ttlHours: 24,
             },
@@ -2454,6 +2479,8 @@ describe("doctor config flow", () => {
       expect(legacyMessages).toContain("does not rewrite this shape automatically");
       expect(legacyMessages).toContain("session.threadBindings.ttlHours");
       expect(legacyMessages).toContain("session.threadBindings.idleHours");
+      expect(legacyMessages).toContain("session.maintenance.rotateBytes");
+      expect(legacyMessages).toContain("deprecated and ignored");
       expect(legacyMessages).toContain("channels.<id>.threadBindings.ttlHours");
       expect(legacyMessages).toContain("channels.<id>.threadBindings.idleHours");
       expect(legacyMessages).toContain("talk:");

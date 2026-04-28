@@ -84,7 +84,7 @@
       "payloadValid": true,
       "expectedSelection": {
         "provider": "elevenlabs",
-        "normalizedPayload": false,
+        "normalizedPayload": true,
         "voiceId": "voice-legacy",
         "apiKey": "xxxxx"
       },

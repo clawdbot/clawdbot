@@ -12,6 +12,12 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import type { GatewayClient } from "./client.js";
 
 vi.mock("../infra/update-runner.js", () => ({
+  resolveUpdateInstallSurface: vi.fn(async () => ({
+    kind: "git",
+    mode: "git",
+    root: "/repo",
+    packageRoot: "/repo",
+  })),
   runGatewayUpdate: vi.fn(async () => ({
     status: "ok",
     mode: "git",

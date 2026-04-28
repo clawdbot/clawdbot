@@ -168,6 +168,9 @@ class VoiceWakeManager(
         list.firstOrNull()?.let(::handleTranscription)
       }
 
-      override fun onEvent(eventType: Int, params: Bundle?) {}
+      override fun onEvent(
+        eventType: Int,
+        params: Bundle?,
+      ) {}
     }
 }

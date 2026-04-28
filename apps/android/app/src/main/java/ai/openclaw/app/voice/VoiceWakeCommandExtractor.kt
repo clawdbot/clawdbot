@@ -1,7 +1,10 @@
 package ai.openclaw.app.voice
 
 object VoiceWakeCommandExtractor {
-  fun extractCommand(text: String, triggerWords: List<String>): String? {
+  fun extractCommand(
+    text: String,
+    triggerWords: List<String>,
+  ): String? {
     val raw = text.trim()
     if (raw.isEmpty()) return null
 
@@ -16,7 +19,11 @@ object VoiceWakeCommandExtractor {
     // Match: "<anything> <trigger><punct/space> <command>"
     val regex = Regex("(?i)(?:^|\\s)($alternation)\\b[\\s\\p{Punct}]*([\\s\\S]+)$")
     val match = regex.find(raw) ?: return null
-    val extracted = match.groupValues.getOrNull(2)?.trim().orEmpty()
+    val extracted =
+      match.groupValues
+        .getOrNull(2)
+        ?.trim()
+        .orEmpty()
     if (extracted.isEmpty()) return null
 
     val cleaned = extracted.trimStart { it.isWhitespace() || it.isPunctuation() }.trim()
@@ -25,8 +32,8 @@ object VoiceWakeCommandExtractor {
   }
 }
 
-private fun Char.isPunctuation(): Boolean {
-  return when (Character.getType(this)) {
+private fun Char.isPunctuation(): Boolean =
+  when (Character.getType(this)) {
     Character.CONNECTOR_PUNCTUATION.toInt(),
     Character.DASH_PUNCTUATION.toInt(),
     Character.START_PUNCTUATION.toInt(),
@@ -37,4 +44,3 @@ private fun Char.isPunctuation(): Boolean {
     -> true
     else -> false
   }
-}

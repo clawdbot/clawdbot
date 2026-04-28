@@ -22,7 +22,6 @@ export type ResolvedSessionMaintenanceConfigRuntime = {
   mode: SessionMaintenanceMode;
   pruneAfterMs: number;
   maxEntries: number;
-  rotateBytes: number;
   resetArchiveRetentionMs: number | null;
   maxDiskBytes: number | null;
   highWaterBytes: number | null;
@@ -70,4 +69,5 @@ export type UpdateLastRoute = (params: {
   deliveryContext?: DeliveryContext;
   ctx?: MsgContext;
   groupResolution?: GroupKeyResolution | null;
-}) => Promise<SessionEntry>;
+  createIfMissing?: boolean;
+}) => Promise<SessionEntry | null>;

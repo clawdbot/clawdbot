@@ -8,7 +8,7 @@ import type {
   OnboardOptions,
   ResetScope,
 } from "../commands/onboard-types.js";
-import { createConfigIO, resolveGatewayPort, writeConfigFile } from "../config/config.js";
+import { createConfigIO, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -57,10 +57,13 @@ function loadModelPickerModule(): Promise<ModelPickerModule> {
 async function writeWizardConfigFile(config: OpenClawConfig): Promise<OpenClawConfig> {
   const committed = await commitConfigWriteWithPendingPluginInstalls({
     nextConfig: config,
-    commit: async (nextConfig, writeOptions) =>
-      writeOptions
-        ? await writeConfigFile(nextConfig, writeOptions)
-        : await writeConfigFile(nextConfig),
+    commit: async (nextConfig, writeOptions) => {
+      await replaceConfigFile({
+        nextConfig,
+        ...(writeOptions ? { writeOptions } : {}),
+        afterWrite: { mode: "auto" },
+      });
+    },
   });
   return committed.config;
 }
@@ -323,7 +326,7 @@ export async function runSetupWizard(
       detections: migrationDetections,
       prompter,
       runtime,
-      writeConfigFile: writeWizardConfigFile,
+      commitConfigFile: writeWizardConfigFile,
     });
     return;
   }

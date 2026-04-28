@@ -48,6 +48,12 @@ const OMITTED_PRIVATE_QA_BUNDLED_PLUGIN_ROOTS = new Set([
   "dist/extensions/qa-matrix",
 ]);
 
+export type NpmGlobalPrefixLayout = {
+  prefix: string;
+  globalRoot: string;
+  binDir: string;
+};
+
 function normalizePackageTarget(value: string): string {
   return value.trim();
 }
@@ -379,6 +385,52 @@ function inferNpmPrefixFromPackageRoot(pkgRoot?: string | null): string | null {
   return null;
 }
 
+export function resolveNpmGlobalPrefixLayoutFromGlobalRoot(
+  globalRoot?: string | null,
+): NpmGlobalPrefixLayout | null {
+  const trimmed = globalRoot?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const normalized = path.resolve(trimmed);
+  if (path.basename(normalized) !== "node_modules") {
+    return null;
+  }
+  const parentDir = path.dirname(normalized);
+  if (path.basename(parentDir) === "lib") {
+    const prefix = path.dirname(parentDir);
+    return {
+      prefix,
+      globalRoot: normalized,
+      binDir: path.join(prefix, "bin"),
+    };
+  }
+  if (process.platform === "win32") {
+    return {
+      prefix: parentDir,
+      globalRoot: normalized,
+      binDir: parentDir,
+    };
+  }
+  return null;
+}
+
+export function resolveNpmGlobalPrefixLayoutFromPrefix(prefix: string): NpmGlobalPrefixLayout {
+  const resolvedPrefix = path.resolve(prefix);
+  if (process.platform === "win32") {
+    return {
+      prefix: resolvedPrefix,
+      globalRoot: path.join(resolvedPrefix, "node_modules"),
+      binDir: resolvedPrefix,
+    };
+  }
+  return {
+    prefix: resolvedPrefix,
+    globalRoot: path.join(resolvedPrefix, "lib", "node_modules"),
+    binDir: path.join(resolvedPrefix, "bin"),
+  };
+}
+
 function resolvePreferredNpmCommand(pkgRoot?: string | null): string | null {
   const prefix = inferNpmPrefixFromPackageRoot(pkgRoot);
   if (!prefix) {
@@ -550,6 +602,7 @@ export function globalInstallArgs(
   managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
   spec: string,
   pkgRoot?: string | null,
+  installPrefix?: string | null,
 ): string[] {
   const resolved = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
   if (resolved.manager === "pnpm") {
@@ -558,19 +611,34 @@ export function globalInstallArgs(
   if (resolved.manager === "bun") {
     return [resolved.command, "add", "-g", spec];
   }
-  return [resolved.command, "i", "-g", spec, ...NPM_GLOBAL_INSTALL_QUIET_FLAGS];
+  return [
+    resolved.command,
+    "i",
+    "-g",
+    ...(installPrefix ? ["--prefix", installPrefix] : []),
+    spec,
+    ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
+  ];
 }
 
 export function globalInstallFallbackArgs(
   managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
   spec: string,
   pkgRoot?: string | null,
+  installPrefix?: string | null,
 ): string[] | null {
   const resolved = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
   if (resolved.manager !== "npm") {
     return null;
   }
-  return [resolved.command, "i", "-g", spec, ...NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS];
+  return [
+    resolved.command,
+    "i",
+    "-g",
+    ...(installPrefix ? ["--prefix", installPrefix] : []),
+    spec,
+    ...NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS,
+  ];
 }
 
 export async function cleanupGlobalRenameDirs(params: {

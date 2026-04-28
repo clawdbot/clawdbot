@@ -1,5 +1,8 @@
 {
   "id": "open-prose",
+  "activation": {
+    "onStartup": false
+  },
   "name": "OpenProse",
   "description": "OpenProse VM skill pack with a /prose slash command.",
   "skills": ["./skills"],

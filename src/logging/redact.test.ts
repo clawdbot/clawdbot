@@ -61,6 +61,33 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("gog gmail watch serve --hook-token abcdef…ghij");
   });
 
+  it("masks sensitive URL query parameters", () => {
+    const input = "connect https://user.example/sync?access_token=abcdef1234567890ghij&safe=value";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("connect https://user.example/sync?access_token=abcdef…ghij&safe=value");
+  });
+
+  it("masks short URL query tokens fully", () => {
+    const input = "cdp=https://browserless.example.com/?token=supersecret123";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("cdp=https://browserless.example.com/?token=***");
+  });
+
+  it("masks standalone lowercase token assignments in diagnostic output", () => {
+    const input = "matrix access_token=abcdef1234567890ghij next";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("matrix access_token=abcdef…ghij next");
+  });
+
   it("masks JSON fields", () => {
     const input = '{"token":"abcdef1234567890ghij"}';
     const output = redactSensitiveText(input, {
@@ -77,6 +104,15 @@ describe("redactSensitiveText", () => {
       patterns: defaults,
     });
     expect(output).toBe("Authorization: Bearer abcdef…ghij");
+  });
+
+  it("masks URL query tokens", () => {
+    const input = "GET /_matrix/client/v3/sync?access_token=abcdef1234567890ghij";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("GET /_matrix/client/v3/sync?access_token=abcdef…ghij");
   });
 
   it("masks bot-style tokens", () => {
@@ -105,6 +141,33 @@ describe("redactSensitiveText", () => {
       patterns: defaults,
     });
     expect(output).toBe("TOKEN=***");
+  });
+
+  it("does not redact lowercase key diagnostics", () => {
+    const input = 'agents.defaults: Unrecognized key: "llm"';
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe(input);
+  });
+
+  it("masks sensitive URL query params while preserving non-sensitive params", () => {
+    const input = "GET /_matrix/client/v3/sync?access_token=abcdef1234567890ghij&since=123";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("GET /_matrix/client/v3/sync?access_token=abcdef…ghij&since=123");
+  });
+
+  it("treats sensitive URL query param names case-insensitively", () => {
+    const input = "connect https://gateway.example/ws?Access-Token=short-token&ok=1";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("connect https://gateway.example/ws?Access-Token=***&ok=1");
   });
 
   it("redacts private key blocks", () => {

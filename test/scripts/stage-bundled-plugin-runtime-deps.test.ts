@@ -155,6 +155,31 @@ describe("stageBundledPluginRuntimeDeps", () => {
     );
   });
 
+  it("forces fallback runtime installs off inherited npm dry-run mode", () => {
+    const spawnSyncImpl = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
+
+    stageBundledPluginRuntimeDepsTesting.runNpmInstall({
+      cwd: "/tmp/openclaw-runtime-deps",
+      npmRunner: {
+        command: "npm",
+        args: ["install"],
+        env: { PATH: "/usr/bin", npm_config_dry_run: "true" },
+        shell: false,
+      },
+      spawnSyncImpl,
+    });
+
+    expect(spawnSyncImpl).toHaveBeenCalledWith(
+      "npm",
+      ["install"],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          npm_config_dry_run: "false",
+        }),
+      }),
+    );
+  });
+
   it("skips restaging when runtime deps stamp matches the sanitized manifest", () => {
     const { pluginDir, repoRoot } = createBundledPluginFixture({
       packageJson: {

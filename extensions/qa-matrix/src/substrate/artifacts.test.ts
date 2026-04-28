@@ -99,6 +99,58 @@ describe("matrix observed event artifacts", () => {
     ]);
   });
 
+  it("keeps approval summaries in redacted Matrix observed-event artifacts", () => {
+    expect(
+      buildMatrixQaObservedEventsArtifact({
+        includeContent: false,
+        observedEvents: [
+          {
+            kind: "message",
+            roomId: "!room:matrix-qa.test",
+            eventId: "$approval",
+            sender: "@sut:matrix-qa.test",
+            type: "m.room.message",
+            body: "secret command body",
+            approval: {
+              id: "approval-1",
+              kind: "exec",
+              state: "pending",
+              type: "approval.request",
+              version: 1,
+              allowedDecisions: ["allow-once", "deny"],
+              hasCommandText: true,
+              commandTextPreview: "printf MATRIX_QA",
+            },
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        kind: "message",
+        roomId: "!room:matrix-qa.test",
+        eventId: "$approval",
+        sender: "@sut:matrix-qa.test",
+        type: "m.room.message",
+        originServerTs: undefined,
+        msgtype: undefined,
+        membership: undefined,
+        relatesTo: undefined,
+        mentions: undefined,
+        reaction: undefined,
+        approval: {
+          id: "approval-1",
+          kind: "exec",
+          state: "pending",
+          type: "approval.request",
+          version: 1,
+          allowedDecisions: ["allow-once", "deny"],
+          hasCommandText: true,
+          commandTextPreview: "printf MATRIX_QA",
+        },
+      },
+    ]);
+  });
+
   it("keeps redaction metadata while still stripping Matrix event content", () => {
     expect(
       buildMatrixQaObservedEventsArtifact({

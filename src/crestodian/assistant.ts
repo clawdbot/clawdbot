@@ -33,6 +33,15 @@ export type CrestodianAssistantPlanner = (params: {
 
 type RunCliAgentFn = typeof import("../agents/cli-runner.js").runCliAgent;
 type RunEmbeddedPiAgentFn = typeof import("../agents/pi-embedded.js").runEmbeddedPiAgent;
+type ReadConfigFileSnapshotFn = typeof readConfigFileSnapshot;
+type PrepareSimpleCompletionModelForAgentFn = typeof prepareSimpleCompletionModelForAgent;
+type CompleteWithPreparedSimpleCompletionModelFn = typeof completeWithPreparedSimpleCompletionModel;
+
+export type CrestodianConfiguredModelPlannerDeps = {
+  readConfigFileSnapshot?: ReadConfigFileSnapshotFn;
+  prepareSimpleCompletionModelForAgent?: PrepareSimpleCompletionModelForAgentFn;
+  completeWithPreparedSimpleCompletionModel?: CompleteWithPreparedSimpleCompletionModelFn;
+};
 
 export type CrestodianLocalRuntimePlannerDeps = {
   runCliAgent?: RunCliAgentFn;
@@ -41,10 +50,13 @@ export type CrestodianLocalRuntimePlannerDeps = {
   removeTempDir?: (dir: string) => Promise<void>;
 };
 
+export type CrestodianPlannerDeps = CrestodianConfiguredModelPlannerDeps &
+  CrestodianLocalRuntimePlannerDeps;
+
 export async function planCrestodianCommand(params: {
   input: string;
   overview: CrestodianOverview;
-  deps?: CrestodianLocalRuntimePlannerDeps;
+  deps?: CrestodianPlannerDeps;
 }): Promise<CrestodianAssistantPlan | null> {
   const configured = await planCrestodianCommandWithConfiguredModel(params);
   if (configured) {
@@ -56,18 +68,21 @@ export async function planCrestodianCommand(params: {
 export async function planCrestodianCommandWithConfiguredModel(params: {
   input: string;
   overview: CrestodianOverview;
+  deps?: CrestodianConfiguredModelPlannerDeps;
 }): Promise<CrestodianAssistantPlan | null> {
   const input = params.input.trim();
   if (!input) {
     return null;
   }
-  const snapshot = await readConfigFileSnapshot();
+  const snapshot = await (params.deps?.readConfigFileSnapshot ?? readConfigFileSnapshot)();
   if (!snapshot.exists || !snapshot.valid) {
     return null;
   }
   const cfg = snapshot.runtimeConfig ?? snapshot.config;
   const agentId = resolveDefaultAgentId(cfg);
-  const prepared = await prepareSimpleCompletionModelForAgent({
+  const prepared = await (
+    params.deps?.prepareSimpleCompletionModelForAgent ?? prepareSimpleCompletionModelForAgent
+  )({
     cfg,
     agentId,
     allowMissingApiKeyModes: ["aws-sdk"],
@@ -79,7 +94,10 @@ export async function planCrestodianCommandWithConfiguredModel(params: {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), CRESTODIAN_ASSISTANT_TIMEOUT_MS);
   try {
-    const response = await completeWithPreparedSimpleCompletionModel({
+    const response = await (
+      params.deps?.completeWithPreparedSimpleCompletionModel ??
+      completeWithPreparedSimpleCompletionModel
+    )({
       model: prepared.model,
       auth: prepared.auth,
       context: {

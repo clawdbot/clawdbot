@@ -13,6 +13,7 @@ import { withTempDir } from "../test-helpers/temp-dir.js";
 import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "./flows.js";
 
 vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: vi.fn(() => ({})),
   loadConfig: vi.fn(() => ({})),
 }));
 

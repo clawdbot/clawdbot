@@ -266,6 +266,104 @@ describe("config plugin validation", () => {
     }
   });
 
+  it("warns instead of failing for stale channel config backed by missing plugin refs", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      channels: {
+        "missing-chat": { token: "stale" },
+      },
+      plugins: {
+        allow: ["missing-chat"],
+        entries: { "missing-chat": { enabled: true } },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.warnings).toContainEqual({
+      path: "channels.missing-chat",
+      message:
+        "unknown channel id: missing-chat (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)",
+    });
+    expect(res.warnings).toContainEqual({
+      path: "plugins.allow",
+      message:
+        "plugin not found: missing-chat (stale config entry ignored; remove it from plugins config)",
+    });
+    expect(res.warnings).toContainEqual({
+      path: "plugins.entries.missing-chat",
+      message:
+        "plugin not found: missing-chat (stale config entry ignored; remove it from plugins config)",
+    });
+  });
+
+  it("keeps unknown channel typos fatal when there is no stale plugin evidence", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      channels: {
+        telegarm: { botToken: "typo" },
+      },
+      plugins: {
+        allow: ["telegram"],
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expect(res.issues).toContainEqual({
+      path: "channels.telegarm",
+      message: "unknown channel id: telegarm",
+    });
+    expect(res.warnings).not.toContainEqual(expect.objectContaining({ path: "channels.telegarm" }));
+  });
+
+  it("uses persisted installed-plugin records as stale channel evidence", async () => {
+    const installedPluginIndexPath = path.join(suiteHome, ".openclaw", "plugins", "installs.json");
+    await mkdirSafe(path.dirname(installedPluginIndexPath));
+    await fs.writeFile(
+      installedPluginIndexPath,
+      JSON.stringify(
+        {
+          installRecords: {
+            "missing-sms": {
+              source: "npm",
+              spec: "missing-sms@1.0.0",
+              installedAt: "2026-04-12T00:00:00.000Z",
+            },
+          },
+          plugins: [],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    try {
+      const res = validateInSuite({
+        agents: { list: [{ id: "pi" }] },
+        channels: {
+          "missing-sms": { token: "stale" },
+        },
+      });
+
+      expect(res.ok).toBe(true);
+      if (!res.ok) {
+        return;
+      }
+      expect(res.warnings).toContainEqual({
+        path: "channels.missing-sms",
+        message:
+          "unknown channel id: missing-sms (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)",
+      });
+    } finally {
+      await fs.rm(installedPluginIndexPath, { force: true });
+    }
+  });
+
   it("warns with actionable guidance when a runtime command name is used in plugins.allow", async () => {
     const res = validateInSuite({
       agents: { list: [{ id: "pi" }] },

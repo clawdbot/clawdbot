@@ -24,6 +24,7 @@ const isWin = process.platform === "win32";
 
 const describeNonWin = isWin ? describe.skip : describe;
 const describeWin = isWin ? describe : describe.skip;
+const parseOpenClawChannelsLoginShellCommand = __testing.parseOpenClawChannelsLoginShellCommand;
 const validateExecScriptPreflight = __testing.validateScriptFileForShellBleed;
 const createPreflightTool = () =>
   createExecTool({ host: "gateway", security: "full", ask: "on-miss" });
@@ -65,6 +66,35 @@ async function expectSymlinkSwapDuringPreflightToAvoidErrors(params: {
     expect(swapped).toBe(true);
   });
 }
+
+describe("exec interactive OpenClaw channel login guard", () => {
+  it("recognizes direct and package-runner channel login commands before execution", () => {
+    expect(
+      parseOpenClawChannelsLoginShellCommand("openclaw channels login --channel whatsapp"),
+    ).toBe(true);
+    expect(
+      parseOpenClawChannelsLoginShellCommand(
+        "pnpm exec openclaw channels login --channel whatsapp --verbose",
+      ),
+    ).toBe(true);
+    expect(parseOpenClawChannelsLoginShellCommand("openclaw channels status --deep")).toBe(false);
+  });
+
+  it("blocks interactive channel login commands from exec", async () => {
+    const tool = createPreflightTool();
+
+    await expect(
+      tool.execute("call-openclaw-channel-login", {
+        command: "openclaw channels login --channel whatsapp --verbose",
+      }),
+    ).rejects.toThrow(/exec cannot run interactive OpenClaw channel login commands/);
+    await expect(
+      tool.execute("call-wrapped-openclaw-channel-login", {
+        command: "sudo -u openclaw bash -lc 'openclaw channels login --channel whatsapp'",
+      }),
+    ).rejects.toThrow(/exec cannot run interactive OpenClaw channel login commands/);
+  });
+});
 
 describeNonWin("exec script preflight", () => {
   it("blocks shell env var injection tokens in python scripts before execution", async () => {

@@ -1,20 +1,7 @@
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("../../../../src/media/mime.js", () => ({
-  detectMime: async (opts: { filePath?: string }) => {
-    if (opts.filePath?.endsWith(".png")) {
-      return "image/png";
-    }
-    if (opts.filePath?.endsWith(".wav")) {
-      return "audio/wav";
-    }
-    return undefined;
-  },
-}));
-
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   buildFileEntry,
   buildMultimodalChunkForIndexing,

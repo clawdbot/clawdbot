@@ -1,11 +1,11 @@
 package ai.openclaw.app.ui
 
-import java.util.Base64
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import java.util.Base64
 
 @RunWith(RobolectricTestRunner::class)
 class GatewayConfigResolverTest {
@@ -468,7 +468,5 @@ class GatewayConfigResolverTest {
     assertEquals(true, resolved?.tls)
   }
 
-  private fun encodeSetupCode(payloadJson: String): String {
-    return Base64.getUrlEncoder().withoutPadding().encodeToString(payloadJson.toByteArray(Charsets.UTF_8))
-  }
+  private fun encodeSetupCode(payloadJson: String): String = Base64.getUrlEncoder().withoutPadding().encodeToString(payloadJson.toByteArray(Charsets.UTF_8))
 }

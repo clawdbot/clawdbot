@@ -59,7 +59,14 @@ class ContactsHandlerTest : NodeHandlerRobolectricTest() {
     val payload = Json.parseToJsonElement(result.payloadJson ?: error("missing payload")).jsonObject
     val contacts = payload.getValue("contacts").jsonArray
     assertEquals(1, contacts.size)
-    assertEquals("Ada Lovelace", contacts.first().jsonObject.getValue("displayName").jsonPrimitive.content)
+    assertEquals(
+      "Ada Lovelace",
+      contacts
+        .first()
+        .jsonObject
+        .getValue("displayName")
+        .jsonPrimitive.content,
+    )
   }
 
   @Test
@@ -112,9 +119,15 @@ private class FakeContactsDataSource(
 
   override fun hasWritePermission(context: Context): Boolean = canWrite
 
-  override fun search(context: Context, request: ContactsSearchRequest): List<ContactRecord> = searchResults
+  override fun search(
+    context: Context,
+    request: ContactsSearchRequest,
+  ): List<ContactRecord> = searchResults
 
-  override fun add(context: Context, request: ContactsAddRequest): ContactRecord {
+  override fun add(
+    context: Context,
+    request: ContactsAddRequest,
+  ): ContactRecord {
     addCalls += 1
     return addResult
   }

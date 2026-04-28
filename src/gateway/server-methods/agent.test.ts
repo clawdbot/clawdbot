@@ -77,7 +77,7 @@ vi.mock("../../config/config.js", async () => {
     await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
   return {
     ...actual,
-    loadConfig: () => mocks.loadConfigReturn,
+    getRuntimeConfig: () => mocks.loadConfigReturn,
   };
 });
 
@@ -154,6 +154,7 @@ const makeContext = (): GatewayRequestContext =>
     logGateway: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     broadcastToConnIds: vi.fn(),
     getSessionEventSubscriberConnIds: () => new Set(),
+    getRuntimeConfig: () => mocks.loadConfigReturn,
   }) as unknown as GatewayRequestContext;
 
 type AgentHandlerArgs = Parameters<typeof agentHandlers.agent>[0];
@@ -405,6 +406,94 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.acp).toEqual(existingAcpMeta);
   });
 
+  it("tags newly-created plugin runtime sessions with the plugin owner", async () => {
+    const sessionKey = "agent:main:dreaming-narrative-light-workspace-1";
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: undefined,
+      canonicalKey: sessionKey,
+    });
+
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {};
+      const result = await updater(store);
+      capturedEntry = store[sessionKey] as Record<string, unknown>;
+      return result;
+    });
+
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "write a narrative",
+        sessionKey,
+        idempotencyKey: "plugin-runtime-owner",
+      },
+      {
+        client: {
+          internal: {
+            pluginRuntimeOwnerId: "memory-core",
+          },
+        } as never,
+      },
+    );
+
+    expect(mocks.updateSessionStore).toHaveBeenCalled();
+    expect(capturedEntry?.pluginOwnerId).toBe("memory-core");
+  });
+
+  it("does not claim stale pre-existing sessions for plugin runtime cleanup", async () => {
+    const sessionKey = "agent:main:existing-user-session";
+    const existingEntry = {
+      sessionId: "stale-session",
+      updatedAt: 1,
+      pluginOwnerId: "other-plugin",
+    };
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: existingEntry,
+      canonicalKey: sessionKey,
+    });
+
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        [sessionKey]: { ...existingEntry },
+      };
+      const result = await updater(store);
+      capturedEntry = store[sessionKey] as Record<string, unknown>;
+      return result;
+    });
+
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "write a narrative",
+        sessionKey,
+        idempotencyKey: "plugin-runtime-existing-owner",
+      },
+      {
+        client: {
+          internal: {
+            pluginRuntimeOwnerId: "memory-core",
+          },
+        } as never,
+      },
+    );
+
+    expect(capturedEntry?.pluginOwnerId).toBe("other-plugin");
+  });
+
   it("forwards provider and model overrides for admin-scoped callers", async () => {
     primeMainAgentRun();
 
@@ -432,6 +521,29 @@ describe("gateway agent handler", () => {
       expect.objectContaining({
         provider: "anthropic",
         model: "claude-haiku-4-5",
+      }),
+    );
+  });
+
+  it("forwards explicit ACP turn source markers", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "bootstrap ACP child",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        acpTurnSource: "manual_spawn",
+        idempotencyKey: "test-acp-turn-source",
+      },
+      { reqId: "test-acp-turn-source" },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const lastCall = mocks.agentCommand.mock.calls.at(-1);
+    expect(lastCall?.[0]).toEqual(
+      expect.objectContaining({
+        acpTurnSource: "manual_spawn",
       }),
     );
   });
@@ -585,6 +697,7 @@ describe("gateway agent handler", () => {
           logGateway: { info: vi.fn(), error: vi.fn() },
           broadcastToConnIds,
           getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+          getRuntimeConfig: () => mocks.loadConfigReturn,
         } as unknown as GatewayRequestContext,
       },
     );
@@ -666,6 +779,7 @@ describe("gateway agent handler", () => {
           logGateway: { info: vi.fn(), error: vi.fn() },
           broadcastToConnIds,
           getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+          getRuntimeConfig: () => mocks.loadConfigReturn,
         } as unknown as GatewayRequestContext,
       },
     );
@@ -715,6 +829,45 @@ describe("gateway agent handler", () => {
 
     const callArgs = mocks.agentCommand.mock.calls[0][0];
     expect(callArgs.message).toBe("[Wed 2026-01-28 20:30 EST] Is it the weekend?");
+
+    resetTimeConfig();
+  });
+
+  it("keeps model-run gateway prompts undecorated and forwards raw-run flags", async () => {
+    setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
+    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
+
+    await invokeAgent(
+      {
+        message: "Reply exactly: pong",
+        agentId: "main",
+        provider: "ollama",
+        model: "llama3.2:latest",
+        modelRun: true,
+        promptMode: "none",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-model-run-raw",
+      },
+      {
+        reqId: "model-run-raw",
+        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+      },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+
+    const callArgs = mocks.agentCommand.mock.calls[0][0] as {
+      message?: string;
+      modelRun?: boolean;
+      promptMode?: string;
+    };
+    expect(callArgs).toEqual(
+      expect.objectContaining({
+        message: "Reply exactly: pong",
+        modelRun: true,
+        promptMode: "none",
+      }),
+    );
 
     resetTimeConfig();
   });
@@ -807,6 +960,7 @@ describe("gateway agent handler", () => {
           logGateway: { info: logInfo, error: vi.fn() },
           broadcastToConnIds: vi.fn(),
           getSessionEventSubscriberConnIds: () => new Set(),
+          getRuntimeConfig: () => mocks.loadConfigReturn,
         } as unknown as GatewayRequestContext,
       },
     );
@@ -847,6 +1001,60 @@ describe("gateway agent handler", () => {
       undefined,
       expect.objectContaining({
         message: expect.stringContaining("invalid agent params"),
+      }),
+    );
+  });
+
+  it.each(
+    (["channel", "replyChannel"] as const).flatMap((field) =>
+      (["heartbeat", "cron", "webhook"] as const).map((channel) => [field, channel] as const),
+    ),
+  )("accepts internal non-delivery %s hint %s", async (field, channel) => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "spawn from internal source",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        [field]: channel,
+        idempotencyKey: `internal-channel-${field}-${channel}`,
+      } as AgentParams,
+      { reqId: `internal-channel-${field}-${channel}-1`, respond },
+    );
+
+    const rejection = respond.mock.calls.find(
+      (call: unknown[]) =>
+        call[0] === false &&
+        typeof (call[2] as { message?: string } | undefined)?.message === "string" &&
+        (call[2] as { message: string }).message.includes("unknown channel"),
+    );
+    expect(rejection).toBeUndefined();
+  });
+
+  it.each(["channel", "replyChannel"] as const)("rejects unknown %s hints", async (field) => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "bogus channel",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        [field]: "not-a-real-channel",
+        idempotencyKey: `unknown-${field}`,
+      } as AgentParams,
+      { reqId: `unknown-${field}-1`, respond },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("unknown channel: not-a-real-channel"),
       }),
     );
   });

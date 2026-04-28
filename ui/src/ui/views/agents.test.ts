@@ -1,5 +1,5 @@
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { renderAgentFiles } from "./agents-panels-status-files.ts";
 import { renderAgents, type AgentsProps } from "./agents.ts";
 
@@ -123,6 +123,73 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
 }
 
 describe("renderAgents", () => {
+  it("remounts overview model controls when switching selected agents", async () => {
+    const container = document.createElement("div");
+    const configForm = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-6": {},
+            "openai/gpt-5.4": {},
+          },
+        },
+        list: [
+          { id: "alpha", model: { primary: "anthropic/claude-sonnet-4-6" } },
+          { id: "beta", model: { primary: "openai/gpt-5.4" } },
+        ],
+      },
+    };
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "beta",
+          config: {
+            form: configForm,
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+        }),
+      ),
+      container,
+    );
+
+    const betaSelect = await vi.waitFor(() => {
+      const select = container.querySelector<HTMLSelectElement>(".agent-model-fields select");
+      expect(
+        Array.from(select?.options ?? []).some((option) => option.value === "openai/gpt-5.4"),
+      ).toBe(true);
+      return select;
+    });
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "alpha",
+          config: {
+            form: configForm,
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+        }),
+      ),
+      container,
+    );
+
+    const alphaSelect = await vi.waitFor(() => {
+      const select = container.querySelector<HTMLSelectElement>(".agent-model-fields select");
+      expect(
+        Array.from(select?.options ?? []).some(
+          (option) => option.value === "anthropic/claude-sonnet-4-6",
+        ),
+      ).toBe(true);
+      return select;
+    });
+    expect(alphaSelect).not.toBe(betaSelect);
+  });
+
   it("shows the skills count only for the selected agent's report", async () => {
     const container = document.createElement("div");
     render(

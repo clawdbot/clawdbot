@@ -137,6 +137,9 @@ describe("delivery context helpers", () => {
     expect(
       deliveryContextKey({ channel: "demo-channel", to: "channel:C1", threadId: "123.456" }),
     ).toBe("demo-channel|channel:C1||123.456");
+    expect(deliveryContextKey({ channel: "telegram", to: "-100123", threadId: 42.9 })).toBe(
+      "telegram|-100123||42",
+    );
   });
 
   it("formats generic fallback conversation targets as channels", () => {

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const runtimeModule = await import("./runtime.js");
@@ -97,6 +97,52 @@ describe("handleDiscordMessageAction", () => {
       expect.any(Object),
       expect.any(Object),
     );
+  });
+
+  it("falls back to Discord toolContext.currentChannelId for sends", async () => {
+    await handleDiscordMessageAction({
+      action: "send",
+      params: {
+        message: "hello",
+      },
+      cfg: {
+        channels: { discord: { token: "tok" } },
+      } as OpenClawConfig,
+      toolContext: {
+        currentChannelProvider: "discord",
+        currentChannelId: "channel:123",
+      },
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        to: "channel:123",
+        content: "hello",
+      }),
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
+  it("does not use another provider's current target for Discord sends", async () => {
+    await expect(
+      handleDiscordMessageAction({
+        action: "send",
+        params: {
+          message: "hello",
+        },
+        cfg: {
+          channels: { discord: { token: "tok" } },
+        } as OpenClawConfig,
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "channel:123",
+        },
+      }),
+    ).rejects.toThrow(/channel target is required/i);
+
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
   it("does not use another provider's current target for Discord reactions", async () => {

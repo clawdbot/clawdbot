@@ -266,14 +266,14 @@ describe("gateway probe endpoints", () => {
   });
 
   it("serves /healthz before loading gateway config", async () => {
-    const loadConfig = vi.fn(() => {
+    const getRuntimeConfig = vi.fn(() => {
       throw new Error("config load blocked");
     });
 
     await withGatewayServer({
       prefix: "probe-healthz-before-config",
       resolvedAuth: AUTH_NONE,
-      overrides: { loadConfig },
+      overrides: { getRuntimeConfig },
       run: async (server) => {
         const req = createRequest({ path: "/healthz" });
         const { res, getBody } = createResponse();
@@ -281,7 +281,7 @@ describe("gateway probe endpoints", () => {
 
         expect(res.statusCode).toBe(200);
         expect(getBody()).toBe(JSON.stringify({ ok: true, status: "live" }));
-        expect(loadConfig).not.toHaveBeenCalled();
+        expect(getRuntimeConfig).not.toHaveBeenCalled();
       },
     });
   });

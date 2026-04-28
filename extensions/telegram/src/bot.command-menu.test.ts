@@ -1,3 +1,7 @@
+import {
+  listNativeCommandSpecs,
+  listNativeCommandSpecsForConfig,
+} from "openclaw/plugin-sdk/native-command-registry";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 
@@ -9,8 +13,6 @@ const {
   telegramBotRuntimeForTest,
 } = await import("./bot.create-telegram-bot.test-harness.js");
 
-let listNativeCommandSpecs: typeof import("../../../src/auto-reply/commands-registry.js").listNativeCommandSpecs;
-let listNativeCommandSpecsForConfig: typeof import("../../../src/auto-reply/commands-registry.js").listNativeCommandSpecsForConfig;
 let normalizeTelegramCommandName: typeof import("./command-config.js").normalizeTelegramCommandName;
 let createTelegramBotBase: typeof import("./bot-core.js").createTelegramBotCore;
 let setTelegramBotRuntimeForTest: typeof import("./bot-core.js").setTelegramBotRuntimeForTest;
@@ -46,8 +48,6 @@ function resolveSkillCommands(config: Parameters<typeof listNativeCommandSpecsFo
 
 describe("createTelegramBot command menu", () => {
   beforeAll(async () => {
-    ({ listNativeCommandSpecs, listNativeCommandSpecsForConfig } =
-      await import("../../../src/auto-reply/commands-registry.js"));
     ({ normalizeTelegramCommandName } = await import("./command-config.js"));
     ({ createTelegramBotCore: createTelegramBotBase, setTelegramBotRuntimeForTest } =
       await import("./bot-core.js"));

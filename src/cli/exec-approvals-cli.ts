@@ -23,6 +23,7 @@ import { isRich, theme } from "../terminal/theme.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { nodesCallOpts, resolveNodeId } from "./nodes-cli/rpc.js";
 import type { NodesRpcOpts } from "./nodes-cli/types.js";
+import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 type ExecApprovalsSnapshot = {
   path: string;
@@ -616,4 +617,6 @@ export function registerExecApprovalsCli(program: Command) {
       return true;
     },
   });
+
+  applyParentDefaultHelpAction(approvals);
 }

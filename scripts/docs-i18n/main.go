@@ -45,7 +45,7 @@ func main() {
 		docsRoot   = flag.String("docs", "docs", "docs root")
 		tmPath     = flag.String("tm", "", "translation memory path")
 		mode       = flag.String("mode", "segment", "translation mode (segment|doc)")
-		thinking   = flag.String("thinking", "high", "thinking level (low|high)")
+		thinking   = flag.String("thinking", "high", "thinking level (low|medium|high|xhigh)")
 		overwrite  = flag.Bool("overwrite", false, "overwrite existing translations")
 		maxFiles   = flag.Int("max", 0, "max files to process (0 = all)")
 		parallel   = flag.Int("parallel", 1, "parallel workers for doc mode")
@@ -67,7 +67,7 @@ func main() {
 		maxFiles:   *maxFiles,
 		parallel:   *parallel,
 	}, files, func(srcLang, tgtLang string, glossary []GlossaryEntry, thinking string) (docsTranslator, error) {
-		return NewPiTranslator(srcLang, tgtLang, glossary, thinking)
+		return NewCodexTranslator(srcLang, tgtLang, glossary, thinking)
 	}); err != nil {
 		fatal(err)
 	}

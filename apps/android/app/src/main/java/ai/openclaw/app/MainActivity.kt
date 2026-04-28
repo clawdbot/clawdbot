@@ -1,18 +1,18 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.ui.OpenClawTheme
+import ai.openclaw.app.ui.RootScreen
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
-import androidx.core.view.WindowCompat
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import ai.openclaw.app.ui.RootScreen
-import ai.openclaw.app.ui.OpenClawTheme
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {

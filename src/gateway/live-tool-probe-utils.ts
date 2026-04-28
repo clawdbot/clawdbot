@@ -33,6 +33,8 @@ const PROBE_REFUSAL_MARKERS = [
   "not a legitimate self-test",
   "not legitimate self-test",
   "authorized integration probe",
+  "authorizing me to execute",
+  "authorizing me to run",
 ];
 
 export function isLikelyToolNonceRefusal(text: string): boolean {

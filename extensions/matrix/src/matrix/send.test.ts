@@ -33,9 +33,9 @@ const resolveMarkdownTableModeMock = vi.fn(() => "code");
 const convertMarkdownTablesMock = vi.fn((text: string) => text);
 const chunkMarkdownTextWithModeMock = vi.fn((text: string) => (text ? [text] : []));
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
-    "openclaw/plugin-sdk/config-runtime",
+vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-config-runtime")>(
+    "openclaw/plugin-sdk/plugin-config-runtime",
   );
   return {
     ...actual,
@@ -53,7 +53,7 @@ vi.mock("./client-bootstrap.js", () => ({
 
 const runtimeStub = {
   config: {
-    loadConfig: () => loadConfigMock(),
+    current: () => loadConfigMock(),
   },
   media: {
     loadWebMedia: (...args: unknown[]) => loadWebMediaMock(...args),
@@ -630,6 +630,28 @@ describe("sendMessageMatrix threads", () => {
       messageIds: ["$m1", "$m2", "$m3"],
     });
   });
+
+  it("merges extra content into only the first chunked text event", async () => {
+    const { client, sendMessage } = makeClient();
+    convertMarkdownTablesMock.mockImplementation(() => "first|second|third");
+    chunkMarkdownTextWithModeMock.mockImplementation((text: string) => text.split("|"));
+
+    await sendMessageMatrix("room:!room:example", "ignored", {
+      client,
+      cfg: {} as never,
+      extraContent: { "com.openclaw.approval": { id: "req-1" } },
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(3);
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      body: "first",
+      "com.openclaw.approval": { id: "req-1" },
+    });
+    expect(sendMessage.mock.calls[1]?.[1]).toMatchObject({ body: "second" });
+    expect(sendMessage.mock.calls[1]?.[1]).not.toHaveProperty("com.openclaw.approval");
+    expect(sendMessage.mock.calls[2]?.[1]).toMatchObject({ body: "third" });
+    expect(sendMessage.mock.calls[2]?.[1]).not.toHaveProperty("com.openclaw.approval");
+  });
 });
 
 describe("sendSingleTextMessageMatrix", () => {
@@ -671,6 +693,28 @@ describe("sendSingleTextMessageMatrix", () => {
     expect(
       (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
     ).not.toContain("matrix.to");
+  });
+
+  it("does not activate mentions inside Matrix tool-progress code spans", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendSingleTextMessageMatrix(
+      "room:!room:example",
+      "Working...\n- `@room ping @alice:example.org !room:example.org`",
+      {
+        client,
+        cfg: {} as never,
+      },
+    );
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      body: "Working...\n- `@room ping @alice:example.org !room:example.org`",
+      "m.mentions": {},
+    });
+    const formattedBody = (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string })
+      .formatted_body;
+    expect(formattedBody).toContain("<code>@room ping @alice:example.org !room:example.org</code>");
+    expect(formattedBody).not.toContain("matrix.to");
   });
 
   it("merges extra content fields into single-event sends", async () => {

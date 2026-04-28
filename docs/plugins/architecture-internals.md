@@ -60,6 +60,11 @@ to narrow plugin loading before broader registry materialization:
   channel id
 - explicit provider setup/runtime resolution narrows to plugins that own the
   requested provider id
+- Gateway startup planning uses `activation.onStartup` for explicit startup
+  imports and startup opt-outs; every plugin should declare it as OpenClaw
+  moves away from implicit startup imports, while plugins without static
+  capability metadata and without `activation.onStartup` still use the
+  deprecated implicit startup sidecar fallback for compatibility
 
 The activation planner exposes both an ids-only API for existing callers and a
 plan API for new diagnostics. Plan entries report why a plugin was selected,
@@ -93,10 +98,22 @@ OpenClaw keeps short in-process caches for:
 These caches reduce bursty startup and repeated command overhead. They are safe
 to think of as short-lived performance caches, not persistence.
 
+Gateway startup hot paths should prefer the current `PluginMetadataSnapshot`,
+the derived `PluginLookUpTable`, or an explicit manifest registry passed through
+the call chain. Config validation, startup auto-enable, and plugin bootstrap use
+the same snapshot when available. For callers that still rebuild manifest
+metadata from the persisted installed plugin index, OpenClaw also keeps a small
+bounded fallback cache keyed by the installed index, request shape, config
+policy, runtime roots, and manifest/package file signatures. That cache is only a
+fallback for repeated installed-index reconstruction; it is not a mutable runtime
+plugin registry.
+
 Performance note:
 
 - Set `OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE=1` or
   `OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE=1` to disable these caches.
+- Set `OPENCLAW_DISABLE_INSTALLED_PLUGIN_MANIFEST_REGISTRY_CACHE=1` to disable
+  only the installed-index manifest-registry fallback cache.
 - Tune cache windows with `OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS` and
   `OPENCLAW_PLUGIN_MANIFEST_CACHE_MS`.
 
@@ -236,7 +253,7 @@ The "When to use" column is the quick decision guide.
 | 28  | `classifyFailoverReason`          | Provider-owned failover reason classification                                                                  | Provider can map raw API/transport errors to rate-limit/overload/etc                                                                          |
 | 29  | `isCacheTtlEligible`              | Prompt-cache policy for proxy/backhaul providers                                                               | Provider needs proxy-specific cache TTL gating                                                                                                |
 | 30  | `buildMissingAuthMessage`         | Replacement for the generic missing-auth recovery message                                                      | Provider needs a provider-specific missing-auth recovery hint                                                                                 |
-| 31  | `suppressBuiltInModel`            | Stale upstream model suppression plus optional user-facing error hint                                          | Provider needs to hide stale upstream rows or replace them with a vendor hint                                                                 |
+| 31  | `suppressBuiltInModel`            | Deprecated. Runtime hook is no longer called; use manifest `modelCatalog.suppressions`                         | Historical hook for hiding stale upstream rows; keep new suppression data in the plugin manifest                                              |
 | 32  | `augmentModelCatalog`             | Synthetic/final catalog rows appended after discovery                                                          | Provider needs synthetic forward-compat rows in `models list` and pickers                                                                     |
 | 33  | `resolveThinkingProfile`          | Model-specific `/think` level set, display labels, and default                                                 | Provider exposes a custom thinking ladder or binary label for selected models                                                                 |
 | 34  | `isBinaryThinking`                | On/off reasoning toggle compatibility hook                                                                     | Provider exposes only binary thinking on/off                                                                                                  |
@@ -491,6 +508,7 @@ Notes:
 - For plugin-owned fallback runs, operators must opt in with `plugins.entries.<id>.subagent.allowModelOverride: true`.
 - Use `plugins.entries.<id>.subagent.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets, or `"*"` to allow any target explicitly.
 - Untrusted plugin subagent runs still work, but override requests are rejected instead of silently falling back.
+- Plugin-created subagent sessions are tagged with the creating plugin id. Fallback `api.runtime.subagent.deleteSession(...)` may delete those owned sessions only; arbitrary session deletion still requires an admin-scoped Gateway request.
 
 For web search, plugins can consume the shared runtime helper instead of
 reaching into the agent tool wiring:
@@ -592,12 +610,16 @@ Channel plugins pick from a family of narrow seams — `channel-setup`,
 on one `approvalCapability` contract rather than mixing across unrelated
 plugin fields. See [Channel plugins](/plugins/sdk-channel-plugins).
 
-Runtime and config helpers live under matching `*-runtime` subpaths
-(`approval-runtime`, `config-runtime`, `infra-runtime`, `agent-runtime`,
-`lazy-runtime`, `directory-runtime`, `text-runtime`, `runtime-store`, etc.).
+Runtime and config helpers live under matching focused `*-runtime` subpaths
+(`approval-runtime`, `agent-runtime`, `lazy-runtime`, `directory-runtime`,
+`text-runtime`, `runtime-store`, `system-event-runtime`, `heartbeat-runtime`,
+`channel-activity-runtime`, etc.). Prefer `config-types`,
+`plugin-config-runtime`, `runtime-config-snapshot`, and `config-mutation`
+instead of the broad `config-runtime` compatibility barrel.
 
 <Info>
-`openclaw/plugin-sdk/channel-runtime` is deprecated — a compatibility shim for
+`openclaw/plugin-sdk/channel-runtime`, `openclaw/plugin-sdk/config-runtime`,
+and `openclaw/plugin-sdk/infra-runtime` are deprecated compatibility shims for
 older plugins. New code should import narrower generic primitives instead.
 </Info>
 

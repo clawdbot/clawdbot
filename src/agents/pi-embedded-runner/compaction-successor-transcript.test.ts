@@ -153,6 +153,39 @@ describe("rotateTranscriptAfterCompaction", () => {
     expect(successor.getSessionName()).toBe("current title");
   });
 
+  it("drops duplicate user messages from the rotated active branch tail", async () => {
+    const dir = await createTmpDir();
+    const manager = SessionManager.create(dir, dir);
+    manager.appendMessage({ role: "user", content: "old user", timestamp: 1 });
+    const firstKeptId = manager.appendMessage(makeAssistant("old assistant", 2));
+    manager.appendCompaction("Summary of old work.", firstKeptId, 5000);
+    const firstDuplicateId = manager.appendMessage({
+      role: "user",
+      content: "please run the deployment status check for production",
+      timestamp: 3_000,
+    });
+    const secondDuplicateId = manager.appendMessage({
+      role: "user",
+      content: " please   run the deployment status check for production ",
+      timestamp: 4_000,
+    });
+    manager.appendMessage(makeAssistant("status checked", 5_000));
+
+    const result = await rotateTranscriptAfterCompaction({
+      sessionManager: manager,
+      sessionFile: manager.getSessionFile()!,
+      now: () => new Date("2026-04-27T12:10:00.000Z"),
+    });
+
+    expect(result.rotated).toBe(true);
+    const successor = SessionManager.open(result.sessionFile!);
+    const entries = successor.getEntries();
+    expect(entries.find((entry) => entry.id === firstDuplicateId)).toBeDefined();
+    expect(entries.find((entry) => entry.id === secondDuplicateId)).toBeUndefined();
+    const contextText = JSON.stringify(successor.buildSessionContext().messages);
+    expect(contextText.match(/deployment status check/g)).toHaveLength(1);
+  });
+
   it("skips sessions with no compaction entry", async () => {
     const dir = await createTmpDir();
     const manager = SessionManager.create(dir, dir);

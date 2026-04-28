@@ -3,6 +3,7 @@ import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import type { GatewayPluginRuntime } from "../engine/gateway/types.js";
 import { setOpenClawVersion } from "../engine/messaging/sender.js";
 
+// Single plugin runtime per process — concurrent multi-tenant qqbot runtimes are not supported.
 const { setRuntime: _setRuntime, getRuntime: getQQBotRuntime } =
   createPluginRuntimeStore<PluginRuntime>({
     pluginId: "qqbot",
@@ -20,5 +21,5 @@ export { getQQBotRuntime, setQQBotRuntime };
 
 /** Type-narrowed getter for engine/ modules that need GatewayPluginRuntime. */
 export function getQQBotRuntimeForEngine(): GatewayPluginRuntime {
-  return getQQBotRuntime() as unknown as GatewayPluginRuntime;
+  return getQQBotRuntime() as GatewayPluginRuntime;
 }

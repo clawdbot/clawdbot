@@ -25,7 +25,10 @@ Ollama provider config uses `baseUrl` as the canonical key. OpenClaw also accept
     Remote public hosts and Ollama Cloud (`https://ollama.com`) require a real credential through `OLLAMA_API_KEY`, an auth profile, or the provider's `apiKey`.
   </Accordion>
   <Accordion title="Custom provider ids">
-    Custom provider ids that set `api: "ollama"` follow the same rules. For example, an `ollama-remote` provider that points at a private LAN Ollama host can use `apiKey: "ollama-local"` and sub-agents will resolve that marker through the Ollama provider hook instead of treating it as a missing credential.
+    Custom provider ids that set `api: "ollama"` follow the same rules. For example, an `ollama-remote` provider that points at a private LAN Ollama host can use `apiKey: "ollama-local"` and sub-agents will resolve that marker through the Ollama provider hook instead of treating it as a missing credential. Memory search can also set `agents.defaults.memorySearch.provider` to that custom provider id so embeddings use the matching Ollama endpoint.
+  </Accordion>
+  <Accordion title="Auth profiles">
+    `auth-profiles.json` stores the credential for a provider id. Put endpoint settings (`baseUrl`, `api`, model ids, headers, timeouts) in `models.providers.<id>`. Older flat auth-profile files such as `{ "ollama-windows": { "apiKey": "ollama-local" } }` are not a runtime format; run `openclaw doctor --fix` to rewrite them to the canonical `ollama-windows:default` API-key profile with a backup. `baseUrl` in that file is compatibility noise and should be moved to provider config.
   </Accordion>
   <Accordion title="Memory embedding scope">
     When Ollama is used for memory embeddings, bearer auth is scoped to the host where it was declared:
@@ -57,9 +60,10 @@ Choose your preferred setup method and mode.
         - **Cloud + Local** — local Ollama host plus cloud models routed through that host
         - **Cloud only** — hosted Ollama models via `https://ollama.com`
         - **Local only** — local models only
+
       </Step>
       <Step title="Select a model">
-        `Cloud only` prompts for `OLLAMA_API_KEY` and suggests hosted cloud defaults. `Cloud + Local` and `Local only` ask for an Ollama base URL, discover available models, and auto-pull the selected local model if it is not available yet. `Cloud + Local` also checks whether that Ollama host is signed in for cloud access.
+        `Cloud only` prompts for `OLLAMA_API_KEY` and suggests hosted cloud defaults. `Cloud + Local` and `Local only` ask for an Ollama base URL, discover available models, and auto-pull the selected local model if it is not available yet. When Ollama reports an installed `:latest` tag such as `gemma4:latest`, setup shows that installed model once instead of showing both `gemma4` and `gemma4:latest` or pulling the bare alias again. `Cloud + Local` also checks whether that Ollama host is signed in for cloud access.
       </Step>
       <Step title="Verify the model is available">
         ```bash
@@ -96,6 +100,7 @@ Choose your preferred setup method and mode.
         - **Cloud + Local**: install Ollama, sign in with `ollama signin`, and route cloud requests through that host
         - **Cloud only**: use `https://ollama.com` with an `OLLAMA_API_KEY`
         - **Local only**: install Ollama from [ollama.com/download](https://ollama.com/download)
+
       </Step>
       <Step title="Pull a local model (local only)">
         ```bash
@@ -176,21 +181,58 @@ Choose your preferred setup method and mode.
 
 When you set `OLLAMA_API_KEY` (or an auth profile) and **do not** define `models.providers.ollama` or another custom remote provider with `api: "ollama"`, OpenClaw discovers models from the local Ollama instance at `http://127.0.0.1:11434`.
 
-| Behavior             | Detail                                                                                                                                                              |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Catalog query        | Queries `/api/tags`                                                                                                                                                 |
-| Capability detection | Uses best-effort `/api/show` lookups to read `contextWindow`, expanded `num_ctx` Modelfile parameters, and capabilities including vision/tools                      |
-| Vision models        | Models with a `vision` capability reported by `/api/show` are marked as image-capable (`input: ["text", "image"]`), so OpenClaw auto-injects images into the prompt |
-| Reasoning detection  | Marks `reasoning` with a model-name heuristic (`r1`, `reasoning`, `think`)                                                                                          |
-| Token limits         | Sets `maxTokens` to the default Ollama max-token cap used by OpenClaw                                                                                               |
-| Costs                | Sets all costs to `0`                                                                                                                                               |
+| Behavior             | Detail                                                                                                                                                               |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Catalog query        | Queries `/api/tags`                                                                                                                                                  |
+| Capability detection | Uses best-effort `/api/show` lookups to read `contextWindow`, expanded `num_ctx` Modelfile parameters, and capabilities including vision/tools                       |
+| Vision models        | Models with a `vision` capability reported by `/api/show` are marked as image-capable (`input: ["text", "image"]`), so OpenClaw auto-injects images into the prompt  |
+| Reasoning detection  | Uses `/api/show` capabilities when available, including `thinking`; falls back to a model-name heuristic (`r1`, `reasoning`, `think`) when Ollama omits capabilities |
+| Token limits         | Sets `maxTokens` to the default Ollama max-token cap used by OpenClaw                                                                                                |
+| Costs                | Sets all costs to `0`                                                                                                                                                |
 
-This avoids manual model entries while keeping the catalog aligned with the local Ollama instance.
+This avoids manual model entries while keeping the catalog aligned with the local Ollama instance. You can use a full ref such as `ollama/<pulled-model>:latest` in local `infer model run`; OpenClaw resolves that installed model from Ollama's live catalog without requiring a hand-written `models.json` entry.
 
 ```bash
 # See what models are available
 ollama list
 openclaw models list
+```
+
+For a narrow text-generation smoke test that avoids the full agent tool surface,
+use local `infer model run` with a full Ollama model ref:
+
+```bash
+OLLAMA_API_KEY=ollama-local \
+  openclaw infer model run \
+    --local \
+    --model ollama/llama3.2:latest \
+    --prompt "Reply with exactly: pong" \
+    --json
+```
+
+That path still uses OpenClaw's configured provider, auth, and native Ollama
+transport, but it does not start a chat-agent turn or load MCP/tool context. If
+this succeeds while normal agent replies fail, troubleshoot the model's agent
+prompt/tool capacity next.
+
+When you switch a conversation with `/model ollama/<model>`, OpenClaw treats
+that as an exact user selection. If the configured Ollama `baseUrl` is
+unreachable, the next reply fails with the provider error instead of silently
+answering from another configured fallback model.
+
+Isolated cron jobs do one extra local safety check before they start the agent
+turn. If the selected model resolves to a local, private-network, or `.local`
+Ollama provider and `/api/tags` is unreachable, OpenClaw records that cron run
+as `skipped` with the selected `ollama/<model>` in the error text. The endpoint
+preflight is cached for 5 minutes, so multiple cron jobs pointed at the same
+stopped Ollama daemon do not all launch failing model requests.
+
+Live-verify the local text path, native stream path, and embeddings against
+local Ollama with:
+
+```bash
+OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_OLLAMA=1 OPENCLAW_LIVE_OLLAMA_WEB_SEARCH=0 \
+  pnpm test:live -- extensions/ollama/ollama.live.test.ts
 ```
 
 To add a new model, simply pull it with Ollama:
@@ -415,6 +457,7 @@ Use these as starting points and replace model IDs with the exact names from `ol
                 input: ["text"],
                 params: {
                   num_ctx: 32768,
+                  thinking: false,
                   keep_alive: "15m",
                 },
               },
@@ -585,6 +628,7 @@ Use these as starting points and replace model IDs with the exact names from `ol
     ```
 
     Use `compat.supportsTools: false` only when the model or server reliably fails on tool schemas. It trades agent capability for stability.
+    `localModelLean` removes the browser, cron, and message tools from the agent surface, but it does not change Ollama's runtime context or thinking mode. Pair it with explicit `params.num_ctx` and `params.thinking: false` for small Qwen-style thinking models that loop or spend their response budget on hidden reasoning.
 
   </Accordion>
 </AccordionGroup>
@@ -792,7 +836,7 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
   </Accordion>
 
   <Accordion title="Thinking control">
-    For native Ollama models, OpenClaw forwards thinking control as Ollama expects it: top-level `think`, not `options.think`.
+    For native Ollama models, OpenClaw forwards thinking control as Ollama expects it: top-level `think`, not `options.think`. Auto-discovered models whose `/api/show` response includes the `thinking` capability expose `/think low`, `/think medium`, `/think high`, and `/think max`; non-thinking models expose only `/think off`.
 
     ```bash
     openclaw agent --model ollama/gemma4 --thinking off
@@ -815,7 +859,7 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
     }
     ```
 
-    Per-model `params.think` or `params.thinking` can disable or force Ollama API thinking for a specific configured model. Runtime commands such as `/think off` still apply to the active run.
+    Per-model `params.think` or `params.thinking` can disable or force Ollama API thinking for a specific configured model. OpenClaw preserves those explicit model params when the active run only has the implicit default `off`; non-off runtime commands such as `/think medium` still override the active run.
 
   </Accordion>
 
@@ -845,13 +889,21 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
     | Default model | `nomic-embed-text`  |
     | Auto-pull     | Yes — the embedding model is pulled automatically if not present locally |
 
+    Query-time embeddings use retrieval prefixes for models that require or recommend them, including `nomic-embed-text`, `qwen3-embedding`, and `mxbai-embed-large`. Memory document batches stay raw so existing indexes do not need a format migration.
+
     To select Ollama as the memory search embedding provider:
 
     ```json5
     {
       agents: {
         defaults: {
-          memorySearch: { provider: "ollama" },
+          memorySearch: {
+            provider: "ollama",
+            remote: {
+              // Default for Ollama. Raise on larger hosts if reindexing is too slow.
+              nonBatchConcurrency: 1,
+            },
+          },
         },
       },
     }
@@ -865,10 +917,11 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
         defaults: {
           memorySearch: {
             provider: "ollama",
+            model: "nomic-embed-text",
             remote: {
               baseUrl: "http://gpu-box.local:11434",
-              model: "nomic-embed-text",
               apiKey: "ollama-local",
+              nonBatchConcurrency: 2,
             },
           },
         },
@@ -881,7 +934,7 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
   <Accordion title="Streaming configuration">
     OpenClaw's Ollama integration uses the **native Ollama API** (`/api/chat`) by default, which fully supports streaming and tool calling simultaneously. No special configuration is needed.
 
-    For native `/api/chat` requests, OpenClaw also forwards thinking control directly to Ollama: `/think off` and `openclaw agent --thinking off` send top-level `think: false`, while `/think low|medium|high` send the matching top-level `think` effort string. `/think max` maps to Ollama's highest native effort, `think: "high"`.
+    For native `/api/chat` requests, OpenClaw also forwards thinking control directly to Ollama: `/think off` and `openclaw agent --thinking off` send top-level `think: false` unless an explicit model `params.think`/`params.thinking` value is configured, while `/think low|medium|high` send the matching top-level `think` effort string. `/think max` maps to Ollama's highest native effort, `think: "high"`.
 
     <Tip>
     If you need to use the OpenAI-compatible endpoint, see the "Legacy OpenAI-compatible mode" section above. Streaming and tool calling may not work simultaneously in that mode.
@@ -893,6 +946,41 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
 ## Troubleshooting
 
 <AccordionGroup>
+  <Accordion title="WSL2 crash loop (repeated reboots)">
+    On WSL2 with NVIDIA/CUDA, the official Ollama Linux installer creates an `ollama.service` systemd unit with `Restart=always`. If that service autostarts and loads a GPU-backed model during WSL2 boot, Ollama can pin host memory while the model loads. Hyper-V memory reclaim cannot always reclaim those pinned pages, so Windows can terminate the WSL2 VM, systemd starts Ollama again, and the loop repeats.
+
+    Common evidence:
+
+    - repeated WSL2 reboots or terminations from the Windows side
+    - high CPU in `app.slice` or `ollama.service` shortly after WSL2 startup
+    - SIGTERM from systemd rather than a Linux OOM-killer event
+
+    OpenClaw logs a startup warning when it detects WSL2, `ollama.service` enabled with `Restart=always`, and visible CUDA markers.
+
+    Mitigation:
+
+    ```bash
+    sudo systemctl disable ollama
+    ```
+
+    Add this to `%USERPROFILE%\.wslconfig` on the Windows side, then run `wsl --shutdown`:
+
+    ```ini
+    [experimental]
+    autoMemoryReclaim=disabled
+    ```
+
+    Set a shorter keep-alive in the Ollama service environment, or start Ollama manually only when you need it:
+
+    ```bash
+    export OLLAMA_KEEP_ALIVE=5m
+    ollama serve
+    ```
+
+    See [ollama/ollama#11317](https://github.com/ollama/ollama/issues/11317).
+
+  </Accordion>
+
   <Accordion title="Ollama not detected">
     Make sure Ollama is running and that you set `OLLAMA_API_KEY` (or an auth profile), and that you did **not** define an explicit `models.providers.ollama` entry:
 
@@ -1012,7 +1100,7 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
               {
                 id: "qwen3.5:9b",
                 name: "qwen3.5:9b",
-                params: { num_ctx: 32768 },
+                params: { num_ctx: 32768, thinking: false },
               },
             ],
           },

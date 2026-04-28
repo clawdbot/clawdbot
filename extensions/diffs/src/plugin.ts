@@ -1,6 +1,10 @@
 import path from "node:path";
-import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/config-runtime";
-import { resolvePreferredOpenClawTmpDir, type OpenClawPluginApi } from "../api.js";
+import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
+import {
+  resolvePreferredOpenClawTmpDir,
+  type OpenClawConfig,
+  type OpenClawPluginApi,
+} from "../api.js";
 import {
   resolveDiffsPluginDefaults,
   resolveDiffsPluginSecurity,
@@ -18,12 +22,14 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
   });
   const resolveCurrentPluginConfig = () =>
     resolveLivePluginConfigObject(
-      api.runtime.config?.loadConfig,
+      api.runtime.config?.current
+        ? () => api.runtime.config.current() as OpenClawConfig
+        : undefined,
       "diffs",
       api.pluginConfig as Record<string, unknown>,
     ) ?? {};
   const resolveCurrentAccessConfig = () => {
-    const currentConfig = api.runtime.config?.loadConfig?.() ?? api.config;
+    const currentConfig = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
     const pluginConfig = resolveCurrentPluginConfig();
     return {
       allowRemoteViewer: resolveDiffsPluginSecurity(pluginConfig).allowRemoteViewer,

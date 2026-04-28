@@ -197,7 +197,10 @@ describe("cron model formatting and precedence edge cases", () => {
         selectModel({
           payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "openai/" },
         }),
-      ).resolves.toEqual({ ok: false, error: "invalid model" });
+      ).resolves.toEqual({
+        ok: false,
+        error: "cron payload.model 'openai/' rejected: invalid model",
+      });
     });
 
     it("rejects model with leading slash (empty provider)", async () => {
@@ -205,7 +208,30 @@ describe("cron model formatting and precedence edge cases", () => {
         selectModel({
           payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "/gpt-4.1-mini" },
         }),
-      ).resolves.toEqual({ ok: false, error: "invalid model" });
+      ).resolves.toEqual({
+        ok: false,
+        error: "cron payload.model '/gpt-4.1-mini' rejected: invalid model",
+      });
+    });
+
+    it("reports the cron allowlist path when payload.model is not allowed", async () => {
+      resolveAllowedModelRefMock.mockReturnValueOnce({
+        error: "model not allowed: anthropic/claude-sonnet-4-6",
+      });
+
+      await expect(
+        selectModel({
+          payload: {
+            kind: "agentTurn",
+            message: DEFAULT_MESSAGE,
+            model: "anthropic/claude-sonnet-4-6",
+          },
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error:
+          "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.models allowlist: anthropic/claude-sonnet-4-6",
+      });
     });
 
     it("normalizes provider casing", async () => {

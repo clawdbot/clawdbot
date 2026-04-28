@@ -24,6 +24,7 @@ vi.mock("../cli/progress.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: loadConfig,
   loadConfig,
 }));
 

@@ -245,6 +245,14 @@ describe("buildGatewayReloadPlan", () => {
     );
   });
 
+  it("requires restart when model pricing bootstrap changes", () => {
+    const plan = buildGatewayReloadPlan(["models.pricing.enabled"]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("models.pricing.enabled");
+    expect(plan.restartHeartbeat).toBe(false);
+    expect(plan.hotReasons).toEqual([]);
+  });
+
   it("restarts heartbeat when agents.defaults.models allowlist changes", () => {
     const plan = buildGatewayReloadPlan(["agents.defaults.models"]);
     expect(plan.restartGateway).toBe(false);
@@ -519,6 +527,9 @@ function makeZeroDebounceHookWrite(persistedHash: string): ConfigWriteNotificati
       hooks: { enabled: true },
     },
     persistedHash,
+    revision: 1,
+    fingerprint: `runtime-${persistedHash}`,
+    sourceFingerprint: `source-${persistedHash}`,
     writtenAtMs: Date.now(),
   };
 }
@@ -743,7 +754,7 @@ describe("startGatewayConfigReloader", () => {
     await reloader.stop();
   });
 
-  it("skips last-known-good recovery for plugin-local invalid reloads", async () => {
+  it("queues restart in degraded mode for plugin-local invalid reloads", async () => {
     const activeConfig: OpenClawConfig = {
       gateway: { reload: { debounceMs: 0 } },
       agents: { defaults: { model: "gpt-5.4" } },
@@ -776,7 +787,19 @@ describe("startGatewayConfigReloader", () => {
       .mockResolvedValueOnce(invalidSnapshot);
     const recoverSnapshot = vi.fn(async () => true);
     const promoteSnapshot = vi.fn(async () => true);
+    const previousConfig: OpenClawConfig = {
+      ...activeConfig,
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            enabled: true,
+            config: { compactionMode: "adaptive" },
+          },
+        },
+      },
+    };
     const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot, {
+      initialCompareConfig: previousConfig,
       recoverSnapshot,
       promoteSnapshot,
     });
@@ -787,13 +810,34 @@ describe("startGatewayConfigReloader", () => {
     expect(recoverSnapshot).not.toHaveBeenCalled();
     expect(readSnapshot).toHaveBeenCalledTimes(1);
     expect(onHotReload).not.toHaveBeenCalled();
-    expect(onRestart).not.toHaveBeenCalled();
+    expect(onRestart).toHaveBeenCalledTimes(1);
+    expect(onRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changedPaths: ["plugins.entries.lossless-claw.config.cacheAwareCompaction"],
+        restartGateway: true,
+        restartReasons: ["plugins.entries.lossless-claw.config.cacheAwareCompaction"],
+      }),
+      expect.objectContaining({
+        plugins: expect.objectContaining({
+          entries: expect.objectContaining({
+            "lossless-claw": expect.objectContaining({
+              enabled: true,
+              config: expect.objectContaining({
+                cacheAwareCompaction: true,
+              }),
+            }),
+          }),
+        }),
+      }),
+    );
     expect(promoteSnapshot).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledWith(
       "config reload recovery skipped after invalid-config: invalidity is scoped to plugin entries",
     );
     expect(log.warn).toHaveBeenCalledWith(
-      expect.stringContaining("config reload skipped (invalid config):"),
+      expect.stringContaining(
+        "config reload skipped plugin config validation issue at plugins.entries.lossless-claw.config.cacheAwareCompaction:",
+      ),
     );
 
     await reloader.stop();
@@ -930,6 +974,57 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
+  it("honors in-process write intent to skip reload", async () => {
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(makeZeroDebounceHookSnapshot("internal-none"));
+    const promoteSnapshot = vi.fn(async () => true);
+    const harness = createReloaderHarness(readSnapshot, { promoteSnapshot });
+
+    harness.emitWrite({
+      ...makeZeroDebounceHookWrite("internal-none"),
+      afterWrite: { mode: "none", reason: "caller handles follow-up" },
+    });
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    expect(harness.log.info).toHaveBeenCalledWith(
+      "config reload skipped by writer intent (caller handles follow-up)",
+    );
+    expect(promoteSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ hash: "internal-none" }),
+      "in-process-write",
+    );
+
+    await harness.reloader.stop();
+  });
+
+  it("honors in-process write intent to force restart", async () => {
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(makeZeroDebounceHookSnapshot("internal-restart"));
+    const harness = createReloaderHarness(readSnapshot);
+
+    harness.emitWrite({
+      ...makeZeroDebounceHookWrite("internal-restart"),
+      afterWrite: { mode: "restart", reason: "plugin runtime contract changed" },
+    });
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    expect(harness.onRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        restartGateway: true,
+        restartReasons: expect.arrayContaining(["plugin runtime contract changed"]),
+      }),
+      expect.any(Object),
+    );
+
+    await harness.reloader.stop();
+  });
+
   it("plans in-process reloads from source config and ignores runtime materialized paths", async () => {
     const baseInstall = {
       source: "npm" as const,
@@ -1001,6 +1096,9 @@ describe("startGatewayConfigReloader", () => {
         },
       },
       persistedHash: "plugin-timestamps-1",
+      revision: 1,
+      fingerprint: "runtime-plugin-timestamps-1",
+      sourceFingerprint: "source-plugin-timestamps-1",
       writtenAtMs: Date.now(),
     });
     await vi.runOnlyPendingTimersAsync();
@@ -1055,6 +1153,9 @@ describe("startGatewayConfigReloader", () => {
       sourceConfig: nextSourceConfig,
       runtimeConfig: nextSourceConfig,
       persistedHash: "plugin-collision-1",
+      revision: 1,
+      fingerprint: "runtime-plugin-collision-1",
+      sourceFingerprint: "source-plugin-collision-1",
       writtenAtMs: Date.now(),
     });
     await vi.runOnlyPendingTimersAsync();

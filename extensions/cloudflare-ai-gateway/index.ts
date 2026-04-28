@@ -14,6 +14,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { buildCloudflareAiGatewayCatalogProvider } from "./catalog-provider.js";
 import { CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "./models.js";
 import { applyCloudflareAiGatewayConfig, buildCloudflareAiGatewayConfigPatch } from "./onboard.js";
+import { wrapCloudflareAiGatewayProviderStream } from "./stream-wrappers.js";
 
 const PROVIDER_ID = "cloudflare-ai-gateway";
 const PROVIDER_ENV_VAR = "CLOUDFLARE_AI_GATEWAY_API_KEY";
@@ -216,6 +217,7 @@ export default definePluginEntry({
       },
       classifyFailoverReason: ({ errorMessage }) =>
         /\bworkers?_ai\b.*\b(?:rate|limit|quota)\b/i.test(errorMessage) ? "rate_limit" : undefined,
+      wrapStreamFn: wrapCloudflareAiGatewayProviderStream,
     });
   },
 });

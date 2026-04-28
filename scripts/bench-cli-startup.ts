@@ -82,6 +82,24 @@ const COMMAND_CASES: readonly CommandCase[] = [
     presets: ["real"],
   },
   {
+    id: "tasksJson",
+    name: "tasks --json",
+    args: ["tasks", "--json"],
+    presets: ["real"],
+  },
+  {
+    id: "tasksListJson",
+    name: "tasks list --json",
+    args: ["tasks", "list", "--json"],
+    presets: ["real"],
+  },
+  {
+    id: "tasksAuditJson",
+    name: "tasks audit --json",
+    args: ["tasks", "audit", "--json"],
+    presets: ["real"],
+  },
+  {
     id: "agentsListJson",
     name: "agents list --json",
     args: ["agents", "list", "--json"],

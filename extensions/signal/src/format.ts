@@ -1,4 +1,4 @@
-import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-types";
 import {
   markdownToIR,
   normalizeLowercaseStringOrEmpty,

@@ -101,7 +101,7 @@ vi.mock("../../plugins/commands.js", () => ({
   ]),
 }));
 vi.mock("../../config/config.js", () => ({
-  loadConfig: vi.fn(() => ({})),
+  getRuntimeConfig: vi.fn(() => ({})),
 }));
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: vi.fn(() => ["main", "dev"]),
@@ -174,7 +174,7 @@ function callHandler(params: Record<string, unknown> = {}) {
     req: {} as never,
     client: null,
     isWebchatConnect: () => false,
-    context: {} as never,
+    context: { getRuntimeConfig: () => ({}) } as never,
   });
   return result!;
 }

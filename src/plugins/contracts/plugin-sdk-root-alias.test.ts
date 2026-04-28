@@ -458,44 +458,37 @@ describe("plugin-sdk root alias", () => {
   });
 
   it("loads legacy root exports through the merged root wrapper", { timeout: 240_000 }, () => {
+    expect(typeof rootSdk.emptyPluginConfigSchema).toBe("function");
+    expect(typeof rootSdk.registerContextEngine).toBe("function");
+    expect(typeof rootSdk.buildMemorySystemPromptAddition).toBe("function");
+    expect(typeof rootSdk.delegateCompactionToRuntime).toBe("function");
     expect(typeof rootSdk.resolveControlCommandGate).toBe("function");
     expect(typeof rootSdk.onDiagnosticEvent).toBe("function");
+    expect(typeof rootSdk.optionalStringEnum).toBe("function");
+    expect(typeof rootSdk.stringEnum).toBe("function");
+    expect(typeof rootSdk.buildChannelConfigSchema).toBe("function");
+    expect(typeof rootSdk.normalizeAccountId).toBe("function");
+    expect(typeof rootSdk.resolvePreferredOpenClawTmpDir).toBe("function");
     expect(typeof rootSdk.default).toBe("object");
     expect(rootSdk.default).toBe(rootSdk);
     expect(rootSdk.__esModule).toBe(true);
   });
 
-  it("does not publish removed channel-specific plugin-sdk subpaths", () => {
+  it("does not publish private local-only plugin-sdk subpaths", () => {
     const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
       exports?: Record<string, unknown>;
     };
+    const privateSubpathsPath = path.join(
+      path.dirname(packageJsonPath),
+      "scripts",
+      "lib",
+      "plugin-sdk-private-local-only-subpaths.json",
+    );
+    const privateSubpaths = JSON.parse(fs.readFileSync(privateSubpathsPath, "utf-8")) as string[];
 
-    expect(packageJson.exports?.["./plugin-sdk/discord"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/slack"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/signal"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/telegram-core"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/discord-runtime-surface"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/discord-thread-bindings"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/discord-timeouts"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/discord-account"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/discord-session-key"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/discord-surface"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/whatsapp"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/signal-account"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/signal-surface"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/slack-account"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/slack-runtime-surface"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/slack-surface"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/slack-target-parser"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/slack-targets"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/telegram-account"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/telegram-allow-from"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/telegram-surface"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/whatsapp-auth-presence"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/whatsapp-core"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/whatsapp-shared"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/whatsapp-surface"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/whatsapp-targets"]).toBeUndefined();
+    for (const subpath of privateSubpaths) {
+      expect(packageJson.exports?.[`./plugin-sdk/${subpath}`]).toBeUndefined();
+    }
   });
 
   it("preserves reflection semantics for lazily resolved exports", { timeout: 240_000 }, () => {

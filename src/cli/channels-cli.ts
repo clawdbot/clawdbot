@@ -9,6 +9,7 @@ import { formatCliChannelOptions } from "./channel-options.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { hasExplicitOptions } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
+import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 type ChannelsCommandsModule = typeof import("../commands/channels.js");
 
@@ -237,4 +238,6 @@ export function registerChannelsCli(program: Command) {
         );
       }, "Channel logout failed");
     });
+
+  applyParentDefaultHelpAction(channels);
 }

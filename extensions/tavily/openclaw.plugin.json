@@ -1,5 +1,8 @@
 {
   "id": "tavily",
+  "activation": {
+    "onStartup": false
+  },
   "skills": ["./skills"],
   "providerAuthEnvVars": {
     "tavily": ["TAVILY_API_KEY"]

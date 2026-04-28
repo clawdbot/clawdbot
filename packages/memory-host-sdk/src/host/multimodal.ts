@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "../../../../src/shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "./string-utils.js";
 
 const MEMORY_MULTIMODAL_SPECS = {
   image: {

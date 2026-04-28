@@ -70,6 +70,13 @@ Site: [clawhub.ai](https://clawhub.ai)
     openclaw plugins install openclaw-codex-app-server
     ```
 
+    Use `npm:<package>` when you want npm-only resolution without a
+    ClawHub lookup:
+
+    ```bash
+    openclaw plugins install npm:openclaw-codex-app-server
+    ```
+
     Plugin installs validate advertised `pluginApi` and
     `minGatewayVersion` compatibility before archive install runs, so
     incompatible hosts fail closed early instead of partially installing
@@ -143,11 +150,13 @@ abuse without blocking legitimate contributors.
     - Report reasons are required and recorded.
     - Each user can have up to 20 active reports at a time.
     - Skills with more than 3 unique reports are auto-hidden by default.
+
   </Accordion>
   <Accordion title="Moderation">
     - Moderators can view hidden skills, unhide them, delete them, or ban users.
     - Abusing the report feature can result in account bans.
     - Interested in becoming a moderator? Ask in the OpenClaw Discord and contact a moderator or maintainer.
+
   </Accordion>
 </AccordionGroup>
 
@@ -200,7 +209,28 @@ publish/sync.
     clawhub search "query"
     ```
 
+    Searches skills. For plugin/package discovery, use `clawhub package explore`.
+
     - `--limit <n>` — max results.
+
+  </Accordion>
+  <Accordion title="Browse / inspect plugins">
+    ```bash
+    clawhub package explore --family code-plugin
+    clawhub package explore "episodic-claw" --family code-plugin
+    clawhub package inspect episodic-claw
+    ```
+
+    `package explore` and `package inspect` are the ClawHub CLI surfaces for plugin/package discovery and metadata inspection. Native OpenClaw installs still use `openclaw plugins install clawhub:<package>`.
+
+    Options:
+
+    - `--family skill|code-plugin|bundle-plugin` — filter package family.
+    - `--official` — show only official packages.
+    - `--executes-code` — show only packages that execute code.
+    - `--version <version>` / `--tag <tag>` — inspect a specific package version.
+    - `--versions`, `--files`, `--file <path>` — inspect package history and files.
+    - `--json` — machine-readable output.
 
   </Accordion>
   <Accordion title="Install / update / list">
@@ -279,6 +309,13 @@ publish/sync.
     clawhub search "postgres backups"
     ```
   </Tab>
+  <Tab title="Find a plugin">
+    ```bash
+    clawhub package explore --family code-plugin
+    clawhub package explore "memory" --family code-plugin
+    clawhub package inspect episodic-claw
+    ```
+  </Tab>
   <Tab title="Install">
     ```bash
     clawhub install my-skill-pack
@@ -347,6 +384,7 @@ plugin loading paths.
     - Each publish creates a new **semver** `SkillVersion`.
     - Tags (like `latest`) point to a version; moving tags lets you roll back.
     - Changelogs are attached per version and can be empty when syncing or publishing updates.
+
   </Accordion>
   <Accordion title="Local changes vs registry versions">
     Updates compare the local skill contents to registry versions using a
@@ -363,6 +401,7 @@ plugin loading paths.
   <Accordion title="Storage and lockfile">
     - Installed skills are recorded in `.clawhub/lock.json` under your workdir.
     - Auth tokens are stored in the ClawHub CLI config file (override via `CLAWHUB_CONFIG_PATH`).
+
   </Accordion>
   <Accordion title="Telemetry (install counts)">
     When you run `clawhub sync` while logged in, the CLI sends a minimal

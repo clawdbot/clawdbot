@@ -139,7 +139,7 @@ function expectThreadBindFailureCleanup(
 beforeAll(async () => {
   ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
     callGatewayMock: hoisted.callGatewayMock,
-    loadConfig: () => hoisted.configOverride,
+    getRuntimeConfig: () => hoisted.configOverride,
     updateSessionStoreMock: hoisted.updateSessionStoreMock,
     hookRunner: {
       hasHooks: (hookName: string) =>

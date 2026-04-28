@@ -20,9 +20,13 @@ fun friendlySessionName(key: String): String {
   val cleaned = if (stripped.startsWith("g-")) stripped.removePrefix("g-") else stripped
 
   // Split on hyphens/underscores, title-case each word, collapse "main main" -> "Main"
-  val words = cleaned.split('-', '_').filter { it.isNotBlank() }.map { word ->
-    word.replaceFirstChar { it.uppercaseChar() }
-  }.distinct()
+  val words =
+    cleaned
+      .split('-', '_')
+      .filter { it.isNotBlank() }
+      .map { word ->
+        word.replaceFirstChar { it.uppercaseChar() }
+      }.distinct()
 
   val result = words.joinToString(" ")
   return result.ifBlank { key }

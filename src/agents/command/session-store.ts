@@ -68,6 +68,12 @@ export async function updateSessionStoreAfterAgentRun(params: {
 
   const usage = result.meta.agentMeta?.usage;
   const promptTokens = result.meta.agentMeta?.promptTokens;
+  const compactionTokensAfter =
+    typeof result.meta.agentMeta?.compactionTokensAfter === "number" &&
+    Number.isFinite(result.meta.agentMeta.compactionTokensAfter) &&
+    result.meta.agentMeta.compactionTokensAfter > 0
+      ? Math.floor(result.meta.agentMeta.compactionTokensAfter)
+      : undefined;
   const compactionsThisRun = Math.max(0, result.meta.agentMeta?.compactionCount ?? 0);
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
@@ -147,6 +153,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
     if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
       next.totalTokens = totalTokens;
       next.totalTokensFresh = true;
+    } else if (compactionTokensAfter !== undefined) {
+      next.totalTokens = compactionTokensAfter;
+      next.totalTokensFresh = true;
     } else {
       next.totalTokens = undefined;
       next.totalTokensFresh = false;
@@ -159,6 +168,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
     if (runEstimatedCostUsd !== undefined) {
       next.estimatedCostUsd = runEstimatedCostUsd;
     }
+  } else if (compactionTokensAfter !== undefined) {
+    next.totalTokens = compactionTokensAfter;
+    next.totalTokensFresh = true;
   } else if (
     typeof entry.totalTokens === "number" &&
     Number.isFinite(entry.totalTokens) &&

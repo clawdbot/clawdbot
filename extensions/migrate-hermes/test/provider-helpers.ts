@@ -37,15 +37,46 @@ export function makeConfigRuntime(
   config: OpenClawConfig,
   onWrite?: (next: OpenClawConfig) => void,
 ): NonNullable<MigrationProviderContext["runtime"]> {
+  const commitConfig = (next: OpenClawConfig) => {
+    for (const key of Object.keys(config) as Array<keyof OpenClawConfig>) {
+      delete config[key];
+    }
+    Object.assign(config, next);
+    onWrite?.(next);
+  };
+
   return {
     config: {
-      loadConfig: () => config,
-      writeConfigFile: async (next: OpenClawConfig) => {
-        for (const key of Object.keys(config) as Array<keyof OpenClawConfig>) {
-          delete config[key];
-        }
-        Object.assign(config, next);
-        onWrite?.(next);
+      current: () => config,
+      mutateConfigFile: async ({
+        afterWrite,
+        mutate,
+      }: {
+        afterWrite?: unknown;
+        mutate: (draft: OpenClawConfig, context: unknown) => Promise<unknown> | void;
+      }) => {
+        const next = structuredClone(config);
+        const result = await mutate(next, {
+          previousHash: null,
+          snapshot: { config, raw: "", hash: null },
+        });
+        commitConfig(next);
+        return {
+          afterWrite,
+          followUp: { mode: "auto", requiresRestart: false },
+          nextConfig: next,
+          result,
+        };
+      },
+      replaceConfigFile: async ({
+        afterWrite,
+        nextConfig,
+      }: {
+        afterWrite?: unknown;
+        nextConfig: OpenClawConfig;
+      }) => {
+        commitConfig(nextConfig);
+        return { afterWrite, followUp: { mode: "auto", requiresRestart: false }, nextConfig };
       },
     },
   } as NonNullable<MigrationProviderContext["runtime"]>;

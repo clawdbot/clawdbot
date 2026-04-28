@@ -31,6 +31,8 @@ vi.mock("../../config/config.js", async () => {
     readConfigFileSnapshotForWrite: readConfigFileSnapshotForWriteMock,
     validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
     writeConfigFile: writeConfigFileMock,
+    replaceConfigFile: async (params: { nextConfig: unknown; writeOptions?: unknown }) =>
+      await writeConfigFileMock(params.nextConfig, params.writeOptions),
   };
 });
 

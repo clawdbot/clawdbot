@@ -15,6 +15,7 @@ Status: **extremely alpha**. The app is actively being rebuilt from the ground u
 - [x] Request camera/location and other permissions in onboarding/settings flow
 - [x] Push notifications for gateway/chat status updates
 - [x] Security hardening (biometric lock, token handling, safer defaults)
+- [x] Authenticated background presence beacons
 - [x] Voice tab full functionality
 - [x] Screen tab full functionality
 - [ ] Full end-to-end QA and release hardening

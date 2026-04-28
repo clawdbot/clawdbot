@@ -8,6 +8,7 @@ import {
   resolveCapabilityModelCandidates,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
+import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
 import { resolveVideoGenerationSupportedDurations } from "./duration-support.js";
 import { parseVideoGenerationModelRef } from "./model-ref.js";
@@ -17,6 +18,14 @@ import type { GenerateVideoParams, GenerateVideoRuntimeResult } from "./runtime-
 import type { VideoGenerationProviderOptionType, VideoGenerationResult } from "./types.js";
 
 const log = createSubsystemLogger("video-generation");
+
+export type VideoGenerationRuntimeDeps = {
+  getProvider?: typeof getVideoGenerationProvider;
+  listProviders?: typeof listVideoGenerationProviders;
+  getProviderEnvVars?: typeof getProviderEnvVars;
+  log?: Pick<typeof log, "debug" | "warn">;
+};
+
 export type { GenerateVideoParams, GenerateVideoRuntimeResult } from "./runtime-types.js";
 
 /**
@@ -73,31 +82,43 @@ function validateProviderOptionsAgainstDeclaration(params: {
   return undefined;
 }
 
-function buildNoVideoGenerationModelConfiguredMessage(cfg: OpenClawConfig): string {
+function buildNoVideoGenerationModelConfiguredMessage(
+  cfg: OpenClawConfig,
+  deps: VideoGenerationRuntimeDeps,
+): string {
+  const listProviders = deps.listProviders ?? listVideoGenerationProviders;
   return buildNoCapabilityModelConfiguredMessage({
     capabilityLabel: "video-generation",
     modelConfigKey: "videoGenerationModel",
-    providers: listVideoGenerationProviders(cfg),
+    providers: listProviders(cfg),
+    getProviderEnvVars: deps.getProviderEnvVars,
   });
 }
 
-export function listRuntimeVideoGenerationProviders(params?: { config?: OpenClawConfig }) {
-  return listVideoGenerationProviders(params?.config);
+export function listRuntimeVideoGenerationProviders(
+  params?: { config?: OpenClawConfig },
+  deps: VideoGenerationRuntimeDeps = {},
+) {
+  return (deps.listProviders ?? listVideoGenerationProviders)(params?.config);
 }
 
 export async function generateVideo(
   params: GenerateVideoParams,
+  deps: VideoGenerationRuntimeDeps = {},
 ): Promise<GenerateVideoRuntimeResult> {
+  const getProvider = deps.getProvider ?? getVideoGenerationProvider;
+  const listProviders = deps.listProviders ?? listVideoGenerationProviders;
+  const logger = deps.log ?? log;
   const candidates = resolveCapabilityModelCandidates({
     cfg: params.cfg,
     modelConfig: params.cfg.agents?.defaults?.videoGenerationModel,
     modelOverride: params.modelOverride,
     parseModelRef: parseVideoGenerationModelRef,
     agentDir: params.agentDir,
-    listProviders: listVideoGenerationProviders,
+    listProviders,
   });
   if (candidates.length === 0) {
-    throw new Error(buildNoVideoGenerationModelConfiguredMessage(params.cfg));
+    throw new Error(buildNoVideoGenerationModelConfiguredMessage(params.cfg, deps));
   }
 
   const attempts: FallbackAttempt[] = [];
@@ -110,12 +131,12 @@ export async function generateVideo(
     // passed over without flooding logs on long fallback chains.
     if (!skipWarnEmitted) {
       skipWarnEmitted = true;
-      log.warn(`video-generation candidate skipped: ${reason}`);
+      logger.warn(`video-generation candidate skipped: ${reason}`);
     }
   };
 
   for (const candidate of candidates) {
-    const provider = getVideoGenerationProvider(candidate.provider, params.cfg);
+    const provider = getProvider(candidate.provider, params.cfg);
     if (!provider) {
       const error = `No video-generation provider registered for ${candidate.provider}`;
       attempts.push({
@@ -151,7 +172,7 @@ export async function generateVideo(
         attempts.push({ provider: candidate.provider, model: candidate.model, error });
         lastError = new Error(error);
         warnOnFirstSkip(error);
-        log.debug(
+        logger.debug(
           `video-generation candidate skipped (audio capability): ${candidate.provider}/${candidate.model}`,
         );
         continue;
@@ -188,7 +209,7 @@ export async function generateVideo(
         attempts.push({ provider: candidate.provider, model: candidate.model, error: mismatch });
         lastError = new Error(mismatch);
         warnOnFirstSkip(mismatch);
-        log.debug(
+        logger.debug(
           `video-generation candidate skipped (providerOptions): ${candidate.provider}/${candidate.model}`,
         );
         continue;
@@ -226,7 +247,7 @@ export async function generateVideo(
         attempts.push({ provider: candidate.provider, model: candidate.model, error });
         lastError = new Error(error);
         warnOnFirstSkip(error);
-        log.debug(
+        logger.debug(
           `video-generation candidate skipped (duration capability): ${candidate.provider}/${candidate.model}`,
         );
         continue;
@@ -299,7 +320,7 @@ export async function generateVideo(
         model: candidate.model,
         error: err,
       });
-      log.debug(`video-generation candidate failed: ${candidate.provider}/${candidate.model}`);
+      logger.debug(`video-generation candidate failed: ${candidate.provider}/${candidate.model}`);
     }
   }
 

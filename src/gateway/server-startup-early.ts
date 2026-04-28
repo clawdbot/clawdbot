@@ -57,7 +57,7 @@ export async function startGatewayEarlyRuntime(params: {
   skillsRefreshDelayMs: number;
   getSkillsRefreshTimer: () => ReturnType<typeof setTimeout> | null;
   setSkillsRefreshTimer: (timer: ReturnType<typeof setTimeout> | null) => void;
-  loadConfig: () => OpenClawConfig;
+  getRuntimeConfig: () => OpenClawConfig;
 }) {
   let bonjourStop: (() => Promise<void>) | null = null;
   if (!params.minimalTestGateway) {
@@ -100,7 +100,7 @@ export async function startGatewayEarlyRuntime(params: {
         }
         const nextTimer = setTimeout(() => {
           params.setSkillsRefreshTimer(null);
-          void refreshRemoteBinsForConnectedNodes(params.loadConfig());
+          void refreshRemoteBinsForConnectedNodes(params.getRuntimeConfig());
         }, params.skillsRefreshDelayMs);
         params.setSkillsRefreshTimer(nextTimer);
       });

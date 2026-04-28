@@ -249,9 +249,10 @@ export function buildOllamaModelDefinition(
       : capabilities.includes("thinking");
   const compat =
     capabilities === undefined
-      ? undefined
+      ? { supportsUsageInStreaming: true }
       : {
           supportsTools: capabilities.includes("tools"),
+          supportsUsageInStreaming: true,
         };
   return {
     id: modelId,
@@ -261,7 +262,7 @@ export function buildOllamaModelDefinition(
     cost: OLLAMA_DEFAULT_COST,
     contextWindow: contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW,
     maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
-    ...(compat ? { compat } : {}),
+    compat,
   };
 }
 

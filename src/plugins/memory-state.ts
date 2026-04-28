@@ -68,6 +68,7 @@ export type MemoryFlushPlan = {
   softThresholdTokens: number;
   forceFlushTranscriptBytes: number;
   reserveTokensFloor: number;
+  model?: string;
   prompt: string;
   systemPrompt: string;
   relativePath: string;

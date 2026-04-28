@@ -44,6 +44,7 @@ vi.mock("../agents/model-selection.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: () => ({}),
   loadConfig: () => ({}),
 }));
 

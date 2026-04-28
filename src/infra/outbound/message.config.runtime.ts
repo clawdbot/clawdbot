@@ -1,1 +1,1 @@
-export { loadConfig } from "../../config/io.js";
+export { getRuntimeConfig } from "../../config/io.js";

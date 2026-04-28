@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { type ModelAliasIndex, modelKey } from "../agents/model-selection.js";
-import { resolveModelDirectiveSelection } from "./reply/model-selection.js";
+import type { ModelAliasIndex } from "../agents/model-selection-shared.js";
+import { resolveModelDirectiveSelection } from "./reply/model-selection-directive.js";
 
 const emptyAliasIndex: ModelAliasIndex = {
   byAlias: new Map(),
@@ -79,7 +79,7 @@ describe("directive behavior model fuzzy selection", () => {
           },
         ],
       ]),
-      byKey: new Map([[modelKey("moonshot", "kimi-k2-0905-preview"), ["Kimi"]]]),
+      byKey: new Map([["moonshot/kimi-k2-0905-preview", ["Kimi"]]]),
     };
 
     expect(

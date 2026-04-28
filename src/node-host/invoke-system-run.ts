@@ -189,15 +189,15 @@ export type HandleSystemRunInvokeOptions = {
   sendInvokeResult: (result: SystemRunInvokeResult) => Promise<void>;
   sendExecFinishedEvent: (params: ExecFinishedEventParams) => Promise<void>;
   preferMacAppExecHost: boolean;
-  loadConfig?: () => OpenClawConfig;
+  getRuntimeConfig?: () => OpenClawConfig;
 };
 
 async function loadSystemRunConfig(opts: HandleSystemRunInvokeOptions): Promise<OpenClawConfig> {
-  if (opts.loadConfig) {
-    return opts.loadConfig();
+  if (opts.getRuntimeConfig) {
+    return opts.getRuntimeConfig();
   }
-  const { loadConfig } = await import("../config/config.js");
-  return loadConfig();
+  const { getRuntimeConfig } = await import("../config/config.js");
+  return getRuntimeConfig();
 }
 
 async function sendSystemRunDenied(

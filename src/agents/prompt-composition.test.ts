@@ -64,7 +64,11 @@ describe("prompt composition invariants", () => {
 
     expect(first.systemPrompt).toContain("You are in a Slack group chat.");
     expect(first.systemPrompt).toContain("Activation: trigger-only");
+    expect(first.systemPrompt).toContain('reply with exactly "NO_REPLY"');
+    expect(first.systemPrompt).not.toContain("## Silent Replies");
     expect(steady.systemPrompt).toContain("You are in a Slack group chat.");
+    expect(steady.systemPrompt).toContain('reply with exactly "NO_REPLY"');
+    expect(steady.systemPrompt).not.toContain("## Silent Replies");
     expect(steady.systemPrompt).not.toContain("Activation: trigger-only");
     expect(first.systemPrompt).not.toBe(steady.systemPrompt);
     expect(steady.systemPrompt).toBe(eventTurn.systemPrompt);
@@ -80,6 +84,7 @@ describe("prompt composition invariants", () => {
     expect(first.systemPrompt).toContain("You are in a Slack direct conversation.");
     expect(first.systemPrompt).toContain('reply with exactly "NO_REPLY"');
     expect(first.systemPrompt).toContain("so OpenClaw can send a short fallback reply");
+    expect(first.systemPrompt).not.toContain("## Silent Replies");
   });
 
   it("keeps maintenance prompts out of the normal stable-turn invariant set", () => {

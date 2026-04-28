@@ -163,12 +163,15 @@ export async function handlePendingApprovalRequest<
   params.context.broadcast(params.requestEventName, params.requestEvent, { dropIfSlow: true });
 
   const hasApprovalClients = params.context.hasExecApprovalClients?.(params.clientConnId) ?? false;
-  const hasTurnSourceRoute = hasApprovalTurnSourceRoute({
-    turnSourceChannel: params.record.request.turnSourceChannel,
-    turnSourceAccountId: params.record.request.turnSourceAccountId,
-  });
   const deliveredResult = params.deliverRequest();
   const delivered = isPromiseLike(deliveredResult) ? await deliveredResult : deliveredResult;
+  const hasTurnSourceRoute =
+    !hasApprovalClients &&
+    !delivered &&
+    hasApprovalTurnSourceRoute({
+      turnSourceChannel: params.record.request.turnSourceChannel,
+      turnSourceAccountId: params.record.request.turnSourceAccountId,
+    });
 
   if (!hasApprovalClients && !hasTurnSourceRoute && !delivered) {
     params.manager.expire(params.record.id, "no-approval-route");

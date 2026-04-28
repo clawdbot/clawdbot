@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { withTempHome } from "../../../../../test/helpers/temp-home.js";
 import { resolveMatrixAccountStorageRoot } from "../../storage-paths.js";
 import type { MatrixRoomKeyBackupRestoreResult } from "../sdk.js";
 import { maybeRestoreLegacyMatrixBackup } from "./legacy-crypto-restore.js";

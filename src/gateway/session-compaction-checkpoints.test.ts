@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   captureCompactionCheckpointSnapshot,
   cleanupCompactionCheckpointSnapshot,
+  MAX_COMPACTION_CHECKPOINT_SNAPSHOT_BYTES,
   persistSessionCompactionCheckpoint,
 } from "./session-compaction-checkpoints.js";
 
@@ -82,6 +83,31 @@ describe("session-compaction-checkpoints", () => {
 
     expect(fsSync.existsSync(snapshot!.sessionFile)).toBe(false);
     expect(fsSync.existsSync(sessionFile!)).toBe(true);
+  });
+
+  test("capture skips oversized pre-compaction transcripts", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-oversized-"));
+    tempDirs.push(dir);
+
+    const session = SessionManager.create(dir, dir);
+    session.appendMessage({
+      role: "user",
+      content: "before compaction",
+      timestamp: Date.now(),
+    });
+    const sessionFile = session.getSessionFile();
+    expect(sessionFile).toBeTruthy();
+    await fs.appendFile(sessionFile!, "x".repeat(128), "utf-8");
+
+    const snapshot = captureCompactionCheckpointSnapshot({
+      sessionManager: session,
+      sessionFile: sessionFile!,
+      maxBytes: 64,
+    });
+
+    expect(snapshot).toBeNull();
+    expect(MAX_COMPACTION_CHECKPOINT_SNAPSHOT_BYTES).toBeGreaterThan(64);
+    expect(fsSync.readdirSync(dir).filter((file) => file.includes(".checkpoint."))).toEqual([]);
   });
 
   test("persist trims old checkpoint metadata and removes trimmed snapshot files", async () => {

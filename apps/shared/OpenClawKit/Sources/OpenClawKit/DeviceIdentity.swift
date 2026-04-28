@@ -45,7 +45,8 @@ public enum DeviceIdentityStore {
            let decoded = try? JSONDecoder().decode(DeviceIdentity.self, from: data),
            !decoded.deviceId.isEmpty,
            !decoded.publicKey.isEmpty,
-           !decoded.privateKey.isEmpty {
+           !decoded.privateKey.isEmpty
+        {
             return decoded
         }
         let identity = self.generate()
@@ -107,6 +108,6 @@ public enum DeviceIdentityStore {
         let base = DeviceIdentityPaths.stateDirURL()
         return base
             .appendingPathComponent("identity", isDirectory: true)
-            .appendingPathComponent(fileName, isDirectory: false)
+            .appendingPathComponent(self.fileName, isDirectory: false)
     }
 }

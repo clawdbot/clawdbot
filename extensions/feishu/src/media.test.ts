@@ -51,11 +51,6 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("../../../src/channels/plugins/bundled.js", () => ({
-  bundledChannelPlugins: [],
-  bundledChannelSetupPlugins: [],
-}));
-
 let downloadImageFeishu: typeof import("./media.js").downloadImageFeishu;
 let downloadMessageResourceFeishu: typeof import("./media.js").downloadMessageResourceFeishu;
 let sanitizeFileNameForUpload: typeof import("./media.js").sanitizeFileNameForUpload;
@@ -720,5 +715,61 @@ describe("downloadMessageResourceFeishu", () => {
       contentType: "video/mp4",
       fileName: "clip.mp4",
     });
+  });
+
+  it("recovers CJK filenames from plain Content-Disposition headers decoded as Latin-1", async () => {
+    const fileName = "武汉15座山登山信息汇总.csv";
+    const latin1HeaderFileName = Buffer.from(fileName, "utf8").toString("latin1");
+    messageResourceGetMock.mockResolvedValueOnce({
+      data: Buffer.from("fake-file-data"),
+      headers: {
+        "content-disposition": `attachment; filename="${latin1HeaderFileName}"`,
+      },
+    });
+
+    const result = await downloadMessageResourceFeishu({
+      cfg: emptyConfig,
+      messageId: "om_file_msg",
+      fileKey: "file_key_csv",
+      type: "file",
+    });
+
+    expect(result.fileName).toBe(fileName);
+  });
+
+  it("keeps valid Latin-1 filenames from plain Content-Disposition headers unchanged", async () => {
+    messageResourceGetMock.mockResolvedValueOnce({
+      data: Buffer.from("fake-file-data"),
+      headers: {
+        "content-disposition": `attachment; filename="café-Â©.txt"`,
+      },
+    });
+
+    const result = await downloadMessageResourceFeishu({
+      cfg: emptyConfig,
+      messageId: "om_latin1_msg",
+      fileKey: "file_key_latin1",
+      type: "file",
+    });
+
+    expect(result.fileName).toBe("café-Â©.txt");
+  });
+
+  it("keeps JSON-derived file_name metadata unchanged", async () => {
+    const fileName = "武汉15座山登山信息汇总.csv";
+    const latin1LookingFileName = Buffer.from(fileName, "utf8").toString("latin1");
+    messageResourceGetMock.mockResolvedValueOnce({
+      data: Buffer.from("fake-file-data"),
+      file_name: latin1LookingFileName,
+    });
+
+    const result = await downloadMessageResourceFeishu({
+      cfg: emptyConfig,
+      messageId: "om_json_file_msg",
+      fileKey: "file_key_json",
+      type: "file",
+    });
+
+    expect(result.fileName).toBe(latin1LookingFileName);
   });
 });

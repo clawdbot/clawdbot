@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramMessageActions, telegramMessageActionRuntime } from "./channel-actions.js";
 
@@ -18,6 +18,12 @@ describe("telegramMessageActions", () => {
 
   afterEach(() => {
     telegramMessageActionRuntime.handleTelegramAction = originalHandleTelegramAction;
+  });
+
+  it("executes message actions in the gateway when a gateway is available", () => {
+    for (const action of ["send", "poll", "react", "delete", "edit"] as const) {
+      expect(telegramMessageActions.resolveExecutionMode?.({ action })).toBe("gateway");
+    }
   });
 
   it("allows interactive-only sends", async () => {

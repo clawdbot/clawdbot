@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
+import { repoInstallSpec } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import { repoInstallSpec } from "../../test/helpers/bundled-plugin-paths.js";
-import { withTempHome } from "../../test/helpers/temp-home.js";
 import {
   detectPluginInstallPathIssue,
   formatPluginInstallPathIssue,

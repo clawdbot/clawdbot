@@ -10,11 +10,6 @@ vi.mock("./channel.runtime.js", () => ({
   },
 }));
 
-vi.mock("../../../src/channels/plugins/bundled.js", () => ({
-  bundledChannelPlugins: [],
-  bundledChannelSetupPlugins: [],
-}));
-
 let bluebubblesPlugin: typeof import("./channel.js").bluebubblesPlugin;
 
 describe("bluebubblesPlugin.status.probeAccount", () => {

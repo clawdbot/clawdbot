@@ -29,6 +29,8 @@ export type ReplyThreadingPolicy = {
   implicitCurrentMessage?: "default" | "allow" | "deny";
 };
 
+export type SourceReplyDeliveryMode = "automatic" | "message_tool_only";
+
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;
@@ -143,6 +145,12 @@ export type GetReplyOptions = {
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
   onModelSelected?: (ctx: ModelSelectedContext) => void;
+  /**
+   * Controls whether normal assistant replies are automatically delivered to
+   * the source conversation. `message_tool_only` keeps final/block/preview
+   * output private; visible channel output must come from the message tool.
+   */
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   disableBlockStreaming?: boolean;
   /** Timeout for block reply delivery (ms). */
   blockReplyTimeoutMs?: number;

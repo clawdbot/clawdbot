@@ -23,14 +23,13 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { ActiveMediaModel } from "./active-model.types.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
-import { resolveAutoMediaKeyProviders, resolveDefaultMediaModel } from "./defaults.js";
 import { isMediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
 import { extractGeminiResponse } from "./output-extract.js";
+import { normalizeMediaProviderId } from "./provider-id.js";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
-  normalizeMediaProviderId,
 } from "./provider-registry.js";
 import { providerSupportsCapability } from "./provider-supports.js";
 import { resolveModelEntries, resolveScopeDecision } from "./resolve.js";
@@ -155,6 +154,46 @@ function resolveCatalogImageModelId(params: {
   return normalizeOptionalString((autoEntry ?? matches[0])?.id);
 }
 
+function resolveDefaultMediaModelFromRegistry(params: {
+  providerId: string;
+  capability: MediaUnderstandingCapability;
+  providerRegistry: ProviderRegistry;
+}): string | undefined {
+  const provider = params.providerRegistry.get(normalizeMediaProviderId(params.providerId));
+  return normalizeOptionalString(provider?.defaultModels?.[params.capability]);
+}
+
+function resolveAutoMediaKeyProvidersFromRegistry(params: {
+  capability: MediaUnderstandingCapability;
+  providerRegistry: ProviderRegistry;
+}): string[] {
+  type AutoProviderEntry = {
+    provider: MediaUnderstandingProvider;
+    priority: number;
+  };
+  return [...params.providerRegistry.values()]
+    .filter(
+      (provider) =>
+        provider.capabilities?.includes(params.capability) ??
+        providerSupportsCapability(provider, params.capability),
+    )
+    .map((provider): AutoProviderEntry | null => {
+      const priority = provider.autoPriority?.[params.capability];
+      return typeof priority === "number" && Number.isFinite(priority)
+        ? { provider, priority }
+        : null;
+    })
+    .filter((entry): entry is AutoProviderEntry => entry !== null)
+    .toSorted((left, right) => {
+      if (left.priority !== right.priority) {
+        return left.priority - right.priority;
+      }
+      return left.provider.id.localeCompare(right.provider.id);
+    })
+    .map((entry) => normalizeMediaProviderId(entry.provider.id))
+    .filter(Boolean);
+}
+
 async function explicitImageModelVisionStatus(params: {
   cfg: OpenClawConfig;
   providerId: string;
@@ -176,6 +215,7 @@ async function explicitImageModelVisionStatus(params: {
 async function resolveAutoImageModelId(params: {
   cfg: OpenClawConfig;
   providerId: string;
+  providerRegistry: ProviderRegistry;
   explicitModel?: string;
 }): Promise<string | undefined> {
   const explicit = normalizeOptionalString(params.explicitModel);
@@ -193,13 +233,22 @@ async function resolveAutoImageModelId(params: {
   if (configuredModel) {
     return configuredModel;
   }
-  const defaultModel = resolveDefaultMediaModel({
+  const defaultModel = resolveDefaultMediaModelFromRegistry({
+    providerId: params.providerId,
+    capability: "image",
+    providerRegistry: params.providerRegistry,
+  });
+  if (defaultModel) {
+    return defaultModel;
+  }
+  const { resolveDefaultMediaModel } = await import("./defaults.js");
+  const bundledDefaultModel = resolveDefaultMediaModel({
     cfg: params.cfg,
     providerId: params.providerId,
     capability: "image",
   });
-  if (defaultModel) {
-    return defaultModel;
+  if (bundledDefaultModel) {
+    return bundledDefaultModel;
   }
   const { loadModelCatalog, modelSupportsVision } = await loadModelCatalogApi();
   const catalog = await loadModelCatalog({ config: params.cfg });
@@ -221,8 +270,15 @@ export function resolveMediaAttachmentLocalRoots(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
 }): readonly string[] {
+  // ctx.MediaWorkspaceDir is set by chat.send's prestageNonImageOffloads when
+  // inbound attachments were staged into a sandbox workspace. The paths in
+  // ctx.MediaPaths are kept sandbox-relative (so the agent inside the
+  // container can read them), and the workspace dir is carried separately so
+  // host-side media-understanding can still resolve them via this root list.
+  const workspaceDir = params.ctx.MediaWorkspaceDir;
   return mergeInboundPathRoots(
     getDefaultMediaLocalRoots(),
+    workspaceDir ? [path.resolve(workspaceDir)] : undefined,
     resolveChannelInboundAttachmentRoots(params),
   );
 }
@@ -499,7 +555,12 @@ async function resolveKeyEntry(params: {
     }
     const resolvedModel =
       capability === "image"
-        ? await resolveAutoImageModelId({ cfg, providerId, explicitModel: model })
+        ? await resolveAutoImageModelId({
+            cfg,
+            providerId,
+            providerRegistry,
+            explicitModel: model,
+          })
         : model;
     if (capability === "image" && !resolvedModel) {
       return null;
@@ -518,8 +579,7 @@ async function resolveKeyEntry(params: {
     cfg,
     providerRegistry,
     capability,
-    fallbackProviders: resolveAutoMediaKeyProviders({
-      cfg,
+    fallbackProviders: resolveAutoMediaKeyProvidersFromRegistry({
       capability,
       providerRegistry,
     }),
@@ -694,6 +754,7 @@ async function resolveActiveModelEntry(params: {
       ? await resolveAutoImageModelId({
           cfg: params.cfg,
           providerId,
+          providerRegistry: params.providerRegistry,
           explicitModel: params.activeModel?.model,
         })
       : params.activeModel?.model;

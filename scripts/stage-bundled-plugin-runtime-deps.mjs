@@ -885,6 +885,7 @@ function runNpmInstall(params) {
     ...(params.npmRunner.env ?? process.env),
     CI: "1",
     npm_config_audit: "false",
+    npm_config_dry_run: "false",
     npm_config_fund: "false",
     npm_config_legacy_peer_deps: "true",
     npm_config_loglevel: "error",

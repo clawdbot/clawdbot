@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { QQBOT_ACCESS_REASON } from "../access/index.js";
 import type { RefIndexEntry } from "../ref/types.js";
 import type { InboundPipelineDeps } from "./inbound-context.js";
 import { buildInboundContext } from "./inbound-pipeline.js";
@@ -93,6 +92,36 @@ function makeDeps(overrides: Partial<InboundPipelineDeps> = {}): InboundPipeline
     log: { info: vi.fn(), error: vi.fn(), debug: vi.fn() },
     runtime: makeRuntime(),
     startTyping: vi.fn(async () => ({ keepAlive: null })),
+    adapters: {
+      history: {
+        recordPendingHistoryEntry: vi.fn(() => []),
+        buildPendingHistoryContext: vi.fn(() => ""),
+        clearPendingHistory: vi.fn(),
+      },
+      mentionGate: {
+        resolveInboundMentionDecision: vi.fn(() => ({
+          effectiveWasMentioned: false,
+          shouldSkip: false,
+          shouldBypassMention: false,
+          implicitMention: false,
+        })),
+      },
+      audioConvert: {
+        convertSilkToWav: vi.fn(async () => null),
+        isVoiceAttachment: vi.fn(() => false),
+        formatDuration: vi.fn(() => "0s"),
+      },
+      outboundAudio: {
+        audioFileToSilkBase64: vi.fn(async () => undefined),
+        isAudioFile: vi.fn(() => false),
+        shouldTranscodeVoice: vi.fn(() => false),
+        waitForFile: vi.fn(async () => 0),
+      },
+      commands: {
+        pluginVersion: "0.0.0-test",
+        resolveVersion: vi.fn(() => "0.0.0"),
+      },
+    },
     ...overrides,
   };
 }
@@ -105,7 +134,7 @@ describe("buildInboundContext bot self-echo suppression", () => {
     processAttachmentsMock.mockResolvedValue(emptyProcessedAttachments);
   });
 
-  it("blocks inbound events whose current msgIdx matches this bot's outbound ref", async () => {
+  it("does not block inbound events whose current msgIdx matches this bot's outbound ref (self-echo handled upstream)", async () => {
     getRefIndexMock.mockReturnValue({
       content: "mirrored reply",
       senderId: "qq-main",
@@ -116,13 +145,11 @@ describe("buildInboundContext bot self-echo suppression", () => {
 
     const inbound = await buildInboundContext(makeEvent({ msgIdx: "REF_BOT" }), deps);
 
-    expect(getRefIndexMock).toHaveBeenCalledWith("REF_BOT");
-    expect(inbound.blocked).toBe(true);
-    expect(inbound.blockReasonCode).toBe(QQBOT_ACCESS_REASON.BOT_SELF_ECHO);
-    expect(inbound.body).toBe("");
-    expect(deps.startTyping).not.toHaveBeenCalled();
-    expect(processAttachmentsMock).not.toHaveBeenCalled();
-    expect(setRefIndexMock).not.toHaveBeenCalled();
+    // Self-echo suppression is handled by the gateway layer upstream;
+    // buildInboundContext no longer short-circuits on msgIdx match.
+    expect(inbound.blocked).toBe(false);
+    expect(deps.startTyping).toHaveBeenCalledTimes(1);
+    expect(processAttachmentsMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not block a user message that quotes a bot-authored ref", async () => {

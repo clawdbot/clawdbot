@@ -6,9 +6,11 @@ import {
   shouldEnsureCliPath,
   shouldStartCrestodianForBareRoot,
   shouldStartCrestodianForModernOnboard,
+  shouldStartProxyForCli,
   shouldUseBrowserHelpFastPath,
   shouldUseRootHelpFastPath,
 } from "./run-main-policy.js";
+import { isGatewayRunFastPathArgv } from "./run-main.js";
 
 const memoryWikiCommandAliasRegistry: PluginManifestCommandAliasRegistry = {
   plugins: [
@@ -27,6 +29,26 @@ const memoryCoreCommandAliasRegistry: PluginManifestCommandAliasRegistry = {
     },
   ],
 };
+
+describe("isGatewayRunFastPathArgv", () => {
+  it("matches only plain gateway foreground starts without root options or help", () => {
+    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway"])).toBe(true);
+    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--force"])).toBe(true);
+    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--port", "18789"])).toBe(true);
+    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--auth=none"])).toBe(true);
+    expect(
+      isGatewayRunFastPathArgv(["node", "openclaw", "--no-color", "gateway", "--bind", "loopback"]),
+    ).toBe(true);
+    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "run"])).toBe(true);
+    expect(
+      isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "run", "--raw-stream-path", "x"]),
+    ).toBe(true);
+    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "call", "health"])).toBe(false);
+    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--help"])).toBe(false);
+    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--port"])).toBe(false);
+    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--unknown"])).toBe(false);
+  });
+});
 
 describe("rewriteUpdateFlagArgv", () => {
   it("leaves argv unchanged when --update is absent", () => {
@@ -119,6 +141,13 @@ describe("shouldStartCrestodianForModernOnboard", () => {
     expect(
       shouldStartCrestodianForModernOnboard(["node", "openclaw", "onboard", "--modern", "--help"]),
     ).toBe(false);
+  });
+});
+
+describe("shouldStartProxyForCli", () => {
+  it("starts managed proxy routing for the --update shorthand", () => {
+    expect(shouldStartProxyForCli(["node", "openclaw", "--update"])).toBe(true);
+    expect(shouldStartProxyForCli(["node", "openclaw", "--profile", "p", "--update"])).toBe(true);
   });
 });
 

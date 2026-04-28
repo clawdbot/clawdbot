@@ -1,5 +1,8 @@
 {
   "id": "azure-speech",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "name": "Azure Speech",
   "description": "Azure AI Speech text-to-speech (MP3, native Ogg/Opus voice notes, PCM telephony).",

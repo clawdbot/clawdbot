@@ -109,6 +109,7 @@ struct VoiceWakeRuntimeTests {
             trimWake: VoiceWakeRuntime._testTrimmedAfterTrigger)
         #expect(match == nil)
     }
+
     @Test func `trims after chinese trigger keeps post speech`() {
         let triggers = ["小爪", "openclaw"]
         let text = "嘿 小爪 帮我打开设置"

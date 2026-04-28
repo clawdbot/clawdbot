@@ -1,4 +1,4 @@
-import { runTasksWithConcurrency } from "openclaw/plugin-sdk/infra-runtime";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { formatSlackFileReference } from "../../file-reference.js";

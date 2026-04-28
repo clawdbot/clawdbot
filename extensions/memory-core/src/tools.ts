@@ -182,6 +182,7 @@ async function executeMemoryReadResult<T>(params: {
 
 export function createMemorySearchTool(options: {
   config?: OpenClawConfig;
+  getConfig?: () => OpenClawConfig | undefined;
   agentSessionKey?: string;
   sandboxed?: boolean;
 }) {
@@ -344,6 +345,7 @@ export function createMemorySearchTool(options: {
 
 export function createMemoryGetTool(options: {
   config?: OpenClawConfig;
+  getConfig?: () => OpenClawConfig | undefined;
   agentSessionKey?: string;
 }) {
   return createMemoryTool({

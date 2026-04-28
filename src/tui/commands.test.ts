@@ -38,6 +38,23 @@ describe("getSlashCommands", () => {
     expect(gatewayStatus?.description).toBe("Show gateway status summary");
     expect(crestodian?.description).toBe("Return to Crestodian");
   });
+
+  it("uses session-provided thinking levels for completions", () => {
+    const commands = getSlashCommands({
+      provider: "ollama",
+      model: "qwen3:0.6b",
+      thinkingLevels: [
+        { id: "off", label: "off" },
+        { id: "medium", label: "medium" },
+        { id: "max", label: "max" },
+      ],
+    });
+    const think = commands.find((command) => command.name === "think");
+    expect(think?.getArgumentCompletions?.("m")).toEqual([
+      { value: "medium", label: "medium" },
+      { value: "max", label: "max" },
+    ]);
+  });
 });
 
 describe("helpText", () => {

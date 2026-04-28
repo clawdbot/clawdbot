@@ -1,10 +1,9 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ModelProviderConfig } from "../config/types.js";
+import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import {
   expectAugmentedCodexCatalog,
-  expectCodexBuiltInSuppression,
   expectCodexMissingAuthHint,
   expectedAugmentedOpenaiCodexCatalogEntries,
 } from "./provider-runtime.test-support.js";
@@ -70,7 +69,6 @@ let resolveProviderFollowupFallbackRoute: typeof import("./provider-runtime.js")
 let resolveProviderStreamFn: typeof import("./provider-runtime.js").resolveProviderStreamFn;
 let resolveProviderCacheTtlEligibility: typeof import("./provider-runtime.js").resolveProviderCacheTtlEligibility;
 let resolveProviderBinaryThinking: typeof import("./provider-runtime.js").resolveProviderBinaryThinking;
-let resolveProviderBuiltInModelSuppression: typeof import("./provider-runtime.js").resolveProviderBuiltInModelSuppression;
 let createProviderEmbeddingProvider: typeof import("./provider-runtime.js").createProviderEmbeddingProvider;
 let resolveProviderDefaultThinkingLevel: typeof import("./provider-runtime.js").resolveProviderDefaultThinkingLevel;
 let resolveProviderModernModelRef: typeof import("./provider-runtime.js").resolveProviderModernModelRef;
@@ -144,15 +142,6 @@ function createOpenAiCatalogProviderPlugin(
     id: "openai",
     label: "OpenAI",
     auth: [],
-    suppressBuiltInModel: ({ provider, modelId }) =>
-      (provider === "openai" || provider === "azure-openai-responses") &&
-      modelId === "gpt-5.3-codex-spark"
-        ? {
-            suppress: true,
-            errorMessage:
-              "gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
-          }
-        : undefined,
     augmentModelCatalog: () => [
       { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
       { provider: "openai", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
@@ -160,7 +149,6 @@ function createOpenAiCatalogProviderPlugin(
       { provider: "openai", id: "gpt-5.4-nano", name: "gpt-5.4-nano" },
       { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
       { provider: "openai-codex", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
-      { provider: "openai-codex", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
     ],
     ...overrides,
   };
@@ -303,7 +291,6 @@ describe("provider-runtime", () => {
       resolveProviderStreamFn,
       resolveProviderCacheTtlEligibility,
       resolveProviderBinaryThinking,
-      resolveProviderBuiltInModelSuppression,
       createProviderEmbeddingProvider,
       resolveProviderDefaultThinkingLevel,
       resolveProviderModernModelRef,
@@ -405,6 +392,201 @@ describe("provider-runtime", () => {
     );
   });
 
+  it("separates provider hook cache keys by load policy", () => {
+    const base = {
+      workspaceDir: "/tmp/workspace",
+      env: { OPENCLAW_HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv,
+      providerRefs: ["demo"],
+    };
+
+    expect(
+      providerRuntimeTesting.buildHookProviderCacheKey({
+        ...base,
+        applyAutoEnable: false,
+        bundledProviderAllowlistCompat: false,
+        bundledProviderVitestCompat: false,
+        installBundledRuntimeDeps: false,
+      }),
+    ).not.toBe(providerRuntimeTesting.buildHookProviderCacheKey(base));
+  });
+
+  it("ignores unrelated plugin config values in provider hook cache keys", () => {
+    const base = {
+      workspaceDir: "/tmp/workspace",
+      env: { OPENCLAW_HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv,
+      onlyPluginIds: ["demo"],
+    };
+    const firstConfig = {
+      plugins: {
+        entries: {
+          demo: { enabled: true, config: { endpoint: "https://demo.example" } },
+          "active-memory": { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    const secondConfig = {
+      plugins: {
+        entries: {
+          demo: { enabled: true, config: { endpoint: "https://demo.example" } },
+          "active-memory": { enabled: true, config: { qmd: { searchMode: "fast" } } },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      providerRuntimeTesting.buildHookProviderCacheKey({
+        ...base,
+        config: firstConfig,
+        fullConfigPluginIds: ["demo"],
+      }),
+    ).toBe(
+      providerRuntimeTesting.buildHookProviderCacheKey({
+        ...base,
+        config: secondConfig,
+        fullConfigPluginIds: ["demo"],
+      }),
+    );
+  });
+
+  it("keeps scoped provider plugin config in provider hook cache keys", () => {
+    const base = {
+      workspaceDir: "/tmp/workspace",
+      env: { OPENCLAW_HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv,
+      onlyPluginIds: ["demo"],
+      fullConfigPluginIds: ["demo"],
+    };
+
+    expect(
+      providerRuntimeTesting.buildHookProviderCacheKey({
+        ...base,
+        config: {
+          plugins: {
+            entries: {
+              demo: { enabled: true, config: { endpoint: "https://one.example" } },
+            },
+          },
+        } as OpenClawConfig,
+      }),
+    ).not.toBe(
+      providerRuntimeTesting.buildHookProviderCacheKey({
+        ...base,
+        config: {
+          plugins: {
+            entries: {
+              demo: { enabled: true, config: { endpoint: "https://two.example" } },
+            },
+          },
+        } as OpenClawConfig,
+      }),
+    );
+  });
+
+  it("keeps provider-ref owner plugin config in provider hook cache keys", () => {
+    const provider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo",
+      auth: [],
+    };
+    resolveOwningPluginIdsForProviderMock.mockReturnValue(["demo"]);
+    resolvePluginProvidersMock.mockReturnValue([provider]);
+    const firstConfig = {
+      plugins: {
+        entries: {
+          demo: { enabled: true, config: { endpoint: "https://one.example" } },
+        },
+      },
+    } as OpenClawConfig;
+    const secondConfig = {
+      plugins: {
+        entries: {
+          demo: { enabled: true, config: { endpoint: "https://two.example" } },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID, config: firstConfig })).toBe(
+      provider,
+    );
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID, config: secondConfig })).toBe(
+      provider,
+    );
+
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses provider-ref hook loads when unrelated plugin config changes", () => {
+    const provider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo",
+      auth: [],
+    };
+    resolveOwningPluginIdsForProviderMock.mockReturnValue(["demo"]);
+    resolvePluginProvidersMock.mockReturnValue([provider]);
+    const firstConfig = {
+      plugins: {
+        entries: {
+          demo: { enabled: true, config: { endpoint: "https://demo.example" } },
+          "active-memory": { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    const secondConfig = {
+      plugins: {
+        entries: {
+          demo: { enabled: true, config: { endpoint: "https://demo.example" } },
+          "active-memory": { enabled: true, config: { qmd: { searchMode: "fast" } } },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID, config: firstConfig })).toBe(
+      provider,
+    );
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID, config: secondConfig })).toBe(
+      provider,
+    );
+
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reuse auto-enabled runtime providers for synthetic auth fallback", () => {
+    const runtimeProvider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo",
+      auth: [],
+      resolveSyntheticAuth: () => ({
+        apiKey: "default-runtime-token",
+        source: "default runtime",
+        mode: "api-key" as const,
+      }),
+    };
+    resolvePluginProvidersMock.mockImplementation((params) =>
+      params.applyAutoEnable === false &&
+      params.bundledProviderAllowlistCompat === false &&
+      params.bundledProviderVitestCompat === false &&
+      params.installBundledRuntimeDeps === false
+        ? []
+        : [runtimeProvider],
+    );
+
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID })).toBe(runtimeProvider);
+
+    expect(
+      resolveProviderSyntheticAuthWithPlugin({
+        provider: DEMO_PROVIDER_ID,
+        context: {
+          provider: DEMO_PROVIDER_ID,
+          providerConfig: {
+            api: "ollama",
+            baseUrl: "http://127.0.0.1:11434",
+            models: [],
+          },
+        },
+      }),
+    ).toBeUndefined();
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(3);
+  });
+
   it("skips provider runtime loading when no plugin declares external auth hooks", () => {
     expect(
       resolveExternalAuthProfilesWithPlugins({
@@ -501,6 +683,91 @@ describe("provider-runtime", () => {
       }),
     ]);
     expect(providerRuntimeWarnMock).not.toHaveBeenCalled();
+  });
+
+  it("reuses catalog hook provider loads when only non-plugin config changes", async () => {
+    resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["demo"]);
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "demo",
+        label: "Demo",
+        auth: [],
+        augmentModelCatalog: () => [{ provider: "demo", id: "demo-model", name: "Demo Model" }],
+      },
+    ]);
+    const baseConfig = {
+      plugins: {
+        entries: {
+          demo: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    const firstConfig = {
+      ...baseConfig,
+      agents: { defaults: { model: "openai/gpt-5.4" } },
+    } as OpenClawConfig;
+    const secondConfig = {
+      ...baseConfig,
+      agents: { defaults: { model: "anthropic/claude-sonnet-4-5" } },
+    } as OpenClawConfig;
+
+    expect(
+      await augmentModelCatalogWithProviderPlugins({
+        config: firstConfig,
+        env: process.env,
+        context: { config: firstConfig, env: process.env, entries: [] },
+      }),
+    ).toEqual([{ provider: "demo", id: "demo-model", name: "Demo Model" }]);
+    expect(
+      await augmentModelCatalogWithProviderPlugins({
+        config: secondConfig,
+        env: process.env,
+        context: { config: secondConfig, env: process.env, entries: [] },
+      }),
+    ).toEqual([{ provider: "demo", id: "demo-model", name: "Demo Model" }]);
+
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses catalog hook provider loads when unrelated plugin config changes", async () => {
+    resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["demo"]);
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "demo",
+        label: "Demo",
+        auth: [],
+        augmentModelCatalog: () => [{ provider: "demo", id: "demo-model", name: "Demo Model" }],
+      },
+    ]);
+    const firstConfig = {
+      plugins: {
+        entries: {
+          demo: { enabled: true, config: { endpoint: "https://demo.example" } },
+          "active-memory": { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    const secondConfig = {
+      plugins: {
+        entries: {
+          demo: { enabled: true, config: { endpoint: "https://demo.example" } },
+          "active-memory": { enabled: true, config: { qmd: { searchMode: "fast" } } },
+        },
+      },
+    } as OpenClawConfig;
+
+    for (const config of [firstConfig, secondConfig]) {
+      expect(
+        await augmentModelCatalogWithProviderPlugins({
+          config,
+          env: process.env,
+          context: { config, env: process.env, entries: [] },
+        }),
+      ).toEqual([{ provider: "demo", id: "demo-model", name: "Demo Model" }]);
+    }
+
+    expect(resolveCatalogHookProviderPluginIdsMock).toHaveBeenCalledTimes(1);
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
   });
 
   it("returns provider-prepared runtime auth for the matched provider", async () => {
@@ -1609,7 +1876,6 @@ describe("provider-runtime", () => {
     ]);
 
     expectCodexMissingAuthHint(buildProviderMissingAuthMessageWithPlugin);
-    expectCodexBuiltInSuppression(resolveProviderBuiltInModelSuppression);
     await expectAugmentedCodexCatalog(augmentModelCatalogWithProviderPlugins);
 
     expectCalledOnce(
@@ -1658,6 +1924,39 @@ describe("provider-runtime", () => {
     expect(resolvePluginProvidersMock).toHaveBeenCalledWith(
       expect.objectContaining({
         providerRefs: ["ollama-spark", "ollama"],
+      }),
+    );
+  });
+
+  it("does not match alias hooks when an exact custom provider declares a foreign api owner", () => {
+    const qwenPlugin: ProviderPlugin = {
+      id: "qwen",
+      label: "Qwen",
+      aliases: ["modelstudio"],
+      auth: [],
+      createStreamFn: vi.fn(() => vi.fn()),
+    };
+    resolvePluginProvidersMock.mockReturnValue([qwenPlugin]);
+
+    const plugin = resolveProviderRuntimePlugin({
+      provider: "modelstudio",
+      config: {
+        models: {
+          providers: {
+            modelstudio: {
+              api: "openai-completions",
+              baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
+              models: [],
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(plugin).toBeUndefined();
+    expect(resolvePluginProvidersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerRefs: ["modelstudio", "openai-completions"],
       }),
     );
   });
@@ -1760,19 +2059,6 @@ describe("provider-runtime", () => {
         return [];
       }
       return [createOpenAiCatalogProviderPlugin()];
-    });
-
-    expect(
-      resolveProviderBuiltInModelSuppression({
-        env: process.env,
-        context: {
-          env: process.env,
-          provider: "openai",
-          modelId: "gpt-5.3-codex-spark",
-        },
-      }),
-    ).toMatchObject({
-      suppress: true,
     });
 
     await expect(

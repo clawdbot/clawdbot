@@ -13,6 +13,7 @@ export function safeRealpathSync(targetPath: string, cache?: Map<string, string>
   try {
     const resolved = fs.realpathSync(targetPath);
     cache?.set(targetPath, resolved);
+    cache?.set(resolved, resolved);
     return resolved;
   } catch {
     return null;

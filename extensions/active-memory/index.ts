@@ -9,14 +9,16 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   resolveLivePluginConfigObject,
   resolvePluginConfigObject,
+} from "openclaw/plugin-sdk/plugin-config-runtime";
+import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import {
   resolveSessionStoreEntry,
   updateSessionStore,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/config-runtime";
-import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -1877,7 +1879,7 @@ async function maybeResolveActiveRecall(params: {
     if (controller.signal.aborted) {
       const result: ActiveRecallResult = {
         status: "timeout",
-        elapsedMs: Date.now() - startedAt,
+        elapsedMs: params.config.timeoutMs,
         summary: null,
       };
       if (params.config.logging) {
@@ -1932,7 +1934,9 @@ export default definePluginEntry({
     warnDeprecatedModelFallbackPolicy(api.pluginConfig);
     const refreshLiveConfigFromRuntime = () => {
       const livePluginConfig = resolveLivePluginConfigObject(
-        api.runtime.config?.loadConfig,
+        api.runtime.config?.current
+          ? () => api.runtime.config.current() as OpenClawConfig
+          : undefined,
         "active-memory",
         api.pluginConfig as Record<string, unknown>,
       );
@@ -1953,7 +1957,7 @@ export default definePluginEntry({
           return { text: formatActiveMemoryCommandHelp() };
         }
         if (isGlobal) {
-          const currentConfig = api.runtime.config.loadConfig();
+          const currentConfig = api.runtime.config.current() as OpenClawConfig;
           if (action === "status") {
             return {
               text: `Active Memory: ${isActiveMemoryGloballyEnabled(currentConfig) ? "on" : "off"} globally.`,
@@ -1961,13 +1965,19 @@ export default definePluginEntry({
           }
           if (action === "on" || action === "enable" || action === "enabled") {
             const nextConfig = updateActiveMemoryGlobalEnabledInConfig(currentConfig, true);
-            await api.runtime.config.writeConfigFile(nextConfig);
+            await api.runtime.config.replaceConfigFile({
+              nextConfig,
+              afterWrite: { mode: "auto" },
+            });
             refreshLiveConfigFromRuntime();
             return { text: "Active Memory: on globally." };
           }
           if (action === "off" || action === "disable" || action === "disabled") {
             const nextConfig = updateActiveMemoryGlobalEnabledInConfig(currentConfig, false);
-            await api.runtime.config.writeConfigFile(nextConfig);
+            await api.runtime.config.replaceConfigFile({
+              nextConfig,
+              afterWrite: { mode: "auto" },
+            });
             refreshLiveConfigFromRuntime();
             return { text: "Active Memory: off globally." };
           }

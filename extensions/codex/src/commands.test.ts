@@ -265,6 +265,27 @@ describe("codex command", () => {
     });
   });
 
+  it("formats disabled installed Codex Computer Use plugins", async () => {
+    const readCodexComputerUseStatus = vi.fn(async () => ({
+      ...computerUseReadyStatus(),
+      ready: false,
+      reason: "plugin_disabled" as const,
+      pluginEnabled: false,
+      mcpServerAvailable: false,
+      tools: [],
+      message:
+        "Computer Use is installed, but the computer-use plugin is disabled. Run /codex computer-use install or enable computerUse.autoInstall to re-enable it.",
+    }));
+
+    await expect(
+      handleCodexCommand(createContext("computer-use status"), {
+        deps: createDeps({ readCodexComputerUseStatus }),
+      }),
+    ).resolves.toEqual({
+      text: expect.stringContaining("Plugin: computer-use (installed, disabled)"),
+    });
+  });
+
   it("installs Codex Computer Use from command overrides", async () => {
     const installCodexComputerUse = vi.fn(async () => computerUseReadyStatus());
 
@@ -667,6 +688,7 @@ function computerUseReadyStatus(): CodexComputerUseStatus {
   return {
     enabled: true,
     ready: true,
+    reason: "ready",
     installed: true,
     pluginEnabled: true,
     mcpServerAvailable: true,

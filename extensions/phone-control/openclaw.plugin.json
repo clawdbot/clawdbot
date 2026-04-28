@@ -1,5 +1,8 @@
 {
   "id": "phone-control",
+  "activation": {
+    "onStartup": true
+  },
   "enabledByDefault": true,
   "name": "Phone Control",
   "description": "Arm/disarm high-risk phone node commands (camera/screen/writes) with an optional auto-expiry.",

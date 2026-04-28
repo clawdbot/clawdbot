@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
-import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
+import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { danger } from "../globals.js";
 import { resolveMessageChannelSelection } from "../infra/outbound/channel-selection.js";
@@ -105,7 +105,7 @@ export function registerDirectoryCli(program: Command) {
   const resolve = async (opts: { channel?: string; account?: string }) => {
     const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
     const autoEnabled = applyPluginAutoEnable({
-      config: loadConfig(),
+      config: getRuntimeConfig(),
       env: process.env,
     });
     let cfg = autoEnabled.config;

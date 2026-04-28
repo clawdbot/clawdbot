@@ -1,8 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { configureOpenAICompatibleSelfHostedProviderNonInteractive } from "./provider-self-hosted-setup.js";
+import {
+  configureOpenAICompatibleSelfHostedProviderNonInteractive,
+  discoverOpenAICompatibleLocalModels,
+} from "./provider-self-hosted-setup.js";
 import type { ProviderAuthMethodNonInteractiveContext } from "./types.js";
 
-const upsertAuthProfileWithLock = vi.hoisted(() => vi.fn(async () => null));
+const { fetchWithSsrFGuardMock, upsertAuthProfileWithLock } = vi.hoisted(() => ({
+  fetchWithSsrFGuardMock: vi.fn(),
+  upsertAuthProfileWithLock: vi.fn(async () => null),
+}));
+
+vi.mock("../infra/net/fetch-guard.js", () => ({
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+}));
+
 vi.mock("../agents/auth-profiles/upsert-with-lock.js", () => ({
   upsertAuthProfileWithLock,
 }));
@@ -73,6 +84,70 @@ async function configureSelfHostedTestProvider(params: {
     modelPlaceholder: "Qwen/Qwen3-32B",
   });
 }
+
+describe("discoverOpenAICompatibleLocalModels", () => {
+  it("uses guarded fetch pinned to the configured self-hosted provider", async () => {
+    const release = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ data: [{ id: "Qwen/Qwen3-32B" }] }), {
+        status: 200,
+      }),
+      finalUrl: "http://127.0.0.1:8000/v1/models",
+      release,
+    });
+
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8000/v1/",
+      apiKey: "self-hosted-test-key",
+      label: "vLLM",
+      env: {},
+    });
+
+    expect(models).toEqual([
+      expect.objectContaining({
+        id: "Qwen/Qwen3-32B",
+        name: "Qwen/Qwen3-32B",
+      }),
+    ]);
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "http://127.0.0.1:8000/v1/models",
+        init: { headers: { Authorization: "Bearer self-hosted-test-key" } },
+        policy: {
+          hostnameAllowlist: ["127.0.0.1"],
+          allowPrivateNetwork: true,
+        },
+        timeoutMs: 5000,
+      }),
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("does not allowlist always-blocked metadata hostnames", async () => {
+    const release = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ data: [{ id: "metadata-probe" }] }), {
+        status: 200,
+      }),
+      finalUrl: "http://metadata.google.internal/v1/models",
+      release,
+    });
+
+    await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://metadata.google.internal/v1",
+      label: "vLLM",
+      env: {},
+    });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "http://metadata.google.internal/v1/models",
+        policy: undefined,
+      }),
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+});
 
 describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
   it.each([

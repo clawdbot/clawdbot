@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { loadConfig, readConfigFileSnapshot } from "../config/config.js";
+import { getRuntimeConfig, readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginCliLogger,
@@ -25,7 +25,7 @@ export const loadValidatedConfigForPluginRegistration =
     if (!snapshot.valid) {
       return null;
     }
-    return loadConfig();
+    return getRuntimeConfig();
   };
 
 export async function getPluginCliCommandDescriptors(

@@ -4,6 +4,7 @@
 // prebuilt package artifact with dist inventory, not a source checkout.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { LOCAL_BUILD_METADATA_DIST_PATHS } from "./lib/local-build-metadata-paths.mjs";
 
 function usage() {
   return "Usage: node scripts/check-openclaw-package-tarball.mjs <openclaw.tgz>";
@@ -39,6 +40,8 @@ const entrySet = new Set(normalized);
 const errors = [];
 const warnings = [];
 const LEGACY_PACKAGE_ACCEPTANCE_COMPAT_MAX = { year: 2026, month: 4, day: 25 };
+const LEGACY_LOCAL_BUILD_METADATA_COMPAT_MAX = { year: 2026, month: 4, day: 26 };
+const FORBIDDEN_LOCAL_BUILD_METADATA_FILES = new Set(LOCAL_BUILD_METADATA_DIST_PATHS);
 
 const LEGACY_OMITTED_PRIVATE_QA_INVENTORY_PREFIXES = [
   "dist/extensions/qa-channel/",
@@ -95,6 +98,11 @@ function isLegacyPackageAcceptanceCompatVersion(version) {
   return parsed ? compareCalver(parsed, LEGACY_PACKAGE_ACCEPTANCE_COMPAT_MAX) <= 0 : false;
 }
 
+function isLegacyLocalBuildMetadataCompatVersion(version) {
+  const parsed = parseCalver(version);
+  return parsed ? compareCalver(parsed, LEGACY_LOCAL_BUILD_METADATA_COMPAT_MAX) <= 0 : false;
+}
+
 function readTarEntry(entryPath) {
   const candidates = [entryPath, `package/${entryPath}`];
   for (const candidate of candidates) {
@@ -121,13 +129,29 @@ if (!entrySet.has("package.json")) {
 if (!normalized.some((entry) => entry.startsWith("dist/"))) {
   errors.push("missing dist/ entries");
 }
+let packageVersion = "";
+if (entrySet.has("package.json")) {
+  try {
+    const packageJson = JSON.parse(readTarEntry("package.json"));
+    packageVersion = typeof packageJson.version === "string" ? packageJson.version : "";
+  } catch {
+    packageVersion = "";
+  }
+}
+for (const forbiddenEntry of FORBIDDEN_LOCAL_BUILD_METADATA_FILES) {
+  if (entrySet.has(forbiddenEntry)) {
+    if (isLegacyLocalBuildMetadataCompatVersion(packageVersion)) {
+      warnings.push(`legacy package includes local build metadata tar entry ${forbiddenEntry}`);
+      continue;
+    }
+    errors.push(`forbidden local build metadata tar entry ${forbiddenEntry}`);
+  }
+}
 if (!entrySet.has("dist/postinstall-inventory.json")) {
   errors.push("missing dist/postinstall-inventory.json");
 }
 if (entrySet.has("dist/postinstall-inventory.json")) {
   try {
-    const packageJson = JSON.parse(readTarEntry("package.json"));
-    const packageVersion = typeof packageJson.version === "string" ? packageJson.version : "";
     const allowLegacyPrivateQaInventoryOmissions =
       isLegacyPackageAcceptanceCompatVersion(packageVersion);
     const inventory = JSON.parse(readTarEntry("dist/postinstall-inventory.json"));

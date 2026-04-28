@@ -17,7 +17,7 @@ const validateConfigObjectWithPluginsMock = vi.hoisted(() =>
     issues: [],
   })),
 );
-const writeConfigFileMock = vi.hoisted(() => vi.fn(async () => undefined));
+const replaceConfigFileMock = vi.hoisted(() => vi.fn(async () => undefined));
 const getConfigOverridesMock = vi.hoisted(() => vi.fn(() => ({})));
 const getConfigValueAtPathMock = vi.hoisted(() => vi.fn());
 const parseConfigPathMock = vi.hoisted(() => vi.fn());
@@ -79,7 +79,7 @@ vi.mock("../../config/config-paths.js", () => ({
 vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
   validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
-  writeConfigFile: writeConfigFileMock,
+  replaceConfigFile: replaceConfigFileMock,
 }));
 
 vi.mock("../../config/runtime-overrides.js", () => ({
@@ -418,11 +418,11 @@ describe("command gating", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const previousWriteCount = writeConfigFileMock.mock.calls.length;
+      const previousWriteCount = replaceConfigFileMock.mock.calls.length;
       const result = await handleConfigCommand(testCase.params, true);
       expect(result?.shouldContinue).toBe(false);
       expect(result?.reply?.text).toContain(testCase.expectedText);
-      expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount);
+      expect(replaceConfigFileMock.mock.calls.length).toBe(previousWriteCount);
     }
   });
 
@@ -449,12 +449,12 @@ describe("command gating", () => {
     params.command.surface = "telegram";
     params.command.senderIsOwner = true;
 
-    const previousWriteCount = writeConfigFileMock.mock.calls.length;
+    const previousWriteCount = replaceConfigFileMock.mock.calls.length;
     const result = await handleConfigCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("channels.telegram.accounts.work.configWrites=true");
-    expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount);
+    expect(replaceConfigFileMock.mock.calls.length).toBe(previousWriteCount);
   });
 
   it("enforces gateway client permissions for /config commands", async () => {
@@ -505,6 +505,6 @@ describe("command gating", () => {
     const setResult = await handleConfigCommand(setParams, true);
     expect(setResult?.shouldContinue).toBe(false);
     expect(setResult?.reply?.text).toContain("Config updated");
-    expect(writeConfigFileMock).toHaveBeenCalled();
+    expect(replaceConfigFileMock).toHaveBeenCalled();
   });
 });

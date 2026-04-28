@@ -3,8 +3,11 @@ import { expectGeneratedTokenPersistedToGatewayAuth } from "../../test-support.j
 import type { OpenClawConfig } from "../config/config.js";
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn<() => OpenClawConfig>(),
+  getRuntimeConfig: vi.fn<() => OpenClawConfig>(),
   writeConfigFile: vi.fn<(cfg: OpenClawConfig) => Promise<void>>(async (_cfg) => {}),
+  replaceConfigFile: vi.fn(async ({ nextConfig }: { nextConfig: OpenClawConfig }) => {
+    await mocks.writeConfigFile(nextConfig);
+  }),
   resolveGatewayAuth: vi.fn(
     ({
       authConfig,
@@ -48,8 +51,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: mocks.loadConfig,
-  writeConfigFile: mocks.writeConfigFile,
+  getRuntimeConfig: mocks.getRuntimeConfig,
+  replaceConfigFile: mocks.replaceConfigFile,
 }));
 
 vi.mock("../gateway/startup-auth.js", () => ({
@@ -73,7 +76,7 @@ async function expectGeneratedBrowserAuthPersistence(params: {
   mode: "none" | "trusted-proxy";
   generatedAuthField: "token" | "password";
 }) {
-  mocks.loadConfig.mockReturnValue(params.cfg);
+  mocks.getRuntimeConfig.mockReturnValue(params.cfg);
 
   const result = await ensureBrowserControlAuth({ cfg: params.cfg, env: {} as NodeJS.ProcessEnv });
 
@@ -88,7 +91,7 @@ async function expectGeneratedBrowserAuthPersistence(params: {
 }
 
 async function expectUnresolvedBrowserSecretRefSkipsPersistence(cfg: OpenClawConfig) {
-  mocks.loadConfig.mockReturnValue(cfg);
+  mocks.getRuntimeConfig.mockReturnValue(cfg);
 
   const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
 
@@ -113,7 +116,7 @@ describe("ensureBrowserControlAuth", () => {
 
     const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
     expect(result).toEqual({ auth: {} });
-    expect(mocks.loadConfig).not.toHaveBeenCalled();
+    expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
     expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
   };
@@ -137,7 +140,7 @@ describe("ensureBrowserControlAuth", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
-    mocks.loadConfig.mockClear();
+    mocks.getRuntimeConfig.mockClear();
     mocks.writeConfigFile.mockClear();
     mocks.resolveGatewayAuth.mockClear();
     mocks.ensureGatewayStartupAuth.mockClear();
@@ -155,7 +158,7 @@ describe("ensureBrowserControlAuth", () => {
     const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
 
     expect(result).toEqual({ auth: { token: "already-set" } });
-    expect(mocks.loadConfig).not.toHaveBeenCalled();
+    expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
     expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
   });
@@ -260,7 +263,7 @@ describe("ensureBrowserControlAuth", () => {
         enabled: true,
       },
     };
-    mocks.loadConfig.mockReturnValue({
+    mocks.getRuntimeConfig.mockReturnValue({
       browser: {
         enabled: true,
       },
@@ -284,7 +287,7 @@ describe("ensureBrowserControlAuth", () => {
     });
 
     expect(result).toEqual({ auth: {} });
-    expect(mocks.loadConfig).not.toHaveBeenCalled();
+    expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
     expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
   });
@@ -401,7 +404,7 @@ describe("ensureBrowserControlAuth", () => {
         enabled: true,
       },
     };
-    mocks.loadConfig.mockReturnValue({
+    mocks.getRuntimeConfig.mockReturnValue({
       gateway: {
         auth: {
           token: "latest-token",
@@ -436,7 +439,7 @@ describe("ensureBrowserControlAuth", () => {
         },
       },
     };
-    mocks.loadConfig.mockReturnValue(cfg);
+    mocks.getRuntimeConfig.mockReturnValue(cfg);
     mocks.ensureGatewayStartupAuth.mockRejectedValueOnce(new Error("MISSING_GW_TOKEN"));
 
     await expect(ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv })).rejects.toThrow(

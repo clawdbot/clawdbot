@@ -8,6 +8,7 @@ import {
   installLaunchAgent,
   isLaunchAgentListed,
   parseLaunchctlPrint,
+  readLaunchAgentProgramArguments,
   readLaunchAgentRuntime,
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
@@ -474,21 +475,42 @@ describe("launchd install", () => {
     expect(installKickstartIndex).toBe(-1);
   });
 
-  it("writes TMPDIR to LaunchAgent environment when provided", async () => {
+  it("writes LaunchAgent environment to an owner-only env file when provided", async () => {
     const env = createDefaultLaunchdEnv();
     const tmpDir = "/Users/test/.openclaw/tmp";
+    const apiKey = "secret-api-key";
     await installLaunchAgent({
       env,
       stdout: new PassThrough(),
       programArguments: defaultProgramArguments,
-      environment: { TMPDIR: tmpDir },
+      environment: { TMPDIR: tmpDir, OPENAI_API_KEY: apiKey },
     });
 
     const plistPath = resolveLaunchAgentPlistPath(env);
+    const envFilePath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway.env";
+    const wrapperPath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh";
     const plist = state.files.get(plistPath) ?? "";
-    expect(plist).toContain("<key>EnvironmentVariables</key>");
-    expect(plist).toContain("<key>TMPDIR</key>");
-    expect(plist).toContain(`<string>${tmpDir}</string>`);
+    expect(plist).not.toContain("<key>EnvironmentVariables</key>");
+    expect(plist).not.toContain(apiKey);
+    expect(plist).toContain(`<string>${wrapperPath}</string>`);
+    expect(plist).toContain(`<string>${envFilePath}</string>`);
+    const envFile = state.files.get(envFilePath) ?? "";
+    expect(envFile).toContain(`export TMPDIR='${tmpDir}'`);
+    expect(envFile).toContain(`export OPENAI_API_KEY='${apiKey}'`);
+    expect(state.fileModes.get(envFilePath)).toBe(0o600);
+    expect(state.fileModes.get(wrapperPath)).toBe(0o700);
+    expect(state.dirModes.get("/Users/test/.openclaw/service-env")).toBe(0o700);
+
+    const command = await readLaunchAgentProgramArguments(env);
+    expect(command?.programArguments).toEqual(defaultProgramArguments);
+    expect(command?.environment).toMatchObject({
+      TMPDIR: tmpDir,
+      OPENAI_API_KEY: apiKey,
+    });
+    expect(command?.environmentValueSources).toMatchObject({
+      TMPDIR: "file",
+      OPENAI_API_KEY: "file",
+    });
   });
 
   it("creates the LaunchAgent TMPDIR before bootstrap", async () => {
@@ -582,7 +604,7 @@ describe("launchd install", () => {
     expect(state.dirModes.get(env.HOME!)).toBe(0o755);
     expect(state.dirModes.get("/Users/test/Library")).toBe(0o755);
     expect(state.dirModes.get("/Users/test/Library/LaunchAgents")).toBe(0o755);
-    expect(state.fileModes.get(plistPath)).toBe(0o644);
+    expect(state.fileModes.get(plistPath)).toBe(0o600);
   });
 
   it("stops LaunchAgent by disabling relaunch before stopping the process", async () => {

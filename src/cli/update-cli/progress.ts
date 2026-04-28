@@ -30,6 +30,9 @@ const STEP_LABELS: Record<string, string> = {
   "git rev-parse HEAD (after)": "Verifying update",
   "global update": "Updating via package manager",
   "global update (omit optional)": "Retrying update without optional deps",
+  "global install stage": "Preparing staged package install",
+  "global install verify": "Verifying global package",
+  "global install swap": "Activating global package",
   "global install": "Installing global package",
 };
 
@@ -75,8 +78,10 @@ export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
 
   const stderr = normalizeLowercaseStringOrEmpty(failedStep.stderrTail);
   const hints: string[] = [];
+  const isGlobalPackageInstallStep =
+    failedStep.name.startsWith("global update") || failedStep.name.startsWith("global install");
 
-  if (failedStep.name.startsWith("global update") && stderr.includes("eacces")) {
+  if (isGlobalPackageInstallStep && stderr.includes("eacces")) {
     hints.push(
       "Detected permission failure (EACCES). Re-run with a writable global prefix or sudo (for system-managed Node installs).",
     );

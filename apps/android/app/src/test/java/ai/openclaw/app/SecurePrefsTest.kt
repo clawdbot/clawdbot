@@ -16,7 +16,11 @@ class SecurePrefsTest {
   fun loadLocationMode_migratesLegacyAlwaysValue() {
     val context = RuntimeEnvironment.getApplication()
     val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
-    plainPrefs.edit().clear().putString("location.enabledMode", "always").commit()
+    plainPrefs
+      .edit()
+      .clear()
+      .putString("location.enabledMode", "always")
+      .commit()
 
     val prefs = SecurePrefs(context)
 
@@ -28,7 +32,11 @@ class SecurePrefsTest {
   fun voiceMicEnabled_ignoresOldTalkEnabledKey() {
     val context = RuntimeEnvironment.getApplication()
     val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
-    plainPrefs.edit().clear().putBoolean("talk.enabled", true).commit()
+    plainPrefs
+      .edit()
+      .clear()
+      .putBoolean("talk.enabled", true)
+      .commit()
 
     val prefs = SecurePrefs(context)
 
@@ -40,7 +48,11 @@ class SecurePrefsTest {
   fun setVoiceMicEnabled_persistsNewKeyOnly() {
     val context = RuntimeEnvironment.getApplication()
     val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
-    plainPrefs.edit().clear().putBoolean("talk.enabled", false).commit()
+    plainPrefs
+      .edit()
+      .clear()
+      .putBoolean("talk.enabled", false)
+      .commit()
     val prefs = SecurePrefs(context)
 
     prefs.setVoiceMicEnabled(true)

@@ -1,14 +1,38 @@
 {
   "id": "xai",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["xai"],
   "providerDiscoveryEntry": "./provider-discovery.ts",
+  "modelIdNormalization": {
+    "providers": {
+      "xai": {
+        "aliases": {
+          "grok-4-fast-reasoning": "grok-4-fast",
+          "grok-4-1-fast-reasoning": "grok-4-1-fast",
+          "grok-4.20-experimental-beta-0304-reasoning": "grok-4.20-beta-latest-reasoning",
+          "grok-4.20-experimental-beta-0304-non-reasoning": "grok-4.20-beta-latest-non-reasoning",
+          "grok-4.20-reasoning": "grok-4.20-beta-latest-reasoning",
+          "grok-4.20-non-reasoning": "grok-4.20-beta-latest-non-reasoning"
+        }
+      }
+    }
+  },
   "providerEndpoints": [
     {
       "endpointClass": "xai-native",
       "hosts": ["api.x.ai", "api.grok.x.ai"]
     }
   ],
+  "providerRequest": {
+    "providers": {
+      "xai": {
+        "family": "xai"
+      }
+    }
+  },
   "syntheticAuthRefs": ["xai"],
   "providerAuthEnvVars": {
     "xai": ["XAI_API_KEY"]

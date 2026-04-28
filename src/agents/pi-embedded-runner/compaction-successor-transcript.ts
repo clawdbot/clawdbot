@@ -9,6 +9,7 @@ import {
   type SessionHeader,
 } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { collectDuplicateUserMessageEntryIdsForCompaction } from "./compaction-duplicate-user-messages.js";
 
 type ReadonlySessionManagerForRotation = Pick<
   SessionManager,
@@ -126,10 +127,12 @@ function buildSuccessorEntries(params: {
   }
 
   const removedIds = new Set<string>();
+  const duplicateUserMessageIds = collectDuplicateUserMessageEntryIdsForCompaction(branch);
   for (const entry of allEntries) {
     if (
       (summarizedBranchIds.has(entry.id) && entry.type === "message") ||
-      staleStateEntryIds.has(entry.id)
+      staleStateEntryIds.has(entry.id) ||
+      duplicateUserMessageIds.has(entry.id)
     ) {
       removedIds.add(entry.id);
     }

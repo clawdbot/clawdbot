@@ -28,6 +28,28 @@ function createWrappedTelegramClientFetch(proxyFetch: typeof fetch) {
   return { clientFetch, shutdown };
 }
 
+function createWrappedTelegramClientFetchWithTransport(params: {
+  fetch: typeof fetch;
+  forceFallback?: (reason: string) => boolean;
+}) {
+  const shutdown = new AbortController();
+  botCtorSpy.mockClear();
+  createTelegramBot({
+    token: "tok",
+    fetchAbortSignal: shutdown.signal,
+    telegramTransport: {
+      fetch: params.fetch,
+      sourceFetch: params.fetch,
+      close: async () => undefined,
+      ...(params.forceFallback ? { forceFallback: params.forceFallback } : {}),
+    },
+  });
+  const clientFetch = (botCtorSpy.mock.calls.at(-1)?.[1] as { client?: { fetch?: unknown } })
+    ?.client?.fetch as (input: RequestInfo | URL, init?: RequestInit) => Promise<unknown>;
+  expect(clientFetch).toBeTypeOf("function");
+  return { clientFetch, shutdown };
+}
+
 describe("createTelegramBot fetch abort", () => {
   it("aborts wrapped client fetch when fetchAbortSignal aborts", async () => {
     const fetchSpy = vi.fn(
@@ -86,6 +108,33 @@ describe("createTelegramBot fetch abort", () => {
 
     expect(observedSignal).toBeInstanceOf(AbortSignal);
     expect(observedSignal.aborted).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it("retries timed-out control calls once after forcing transport fallback", async () => {
+    vi.useFakeTimers();
+    const forceFallback = vi.fn(() => true);
+    const fetchSpy = vi
+      .fn()
+      .mockImplementationOnce(
+        (_input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            const signal = init?.signal as AbortSignal;
+            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          }),
+      )
+      .mockResolvedValueOnce({ ok: true } as Response);
+    const { clientFetch } = createWrappedTelegramClientFetchWithTransport({
+      fetch: fetchSpy as unknown as typeof fetch,
+      forceFallback,
+    });
+
+    const resultPromise = clientFetch("https://api.telegram.org/bot123456:ABC/deleteWebhook");
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    await expect(resultPromise).resolves.toEqual({ ok: true });
+    expect(forceFallback).toHaveBeenCalledWith("request-timeout");
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
   });
 

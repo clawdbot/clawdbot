@@ -159,6 +159,10 @@ export function formatTransportErrorCopy(raw: string): string | undefined {
     return "LLM request failed: network connection error.";
   }
 
+  if (raw.includes("网络错误") || raw.includes("网络异常") || raw.includes("连接错误")) {
+    return "LLM request failed: provider reported a network error.";
+  }
+
   return undefined;
 }
 

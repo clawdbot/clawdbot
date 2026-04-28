@@ -7,13 +7,13 @@
 
 import { resolveConversationBindingContext } from "../channels/conversation-binding-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { ADMIN_SCOPE, isOperatorScope } from "../gateway/operator-scopes.js";
 import { logVerbose } from "../globals.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
   listPluginInvocationKeys,
-  listProviderPluginCommandSpecs,
   registerPluginCommand,
   validateCommandName,
   validatePluginCommandDefinition,
@@ -23,7 +23,7 @@ import {
   setPluginCommandRegistryLocked,
   type RegisteredPluginCommand,
 } from "./command-registry-state.js";
-import { getPluginCommandSpecs } from "./command-specs.js";
+import { getPluginCommandSpecs, listProviderPluginCommandSpecs } from "./command-specs.js";
 import {
   detachPluginConversationBinding,
   getCurrentPluginConversationBinding,
@@ -196,6 +196,27 @@ export async function executePluginCommand(params: {
       `Plugin command /${command.name} blocked: unauthorized sender ${senderId || "<unknown>"}`,
     );
     return { text: "⚠️ This command requires authorization." };
+  }
+  if (command.requiredScopes !== undefined && !Array.isArray(command.requiredScopes)) {
+    logVerbose(`Plugin command /${command.name} blocked: invalid requiredScopes configuration`);
+    return { text: "⚠️ This command has invalid gateway scope configuration." };
+  }
+  const requiredScopes = command.requiredScopes ?? [];
+  const unknownScope = (requiredScopes as readonly unknown[]).find(
+    (scope) => !isOperatorScope(scope),
+  );
+  if (unknownScope) {
+    logVerbose(`Plugin command /${command.name} blocked: unknown gateway scope`);
+    return { text: "⚠️ This command has invalid gateway scope configuration." };
+  }
+  if (requiredScopes.length > 0 && params.gatewayClientScopes) {
+    const scopes = new Set(params.gatewayClientScopes ?? []);
+    const hasAdmin = scopes.has(ADMIN_SCOPE);
+    const missingScope = requiredScopes.find((scope) => !hasAdmin && !scopes.has(scope));
+    if (missingScope) {
+      logVerbose(`Plugin command /${command.name} blocked: missing gateway scope ${missingScope}`);
+      return { text: `⚠️ This command requires gateway scope: ${missingScope}.` };
+    }
   }
 
   // Sanitize args before passing to handler

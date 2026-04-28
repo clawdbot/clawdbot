@@ -1,5 +1,8 @@
 {
   "id": "fireworks",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["fireworks"],
   "providerAuthEnvVars": {
@@ -20,6 +23,45 @@
       "cliDescription": "Fireworks API key"
     }
   ],
+  "modelCatalog": {
+    "providers": {
+      "fireworks": {
+        "baseUrl": "https://api.fireworks.ai/inference/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "accounts/fireworks/models/kimi-k2p6",
+            "name": "Kimi K2.6",
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 262144,
+            "cost": {
+              "input": 0.95,
+              "output": 4,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "accounts/fireworks/routers/kimi-k2p5-turbo",
+            "name": "Kimi K2.5 Turbo (Fire Pass)",
+            "input": ["text", "image"],
+            "contextWindow": 256000,
+            "maxTokens": 256000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "fireworks": "static"
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

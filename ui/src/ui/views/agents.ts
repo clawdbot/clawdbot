@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import { t } from "../../i18n/index.ts";
 import type {
   AgentIdentityResult,
@@ -220,25 +221,28 @@ export function renderAgents(props: AgentsProps) {
                 tabCounts,
               )}
               ${props.activePanel === "overview"
-                ? renderAgentOverview({
-                    agent: selectedAgent,
-                    basePath: props.basePath,
-                    defaultId,
-                    configForm: props.config.form,
-                    agentFilesList: props.agentFiles.list,
-                    agentIdentity: props.agentIdentityById[selectedAgent.id] ?? null,
-                    agentIdentityError: props.agentIdentityError,
-                    agentIdentityLoading: props.agentIdentityLoading,
-                    configLoading: props.config.loading,
-                    configSaving: props.config.saving,
-                    configDirty: props.config.dirty,
-                    modelCatalog: props.modelCatalog,
-                    onConfigReload: props.onConfigReload,
-                    onConfigSave: props.onConfigSave,
-                    onModelChange: props.onModelChange,
-                    onModelFallbacksChange: props.onModelFallbacksChange,
-                    onSelectPanel: props.onSelectPanel,
-                  })
+                ? keyed(
+                    selectedAgent.id,
+                    renderAgentOverview({
+                      agent: selectedAgent,
+                      basePath: props.basePath,
+                      defaultId,
+                      configForm: props.config.form,
+                      agentFilesList: props.agentFiles.list,
+                      agentIdentity: props.agentIdentityById[selectedAgent.id] ?? null,
+                      agentIdentityError: props.agentIdentityError,
+                      agentIdentityLoading: props.agentIdentityLoading,
+                      configLoading: props.config.loading,
+                      configSaving: props.config.saving,
+                      configDirty: props.config.dirty,
+                      modelCatalog: props.modelCatalog,
+                      onConfigReload: props.onConfigReload,
+                      onConfigSave: props.onConfigSave,
+                      onModelChange: props.onModelChange,
+                      onModelFallbacksChange: props.onModelFallbacksChange,
+                      onSelectPanel: props.onSelectPanel,
+                    }),
+                  )
                 : nothing}
               ${props.activePanel === "files"
                 ? renderAgentFiles({

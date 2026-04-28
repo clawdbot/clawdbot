@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { bundledDistPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -247,6 +247,7 @@ describe("runGatewayUpdate", () => {
   }
 
   async function writeGlobalPackageVersion(pkgRoot: string, version = "2.0.0") {
+    await fs.mkdir(pkgRoot, { recursive: true });
     await fs.writeFile(
       path.join(pkgRoot, "package.json"),
       JSON.stringify({ name: "openclaw", version }),
@@ -1358,7 +1359,11 @@ describe("runGatewayUpdate", () => {
     npmRootOutput?: string;
     installCommand: string;
     gitRootMode?: "not-git" | "missing";
-    onInstall?: (options?: { env?: NodeJS.ProcessEnv }) => Promise<void>;
+    onInstall?: (options?: {
+      env?: NodeJS.ProcessEnv;
+      installPrefix?: string;
+      packageRoot?: string;
+    }) => Promise<void>;
   }) => {
     const calls: string[] = [];
     const runCommand = async (argv: string[], options?: { env?: NodeJS.ProcessEnv }) => {
@@ -1382,6 +1387,26 @@ describe("runGatewayUpdate", () => {
       if (key === params.installCommand) {
         await params.onInstall?.(options);
         return { stdout: "ok", stderr: "", code: 0 };
+      }
+      const prefixIndex = argv.indexOf("--prefix");
+      const installPrefix = prefixIndex >= 0 ? argv[prefixIndex + 1] : undefined;
+      if (installPrefix) {
+        const normalizedInstallCommand = [
+          ...argv.slice(0, prefixIndex),
+          ...argv.slice(prefixIndex + 2),
+        ].join(" ");
+        if (normalizedInstallCommand === params.installCommand) {
+          const packageRoot =
+            process.platform === "win32"
+              ? path.join(installPrefix, "node_modules", "openclaw")
+              : path.join(installPrefix, "lib", "node_modules", "openclaw");
+          await params.onInstall?.({
+            ...options,
+            installPrefix,
+            packageRoot,
+          });
+          return { stdout: "ok", stderr: "", code: 0 };
+        }
       }
       return { stdout: "", stderr: "", code: 0 };
     };
@@ -1509,7 +1534,7 @@ describe("runGatewayUpdate", () => {
     });
 
     expect(result.status).toBe("error");
-    expect(result.reason).toBe("global install verify");
+    expect(result.reason).toBe("global-install-failed");
     expect(result.after?.version).toBe("2.0.0");
     expect(result.steps.at(-1)?.stderrTail).toContain(
       "expected installed version 2026.3.23-2, found 2.0.0",
@@ -1539,7 +1564,7 @@ describe("runGatewayUpdate", () => {
     const result = await runWithCommand(runCommand, { cwd: pkgRoot });
 
     expect(result.status).toBe("error");
-    expect(result.reason).toBe("global install verify");
+    expect(result.reason).toBe("global-install-failed");
     expect(result.steps.at(-1)?.stderrTail).toContain(
       `missing packaged dist file ${WHATSAPP_LIGHT_RUNTIME_API}`,
     );
@@ -1575,16 +1600,18 @@ describe("runGatewayUpdate", () => {
       installCommand: "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error",
       onInstall: async (options) => {
         installEnv = options?.env;
-        await writeGlobalPackageVersion(pkgRoot);
+        await writeGlobalPackageVersion(options?.packageRoot ?? pkgRoot);
       },
     });
 
-    await withEnvAsync({ LOCALAPPDATA: localAppData }, async () => {
-      const result = await runWithCommand(runCommand, { cwd: pkgRoot });
-      expect(result.status).toBe("ok");
-    });
-
-    platformSpy.mockRestore();
+    try {
+      await withEnvAsync({ LOCALAPPDATA: localAppData }, async () => {
+        const result = await runWithCommand(runCommand, { cwd: pkgRoot });
+        expect(result.status).toBe("ok");
+      });
+    } finally {
+      platformSpy.mockRestore();
+    }
 
     const mergedPath = installEnv?.Path ?? installEnv?.PATH ?? "";
     expect(mergedPath.split(path.delimiter).slice(0, 2)).toEqual([
@@ -1593,6 +1620,39 @@ describe("runGatewayUpdate", () => {
     ]);
     expect(installEnv?.NPM_CONFIG_SCRIPT_SHELL).toBeUndefined();
     expect(installEnv?.NODE_LLAMA_CPP_SKIP_DOWNLOAD).toBe("1");
+  });
+
+  it("reports staged npm swap failures as global install failures", async () => {
+    const prefix = path.join(tempDir, "npm-prefix");
+    const nodeModules = path.join(prefix, "lib", "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    await seedGlobalPackageRoot(pkgRoot);
+    await fs.writeFile(path.join(prefix, "bin"), "not a directory", "utf-8");
+
+    const { runCommand } = createGlobalInstallHarness({
+      pkgRoot,
+      npmRootOutput: nodeModules,
+      installCommand: "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error",
+      onInstall: async (options) => {
+        await writeGlobalPackageVersion(options?.packageRoot ?? pkgRoot);
+        if (options?.installPrefix) {
+          const binDir = path.join(options.installPrefix, "bin");
+          await fs.mkdir(binDir, { recursive: true });
+          await fs.writeFile(path.join(binDir, "openclaw"), "#!/bin/sh\n", "utf-8");
+        }
+      },
+    });
+
+    const result = await runWithCommand(runCommand, { cwd: pkgRoot });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("global-install-failed");
+    expect(result.root).toBe(pkgRoot);
+    expect(result.after?.version).toBe("1.0.0");
+    expect(result.steps.at(-1)?.name).toBe("global install swap");
+    await expect(fs.readFile(path.join(pkgRoot, "package.json"), "utf-8")).resolves.toContain(
+      '"version":"1.0.0"',
+    );
   });
 
   it("uses OPENCLAW_UPDATE_PACKAGE_SPEC for global package updates", async () => {

@@ -1,10 +1,10 @@
+import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildMistralCatalogModels, MISTRAL_BASE_URL } from "./model-definitions.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export function buildMistralProvider(): ModelProviderConfig {
-  return {
-    baseUrl: MISTRAL_BASE_URL,
-    api: "openai-completions",
-    models: buildMistralCatalogModels(),
-  };
+  return buildManifestModelProviderConfig({
+    providerId: "mistral",
+    catalog: manifest.modelCatalog.providers.mistral,
+  });
 }

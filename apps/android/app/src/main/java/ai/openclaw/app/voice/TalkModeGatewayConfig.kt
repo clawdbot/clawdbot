@@ -37,14 +37,14 @@ internal object TalkModeGatewayConfigParser {
 }
 
 private fun JsonElement?.asStringOrNull(): String? =
-  this?.let { element ->
-    element as? JsonPrimitive
-  }?.contentOrNull
+  this
+    ?.let { element ->
+      element as? JsonPrimitive
+    }?.contentOrNull
 
 private fun JsonElement?.asBooleanOrNull(): Boolean? {
   val primitive = this as? JsonPrimitive ?: return null
   return primitive.booleanOrNull
 }
 
-private fun JsonElement?.asObjectOrNull(): JsonObject? =
-  this as? JsonObject
+private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject

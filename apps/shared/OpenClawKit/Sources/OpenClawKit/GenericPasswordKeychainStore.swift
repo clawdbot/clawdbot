@@ -12,8 +12,8 @@ public enum GenericPasswordKeychainStore {
         _ value: String,
         service: String,
         account: String,
-        accessible: CFString = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-    ) -> Bool {
+        accessible: CFString = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly) -> Bool
+    {
         self.saveData(Data(value.utf8), service: service, account: account, accessible: accessible)
     }
 
@@ -40,8 +40,8 @@ public enum GenericPasswordKeychainStore {
         _ data: Data,
         service: String,
         account: String,
-        accessible: CFString
-    ) -> Bool {
+        accessible: CFString) -> Bool
+    {
         let query = self.baseQuery(service: service, account: account)
         let previousData = self.loadData(service: service, account: account)
 

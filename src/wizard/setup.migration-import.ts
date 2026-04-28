@@ -198,7 +198,7 @@ export async function runSetupMigrationImport(params: {
   detections: readonly SetupMigrationDetection[];
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
-  writeConfigFile: (config: OpenClawConfig) => Promise<OpenClawConfig>;
+  commitConfigFile: (config: OpenClawConfig) => Promise<OpenClawConfig>;
 }): Promise<void> {
   const [
     { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig },
@@ -285,7 +285,7 @@ export async function runSetupMigrationImport(params: {
     command: "onboard",
     mode: "local",
   });
-  targetConfig = await params.writeConfigFile(targetConfig);
+  targetConfig = await params.commitConfigFile(targetConfig);
   const applyCtx = {
     ...ctx,
     config: targetConfig,

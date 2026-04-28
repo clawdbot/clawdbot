@@ -14,6 +14,17 @@ export function mapMattermostChannelTypeToChatType(channelType?: string | null):
   return "channel";
 }
 
+export function resolveMattermostTrustedChatKind(params: {
+  channelType?: string | null;
+  fallback?: ChatType;
+}): ChatType {
+  const channelType = params.channelType?.trim();
+  if (channelType) {
+    return mapMattermostChannelTypeToChatType(channelType);
+  }
+  return params.fallback ?? "channel";
+}
+
 export type MattermostRequireMentionResolverInput = {
   cfg: OpenClawConfig;
   channel: "mattermost";

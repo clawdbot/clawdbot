@@ -5,7 +5,7 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct MenuSessionsInjectorTests {
-    @Test func anchorsDynamicRowsBelowControlsAndActions() throws {
+    @Test func `anchors dynamic rows below controls and actions`() throws {
         let injector = MenuSessionsInjector()
 
         let menu = NSMenu()
@@ -24,7 +24,7 @@ struct MenuSessionsInjectorTests {
         #expect(injector.testingFindNodesInsertIndex(in: menu) == footerSeparatorIndex)
     }
 
-    @Test func injectsDisconnectedMessage() {
+    @Test func `injects disconnected message`() {
         let injector = MenuSessionsInjector()
         injector.setTestingControlChannelConnected(false)
         injector.setTestingSnapshot(nil, errorText: nil)
@@ -38,7 +38,7 @@ struct MenuSessionsInjectorTests {
         #expect(menu.items.contains { $0.tag == 9_415_557 })
     }
 
-    @Test func injectsSessionRows() throws {
+    @Test func `injects session rows`() throws {
         let injector = MenuSessionsInjector()
         injector.setTestingControlChannelConnected(true)
 

@@ -1,8 +1,35 @@
 {
   "id": "google",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
-  "providers": ["google", "google-gemini-cli"],
+  "providers": ["google", "google-gemini-cli", "google-vertex"],
   "autoEnableWhenConfiguredProviders": ["google-gemini-cli"],
+  "modelIdNormalization": {
+    "providers": {
+      "google": {
+        "aliases": {
+          "gemini-3-pro": "gemini-3-pro-preview",
+          "gemini-3-flash": "gemini-3-flash-preview",
+          "gemini-3.1-pro": "gemini-3.1-pro-preview",
+          "gemini-3.1-flash-lite": "gemini-3.1-flash-lite-preview",
+          "gemini-3.1-flash": "gemini-3-flash-preview",
+          "gemini-3.1-flash-preview": "gemini-3-flash-preview"
+        }
+      },
+      "google-vertex": {
+        "aliases": {
+          "gemini-3-pro": "gemini-3-pro-preview",
+          "gemini-3-flash": "gemini-3-flash-preview",
+          "gemini-3.1-pro": "gemini-3.1-pro-preview",
+          "gemini-3.1-flash-lite": "gemini-3.1-flash-lite-preview",
+          "gemini-3.1-flash": "gemini-3-flash-preview",
+          "gemini-3.1-flash-preview": "gemini-3-flash-preview"
+        }
+      }
+    }
+  },
   "modelPricing": {
     "providers": {
       "google-gemini-cli": {
@@ -12,6 +39,35 @@
         "liteLLM": {
           "provider": "google"
         }
+      }
+    }
+  },
+  "providerEndpoints": [
+    {
+      "endpointClass": "google-generative-ai",
+      "hosts": ["generativelanguage.googleapis.com"]
+    },
+    {
+      "endpointClass": "google-vertex",
+      "hosts": ["aiplatform.googleapis.com"],
+      "googleVertexRegion": "global"
+    },
+    {
+      "endpointClass": "google-vertex",
+      "hostSuffixes": ["-aiplatform.googleapis.com"],
+      "googleVertexRegionHostSuffix": "-aiplatform.googleapis.com"
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "google": {
+        "family": "google"
+      },
+      "google-gemini-cli": {
+        "family": "google"
+      },
+      "google-vertex": {
+        "family": "google"
       }
     }
   },

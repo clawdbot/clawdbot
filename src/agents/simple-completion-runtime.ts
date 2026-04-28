@@ -15,7 +15,8 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "./model-selection.js";
-import { resolveModel } from "./pi-embedded-runner/model.js";
+import { resolveModel, resolveModelAsync } from "./pi-embedded-runner/model.js";
+import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 
 type SimpleCompletionAuthStorage = {
   setRuntimeApiKey: (provider: string, apiKey: string) => void;
@@ -158,8 +159,13 @@ export async function prepareSimpleCompletionModel(params: {
   profileId?: string;
   preferredProfile?: string;
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
+  skipPiDiscovery?: boolean;
 }): Promise<PreparedSimpleCompletionModel> {
-  const resolved = resolveModel(params.provider, params.modelId, params.agentDir, params.cfg);
+  const resolved = params.skipPiDiscovery
+    ? await resolveModelAsync(params.provider, params.modelId, params.agentDir, params.cfg, {
+        skipPiDiscovery: true,
+      })
+    : resolveModel(params.provider, params.modelId, params.agentDir, params.cfg);
   if (!resolved.model) {
     return {
       error: resolved.error ?? `Unknown model: ${params.provider}/${params.modelId}`,
@@ -233,6 +239,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
   modelRef?: string;
   preferredProfile?: string;
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
+  skipPiDiscovery?: boolean;
 }): Promise<PreparedSimpleCompletionModelForAgent> {
   const selection = resolveSimpleCompletionSelectionForAgent({
     cfg: params.cfg,
@@ -252,6 +259,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
     profileId: selection.profileId,
     preferredProfile: params.preferredProfile,
     allowMissingApiKeyModes: params.allowMissingApiKeyModes,
+    skipPiDiscovery: params.skipPiDiscovery,
   });
   if ("error" in prepared) {
     return {
@@ -272,7 +280,8 @@ export async function completeWithPreparedSimpleCompletionModel(params: {
   context: Parameters<typeof complete>[1];
   options?: SimpleCompletionModelOptions;
 }) {
-  return await complete(params.model, params.context, {
+  const completionModel = prepareModelForSimpleCompletion({ model: params.model });
+  return await complete(completionModel, params.context, {
     ...params.options,
     apiKey: params.auth.apiKey,
   });

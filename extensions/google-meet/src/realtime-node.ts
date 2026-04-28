@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import {
@@ -10,9 +10,13 @@ import {
   consultOpenClawAgentForGoogleMeet,
   GOOGLE_MEET_AGENT_CONSULT_TOOL_NAME,
   resolveGoogleMeetRealtimeTools,
+  submitGoogleMeetConsultWorkingResponse,
 } from "./agent-consult.js";
 import type { GoogleMeetConfig } from "./config.js";
-import { resolveGoogleMeetRealtimeProvider } from "./realtime.js";
+import {
+  resolveGoogleMeetRealtimeAudioFormat,
+  resolveGoogleMeetRealtimeProvider,
+} from "./realtime.js";
 import type { GoogleMeetChromeHealth } from "./transports/types.js";
 
 export type ChromeNodeRealtimeAudioBridgeHandle = {
@@ -92,6 +96,7 @@ export async function startNodeRealtimeAudioBridge(params: {
   bridge = createRealtimeVoiceBridgeSession({
     provider: resolved.provider,
     providerConfig: resolved.providerConfig,
+    audioFormat: resolveGoogleMeetRealtimeAudioFormat(params.config),
     instructions: params.config.realtime.instructions,
     initialGreetingInstructions: params.config.realtime.introMessage,
     triggerGreetingOnReady: false,
@@ -99,9 +104,9 @@ export async function startNodeRealtimeAudioBridge(params: {
     tools: resolveGoogleMeetRealtimeTools(params.config.realtime.toolPolicy),
     audioSink: {
       isOpen: () => !stopped,
-      sendAudio: (muLaw) => {
+      sendAudio: (audio) => {
         lastOutputAt = new Date().toISOString();
-        lastOutputBytes += muLaw.byteLength;
+        lastOutputBytes += audio.byteLength;
         void params.runtime.nodes
           .invoke({
             nodeId: params.nodeId,
@@ -109,7 +114,7 @@ export async function startNodeRealtimeAudioBridge(params: {
             params: {
               action: "pushAudio",
               bridgeId: params.bridgeId,
-              base64: Buffer.from(muLaw).toString("base64"),
+              base64: Buffer.from(audio).toString("base64"),
             },
             timeoutMs: 5_000,
           })
@@ -157,6 +162,7 @@ export async function startNodeRealtimeAudioBridge(params: {
         });
         return;
       }
+      submitGoogleMeetConsultWorkingResponse(session, event.callId || event.itemId);
       void consultOpenClawAgentForGoogleMeet({
         config: params.config,
         fullConfig: params.fullConfig,

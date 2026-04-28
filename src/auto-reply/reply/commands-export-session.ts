@@ -27,6 +27,25 @@ function loadTemplate(fileName: string): string {
   return fs.readFileSync(path.join(EXPORT_HTML_DIR, fileName), "utf-8");
 }
 
+function replaceHtmlPlaceholder(template: string, name: string, value: string): string {
+  let replaced = false;
+  const placeholder = new RegExp(
+    `(<(?:script|style)\\b(?=[^>]*\\bdata-openclaw-export-placeholder="${name}")[^>]*>)(</(?:script|style)>)`,
+  );
+  const next = template.replace(
+    placeholder,
+    (_match: string, openTag: string, closeTag: string) => {
+      replaced = true;
+      const finalOpenTag = openTag.replace(/\sdata-openclaw-export-placeholder="[^"]*"/, "");
+      return `${finalOpenTag}${value}${closeTag}`;
+    },
+  );
+  if (!replaced) {
+    throw new Error(`Export HTML template missing ${name} placeholder`);
+  }
+  return next;
+}
+
 function generateHtml(sessionData: SessionData): string {
   const template = loadTemplate("template.html");
   const templateCss = loadTemplate("template.css");
@@ -88,12 +107,13 @@ function generateHtml(sessionData: SessionData): string {
     .replace("/* {{CONTAINER_BG_DECL}} */", `--container-bg: ${containerBg};`)
     .replace("/* {{INFO_BG_DECL}} */", `--info-bg: ${infoBg};`);
 
-  return template
-    .replace("{{CSS}}", css)
-    .replace("{{JS}}", templateJs)
-    .replace("{{SESSION_DATA}}", sessionDataBase64)
-    .replace("{{MARKED_JS}}", markedJs)
-    .replace("{{HIGHLIGHT_JS}}", hljsJs);
+  return [
+    ["CSS", css],
+    ["SESSION_DATA", sessionDataBase64],
+    ["MARKED_JS", markedJs],
+    ["HIGHLIGHT_JS", hljsJs],
+    ["JS", templateJs],
+  ].reduce((html, [name, value]) => replaceHtmlPlaceholder(html, name, value), template);
 }
 
 export async function buildExportSessionReply(params: HandleCommandsParams): Promise<ReplyPayload> {

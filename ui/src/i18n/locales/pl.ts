@@ -109,6 +109,14 @@ export const pl: TranslationMap = {
       lightningHelp: "Adres Lightning do napiwków (LUD-16)",
     },
   },
+  lazyView: {
+    loadingTitle: "Ładowanie panelu",
+    errorTitle: "Nie udało się załadować panelu",
+    errorSubtitle:
+      "Odśwież stronę, aby załadować najnowszy pakiet Control UI, lub spróbuj ponownie, jeśli żądanie sieciowe się nie powiodło.",
+    retry: "Spróbuj ponownie",
+    unknownError: "Nieznany błąd ładowania modułu.",
+  },
   nodes: {
     binding: {
       loadConfigHint: "Wczytaj konfigurację, aby edytować powiązania.",

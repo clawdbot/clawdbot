@@ -8,8 +8,11 @@ import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
 } from "openclaw/plugin-sdk/approval-native-runtime";
+import type {
+  ExecApprovalRequest,
+  PluginApprovalRequest,
+} from "openclaw/plugin-sdk/approval-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
-import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -58,12 +61,6 @@ function resolveSessionTelegramOriginTarget(sessionTarget: {
   };
 }
 
-function telegramTargetsMatch(a: TelegramOriginTarget, b: TelegramOriginTarget): boolean {
-  const normalizedA = normalizeTelegramChatId(a.to) ?? a.to;
-  const normalizedB = normalizeTelegramChatId(b.to) ?? b.to;
-  return normalizedA === normalizedB && a.threadId === b.threadId;
-}
-
 const resolveTelegramOriginTarget = createChannelNativeOriginTargetResolver({
   channel: "telegram",
   shouldHandleRequest: ({ cfg, accountId, request }) =>
@@ -74,7 +71,6 @@ const resolveTelegramOriginTarget = createChannelNativeOriginTargetResolver({
     }),
   resolveTurnSourceTarget: resolveTurnSourceTelegramOriginTarget,
   resolveSessionTarget: resolveSessionTelegramOriginTarget,
-  targetsMatch: telegramTargetsMatch,
 });
 
 const resolveTelegramApproverDmTargets = createChannelApproverDmTargetResolver({

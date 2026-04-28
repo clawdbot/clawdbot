@@ -51,6 +51,7 @@ SecretRefs are validated only on effectively active surfaces.
         - `gateway.remote.token` is active when token auth can win and no env/auth token is configured.
         - `gateway.remote.password` is active only when password auth can win and no env/auth password is configured.
     - `gateway.auth.token` SecretRef is inactive for startup auth resolution when `OPENCLAW_GATEWAY_TOKEN` is set, because env token input wins for that runtime.
+
   </Accordion>
 </AccordionGroup>
 
@@ -159,6 +160,7 @@ Define providers under `secrets.providers`:
   <Accordion title="Env provider">
     - Optional allowlist via `allowlist`.
     - Missing/empty env values fail resolution.
+
   </Accordion>
   <Accordion title="File provider">
     - Reads local file from `path`.
@@ -166,6 +168,7 @@ Define providers under `secrets.providers`:
     - `mode: "singleValue"` expects ref id `"value"` and returns file contents.
     - Path must pass ownership/permission checks.
     - Windows fail-closed note: if ACL verification is unavailable for a path, resolution fails. For trusted paths only, set `allowInsecurePath: true` on that provider to bypass path security checks.
+
   </Accordion>
   <Accordion title="Exec provider">
     - Runs configured absolute binary path, no shell.

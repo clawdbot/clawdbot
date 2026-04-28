@@ -1,5 +1,5 @@
-import OpenClawKit
 import Observation
+import OpenClawKit
 import UIKit
 import WebKit
 
@@ -194,7 +194,7 @@ final class ScreenController {
                 NSLocalizedDescriptionKey: "web view unavailable",
             ])
         }
-        let image: UIImage = try await withCheckedThrowingContinuation { cont in
+        return try await withCheckedThrowingContinuation { cont in
             webView.takeSnapshot(with: config) { image, error in
                 if let error {
                     cont.resume(throwing: error)
@@ -209,7 +209,6 @@ final class ScreenController {
                 cont.resume(returning: image)
             }
         }
-        return image
     }
 
     func attachWebView(_ webView: WKWebView) {

@@ -1,5 +1,5 @@
+import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { expectPairingReplyText } from "../../test/helpers/pairing-reply.js";
 import { captureEnv } from "../test-utils/env.js";
 import { buildPairingReply } from "./pairing-messages.js";
 

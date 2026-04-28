@@ -10,6 +10,7 @@ import {
 
 export type GoogleMeetTransport = "chrome" | "chrome-node" | "twilio";
 export type GoogleMeetMode = "realtime" | "transcribe";
+export type GoogleMeetChromeAudioFormat = "pcm16-24khz" | "g711-ulaw-8khz";
 export type GoogleMeetToolPolicy = RealtimeVoiceAgentConsultToolPolicy;
 
 export type GoogleMeetConfig = {
@@ -24,6 +25,7 @@ export type GoogleMeetConfig = {
   defaultMode: GoogleMeetMode;
   chrome: {
     audioBackend: "blackhole-2ch";
+    audioFormat: GoogleMeetChromeAudioFormat;
     launch: boolean;
     browserProfile?: string;
     guestName: string;
@@ -77,6 +79,46 @@ export type GoogleMeetConfig = {
 };
 
 export const DEFAULT_GOOGLE_MEET_AUDIO_INPUT_COMMAND = [
+  "sox",
+  "-q",
+  "-t",
+  "coreaudio",
+  "BlackHole 2ch",
+  "-t",
+  "raw",
+  "-r",
+  "24000",
+  "-c",
+  "1",
+  "-e",
+  "signed-integer",
+  "-b",
+  "16",
+  "-L",
+  "-",
+] as const;
+
+export const DEFAULT_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND = [
+  "sox",
+  "-q",
+  "-t",
+  "raw",
+  "-r",
+  "24000",
+  "-c",
+  "1",
+  "-e",
+  "signed-integer",
+  "-b",
+  "16",
+  "-L",
+  "-",
+  "-t",
+  "coreaudio",
+  "BlackHole 2ch",
+] as const;
+
+export const LEGACY_GOOGLE_MEET_AUDIO_INPUT_COMMAND = [
   "rec",
   "-q",
   "-t",
@@ -92,7 +134,7 @@ export const DEFAULT_GOOGLE_MEET_AUDIO_INPUT_COMMAND = [
   "-",
 ] as const;
 
-export const DEFAULT_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND = [
+export const LEGACY_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND = [
   "play",
   "-q",
   "-t",
@@ -108,6 +150,8 @@ export const DEFAULT_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND = [
   "-",
 ] as const;
 
+export const DEFAULT_GOOGLE_MEET_CHROME_AUDIO_FORMAT: GoogleMeetChromeAudioFormat = "pcm16-24khz";
+
 export const DEFAULT_GOOGLE_MEET_REALTIME_INSTRUCTIONS = `You are joining a private Google Meet as an OpenClaw agent. Keep spoken replies brief and natural. When a question needs deeper reasoning, current information, or tools, call ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} before answering.`;
 export const DEFAULT_GOOGLE_MEET_REALTIME_INTRO_MESSAGE = "Say exactly: I'm here and listening.";
 
@@ -121,6 +165,7 @@ export const DEFAULT_GOOGLE_MEET_CONFIG: GoogleMeetConfig = {
   defaultMode: "realtime",
   chrome: {
     audioBackend: "blackhole-2ch",
+    audioFormat: DEFAULT_GOOGLE_MEET_CHROME_AUDIO_FORMAT,
     launch: true,
     guestName: "OpenClaw Agent",
     reuseExistingTab: true,
@@ -264,6 +309,37 @@ function resolveMode(value: unknown, fallback: GoogleMeetMode): GoogleMeetMode {
   return normalized === "realtime" || normalized === "transcribe" ? normalized : fallback;
 }
 
+function resolveChromeAudioFormat(value: unknown): GoogleMeetChromeAudioFormat | undefined {
+  const normalized = normalizeOptionalString(value)?.toLowerCase().replaceAll("_", "-");
+  switch (normalized) {
+    case "pcm16-24khz":
+    case "pcm16-24k":
+    case "pcm24":
+    case "pcm":
+      return "pcm16-24khz";
+    case "g711-ulaw-8khz":
+    case "g711-ulaw-8k":
+    case "g711-ulaw":
+    case "mulaw":
+    case "mu-law":
+      return "g711-ulaw-8khz";
+    default:
+      return undefined;
+  }
+}
+
+function defaultAudioInputCommand(format: GoogleMeetChromeAudioFormat): readonly string[] {
+  return format === "g711-ulaw-8khz"
+    ? LEGACY_GOOGLE_MEET_AUDIO_INPUT_COMMAND
+    : DEFAULT_GOOGLE_MEET_AUDIO_INPUT_COMMAND;
+}
+
+function defaultAudioOutputCommand(format: GoogleMeetChromeAudioFormat): readonly string[] {
+  return format === "g711-ulaw-8khz"
+    ? LEGACY_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND
+    : DEFAULT_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND;
+}
+
 export function resolveGoogleMeetConfig(input: unknown): GoogleMeetConfig {
   return resolveGoogleMeetConfigWithEnv(input);
 }
@@ -276,6 +352,13 @@ export function resolveGoogleMeetConfigWithEnv(
   const defaults = asRecord(raw.defaults);
   const preview = asRecord(raw.preview);
   const chrome = asRecord(raw.chrome);
+  const configuredAudioInputCommand = resolveStringArray(chrome.audioInputCommand);
+  const configuredAudioOutputCommand = resolveStringArray(chrome.audioOutputCommand);
+  const hasCustomAudioCommand =
+    configuredAudioInputCommand !== undefined || configuredAudioOutputCommand !== undefined;
+  const audioFormat =
+    resolveChromeAudioFormat(chrome.audioFormat) ??
+    (hasCustomAudioCommand ? "g711-ulaw-8khz" : DEFAULT_GOOGLE_MEET_CONFIG.chrome.audioFormat);
   const chromeNode = asRecord(raw.chromeNode);
   const twilio = asRecord(raw.twilio);
   const voiceCall = asRecord(raw.voiceCall);
@@ -304,6 +387,7 @@ export function resolveGoogleMeetConfigWithEnv(
     defaultMode: resolveMode(raw.defaultMode, DEFAULT_GOOGLE_MEET_CONFIG.defaultMode),
     chrome: {
       audioBackend: "blackhole-2ch",
+      audioFormat,
       launch: resolveBoolean(chrome.launch, DEFAULT_GOOGLE_MEET_CONFIG.chrome.launch),
       browserProfile: normalizeOptionalString(chrome.browserProfile),
       guestName:
@@ -321,11 +405,9 @@ export function resolveGoogleMeetConfigWithEnv(
         chrome.waitForInCallMs,
         DEFAULT_GOOGLE_MEET_CONFIG.chrome.waitForInCallMs,
       ),
-      audioInputCommand: resolveStringArray(chrome.audioInputCommand) ?? [
-        ...DEFAULT_GOOGLE_MEET_AUDIO_INPUT_COMMAND,
-      ],
-      audioOutputCommand: resolveStringArray(chrome.audioOutputCommand) ?? [
-        ...DEFAULT_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND,
+      audioInputCommand: configuredAudioInputCommand ?? [...defaultAudioInputCommand(audioFormat)],
+      audioOutputCommand: configuredAudioOutputCommand ?? [
+        ...defaultAudioOutputCommand(audioFormat),
       ],
       audioBridgeCommand: resolveStringArray(chrome.audioBridgeCommand),
       audioBridgeHealthCommand: resolveStringArray(chrome.audioBridgeHealthCommand),

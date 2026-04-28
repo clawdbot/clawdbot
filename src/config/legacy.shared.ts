@@ -75,7 +75,7 @@ export const mapLegacyAudioTranscription = (value: unknown): Record<string, unkn
     return null;
   }
 
-  const args = command.slice(1);
+  const args = command.slice(1).map((part) => part.replace(/\{input\}/g, "{{MediaPath}}"));
   const timeoutSeconds =
     typeof transcriber?.timeoutSeconds === "number" ? transcriber?.timeoutSeconds : undefined;
 

@@ -97,6 +97,8 @@ type GatewayHost = {
   assistantAvatar: string | null;
   assistantAgentId: string | null;
   serverVersion: string | null;
+  pendingUpdateExpectedVersion: string | null;
+  updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   sessionKey: string;
   chatRunId: string | null;
   pendingAbort?: { runId: string; sessionKey: string } | null;
@@ -157,6 +159,94 @@ type ConnectGatewayOptions = {
   reason?: "initial" | "seq-gap";
 };
 
+type UpdateRestartStatusResponse = {
+  sentinel?: {
+    kind?: string;
+    status?: string;
+    stats?: {
+      reason?: string | null;
+      after?: { version?: string | null } | null;
+    } | null;
+  } | null;
+};
+
+function resolveUpdateVerificationBanner(params: {
+  expectedVersion: string;
+  actualVersion: string | null;
+}): { tone: "danger"; text: string } {
+  const actualSuffix = params.actualVersion
+    ? ` Expected v${params.expectedVersion}, running v${params.actualVersion}.`
+    : "";
+  return {
+    tone: "danger",
+    text: `Update installed but running version did not change — restart may have been blocked.${actualSuffix}`,
+  };
+}
+
+function resolvePostRestartUpdateBanner(reason: string | null | undefined): {
+  tone: "danger";
+  text: string;
+} {
+  const normalizedReason = reason?.trim() || "restart-unhealthy";
+  const guidance =
+    normalizedReason === "restart-unhealthy"
+      ? "The replacement process never became healthy and the previous process stayed up."
+      : "Check the gateway logs for the replacement failure.";
+  return {
+    tone: "danger",
+    text: `Update error: ${normalizedReason}. ${guidance}`,
+  };
+}
+
+async function verifyPendingUpdateVersion(
+  host: GatewayHost,
+  client: GatewayBrowserClient,
+): Promise<void> {
+  const expectedVersion = host.pendingUpdateExpectedVersion?.trim();
+  if (!expectedVersion) {
+    return;
+  }
+  const deadline = Date.now() + 10_000;
+  while (host.client === client && host.connected && Date.now() < deadline) {
+    let response: UpdateRestartStatusResponse | null = null;
+    try {
+      response = await client.request<UpdateRestartStatusResponse>("update.status", {});
+    } catch {
+      response = null;
+    }
+    const sentinel = response?.sentinel;
+    const actualVersion = sentinel?.stats?.after?.version?.trim() || null;
+    if (sentinel?.kind === "update" && actualVersion) {
+      host.pendingUpdateExpectedVersion = null;
+      if (sentinel.status && sentinel.status !== "ok") {
+        host.updateStatusBanner = resolvePostRestartUpdateBanner(sentinel.stats?.reason ?? null);
+        return;
+      }
+      if (actualVersion !== expectedVersion) {
+        host.updateStatusBanner = resolveUpdateVerificationBanner({
+          expectedVersion,
+          actualVersion,
+        });
+      }
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 250);
+    });
+  }
+  if (host.client !== client || !host.connected) {
+    return;
+  }
+  const currentVersion = host.hello?.server?.version?.trim() || null;
+  host.pendingUpdateExpectedVersion = null;
+  if (currentVersion !== expectedVersion) {
+    host.updateStatusBanner = resolveUpdateVerificationBanner({
+      expectedVersion,
+      actualVersion: currentVersion,
+    });
+  }
+}
+
 export function resolveControlUiClientVersion(params: {
   gatewayUrl: string;
   serverVersion: string | null;
@@ -175,12 +265,50 @@ export function resolveControlUiClientVersion(params: {
     const page = new URL(pageUrl);
     const gateway = new URL(params.gatewayUrl, page);
     const allowedProtocols = new Set(["ws:", "wss:", "http:", "https:"]);
-    if (!allowedProtocols.has(gateway.protocol) || gateway.host !== page.host) {
+    if (!allowedProtocols.has(gateway.protocol) || !isSameControlUiVersionEndpoint(page, gateway)) {
       return undefined;
     }
     return serverVersion;
   } catch {
     return undefined;
+  }
+}
+
+function isSameControlUiVersionEndpoint(page: URL, gateway: URL): boolean {
+  if (gateway.host === page.host) {
+    return true;
+  }
+  return (
+    isLoopbackHostname(page.hostname) &&
+    isLoopbackHostname(gateway.hostname) &&
+    resolveUrlEffectivePort(page) === resolveUrlEffectivePort(gateway)
+  );
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
+  return (
+    normalized === "localhost" ||
+    normalized === "::1" ||
+    normalized === "0:0:0:0:0:0:0:1" ||
+    normalized === "127.0.0.1" ||
+    normalized.startsWith("127.")
+  );
+}
+
+function resolveUrlEffectivePort(url: URL): string {
+  if (url.port) {
+    return url.port;
+  }
+  switch (url.protocol) {
+    case "http:":
+    case "ws:":
+      return "80";
+    case "https:":
+    case "wss:":
+      return "443";
+    default:
+      return "";
   }
 }
 
@@ -303,6 +431,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       applySnapshot(host, hello);
       void loadControlUiBootstrapConfig(
         host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
+        { applyIdentity: false },
       );
       // Process any pending abort from before the disconnect.
       if (host.pendingAbort) {
@@ -344,6 +473,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
       // Re-run push reconciliation now that the gateway client is available.
       void host.reconcileWebPushState?.();
+      void verifyPendingUpdateVersion(host, client);
     },
     onClose: ({ code, reason, error }) => {
       if (host.client !== client) {
@@ -455,7 +585,7 @@ function isEventForDifferentActiveRun(
   payload: ChatEventPayload | undefined,
   activeRunId: string | null,
 ): boolean {
-  return Boolean(activeRunId && payload?.runId && payload.runId !== activeRunId);
+  return Boolean(activeRunId && payload && payload.runId !== activeRunId);
 }
 
 function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | undefined) {
@@ -484,23 +614,24 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
   const deferredSessionKey = deferredReloadHost.pendingSessionMessageReloadSessionKey?.trim();
   const payloadSessionKey = payload?.sessionKey?.trim();
-  const shouldReplayDeferredSessionMessageReload = Boolean(
+  const finalEventNeedsHistoryReload =
+    state === "final" && shouldReloadHistoryForFinalEvent(payload);
+  const shouldResolveDeferredSessionMessageReload = Boolean(
     deferredSessionKey &&
     payloadSessionKey &&
     deferredSessionKey === payloadSessionKey &&
     isTerminalChatState(state) &&
+    !terminalEventIsForDifferentActiveRun &&
     payloadSessionKey === host.sessionKey &&
     !host.chatRunId,
   );
-  if (deferredSessionKey && payloadSessionKey && deferredSessionKey === payloadSessionKey) {
+  const shouldReplayDeferredSessionMessageReload =
+    shouldResolveDeferredSessionMessageReload &&
+    (state !== "final" || finalEventNeedsHistoryReload);
+  if (shouldResolveDeferredSessionMessageReload) {
     deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
   }
-  if (
-    state === "final" &&
-    !historyReloaded &&
-    !terminalEventIsForDifferentActiveRun &&
-    shouldReloadHistoryForFinalEvent(payload)
-  ) {
+  if (finalEventNeedsHistoryReload && !historyReloaded && !terminalEventIsForDifferentActiveRun) {
     void loadChatHistory(host as unknown as ChatState);
     return;
   }

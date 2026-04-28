@@ -130,7 +130,8 @@ This table maps common inference tasks to the corresponding infer command.
 - Stateless execution commands default to local.
 - Gateway-managed state commands default to gateway.
 - The normal local path does not require the gateway to be running.
-- `model run` is one-shot. MCP servers opened through the agent runtime for that command are retired after the reply for both local and `--gateway` execution, so repeated scripted invocations do not keep stdio MCP child processes alive.
+- Local `model run` is a lean one-shot provider completion. It resolves the configured agent model and auth, but does not start a chat-agent turn, load tools, or open bundled MCP servers.
+- `model run --gateway` exercises Gateway routing, saved auth, provider selection, and the embedded runtime, but still runs as a raw model probe: it sends the supplied prompt without prior session transcript, bootstrap/AGENTS context, context-engine assembly, tools, or bundled MCP servers.
 
 ## Model
 
@@ -143,10 +144,24 @@ openclaw infer model providers --json
 openclaw infer model inspect --name gpt-5.5 --json
 ```
 
+Use full `<provider/model>` refs to smoke-test a specific provider without
+starting the Gateway or loading the full agent tool surface:
+
+```bash
+openclaw infer model run --local --model anthropic/claude-sonnet-4-6 --prompt "Reply with exactly: pong" --json
+openclaw infer model run --local --model cerebras/zai-glm-4.7 --prompt "Reply with exactly: pong" --json
+openclaw infer model run --local --model google/gemini-2.5-flash --prompt "Reply with exactly: pong" --json
+openclaw infer model run --local --model groq/llama-3.1-8b-instant --prompt "Reply with exactly: pong" --json
+openclaw infer model run --local --model mistral/mistral-small-latest --prompt "Reply with exactly: pong" --json
+openclaw infer model run --local --model openai/gpt-4.1 --prompt "Reply with exactly: pong" --json
+```
+
 Notes:
 
-- `model run` reuses the agent runtime so provider/model overrides behave like normal agent execution.
-- Because `model run` is intended for headless automation, it does not retain per-session bundled MCP runtimes after the command finishes.
+- Local `model run` is the narrowest CLI smoke for provider/model/auth health because it sends only the supplied prompt to the selected model.
+- `model run --prompt` must contain non-whitespace text; empty prompts are rejected before local providers or the Gateway are called.
+- Local `model run` exits non-zero when the provider returns no text output, so unreachable local providers and empty completions do not look like successful probes.
+- Use `model run --gateway` when you need to test Gateway routing, agent-runtime setup, or Gateway-managed provider state while keeping the model input raw. Use `openclaw agent` or chat surfaces when you want the full agent context, tools, memory, and session transcript.
 - `model auth login`, `model auth logout`, and `model auth status` manage saved provider auth state.
 
 ## Image

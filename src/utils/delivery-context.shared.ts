@@ -1,4 +1,9 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  channelRouteCompactKey,
+  channelRouteThreadId,
+  channelRouteTarget,
+  normalizeChannelRouteTarget,
+} from "../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "./account-id.js";
 import type { DeliveryContext, DeliveryContextSessionSource } from "./delivery-context.types.js";
 import { normalizeMessageChannel } from "./message-channel-core.js";
@@ -8,30 +13,26 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
   if (!context) {
     return undefined;
   }
-  const channel =
-    typeof context.channel === "string"
-      ? (normalizeMessageChannel(context.channel) ?? context.channel.trim())
-      : undefined;
-  const to = normalizeOptionalString(context.to);
-  const accountId = normalizeAccountId(context.accountId);
-  const threadId =
-    typeof context.threadId === "number" && Number.isFinite(context.threadId)
-      ? Math.trunc(context.threadId)
-      : typeof context.threadId === "string"
-        ? normalizeOptionalString(context.threadId)
-        : undefined;
-  const normalizedThreadId =
-    typeof threadId === "string" ? (threadId ? threadId : undefined) : threadId;
-  if (!channel && !to && !accountId && normalizedThreadId == null) {
+  const route = normalizeChannelRouteTarget({
+    channel:
+      typeof context.channel === "string"
+        ? (normalizeMessageChannel(context.channel) ?? context.channel.trim())
+        : undefined,
+    to: context.to,
+    accountId: context.accountId,
+    threadId: context.threadId,
+  });
+  if (!route) {
     return undefined;
   }
   const normalized: DeliveryContext = {
-    channel: channel || undefined,
-    to: to || undefined,
-    accountId,
+    channel: route.channel,
+    to: channelRouteTarget(route),
+    accountId: normalizeAccountId(route.accountId),
   };
-  if (normalizedThreadId != null) {
-    normalized.threadId = normalizedThreadId;
+  const threadId = channelRouteThreadId(route);
+  if (threadId != null) {
+    normalized.threadId = threadId;
   }
   return normalized;
 }
@@ -130,11 +131,5 @@ export function mergeDeliveryContext(
 }
 
 export function deliveryContextKey(context?: DeliveryContext): string | undefined {
-  const normalized = normalizeDeliveryContext(context);
-  if (!normalized?.channel || !normalized?.to) {
-    return undefined;
-  }
-  const threadId =
-    normalized.threadId != null && normalized.threadId !== "" ? String(normalized.threadId) : "";
-  return `${normalized.channel}|${normalized.to}|${normalized.accountId ?? ""}|${threadId}`;
+  return channelRouteCompactKey(normalizeDeliveryContext(context));
 }

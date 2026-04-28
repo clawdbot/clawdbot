@@ -1,5 +1,8 @@
 {
   "id": "zalouser",
+  "activation": {
+    "onStartup": false
+  },
   "channels": ["zalouser"],
   "channelEnvVars": {
     "zalouser": ["ZALOUSER_PROFILE", "ZCA_PROFILE"]

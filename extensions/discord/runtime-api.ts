@@ -1,20 +1,200 @@
-export * from "./src/audit.js";
-export * from "./src/actions/runtime.js";
-export * from "./src/actions/runtime.moderation-shared.js";
-export * from "./src/actions/runtime.shared.js";
-export * from "./src/channel-actions.js";
-export * from "./src/directory-live.js";
-export * from "./src/monitor.js";
-export * from "./src/monitor/gateway-plugin.js";
-export * from "./src/monitor/gateway-registry.js";
-export * from "./src/monitor/presence-cache.js";
-export * from "./src/monitor/thread-bindings.js";
-export * from "./src/monitor/thread-bindings.manager.js";
-export * from "./src/monitor/timeouts.js";
-export * from "./src/probe.js";
-export * from "./src/resolve-channels.js";
-export * from "./src/resolve-users.js";
-export * from "./src/outbound-session-route.js";
-export * from "./src/send.js";
-export * from "./src/send.components.js";
+export { auditDiscordChannelPermissions, collectDiscordAuditChannelIds } from "./src/audit.js";
+export { handleDiscordAction } from "./src/actions/runtime.js";
+export {
+  isDiscordModerationAction,
+  readDiscordModerationCommand,
+  requiredGuildPermissionForModerationAction,
+  type DiscordModerationAction,
+  type DiscordModerationCommand,
+} from "./src/actions/runtime.moderation-shared.js";
+export {
+  readDiscordChannelCreateParams,
+  readDiscordChannelEditParams,
+  readDiscordChannelMoveParams,
+  readDiscordParentIdParam,
+} from "./src/actions/runtime.shared.js";
+export { discordMessageActions } from "./src/channel-actions.js";
+export {
+  listDiscordDirectoryGroupsLive,
+  listDiscordDirectoryPeersLive,
+} from "./src/directory-live.js";
+export {
+  allowListMatches,
+  buildDiscordMediaPayload,
+  createDiscordMessageHandler,
+  createDiscordNativeCommand,
+  isDiscordGroupAllowedByPolicy,
+  monitorDiscordProvider,
+  normalizeDiscordAllowList,
+  normalizeDiscordSlug,
+  registerDiscordListener,
+  resolveDiscordChannelConfig,
+  resolveDiscordChannelConfigWithFallback,
+  resolveDiscordCommandAuthorized,
+  resolveDiscordGuildEntry,
+  resolveDiscordReplyTarget,
+  resolveDiscordShouldRequireMention,
+  resolveGroupDmAllow,
+  sanitizeDiscordThreadName,
+  shouldEmitDiscordReactionNotification,
+  type DiscordAllowList,
+  type DiscordChannelConfigResolved,
+  type DiscordGuildEntryResolved,
+  type DiscordMessageEvent,
+  type DiscordMessageHandler,
+  type MonitorDiscordOpts,
+} from "./src/monitor.js";
+export {
+  createDiscordGatewayPlugin,
+  resolveDiscordGatewayIntents,
+  waitForDiscordGatewayPluginRegistration,
+} from "./src/monitor/gateway-plugin.js";
+export {
+  clearGateways,
+  getGateway,
+  registerGateway,
+  unregisterGateway,
+} from "./src/monitor/gateway-registry.js";
+export {
+  clearPresences,
+  getPresence,
+  presenceCacheSize,
+  setPresence,
+} from "./src/monitor/presence-cache.js";
+export {
+  __testing,
+  autoBindSpawnedDiscordSubagent,
+  createNoopThreadBindingManager,
+  createThreadBindingManager,
+  formatThreadBindingDurationLabel,
+  getThreadBindingManager,
+  isRecentlyUnboundThreadWebhookMessage,
+  listThreadBindingsBySessionKey,
+  listThreadBindingsForAccount,
+  reconcileAcpThreadBindingsOnStartup,
+  resolveDiscordThreadBindingIdleTimeoutMs,
+  resolveDiscordThreadBindingMaxAgeMs,
+  resolveThreadBindingIdleTimeoutMs,
+  resolveThreadBindingInactivityExpiresAt,
+  resolveThreadBindingIntroText,
+  resolveThreadBindingMaxAgeExpiresAt,
+  resolveThreadBindingMaxAgeMs,
+  resolveThreadBindingPersona,
+  resolveThreadBindingPersonaFromRecord,
+  resolveThreadBindingsEnabled,
+  resolveThreadBindingThreadName,
+  setThreadBindingIdleTimeoutBySessionKey,
+  setThreadBindingMaxAgeBySessionKey,
+  unbindThreadBindingsBySessionKey,
+  type AcpThreadBindingReconciliationResult,
+  type ThreadBindingManager,
+  type ThreadBindingRecord,
+  type ThreadBindingTargetKind,
+} from "./src/monitor/thread-bindings.js";
+export {
+  DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
+  DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
+  DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
+  DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
+  isAbortError,
+  mergeAbortSignals,
+  normalizeDiscordInboundWorkerTimeoutMs,
+  normalizeDiscordListenerTimeoutMs,
+  runDiscordTaskWithTimeout,
+} from "./src/monitor/timeouts.js";
+export {
+  fetchDiscordApplicationId,
+  fetchDiscordApplicationSummary,
+  parseApplicationIdFromToken,
+  probeDiscord,
+  resolveDiscordPrivilegedIntentsFromFlags,
+  type DiscordApplicationSummary,
+  type DiscordPrivilegedIntentsSummary,
+  type DiscordPrivilegedIntentStatus,
+  type DiscordProbe,
+} from "./src/probe.js";
+export {
+  resolveDiscordChannelAllowlist,
+  type DiscordChannelResolution,
+} from "./src/resolve-channels.js";
+export { resolveDiscordUserAllowlist, type DiscordUserResolution } from "./src/resolve-users.js";
+export {
+  resolveDiscordOutboundSessionRoute,
+  type ResolveDiscordOutboundSessionRouteParams,
+} from "./src/outbound-session-route.js";
+export {
+  addRoleDiscord,
+  banMemberDiscord,
+  createChannelDiscord,
+  createScheduledEventDiscord,
+  createThreadDiscord,
+  deleteChannelDiscord,
+  deleteMessageDiscord,
+  DiscordSendError,
+  editChannelDiscord,
+  editMessageDiscord,
+  fetchChannelInfoDiscord,
+  fetchChannelPermissionsDiscord,
+  fetchMemberGuildPermissionsDiscord,
+  fetchMemberInfoDiscord,
+  fetchMessageDiscord,
+  fetchReactionsDiscord,
+  fetchRoleInfoDiscord,
+  fetchVoiceStatusDiscord,
+  hasAllGuildPermissionsDiscord,
+  hasAnyGuildPermissionDiscord,
+  kickMemberDiscord,
+  listGuildChannelsDiscord,
+  listGuildEmojisDiscord,
+  listPinsDiscord,
+  listScheduledEventsDiscord,
+  listThreadsDiscord,
+  moveChannelDiscord,
+  pinMessageDiscord,
+  reactMessageDiscord,
+  readMessagesDiscord,
+  removeChannelPermissionDiscord,
+  removeOwnReactionsDiscord,
+  removeReactionDiscord,
+  removeRoleDiscord,
+  resolveEventCoverImage,
+  searchMessagesDiscord,
+  sendMessageDiscord,
+  sendPollDiscord,
+  sendStickerDiscord,
+  sendTypingDiscord,
+  sendVoiceMessageDiscord,
+  sendWebhookMessageDiscord,
+  setChannelPermissionDiscord,
+  timeoutMemberDiscord,
+  unpinMessageDiscord,
+  uploadEmojiDiscord,
+  uploadStickerDiscord,
+  type DiscordChannelCreate,
+  type DiscordChannelEdit,
+  type DiscordChannelMove,
+  type DiscordChannelPermissionSet,
+  type DiscordEmojiUpload,
+  type DiscordMessageEdit,
+  type DiscordMessageQuery,
+  type DiscordModerationTarget,
+  type DiscordPermissionsSummary,
+  type DiscordReactionRuntimeContext,
+  type DiscordReactionSummary,
+  type DiscordReactionUser,
+  type DiscordReactOpts,
+  type DiscordRoleChange,
+  type DiscordRuntimeAccountContext,
+  type DiscordSearchQuery,
+  type DiscordSendResult,
+  type DiscordStickerUpload,
+  type DiscordThreadCreate,
+  type DiscordThreadList,
+  type DiscordTimeoutTarget,
+} from "./src/send.js";
+export {
+  editDiscordComponentMessage,
+  registerBuiltDiscordComponentMessage,
+  sendDiscordComponentMessage,
+} from "./src/send.components.js";
 export { setDiscordRuntime } from "./src/runtime.js";

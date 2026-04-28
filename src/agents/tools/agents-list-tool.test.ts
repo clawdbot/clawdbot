@@ -8,7 +8,7 @@ vi.mock("../../config/config.js", async () => {
     await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
   return {
     ...actual,
-    loadConfig: () => loadConfigMock(),
+    getRuntimeConfig: () => loadConfigMock(),
   };
 });
 
@@ -48,17 +48,36 @@ describe("agents_list tool", () => {
       requester: "main",
       agents: [
         {
-          id: "main",
-          configured: true,
-          model: "anthropic/claude-opus-4.5",
-          agentRuntime: { id: "pi", source: "defaults" },
-        },
-        {
           id: "codex",
           name: "Codex",
           configured: true,
           model: "openai/gpt-5.5",
           agentRuntime: { id: "codex", fallback: "none", source: "agent" },
+        },
+      ],
+    });
+  });
+
+  it("returns requester as the only target when no subagent allowlist is configured", async () => {
+    loadConfigMock.mockReturnValue({
+      agents: {
+        list: [{ id: "main", default: true }, { id: "codex" }],
+      },
+    } satisfies OpenClawConfig);
+
+    const { createAgentsListTool } = await import("./agents-list-tool.js");
+    const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
+      "call",
+      {},
+    );
+
+    expect(result.details).toMatchObject({
+      requester: "main",
+      allowAny: false,
+      agents: [
+        {
+          id: "main",
+          configured: true,
         },
       ],
     });

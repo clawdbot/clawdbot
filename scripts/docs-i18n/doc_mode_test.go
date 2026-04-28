@@ -460,6 +460,21 @@ func TestValidateDocChunkTranslationRejectsProtocolTokenLeakage(t *testing.T) {
 	}
 }
 
+func TestValidateDocChunkTranslationRejectsTranscriptArtifact(t *testing.T) {
+	t.Parallel()
+
+	source := "Regular paragraph.\n\n"
+	translated := `Regular paragraph. assistant to=functions.read commentary {"path":"/home/runner/work/docs/docs/source/AGENTS.md"} code`
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected transcript artifact to be rejected")
+	}
+	if !strings.Contains(err.Error(), "agent transcript artifact") {
+		t.Fatalf("expected transcript artifact error, got %v", err)
+	}
+}
+
 func TestValidateDocChunkTranslationRejectsTopLevelBodyWrapperLeakEvenWhenSourceMentionsBodyTag(t *testing.T) {
 	t.Parallel()
 

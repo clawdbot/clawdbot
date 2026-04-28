@@ -4,6 +4,7 @@ export type NpmProjectInstallEnvOptions = {
 
 const NPM_CONFIG_KEYS_TO_RESET = new Set([
   "npm_config_cache",
+  "npm_config_dry_run",
   "npm_config_global",
   "npm_config_location",
   "npm_config_prefix",
@@ -21,6 +22,7 @@ export function createNpmProjectInstallEnv(
   }
   return {
     ...nextEnv,
+    npm_config_dry_run: "false",
     npm_config_global: "false",
     npm_config_location: "project",
     npm_config_package_lock: "false",

@@ -1,22 +1,14 @@
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildHermesMigrationProvider } from "./provider.js";
-import { cleanupTempRoots, makeContext, makeTempRoot, writeFile } from "./test/provider-helpers.js";
-
-function makeConfigRuntime(config: Record<string, unknown>) {
-  return {
-    config: {
-      loadConfig: () => config,
-      writeConfigFile: async (next: Record<string, unknown>) => {
-        Object.keys(config).forEach((key) => {
-          delete config[key];
-        });
-        Object.assign(config, next);
-        return next;
-      },
-    },
-  } as never;
-}
+import {
+  cleanupTempRoots,
+  makeConfigRuntime,
+  makeContext,
+  makeTempRoot,
+  writeFile,
+} from "./test/provider-helpers.js";
 
 describe("Hermes migration config mapping", () => {
   afterEach(async () => {
@@ -125,9 +117,9 @@ describe("Hermes migration config mapping", () => {
     const source = path.join(root, "hermes");
     const workspaceDir = path.join(root, "workspace");
     const stateDir = path.join(root, "state");
-    const config: Record<string, unknown> = {
+    const config = {
       agents: { defaults: { workspace: workspaceDir } },
-    };
+    } as OpenClawConfig;
     await writeFile(
       path.join(source, "config.yaml"),
       [

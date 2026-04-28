@@ -1,4 +1,4 @@
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -250,7 +250,7 @@ export async function flowsCancelCommand(opts: { lookup: string }, runtime: Runt
     return;
   }
   const result = await cancelFlowById({
-    cfg: loadConfig(),
+    cfg: getRuntimeConfig(),
     flowId: flow.flowId,
   });
   if (!result.found) {

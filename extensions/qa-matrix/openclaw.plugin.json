@@ -1,5 +1,8 @@
 {
   "id": "qa-matrix",
+  "activation": {
+    "onStartup": false
+  },
   "name": "QA Matrix",
   "description": "Matrix QA transport runner and substrate",
   "qaRunners": [

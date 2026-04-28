@@ -7,7 +7,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveWhatsAppGroupSessionRoute } from "../../group-session-key.js";
 import { getPrimaryIdentityId, getSenderIdentity } from "../../identity.js";
 import { normalizeE164 } from "../../text-runtime.js";
-import { loadConfig } from "../config.runtime.js";
+import { getRuntimeConfig } from "../config.runtime.js";
 import type { MentionConfig } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
@@ -20,7 +20,7 @@ import { resolvePeerId } from "./peer.js";
 import { processMessage } from "./process-message.js";
 
 export function createWebOnMessageHandler(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: ReturnType<typeof getRuntimeConfig>;
   verbose: boolean;
   connectionId: string;
   maxMediaBytes: number;
@@ -87,7 +87,7 @@ export function createWebOnMessageHandler(params: {
     const peerId = resolvePeerId(msg);
     // Fresh config for bindings lookup; other routing inputs are payload-derived.
     const baseRoute = resolveAgentRoute({
-      cfg: loadConfig(),
+      cfg: getRuntimeConfig(),
       channel: "whatsapp",
       accountId: msg.accountId,
       peer: {

@@ -23,6 +23,23 @@ describe("probeGatewayMemoryStatus", () => {
     callGateway.mockReset();
   });
 
+  it("requests cached memory status without a live embedding probe", async () => {
+    callGateway.mockResolvedValue({ embedding: { ok: true } });
+
+    await expect(probeGatewayMemoryStatus({ cfg, timeoutMs: 1234 })).resolves.toEqual({
+      checked: true,
+      ready: true,
+      error: undefined,
+    });
+
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "doctor.memory.status",
+      params: { probe: false },
+      timeoutMs: 1234,
+      config: cfg,
+    });
+  });
+
   it("treats outer gateway timeouts as inconclusive", async () => {
     callGateway.mockRejectedValue(
       new Error("gateway timeout after 8000ms\nGateway target: ws://127.0.0.1:18789"),

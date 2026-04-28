@@ -17,7 +17,7 @@ function registerWebhookRoutes(api: OpenClawPluginApi): void {
   });
 
   for (const route of routes) {
-    const taskFlow = api.runtime.taskFlow.bindSession({
+    const taskFlow = api.runtime.tasks.managedFlows.bindSession({
       sessionKey: route.sessionKey,
     });
     const target: TaskFlowWebhookTarget = {

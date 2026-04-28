@@ -1,9 +1,10 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
-import { loadConfig, writeConfigFile } from "openclaw/plugin-sdk/config-runtime";
+import { replaceConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, warn } from "openclaw/plugin-sdk/runtime-env";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { migrateSlackChannelConfig } from "../../channel-migration.js";
 import { resolveSlackChannelLabel } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
@@ -129,7 +130,7 @@ export function registerSlackChannelEvents(params: {
           return;
         }
 
-        const currentConfig = loadConfig();
+        const currentConfig = getRuntimeConfig();
         const migration = migrateSlackChannelConfig({
           cfg: currentConfig,
           accountId: ctx.accountId,
@@ -144,7 +145,10 @@ export function registerSlackChannelEvents(params: {
             oldChannelId,
             newChannelId,
           });
-          await writeConfigFile(currentConfig);
+          await replaceConfigFile({
+            nextConfig: currentConfig,
+            afterWrite: { mode: "auto" },
+          });
           ctx.runtime.log?.(warn("[slack] Channel config migrated and saved successfully."));
         } else if (migration.skippedExisting) {
           ctx.runtime.log?.(

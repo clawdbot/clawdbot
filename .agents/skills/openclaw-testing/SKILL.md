@@ -76,6 +76,9 @@ Use targeted file paths whenever possible. Avoid raw `vitest`; use the repo
 - Direct test edits run themselves. Source edits prefer explicit mappings,
   sibling `*.test.ts`, then import-graph dependents. Shared harness/config/root
   edits are skipped by default unless they have precise mapped tests.
+- Shared group-room delivery config and source-reply prompt edits are precise
+  mapped tests: they run the core auto-reply regressions plus Discord and Slack
+  delivery tests so cross-channel default changes fail before a PR push.
 - Public SDK or contract edits do not automatically run every plugin test.
   `check:changed` proves extension type contracts; the agent chooses the
   smallest plugin/contract Vitest proof that matches the actual risk.
@@ -122,14 +125,37 @@ gh workflow run full-release-validation.yml \
   --repo openclaw/openclaw \
   --ref main \
   -f ref=<branch-or-sha> \
-  -f workflow_ref=main \
   -f provider=openai \
-  -f mode=both
+  -f mode=both \
+  -f release_profile=stable
 ```
+
+Run the workflow itself from the trusted current ref, normally `--ref main`;
+child workflows are dispatched from that same ref even when `ref` points at an
+older release branch or tag. Full Release Validation has no separate child
+workflow ref input; choose the trusted harness by choosing the workflow run ref.
+Use `release_profile=minimum|stable|full` to control live/provider breadth:
+`minimum` keeps the fastest OpenAI/core release-critical set, `stable` adds the
+stable provider/backend set, and `full` adds the broad advisory provider/media
+matrix. Do not make `full` faster by silently dropping suites; optimize setup,
+artifact reuse, and sharding instead. The parent verifier job appends
+slowest-job tables for child runs; rerun only that verifier after a child rerun
+turns green.
 
 If a full run is already active on a newer `origin/main`, prefer watching that
 run over dispatching a duplicate. If you accidentally dispatch a stale duplicate,
 cancel it and monitor the current run.
+
+The child-dispatch jobs record the child run ids. The final
+`Verify full validation` job re-queries those child runs and is the canonical
+parent gate. If a child workflow failed but was later rerun successfully, rerun
+only the failed parent verifier job; do not dispatch a new full umbrella unless
+the release evidence is stale.
+
+For bounded recovery after a focused fix, pass `-f rerun_group=<group>`.
+Supported umbrella groups are `all`, `ci`, `release-checks`, `install-smoke`,
+`cross-os`, `live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, and
+`npm-telegram`. Use the narrowest group that covers the failed box.
 
 ### Release Evidence
 
@@ -170,8 +196,10 @@ that private workflow manually with the full-validation run id.
 `OpenClaw Release Checks` (`openclaw-release-checks.yml`) is the release child
 workflow. It is broader than normal CI but narrower than the umbrella because it
 does not dispatch the separate full normal CI child. It runs Package Acceptance
-with `telegram_mode=mock-openai`, so the release package tarball also goes
-through Telegram package QA. Use it when release-path validation is needed
+with artifact-native delta lanes and `telegram_mode=mock-openai`, so the release
+package tarball also goes through offline plugin proof, bundled-channel compat,
+and Telegram package QA. The Docker release-path chunks cover the overlapping
+package/update/plugin lanes. Use it when release-path validation is needed
 without rerunning the entire umbrella.
 
 ```bash
@@ -180,15 +208,39 @@ gh workflow run openclaw-release-checks.yml \
   --ref main \
   -f ref=<branch-or-sha> \
   -f provider=openai \
-  -f mode=both
+  -f mode=both \
+  -f release_profile=stable \
+  -f rerun_group=all
 ```
+
+Release-check rerun groups are `all`, `install-smoke`, `cross-os`, `live-e2e`,
+`package`, `qa`, `qa-parity`, and `qa-live`.
+`OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected
+ref once as `release-package-under-test` and passes that artifact into cross-OS
+release checks, release-path Docker live/E2E checks, and Package Acceptance.
+When `Full Release Validation` dispatches release checks, it passes the requested
+branch/tag plus an `expected_sha` so branch/tag refs resolve through the fast
+remote-ref path while the package and QA jobs still validate the exact SHA.
+
+The release Docker path intentionally shards the plugin/runtime tail. The
+workflow uses `plugins-runtime-plugins`, `plugins-runtime-services`, and
+`plugins-runtime-install-a` through `plugins-runtime-install-d`; aggregate
+aliases such as `plugins-runtime-core`, `plugins-runtime`, and
+`plugins-integrations` remain for manual reruns.
+
+The release QA parity box is internally split into candidate and baseline lane
+jobs, followed by a report job that downloads both artifacts and runs
+`pnpm openclaw qa parity-report`. For parity failures, inspect the failed lane
+first; inspect the report job when both lane summaries exist but the comparison
+fails.
 
 ### QA Lab Matrix Profiles
 
 `pnpm openclaw qa matrix` defaults to `--profile all`. Do not assume the CLI
 default is the fast release path. Use explicit profiles:
 
-- `--profile fast --fail-fast`: release-critical Matrix transport contract
+- `--profile fast`: release-critical Matrix transport contract; add
+  `--fail-fast` only when the target CLI supports it
 - `--profile transport|media|e2ee-smoke|e2ee-deep|e2ee-cli`: sharded full
   Matrix proof
 - `OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000`: CI-friendly no-reply quiet
@@ -223,13 +275,54 @@ gh workflow run openclaw-live-and-e2e-checks-reusable.yml \
 Useful knobs:
 
 - `docker_lanes='<lane[,lane]>'`: run selected Docker scheduler lanes against
-  prepared artifacts instead of the three release chunks.
+  prepared artifacts instead of the release chunk matrix. Multiple selected
+  lanes fan out as parallel targeted Docker jobs after one shared package/image
+  preparation step.
 - `include_live_suites=false`: skip live/provider suites when testing Docker
   scheduler or release packaging only.
 - `live_models_only=true`: run only Docker live model coverage.
 - `live_model_providers=fireworks` (or comma/space separated providers): run one
   targeted Docker live model job instead of the full provider matrix.
 - blank `live_model_providers`: run the full live-model provider matrix.
+
+Release-path Docker chunks are currently `core`, `package-update-openai`,
+`package-update-anthropic`, `package-update-core`,
+`plugins-runtime-plugins`, `plugins-runtime-services`,
+`plugins-runtime-install-a`, `plugins-runtime-install-b`,
+`plugins-runtime-install-c`, `plugins-runtime-install-d`,
+`bundled-channels-core`, `bundled-channels-update-a`,
+`bundled-channels-update-b`, and `bundled-channels-contracts`. The aggregate
+`bundled-channels`, `plugins-runtime-core`, `plugins-runtime`, and
+`plugins-integrations` chunks remain valid for manual one-shot reruns, but
+release checks use the split chunks.
+
+When live suites are enabled, the workflow shards broad native `pnpm test:live`
+coverage through `scripts/test-live-shard.mjs` instead of one serial `live-all`
+job:
+
+- `native-live-src-agents`
+- `native-live-src-gateway-core`
+- `native-live-src-gateway-profiles` (release CI runs this with provider
+  filters such as `OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic`)
+- `native-live-src-gateway-backends`
+- `native-live-test`
+- `native-live-extensions-a-k`
+- `native-live-extensions-l-n`
+- `native-live-extensions-openai`
+- `native-live-extensions-o-z`
+- `native-live-extensions-o-z-other`
+- `native-live-extensions-xai`
+- `native-live-extensions-media`
+- `native-live-extensions-media-audio`
+- `native-live-extensions-media-music`
+- `native-live-extensions-media-music-google`
+- `native-live-extensions-media-music-minimax`
+- `native-live-extensions-media-video`
+
+Use `node scripts/test-live-shard.mjs <shard> --list` to see the exact files
+before rerunning a failed native live shard. The aggregate `o-z` and `media`
+shards remain useful locally; release CI uses the smaller provider/media shards
+so one live-provider flake does not force a broad native live rerun.
 
 For model-list or provider-selection fixes, use `live_models_only=true` plus the
 specific `live_model_providers` allowlist. Confirm logs show the expected
@@ -278,18 +371,36 @@ generated inside GitHub artifacts include `package_artifact_run_id`,
 exact tarball and prepared images from the failed run. When the fix changes
 package contents, omit those reuse inputs so the workflow packs a new tarball.
 Live-only targeted reruns skip the E2E images and build only the live-test
-image. Release-path normal mode remains max three Docker chunk jobs:
+image. Release-path normal mode fans out into smaller Docker chunk jobs:
 
 - `core`
-- `package-update`
-- `plugins-integrations`
+- `package-update-openai`
+- `package-update-anthropic`
+- `package-update-core`
+- `plugins-runtime-plugins`
+- `plugins-runtime-services`
+- `plugins-runtime-install-a`
+- `plugins-runtime-install-b`
+- `plugins-runtime-install-c`
+- `plugins-runtime-install-d`
+- `bundled-channels`
 
-OpenWebUI is folded into `plugins-integrations` for full release-path coverage
-and keeps a standalone `openwebui` chunk only for OpenWebUI-only dispatches.
-The bundled-channel runtime-dependency coverage inside `plugins-integrations`
+OpenWebUI is folded into `plugins-runtime-services` for full release-path
+coverage and keeps a standalone `openwebui` chunk only for OpenWebUI-only
+dispatches. The legacy `package-update`, `plugins-runtime-core`,
+`plugins-runtime`, and `plugins-integrations` chunks still work as aggregate
+aliases for manual reruns, but the release workflow uses the split chunks so
+provider installer checks, plugin runtime checks, bundled plugin
+install/uninstall shards, and bundled-channel checks can run on separate
+machines. The bundled-channel runtime-dependency coverage
+inside `bundled-channels`
 uses the split `bundled-channel-*` and `bundled-channel-update-*` lanes rather
 than the serial `bundled-channel-deps` lane, so failures produce cheap targeted
-reruns for the exact channel/update scenario.
+reruns for the exact channel/update scenario. The bundled plugin
+install/uninstall sweep is also split into
+`bundled-plugin-install-uninstall-0` through
+`bundled-plugin-install-uninstall-7`; selecting the legacy
+`bundled-plugin-install-uninstall` lane expands to all eight shards.
 
 ## Package Acceptance
 
@@ -435,7 +546,7 @@ gh workflow run openclaw-live-and-e2e-checks-reusable.yml \
 That path still runs the prepare job, so it creates a new tarball for `<sha>`.
 If the SHA-tagged GHCR bare/functional image already exists, CI skips rebuilding
 that image and only uploads the fresh package artifact before the targeted lane
-job. Do not rerun the full three-chunk release path unless the failed lane list
+job. Do not rerun the full release path unless the failed lane list
 or touched surface really requires it.
 
 ## Docker Expected Timings

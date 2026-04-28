@@ -1,5 +1,5 @@
 import { sendMessageTelegram } from "../../extensions/telegram/runtime-api.js";
-import { loadConfig } from "../../src/config/config.js";
+import { getRuntimeConfig } from "../../src/config/config.js";
 import { matchPluginCommand, executePluginCommand } from "../../src/plugins/commands.js";
 import { loadOpenClawPlugins } from "../../src/plugins/loader.js";
 
@@ -35,7 +35,7 @@ if (!chatId) {
   process.exit(1);
 }
 
-const cfg = loadConfig();
+const cfg = getRuntimeConfig();
 loadOpenClawPlugins({ config: cfg });
 
 const match = matchPluginCommand("/pair");

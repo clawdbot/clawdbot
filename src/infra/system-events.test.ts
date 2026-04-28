@@ -120,6 +120,23 @@ describe("system events (session routing)", () => {
     expect(peekSystemEvents(key)).toEqual(["second"]);
   });
 
+  it("matches consumed delivery contexts through normalized route identity", () => {
+    const key = "agent:main:test-consume-route-context";
+    enqueueSystemEvent("first", {
+      sessionKey: key,
+      deliveryContext: {
+        channel: "telegram",
+        to: "-100123",
+        threadId: 42.9,
+      },
+    });
+    const inspected = peekSystemEventEntries(key);
+    inspected[0].deliveryContext!.threadId = "42";
+
+    expect(consumeSystemEventEntries(key, inspected).map((entry) => entry.text)).toEqual(["first"]);
+    expect(peekSystemEvents(key)).toEqual([]);
+  });
+
   it("resolves the newest effective delivery context from queued events", () => {
     const key = "agent:main:test-delivery-context";
     enqueueSystemEvent("Restarted", {

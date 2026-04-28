@@ -7,7 +7,6 @@ import type {
 } from "../../auto-reply/commands-registry.types.js";
 import { listSkillCommandsForAgents } from "../../auto-reply/skill-commands.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginCommandSpecs } from "../../plugins/command-specs.js";
 import { listPluginCommands } from "../../plugins/commands.js";
@@ -52,8 +51,11 @@ function clampDescription(value: string | undefined): string {
   return clampString(value ?? "", COMMAND_DESCRIPTION_MAX_LENGTH);
 }
 
-function resolveAgentIdOrRespondError(rawAgentId: unknown, respond: RespondFn) {
-  const cfg = loadConfig();
+function resolveAgentIdOrRespondError(
+  rawAgentId: unknown,
+  respond: RespondFn,
+  cfg: OpenClawConfig,
+) {
   const knownAgents = listAgentIds(cfg);
   const requestedAgentId = typeof rawAgentId === "string" ? rawAgentId.trim() : "";
   const agentId = requestedAgentId || resolveDefaultAgentId(cfg);
@@ -240,7 +242,7 @@ export function buildCommandsListResult(params: {
 }
 
 export const commandsHandlers: GatewayRequestHandlers = {
-  "commands.list": ({ params, respond }) => {
+  "commands.list": ({ params, respond, context }) => {
     if (!validateCommandsListParams(params)) {
       respond(
         false,
@@ -252,7 +254,11 @@ export const commandsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const resolved = resolveAgentIdOrRespondError(params.agentId, respond);
+    const resolved = resolveAgentIdOrRespondError(
+      params.agentId,
+      respond,
+      context.getRuntimeConfig(),
+    );
     if (!resolved) {
       return;
     }

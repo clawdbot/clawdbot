@@ -1,6 +1,6 @@
 import path from "node:path";
+import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, vi } from "vitest";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles.js";
 import { resetSkillsRefreshForTest } from "../agents/skills/refresh.js";
 import { clearSessionStoreCacheForTest, loadSessionStore } from "../config/sessions.js";

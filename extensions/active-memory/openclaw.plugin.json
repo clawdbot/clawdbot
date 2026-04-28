@@ -1,5 +1,8 @@
 {
   "id": "active-memory",
+  "activation": {
+    "onStartup": true
+  },
   "name": "Active Memory",
   "description": "Runs a bounded blocking memory sub-agent before eligible conversational replies and injects relevant memory into prompt context.",
   "configSchema": {

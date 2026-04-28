@@ -1,5 +1,8 @@
 {
   "id": "cloudflare-ai-gateway",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["cloudflare-ai-gateway"],
   "modelPricing": {

@@ -108,15 +108,6 @@ vi.mock("./browser/config.js", () => browserConfigMocks);
 const nodesUtilsMocks = vi.hoisted(() => ({
   listNodes: vi.fn(async (..._args: unknown[]): Promise<Array<Record<string, unknown>>> => []),
 }));
-vi.mock("../../../src/agents/tools/nodes-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../../../src/agents/tools/nodes-utils.js")>(
-    "../../../src/agents/tools/nodes-utils.js",
-  );
-  return {
-    ...actual,
-    listNodes: nodesUtilsMocks.listNodes,
-  };
-});
 
 const gatewayMocks = vi.hoisted(() => ({
   callGatewayTool: vi.fn(
@@ -126,7 +117,6 @@ const gatewayMocks = vi.hoisted(() => ({
     }),
   ),
 }));
-vi.mock("../../../src/agents/tools/gateway.js", () => gatewayMocks);
 
 const configMocks = vi.hoisted(() => ({
   loadConfig: vi.fn<
@@ -136,13 +126,13 @@ const configMocks = vi.hoisted(() => ({
     }
   >(() => ({ browser: {} })),
 }));
-vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
-    "openclaw/plugin-sdk/config-runtime",
-  );
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
+  >("openclaw/plugin-sdk/runtime-config-snapshot");
   return {
     ...actual,
-    loadConfig: configMocks.loadConfig,
+    getRuntimeConfig: configMocks.loadConfig,
   };
 });
 
@@ -156,13 +146,14 @@ vi.mock("./browser/session-tab-registry.js", () => sessionTabRegistryMocks);
 const toolCommonMocks = vi.hoisted(() => ({
   imageResultFromFile: vi.fn(),
 }));
-vi.mock("../../../src/agents/tools/common.js", async () => {
-  const actual = await vi.importActual<typeof import("../../../src/agents/tools/common.js")>(
-    "../../../src/agents/tools/common.js",
-  );
+vi.mock("./sdk-setup-tools.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./sdk-setup-tools.js")>("./sdk-setup-tools.js");
   return {
     ...actual,
+    callGatewayTool: gatewayMocks.callGatewayTool,
     imageResultFromFile: toolCommonMocks.imageResultFromFile,
+    listNodes: nodesUtilsMocks.listNodes,
   };
 });
 
@@ -193,6 +184,7 @@ vi.mock("./browser-tool.runtime.js", () => {
     ...configMocks,
     ...gatewayMocks,
     ...sessionTabRegistryMocks,
+    getRuntimeConfig: configMocks.loadConfig,
     applyBrowserProxyPaths: vi.fn(),
     getBrowserProfileCapabilities: (profile: Record<string, unknown>) => ({
       usesChromeMcp: profile.driver === "existing-session",
@@ -269,7 +261,7 @@ function resetBrowserToolMocks() {
     browserStatus: browserClientMocks.browserStatus as never,
     browserStop: browserClientMocks.browserStop as never,
     imageResultFromFile: toolCommonMocks.imageResultFromFile as never,
-    loadConfig: configMocks.loadConfig as never,
+    getRuntimeConfig: configMocks.loadConfig as never,
     listNodes: nodesUtilsMocks.listNodes as never,
     callGatewayTool: gatewayMocks.callGatewayTool as never,
     trackSessionBrowserTab: sessionTabRegistryMocks.trackSessionBrowserTab as never,
@@ -280,7 +272,7 @@ function resetBrowserToolMocks() {
     browserConsoleMessages: browserActionsMocks.browserConsoleMessages as never,
     browserSnapshot: browserClientMocks.browserSnapshot as never,
     browserTabs: browserClientMocks.browserTabs as never,
-    loadConfig: configMocks.loadConfig as never,
+    getRuntimeConfig: configMocks.loadConfig as never,
     imageResultFromFile: toolCommonMocks.imageResultFromFile as never,
   });
 }

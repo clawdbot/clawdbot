@@ -1,5 +1,8 @@
 {
   "id": "comfy",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["comfy"],
   "providerAuthEnvVars": {

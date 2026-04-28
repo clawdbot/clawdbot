@@ -108,7 +108,5 @@ private class ThrowingPoster(
 ) : SystemNotificationPoster {
   override fun isAuthorized(): Boolean = authorized
 
-  override fun post(request: SystemNotifyRequest) {
-    throw error
-  }
+  override fun post(request: SystemNotifyRequest): Unit = throw error
 }

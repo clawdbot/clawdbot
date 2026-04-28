@@ -1,3 +1,4 @@
+import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -23,6 +24,7 @@ export type HandleDirectiveOnlyCoreParams = {
   allowedModelCatalog: Awaited<
     ReturnType<typeof import("../../agents/model-catalog.js").loadModelCatalog>
   >;
+  thinkingCatalog?: ModelCatalogEntry[];
   resetModelOverride: boolean;
   provider: string;
   model: string;
@@ -52,6 +54,7 @@ export type ApplyInlineDirectivesFastLaneParams = HandleDirectiveOnlyCoreParams 
   agentCfg?: NonNullable<OpenClawConfig["agents"]>["defaults"];
   modelState: {
     resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
+    resolveThinkingCatalog: () => Promise<ModelCatalogEntry[] | undefined>;
     allowedModelKeys: Set<string>;
     allowedModelCatalog: Awaited<
       ReturnType<typeof import("../../agents/model-catalog.js").loadModelCatalog>

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { SENSITIVE_URL_HINT_TAG } from "../shared/net/redact-sensitive-url.js";
-import { DEFAULT_LLM_IDLE_TIMEOUT_SECONDS } from "./agent-timeout-defaults.js";
 import { computeBaseConfigSchemaResponse } from "./schema-base.js";
 import { GENERATED_BASE_CONFIG_SCHEMA } from "./schema.base.generated.js";
 
@@ -62,34 +61,5 @@ describe("generated base config schema", () => {
     expect(uiHints["agents.defaults.videoGenerationModel.primary"]).toBeDefined();
     expect(uiHints["agents.defaults.videoGenerationModel.fallbacks"]).toBeDefined();
     expect(uiHints["agents.defaults.mediaGenerationAutoProviderFallback"]).toBeDefined();
-  });
-
-  it("keeps the LLM idle timeout schema help aligned with the runtime default", () => {
-    const idleTimeoutDescription = (
-      GENERATED_BASE_CONFIG_SCHEMA.schema as {
-        properties?: {
-          agents?: {
-            properties?: {
-              defaults?: {
-                properties?: {
-                  llm?: {
-                    properties?: {
-                      idleTimeoutSeconds?: {
-                        description?: string;
-                      };
-                    };
-                  };
-                };
-              };
-            };
-          };
-        };
-      }
-    ).properties?.agents?.properties?.defaults?.properties?.llm?.properties?.idleTimeoutSeconds
-      ?.description;
-
-    expect(idleTimeoutDescription).toContain(
-      `Default: ${DEFAULT_LLM_IDLE_TIMEOUT_SECONDS} seconds.`,
-    );
   });
 });

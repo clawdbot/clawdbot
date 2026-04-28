@@ -1,4 +1,4 @@
-import { expectChannelInboundContextContract } from "openclaw/plugin-sdk/testing";
+import { expectChannelInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
 import { describe, it } from "vitest";
 import { buildFinalizedDiscordDirectInboundContext } from "./monitor/inbound-context.test-helpers.js";
 

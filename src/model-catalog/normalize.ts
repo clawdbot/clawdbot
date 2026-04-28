@@ -202,6 +202,17 @@ function normalizeModelCatalogCompat(value: unknown): ModelCompatConfig | undefi
     }
   }
 
+  if (isRecord(value.reasoningEffortMap)) {
+    const reasoningEffortMap = Object.fromEntries(
+      Object.entries(value.reasoningEffortMap)
+        .map(([key, mapped]) => [key.trim(), typeof mapped === "string" ? mapped.trim() : ""])
+        .filter(([key, mapped]) => key.length > 0 && mapped.length > 0),
+    );
+    if (Object.keys(reasoningEffortMap).length > 0) {
+      compat.reasoningEffortMap = reasoningEffortMap;
+    }
+  }
+
   const maxTokensField = normalizeOptionalString(value.maxTokensField) ?? "";
   if (maxTokensField === "max_completion_tokens" || maxTokensField === "max_tokens") {
     compat.maxTokensField = maxTokensField;
@@ -212,9 +223,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCompatConfig | undefi
     thinkingFormat === "openai" ||
     thinkingFormat === "openrouter" ||
     thinkingFormat === "deepseek" ||
-    thinkingFormat === "zai" ||
-    thinkingFormat === "qwen" ||
-    thinkingFormat === "qwen-chat-template"
+    thinkingFormat === "zai"
   ) {
     compat.thinkingFormat = thinkingFormat;
   }
@@ -361,10 +370,25 @@ function normalizeModelCatalogSuppressions(value: unknown): ModelCatalogSuppress
       continue;
     }
     const reason = normalizeOptionalString(entry.reason) ?? "";
+    const rawWhen = isRecord(entry.when) ? entry.when : undefined;
+    const baseUrlHosts = normalizeTrimmedStringList(rawWhen?.baseUrlHosts).map((host) =>
+      host.toLowerCase(),
+    );
+    const providerConfigApiIn = normalizeTrimmedStringList(rawWhen?.providerConfigApiIn).map(
+      (api) => api.toLowerCase(),
+    );
+    const when =
+      baseUrlHosts.length > 0 || providerConfigApiIn.length > 0
+        ? {
+            ...(baseUrlHosts.length > 0 ? { baseUrlHosts } : {}),
+            ...(providerConfigApiIn.length > 0 ? { providerConfigApiIn } : {}),
+          }
+        : undefined;
     suppressions.push({
       provider,
       model,
       ...(reason ? { reason } : {}),
+      ...(when ? { when } : {}),
     });
   }
   return suppressions.length > 0 ? suppressions : undefined;

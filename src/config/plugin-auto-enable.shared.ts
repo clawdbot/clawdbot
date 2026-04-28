@@ -283,7 +283,7 @@ function collectPluginIdsForConfiguredChannel(
 }
 
 function collectCandidateChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
-  return listPotentialConfiguredChannelIds(cfg, env).map(
+  return listPotentialConfiguredChannelIds(cfg, env, { includePersistedAuthState: false }).map(
     (channelId) => normalizeChatChannelId(channelId) ?? channelId,
   );
 }
@@ -351,42 +351,86 @@ function collectConfiguredPluginEntryIds(cfg: OpenClawConfig): string[] {
   }
   return Object.keys(entries)
     .map((pluginId) => pluginId.trim())
-    .filter(Boolean);
+    .filter((pluginId) => pluginId && !isPluginEntryExplicitlyDisabled(cfg, pluginId));
+}
+
+function hasOwnPluginEntry(cfg: OpenClawConfig, pluginId: string): boolean {
+  const entries = cfg.plugins?.entries;
+  return !!entries && typeof entries === "object" && Object.hasOwn(entries, pluginId);
+}
+
+function isPluginEntryExplicitlyDisabled(cfg: OpenClawConfig, pluginId: string): boolean {
+  return cfg.plugins?.entries?.[pluginId]?.enabled === false;
+}
+
+function hasNonDisabledPluginEntry(cfg: OpenClawConfig, pluginId: string): boolean {
+  if (!hasOwnPluginEntry(cfg, pluginId)) {
+    return false;
+  }
+  return !isPluginEntryExplicitlyDisabled(cfg, pluginId);
+}
+
+function hasBrowserSetupAutoEnableRelevantConfig(cfg: OpenClawConfig): boolean {
+  if (cfg.browser?.enabled === false || isPluginEntryExplicitlyDisabled(cfg, "browser")) {
+    return false;
+  }
+  if (isRecord(cfg.browser)) {
+    return true;
+  }
+  if (hasNonDisabledPluginEntry(cfg, "browser")) {
+    return true;
+  }
+  return hasBrowserToolReference(cfg);
+}
+
+function hasAcpxSetupAutoEnableRelevantConfig(cfg: OpenClawConfig): boolean {
+  if (isPluginEntryExplicitlyDisabled(cfg, "acpx")) {
+    return false;
+  }
+  if (!isRecord(cfg.acp)) {
+    return false;
+  }
+  const backend = normalizeOptionalLowercaseString(cfg.acp.backend);
+  const configured =
+    cfg.acp.enabled === true ||
+    (isRecord(cfg.acp.dispatch) && cfg.acp.dispatch.enabled === true) ||
+    backend === "acpx";
+  return configured && (!backend || backend === "acpx");
+}
+
+function hasXaiSetupAutoEnableRelevantConfig(cfg: OpenClawConfig): boolean {
+  if (isPluginEntryExplicitlyDisabled(cfg, "xai")) {
+    return false;
+  }
+  const pluginConfig = cfg.plugins?.entries?.xai?.config;
+  return (
+    (isRecord(pluginConfig) &&
+      (isRecord(pluginConfig.xSearch) || isRecord(pluginConfig.codeExecution))) ||
+    (isRecord(cfg.tools?.web) && isRecord((cfg.tools.web as Record<string, unknown>).x_search))
+  );
 }
 
 function resolveRelevantSetupAutoEnablePluginIds(cfg: OpenClawConfig): string[] {
   const pluginIds = new Set<string>(collectConfiguredPluginEntryIds(cfg));
-  if (
-    isRecord(cfg.browser) ||
-    isRecord(cfg.plugins?.entries?.browser) ||
-    hasBrowserToolReference(cfg)
-  ) {
+  if (hasBrowserSetupAutoEnableRelevantConfig(cfg)) {
     pluginIds.add("browser");
   }
-  if (isRecord(cfg.acp) || isRecord(cfg.plugins?.entries?.acpx)) {
+  if (hasAcpxSetupAutoEnableRelevantConfig(cfg)) {
     pluginIds.add("acpx");
   }
-  if (
-    isRecord(cfg.plugins?.entries?.xai) ||
-    (isRecord(cfg.tools?.web) && isRecord((cfg.tools.web as Record<string, unknown>).x_search))
-  ) {
+  if (hasXaiSetupAutoEnableRelevantConfig(cfg)) {
     pluginIds.add("xai");
   }
   return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
 }
 
 function hasSetupAutoEnableRelevantConfig(cfg: OpenClawConfig): boolean {
-  const entries = cfg.plugins?.entries;
-  if (isRecord(cfg.browser) || isRecord(cfg.acp) || hasBrowserToolReference(cfg)) {
-    return true;
-  }
-  if (isRecord(entries?.browser) || isRecord(entries?.acpx) || isRecord(entries?.xai)) {
-    return true;
-  }
-  if (isRecord(cfg.tools?.web) && isRecord((cfg.tools.web as Record<string, unknown>).x_search)) {
-    return true;
-  }
-  return hasConfiguredPluginConfigEntry(cfg);
+  return (
+    hasBrowserSetupAutoEnableRelevantConfig(cfg) ||
+    hasAcpxSetupAutoEnableRelevantConfig(cfg) ||
+    hasXaiSetupAutoEnableRelevantConfig(cfg) ||
+    hasConfiguredPluginConfigEntry(cfg)
+  );
 }
 
 function hasPluginEntries(cfg: OpenClawConfig): boolean {
@@ -394,8 +438,19 @@ function hasPluginEntries(cfg: OpenClawConfig): boolean {
   return !!entries && typeof entries === "object" && Object.keys(entries).length > 0;
 }
 
-function hasPluginAllowlistWithEntries(cfg: OpenClawConfig): boolean {
-  return Array.isArray(cfg.plugins?.allow) && cfg.plugins.allow.length > 0 && hasPluginEntries(cfg);
+function hasPluginAllowlistWithMaterialEntries(cfg: OpenClawConfig): boolean {
+  if (
+    !Array.isArray(cfg.plugins?.allow) ||
+    cfg.plugins.allow.length === 0 ||
+    !hasPluginEntries(cfg)
+  ) {
+    return false;
+  }
+  const entries = cfg.plugins?.entries;
+  if (!entries || typeof entries !== "object") {
+    return false;
+  }
+  return Object.values(entries).some(hasMaterialPluginEntryConfig);
 }
 
 function hasConfiguredProviderModelOrHarness(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
@@ -411,8 +466,15 @@ function hasConfiguredProviderModelOrHarness(cfg: OpenClawConfig, env: NodeJS.Pr
   return hasConfiguredEmbeddedHarnessRuntime(cfg, env);
 }
 
+function arePluginsGloballyDisabled(cfg: OpenClawConfig): boolean {
+  return cfg.plugins?.enabled === false;
+}
+
 function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  if (hasPluginAllowlistWithEntries(cfg)) {
+  if (arePluginsGloballyDisabled(cfg)) {
+    return false;
+  }
+  if (hasPluginAllowlistWithMaterialEntries(cfg)) {
     return true;
   }
   if (hasConfiguredPluginConfigEntry(cfg)) {
@@ -438,13 +500,16 @@ export function configMayNeedPluginAutoEnable(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): boolean {
-  if (hasPluginAllowlistWithEntries(cfg)) {
+  if (arePluginsGloballyDisabled(cfg)) {
+    return false;
+  }
+  if (hasPluginAllowlistWithMaterialEntries(cfg)) {
     return true;
   }
   if (hasConfiguredPluginConfigEntry(cfg)) {
     return true;
   }
-  if (hasPotentialConfiguredChannels(cfg, env)) {
+  if (hasPotentialConfiguredChannels(cfg, env, { includePersistedAuthState: false })) {
     return true;
   }
   if (hasConfiguredProviderModelOrHarness(cfg, env)) {

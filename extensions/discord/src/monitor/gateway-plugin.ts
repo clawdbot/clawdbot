@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import * as carbonGateway from "@buape/carbon/gateway";
 import type { APIGatewayBotInfo } from "discord-api-types/v10";
 import * as httpsProxyAgent from "https-proxy-agent";
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   captureHttpExchange,
@@ -73,7 +73,7 @@ function hasCarbonGatewaySocketStarted(plugin: carbonGateway.GatewayPlugin): boo
 }
 
 export function resolveDiscordGatewayIntents(
-  intentsConfig?: import("openclaw/plugin-sdk/config-runtime").DiscordIntentsConfig,
+  intentsConfig?: import("openclaw/plugin-sdk/config-types").DiscordIntentsConfig,
 ): number {
   let intents =
     carbonGateway.GatewayIntents.Guilds |
@@ -485,7 +485,9 @@ export function createDiscordGatewayPlugin(params: {
   const options = {
     reconnect: { maxAttempts: 50 },
     intents,
-    autoInteractions: true,
+    // OpenClaw registers its own async interaction listener. Carbon's default
+    // InteractionEventListener awaits the full handler on the critical event lane.
+    autoInteractions: false,
   };
 
   if (!proxy) {

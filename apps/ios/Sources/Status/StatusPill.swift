@@ -54,8 +54,7 @@ struct StatusPill: View {
                         .scaleEffect(
                             self.gateway == .connecting && !self.reduceMotion
                                 ? (self.pulse ? 1.15 : 0.85)
-                                : 1.0
-                        )
+                                : 1.0)
                         .opacity(self.gateway == .connecting && !self.reduceMotion ? (self.pulse ? 1.0 : 0.6) : 1.0)
 
                     Text(self.gateway.title)

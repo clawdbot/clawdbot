@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import JSON5 from "json5";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
@@ -23,6 +22,7 @@ import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import {
   normalizeManifestCommandAliases,
   type PluginManifestCommandAlias,
@@ -91,6 +91,22 @@ export type PluginManifestModelPricing = {
   providers?: Record<string, PluginManifestModelPricingProvider>;
 };
 
+export type PluginManifestModelIdPrefixRule = {
+  modelPrefix: string;
+  prefix: string;
+};
+
+export type PluginManifestModelIdNormalizationProvider = {
+  aliases?: Record<string, string>;
+  stripPrefixes?: string[];
+  prefixWhenBare?: string;
+  prefixWhenBareAfterAliasStartsWith?: PluginManifestModelIdPrefixRule[];
+};
+
+export type PluginManifestModelIdNormalization = {
+  providers?: Record<string, PluginManifestModelIdNormalizationProvider>;
+};
+
 export type PluginManifestProviderEndpoint = {
   /**
    * Core endpoint class this plugin-owned endpoint should map to. Core must
@@ -99,13 +115,39 @@ export type PluginManifestProviderEndpoint = {
   endpointClass: string;
   /** Hostnames that should resolve to this endpoint class. */
   hosts?: string[];
+  /** Host suffixes that should resolve to this endpoint class. */
+  hostSuffixes?: string[];
   /** Exact normalized base URLs that should resolve to this endpoint class. */
   baseUrls?: string[];
+  /** Static Google Vertex region metadata for exact global hosts. */
+  googleVertexRegion?: string;
+  /** Host suffix whose prefix should be exposed as the Google Vertex region. */
+  googleVertexRegionHostSuffix?: string;
+};
+
+export type PluginManifestProviderRequestProvider = {
+  family?: string;
+  compatibilityFamily?: "moonshot";
+  openAICompletions?: {
+    supportsStreamingUsage?: boolean;
+  };
+};
+
+export type PluginManifestProviderRequest = {
+  providers?: Record<string, PluginManifestProviderRequestProvider>;
 };
 
 export type PluginManifestActivationCapability = "provider" | "channel" | "tool" | "hook";
 
 export type PluginManifestActivation = {
+  /**
+   * Explicit Gateway startup activation. Every plugin should set this as
+   * OpenClaw moves away from implicit startup sidecar loading. Set true when
+   * the plugin must be imported during Gateway startup; set false to opt out
+   * of the deprecated implicit startup sidecar fallback when no other
+   * activation trigger matches.
+   */
+  onStartup?: boolean;
   /**
    * Provider ids that should include this plugin in activation/load plans.
    * This is planner metadata only; runtime behavior still comes from register().
@@ -234,8 +276,12 @@ export type PluginManifest = {
   modelCatalog?: PluginManifestModelCatalog;
   /** Manifest-owned external pricing lookup policy for provider refs. */
   modelPricing?: PluginManifestModelPricing;
+  /** Manifest-owned model-id normalization used before provider runtime loads. */
+  modelIdNormalization?: PluginManifestModelIdNormalization;
   /** Cheap provider endpoint metadata used before provider runtime loads. */
   providerEndpoints?: PluginManifestProviderEndpoint[];
+  /** Cheap provider request metadata used before provider runtime loads. */
+  providerRequest?: PluginManifestProviderRequest;
   /** Cheap startup activation lookup for plugin-owned CLI inference backends. */
   cliBackends?: string[];
   /**
@@ -701,6 +747,85 @@ function normalizeManifestModelPricing(
   return Object.keys(providers).length > 0 ? { providers } : undefined;
 }
 
+function normalizeManifestModelIdPrefixRules(
+  value: unknown,
+): PluginManifestModelIdPrefixRule[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const rules: PluginManifestModelIdPrefixRule[] = [];
+  for (const rawRule of value) {
+    if (!isRecord(rawRule)) {
+      continue;
+    }
+    const modelPrefix = normalizeOptionalString(rawRule.modelPrefix);
+    const prefix = normalizeOptionalString(rawRule.prefix);
+    if (!modelPrefix || !prefix) {
+      continue;
+    }
+    rules.push({ modelPrefix, prefix });
+  }
+  return rules.length > 0 ? rules : undefined;
+}
+
+function normalizeManifestModelIdNormalizationProvider(
+  value: unknown,
+): PluginManifestModelIdNormalizationProvider | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const aliases: Record<string, string> = {};
+  if (isRecord(value.aliases)) {
+    for (const [rawAlias, rawCanonical] of Object.entries(value.aliases)) {
+      const alias = normalizeModelCatalogProviderId(rawAlias);
+      const canonical = normalizeOptionalString(rawCanonical);
+      if (alias && canonical) {
+        aliases[alias] = canonical;
+      }
+    }
+  }
+  const stripPrefixes = normalizeTrimmedStringList(value.stripPrefixes);
+  const prefixWhenBare = normalizeOptionalString(value.prefixWhenBare);
+  const prefixWhenBareAfterAliasStartsWith = normalizeManifestModelIdPrefixRules(
+    value.prefixWhenBareAfterAliasStartsWith,
+  );
+  const normalization = {
+    ...(Object.keys(aliases).length > 0 ? { aliases } : {}),
+    ...(stripPrefixes.length > 0 ? { stripPrefixes } : {}),
+    ...(prefixWhenBare ? { prefixWhenBare } : {}),
+    ...(prefixWhenBareAfterAliasStartsWith ? { prefixWhenBareAfterAliasStartsWith } : {}),
+  } satisfies PluginManifestModelIdNormalizationProvider;
+
+  return Object.keys(normalization).length > 0 ? normalization : undefined;
+}
+
+function normalizeManifestModelIdNormalization(
+  value: unknown,
+  params: { ownedProviders: ReadonlySet<string> },
+): PluginManifestModelIdNormalization | undefined {
+  if (!isRecord(value) || !isRecord(value.providers)) {
+    return undefined;
+  }
+  const ownedProviders = new Set(
+    [...params.ownedProviders]
+      .map((provider) => normalizeModelCatalogProviderId(provider))
+      .filter(Boolean),
+  );
+  const providers: Record<string, PluginManifestModelIdNormalizationProvider> = {};
+  for (const [rawProviderId, rawPolicy] of Object.entries(value.providers)) {
+    const providerId = normalizeModelCatalogProviderId(rawProviderId);
+    if (!providerId || !ownedProviders.has(providerId)) {
+      continue;
+    }
+    const policy = normalizeManifestModelIdNormalizationProvider(rawPolicy);
+    if (policy) {
+      providers[providerId] = policy;
+    }
+  }
+  return Object.keys(providers).length > 0 ? { providers } : undefined;
+}
+
 function normalizeManifestProviderEndpoints(
   value: unknown,
 ): PluginManifestProviderEndpoint[] | undefined {
@@ -718,18 +843,78 @@ function normalizeManifestProviderEndpoints(
       continue;
     }
     const hosts = normalizeTrimmedStringList(rawEndpoint.hosts).map((host) => host.toLowerCase());
+    const hostSuffixes = normalizeTrimmedStringList(rawEndpoint.hostSuffixes).map((host) =>
+      host.toLowerCase(),
+    );
     const baseUrls = normalizeTrimmedStringList(rawEndpoint.baseUrls);
-    if (hosts.length === 0 && baseUrls.length === 0) {
+    const googleVertexRegion = normalizeOptionalString(rawEndpoint.googleVertexRegion);
+    const googleVertexRegionHostSuffix = normalizeOptionalString(
+      rawEndpoint.googleVertexRegionHostSuffix,
+    )?.toLowerCase();
+    if (hosts.length === 0 && hostSuffixes.length === 0 && baseUrls.length === 0) {
       continue;
     }
     endpoints.push({
       endpointClass,
       ...(hosts.length > 0 ? { hosts } : {}),
+      ...(hostSuffixes.length > 0 ? { hostSuffixes } : {}),
       ...(baseUrls.length > 0 ? { baseUrls } : {}),
+      ...(googleVertexRegion ? { googleVertexRegion } : {}),
+      ...(googleVertexRegionHostSuffix ? { googleVertexRegionHostSuffix } : {}),
     });
   }
 
   return endpoints.length > 0 ? endpoints : undefined;
+}
+
+function normalizeManifestProviderRequestProvider(
+  value: unknown,
+): PluginManifestProviderRequestProvider | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const family = normalizeOptionalString(value.family);
+  const compatibilityFamily =
+    normalizeOptionalString(value.compatibilityFamily) === "moonshot" ? "moonshot" : undefined;
+  const supportsStreamingUsage = isRecord(value.openAICompletions)
+    ? value.openAICompletions.supportsStreamingUsage
+    : undefined;
+  const openAICompletions =
+    typeof supportsStreamingUsage === "boolean" ? { supportsStreamingUsage } : undefined;
+  const providerRequest = {
+    ...(family ? { family } : {}),
+    ...(compatibilityFamily ? { compatibilityFamily } : {}),
+    ...(openAICompletions && Object.keys(openAICompletions).length > 0
+      ? { openAICompletions }
+      : {}),
+  } satisfies PluginManifestProviderRequestProvider;
+  return Object.keys(providerRequest).length > 0 ? providerRequest : undefined;
+}
+
+function normalizeManifestProviderRequest(
+  value: unknown,
+  params: { ownedProviders: ReadonlySet<string> },
+): PluginManifestProviderRequest | undefined {
+  if (!isRecord(value) || !isRecord(value.providers)) {
+    return undefined;
+  }
+  const ownedProviders = new Set(
+    [...params.ownedProviders]
+      .map((provider) => normalizeModelCatalogProviderId(provider))
+      .filter(Boolean),
+  );
+  const providers: Record<string, PluginManifestProviderRequestProvider> = {};
+  for (const [rawProviderId, rawPolicy] of Object.entries(value.providers)) {
+    const providerId = normalizeModelCatalogProviderId(rawProviderId);
+    if (!providerId || !ownedProviders.has(providerId)) {
+      continue;
+    }
+    const policy = normalizeManifestProviderRequestProvider(rawPolicy);
+    if (policy) {
+      providers[providerId] = policy;
+    }
+  }
+  return Object.keys(providers).length > 0 ? { providers } : undefined;
 }
 
 function normalizeManifestActivation(value: unknown): PluginManifestActivation | undefined {
@@ -743,6 +928,7 @@ function normalizeManifestActivation(value: unknown): PluginManifestActivation |
   const onChannels = normalizeTrimmedStringList(value.onChannels);
   const onRoutes = normalizeTrimmedStringList(value.onRoutes);
   const onConfigPaths = normalizeTrimmedStringList(value.onConfigPaths);
+  const onStartup = typeof value.onStartup === "boolean" ? value.onStartup : undefined;
   const onCapabilities = normalizeTrimmedStringList(value.onCapabilities).filter(
     (capability): capability is PluginManifestActivationCapability =>
       capability === "provider" ||
@@ -752,6 +938,7 @@ function normalizeManifestActivation(value: unknown): PluginManifestActivation |
   );
 
   const activation = {
+    ...(onStartup !== undefined ? { onStartup } : {}),
     ...(onProviders.length > 0 ? { onProviders } : {}),
     ...(onAgentHarnesses.length > 0 ? { onAgentHarnesses } : {}),
     ...(onCommands.length > 0 ? { onCommands } : {}),
@@ -974,11 +1161,13 @@ function parsePluginKind(raw: unknown): PluginKind | PluginKind[] | undefined {
 export function loadPluginManifest(
   rootDir: string,
   rejectHardlinks = true,
+  rootRealPath?: string,
 ): PluginManifestLoadResult {
   const manifestPath = resolvePluginManifestPath(rootDir);
   const opened = openBoundaryFileSync({
     absolutePath: manifestPath,
     rootPath: rootDir,
+    ...(rootRealPath !== undefined ? { rootRealPath } : {}),
     boundaryLabel: "plugin root",
     maxBytes: MAX_PLUGIN_MANIFEST_BYTES,
     rejectHardlinks,
@@ -999,7 +1188,7 @@ export function loadPluginManifest(
   }
   let raw: unknown;
   try {
-    raw = JSON5.parse(fs.readFileSync(opened.fd, "utf-8"));
+    raw = parseJsonWithJson5Fallback(fs.readFileSync(opened.fd, "utf-8"));
   } catch (err) {
     return {
       ok: false,
@@ -1040,7 +1229,13 @@ export function loadPluginManifest(
   const modelPricing = normalizeManifestModelPricing(raw.modelPricing, {
     ownedProviders: new Set(providers),
   });
+  const modelIdNormalization = normalizeManifestModelIdNormalization(raw.modelIdNormalization, {
+    ownedProviders: new Set(providers),
+  });
   const providerEndpoints = normalizeManifestProviderEndpoints(raw.providerEndpoints);
+  const providerRequest = normalizeManifestProviderRequest(raw.providerRequest, {
+    ownedProviders: new Set(providers),
+  });
   const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
   const syntheticAuthRefs = normalizeTrimmedStringList(raw.syntheticAuthRefs);
   const nonSecretAuthMarkers = normalizeTrimmedStringList(raw.nonSecretAuthMarkers);
@@ -1082,7 +1277,9 @@ export function loadPluginManifest(
       modelSupport,
       modelCatalog,
       modelPricing,
+      modelIdNormalization,
       providerEndpoints,
+      providerRequest,
       cliBackends,
       syntheticAuthRefs,
       nonSecretAuthMarkers,

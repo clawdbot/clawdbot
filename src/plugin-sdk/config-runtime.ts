@@ -1,60 +1,37 @@
 // Shared config/runtime boundary for plugins that need config loading,
 // config writes, or session-store helpers without importing src internals.
 
-import type { OpenClawConfig } from "../config/types.js";
-
-export function requireRuntimeConfig(config: OpenClawConfig, context: string): OpenClawConfig {
-  if (config) {
-    return config;
-  }
-  throw new Error(
-    `${context} requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.`,
-  );
-}
-
-export function resolvePluginConfigObject(
-  config: OpenClawConfig | undefined,
-  pluginId: string,
-): Record<string, unknown> | undefined {
-  const plugins =
-    config?.plugins && typeof config.plugins === "object" && !Array.isArray(config.plugins)
-      ? (config.plugins as Record<string, unknown>)
-      : undefined;
-  const entries =
-    plugins?.entries && typeof plugins.entries === "object" && !Array.isArray(plugins.entries)
-      ? (plugins.entries as Record<string, unknown>)
-      : undefined;
-  const entry = entries?.[pluginId];
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-    return undefined;
-  }
-  const pluginConfig = (entry as { config?: unknown }).config;
-  return pluginConfig && typeof pluginConfig === "object" && !Array.isArray(pluginConfig)
-    ? (pluginConfig as Record<string, unknown>)
-    : undefined;
-}
-
-export function resolveLivePluginConfigObject(
-  runtimeConfigLoader: (() => OpenClawConfig | undefined) | undefined,
-  pluginId: string,
-  startupPluginConfig?: Record<string, unknown>,
-): Record<string, unknown> | undefined {
-  if (typeof runtimeConfigLoader !== "function") {
-    return startupPluginConfig;
-  }
-  return resolvePluginConfigObject(runtimeConfigLoader(), pluginId);
-}
-
 export { resolveDefaultAgentId } from "../agents/agent-scope.js";
 export {
+  requireRuntimeConfig,
+  resolveLivePluginConfigObject,
+  resolvePluginConfigObject,
+} from "./plugin-config-runtime.js";
+export {
+  clearConfigCache,
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
   getRuntimeConfigSnapshot,
+  getRuntimeConfig,
+  /**
+   * @deprecated Use getRuntimeConfig(), runtime.config.current(), or pass the
+   * already loaded config through the call path. Runtime code must not reload
+   * config on demand. Bundled plugins and repo code are blocked from using
+   * this by the deprecated-internal-config-api architecture guard.
+   */
   loadConfig,
   readConfigFileSnapshotForWrite,
   setRuntimeConfigSnapshot,
+  /**
+   * @deprecated Use mutateConfigFile() or replaceConfigFile() with an explicit
+   * afterWrite intent so restart behavior stays under host control. Bundled
+   * plugins and repo code are blocked from using this by the
+   * deprecated-internal-config-api architecture guard.
+   */
   writeConfigFile,
 } from "../config/io.js";
+export { mutateConfigFile, replaceConfigFile } from "../config/mutate.js";
+export type { ConfigWriteAfterWrite } from "../config/runtime-snapshot.js";
 export { logConfigUpdated } from "../config/logging.js";
 export { updateConfig } from "../commands/models/shared.js";
 export { resolveChannelModelOverride } from "../channels/model-overrides.js";
@@ -70,6 +47,7 @@ export { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 export {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
+  resolveToolsBySender,
   type ChannelGroupPolicy,
 } from "../config/group-policy.js";
 export {
@@ -112,12 +90,18 @@ export type {
   DiscordSlashCommandConfig,
   DmConfig,
   DmPolicy,
+  GoogleChatAccountConfig,
+  GoogleChatConfig,
   ContextVisibilityMode,
   GroupPolicy,
   GroupToolPolicyBySenderConfig,
   GroupToolPolicyConfig,
   MarkdownConfig,
   MarkdownTableMode,
+  MSTeamsChannelConfig,
+  MSTeamsConfig,
+  MSTeamsReplyStyle,
+  MSTeamsTeamConfig,
   OpenClawConfig,
   ReplyToMode,
   SignalReactionNotificationMode,

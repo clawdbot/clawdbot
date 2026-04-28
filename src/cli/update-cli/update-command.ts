@@ -15,6 +15,7 @@ import {
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
+import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "../../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
@@ -149,6 +150,85 @@ export function shouldUseLegacyProcessRestartAfterUpdate(params: {
   updateMode: UpdateRunResult["mode"];
 }): boolean {
   return !isPackageManagerUpdateMode(params.updateMode);
+}
+
+type PrePackageServiceStop = {
+  stopped: boolean;
+  serviceEnv?: NodeJS.ProcessEnv;
+};
+
+async function maybeStopManagedServiceBeforePackageUpdate(params: {
+  shouldRestart: boolean;
+  jsonMode: boolean;
+}): Promise<PrePackageServiceStop> {
+  let service: ReturnType<typeof resolveGatewayService>;
+  let serviceState: Awaited<ReturnType<typeof readGatewayServiceState>>;
+  try {
+    service = resolveGatewayService();
+    serviceState = await readGatewayServiceState(service, { env: process.env });
+  } catch {
+    return { stopped: false };
+  }
+
+  if (!serviceState.installed) {
+    return { stopped: false };
+  }
+
+  if (!params.shouldRestart) {
+    if (!params.jsonMode && serviceState.running) {
+      defaultRuntime.log(
+        theme.warn(
+          "--no-restart is set while the managed gateway service is running; the package update will not stop or restart that process.",
+        ),
+      );
+    }
+    return { stopped: false, serviceEnv: serviceState.env };
+  }
+
+  if (!serviceState.running) {
+    return { stopped: false, serviceEnv: serviceState.env };
+  }
+
+  if (!params.jsonMode) {
+    defaultRuntime.log(theme.muted("Stopping managed gateway service before package update..."));
+  }
+  await service.stop({ env: serviceState.env, stdout: process.stdout });
+  return { stopped: true, serviceEnv: serviceState.env };
+}
+
+async function maybeRestartServiceAfterFailedPackageUpdate(params: {
+  prePackageServiceStop: PrePackageServiceStop | undefined;
+  jsonMode: boolean;
+}): Promise<void> {
+  if (!params.prePackageServiceStop?.stopped || !params.prePackageServiceStop.serviceEnv) {
+    return;
+  }
+  try {
+    await resolveGatewayService().restart({
+      env: params.prePackageServiceStop.serviceEnv,
+      stdout: process.stdout,
+    });
+    if (!params.jsonMode) {
+      defaultRuntime.log(theme.muted("Restarted managed gateway service after failed update."));
+    }
+  } catch (err) {
+    const message = `Failed to restart managed gateway service after failed update: ${String(err)}`;
+    if (params.jsonMode) {
+      defaultRuntime.error(message);
+    } else {
+      defaultRuntime.log(theme.warn(message));
+    }
+  }
+}
+
+function isRunningInsideGatewayService(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  if (env.OPENCLAW_SERVICE_MARKER?.trim() !== GATEWAY_SERVICE_MARKER) {
+    return false;
+  }
+  const serviceKind = env.OPENCLAW_SERVICE_KIND?.trim();
+  return !serviceKind || serviceKind === GATEWAY_SERVICE_KIND;
 }
 
 function formatCommandFailure(stdout: string, stderr: string): string {
@@ -1309,6 +1389,18 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     return;
   }
 
+  if (updateInstallKind === "package" && isRunningInsideGatewayService()) {
+    defaultRuntime.error(
+      [
+        "Package updates cannot run from inside the gateway service process.",
+        "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
+        `Run \`${replaceCliName(formatCliCommand("openclaw update"), CLI_NAME)}\` from a shell outside the gateway service, or stop the gateway service first and then update.`,
+      ].join("\n"),
+    );
+    defaultRuntime.exit(1);
+    return;
+  }
+
   if (downgradeRisk && !opts.yes) {
     if (!process.stdin.isTTY || opts.json) {
       defaultRuntime.error(
@@ -1363,31 +1455,56 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   const { progress, stop } = createUpdateProgress(showProgress);
   const startedAt = Date.now();
 
-  const result =
-    updateInstallKind === "package"
-      ? await runPackageInstallUpdate({
-          root,
-          installKind,
-          tag,
-          timeoutMs: updateStepTimeoutMs,
-          startedAt,
-          progress,
-          jsonMode: Boolean(opts.json),
-        })
-      : await runGitUpdate({
-          root,
-          switchToGit,
-          installKind,
-          timeoutMs,
-          startedAt,
-          progress,
-          channel,
-          tag,
-          showProgress,
-          opts,
-          stop,
-          devTargetRef,
-        });
+  let prePackageServiceStop: PrePackageServiceStop | undefined;
+  if (updateInstallKind === "package") {
+    try {
+      prePackageServiceStop = await maybeStopManagedServiceBeforePackageUpdate({
+        shouldRestart,
+        jsonMode: Boolean(opts.json),
+      });
+    } catch (err) {
+      stop();
+      defaultRuntime.error(`Failed to stop managed gateway service before update: ${String(err)}`);
+      defaultRuntime.exit(1);
+      return;
+    }
+  }
+
+  let result: UpdateRunResult;
+  try {
+    result =
+      updateInstallKind === "package"
+        ? await runPackageInstallUpdate({
+            root,
+            installKind,
+            tag,
+            timeoutMs: updateStepTimeoutMs,
+            startedAt,
+            progress,
+            jsonMode: Boolean(opts.json),
+          })
+        : await runGitUpdate({
+            root,
+            switchToGit,
+            installKind,
+            timeoutMs,
+            startedAt,
+            progress,
+            channel,
+            tag,
+            showProgress,
+            opts,
+            stop,
+            devTargetRef,
+          });
+  } catch (err) {
+    stop();
+    await maybeRestartServiceAfterFailedPackageUpdate({
+      prePackageServiceStop,
+      jsonMode: Boolean(opts.json),
+    });
+    throw err;
+  }
 
   stop();
   if (!opts.json || result.status !== "ok") {
@@ -1395,11 +1512,19 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   }
 
   if (result.status === "error") {
+    await maybeRestartServiceAfterFailedPackageUpdate({
+      prePackageServiceStop,
+      jsonMode: Boolean(opts.json),
+    });
     defaultRuntime.exit(1);
     return;
   }
 
   if (result.status === "skipped") {
+    await maybeRestartServiceAfterFailedPackageUpdate({
+      prePackageServiceStop,
+      jsonMode: Boolean(opts.json),
+    });
     if (result.reason === "dirty") {
       defaultRuntime.error(theme.error("Update blocked: local files are edited in this checkout."));
       defaultRuntime.log(
@@ -1501,6 +1626,10 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     } else {
       defaultRuntime.error(theme.error("Update failed during plugin post-update sync."));
     }
+    await maybeRestartServiceAfterFailedPackageUpdate({
+      prePackageServiceStop,
+      jsonMode: Boolean(opts.json),
+    });
     defaultRuntime.exit(1);
     return;
   }

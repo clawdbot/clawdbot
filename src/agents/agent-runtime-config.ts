@@ -1,5 +1,5 @@
 import { getAgentRuntimeCommandSecretTargetIds } from "../cli/command-secret-targets.js";
-import { loadConfig, readConfigFileSnapshotForWrite } from "../config/io.js";
+import { getRuntimeConfig, readConfigFileSnapshotForWrite } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
@@ -13,7 +13,7 @@ export async function resolveAgentRuntimeConfig(
   sourceConfig: OpenClawConfig;
   cfg: OpenClawConfig;
 }> {
-  const loadedRaw = loadConfig();
+  const loadedRaw = getRuntimeConfig();
   const sourceConfig = await (async () => {
     try {
       const { snapshot } = await readConfigFileSnapshotForWrite();

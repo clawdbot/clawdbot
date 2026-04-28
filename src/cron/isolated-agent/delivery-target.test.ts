@@ -116,6 +116,14 @@ beforeEach(() => {
         },
         source: "test",
       },
+      {
+        pluginId: "telegram",
+        plugin: createOutboundTestPlugin({
+          id: "telegram",
+          outbound: createStubOutbound("Telegram"),
+        }),
+        source: "test",
+      },
     ]),
   );
 });
@@ -610,6 +618,51 @@ describe("resolveDeliveryTarget", () => {
 
     expect(result.ok).toBe(true);
     expect(result.accountId).toBe("bot-b");
+  });
+
+  it("strips :topic: suffix from telegram targets when threadId is resolved", async () => {
+    setMainSessionEntry(undefined);
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "telegram",
+      to: "63448508:topic:1008013",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("63448508");
+    expect(result.threadId).toBe(1008013);
+  });
+
+  it("prefers explicit telegram :topic: targets over session-derived threadId", async () => {
+    setLastSessionEntry({
+      sessionId: "sess-telegram-topic",
+      lastChannel: "telegram",
+      lastTo: "63448508:topic:1008013",
+      lastThreadId: "stale-thread",
+    });
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "telegram",
+      to: "63448508:topic:1008013",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("63448508");
+    expect(result.threadId).toBe(1008013);
+  });
+
+  it("keeps explicit delivery threadId when stripping telegram :topic: targets", async () => {
+    setMainSessionEntry(undefined);
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "telegram",
+      to: "63448508:topic:1008013",
+      threadId: "42",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("63448508");
+    expect(result.threadId).toBe("42");
   });
 
   it("explicit delivery.accountId overrides bindings-derived accountId", async () => {

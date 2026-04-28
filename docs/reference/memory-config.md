@@ -46,12 +46,12 @@ See [Active Memory](/concepts/active-memory) for the activation model, plugin-ow
 
 ## Provider selection
 
-| Key        | Type      | Default          | Description                                                                                                   |
-| ---------- | --------- | ---------------- | ------------------------------------------------------------------------------------------------------------- |
-| `provider` | `string`  | auto-detected    | Embedding adapter ID: `bedrock`, `gemini`, `github-copilot`, `local`, `mistral`, `ollama`, `openai`, `voyage` |
-| `model`    | `string`  | provider default | Embedding model name                                                                                          |
-| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                                    |
-| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                               |
+| Key        | Type      | Default          | Description                                                                                                                                                                                                                        |
+| ---------- | --------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider` | `string`  | auto-detected    | Embedding adapter ID such as `bedrock`, `deepinfra`, `gemini`, `github-copilot`, `local`, `mistral`, `ollama`, `openai`, or `voyage`; may also be a configured `models.providers.<id>` whose `api` points at one of those adapters |
+| `model`    | `string`  | provider default | Embedding model name                                                                                                                                                                                                               |
+| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                                                                                                                                                         |
+| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                                                                                                                                                    |
 
 ### Auto-detection order
 
@@ -76,6 +76,9 @@ When `provider` is not set, OpenClaw selects the first available:
   <Step title="mistral">
     Selected if a Mistral key can be resolved.
   </Step>
+  <Step title="deepinfra">
+    Selected if a DeepInfra key can be resolved.
+  </Step>
   <Step title="bedrock">
     Selected if the AWS SDK credential chain resolves (instance role, access keys, profile, SSO, web identity, or shared config).
   </Step>
@@ -83,19 +86,47 @@ When `provider` is not set, OpenClaw selects the first available:
 
 `ollama` is supported but not auto-detected (set it explicitly).
 
+### Custom provider ids
+
+`memorySearch.provider` can point at a custom `models.providers.<id>` entry. OpenClaw resolves that provider's `api` owner for the embedding adapter while preserving the custom provider id for endpoint, auth, and model-prefix handling. This lets multi-GPU or multi-host setups dedicate memory embeddings to a specific local endpoint:
+
+```json5
+{
+  models: {
+    providers: {
+      "ollama-5080": {
+        api: "ollama",
+        baseUrl: "http://gpu-box.local:11435",
+        apiKey: "ollama-local",
+        models: [{ id: "qwen3-embedding:0.6b" }],
+      },
+    },
+  },
+  agents: {
+    defaults: {
+      memorySearch: {
+        provider: "ollama-5080",
+        model: "qwen3-embedding:0.6b",
+      },
+    },
+  },
+}
+```
+
 ### API key resolution
 
 Remote embeddings require an API key. Bedrock uses the AWS SDK default credential chain instead (instance roles, SSO, access keys).
 
-| Provider       | Env var                                            | Config key                        |
-| -------------- | -------------------------------------------------- | --------------------------------- |
-| Bedrock        | AWS credential chain                               | No API key needed                 |
-| Gemini         | `GEMINI_API_KEY`                                   | `models.providers.google.apiKey`  |
-| GitHub Copilot | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` | Auth profile via device login     |
-| Mistral        | `MISTRAL_API_KEY`                                  | `models.providers.mistral.apiKey` |
-| Ollama         | `OLLAMA_API_KEY` (placeholder)                     | --                                |
-| OpenAI         | `OPENAI_API_KEY`                                   | `models.providers.openai.apiKey`  |
-| Voyage         | `VOYAGE_API_KEY`                                   | `models.providers.voyage.apiKey`  |
+| Provider       | Env var                                            | Config key                          |
+| -------------- | -------------------------------------------------- | ----------------------------------- |
+| Bedrock        | AWS credential chain                               | No API key needed                   |
+| DeepInfra      | `DEEPINFRA_API_KEY`                                | `models.providers.deepinfra.apiKey` |
+| Gemini         | `GEMINI_API_KEY`                                   | `models.providers.google.apiKey`    |
+| GitHub Copilot | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` | Auth profile via device login       |
+| Mistral        | `MISTRAL_API_KEY`                                  | `models.providers.mistral.apiKey`   |
+| Ollama         | `OLLAMA_API_KEY` (placeholder)                     | --                                  |
+| OpenAI         | `OPENAI_API_KEY`                                   | `models.providers.openai.apiKey`    |
+| Voyage         | `VOYAGE_API_KEY`                                   | `models.providers.voyage.apiKey`    |
 
 <Note>
 Codex OAuth covers chat/completions only and does not satisfy embedding requests.
@@ -148,6 +179,37 @@ For custom OpenAI-compatible endpoints or overriding provider defaults:
     <Warning>
     Changing model or `outputDimensionality` triggers an automatic full reindex.
     </Warning>
+
+  </Accordion>
+  <Accordion title="OpenAI-compatible input types">
+    OpenAI-compatible embedding endpoints can opt into provider-specific `input_type` request fields. This is useful for asymmetric embedding models that require different labels for query and document embeddings.
+
+    | Key                 | Type     | Default | Description                                             |
+    | ------------------- | -------- | ------- | ------------------------------------------------------- |
+    | `inputType`         | `string` | unset   | Shared `input_type` for query and document embeddings   |
+    | `queryInputType`    | `string` | unset   | Query-time `input_type`; overrides `inputType`          |
+    | `documentInputType` | `string` | unset   | Index/document `input_type`; overrides `inputType`      |
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            remote: {
+              baseUrl: "https://embeddings.example/v1",
+              apiKey: "env:EMBEDDINGS_API_KEY",
+            },
+            model: "asymmetric-embedder",
+            queryInputType: "query",
+            documentInputType: "passage",
+          },
+        },
+      },
+    }
+    ```
+
+    Changing these values affects embedding cache identity for provider batch indexing and should be followed by a memory reindex when the upstream model treats the labels differently.
 
   </Accordion>
   <Accordion title="Bedrock">
@@ -355,6 +417,7 @@ Prevents re-embedding unchanged text during reindex or transcript updates.
 
 | Key                           | Type      | Default | Description                |
 | ----------------------------- | --------- | ------- | -------------------------- |
+| `remote.nonBatchConcurrency`  | `number`  | `4`     | Parallel inline embeddings |
 | `remote.batch.enabled`        | `boolean` | `false` | Enable batch embedding API |
 | `remote.batch.concurrency`    | `number`  | `2`     | Parallel batch jobs        |
 | `remote.batch.wait`           | `boolean` | `true`  | Wait for batch completion  |
@@ -363,7 +426,9 @@ Prevents re-embedding unchanged text during reindex or transcript updates.
 
 Available for `openai`, `gemini`, and `voyage`. OpenAI batch is typically fastest and cheapest for large backfills.
 
-This is separate from `sync.embeddingBatchTimeoutSeconds`, which controls inline embedding calls used by local/self-hosted providers and hosted providers when provider batch APIs are not active.
+`remote.nonBatchConcurrency` controls inline embedding calls used by local/self-hosted providers and hosted providers when provider batch APIs are not active. Ollama defaults to `1` for non-batch indexing to avoid overwhelming smaller local hosts; set a higher value on larger machines.
+
+This is separate from `sync.embeddingBatchTimeoutSeconds`, which controls the timeout for inline embedding calls.
 
 ---
 
@@ -408,17 +473,19 @@ When sqlite-vec is unavailable, OpenClaw falls back to in-process cosine similar
 
 Set `memory.backend = "qmd"` to enable. All QMD settings live under `memory.qmd`:
 
-| Key                      | Type      | Default  | Description                                  |
-| ------------------------ | --------- | -------- | -------------------------------------------- |
-| `command`                | `string`  | `qmd`    | QMD executable path                          |
-| `searchMode`             | `string`  | `search` | Search command: `search`, `vsearch`, `query` |
-| `includeDefaultMemory`   | `boolean` | `true`   | Auto-index `MEMORY.md` + `memory/**/*.md`    |
-| `paths[]`                | `array`   | --       | Extra paths: `{ name, path, pattern? }`      |
-| `sessions.enabled`       | `boolean` | `false`  | Index session transcripts                    |
-| `sessions.retentionDays` | `number`  | --       | Transcript retention                         |
-| `sessions.exportDir`     | `string`  | --       | Export directory                             |
+| Key                      | Type      | Default  | Description                                                                           |
+| ------------------------ | --------- | -------- | ------------------------------------------------------------------------------------- |
+| `command`                | `string`  | `qmd`    | QMD executable path; set an absolute path when service `PATH` differs from your shell |
+| `searchMode`             | `string`  | `search` | Search command: `search`, `vsearch`, `query`                                          |
+| `includeDefaultMemory`   | `boolean` | `true`   | Auto-index `MEMORY.md` + `memory/**/*.md`                                             |
+| `paths[]`                | `array`   | --       | Extra paths: `{ name, path, pattern? }`                                               |
+| `sessions.enabled`       | `boolean` | `false`  | Index session transcripts                                                             |
+| `sessions.retentionDays` | `number`  | --       | Transcript retention                                                                  |
+| `sessions.exportDir`     | `string`  | --       | Export directory                                                                      |
 
-OpenClaw prefers the current QMD collection and MCP query shapes, but keeps older QMD releases working by falling back to legacy `--mask` collection flags and older MCP tool names when needed.
+`searchMode: "search"` is lexical/BM25-only. OpenClaw does not run semantic vector readiness probes or QMD embedding maintenance for that mode, including during `memory status --deep`; `vsearch` and `query` continue to require QMD vector readiness and embeddings.
+
+OpenClaw prefers current QMD collection and MCP query shapes, but keeps older QMD releases working by trying compatible collection pattern flags and older MCP tool names when needed. When QMD advertises support for multiple collection filters, same-source collections are searched with one QMD process; older QMD builds keep the per-collection compatibility path. Same-source means durable memory collections are grouped together, while session transcript collections remain a separate group so source diversification still has both inputs.
 
 <Note>
 QMD model overrides stay on the QMD side, not OpenClaw config. If you need to override QMD's models globally, set environment variables such as `QMD_EMBED_MODEL`, `QMD_RERANK_MODEL`, and `QMD_GENERATE_MODEL` in the gateway runtime environment.
@@ -511,10 +578,11 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 
 ### User settings
 
-| Key         | Type      | Default     | Description                                       |
-| ----------- | --------- | ----------- | ------------------------------------------------- |
-| `enabled`   | `boolean` | `false`     | Enable or disable dreaming entirely               |
-| `frequency` | `string`  | `0 3 * * *` | Optional cron cadence for the full dreaming sweep |
+| Key         | Type      | Default       | Description                                       |
+| ----------- | --------- | ------------- | ------------------------------------------------- |
+| `enabled`   | `boolean` | `false`       | Enable or disable dreaming entirely               |
+| `frequency` | `string`  | `0 3 * * *`   | Optional cron cadence for the full dreaming sweep |
+| `model`     | `string`  | default model | Optional Dream Diary subagent model override      |
 
 ### Example
 
@@ -523,10 +591,15 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
   plugins: {
     entries: {
       "memory-core": {
+        subagent: {
+          allowModelOverride: true,
+          allowedModels: ["anthropic/claude-sonnet-4-6"],
+        },
         config: {
           dreaming: {
             enabled: true,
             frequency: "0 3 * * *",
+            model: "anthropic/claude-sonnet-4-6",
           },
         },
       },
@@ -538,7 +611,10 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 <Note>
 - Dreaming writes machine state to `memory/.dreams/`.
 - Dreaming writes human-readable narrative output to `DREAMS.md` (or existing `dreams.md`).
+- `dreaming.model` uses the existing plugin subagent trust gate; set `plugins.entries.memory-core.subagent.allowModelOverride: true` before enabling it.
+- Dream Diary retries once with the session default model when the configured model is unavailable. Trust or allowlist failures are logged and are not silently retried.
 - The light/deep/REM phase policy and thresholds are internal behavior, not user-facing config.
+
 </Note>
 
 ## Related

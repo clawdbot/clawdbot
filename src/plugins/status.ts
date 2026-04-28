@@ -1,5 +1,5 @@
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOpenClawVersionBase } from "../config/version.js";
 import { listImportedBundledPluginFacadeIds } from "../plugin-sdk/facade-runtime.js";
@@ -50,7 +50,7 @@ export type { PluginCapabilityKind, PluginInspectShape } from "./inspect-shape.j
 
 export type PluginCompatibilityNotice = {
   pluginId: string;
-  code: "legacy-before-agent-start" | "hook-only";
+  code: "legacy-before-agent-start" | "legacy-implicit-startup-sidecar" | "hook-only";
   compatCode: PluginCompatCode;
   severity: "warn" | "info";
   message: string;
@@ -121,6 +121,16 @@ function buildCompatibilityNoticesForInspect(
         "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
     });
   }
+  if (inspect.plugin.compat?.includes("legacy-implicit-startup-sidecar")) {
+    warnings.push({
+      pluginId: inspect.plugin.id,
+      code: "legacy-implicit-startup-sidecar",
+      compatCode: "legacy-implicit-startup-sidecar",
+      severity: "warn",
+      message:
+        "relies on deprecated implicit startup loading; add activation.onStartup: true for startup work or activation.onStartup: false for startup-lazy plugins.",
+    });
+  }
   if (inspect.shape === "hook-only") {
     warnings.push({
       pluginId: inspect.plugin.id,
@@ -177,6 +187,8 @@ function buildPluginRecordFromInstalledIndex(
     rootDir: plugin.rootDir,
     origin: plugin.origin,
     enabled: plugin.enabled,
+    compat: plugin.compat,
+    syntheticAuthRefs: [...(plugin.syntheticAuthRefs ?? manifest?.syntheticAuthRefs ?? [])],
     status: plugin.enabled ? "loaded" : "disabled",
     toolNames: [],
     hookNames: [],
@@ -210,7 +222,7 @@ function buildPluginRecordFromInstalledIndex(
 export function buildPluginRegistrySnapshotReport(
   params?: PluginReportParams,
 ): PluginRegistryStatusReport {
-  const config = params?.config ?? loadConfig();
+  const config = params?.config ?? getRuntimeConfig();
   const result = loadPluginRegistrySnapshotWithMetadata({
     config,
     env: params?.env,
@@ -241,7 +253,7 @@ function buildPluginReport(
   loadModules: boolean,
 ): PluginStatusReport {
   const baseContext = resolvePluginRuntimeLoadContext({
-    config: params?.config ?? loadConfig(),
+    config: params?.config ?? getRuntimeConfig(),
     env: params?.env,
     logger: params?.logger,
     workspaceDir: params?.workspaceDir,
@@ -345,7 +357,7 @@ export function buildPluginInspectReport(params: {
   logger?: PluginLogger;
   report?: PluginStatusReport;
 }): PluginInspectReport | null {
-  const rawConfig = params.config ?? loadConfig();
+  const rawConfig = params.config ?? getRuntimeConfig();
   const config = resolvePluginRuntimeLoadContext({
     config: rawConfig,
     env: params.env,
@@ -475,7 +487,7 @@ export function buildAllPluginInspectReports(params?: {
   logger?: PluginLogger;
   report?: PluginStatusReport;
 }): PluginInspectReport[] {
-  const rawConfig = params?.config ?? loadConfig();
+  const rawConfig = params?.config ?? getRuntimeConfig();
   const report =
     params?.report ??
     buildPluginDiagnosticsReport({

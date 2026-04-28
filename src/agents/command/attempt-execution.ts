@@ -23,6 +23,7 @@ import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildWorkspaceSkillSnapshot } from "../skills.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import {
+  buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
   resolveFallbackRetryPrompt,
 } from "./attempt-execution.helpers.js";
@@ -233,6 +234,7 @@ export async function persistCliTurnTranscript(params: {
 export function runAgentAttempt(params: {
   providerOverride: string;
   modelOverride: string;
+  originalProvider: string;
   cfg: OpenClawConfig;
   sessionEntry: SessionEntry | undefined;
   sessionId: string;
@@ -259,39 +261,57 @@ export function runAgentAttempt(params: {
   allowTransientCooldownProbe?: boolean;
   sessionHasHistory?: boolean;
 }) {
+  const isRawModelRun = params.opts.modelRun === true || params.opts.promptMode === "none";
+  const claudeCliFallbackPrelude =
+    !isRawModelRun &&
+    params.isFallbackRetry &&
+    isClaudeCliProvider(params.originalProvider) &&
+    !isClaudeCliProvider(params.providerOverride)
+      ? buildClaudeCliFallbackContextPrelude({
+          cliSessionId: getCliSessionBinding(params.sessionEntry, "claude-cli")?.sessionId,
+        })
+      : "";
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
     sessionHasHistory: params.sessionHasHistory,
+    priorContextPrelude: claudeCliFallbackPrelude,
   });
   const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.sessionEntry?.systemPromptReport,
   );
   const bootstrapPromptWarningSignature =
     bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
-  const sessionPinnedAgentHarnessId = resolveSessionPinnedAgentHarnessId({
-    cfg: params.cfg,
-    sessionAgentId: params.sessionAgentId,
-    sessionEntry: params.sessionEntry,
-    sessionHasHistory: params.sessionHasHistory,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey ?? params.sessionId,
-  });
-  const agentRuntimeOverride = params.sessionEntry?.agentRuntimeOverride?.trim();
-  const cliExecutionProvider =
-    resolveCliRuntimeExecutionProvider({
-      provider: params.providerOverride,
-      cfg: params.cfg,
-      agentId: params.sessionAgentId,
-      runtimeOverride: agentRuntimeOverride,
-    }) ?? params.providerOverride;
-  const agentHarnessPolicy = resolveAgentHarnessPolicy({
-    provider: params.providerOverride,
-    modelId: params.modelOverride,
-    config: params.cfg,
-    agentId: params.sessionAgentId,
-    sessionKey: params.sessionKey ?? params.sessionId,
-  });
+  const sessionPinnedAgentHarnessId = isRawModelRun
+    ? "pi"
+    : resolveSessionPinnedAgentHarnessId({
+        cfg: params.cfg,
+        sessionAgentId: params.sessionAgentId,
+        sessionEntry: params.sessionEntry,
+        sessionHasHistory: params.sessionHasHistory,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey ?? params.sessionId,
+      });
+  const agentRuntimeOverride = isRawModelRun
+    ? undefined
+    : params.sessionEntry?.agentRuntimeOverride?.trim();
+  const cliExecutionProvider = isRawModelRun
+    ? params.providerOverride
+    : (resolveCliRuntimeExecutionProvider({
+        provider: params.providerOverride,
+        cfg: params.cfg,
+        agentId: params.sessionAgentId,
+        runtimeOverride: agentRuntimeOverride,
+      }) ?? params.providerOverride);
+  const agentHarnessPolicy = isRawModelRun
+    ? ({ runtime: "pi", fallback: "pi" } as const)
+    : resolveAgentHarnessPolicy({
+        provider: params.providerOverride,
+        modelId: params.modelOverride,
+        config: params.cfg,
+        agentId: params.sessionAgentId,
+        sessionKey: params.sessionKey ?? params.sessionId,
+      });
   const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
     provider: params.providerOverride,
     authProfileProvider: params.authProfileProvider,
@@ -303,7 +323,7 @@ export function runAgentAttempt(params: {
     allowHarnessAuthProfileForwarding: !isCliProvider(cliExecutionProvider, params.cfg),
   });
   const authProfileId = runtimeAuthPlan.forwardedAuthProfileId;
-  if (isCliProvider(cliExecutionProvider, params.cfg)) {
+  if (!isRawModelRun && isCliProvider(cliExecutionProvider, params.cfg)) {
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
     const resolveReusableCliSessionBinding = async () => {
       if (
@@ -365,6 +385,8 @@ export function runAgentAttempt(params: {
         messageProvider: params.messageChannel,
         agentAccountId: params.runContext.accountId,
         senderIsOwner: params.opts.senderIsOwner,
+        cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
+        cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
       });
     return resolveReusableCliSessionBinding().then(async (activeCliSessionBinding) => {
       try {

@@ -11,6 +11,32 @@ const { prepareAcpxCodexAuthConfigMock } = vi.hoisted(() => ({
     async ({ pluginConfig }: { pluginConfig: unknown }) => pluginConfig,
   ),
 }));
+const { acpxRuntimeConstructorMock, createAgentRegistryMock, createFileSessionStoreMock } =
+  vi.hoisted(() => ({
+    acpxRuntimeConstructorMock: vi.fn(function AcpxRuntime(options: unknown) {
+      return {
+        cancel: vi.fn(async () => {}),
+        close: vi.fn(async () => {}),
+        doctor: vi.fn(async () => ({ ok: true, message: "ok" })),
+        ensureSession: vi.fn(async () => ({
+          backend: "acpx",
+          runtimeSessionName: "agent:codex:acp:test",
+          sessionKey: "agent:codex:acp:test",
+        })),
+        getCapabilities: vi.fn(async () => ({ controls: [] })),
+        getStatus: vi.fn(async () => ({ summary: "ready" })),
+        isHealthy: vi.fn(() => true),
+        prepareFreshSession: vi.fn(async () => {}),
+        probeAvailability: vi.fn(async () => {}),
+        runTurn: vi.fn(async function* () {}),
+        setConfigOption: vi.fn(async () => {}),
+        setMode: vi.fn(async () => {}),
+        __options: options,
+      };
+    }),
+    createAgentRegistryMock: vi.fn(() => ({})),
+    createFileSessionStoreMock: vi.fn(() => ({})),
+  }));
 
 vi.mock("../runtime-api.js", () => ({
   getAcpRuntimeBackend: (id: string) => runtimeRegistry.get(id),
@@ -24,9 +50,9 @@ vi.mock("../runtime-api.js", () => ({
 
 vi.mock("./runtime.js", () => ({
   ACPX_BACKEND_ID: "acpx",
-  AcpxRuntime: function AcpxRuntime() {},
-  createAgentRegistry: vi.fn(() => ({})),
-  createFileSessionStore: vi.fn(() => ({})),
+  AcpxRuntime: acpxRuntimeConstructorMock,
+  createAgentRegistry: createAgentRegistryMock,
+  createFileSessionStore: createFileSessionStoreMock,
 }));
 
 vi.mock("./codex-auth-bridge.js", () => ({
@@ -47,6 +73,9 @@ async function makeTempDir(): Promise<string> {
 afterEach(async () => {
   runtimeRegistry.clear();
   prepareAcpxCodexAuthConfigMock.mockClear();
+  acpxRuntimeConstructorMock.mockClear();
+  createAgentRegistryMock.mockClear();
+  createFileSessionStoreMock.mockClear();
   delete process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE;
   delete process.env.OPENCLAW_SKIP_ACPX_RUNTIME;
   delete process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE;
@@ -122,6 +151,28 @@ describe("createAcpxRuntimeService", () => {
     await fs.access(stateDir);
     expect(probeAvailability).not.toHaveBeenCalled();
     expect(getAcpRuntimeBackend("acpx")?.healthy).toBeUndefined();
+
+    await service.stop?.(ctx);
+  });
+
+  it("registers the default backend without importing ACPX runtime until first use", async () => {
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    const service = createAcpxRuntimeService();
+
+    await service.start(ctx);
+
+    const backend = getAcpRuntimeBackend("acpx");
+    expect(backend?.runtime).toBeDefined();
+    expect(acpxRuntimeConstructorMock).not.toHaveBeenCalled();
+
+    await backend?.runtime.ensureSession({
+      agent: "codex",
+      mode: "oneshot",
+      sessionKey: "agent:codex:acp:test",
+    });
+
+    expect(acpxRuntimeConstructorMock).toHaveBeenCalledOnce();
 
     await service.stop?.(ctx);
   });

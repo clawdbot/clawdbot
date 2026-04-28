@@ -258,6 +258,9 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands.map((command) => command.name)).toEqual([
       "conflict markers",
+      "changelog attributions",
+      "guarded extension wildcard re-exports",
+      "plugin-sdk wildcard re-exports",
       "typecheck core tests",
       "lint core",
       "lint scripts",
@@ -544,12 +547,28 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands.map((command) => command.args[0])).toEqual([
       "check:no-conflict-markers",
+      "check:changelog-attributions",
+      "lint:extensions:no-guarded-wildcard-reexports",
+      "lint:extensions:no-plugin-sdk-wildcard-reexports",
       "release-metadata:check",
       "ios:version:check",
       "config:schema:check",
       "config:docs:check",
       "deps:root-ownership:check",
     ]);
+  });
+
+  it("keeps docs plus changelog entries on the docs-only changed gate", () => {
+    const result = detectChangedLanes(["CHANGELOG.md", "docs/tools/index.md"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.docsOnly).toBe(true);
+    expect(result.lanes).toMatchObject({
+      docs: true,
+      releaseMetadata: false,
+      all: false,
+    });
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("release-metadata:check");
   });
 
   it("guards release metadata package changes to the top-level version field", () => {
@@ -674,6 +693,15 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands).toEqual([
       { name: "conflict markers", args: ["check:no-conflict-markers"] },
+      { name: "changelog attributions", args: ["check:changelog-attributions"] },
+      {
+        name: "guarded extension wildcard re-exports",
+        args: ["lint:extensions:no-guarded-wildcard-reexports"],
+      },
+      {
+        name: "plugin-sdk wildcard re-exports",
+        args: ["lint:extensions:no-plugin-sdk-wildcard-reexports"],
+      },
     ]);
   });
 
@@ -684,6 +712,15 @@ describe("scripts/changed-lanes", () => {
     expect(result.docsOnly).toBe(true);
     expect(plan.commands).toEqual([
       { name: "conflict markers", args: ["check:no-conflict-markers"] },
+      { name: "changelog attributions", args: ["check:changelog-attributions"] },
+      {
+        name: "guarded extension wildcard re-exports",
+        args: ["lint:extensions:no-guarded-wildcard-reexports"],
+      },
+      {
+        name: "plugin-sdk wildcard re-exports",
+        args: ["lint:extensions:no-plugin-sdk-wildcard-reexports"],
+      },
     ]);
   });
 });

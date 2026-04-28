@@ -6,14 +6,14 @@ vi.mock("./plugin-sdk/browser-maintenance.js", () => ({
   closeTrackedBrowserTabsForSessions,
 }));
 
+const { cleanupBrowserSessionsForLifecycleEnd } = await import("./browser-lifecycle-cleanup.js");
+
 describe("cleanupBrowserSessionsForLifecycleEnd", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it("normalizes session keys before closing browser sessions", async () => {
-    const { cleanupBrowserSessionsForLifecycleEnd } =
-      await import("./browser-lifecycle-cleanup.js");
     const onWarn = vi.fn();
 
     await expect(
@@ -30,8 +30,6 @@ describe("cleanupBrowserSessionsForLifecycleEnd", () => {
   });
 
   it("swallows browser cleanup failures", async () => {
-    const { cleanupBrowserSessionsForLifecycleEnd } =
-      await import("./browser-lifecycle-cleanup.js");
     const onError = vi.fn();
     const error = new Error("cleanup failed");
     closeTrackedBrowserTabsForSessions.mockRejectedValueOnce(error);

@@ -1,5 +1,5 @@
+import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createNonExitingRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import * as dedup from "./dedup.js";
 import { createFeishuDriveCommentNoticeHandler } from "./monitor.comment-notice-handler.js";
@@ -11,7 +11,7 @@ import {
 const handleFeishuCommentEventMock = vi.hoisted(() => vi.fn(async () => {}));
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 
-let lastRuntime: ReturnType<typeof createNonExitingRuntimeEnv> | null = null;
+let lastRuntime = createNonExitingRuntimeEnv();
 const TEST_DOC_TOKEN = "ZsJfdxrBFo0RwuxteOLc1Ekvneb";
 const TEST_WIKI_TOKEN = "OtYpd5pKOoMeQzxrzkocv9KIn4H";
 
@@ -804,7 +804,7 @@ describe("resolveDriveCommentEventTurn", () => {
 
 describe("drive.notice.comment_add_v1 monitor handler", () => {
   beforeEach(() => {
-    lastRuntime = null;
+    lastRuntime = createNonExitingRuntimeEnv();
     handleFeishuCommentEventMock.mockClear();
     createFeishuClientMock.mockReset().mockReturnValue(makeOpenApiClient({}) as never);
     vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockResolvedValue("claimed");

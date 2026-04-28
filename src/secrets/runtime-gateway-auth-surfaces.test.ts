@@ -87,6 +87,23 @@ describe("evaluateGatewayAuthSurfaceStates", () => {
     });
   });
 
+  it("marks gateway.auth.password active when trusted-proxy mode is explicit", () => {
+    const states = evaluate({
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          password: envRef("GW_AUTH_PASSWORD"),
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(states["gateway.auth.password"]).toMatchObject({
+      hasSecretRef: true,
+      active: true,
+      reason: "no token source can win, so password auth can win.",
+    });
+  });
+
   it("marks gateway.auth.password inactive when env token is configured", () => {
     const states = evaluate(
       {
@@ -195,6 +212,26 @@ describe("evaluateGatewayAuthSurfaceStates", () => {
       hasSecretRef: true,
       active: false,
       reason: 'password auth cannot win with gateway.auth.mode="token".',
+    });
+  });
+
+  it("marks gateway.remote.password inactive as a trusted-proxy local fallback", () => {
+    const states = evaluate({
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "trusted-proxy",
+        },
+        remote: {
+          password: envRef("GW_REMOTE_PASSWORD"),
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(states["gateway.remote.password"]).toMatchObject({
+      hasSecretRef: true,
+      active: false,
+      reason: "remote password fallback is not active.",
     });
   });
 });

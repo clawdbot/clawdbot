@@ -57,6 +57,15 @@ id, explicit `baseConversationId`, and any `parentConversationCandidates`.
 When you return `parentConversationCandidates`, keep them ordered from the
 narrowest parent to the broadest/base conversation.
 
+Use `openclaw/plugin-sdk/channel-route` when plugin code needs to normalize
+route-like fields, compare a child thread with its parent route, or build a
+stable dedupe key from `{ channel, to, accountId, threadId }`. The helper
+normalizes numeric thread ids the same way core does, so plugins should prefer
+it over ad hoc `String(threadId)` comparisons.
+Plugins with provider-specific target grammar can inject their parser into
+`resolveChannelRouteTargetWithParser(...)` and still get the same route target
+shape and thread fallback semantics core uses.
+
 Bundled plugins that need the same parsing before the channel registry boots
 can also expose a top-level `session-key-api.ts` file with a matching
 `resolveSessionConversation(...)` export. Core uses that bootstrap-safe surface
@@ -87,6 +96,8 @@ Most channel plugins do not need approval-specific code.
 - Use `approvalCapability.describeExecApprovalSetup` when the channel wants the disabled-path reply to explain the exact config knobs needed to enable native exec approvals. The hook receives `{ channel, channelLabel, accountId }`; named-account channels should render account-scoped paths such as `channels.<channel>.accounts.<id>.execApprovals.*` instead of top-level defaults.
 - If a channel can infer stable owner-like DM identities from existing config, use `createResolvedApproverActionAuthAdapter` from `openclaw/plugin-sdk/approval-runtime` to restrict same-chat `/approve` without adding approval-specific core logic.
 - If a channel needs native approval delivery, keep channel code focused on target normalization plus transport/presentation facts. Use `createChannelExecApprovalProfile`, `createChannelNativeOriginTargetResolver`, `createChannelApproverDmTargetResolver`, and `createApproverRestrictedNativeApprovalCapability` from `openclaw/plugin-sdk/approval-runtime`. Put the channel-specific facts behind `approvalCapability.nativeRuntime`, ideally via `createChannelApprovalNativeRuntimeAdapter(...)` or `createLazyChannelApprovalNativeRuntimeAdapter(...)`, so core can assemble the handler and own request filtering, routing, dedupe, expiry, gateway subscription, and routed-elsewhere notices. `nativeRuntime` is split into a few smaller seams:
+- `createChannelNativeOriginTargetResolver` uses the shared channel-route matcher by default for `{ to, accountId, threadId }` targets. Pass `targetsMatch` only when a channel has provider-specific equivalence rules, such as Slack timestamp prefix matching.
+- Pass `normalizeTargetForMatch` to `createChannelNativeOriginTargetResolver` when the channel needs to canonicalize provider ids before the default route matcher or a custom `targetsMatch` callback runs, while preserving the original target for delivery. Use `normalizeTarget` only when the resolved delivery target itself should be canonicalized.
 - `availability` — whether the account is configured and whether a request should be handled
 - `presentation` — map the shared approval view model into pending/resolved/expired native payloads or final actions
 - `transport` — prepare targets plus send/update/delete native approval messages
@@ -633,7 +644,7 @@ Write colocated tests in `src/channel.test.ts`:
 
     For shared test helpers, see [Testing](/plugins/sdk-testing).
 
-  </Step>
+</Step>
 </Steps>
 
 ## File structure

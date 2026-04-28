@@ -33,7 +33,7 @@ private final class FakeWebSocketTask: WebSocketTasking, @unchecked Sendable {
                 self.respondedRequestIds.insert(request.id)
                 if request.method == "connect" {
                     return .string("""
-                    {"type":"res","id":"\(request.id)","ok":true,"payload":{"type":"hello","protocol":3,"server":{},"features":{},"snapshot":{"presence":[],"health":{},"stateVersion":{"presence":0,"health":0},"uptimeMs":0},"policy":{}}}
+                    {"type":"res","id":"\(request.id)","ok":true,"payload":{"type":"hello","protocol":3,"server":{},"features":{},"snapshot":{"presence":[],"health":{},"stateVersion":{"presence":0,"health":0},"uptimeMs":0},"auth":{},"policy":{}}}
                     """)
                 }
                 return .string("""
@@ -50,14 +50,13 @@ private final class FakeWebSocketTask: WebSocketTasking, @unchecked Sendable {
 
     private func latestUnrespondedRequest() -> (id: String, method: String)? {
         for message in self.sentMessages.reversed() {
-            let data: Data?
-            switch message {
-            case .string(let text):
-                data = Data(text.utf8)
-            case .data(let raw):
-                data = raw
+            let data: Data? = switch message {
+            case let .string(text):
+                Data(text.utf8)
+            case let .data(raw):
+                raw
             @unknown default:
-                data = nil
+                nil
             }
             guard let data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -81,6 +80,23 @@ private final class FakeWebSocketSession: WebSocketSessioning, @unchecked Sendab
     }
 }
 
+private final class WebSocketMessageRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var messages: [URLSessionWebSocketTask.Message] = []
+
+    func append(_ message: URLSessionWebSocketTask.Message) {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        self.messages.append(message)
+    }
+
+    func snapshot() -> [URLSessionWebSocketTask.Message] {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.messages
+    }
+}
+
 private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSession) {
     let session = FakeWebSocketSession()
     let connection = GatewayConnection(
@@ -95,6 +111,7 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
     @Test func `status fails when process missing`() async {
         let (connection, _) = makeTestGatewayConnection()
         let result = await connection.status()
+        await connection.shutdown()
         #expect(result.ok == false)
         #expect(result.error != nil)
     }
@@ -111,9 +128,22 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
     }
 
     @Test func `send agent keeps empty voice wake trigger field`() async throws {
-        let (connection, session) = makeTestGatewayConnection()
-        session.task.autoRespond = true
-        _ = await connection.sendAgent(GatewayAgentInvocation(
+        let recorder = WebSocketMessageRecorder()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                recorder.append(message)
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+            })
+        })
+        let connection = GatewayConnection(
+            configProvider: {
+                (url: URL(string: "ws://127.0.0.1:1")!, token: nil, password: nil)
+            },
+            sessionBox: WebSocketSessionBox(session: session))
+        let result = await connection.sendAgent(GatewayAgentInvocation(
             message: "test",
             sessionKey: "main",
             thinking: nil,
@@ -123,24 +153,37 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
             timeoutSeconds: nil,
             idempotencyKey: "idem-1",
             voiceWakeTrigger: "   "))
+        await connection.shutdown()
+        #expect(result.ok == true)
 
-        guard let lastMessage = session.task.sentMessages.last else {
-            Issue.record("expected websocket send payload")
+        guard let agentMessage = recorder.snapshot().reversed().first(where: { message in
+            guard let data = Self.messageData(message),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return false }
+            return json["method"] as? String == "agent"
+        }) else {
+            Issue.record("expected agent websocket send payload")
             return
         }
-        let payloadData: Data
-        switch lastMessage {
-        case .string(let text):
-            payloadData = Data(text.utf8)
-        case .data(let data):
-            payloadData = data
-        @unknown default:
-            Issue.record("unexpected websocket message type")
+
+        guard let payloadData = Self.messageData(agentMessage) else {
+            Issue.record("unexpected agent websocket message type")
             return
         }
 
         let json = try JSONSerialization.jsonObject(with: payloadData) as? [String: Any]
         let params = json?["params"] as? [String: Any]
         #expect(params?["voiceWakeTrigger"] as? String == "")
+    }
+
+    private static func messageData(_ message: URLSessionWebSocketTask.Message) -> Data? {
+        switch message {
+        case let .string(text):
+            Data(text.utf8)
+        case let .data(data):
+            data
+        @unknown default:
+            nil
+        }
     }
 }

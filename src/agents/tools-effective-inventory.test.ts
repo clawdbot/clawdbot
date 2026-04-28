@@ -1,4 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { createOpenClawCodingTools } from "./pi-tools.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -23,7 +25,6 @@ const effectiveInventoryState = vi.hoisted(() => ({
   pluginMeta: {} as Record<string, { pluginId: string } | undefined>,
   channelMeta: {} as Record<string, { channelId: string } | undefined>,
   effectivePolicy: {} as { profile?: string; providerProfile?: string },
-  resolvedModelCompat: undefined as Record<string, unknown> | undefined,
   createToolsMock: vi.fn<typeof createOpenClawCodingTools>(
     (_options) =>
       [
@@ -48,18 +49,10 @@ vi.mock("./pi-tools.js", () => ({
     effectiveInventoryState.createToolsMock(options),
 }));
 
-vi.mock("./pi-embedded-runner/model.js", () => ({
-  resolveModel: vi.fn(() => ({
-    model: effectiveInventoryState.resolvedModelCompat
-      ? { compat: effectiveInventoryState.resolvedModelCompat }
-      : undefined,
-    authStorage: {} as never,
-    modelRegistry: {} as never,
-  })),
-}));
-
 vi.mock("../plugins/tools.js", () => ({
   getPluginToolMeta: (tool: { name: string }) => effectiveInventoryState.pluginMeta[tool.name],
+  buildPluginToolMetadataKey: (pluginId: string, toolName: string) =>
+    JSON.stringify([pluginId, toolName]),
 }));
 
 vi.mock("./channel-tools.js", () => ({
@@ -79,7 +72,6 @@ async function loadHarness(options?: {
   pluginMeta?: Record<string, { pluginId: string } | undefined>;
   channelMeta?: Record<string, { channelId: string } | undefined>;
   effectivePolicy?: { profile?: string; providerProfile?: string };
-  resolvedModelCompat?: Record<string, unknown>;
 }) {
   effectiveInventoryState.tools = options?.tools ?? [
     mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
@@ -88,7 +80,6 @@ async function loadHarness(options?: {
   effectiveInventoryState.pluginMeta = options?.pluginMeta ?? {};
   effectiveInventoryState.channelMeta = options?.channelMeta ?? {};
   effectiveInventoryState.effectivePolicy = options?.effectivePolicy ?? {};
-  effectiveInventoryState.resolvedModelCompat = options?.resolvedModelCompat;
   effectiveInventoryState.createToolsMock =
     options?.createToolsMock ??
     vi.fn<typeof createOpenClawCodingTools>((_options) => effectiveInventoryState.tools);
@@ -111,10 +102,10 @@ describe("resolveEffectiveToolInventory", () => {
     effectiveInventoryState.pluginMeta = {};
     effectiveInventoryState.channelMeta = {};
     effectiveInventoryState.effectivePolicy = {};
-    effectiveInventoryState.resolvedModelCompat = undefined;
     effectiveInventoryState.createToolsMock = vi.fn<typeof createOpenClawCodingTools>(
       (_options) => effectiveInventoryState.tools,
     );
+    setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   it("groups core, plugin, and channel tools from the effective runtime set", async () => {
@@ -202,6 +193,74 @@ describe("resolveEffectiveToolInventory", () => {
     const labels = result.groups.flatMap((group) => group.tools.map((tool) => tool.label));
 
     expect(labels).toEqual(["Lookup (docs)", "Lookup (jira)"]);
+  });
+
+  it("projects plugin tool metadata into the effective inventory", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.toolMetadata = [
+      {
+        pluginId: "docs",
+        pluginName: "Docs",
+        source: "fixture",
+        metadata: {
+          toolName: "docs_lookup",
+          displayName: "Docs Search",
+          description: "Curated docs lookup.",
+          risk: "low",
+          tags: ["docs", "fixture"],
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+    const { resolveEffectiveToolInventory } = await loadHarness({
+      tools: [mockTool({ name: "docs_lookup", label: "Lookup", description: "Search docs" })],
+      pluginMeta: { docs_lookup: { pluginId: "docs" } },
+    });
+
+    const result = resolveEffectiveToolInventory({ cfg: {} });
+
+    expect(result.groups[0]?.tools[0]).toEqual({
+      id: "docs_lookup",
+      label: "Docs Search",
+      description: "Curated docs lookup.",
+      rawDescription: "Curated docs lookup.",
+      source: "plugin",
+      pluginId: "docs",
+      risk: "low",
+      tags: ["docs", "fixture"],
+    });
+  });
+
+  it("does not let one plugin project metadata onto another plugin tool", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.toolMetadata = [
+      {
+        pluginId: "spoofing-plugin",
+        pluginName: "Spoofing Plugin",
+        source: "fixture",
+        metadata: {
+          toolName: "docs_lookup",
+          displayName: "Spoofed Docs Search",
+          risk: "high",
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+    const { resolveEffectiveToolInventory } = await loadHarness({
+      tools: [mockTool({ name: "docs_lookup", label: "Lookup", description: "Search docs" })],
+      pluginMeta: { docs_lookup: { pluginId: "docs" } },
+    });
+
+    const result = resolveEffectiveToolInventory({ cfg: {} });
+
+    expect(result.groups[0]?.tools[0]).toEqual({
+      id: "docs_lookup",
+      label: "Lookup",
+      description: "Search docs",
+      rawDescription: "Search docs",
+      source: "plugin",
+      pluginId: "docs",
+    });
   });
 
   it("prefers displaySummary over raw description", async () => {
@@ -312,11 +371,31 @@ describe("resolveEffectiveToolInventory", () => {
     ]);
     const { resolveEffectiveToolInventory } = await loadHarness({
       createToolsMock,
-      resolvedModelCompat: { supportsTools: true, supportsNativeWebSearch: true },
     });
 
     resolveEffectiveToolInventory({
-      cfg: {},
+      cfg: {
+        models: {
+          providers: {
+            xai: {
+              baseUrl: "https://api.x.ai/v1",
+              models: [
+                {
+                  id: "grok-test",
+                  name: "Grok Test",
+                  api: "openai-completions",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 8_192,
+                  compat: { supportsTools: true, nativeWebSearchTool: true },
+                },
+              ],
+            },
+          },
+        },
+      },
       agentDir: "/tmp/agents/main/agent",
       modelProvider: "xai",
       modelId: "grok-test",
@@ -325,7 +404,7 @@ describe("resolveEffectiveToolInventory", () => {
     expect(createToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         allowGatewaySubagentBinding: true,
-        modelCompat: { supportsTools: true, supportsNativeWebSearch: true },
+        modelCompat: { supportsTools: true, nativeWebSearchTool: true },
       }),
     );
   });

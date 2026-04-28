@@ -8,6 +8,7 @@ import {
   resolveBundledPluginSources,
 } from "../plugins/bundled-sources.js";
 import { enablePluginInConfig, type PluginEnableResult } from "../plugins/enable.js";
+import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import { installPluginFromNpmSpec } from "../plugins/install.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "../plugins/installs.js";
 import type { PluginPackageInstall } from "../plugins/manifest.js";
@@ -114,6 +115,18 @@ function addPluginLoadPath(cfg: OpenClawConfig, pluginPath: string): OpenClawCon
       },
     },
   };
+}
+
+function pathsReferToSameDirectory(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): boolean {
+  if (!left || !right) {
+    return false;
+  }
+  const realLeft = resolveRealDirectory(left);
+  const realRight = resolveRealDirectory(right);
+  return Boolean(realLeft && realRight && realLeft === realRight);
 }
 
 function formatPortableLocalPath(localPath: string, workspaceDir?: string): string | undefined {
@@ -381,6 +394,7 @@ async function installPluginFromNpmSpecWithProgress(params: {
         spec: params.npmSpec,
         timeoutMs: ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS,
         expectedIntegrity: params.entry.install.expectedIntegrity,
+        extensionsDir: resolveDefaultPluginExtensionsDir(),
         logger: {
           info: updateProgress,
           warn: (message) => {
@@ -476,6 +490,14 @@ export async function ensureOnboardingPluginInstalled(params: {
         installed: false,
         pluginId: entry.pluginId,
         status: "failed",
+      };
+    }
+    if (pathsReferToSameDirectory(localPath, bundledLocalPath)) {
+      return {
+        cfg: enableResult.config,
+        installed: true,
+        pluginId: entry.pluginId,
+        status: "installed",
       };
     }
     next = addPluginLoadPath(enableResult.config, localPath);
@@ -593,6 +615,14 @@ export async function ensureOnboardingPluginInstalled(params: {
           installed: false,
           pluginId: entry.pluginId,
           status: "failed",
+        };
+      }
+      if (pathsReferToSameDirectory(localPath, bundledLocalPath)) {
+        return {
+          cfg: enableResult.config,
+          installed: true,
+          pluginId: entry.pluginId,
+          status: "installed",
         };
       }
       next = addPluginLoadPath(enableResult.config, localPath);

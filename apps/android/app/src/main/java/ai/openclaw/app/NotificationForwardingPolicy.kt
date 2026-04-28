@@ -3,15 +3,15 @@ package ai.openclaw.app
 import java.time.Instant
 import java.time.ZoneId
 
-enum class NotificationPackageFilterMode(val rawValue: String) {
+enum class NotificationPackageFilterMode(
+  val rawValue: String,
+) {
   Allowlist("allowlist"),
   Blocklist("blocklist"),
   ;
 
   companion object {
-    fun fromRawValue(raw: String?): NotificationPackageFilterMode {
-      return entries.firstOrNull { it.rawValue == raw?.trim()?.lowercase() } ?: Blocklist
-    }
+    fun fromRawValue(raw: String?): NotificationPackageFilterMode = entries.firstOrNull { it.rawValue == raw?.trim()?.lowercase() } ?: Blocklist
   }
 }
 
@@ -50,7 +50,8 @@ internal fun NotificationForwardingPolicy.isWithinQuietHours(
     return true
   }
   val now =
-    Instant.ofEpochMilli(nowEpochMs)
+    Instant
+      .ofEpochMilli(nowEpochMs)
       .atZone(zoneId)
       .toLocalTime()
   val nowMinutes = now.hour * 60 + now.minute
@@ -82,7 +83,10 @@ internal class NotificationBurstLimiter {
   private var windowStartMs: Long = -1L
   private var eventsInWindow: Int = 0
 
-  fun allow(nowEpochMs: Long, maxEventsPerMinute: Int): Boolean {
+  fun allow(
+    nowEpochMs: Long,
+    maxEventsPerMinute: Int,
+  ): Boolean {
     if (maxEventsPerMinute <= 0) {
       return false
     }

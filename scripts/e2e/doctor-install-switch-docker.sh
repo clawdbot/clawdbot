@@ -44,6 +44,10 @@ case "$cmd" in
   status)
     exit 0
     ;;
+  is-active)
+    echo "inactive" >&2
+    exit 3
+    ;;
   is-enabled)
     unit="${args[1]:-}"
     unit_path="$HOME/.config/systemd/user/${unit}"
@@ -250,6 +254,44 @@ NODE
     "$git_entry" \
     "$npm_bin doctor --repair --force --yes" \
     "$npm_entry"
+
+  run_proxy_env_flow() {
+    local name="proxy-env-cleanup"
+    local install_log="/tmp/openclaw-doctor-switch-${name}-install.log"
+    local doctor_log="/tmp/openclaw-doctor-switch-${name}-doctor.log"
+    local command_timeout="${OPENCLAW_DOCKER_DOCTOR_SWITCH_COMMAND_TIMEOUT:-300s}"
+
+    echo "== Flow: $name =="
+    home_dir=$(mktemp -d "/tmp/openclaw-switch-${name}.XXXXXX")
+    export HOME="$home_dir"
+    export USER="testuser"
+
+    unit_path="$HOME/.config/systemd/user/openclaw-gateway.service"
+    if ! timeout "$command_timeout" env \
+      HTTP_PROXY="http://proxy.local:7890" \
+      HTTPS_PROXY="https://proxy.local:7890" \
+      NO_PROXY="localhost,127.0.0.1" \
+      "$npm_bin" gateway install --force >"$install_log" 2>&1; then
+      cat "$install_log"
+      exit 1
+    fi
+    assert_no_env_key "$unit_path" "HTTP_PROXY"
+    assert_no_env_key "$unit_path" "HTTPS_PROXY"
+    assert_no_env_key "$unit_path" "NO_PROXY"
+
+    {
+      printf "%s\n" "Environment=HTTP_PROXY=http://stale-proxy.local:7890"
+      printf "%s\n" "Environment=HTTPS_PROXY=https://stale-proxy.local:7890"
+    } >>"$unit_path"
+    if ! timeout "$command_timeout" node "$git_cli" doctor --repair --yes >"$doctor_log" 2>&1; then
+      cat "$doctor_log"
+      exit 1
+    fi
+    assert_no_env_key "$unit_path" "HTTP_PROXY"
+    assert_no_env_key "$unit_path" "HTTPS_PROXY"
+  }
+
+  run_proxy_env_flow
 
   run_wrapper_flow() {
     local name="wrapper-persistence"

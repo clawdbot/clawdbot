@@ -1,4 +1,5 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
@@ -9,6 +10,7 @@ import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import type { EmbeddedRunTrigger } from "../pi-embedded-runner/run/params.js";
 import type { SkillSnapshot } from "../skills.js";
+import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 
 export type RunCliAgentParams = {
   sessionId: string;
@@ -27,6 +29,8 @@ export type RunCliAgentParams = {
   runId: string;
   jobId?: string;
   extraSystemPrompt?: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  silentReplyPromptMode?: SilentReplyPromptMode;
   /** Static portion of extraSystemPrompt (excluding per-message inbound metadata) for session reuse hashing. */
   extraSystemPromptStatic?: string;
   streamParams?: import("../command/types.js").AgentStreamParams;
@@ -52,6 +56,12 @@ export type RunCliAgentParams = {
    * handles alive after returning.
    */
   cleanupCliLiveSessionOnRunEnd?: boolean;
+  /**
+   * Close process-wide bundle MCP resources after this run. Intended for
+   * one-shot local CLI calls where the loopback server should not keep Node
+   * alive after the JSON response is emitted.
+   */
+  cleanupBundleMcpOnRunEnd?: boolean;
 };
 
 export type CliPreparedBackend = {

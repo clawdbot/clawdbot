@@ -380,6 +380,25 @@ describe("security audit gateway exposure findings", () => {
         expectedCheckId: "gateway.trusted_proxy_no_allowlist",
         expectedSeverity: "warn",
       },
+      {
+        name: "loopback proxy source explicitly allowed",
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            trustedProxies: ["127.0.0.1"],
+            auth: {
+              mode: "trusted-proxy",
+              trustedProxy: {
+                userHeader: "x-forwarded-user",
+                allowUsers: ["nick@example.com"],
+                allowLoopback: true,
+              },
+            },
+          },
+        },
+        expectedCheckId: "gateway.trusted_proxy_allow_loopback",
+        expectedSeverity: "warn",
+      },
     ];
 
     for (const testCase of cases) {

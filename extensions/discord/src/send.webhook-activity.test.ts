@@ -3,20 +3,20 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 const recordChannelActivityMock = vi.hoisted(() => vi.fn());
 const loadConfigMock = vi.hoisted(() => vi.fn(() => ({ channels: { discord: {} } })));
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
-    "openclaw/plugin-sdk/config-runtime",
+vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-config-runtime")>(
+    "openclaw/plugin-sdk/plugin-config-runtime",
   );
   return {
     ...actual,
-    loadConfig: () => loadConfigMock(),
+    requireRuntimeConfig: (cfg: unknown) => cfg ?? loadConfigMock(),
   };
 });
 
-vi.mock("../../../src/infra/channel-activity.js", async () => {
-  const actual = await vi.importActual<typeof import("../../../src/infra/channel-activity.js")>(
-    "../../../src/infra/channel-activity.js",
-  );
+vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/channel-activity-runtime")
+  >("openclaw/plugin-sdk/channel-activity-runtime");
   return {
     ...actual,
     recordChannelActivity: (...args: unknown[]) => recordChannelActivityMock(...args),

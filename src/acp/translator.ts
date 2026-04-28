@@ -117,6 +117,7 @@ type GatewaySessionPresentationRow = Pick<
   | "fastMode"
   | "modelProvider"
   | "model"
+  | "thinkingLevels"
   | "verboseLevel"
   | "traceLevel"
   | "reasoningLevel"
@@ -247,7 +248,9 @@ function buildSessionPresentation(params: {
     ...params.row,
     ...params.overrides,
   };
-  const availableLevelIds: string[] = [...listThinkingLevels(row.modelProvider, row.model)];
+  const availableLevelIds: string[] = row.thinkingLevels?.map((level) => level.id) ?? [
+    ...listThinkingLevels(row.modelProvider, row.model),
+  ];
   const currentModeId = normalizeOptionalString(row.thinkingLevel) || "adaptive";
   if (!availableLevelIds.includes(currentModeId)) {
     availableLevelIds.push(currentModeId);
@@ -1268,6 +1271,7 @@ export class AcpGatewayAgent implements Agent {
       derivedTitle: session.derivedTitle,
       updatedAt: session.updatedAt,
       thinkingLevel: session.thinkingLevel,
+      thinkingLevels: session.thinkingLevels,
       modelProvider: session.modelProvider,
       model: session.model,
       fastMode: session.fastMode,

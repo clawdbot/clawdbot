@@ -199,7 +199,11 @@ struct ExecAllowlistTests {
     }
 
     @Test func `resolve for allowlist fails closed on chained line-continued command substitution`() {
-        let command = ["/bin/sh", "-lc", "echo ok && $\\\n(/usr/bin/touch /tmp/openclaw-allowlist-test-chained-line-cont-subst)"]
+        let command = [
+            "/bin/sh",
+            "-lc",
+            "echo ok && $\\\n(/usr/bin/touch /tmp/openclaw-allowlist-test-chained-line-cont-subst)",
+        ]
         let resolutions = ExecCommandResolution.resolveForAllowlist(
             command: command,
             rawCommand: "echo ok && $\\\n(/usr/bin/touch /tmp/openclaw-allowlist-test-chained-line-cont-subst)",

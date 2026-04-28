@@ -28,6 +28,7 @@ describe("config compaction settings", () => {
       },
       memoryFlush: {
         enabled: false,
+        model: "ollama/qwen3:8b",
         softThresholdTokens: 1234,
         prompt: "Write notes.",
         systemPrompt: "Flush memory now.",
@@ -44,6 +45,7 @@ describe("config compaction settings", () => {
     expect(compaction?.qualityGuard?.enabled).toBe(true);
     expect(compaction?.qualityGuard?.maxRetries).toBe(2);
     expect(compaction?.memoryFlush?.enabled).toBe(false);
+    expect(compaction?.memoryFlush?.model).toBe("ollama/qwen3:8b");
     expect(compaction?.memoryFlush?.softThresholdTokens).toBe(1234);
     expect(compaction?.memoryFlush?.prompt).toBe("Write notes.");
     expect(compaction?.memoryFlush?.systemPrompt).toBe("Flush memory now.");

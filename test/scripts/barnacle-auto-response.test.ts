@@ -44,14 +44,20 @@ function file(filename: string, status = "modified") {
   };
 }
 
-function barnacleContext(pullRequest: Record<string, unknown>, labels: string[] = []) {
+function barnacleContext(
+  pullRequest: Record<string, unknown>,
+  labels: string[] = [],
+  options: Record<string, unknown> = {},
+) {
   return {
     repo: {
       owner: "openclaw",
       repo: "openclaw",
     },
     payload: {
-      action: "opened",
+      action: options.action ?? "opened",
+      label: options.label,
+      sender: options.sender,
       pull_request: {
         number: 123,
         title: "Cleanup plugin docs",
@@ -70,7 +76,10 @@ function barnacleContext(pullRequest: Record<string, unknown>, labels: string[] 
 function barnacleGithub(files: ReturnType<typeof file>[]) {
   const calls = {
     addLabels: [] as Array<{ issue_number: number; labels: string[] }>,
+    createComment: [] as Array<{ issue_number: number; body: string }>,
+    lock: [] as Array<{ issue_number: number; lock_reason?: string }>,
     removeLabel: [] as Array<{ issue_number: number; name: string }>,
+    update: [] as Array<{ issue_number: number; state?: string }>,
   };
   const github = {
     paginate: async () => files,
@@ -79,7 +88,9 @@ function barnacleGithub(files: ReturnType<typeof file>[]) {
         addLabels: async (params: { issue_number: number; labels: string[] }) => {
           calls.addLabels.push(params);
         },
-        createComment: async () => undefined,
+        createComment: async (params: { issue_number: number; body: string }) => {
+          calls.createComment.push(params);
+        },
         createLabel: async () => undefined,
         getLabel: async (params: { name: string }) => ({
           data: {
@@ -89,11 +100,15 @@ function barnacleGithub(files: ReturnType<typeof file>[]) {
               managedLabelSpecs[params.name as keyof typeof managedLabelSpecs]?.description ?? "",
           },
         }),
-        lock: async () => undefined,
+        lock: async (params: { issue_number: number; lock_reason?: string }) => {
+          calls.lock.push(params);
+        },
         removeLabel: async (params: { issue_number: number; name: string }) => {
           calls.removeLabel.push(params);
         },
-        update: async () => undefined,
+        update: async (params: { issue_number: number; state?: string }) => {
+          calls.update.push(params);
+        },
         updateLabel: async () => undefined,
       },
       pulls: {
@@ -195,6 +210,30 @@ describe("barnacle-auto-response", () => {
     expect(labels).not.toContain(candidateLabels.dirtyCandidate);
   });
 
+  it("does not classify a linked core plugin auto-enable fix as an external plugin candidate", () => {
+    const labels = classifyPullRequestCandidateLabels(
+      pr(
+        "Fix duplicate plugin auto-enable entries",
+        [
+          "- Problem: openclaw doctor --fix adds duplicate installed plugin entries",
+          "- Why it matters: users get noisy config churn",
+          "- What changed: respect manifest-provided channel auto-loads",
+          "",
+          "Fixes #37548",
+          "",
+          "This touches external plugin install state but fixes core config repair behavior.",
+        ].join("\n"),
+      ),
+      [
+        file("src/config/plugin-auto-enable.shared.ts"),
+        file("src/config/plugin-auto-enable.channels.test.ts"),
+        file("src/config/plugin-auto-enable.test-helpers.ts"),
+      ],
+    );
+
+    expect(labels).not.toContain(candidateLabels.externalPluginCandidate);
+  });
+
   it("does not add candidate labels to maintainer-authored PRs", async () => {
     const { calls, github } = barnacleGithub([
       file("ui/src/app.ts"),
@@ -272,5 +311,73 @@ describe("barnacle-auto-response", () => {
         labels: expect.arrayContaining([candidateLabels.dirtyCandidate]),
       }),
     );
+    expect(calls.createComment).toEqual([]);
+    expect(calls.update).toEqual([]);
+  });
+
+  it("actions manually applied candidate labels", async () => {
+    const { calls, github } = barnacleGithub([file("extensions/example/openclaw.plugin.json")]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext({}, [candidateLabels.externalPluginCandidate], {
+        action: "labeled",
+        label: { name: candidateLabels.externalPluginCandidate },
+        sender: { login: "maintainer", type: "User" },
+      }),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.createComment).toContainEqual(
+      expect.objectContaining({
+        body: expect.stringContaining("ClawHub"),
+      }),
+    );
+    expect(calls.update).toContainEqual(expect.objectContaining({ state: "closed" }));
+  });
+
+  it("keeps bot-applied candidate labels passive", async () => {
+    const { calls, github } = barnacleGithub([file("extensions/example/openclaw.plugin.json")]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext({}, [candidateLabels.externalPluginCandidate], {
+        action: "labeled",
+        label: { name: candidateLabels.externalPluginCandidate },
+        sender: { login: "openclaw-bot[bot]", type: "Bot" },
+      }),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.createComment).toEqual([]);
+    expect(calls.update).toEqual([]);
+  });
+
+  it("actions existing candidate labels when a maintainer adds trigger-response", async () => {
+    const { calls, github } = barnacleGithub([file("src/gateway/foo.test.ts")]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext({}, [candidateLabels.testOnlyNoBug, "trigger-response"], {
+        action: "labeled",
+        label: { name: "trigger-response" },
+        sender: { login: "maintainer", type: "User" },
+      }),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).toContainEqual(expect.objectContaining({ name: "trigger-response" }));
+    expect(calls.createComment).toContainEqual(
+      expect.objectContaining({
+        body: expect.stringContaining("only changes tests"),
+      }),
+    );
+    expect(calls.update).toContainEqual(expect.objectContaining({ state: "closed" }));
   });
 });

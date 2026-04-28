@@ -115,6 +115,7 @@ import {
 } from "./controllers/skills.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
+import { createLazyView, renderLazyView } from "./lazy-view.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
 import "./components/dashboard-header.ts";
 import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
@@ -150,38 +151,21 @@ import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.t
 import { renderLoginGate } from "./views/login-gate.ts";
 import { renderOverview } from "./views/overview.ts";
 
-// Lazy-loaded view modules – deferred so the initial bundle stays small.
-// Each loader resolves once; subsequent calls return the cached module.
-type LazyState<T> = { mod: T | null; promise: Promise<T> | null };
-
 let _pendingUpdate: (() => void) | undefined;
 
-function createLazy<T>(loader: () => Promise<T>): () => T | null {
-  const s: LazyState<T> = { mod: null, promise: null };
-  return () => {
-    if (s.mod) {
-      return s.mod;
-    }
-    if (!s.promise) {
-      s.promise = loader().then((m) => {
-        s.mod = m;
-        _pendingUpdate?.();
-        return m;
-      });
-    }
-    return null;
-  };
-}
+const notifyLazyViewChanged = () => _pendingUpdate?.();
 
-const lazyAgents = createLazy(() => import("./views/agents.ts"));
-const lazyChannels = createLazy(() => import("./views/channels.ts"));
-const lazyCron = createLazy(() => import("./views/cron.ts"));
-const lazyDebug = createLazy(() => import("./views/debug.ts"));
-const lazyInstances = createLazy(() => import("./views/instances.ts"));
-const lazyLogs = createLazy(() => import("./views/logs.ts"));
-const lazyNodes = createLazy(() => import("./views/nodes.ts"));
-const lazySessions = createLazy(() => import("./views/sessions.ts"));
-const lazySkills = createLazy(() => import("./views/skills.ts"));
+// Lazy-loaded view modules are deferred so the initial bundle stays small.
+// The shared loader renders visible fallback states instead of leaving a tab blank.
+const lazyAgents = createLazyView(() => import("./views/agents.ts"), notifyLazyViewChanged);
+const lazyChannels = createLazyView(() => import("./views/channels.ts"), notifyLazyViewChanged);
+const lazyCron = createLazyView(() => import("./views/cron.ts"), notifyLazyViewChanged);
+const lazyDebug = createLazyView(() => import("./views/debug.ts"), notifyLazyViewChanged);
+const lazyInstances = createLazyView(() => import("./views/instances.ts"), notifyLazyViewChanged);
+const lazyLogs = createLazyView(() => import("./views/logs.ts"), notifyLazyViewChanged);
+const lazyNodes = createLazyView(() => import("./views/nodes.ts"), notifyLazyViewChanged);
+const lazySessions = createLazyView(() => import("./views/sessions.ts"), notifyLazyViewChanged);
+const lazySkills = createLazyView(() => import("./views/skills.ts"), notifyLazyViewChanged);
 
 function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
   if (typeof nextRunAtMs !== "number" || !Number.isFinite(nextRunAtMs)) {
@@ -212,10 +196,6 @@ function resolveDreamingNextCycle(
 }
 
 let clawhubSearchTimer: ReturnType<typeof setTimeout> | null = null;
-function lazyRender<M>(getter: () => M | null, render: (mod: M) => unknown) {
-  const mod = getter();
-  return mod ? render(mod) : nothing;
-}
 
 const UPDATE_BANNER_DISMISS_KEY = "openclaw:control-ui:update-banner-dismissed:v1";
 const CRON_THINKING_SUGGESTIONS = ["off", "minimal", "low", "medium", "high"];
@@ -700,18 +680,18 @@ export function renderApp(state: AppViewState) {
     if (!state.client || !state.connected) {
       return null;
     }
-    const payload = (await state.client.request("wiki.get", {
-      lookup,
-      fromLine: 1,
-      lineCount: 5000,
-    })) as {
+    const payload: {
       title?: unknown;
       path?: unknown;
       content?: unknown;
       updatedAt?: unknown;
       totalLines?: unknown;
       truncated?: unknown;
-    } | null;
+    } | null = await state.client.request("wiki.get", {
+      lookup,
+      fromLine: 1,
+      lineCount: 5000,
+    });
     const title =
       typeof payload?.title === "string" && payload.title.trim() ? payload.title.trim() : lookup;
     const path =
@@ -889,7 +869,7 @@ export function renderApp(state: AppViewState) {
     onRequestUpdate: requestHostUpdate,
     onFormPatch: (path: Array<string | number>, value: unknown) =>
       updateConfigFormValue(state, path, value),
-    onReload: () => loadConfig(state),
+    onReload: () => loadConfig(state, { discardPendingChanges: true }),
     onReset: () => resetConfigPendingChanges(state),
     onSave: () => saveConfig(state),
     onApply: () => applyConfig(state),
@@ -1313,7 +1293,7 @@ export function renderApp(state: AppViewState) {
       },
       onSlashCommand: (cmd) => {
         state.setTab("chat" as import("./navigation.ts").Tab);
-        state.chatMessage = cmd.endsWith(" ") ? cmd : `${cmd} `;
+        state.handleChatDraftChange(cmd.endsWith(" ") ? cmd : `${cmd} `);
       },
     })}
     <div
@@ -1482,6 +1462,11 @@ export function renderApp(state: AppViewState) {
         </aside>
       </div>
       <main class="content ${isChat ? "content--chat" : ""}">
+        ${state.updateStatusBanner
+          ? html`<div class="callout ${state.updateStatusBanner.tone}" role="alert">
+              ${state.updateStatusBanner.text}
+            </div>`
+          : nothing}
         ${state.updateAvailable &&
         state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion &&
         !isUpdateBannerDismissed(state.updateAvailable)
@@ -1582,6 +1567,7 @@ export function renderApp(state: AppViewState) {
               onSessionKeyChange: (next) => {
                 state.sessionKey = next;
                 state.chatMessage = "";
+                state.resetChatInputHistoryNavigation();
                 state.chatMessages = [];
                 state.chatToolMessages = [];
                 state.chatStream = null;
@@ -1607,7 +1593,7 @@ export function renderApp(state: AppViewState) {
             })
           : nothing}
         ${state.tab === "channels"
-          ? lazyRender(lazyChannels, (m) =>
+          ? renderLazyView(lazyChannels, (m) =>
               m.renderChannels({
                 connected: state.connected,
                 loading: state.channelsLoading,
@@ -1645,7 +1631,7 @@ export function renderApp(state: AppViewState) {
             )
           : nothing}
         ${state.tab === "instances"
-          ? lazyRender(lazyInstances, (m) =>
+          ? renderLazyView(lazyInstances, (m) =>
               m.renderInstances({
                 loading: state.presenceLoading,
                 entries: state.presenceEntries,
@@ -1656,7 +1642,7 @@ export function renderApp(state: AppViewState) {
             )
           : nothing}
         ${state.tab === "sessions"
-          ? lazyRender(lazySessions, (m) =>
+          ? renderLazyView(lazySessions, (m) =>
               m.renderSessions({
                 loading: state.sessionsLoading,
                 result: state.sessionsResult,
@@ -1667,6 +1653,7 @@ export function renderApp(state: AppViewState) {
                 includeUnknown: state.sessionsIncludeUnknown,
                 basePath: state.basePath,
                 searchQuery: state.sessionsSearchQuery,
+                agentIdentityById: state.agentIdentityById,
                 sortColumn: state.sessionsSortColumn,
                 sortDir: state.sessionsSortDir,
                 page: state.sessionsPage,
@@ -1763,7 +1750,7 @@ export function renderApp(state: AppViewState) {
         ${renderUsageTab(state)}
         ${state.tab === "cron" ? renderCronQuickCreateForTab(state, requestHostUpdate) : nothing}
         ${state.tab === "cron"
-          ? lazyRender(lazyCron, (m) =>
+          ? renderLazyView(lazyCron, (m) =>
               m.renderCron({
                 basePath: state.basePath,
                 loading: state.cronLoading,
@@ -1868,7 +1855,7 @@ export function renderApp(state: AppViewState) {
             )
           : nothing}
         ${state.tab === "agents"
-          ? lazyRender(lazyAgents, (m) =>
+          ? renderLazyView(lazyAgents, (m) =>
               m.renderAgents({
                 basePath: state.basePath ?? "",
                 loading: state.agentsLoading,
@@ -2040,7 +2027,7 @@ export function renderApp(state: AppViewState) {
                     removeConfigFormValue(state, [...basePath, "deny"]);
                   }
                 },
-                onConfigReload: () => loadConfig(state),
+                onConfigReload: () => loadConfig(state, { discardPendingChanges: true }),
                 onConfigSave: () => saveAgentsConfig(state),
                 onChannelsRefresh: () => loadChannels(state, false),
                 onCronRefresh: () => state.loadCron(),
@@ -2183,7 +2170,7 @@ export function renderApp(state: AppViewState) {
             )
           : nothing}
         ${state.tab === "skills"
-          ? lazyRender(lazySkills, (m) =>
+          ? renderLazyView(lazySkills, (m) =>
               m.renderSkills({
                 connected: state.connected,
                 loading: state.skillsLoading,
@@ -2229,7 +2216,7 @@ export function renderApp(state: AppViewState) {
             )
           : nothing}
         ${state.tab === "nodes"
-          ? lazyRender(lazyNodes, (m) =>
+          ? renderLazyView(lazyNodes, (m) =>
               m.renderNodes({
                 loading: state.nodesLoading,
                 nodes: state.nodes,
@@ -2258,7 +2245,7 @@ export function renderApp(state: AppViewState) {
                 onDeviceRotate: (deviceId, role, scopes) =>
                   rotateDeviceToken(state, { deviceId, role, scopes }),
                 onDeviceRevoke: (deviceId, role) => revokeDeviceToken(state, { deviceId, role }),
-                onLoadConfig: () => loadConfig(state),
+                onLoadConfig: () => loadConfig(state, { discardPendingChanges: true }),
                 onLoadExecApprovals: () => {
                   const target =
                     state.execApprovalsTarget === "node" && state.execApprovalsTargetNodeId
@@ -2355,8 +2342,9 @@ export function renderApp(state: AppViewState) {
               },
               onChatScroll: (event) => state.handleChatScroll(event),
               getDraft: () => state.chatMessage,
-              onDraftChange: (next) => (state.chatMessage = next),
+              onDraftChange: (next) => state.handleChatDraftChange(next),
               onRequestUpdate: requestHostUpdate,
+              onHistoryKeydown: (input) => state.handleChatInputHistoryKey(input),
               attachments: state.chatAttachments,
               onAttachmentsChange: (next) => (state.chatAttachments = next),
               onSend: () => state.handleSendChat(),
@@ -2421,7 +2409,7 @@ export function renderApp(state: AppViewState) {
           : nothing}
         ${renderConfigTabForActiveTab()}
         ${state.tab === "debug"
-          ? lazyRender(lazyDebug, (m) =>
+          ? renderLazyView(lazyDebug, (m) =>
               m.renderDebug({
                 loading: state.debugLoading,
                 status: state.debugStatus,
@@ -2442,7 +2430,7 @@ export function renderApp(state: AppViewState) {
             )
           : nothing}
         ${state.tab === "logs"
-          ? lazyRender(lazyLogs, (m) =>
+          ? renderLazyView(lazyLogs, (m) =>
               m.renderLogs({
                 loading: state.logsLoading,
                 error: state.logsError,

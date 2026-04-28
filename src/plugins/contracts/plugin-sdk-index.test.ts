@@ -101,7 +101,9 @@ describe("plugin-sdk exports", () => {
       "delegateCompactionToRuntime",
       "emptyPluginConfigSchema",
       "onDiagnosticEvent",
+      "optionalStringEnum",
       "registerContextEngine",
+      "stringEnum",
     ]);
   });
 

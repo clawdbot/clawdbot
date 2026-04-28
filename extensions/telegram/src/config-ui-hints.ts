@@ -103,7 +103,7 @@ export const telegramChannelConfigUiHints = {
   },
   apiRoot: {
     label: "Telegram API Root URL",
-    help: "Custom Telegram Bot API root URL. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
+    help: "Custom Telegram Bot API root URL. Use the API root only (for example https://api.telegram.org), not a full /bot<TOKEN> endpoint. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
   },
   trustedLocalFileRoots: {
     label: "Telegram Trusted Local File Roots",

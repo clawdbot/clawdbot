@@ -95,6 +95,7 @@ troubleshooting, see the main [FAQ](/help/faq).
     - These deployments can differ and may change over time; there is no fixed provider recommendation.
     - Check the current runtime setting on each gateway with `openclaw models status`.
     - For security-sensitive/tool-enabled agents, use the strongest latest-generation model available.
+
   </Accordion>
 
   <Accordion title="How do I switch models on the fly (without restarting)?">

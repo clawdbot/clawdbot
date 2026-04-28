@@ -169,6 +169,9 @@ export function buildOpenAIWebSocketResponseCreatePayload(params: {
       reasoning.summary = streamOpts.reasoningSummary;
     }
     extraParams.reasoning = reasoning;
+    if (reasoning.effort && reasoning.effort !== "none") {
+      extraParams.include = ["reasoning.encrypted_content"];
+    }
   }
 
   const textVerbosity = resolveOpenAITextVerbosity(

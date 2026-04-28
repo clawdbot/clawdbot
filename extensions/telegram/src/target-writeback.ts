@@ -1,13 +1,13 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   readConfigFileSnapshotForWrite,
-  writeConfigFile,
-} from "openclaw/plugin-sdk/config-runtime";
+  replaceConfigFile,
+} from "openclaw/plugin-sdk/config-mutation";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   loadCronStore,
   resolveCronStorePath,
   saveCronStore,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/cron-store-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -179,7 +179,12 @@ export async function maybePersistResolvedTelegramTarget(params: {
       resolvedTarget,
     });
     if (configChanged) {
-      await writeConfigFile(nextConfig, writeOptions);
+      await replaceConfigFile({
+        nextConfig,
+        snapshot,
+        writeOptions,
+        afterWrite: { mode: "auto" },
+      });
       if (params.verbose) {
         writebackLogger.warn(`resolved Telegram defaultTo target ${raw} -> ${resolvedTarget}`);
       }

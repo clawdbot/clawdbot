@@ -1,4 +1,5 @@
-export { requireRuntimeConfig, resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+export { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
+export { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 export { ssrfPolicyFromPrivateNetworkOptIn } from "openclaw/plugin-sdk/ssrf-runtime";
 export { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 export { fetchWithSsrFGuard } from "../runtime-api.js";

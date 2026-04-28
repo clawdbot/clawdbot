@@ -1,7 +1,64 @@
 {
   "id": "xiaomi",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["xiaomi"],
+  "modelCatalog": {
+    "providers": {
+      "xiaomi": {
+        "baseUrl": "https://api.xiaomimimo.com/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "mimo-v2-flash",
+            "name": "Xiaomi MiMo V2 Flash",
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "mimo-v2-pro",
+            "name": "Xiaomi MiMo V2 Pro",
+            "input": ["text"],
+            "reasoning": true,
+            "contextWindow": 1048576,
+            "maxTokens": 32000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "mimo-v2-omni",
+            "name": "Xiaomi MiMo V2 Omni",
+            "input": ["text", "image"],
+            "reasoning": true,
+            "contextWindow": 262144,
+            "maxTokens": 32000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "xiaomi": "static"
+    }
+  },
   "contracts": {
     "speechProviders": ["xiaomi"]
   },

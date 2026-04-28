@@ -21,6 +21,26 @@ export type AssistantAvatarOverrideState = {
   assistantAvatarReason?: string | null;
 };
 
+const assistantIdentityRequestVersions = new WeakMap<object, number>();
+
+function beginAssistantIdentityRequest(state: AssistantIdentityState): number {
+  const key = state as object;
+  const nextVersion = (assistantIdentityRequestVersions.get(key) ?? 0) + 1;
+  assistantIdentityRequestVersions.set(key, nextVersion);
+  return nextVersion;
+}
+
+function shouldApplyAssistantIdentityResult(
+  state: AssistantIdentityState,
+  version: number,
+  sessionKey: string,
+): boolean {
+  return (
+    assistantIdentityRequestVersions.get(state as object) === version &&
+    state.sessionKey.trim() === sessionKey
+  );
+}
+
 export async function loadAssistantIdentity(
   state: AssistantIdentityState,
   opts?: { sessionKey?: string },
@@ -30,8 +50,12 @@ export async function loadAssistantIdentity(
   }
   const sessionKey = opts?.sessionKey?.trim() || state.sessionKey.trim();
   const params = sessionKey ? { sessionKey } : {};
+  const requestVersion = beginAssistantIdentityRequest(state);
   try {
     const res = await state.client.request("agent.identity.get", params);
+    if (!shouldApplyAssistantIdentityResult(state, requestVersion, sessionKey)) {
+      return;
+    }
     if (!res) {
       return;
     }

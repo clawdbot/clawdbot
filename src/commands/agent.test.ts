@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import "./agent-command.test-mocks.js";
 import { __testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
@@ -27,6 +27,7 @@ const configIoMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: configIoMocks.loadConfig,
   loadConfig: configIoMocks.loadConfig,
   readConfigFileSnapshotForWrite: configIoMocks.readConfigFileSnapshotForWrite,
 }));
@@ -118,6 +119,7 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
         agentDir: params.agentDir,
         allowTransientCooldownProbe: params.allowTransientCooldownProbe,
         cleanupBundleMcpOnRunEnd: opts.cleanupBundleMcpOnRunEnd,
+        cleanupCliLiveSessionOnRunEnd: opts.cleanupCliLiveSessionOnRunEnd,
         modelRun: opts.modelRun,
         promptMode: opts.promptMode,
         disableTools: opts.modelRun === true,
@@ -438,6 +440,60 @@ describe("agentCommand", () => {
     });
   });
 
+  it("bypasses ACP sessions for one-shot model runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:main";
+      mockConfig(home, store, { models: {} });
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "acp-backed-session",
+          updatedAt: Date.now(),
+        },
+      });
+      const runTurn = vi.fn();
+      acpManagerTesting.setAcpSessionManagerForTests({
+        resolveSession: vi.fn(() => ({
+          kind: "ready",
+          sessionKey,
+          meta: {
+            backend: "acpx",
+            agent: "codex",
+            runtimeSessionName: "runtime-1",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: Date.now(),
+          },
+        })),
+        runTurn,
+      });
+
+      await agentCommand(
+        {
+          message: "Reply with exactly OPENCLAW-MODEL-OK",
+          sessionKey,
+          model: "openrouter/auto",
+          modelRun: true,
+          promptMode: "none",
+        },
+        runtime,
+      );
+
+      expect(runTurn).not.toHaveBeenCalled();
+      const callArgs = getLastEmbeddedCall();
+      expect(callArgs).toEqual(
+        expect.objectContaining({
+          provider: "openrouter",
+          model: "openrouter/auto",
+          prompt: "Reply with exactly OPENCLAW-MODEL-OK",
+          modelRun: true,
+          promptMode: "none",
+          disableTools: true,
+        }),
+      );
+    });
+  });
+
   it("passes resolved session-id resume files to embedded runs", async () => {
     await withTempHome(async (home) => {
       const resumeStore = path.join(home, "sessions-resume.json");
@@ -502,7 +558,7 @@ describe("agentCommand", () => {
     });
   });
 
-  it("uses default fallback list for session model overrides", async () => {
+  it("uses default fallback list for auto session model overrides", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       writeSessionStoreSeed(store, {
@@ -511,6 +567,7 @@ describe("agentCommand", () => {
           updatedAt: Date.now(),
           providerOverride: "anthropic",
           modelOverride: "claude-opus-4-6",
+          modelOverrideSource: "auto",
         },
       });
 
@@ -556,6 +613,55 @@ describe("agentCommand", () => {
         { provider: "anthropic", model: "claude-opus-4-6" },
         { provider: "openai", model: "gpt-5.4" },
       ]);
+    });
+  });
+
+  it("does not use fallback list for user session model overrides", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions-user-override.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:subagent:user-override": {
+          sessionId: "session-user-override",
+          updatedAt: Date.now(),
+          providerOverride: "ollama",
+          modelOverride: "qwen3.5:27b",
+          modelOverrideSource: "user",
+        },
+      });
+
+      mockConfig(home, store, {
+        model: {
+          primary: "openai/gpt-4.1-mini",
+          fallbacks: ["openai/gpt-5.4"],
+        },
+        models: {
+          "ollama/qwen3.5:27b": {},
+          "openai/gpt-4.1-mini": {},
+          "openai/gpt-5.4": {},
+        },
+      });
+
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        { id: "qwen3.5:27b", name: "Qwen 3.5", provider: "ollama" },
+        { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+      ]);
+      vi.mocked(runEmbeddedPiAgent).mockRejectedValueOnce(new Error("connect ECONNREFUSED"));
+
+      await expect(
+        agentCommand(
+          {
+            message: "hi",
+            sessionKey: "agent:main:subagent:user-override",
+          },
+          runtime,
+        ),
+      ).rejects.toThrow("connect ECONNREFUSED");
+
+      const attempts = vi
+        .mocked(runEmbeddedPiAgent)
+        .mock.calls.map((call) => ({ provider: call[0]?.provider, model: call[0]?.model }));
+      expect(attempts).toEqual([{ provider: "ollama", model: "qwen3.5:27b" }]);
     });
   });
 

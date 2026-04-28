@@ -4,7 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
-const loadConfig = vi.hoisted(() => vi.fn(() => ({}) as OpenClawConfig));
+const getRuntimeConfig = vi.hoisted(() => vi.fn(() => ({}) as OpenClawConfig));
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
 const resolveAgentWorkspaceDir = vi.hoisted(() =>
   vi.fn((_cfg: OpenClawConfig, _agentId: string) => "/tmp/openclaw"),
@@ -23,7 +23,7 @@ const removeGroundedShortTermCandidates = vi.hoisted(() => vi.fn());
 const repairDreamingArtifacts = vi.hoisted(() => vi.fn());
 
 vi.mock("../../config/config.js", () => ({
-  loadConfig,
+  getRuntimeConfig,
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -50,20 +50,23 @@ vi.mock("./doctor.memory-core-runtime.js", () => ({
 
 import { doctorHandlers } from "./doctor.js";
 
+const makeRuntimeContext = () => ({ getRuntimeConfig: () => getRuntimeConfig() });
+
 const invokeDoctorMemoryStatus = async (
   respond: ReturnType<typeof vi.fn>,
-  context?: { cron?: { list?: ReturnType<typeof vi.fn> } },
+  options?: { cron?: { list?: ReturnType<typeof vi.fn> }; params?: unknown },
 ) => {
   const cronList =
-    context?.cron?.list ??
+    options?.cron?.list ??
     vi.fn(async () => {
       return [];
     });
   await doctorHandlers["doctor.memory.status"]({
     req: {} as never,
-    params: {} as never,
+    params: (options?.params ?? {}) as never,
     respond: respond as never,
     context: {
+      ...makeRuntimeContext(),
       cron: {
         list: cronList,
       },
@@ -78,7 +81,7 @@ const invokeDoctorMemoryDreamDiary = async (respond: ReturnType<typeof vi.fn>) =
     req: {} as never,
     params: {} as never,
     respond: respond as never,
-    context: {} as never,
+    context: makeRuntimeContext() as never,
     client: null,
     isWebchatConnect: () => false,
   });
@@ -89,7 +92,7 @@ const invokeDoctorMemoryBackfillDreamDiary = async (respond: ReturnType<typeof v
     req: {} as never,
     params: {} as never,
     respond: respond as never,
-    context: {} as never,
+    context: makeRuntimeContext() as never,
     client: null,
     isWebchatConnect: () => false,
   });
@@ -100,7 +103,7 @@ const invokeDoctorMemoryResetDreamDiary = async (respond: ReturnType<typeof vi.f
     req: {} as never,
     params: {} as never,
     respond: respond as never,
-    context: {} as never,
+    context: makeRuntimeContext() as never,
     client: null,
     isWebchatConnect: () => false,
   });
@@ -111,7 +114,7 @@ const invokeDoctorMemoryResetGroundedShortTerm = async (respond: ReturnType<type
     req: {} as never,
     params: {} as never,
     respond: respond as never,
-    context: {} as never,
+    context: makeRuntimeContext() as never,
     client: null,
     isWebchatConnect: () => false,
   });
@@ -122,7 +125,7 @@ const invokeDoctorMemoryRepairDreamingArtifacts = async (respond: ReturnType<typ
     req: {} as never,
     params: {} as never,
     respond: respond as never,
-    context: {} as never,
+    context: makeRuntimeContext() as never,
     client: null,
     isWebchatConnect: () => false,
   });
@@ -133,7 +136,7 @@ const invokeDoctorMemoryDedupeDreamDiary = async (respond: ReturnType<typeof vi.
     req: {} as never,
     params: {} as never,
     respond: respond as never,
-    context: {} as never,
+    context: makeRuntimeContext() as never,
     client: null,
     isWebchatConnect: () => false,
   });
@@ -155,7 +158,7 @@ const expectEmbeddingErrorResponse = (respond: ReturnType<typeof vi.fn>, error: 
 
 describe("doctor.memory.status", () => {
   beforeEach(() => {
-    loadConfig.mockClear();
+    getRuntimeConfig.mockClear();
     resolveDefaultAgentId.mockClear();
     resolveAgentWorkspaceDir.mockReset().mockReturnValue("/tmp/openclaw");
     resolveMemorySearchConfig.mockReset().mockReturnValue({ enabled: true });
@@ -179,7 +182,7 @@ describe("doctor.memory.status", () => {
     });
     const respond = vi.fn();
 
-    await invokeDoctorMemoryStatus(respond);
+    await invokeDoctorMemoryStatus(respond, { params: { probe: true } });
 
     expect(getMemorySearchManager).toHaveBeenCalledWith({
       cfg: expect.any(Object),
@@ -214,6 +217,63 @@ describe("doctor.memory.status", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("does not live-probe embedding readiness by default", async () => {
+    const close = vi.fn().mockResolvedValue(undefined);
+    const probeEmbeddingAvailability = vi.fn().mockResolvedValue({ ok: true });
+    getMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: () => ({ provider: "gemini" }),
+        probeEmbeddingAvailability,
+        close,
+      },
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryStatus(respond);
+
+    expect(probeEmbeddingAvailability).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        embedding: expect.objectContaining({ ok: false, checked: false }),
+      }),
+      undefined,
+    );
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("returns cached embedding readiness without a live probe", async () => {
+    const close = vi.fn().mockResolvedValue(undefined);
+    const probeEmbeddingAvailability = vi.fn().mockResolvedValue({ ok: false });
+    getMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: () => ({ provider: "gemini" }),
+        getCachedEmbeddingAvailability: vi.fn(() => ({
+          ok: true,
+          checked: true,
+          cached: true,
+          checkedAtMs: 123,
+          cacheExpiresAtMs: 456,
+        })),
+        probeEmbeddingAvailability,
+        close,
+      },
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryStatus(respond);
+
+    expect(probeEmbeddingAvailability).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        embedding: expect.objectContaining({ ok: true, checked: true, cached: true }),
+      }),
+      undefined,
+    );
+    expect(close).toHaveBeenCalled();
+  });
+
   it("returns unavailable when memory manager is missing", async () => {
     getMemorySearchManager.mockResolvedValue({
       manager: null,
@@ -221,7 +281,7 @@ describe("doctor.memory.status", () => {
     });
     const respond = vi.fn();
 
-    await invokeDoctorMemoryStatus(respond);
+    await invokeDoctorMemoryStatus(respond, { params: { probe: true } });
 
     expectEmbeddingErrorResponse(respond, "memory search unavailable");
   });
@@ -237,7 +297,7 @@ describe("doctor.memory.status", () => {
     });
     const respond = vi.fn();
 
-    await invokeDoctorMemoryStatus(respond);
+    await invokeDoctorMemoryStatus(respond, { params: { probe: true } });
 
     expectEmbeddingErrorResponse(respond, "gateway memory probe failed: timeout");
     expect(close).toHaveBeenCalled();
@@ -388,7 +448,7 @@ describe("doctor.memory.status", () => {
       "utf-8",
     );
 
-    loadConfig.mockReturnValue({
+    getRuntimeConfig.mockReturnValue({
       agents: {
         defaults: {
           userTimezone: "America/Los_Angeles",
@@ -457,7 +517,7 @@ describe("doctor.memory.status", () => {
         expect.objectContaining({
           agentId: "main",
           provider: "gemini",
-          embedding: { ok: true },
+          embedding: expect.objectContaining({ ok: false, checked: false }),
           dreaming: expect.objectContaining({
             enabled: true,
             timezone: "America/Los_Angeles",
@@ -544,7 +604,7 @@ describe("doctor.memory.status", () => {
       "utf-8",
     );
     resolveMemorySearchConfig.mockReturnValue(null);
-    loadConfig.mockReturnValue({
+    getRuntimeConfig.mockReturnValue({
       plugins: {
         entries: {
           "memory-core": {
@@ -589,7 +649,7 @@ describe("doctor.memory.status", () => {
   });
 
   it("reads dreaming config from the selected memory slot plugin", async () => {
-    loadConfig.mockReturnValue({
+    getRuntimeConfig.mockReturnValue({
       plugins: {
         slots: {
           memory: "memos-local-openclaw-plugin",
@@ -669,7 +729,7 @@ describe("doctor.memory.status", () => {
     );
     await fs.mkdir(path.join(mainWorkspaceDir, "memory", ".dreams"), { recursive: true });
 
-    loadConfig.mockReturnValue({
+    getRuntimeConfig.mockReturnValue({
       agents: {
         defaults: {
           memorySearch: {
@@ -837,7 +897,7 @@ describe("doctor.memory dream actions", () => {
 
 describe("doctor.memory.dreamDiary", () => {
   beforeEach(() => {
-    loadConfig.mockClear();
+    getRuntimeConfig.mockClear();
     resolveDefaultAgentId.mockClear();
     resolveAgentWorkspaceDir.mockReset().mockReturnValue("/tmp/openclaw");
     previewGroundedRemMarkdown.mockReset();

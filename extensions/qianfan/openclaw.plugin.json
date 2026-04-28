@@ -1,7 +1,51 @@
 {
   "id": "qianfan",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["qianfan"],
+  "modelCatalog": {
+    "providers": {
+      "qianfan": {
+        "baseUrl": "https://qianfan.baidubce.com/v2",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "deepseek-v3.2",
+            "name": "DEEPSEEK V3.2",
+            "input": ["text"],
+            "reasoning": true,
+            "contextWindow": 98304,
+            "maxTokens": 32768,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "ernie-5.0-thinking-preview",
+            "name": "ERNIE-5.0-Thinking-Preview",
+            "input": ["text", "image"],
+            "reasoning": true,
+            "contextWindow": 119000,
+            "maxTokens": 64000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "qianfan": "static"
+    }
+  },
   "providerAuthEnvVars": {
     "qianfan": ["QIANFAN_API_KEY"]
   },

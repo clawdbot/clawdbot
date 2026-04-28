@@ -13,6 +13,12 @@ import type {
   TtsSynthesisResult,
   TtsTelephonyResult,
 } from "./tts-runtime.types.js";
+export {
+  TtsAutoSchema,
+  TtsConfigSchema,
+  TtsModeSchema,
+  TtsProviderSchema,
+} from "../config/zod-schema.core.js";
 
 // Manual facade. Keep loader boundary explicit and avoid typing this public SDK
 // seam through the bundled speech-core runtime surface.

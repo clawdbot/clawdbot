@@ -1,6 +1,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { loadPluginRegistrySnapshot } from "./plugin-registry.js";
 import { resolveDiscoveredProviderPluginIds } from "./providers.js";
 import { resolvePluginProviders } from "./providers.runtime.js";
 import { createPluginSourceLoader } from "./source-loader.js";
@@ -75,14 +77,25 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry">;
 }): ProviderDiscoveryEntryResult {
-  const pluginIds = resolveDiscoveredProviderPluginIds(params);
-  const pluginIdSet = new Set(pluginIds);
-  const pluginRecords = loadPluginManifestRegistryForPluginRegistry({
+  const registry = params.pluginMetadataSnapshot?.index ?? loadPluginRegistrySnapshot(params);
+  const manifestRegistry =
+    params.pluginMetadataSnapshot?.manifestRegistry ??
+    loadPluginManifestRegistryForInstalledIndex({
+      index: registry,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      includeDisabled: true,
+    });
+  const pluginIds = resolveDiscoveredProviderPluginIds({
     ...params,
-    pluginIds,
-    includeDisabled: true,
-  }).plugins.filter((plugin) => pluginIdSet.has(plugin.id));
+    registry,
+    manifestRegistry,
+  });
+  const pluginIdSet = new Set(pluginIds);
+  const pluginRecords = manifestRegistry.plugins.filter((plugin) => pluginIdSet.has(plugin.id));
   const entryRecords = pluginRecords.filter((plugin) => plugin.providerDiscoverySource);
   const entryPluginIds = new Set(entryRecords.map((plugin) => plugin.id));
   if (entryRecords.length === 0) {
@@ -135,6 +148,7 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry">;
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
   const entryResult = resolveProviderDiscoveryEntryPlugins(params);

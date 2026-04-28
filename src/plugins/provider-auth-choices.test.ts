@@ -17,13 +17,23 @@ vi.mock("./plugin-registry.js", () => ({
   loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
 }));
 
-import {
+vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry:
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
+  loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
+}));
+
+vi.resetModules();
+
+const {
   resolveManifestDeprecatedProviderAuthChoice,
   resolveManifestProviderApiKeyChoice,
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices,
   resolveManifestProviderOnboardAuthFlags,
-} from "./provider-auth-choices.js";
+} = await import("./provider-auth-choices.js");
+const { resetProviderAuthAliasMapCacheForTest, resolveProviderIdForAuth } =
+  await import("../agents/provider-auth-aliases.js");
 
 function createManifestPlugin(id: string, providerAuthChoices: Array<Record<string, unknown>>) {
   return {
@@ -78,6 +88,7 @@ describe("provider auth choice manifest helpers", () => {
     });
     pluginRegistryMocks.loadPluginRegistrySnapshot.mockReset();
     pluginRegistryMocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
+    resetProviderAuthAliasMapCacheForTest();
   });
 
   it("flattens manifest auth choices", () => {
@@ -560,6 +571,9 @@ describe("provider auth choice manifest helpers", () => {
       },
     ]);
 
+    const resolvedProviderId = resolveProviderIdForAuth("fixture-provider-plan");
+    expect(pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalled();
+    expect(resolvedProviderId).toBe("fixture-provider");
     expect(
       resolveManifestProviderApiKeyChoice({
         providerId: "fixture-provider-plan",

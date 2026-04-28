@@ -1,18 +1,20 @@
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
-  resolveDefaultGroupPolicy,
-  resolveGroupSessionKey,
-  type ChannelGroupPolicy,
-  type DmPolicy,
-  type GroupPolicy,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/channel-policy";
+import type {
+  ChannelGroupPolicy,
+  DmPolicy,
+  GroupPolicy,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/config-types";
+import { resolveDefaultGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import {
   readStoreAllowFromForDmPolicy,
   resolveEffectiveAllowFromLists,
   resolveDmGroupAccessWithCommandGate,
 } from "openclaw/plugin-sdk/security-runtime";
+import { resolveGroupSessionKey } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveWhatsAppAccount, type ResolvedWhatsAppAccount } from "./accounts.js";
 import { getSelfIdentity, getSenderIdentity } from "./identity.js";
 import type { WebInboundMessage } from "./inbound/types.js";

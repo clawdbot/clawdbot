@@ -18,16 +18,19 @@ vi.mock("../plugins/manifest-registry.js", () => ({
       {
         id: "brave",
         origin: "bundled",
+        channels: [],
         contracts: { webSearchProviders: ["brave"] },
       },
       {
         id: "google",
         origin: "bundled",
+        channels: [],
         contracts: { webSearchProviders: ["gemini"] },
       },
       {
         id: "firecrawl",
         origin: "bundled",
+        channels: [],
         contracts: { webSearchProviders: ["firecrawl"] },
       },
     ],

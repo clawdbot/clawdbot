@@ -218,10 +218,3 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
     }),
   };
 });
-
-vi.mock("../../../src/infra/outbound/session-binding-service.js", () => ({
-  getSessionBindingService: () => ({
-    resolveByConversation: resolveBoundConversationMock,
-    touch: touchBindingMock,
-  }),
-}));

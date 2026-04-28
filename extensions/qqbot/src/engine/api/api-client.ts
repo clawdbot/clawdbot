@@ -21,6 +21,15 @@ export interface RequestOptions {
   timeoutMs?: number;
   /** Body keys to redact in debug logs (e.g. `['file_data']`). */
   redactBodyKeys?: string[];
+  /**
+   * Mark the request as a file-upload call.
+   *
+   * Triggers the longer `fileUploadTimeoutMs` (default 120s) instead of the
+   * standard `defaultTimeoutMs` (default 30s). Prefer this flag over
+   * inspecting the request path; it keeps the timeout policy independent of
+   * route naming conventions.
+   */
+  uploadRequest?: boolean;
 }
 
 /**
@@ -74,7 +83,14 @@ export class ApiClient {
       "User-Agent": this.resolveUserAgent(),
     };
 
-    const isFileUpload = path.includes("/files");
+    const isFileUpload =
+      options?.uploadRequest === true ||
+      // Back-compat: legacy callers that predate the explicit `uploadRequest`
+      // flag still get the long timeout when hitting file endpoints. New
+      // code should always pass `uploadRequest: true` explicitly.
+      path.includes("/files") ||
+      path.includes("/upload_prepare") ||
+      path.includes("/upload_part_finish");
     const timeout =
       options?.timeoutMs ?? (isFileUpload ? this.fileUploadTimeoutMs : this.defaultTimeoutMs);
 

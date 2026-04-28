@@ -43,6 +43,9 @@ vi.mock("./gateway.ts", async (importOriginal) => {
     readonly start = vi.fn();
     readonly stop = vi.fn();
     readonly request = vi.fn(async (method: string) => {
+      if (method === "update.status") {
+        return { sentinel: null };
+      }
       if (method === "models.authStatus") {
         return { ts: 0, providers: [] };
       }
@@ -73,6 +76,7 @@ vi.mock("./gateway.ts", async (importOriginal) => {
               type: "hello-ok",
               protocol: 3,
               snapshot: {},
+              auth: { role: "operator", scopes: [] },
             },
           );
         },
@@ -109,6 +113,7 @@ vi.mock("./controllers/control-ui-bootstrap.ts", () => ({
 }));
 
 type TestGatewayHost = Parameters<typeof connectGateway>[0] & {
+  chatMessages: unknown[];
   chatSideResult: unknown;
   chatSideResultTerminalRuns: Set<string>;
   chatStream: string | null;
@@ -154,6 +159,8 @@ function createHost(): TestGatewayHost {
     assistantAgentId: null,
     localMediaPreviewRoots: [],
     serverVersion: null,
+    pendingUpdateExpectedVersion: null,
+    updateStatusBanner: null,
     sessionKey: "main",
     chatMessages: [],
     chatQueue: [],
@@ -280,6 +287,120 @@ describe("connectGateway", () => {
       currentVersion: "1.0.0",
       latestVersion: "2.0.0",
       channel: "latest",
+    });
+  });
+
+  it("clears pending update verification when the restarted version matches", async () => {
+    const host = createHost();
+    host.pendingUpdateExpectedVersion = "2.0.0";
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "update.status") {
+        return {
+          sentinel: {
+            kind: "update",
+            status: "ok",
+            stats: {
+              after: { version: "2.0.0" },
+            },
+          },
+        };
+      }
+      return {};
+    });
+
+    client.emitHello({
+      type: "hello-ok",
+      protocol: 3,
+      server: { version: "2.0.0" },
+      auth: { role: "operator", scopes: [] },
+      snapshot: {},
+    });
+
+    await vi.waitFor(() => {
+      expect(host.pendingUpdateExpectedVersion).toBeNull();
+    });
+    expect(host.updateStatusBanner).toBeNull();
+  });
+
+  it("shows a hard error when the restarted version does not match the expected update", async () => {
+    const host = createHost();
+    host.pendingUpdateExpectedVersion = "2.0.0";
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "update.status") {
+        return {
+          sentinel: {
+            kind: "update",
+            status: "ok",
+            stats: {
+              after: { version: "1.0.0" },
+            },
+          },
+        };
+      }
+      return {};
+    });
+
+    client.emitHello({
+      type: "hello-ok",
+      protocol: 3,
+      server: { version: "1.0.0" },
+      auth: { role: "operator", scopes: [] },
+      snapshot: {},
+    });
+
+    await vi.waitFor(() => {
+      expect(host.pendingUpdateExpectedVersion).toBeNull();
+      expect(host.updateStatusBanner?.text).toContain(
+        "Update installed but running version did not change",
+      );
+    });
+  });
+
+  it("surfaces post-restart sentinel failures after reconnect", async () => {
+    const host = createHost();
+    host.pendingUpdateExpectedVersion = "2.0.0";
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "update.status") {
+        return {
+          sentinel: {
+            kind: "update",
+            status: "error",
+            stats: {
+              reason: "restart-unhealthy",
+              after: { version: "1.0.0" },
+            },
+          },
+        };
+      }
+      return {};
+    });
+
+    client.emitHello({
+      type: "hello-ok",
+      protocol: 3,
+      server: { version: "1.0.0" },
+      auth: { role: "operator", scopes: [] },
+      snapshot: {},
+    });
+
+    await vi.waitFor(() => {
+      expect(host.pendingUpdateExpectedVersion).toBeNull();
+      expect(host.updateStatusBanner).toEqual({
+        tone: "danger",
+        text: "Update error: restart-unhealthy. The replacement process never became healthy and the previous process stayed up.",
+      });
     });
   });
 
@@ -533,7 +654,7 @@ describe("connectGateway", () => {
     client.emitHello();
 
     expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledTimes(1);
-    expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledWith(host);
+    expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledWith(host, { applyIdentity: false });
   });
 
   it("sends queued chat aborts after reconnect before clearing pending state", async () => {
@@ -753,6 +874,150 @@ describe("connectGateway", () => {
     },
   );
 
+  it("does not reload chat history after final assistant payload reconciles an active run", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "main-run-4";
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "session.message",
+      payload: {
+        sessionKey: "main",
+      },
+    });
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "main-run-4",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Final answer" }],
+        },
+      },
+    });
+
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatMessages).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer" }],
+      },
+    ]);
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("replays deferred session.message reloads after legacy silent final payload", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "main-run-silent";
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "session.message",
+      payload: {
+        sessionKey: "main",
+      },
+    });
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "main-run-silent",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "NO_REPLY" }],
+        },
+      },
+    });
+
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatMessages).toEqual([]);
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+  });
+
+  it("keeps deferred session.message reload pending across unrelated terminal events", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "main-run-5";
+    host.chatStream = "still streaming";
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "session.message",
+      payload: {
+        sessionKey: "main",
+      },
+    });
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "other-run-1",
+        sessionKey: "main",
+        state: "final",
+      },
+    });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+    expect(host.chatRunId).toBe("main-run-5");
+    expect(host.chatStream).toBe("still streaming");
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "main-run-5",
+        sessionKey: "main",
+        state: "aborted",
+      },
+    });
+
+    expect(host.chatRunId).toBeNull();
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+  });
+
+  it("keeps deferred session.message reload pending across unowned terminal events", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "main-run-unowned";
+    host.chatStream = "still streaming";
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "session.message",
+      payload: {
+        sessionKey: "main",
+      },
+    });
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        sessionKey: "main",
+        state: "final",
+      },
+    });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+    expect(host.chatRunId).toBe("main-run-unowned");
+    expect(host.chatStream).toBe("still streaming");
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "main-run-unowned",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Done" }],
+        },
+      },
+    });
+
+    expect(host.chatRunId).toBeNull();
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
   it("clears tracked BTW terminal runs after reconnect hello", () => {
     const host = createHost();
 
@@ -907,6 +1172,33 @@ describe("resolveControlUiClientVersion", () => {
         pageUrl: "https://control.example.com/openclaw/",
       }),
     ).toBe("2026.3.7");
+  });
+
+  it("returns serverVersion for loopback aliases on the same port", () => {
+    expect(
+      resolveControlUiClientVersion({
+        gatewayUrl: "ws://127.0.0.1:18789",
+        serverVersion: "2026.4.24",
+        pageUrl: "http://localhost:18789/chat",
+      }),
+    ).toBe("2026.4.24");
+    expect(
+      resolveControlUiClientVersion({
+        gatewayUrl: "ws://[::1]:18789",
+        serverVersion: "2026.4.24",
+        pageUrl: "http://127.0.0.1:18789/chat",
+      }),
+    ).toBe("2026.4.24");
+  });
+
+  it("omits serverVersion for loopback aliases on different ports", () => {
+    expect(
+      resolveControlUiClientVersion({
+        gatewayUrl: "ws://127.0.0.1:18789",
+        serverVersion: "2026.4.24",
+        pageUrl: "http://localhost:19889/chat",
+      }),
+    ).toBeUndefined();
   });
 
   it("omits serverVersion for cross-origin targets", () => {

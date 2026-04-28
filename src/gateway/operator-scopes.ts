@@ -12,3 +12,20 @@ export type OperatorScope =
   | typeof APPROVALS_SCOPE
   | typeof PAIRING_SCOPE
   | typeof TALK_SECRETS_SCOPE;
+
+const KNOWN_OPERATOR_SCOPE_VALUES: readonly OperatorScope[] = [
+  ADMIN_SCOPE,
+  READ_SCOPE,
+  WRITE_SCOPE,
+  APPROVALS_SCOPE,
+  PAIRING_SCOPE,
+  TALK_SECRETS_SCOPE,
+];
+
+export const KNOWN_OPERATOR_SCOPES: ReadonlySet<OperatorScope> = new Set(
+  KNOWN_OPERATOR_SCOPE_VALUES,
+);
+
+export function isOperatorScope(value: unknown): value is OperatorScope {
+  return typeof value === "string" && KNOWN_OPERATOR_SCOPES.has(value as OperatorScope);
+}

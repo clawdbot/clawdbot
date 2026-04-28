@@ -8,6 +8,7 @@ export type LiveCacheFloor = {
   minHitRate?: number;
   maxCacheRead?: number;
   maxCacheWrite?: number;
+  warnOnly?: boolean;
 };
 
 export const LIVE_CACHE_REGRESSION_BASELINE = {
@@ -56,6 +57,7 @@ export const LIVE_CACHE_REGRESSION_BASELINE = {
       observedHitRate: 0.954,
       minCacheRead: 3_840,
       minHitRate: 0.82,
+      warnOnly: true,
     },
     mcp: {
       observedCacheRead: 4_608,

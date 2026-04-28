@@ -89,6 +89,10 @@ directories outside the workspace.
 AI-native cross-session memory with user modeling, semantic search, and
 multi-agent awareness. Plugin install.
 </Card>
+<Card title="LanceDB" icon="layers" href="/plugins/memory-lancedb">
+Bundled LanceDB-backed memory with OpenAI-compatible embeddings, auto-recall,
+auto-capture, and local Ollama embedding support.
+</Card>
 </CardGroup>
 
 ## Knowledge wiki layer
@@ -105,6 +109,26 @@ dashboards, bridge mode, and Obsidian-friendly workflows.
 Before [compaction](/concepts/compaction) summarizes your conversation, OpenClaw
 runs a silent turn that reminds the agent to save important context to memory
 files. This is on by default — you do not need to configure anything.
+
+To keep that housekeeping turn on a local model, set an exact memory-flush model
+override:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "memoryFlush": {
+          "model": "ollama/qwen3:8b"
+        }
+      }
+    }
+  }
+}
+```
+
+The override applies only to the memory-flush turn and does not inherit the
+active session fallback chain.
 
 <Tip>
 The memory flush prevents context loss during compaction. If your agent has
@@ -179,6 +203,7 @@ openclaw memory index --force   # Rebuild the index
 - [Builtin memory engine](/concepts/memory-builtin): default SQLite backend.
 - [QMD memory engine](/concepts/memory-qmd): advanced local-first sidecar.
 - [Honcho memory](/concepts/memory-honcho): AI-native cross-session memory.
+- [Memory LanceDB](/plugins/memory-lancedb): LanceDB-backed plugin with OpenAI-compatible embeddings.
 - [Memory Wiki](/plugins/memory-wiki): compiled knowledge vault and wiki-native tools.
 - [Memory search](/concepts/memory-search): search pipeline, providers, and tuning.
 - [Dreaming](/concepts/dreaming): background promotion from short-term recall to long-term memory.
@@ -191,3 +216,4 @@ openclaw memory index --force   # Rebuild the index
 - [Memory search](/concepts/memory-search)
 - [Builtin memory engine](/concepts/memory-builtin)
 - [Honcho memory](/concepts/memory-honcho)
+- [Memory LanceDB](/plugins/memory-lancedb)

@@ -1,10 +1,10 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   callGatewayFromCli,
   ErrorCodes,
   errorShape,
-} from "openclaw/plugin-sdk/browser-node-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
+  type GatewayRequestHandlerOptions,
+} from "openclaw/plugin-sdk/gateway-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { Type } from "typebox";
@@ -76,14 +76,19 @@ const googleMeetConfigSchema = {
       help: "Waits for Chrome to report that the Meet tab is in-call before the realtime intro speaks.",
       advanced: true,
     },
+    "chrome.audioFormat": {
+      label: "Audio Format",
+      help: "Command-pair audio format. PCM16 24 kHz is the default Chrome/Meet path; G.711 mu-law 8 kHz remains available for legacy command pairs.",
+      advanced: true,
+    },
     "chrome.audioInputCommand": {
       label: "Audio Input Command",
-      help: "Command that writes 8 kHz G.711 mu-law meeting audio to stdout.",
+      help: "Command that writes meeting audio to stdout in chrome.audioFormat.",
       advanced: true,
     },
     "chrome.audioOutputCommand": {
       label: "Audio Output Command",
-      help: "Command that reads 8 kHz G.711 mu-law assistant audio from stdin.",
+      help: "Command that reads assistant audio from stdin in chrome.audioFormat.",
       advanced: true,
     },
     "chrome.audioBridgeCommand": { label: "Audio Bridge Command", advanced: true },
@@ -672,7 +677,13 @@ export default definePluginEntry({
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
           const rt = await ensureRuntime();
-          respond(true, await rt.setupStatus({ transport: normalizeTransport(params?.transport) }));
+          respond(
+            true,
+            await rt.setupStatus({
+              transport: normalizeTransport(params?.transport),
+              mode: normalizeMode(params?.mode),
+            }),
+          );
         } catch (err) {
           sendError(respond, err);
         }

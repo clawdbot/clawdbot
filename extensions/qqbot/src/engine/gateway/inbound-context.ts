@@ -9,6 +9,10 @@
  */
 
 import type { QQBotAccessDecision, QQBotAccessReasonCode } from "../access/index.js";
+import type { EngineAdapters } from "../adapter/index.js";
+import type { GroupActivationMode, SessionStoreReader } from "../group/activation.js";
+import type { HistoryEntry } from "../group/history.js";
+import type { GroupMessageGateResult } from "../group/message-gating.js";
 import type { QueuedMessage } from "./message-queue.js";
 import type {
   GatewayAccount,
@@ -26,6 +30,46 @@ export interface ReplyToInfo {
   body?: string;
   sender?: string;
   isQuote: boolean;
+}
+
+/**
+ * Group-specific inbound metadata.
+ *
+ * Populated for group / guild events; left `undefined` for DMs. Keeping
+ * the group fields under a nested bag makes it obvious which fields are
+ * safe to read only when `isGroupChat === true`.
+ *
+ * The shape is kept small on purpose: everything derivable from `gate`
+ * (raw wasMentioned / explicit / implicit / hasAnyMention / bypass) is
+ * stored once on `gate`, not duplicated on the outer object.
+ */
+export interface InboundGroupInfo {
+  // ---- Gating decision ----
+  /** Full gate evaluation result (source of truth for mention state). */
+  gate: GroupMessageGateResult;
+  /** Effective activation mode after session-store / cfg merge. */
+  activation: GroupActivationMode;
+
+  // ---- Persistence-relevant ----
+  /** Per-group history buffer cap. Zero → disabled. */
+  historyLimit: number;
+  /** `true` if this message was built by merging several queued entries. */
+  isMerged: boolean;
+  /** The unfiltered list of queued messages when `isMerged`, else undefined. */
+  mergedMessages?: readonly QueuedMessage[];
+
+  // ---- Presentation / prompt inputs ----
+  /** Bundle of display-only strings; assembled by the envelope stage. */
+  display: {
+    /** Human-readable group name ("My Group" / first 8 chars of openid). */
+    groupName: string;
+    /** Sender label ("Nick (OPENID)" / "OPENID") for the UI. */
+    senderLabel: string;
+    /** Channel-level intro hint contributed by the platform adapter. */
+    introHint?: string;
+    /** Per-group behaviour prompt appended to the system prompt. */
+    behaviorPrompt?: string;
+  };
 }
 
 /** Fully resolved inbound context passed to the outbound dispatcher. */
@@ -81,22 +125,32 @@ export interface InboundContext {
 
   // ---- Auth ----
   commandAuthorized: boolean;
+
+  // ---- Group ----
+  /** Populated only for group / guild messages. */
+  group?: InboundGroupInfo;
+
+  // ---- Blocking / skipping ----
   /**
-   * Whether the inbound message should be blocked outright (i.e. the bot
-   * neither routes it to an agent nor replies). Set when the sender is
-   * not matched by the configured `allowFrom`/`groupAllowFrom` list
-   * under the active `dmPolicy` / `groupPolicy`.
+   * Whether the inbound message should be blocked outright (access policy
+   * refused the sender). Mutually exclusive with `skipped`.
    */
   blocked: boolean;
   /** Human-readable reason for `blocked`, for logging only. */
   blockReason?: string;
-  /**
-   * Structured reason code for `blocked`, suitable for metrics and
-   * activity indicators.
-   */
+  /** Structured reason code for `blocked`. */
   blockReasonCode?: QQBotAccessReasonCode;
   /** The raw access decision produced by the policy engine. */
   accessDecision?: QQBotAccessDecision;
+  /**
+   * Whether the inbound was accepted by access control but stopped before
+   * AI dispatch by the group gate (e.g. "skip_no_mention"). The caller
+   * should NOT forward `skipped` messages to the outbound dispatcher, but
+   * history / activity side-effects may already have been applied.
+   */
+  skipped: boolean;
+  /** Structured reason code for `skipped`. */
+  skipReason?: "drop_other_mention" | "block_unauthorized_command" | "skip_no_mention";
 
   // ---- Typing ----
   typing: { keepAlive: TypingKeepAlive | null };
@@ -117,4 +171,25 @@ export interface InboundPipelineDeps {
     refIdx?: string;
     keepAlive: TypingKeepAlive | null;
   }>;
+  // ---- Group dependencies (optional — omit when the caller doesn't need
+  // group support, e.g. a DM-only test harness). ----
+  /** Shared per-connection history buffer, created by the gateway. */
+  groupHistories?: Map<string, HistoryEntry[]>;
+  /** Session-store reader for activation-mode overrides. */
+  sessionStoreReader?: SessionStoreReader;
+  /** Whether text-based control commands are enabled globally. */
+  allowTextCommands?: boolean;
+  /**
+   * Framework probe that returns true when `content` is a known control
+   * command. Injected to avoid hard-coding a list of commands in engine.
+   */
+  isControlCommand?: (content: string) => boolean;
+  /** Optional platform hook that contributes a channel-level intro hint. */
+  resolveGroupIntroHint?: (params: {
+    cfg: unknown;
+    accountId: string;
+    groupId: string;
+  }) => string | undefined;
+  /** SDK adapter ports for delegating to shared implementations. */
+  adapters: EngineAdapters;
 }

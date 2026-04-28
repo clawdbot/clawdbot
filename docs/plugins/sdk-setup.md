@@ -300,6 +300,7 @@ Bundled workspace channels that keep setup-safe exports in sidecar modules can u
     - The channel is disabled but needs setup/onboarding surfaces.
     - The channel is enabled but unconfigured.
     - Deferred loading is enabled (`deferConfiguredChannelFullLoadUntilAfterListen`).
+
   </Accordion>
   <Accordion title="What setupEntry must register">
     - The channel plugin object (via `defineSetupPluginEntry`).
@@ -314,6 +315,7 @@ Bundled workspace channels that keep setup-safe exports in sidecar modules can u
     - Background services.
     - Heavy runtime imports (crypto, SDKs).
     - Gateway methods only needed after startup.
+
   </Accordion>
 </AccordionGroup>
 

@@ -97,19 +97,6 @@ export const SessionSchema = z
             });
           }
         }
-        if (val.rotateBytes !== undefined) {
-          try {
-            parseByteSize(normalizeStringifiedOptionalString(val.rotateBytes) ?? "", {
-              defaultUnit: "b",
-            });
-          } catch {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              path: ["rotateBytes"],
-              message: "invalid size (use b, kb, mb, gb, tb)",
-            });
-          }
-        }
         if (val.resetArchiveRetention !== undefined && val.resetArchiveRetention !== false) {
           try {
             parseDurationMs(normalizeStringifiedOptionalString(val.resetArchiveRetention) ?? "", {

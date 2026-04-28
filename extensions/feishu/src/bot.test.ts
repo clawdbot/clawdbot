@@ -1,7 +1,7 @@
 import type * as ConversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
+import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./bot.js";
 import { handleFeishuMessage } from "./bot.js";
@@ -1405,6 +1405,114 @@ describe("handleFeishuMessage command authorization", () => {
         chat_type: "group",
         message_type: "image",
         content: JSON.stringify({ image_key: "img_v3_test" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+
+  it("admits group when chat_id is explicitly configured under groups, even with empty groupAllowFrom (#67687)", async () => {
+    // Regression for #67687: a group that only sets `groups.<chat_id>.requireMention=false`
+    // (and leaves `groupAllowFrom` empty) should still be admitted under the schema-default
+    // `groupPolicy="allowlist"`. The group's explicit presence in `channels.feishu.groups`
+    // is the operator's allowlist signal, and the per-group `requireMention` override should
+    // then control mention gating for inbound text events.
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groupPolicy: "allowlist",
+          // groupAllowFrom intentionally omitted -> empty []
+          groups: {
+            "oc-explicit-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: { open_id: "ou-sender" },
+      },
+      message: {
+        message_id: "msg-explicit-group-67687",
+        chat_id: "oc-explicit-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello bot" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    // Group must be admitted: the inbound finalize/dispatch path runs.
+    expect(mockFinalizeInboundContext).toHaveBeenCalled();
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalled();
+  });
+
+  it("does not let explicit group config override disabled group policy", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groupPolicy: "disabled",
+          groups: {
+            "oc-disabled-policy-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: { open_id: "ou-sender" },
+      },
+      message: {
+        message_id: "msg-disabled-policy-group",
+        chat_id: "oc-disabled-policy-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello bot" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+
+  it("does not treat wildcard group defaults as allowlist admission", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groupPolicy: "allowlist",
+          groups: {
+            "*": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: { open_id: "ou-sender" },
+      },
+      message: {
+        message_id: "msg-wildcard-group-default",
+        chat_id: "oc-wildcard-only",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello bot" }),
       },
     };
 

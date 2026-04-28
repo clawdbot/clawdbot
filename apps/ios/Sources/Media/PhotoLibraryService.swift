@@ -1,6 +1,6 @@
 import Foundation
-import Photos
 import OpenClawKit
+import Photos
 import UIKit
 
 final class PhotoLibraryService: PhotosServicing {
@@ -139,7 +139,7 @@ final class PhotoLibraryService: PhotosServicing {
             if newWidth >= currentImage.size.width {
                 break
             }
-            currentImage = resize(image: currentImage, targetWidth: newWidth)
+            currentImage = self.resize(image: currentImage, targetWidth: newWidth)
         }
 
         throw NSError(domain: "Photos", code: 4, userInfo: [

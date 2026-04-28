@@ -30,6 +30,7 @@ import {
 import { collectTextContentBlocks } from "../content-blocks.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "../copilot-dynamic-headers.js";
 import { isTimeoutError } from "../failover-error.js";
+import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import { repairToolUseResultPairing } from "../session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import {
@@ -776,10 +777,15 @@ async function readWorkspaceContextForSummary(): Promise<string> {
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions: eventInstructions, signal } = event;
-    const hasRealSummarizable = preparation.messagesToSummarize.some((message, index, messages) =>
+    const rawTurnPrefixMessages = preparation.turnPrefixMessages ?? [];
+    const baseMessagesToSummarize = stripRuntimeContextCustomMessages(
+      preparation.messagesToSummarize,
+    );
+    const baseTurnPrefixMessages = stripRuntimeContextCustomMessages(rawTurnPrefixMessages);
+    const hasRealSummarizable = baseMessagesToSummarize.some((message, index, messages) =>
       isRealConversationMessage(message, messages, index),
     );
-    const hasRealTurnPrefix = preparation.turnPrefixMessages.some((message, index, messages) =>
+    const hasRealTurnPrefix = baseTurnPrefixMessages.some((message, index, messages) =>
       isRealConversationMessage(message, messages, index),
     );
     setCompactionSafeguardCancelReason(ctx.sessionManager, undefined);
@@ -811,8 +817,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
     const toolFailures = collectToolFailures([
-      ...preparation.messagesToSummarize,
-      ...preparation.turnPrefixMessages,
+      ...baseMessagesToSummarize,
+      ...baseTurnPrefixMessages,
     ]);
     const toolFailureSection = formatToolFailuresSection(toolFailures);
 
@@ -829,10 +835,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     };
     const identifierPolicy = runtime?.identifierPolicy ?? "strict";
     const providerId = runtime?.provider;
-    const turnPrefixMessages = preparation.turnPrefixMessages ?? [];
+    const turnPrefixMessages = baseTurnPrefixMessages;
     const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
     const { preservedMessages: providerPreservedMessages } = splitPreservedRecentTurns({
-      messages: preparation.messagesToSummarize,
+      messages: baseMessagesToSummarize,
       recentTurnsPreserve,
     });
     const preservedTurnsSection = formatPreservedTurnsSection(providerPreservedMessages);
@@ -854,10 +860,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         try {
           // Give the provider ALL messages — no pruning, no chunking, no split-turn splitting.
           // The provider handles its own context management.
-          const allMessages = [
-            ...preparation.messagesToSummarize,
-            ...(preparation.turnPrefixMessages ?? []),
-          ];
+          const allMessages = [...baseMessagesToSummarize, ...turnPrefixMessages];
           const providerResult = await tryProviderSummarize(compactionProvider, {
             messages: allMessages,
             signal,
@@ -937,7 +940,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     try {
       const modelContextWindow = resolveContextWindowTokens(model);
       const contextWindowTokens = runtime?.contextWindowTokens ?? modelContextWindow;
-      let messagesToSummarize = preparation.messagesToSummarize;
+      let messagesToSummarize = baseMessagesToSummarize;
       const headers = buildCompactionSummaryHeaders({
         model,
         messages: messagesToSummarize,

@@ -35,7 +35,7 @@ describe("spawnSubagentDirect thread binding delivery", () => {
   beforeAll(async () => {
     ({ spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock: hoisted.callGatewayMock,
-      loadConfig: () => currentConfig,
+      getRuntimeConfig: () => currentConfig,
       updateSessionStoreMock: hoisted.updateSessionStoreMock,
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
       emitSessionLifecycleEventMock: hoisted.emitSessionLifecycleEventMock,
@@ -163,9 +163,8 @@ describe("spawnSubagentDirect thread binding delivery", () => {
       expect.objectContaining({
         requesterOrigin: {
           channel: "matrix",
-          accountId: "bot-alpha",
+          accountId: "bot-beta",
           to: `room:${boundRoom}`,
-          threadId: "$thread-root",
         },
         expectsCompletionMessage: false,
         spawnMode: "session",

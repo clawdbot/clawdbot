@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmbeddedCallGateway } from "./embedded-gateway-stub.js";
 
 const runtime = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({ agents: { list: [{ id: "main", default: true }] } })),
+  getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main", default: true }] } })),
   resolveSessionKeyFromResolveParams: vi.fn(),
   resolveSessionAgentId: vi.fn(() => "main"),
   loadSessionEntry: vi.fn(() => ({
@@ -31,7 +31,7 @@ vi.mock("./embedded-gateway-stub.runtime.js", () => runtime);
 
 describe("embedded gateway stub", () => {
   beforeEach(() => {
-    runtime.loadConfig.mockClear();
+    runtime.getRuntimeConfig.mockClear();
     runtime.resolveSessionKeyFromResolveParams.mockReset();
     runtime.projectRecentChatDisplayMessages.mockClear();
     runtime.readSessionMessages.mockClear();

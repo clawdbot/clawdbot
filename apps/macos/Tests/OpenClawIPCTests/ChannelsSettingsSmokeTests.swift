@@ -195,7 +195,7 @@ struct ChannelsSettingsSmokeTests {
         #expect(
             whatsappLoginWaitRequestTimeoutMs(
                 startedAt: startedAt,
-                timeoutMs: 1_000,
+                timeoutMs: 1000,
                 didRunFinalWait: &didRunFinalWait,
                 now: Date(timeInterval: 0.25, since: startedAt)) == 750)
         #expect(didRunFinalWait == false)
@@ -203,7 +203,7 @@ struct ChannelsSettingsSmokeTests {
         #expect(
             whatsappLoginWaitRequestTimeoutMs(
                 startedAt: startedAt,
-                timeoutMs: 1_000,
+                timeoutMs: 1000,
                 didRunFinalWait: &didRunFinalWait,
                 now: Date(timeInterval: 1.25, since: startedAt)) == 1)
         #expect(didRunFinalWait == true)
@@ -211,7 +211,7 @@ struct ChannelsSettingsSmokeTests {
         #expect(
             whatsappLoginWaitRequestTimeoutMs(
                 startedAt: startedAt,
-                timeoutMs: 1_000,
+                timeoutMs: 1000,
                 didRunFinalWait: &didRunFinalWait,
                 now: Date(timeInterval: 1.5, since: startedAt)) == nil)
     }

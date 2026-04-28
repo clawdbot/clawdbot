@@ -1,5 +1,6 @@
 import { z } from "openclaw/plugin-sdk/zod";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MatrixConfig, MatrixStreamingMode } from "../../types.js";
 import type { MatrixRoomInfo } from "./room-info.js";
 
 type DirectRoomTrackerOptions = {
@@ -227,12 +228,13 @@ vi.mock("../../resolve-targets.js", () => ({
 vi.mock("../../runtime.js", () => ({
   getMatrixRuntime: () => ({
     config: {
-      loadConfig: () => ({
+      current: () => ({
         channels: {
           matrix: hoisted.accountConfig,
         },
       }),
-      writeConfigFile: vi.fn(),
+      replaceConfigFile: vi.fn(),
+      mutateConfigFile: vi.fn(),
     },
     logging: {
       getChildLogger: () => hoisted.logger,
@@ -381,11 +383,12 @@ vi.mock("./startup.js", () => ({
   runMatrixStartupMaintenance: hoisted.runMatrixStartupMaintenance,
 }));
 
+let matrixMonitorTesting: typeof import("./index.js").__testing;
 let monitorMatrixProvider: typeof import("./index.js").monitorMatrixProvider;
 
 describe("monitorMatrixProvider", () => {
   beforeAll(async () => {
-    ({ monitorMatrixProvider } = await import("./index.js"));
+    ({ __testing: matrixMonitorTesting, monitorMatrixProvider } = await import("./index.js"));
   });
 
   async function flushUntil(predicate: () => boolean, message: string): Promise<void> {
@@ -464,6 +467,30 @@ describe("monitorMatrixProvider", () => {
     hoisted.setStatus.mockReset();
     Object.values(hoisted.logger).forEach((mock) => mock.mockReset());
   });
+
+  it.each([
+    [undefined, "off", false],
+    [false, "off", false],
+    [true, "partial", true],
+    ["off", "off", false],
+    ["partial", "partial", true],
+    ["quiet", "quiet", true],
+    [{}, "off", false],
+    [{ mode: "off" }, "off", false],
+    [{ mode: "partial" }, "partial", true],
+    [{ mode: "quiet" }, "quiet", true],
+    [{ mode: "partial", preview: { toolProgress: false } }, "partial", false],
+    [{ mode: "quiet", preview: { toolProgress: false } }, "quiet", false],
+    [{ mode: "off", preview: { toolProgress: true } }, "off", false],
+  ] satisfies Array<[MatrixConfig["streaming"], MatrixStreamingMode, boolean]>)(
+    "resolves streaming=%j to mode=%s and toolProgress=%s",
+    (streaming, expectedMode, expectedPreviewToolProgressEnabled) => {
+      expect(matrixMonitorTesting.resolveMatrixStreamingMode(streaming)).toBe(expectedMode);
+      expect(matrixMonitorTesting.resolveMatrixPreviewToolProgressEnabled(streaming)).toBe(
+        expectedPreviewToolProgressEnabled,
+      );
+    },
+  );
 
   it("returns immediately when the abort signal is already canceled", async () => {
     const abortController = new AbortController();

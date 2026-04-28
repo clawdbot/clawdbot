@@ -7,7 +7,7 @@ export {
 } from "openclaw/plugin-sdk/channel-status";
 export { createScopedChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
 export type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
-export type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 
 const DISCORD_CHANNEL_META = {
   id: "discord",

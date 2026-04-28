@@ -29,6 +29,7 @@ import {
   sendWithTokenRetry,
   type ReplyDispatcherDeps,
 } from "../messaging/reply-dispatcher.js";
+import { StreamingController, shouldUseOfficialC2cStream } from "../messaging/streaming-c2c.js";
 import { audioFileToSilkBase64 } from "../utils/audio.js";
 import type { InboundContext } from "./inbound-context.js";
 import type {
@@ -188,6 +189,36 @@ export async function dispatchOutbound(
     inbound.route.agentId,
   );
 
+  const targetType =
+    event.type === "c2c"
+      ? ("c2c" as const)
+      : event.type === "group"
+        ? ("group" as const)
+        : ("channel" as const);
+  const useOfficialC2cStream = shouldUseOfficialC2cStream(account, targetType);
+  let streamingController: StreamingController | null = null;
+  if (useOfficialC2cStream) {
+    streamingController = new StreamingController({
+      account,
+      userId: event.senderId,
+      replyToMsgId: event.messageId,
+      eventId: event.messageId,
+      logPrefix: `[qqbot:${account.accountId}:streaming]`,
+      log,
+      mediaContext: {
+        account,
+        event: {
+          type: event.type as "c2c" | "group" | "channel",
+          senderId: event.senderId,
+          messageId: event.messageId,
+          groupOpenid: event.groupOpenid,
+          channelId: event.channelId,
+        },
+        log,
+      },
+    });
+  }
+
   const dispatchPromise = runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg,
@@ -261,6 +292,34 @@ export async function dispatchOutbound(
           toolOnlyTimeoutId = null;
         }
 
+        if (streamingController && !streamingController.isTerminalPhase) {
+          try {
+            await streamingController.onDeliver(payload);
+          } catch (err) {
+            log?.error(
+              `Streaming deliver error: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+
+          const replyPreview = (payload.text ?? "").trim();
+          if (
+            event.type === "group" &&
+            (replyPreview === "NO_REPLY" || replyPreview === "[SKIP]")
+          ) {
+            log?.info(
+              `Model decided to skip group message (${replyPreview}) from ${event.senderId}`,
+            );
+            return;
+          }
+
+          if (streamingController.shouldFallbackToStatic) {
+            log?.info("Streaming API unavailable, falling back to static for this deliver");
+          } else {
+            recordOutbound();
+            return;
+          }
+        }
+
         const quoteRef = event.msgIdx;
         let quoteRefUsed = false;
         const consumeQuoteRef = (): string | undefined => {
@@ -331,6 +390,17 @@ export async function dispatchOutbound(
         recordOutbound();
       },
       onError: async (err: unknown) => {
+        if (streamingController && !streamingController.isTerminalPhase) {
+          try {
+            await streamingController.onError(err);
+          } catch (streamErr) {
+            const streamErrMsg = streamErr instanceof Error ? streamErr.message : String(streamErr);
+            log?.error(`Streaming onError failed: ${streamErrMsg}`);
+          }
+          if (!streamingController.shouldFallbackToStatic) {
+            return;
+          }
+        }
         const errMsg = err instanceof Error ? err.message : String(err);
         log?.error(`Dispatch error: ${errMsg}`);
         hasResponse = true;
@@ -340,7 +410,30 @@ export async function dispatchOutbound(
         }
       },
     },
-    replyOptions: { disableBlockStreaming: account.config.streaming?.mode === "off" },
+    replyOptions: {
+      disableBlockStreaming: useOfficialC2cStream
+        ? true
+        : (() => {
+            const s = account.config?.streaming;
+            if (s === false) {
+              return true;
+            }
+            return typeof s === "object" && s !== null && s.mode === "off";
+          })(),
+      ...(streamingController
+        ? {
+            onPartialReply: async (payload: { text?: string }) => {
+              try {
+                await streamingController.onPartialReply(payload);
+              } catch (partialErr) {
+                log?.error(
+                  `Streaming onPartialReply error: ${partialErr instanceof Error ? partialErr.message : String(partialErr)}`,
+                );
+              }
+            },
+          }
+        : {}),
+    },
   });
 
   try {
@@ -357,6 +450,21 @@ export async function dispatchOutbound(
     if (toolDeliverCount > 0 && !hasBlockResponse && !toolFallbackSent) {
       toolFallbackSent = true;
       await sendToolFallback();
+    }
+    if (streamingController && !streamingController.isTerminalPhase) {
+      try {
+        streamingController.markFullyComplete();
+        await streamingController.onIdle();
+      } catch (finalizeErr) {
+        log?.error(
+          `Streaming finalization error: ${finalizeErr instanceof Error ? finalizeErr.message : String(finalizeErr)}`,
+        );
+        try {
+          await streamingController.abortStreaming();
+        } catch {
+          /* ignore */
+        }
+      }
     }
   }
 }

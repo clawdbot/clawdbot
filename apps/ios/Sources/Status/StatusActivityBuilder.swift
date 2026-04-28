@@ -6,8 +6,8 @@ enum StatusActivityBuilder {
         appModel: NodeAppModel,
         voiceWakeEnabled: Bool,
         cameraHUDText: String?,
-        cameraHUDKind: NodeAppModel.CameraHUDKind?
-    ) -> StatusPill.Activity? {
+        cameraHUDKind: NodeAppModel.CameraHUDKind?) -> StatusPill.Activity?
+    {
         // Keep the top pill consistent across tabs (camera + voice wake + pairing states).
         if appModel.isBackgrounded {
             return StatusPill.Activity(
@@ -19,9 +19,9 @@ enum StatusActivityBuilder {
         if let gatewayProblem = appModel.lastGatewayProblem {
             switch gatewayProblem.kind {
             case .pairingRequired,
-                .pairingRoleUpgradeRequired,
-                .pairingScopeUpgradeRequired,
-                .pairingMetadataUpgradeRequired:
+                 .pairingRoleUpgradeRequired,
+                 .pairingScopeUpgradeRequired,
+                 .pairingMetadataUpgradeRequired:
                 return StatusPill.Activity(
                     title: "Approval pending",
                     systemImage: "person.crop.circle.badge.clock",
@@ -93,4 +93,3 @@ enum StatusActivityBuilder {
         return nil
     }
 }
-

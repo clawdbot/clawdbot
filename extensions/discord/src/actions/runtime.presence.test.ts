@@ -1,5 +1,5 @@
 import type { GatewayPlugin } from "@buape/carbon/gateway";
-import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { clearGateways, registerGateway } from "../monitor/gateway-registry.js";
 import type { ActionGate } from "../runtime-api.js";

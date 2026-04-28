@@ -85,6 +85,15 @@ export type MatrixExecApprovalConfig = {
 
 export type MatrixStreamingMode = "partial" | "quiet" | "off";
 
+export type MatrixStreamingConfig = {
+  /** Preview streaming mode for Matrix replies. Default: "off". */
+  mode?: MatrixStreamingMode;
+  preview?: {
+    /** Show tool/progress activity in the live draft preview. Default: true. */
+    toolProgress?: boolean;
+  };
+};
+
 export type MatrixNetworkConfig = {
   /** Dangerous opt-in for trusted private/internal Matrix homeservers. */
   dangerouslyAllowPrivateNetwork?: boolean;
@@ -200,11 +209,13 @@ export type MatrixConfig = {
    *   stay visible as separate progress messages. When combined with
    *   preview streaming, Matrix keeps a live draft for the current block and
    *   preserves completed blocks as separate messages.
+   * - `streaming.preview.toolProgress: false` keeps answer preview edits but
+   *   hides interim tool/progress lines.
    * - `true` maps to `"partial"`, `false` maps to `"off"` for backward
-   *   compatibility.
+   *   compatibility. Object form uses `streaming.mode`.
    * Default: `"off"`.
    */
-  streaming?: MatrixStreamingMode | boolean;
+  streaming?: MatrixStreamingMode | MatrixStreamingConfig | boolean;
 };
 
 export type CoreConfig = {

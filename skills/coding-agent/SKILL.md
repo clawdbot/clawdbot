@@ -6,7 +6,11 @@ metadata:
     "openclaw":
       {
         "emoji": "🧩",
-        "requires": { "anyBins": ["claude", "codex", "opencode", "pi"] },
+        "requires":
+          {
+            "anyBins": ["claude", "codex", "opencode", "pi"],
+            "config": ["skills.entries.coding-agent.enabled"],
+          },
         "install":
           [
             {

@@ -54,6 +54,7 @@ const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
 const recoverInstalledLaunchAgent = vi.hoisted(() => vi.fn());
 
 vi.mock("../../config/config.js", () => ({
+  getRuntimeConfig: () => loadConfig(),
   loadConfig: () => loadConfig(),
   readBestEffortConfig: async () => loadConfig(),
   resolveGatewayPort: (cfg?: unknown, env?: unknown) => resolveGatewayPort(cfg, env),

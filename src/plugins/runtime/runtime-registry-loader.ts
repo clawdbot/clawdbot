@@ -3,6 +3,7 @@ import { withActivatedPluginIds } from "../activation-context.js";
 import {
   resolveChannelPluginIds,
   resolveConfiguredChannelPluginIds,
+  resolveDiscoverableScopedChannelPluginIds,
 } from "../channel-plugin-ids.js";
 import { loadOpenClawPlugins, resolveRuntimePluginRegistry } from "../loader.js";
 import {
@@ -90,11 +91,30 @@ export function ensurePluginRegistryLoaded(options?: {
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
   onlyPluginIds?: string[];
+  onlyChannelIds?: string[];
 }): void {
   const scope = options?.scope ?? "all";
-  const requestedPluginIds = normalizePluginIdScope(options?.onlyPluginIds);
-  const scopedLoad = hasExplicitPluginIdScope(requestedPluginIds);
+  const requestedPluginIdsFromOptions = normalizePluginIdScope(options?.onlyPluginIds);
+  const requestedChannelIds = normalizePluginIdScope(options?.onlyChannelIds);
   const context = resolvePluginRuntimeLoadContext(options);
+  const requestedChannelOwnerPluginIds =
+    requestedChannelIds === undefined
+      ? undefined
+      : resolveDiscoverableScopedChannelPluginIds({
+          config: context.config,
+          activationSourceConfig: context.activationSourceConfig,
+          channelIds: requestedChannelIds,
+          workspaceDir: context.workspaceDir,
+          env: context.env,
+        });
+  const requestedPluginIds =
+    requestedChannelOwnerPluginIds === undefined
+      ? requestedPluginIdsFromOptions
+      : normalizePluginIdScope([
+          ...(requestedPluginIdsFromOptions ?? []),
+          ...requestedChannelOwnerPluginIds,
+        ]);
+  const scopedLoad = hasExplicitPluginIdScope(requestedPluginIds);
   const expectedChannelPluginIds = scopedLoad
     ? (requestedPluginIds ?? [])
     : scope === "configured-channels"
@@ -129,14 +149,18 @@ export function ensurePluginRegistryLoaded(options?: {
     return;
   }
   const scopedConfig =
-    !scopedLoad && scope === "configured-channels" && expectedChannelPluginIds.length > 0
+    scope === "configured-channels" &&
+    expectedChannelPluginIds.length > 0 &&
+    (!scopedLoad || requestedChannelOwnerPluginIds !== undefined)
       ? (withActivatedPluginIds({
           config: context.config,
           pluginIds: expectedChannelPluginIds,
         }) ?? context.config)
       : context.config;
   const scopedActivationSourceConfig =
-    !scopedLoad && scope === "configured-channels" && expectedChannelPluginIds.length > 0
+    scope === "configured-channels" &&
+    expectedChannelPluginIds.length > 0 &&
+    (!scopedLoad || requestedChannelOwnerPluginIds !== undefined)
       ? (withActivatedPluginIds({
           config: context.activationSourceConfig,
           pluginIds: expectedChannelPluginIds,

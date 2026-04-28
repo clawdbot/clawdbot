@@ -1,4 +1,3 @@
-import { loadConfig } from "../../config/config.js";
 import {
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
@@ -29,7 +28,7 @@ import { normalizeTrimmedString } from "./record-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const pushHandlers: GatewayRequestHandlers = {
-  "push.test": async ({ params, respond }) => {
+  "push.test": async ({ params, respond, context }) => {
     if (!validatePushTestParams(params)) {
       respondInvalidParams({
         respond,
@@ -83,7 +82,10 @@ export const pushHandlers: GatewayRequestHandlers = {
               });
             })()
           : await (async () => {
-              const relay = resolveApnsRelayConfigFromEnv(process.env, loadConfig().gateway);
+              const relay = resolveApnsRelayConfigFromEnv(
+                process.env,
+                context.getRuntimeConfig().gateway,
+              );
               if (!relay.ok) {
                 respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, relay.error));
                 return null;

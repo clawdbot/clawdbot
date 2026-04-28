@@ -64,6 +64,7 @@ export const resolveCronPayloadOutcomeMock = createMock();
 export const resolveCronDeliveryPlanMock = createMock();
 export const resolveDeliveryTargetMock = createMock();
 export const dispatchCronDeliveryMock = createMock();
+export const preflightCronModelProviderMock = createMock();
 export const isHeartbeatOnlyResponseMock = createMock();
 export const resolveHeartbeatAckMaxCharsMock = createMock();
 export const resolveSessionAuthProfileOverrideMock = createMock();
@@ -80,8 +81,8 @@ const hasNonzeroUsageMock = createMock();
 const ensureAgentWorkspaceMock = createMock();
 const normalizeThinkLevelMock = createMock();
 const normalizeVerboseLevelMock = createMock();
-const isThinkingLevelSupportedMock = createMock();
-const resolveSupportedThinkingLevelMock = createMock();
+export const isThinkingLevelSupportedMock = createMock();
+export const resolveSupportedThinkingLevelMock = createMock();
 const supportsXHighThinkingMock = createMock();
 const resolveSessionTranscriptPathMock = createMock();
 const setSessionRuntimeModelMock = createMock();
@@ -92,7 +93,7 @@ const mapHookExternalContentSourceMock = createMock();
 const isExternalHookSessionMock = createMock();
 const resolveHookExternalContentSourceMock = createMock();
 const getSkillsSnapshotVersionMock = createMock();
-const loadModelCatalogMock = createMock();
+export const loadModelCatalogMock = createMock();
 const getRemoteSkillEligibilityMock = createMock();
 
 vi.mock("./run.runtime.js", () => ({
@@ -220,6 +221,10 @@ vi.mock("./run-delivery.runtime.js", async () => {
   };
 });
 
+vi.mock("./model-preflight.runtime.js", () => ({
+  preflightCronModelProvider: preflightCronModelProviderMock,
+}));
+
 vi.mock("./helpers.js", () => ({
   isHeartbeatOnlyResponse: isHeartbeatOnlyResponseMock,
   pickLastDeliverablePayload: vi.fn().mockReturnValue(undefined),
@@ -293,12 +298,15 @@ function resetRunConfigMocks(): void {
   resolveAgentConfigMock.mockReturnValue(undefined);
   resolveEffectiveModelFallbacksMock.mockReset();
   resolveEffectiveModelFallbacksMock.mockImplementation(
-    ({ cfg, agentId, hasSessionModelOverride }) => {
+    ({ cfg, agentId, hasSessionModelOverride, modelOverrideSource }) => {
       const agentFallbacksOverride = resolveAgentModelFallbacksOverrideMock(cfg, agentId) as
         | string[]
         | undefined;
       if (!hasSessionModelOverride) {
         return agentFallbacksOverride;
+      }
+      if (modelOverrideSource !== "auto") {
+        return [];
       }
       const defaultFallbacks = resolveAgentModelFallbackValues(cfg?.agents?.defaults?.model);
       return agentFallbacksOverride ?? defaultFallbacks;
@@ -474,6 +482,8 @@ function resetRunOutcomeMocks(): void {
       deliveryPayloads,
     }),
   );
+  preflightCronModelProviderMock.mockReset();
+  preflightCronModelProviderMock.mockResolvedValue({ status: "available" });
   isHeartbeatOnlyResponseMock.mockReset();
   isHeartbeatOnlyResponseMock.mockReturnValue(false);
   resolveHeartbeatAckMaxCharsMock.mockReset();

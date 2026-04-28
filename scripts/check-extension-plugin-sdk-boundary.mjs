@@ -38,12 +38,6 @@ const baselinePathByMode = {
     "fixtures",
     "extension-plugin-sdk-internal-inventory.json",
   ),
-  "relative-outside-package": path.join(
-    repoRoot,
-    "test",
-    "fixtures",
-    "extension-relative-outside-package-inventory.json",
-  ),
 };
 
 let allInventoryByModePromise;
@@ -264,9 +258,7 @@ export async function readExpectedInventory(mode) {
     return JSON.parse(await fs.readFile(baselinePathByMode[mode], "utf8"));
   } catch (error) {
     if (
-      (mode === "plugin-sdk-internal" ||
-        mode === "src-outside-plugin-sdk" ||
-        mode === "relative-outside-package") &&
+      (mode === "plugin-sdk-internal" || mode === "src-outside-plugin-sdk") &&
       error &&
       typeof error === "object" &&
       "code" in error &&

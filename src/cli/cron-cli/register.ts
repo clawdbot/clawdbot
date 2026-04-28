@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
+import { applyParentDefaultHelpAction } from "../program/parent-default-help.js";
 import {
   registerCronAddCommand,
   registerCronListCommand,
@@ -24,4 +25,6 @@ export function registerCronCli(program: Command) {
   registerCronAddCommand(cron);
   registerCronSimpleCommands(cron);
   registerCronEditCommand(cron);
+
+  applyParentDefaultHelpAction(cron);
 }

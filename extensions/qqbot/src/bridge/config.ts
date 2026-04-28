@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { getPlatformAdapter } from "../engine/adapter/index.js";
 import {
   DEFAULT_ACCOUNT_ID as ENGINE_DEFAULT_ACCOUNT_ID,
@@ -37,9 +37,17 @@ export function resolveQQBotAccount(
   const base = resolveAccountBase(raw, accountId);
 
   const qqbot = cfg.channels?.qqbot as QQBotChannelConfig | undefined;
+  /**
+   * Legacy top-level account uses `channels.qqbot` as the base, but per-account
+   * fields (allowFrom, streaming, …) often live under `accounts.default`.
+   * Merge that slice so runtime sees `config.streaming` etc.
+   */
   const accountConfig: QQBotAccountConfig =
     base.accountId === DEFAULT_ACCOUNT_ID
-      ? (qqbot ?? {})
+      ? {
+          ...qqbot,
+          ...qqbot?.accounts?.[DEFAULT_ACCOUNT_ID],
+        }
       : (qqbot?.accounts?.[base.accountId] ?? {});
 
   let clientSecret = "";

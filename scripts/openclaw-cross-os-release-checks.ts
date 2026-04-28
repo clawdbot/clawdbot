@@ -4,6 +4,7 @@
 
 import { spawn } from "node:child_process";
 import {
+  appendFileSync,
   chmodSync,
   createWriteStream,
   existsSync,
@@ -19,6 +20,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve, win32 as pathWin32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertNoBundledRuntimeDepsStagingDebris } from "../src/infra/package-dist-inventory.ts";
+import { isLocalBuildMetadataDistPath } from "./lib/local-build-metadata-paths.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const PUBLISHED_INSTALLER_BASE_URL = "https://openclaw.ai";
@@ -153,7 +155,7 @@ export function resolveRunnerMatrix(params) {
     {
       os_id: "ubuntu",
       display_name: "Linux",
-      runner: pick(params.ubuntuRunner, params.varUbuntuRunner, "ubuntu-latest"),
+      runner: pick(params.ubuntuRunner, params.varUbuntuRunner, "blacksmith-8vcpu-ubuntu-2404"),
       artifact_name: "linux",
     },
     {
@@ -478,6 +480,9 @@ function isPackagedDistPath(relativePath) {
   if (relativePath === PACKAGE_DIST_INVENTORY_RELATIVE_PATH) {
     return false;
   }
+  if (isLocalBuildMetadataDistPath(relativePath)) {
+    return false;
+  }
   if (relativePath.endsWith(".map")) {
     return false;
   }
@@ -585,6 +590,14 @@ async function runFreshLane(params) {
       logPath: join(params.logsDir, "fresh-onboard.log"),
     });
 
+    logLanePhase(lane, "models-set");
+    await runModelsSet({
+      lane,
+      env,
+      providerConfig: params.providerConfig,
+      logPath: join(params.logsDir, "fresh-models-set.log"),
+    });
+
     logLanePhase(lane, "start-gateway");
     const gateway = await startGateway({
       lane,
@@ -604,14 +617,6 @@ async function runFreshLane(params) {
     await runDashboardSmoke({
       lane,
       logPath: join(params.logsDir, "fresh-dashboard.log"),
-    });
-
-    logLanePhase(lane, "models-set");
-    await runModelsSet({
-      lane,
-      env,
-      providerConfig: params.providerConfig,
-      logPath: join(params.logsDir, "fresh-models-set.log"),
     });
 
     logLanePhase(lane, "agent-turn");
@@ -720,6 +725,14 @@ async function runUpgradeLane(params) {
       logPath: join(params.logsDir, "upgrade-onboard.log"),
     });
 
+    logLanePhase(lane, "models-set");
+    await runModelsSet({
+      lane,
+      env,
+      providerConfig: params.providerConfig,
+      logPath: join(params.logsDir, "upgrade-models-set.log"),
+    });
+
     logLanePhase(lane, "start-gateway");
     const gateway = await startGateway({
       lane,
@@ -739,14 +752,6 @@ async function runUpgradeLane(params) {
     await runDashboardSmoke({
       lane,
       logPath: join(params.logsDir, "upgrade-dashboard.log"),
-    });
-
-    logLanePhase(lane, "models-set");
-    await runModelsSet({
-      lane,
-      env,
-      providerConfig: params.providerConfig,
-      logPath: join(params.logsDir, "upgrade-models-set.log"),
     });
 
     logLanePhase(lane, "agent-turn");
@@ -837,6 +842,15 @@ async function runInstallerFreshSuite(params) {
       });
     }
 
+    logLanePhase(lane, "models-set");
+    await runInstalledModelsSet({
+      cliPath: freshShell.cliPath,
+      env,
+      providerConfig: params.providerConfig,
+      cwd: lane.homeDir,
+      logPath: join(params.logsDir, "installer-fresh-models-set.log"),
+    });
+
     if (!useManagedGatewayAfterInstall) {
       // Keep the Windows installer lane validating Scheduled Task registration during
       // onboarding and lifecycle commands, but use a manual gateway for the runtime
@@ -882,15 +896,6 @@ async function runInstallerFreshSuite(params) {
     await runDashboardSmoke({
       lane,
       logPath: join(params.logsDir, "installer-fresh-dashboard.log"),
-    });
-
-    logLanePhase(lane, "models-set");
-    await runInstalledModelsSet({
-      cliPath: freshShell.cliPath,
-      env,
-      providerConfig: params.providerConfig,
-      cwd: lane.homeDir,
-      logPath: join(params.logsDir, "installer-fresh-models-set.log"),
     });
 
     logLanePhase(lane, "agent-turn");
@@ -1023,6 +1028,15 @@ async function runDevUpdateSuite(params) {
       logPath: join(params.logsDir, "dev-update-onboard.log"),
     });
 
+    logLanePhase(lane, "models-set");
+    await runInstalledModelsSet({
+      cliPath: verifiedShell.cliPath,
+      env,
+      providerConfig: params.providerConfig,
+      cwd: lane.homeDir,
+      logPath: join(params.logsDir, "dev-update-models-set.log"),
+    });
+
     if (!useManagedGatewayAfterDevUpdate) {
       logLanePhase(lane, "gateway-start");
       const gateway = await startManualGatewayFromInstalledCli({
@@ -1054,15 +1068,6 @@ async function runDevUpdateSuite(params) {
     await runDashboardSmoke({
       lane,
       logPath: join(params.logsDir, "dev-update-dashboard.log"),
-    });
-
-    logLanePhase(lane, "models-set");
-    await runInstalledModelsSet({
-      cliPath: verifiedShell.cliPath,
-      env,
-      providerConfig: params.providerConfig,
-      cwd: lane.homeDir,
-      logPath: join(params.logsDir, "dev-update-models-set.log"),
     });
 
     logLanePhase(lane, "agent-turn");
@@ -1559,29 +1564,12 @@ async function ensureDevUpdateGitInstall(params) {
 
 async function runOnboardWithInstalledCli(params) {
   await withAllocatedGatewayPort(params.lane, async () => {
-    const args = [
-      "onboard",
-      "--non-interactive",
-      "--mode",
-      "local",
-      "--auth-choice",
-      params.providerConfig.authChoice,
-      "--secret-input-mode",
-      "ref",
-      "--gateway-port",
-      String(params.lane.gatewayPort),
-      "--gateway-bind",
-      "loopback",
-      "--skip-skills",
-      "--accept-risk",
-      "--json",
-    ];
-    if (params.installDaemon) {
-      args.push("--install-daemon");
-    }
-    if (!params.installDaemon || shouldSkipInstallerDaemonHealthCheck()) {
-      args.push("--skip-health");
-    }
+    const args = buildReleaseOnboardArgs({
+      authChoice: params.providerConfig.authChoice,
+      gatewayPort: params.lane.gatewayPort,
+      installDaemon: params.installDaemon,
+      skipHealth: !params.installDaemon || shouldSkipInstallerDaemonHealthCheck(),
+    });
     await runInstalledCli({
       cliPath: params.cliPath,
       args,
@@ -1591,6 +1579,34 @@ async function runOnboardWithInstalledCli(params) {
       timeoutMs: 10 * 60 * 1000,
     });
   });
+}
+
+export function buildReleaseOnboardArgs(params) {
+  const args = [
+    "onboard",
+    "--non-interactive",
+    "--mode",
+    "local",
+    "--auth-choice",
+    params.authChoice,
+    "--secret-input-mode",
+    "ref",
+    "--gateway-port",
+    String(params.gatewayPort),
+    "--gateway-bind",
+    "loopback",
+    "--skip-skills",
+    "--skip-bootstrap",
+    "--accept-risk",
+    "--json",
+  ];
+  if (params.installDaemon) {
+    args.push("--install-daemon");
+  }
+  if (params.skipHealth) {
+    args.push("--skip-health");
+  }
+  return args;
 }
 
 async function startManualGatewayFromInstalledCli(params) {
@@ -2229,7 +2245,7 @@ export function shouldRunWindowsInstalledBrowserOverrideImportSmoke(platform = p
 }
 
 export function buildInstalledBrowserOverrideImportProbeScript(
-  runtimeModuleSpecifier = "openclaw/plugin-sdk/browser-node-runtime",
+  runtimeModuleSpecifier = "openclaw/plugin-sdk/plugin-runtime",
 ) {
   return `
 import { existsSync } from "node:fs";
@@ -2298,7 +2314,7 @@ async function runInstalledBrowserOverrideImportSmoke(params) {
   const startedPath = join(probeDir, "started.txt");
   const stoppedPath = join(probeDir, "stopped.txt");
   const packageRoot = installedPackageRoot(params.prefixDir);
-  const runtimeModulePath = join(packageRoot, "dist", "plugin-sdk", "browser-node-runtime.js");
+  const runtimeModulePath = join(packageRoot, "dist", "plugin-sdk", "plugin-runtime.js");
   if (!existsSync(runtimeModulePath)) {
     throw new Error(`Installed browser runtime module not found: ${runtimeModulePath}`);
   }
@@ -2314,7 +2330,7 @@ async function runInstalledBrowserOverrideImportSmoke(params) {
     cwd: packageRoot,
     env: {
       ...params.env,
-      OPENCLAW_BROWSER_CONTROL_MODULE: overridePath,
+      OPENCLAW_BROWSER_CONTROL_MODULE: pathToFileURL(overridePath).href,
       OPENCLAW_BROWSER_OVERRIDE_STARTED_PATH: startedPath,
       OPENCLAW_BROWSER_OVERRIDE_STOPPED_PATH: stoppedPath,
     },
@@ -2360,24 +2376,11 @@ async function runOnboard(params) {
     await runOpenClaw({
       lane: params.lane,
       env: params.env,
-      args: [
-        "onboard",
-        "--non-interactive",
-        "--mode",
-        "local",
-        "--auth-choice",
-        params.providerConfig.authChoice,
-        "--secret-input-mode",
-        "ref",
-        "--gateway-port",
-        String(params.lane.gatewayPort),
-        "--gateway-bind",
-        "loopback",
-        "--skip-skills",
-        "--skip-health",
-        "--accept-risk",
-        "--json",
-      ],
+      args: buildReleaseOnboardArgs({
+        authChoice: params.providerConfig.authChoice,
+        gatewayPort: params.lane.gatewayPort,
+        skipHealth: true,
+      }),
       logPath: params.logPath,
       timeoutMs: 10 * 60 * 1000,
     });
@@ -2554,27 +2557,51 @@ async function runModelsSet(params) {
 }
 
 async function runAgentTurn(params) {
-  const sessionId = `cross-os-release-check-${params.label}-${Date.now()}`;
-  const result = await runOpenClaw({
-    lane: params.lane,
-    env: params.env,
-    args: [
-      "agent",
-      "--agent",
-      "main",
-      "--session-id",
-      sessionId,
-      "--message",
-      "Reply with exact ASCII text OK only.",
-      "--json",
-    ],
-    logPath: params.logPath,
-    timeoutMs: 10 * 60 * 1000,
-  });
-  if (!agentOutputHasExpectedOkMarker(result.stdout, { logPath: params.logPath })) {
-    throw new Error("Agent output did not contain the expected OK marker.");
+  let lastError;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const sessionId = `cross-os-release-check-${params.label}-${Date.now()}-${attempt}`;
+    try {
+      const result = await runOpenClaw({
+        lane: params.lane,
+        env: params.env,
+        args: [
+          "agent",
+          "--agent",
+          "main",
+          "--session-id",
+          sessionId,
+          "--message",
+          "Reply with exact ASCII text OK only.",
+          "--json",
+        ],
+        logPath: params.logPath,
+        timeoutMs: 10 * 60 * 1000,
+      });
+      if (!agentOutputHasExpectedOkMarker(result.stdout, { logPath: params.logPath })) {
+        throw new Error("Agent output did not contain the expected OK marker.");
+      }
+      return result;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= 2 || !shouldRetryCrossOsAgentTurnError(error)) {
+        throw error;
+      }
+      appendFileSync(
+        params.logPath,
+        `\n[release-checks] retrying agent turn after bundled runtime deps staging failure: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      );
+    }
   }
-  return result;
+  throw lastError;
+}
+
+export function shouldRetryCrossOsAgentTurnError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /failed to (?:install|stage) bundled runtime deps|failed to stage bundled runtime deps after/u.test(
+    message,
+  );
 }
 
 export function agentOutputHasExpectedOkMarker(stdout, options = {}) {

@@ -83,4 +83,5 @@ export type GoogleMeetSession = {
 
 export type GoogleMeetJoinResult = {
   session: GoogleMeetSession;
+  spoken?: boolean;
 };

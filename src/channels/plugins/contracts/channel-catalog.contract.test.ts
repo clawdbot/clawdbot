@@ -2,7 +2,7 @@ import {
   describeBundledMetadataOnlyChannelCatalogContract,
   describeChannelCatalogEntryContract,
   describeOfficialFallbackChannelCatalogContract,
-} from "../../../../test/helpers/channels/channel-catalog-contract.js";
+} from "./test-helpers/channel-catalog-contract.js";
 
 describeChannelCatalogEntryContract({
   channelId: "msteams",
@@ -41,4 +41,10 @@ describeChannelCatalogEntryContract({
   channelId: "wecom",
   npmSpec: "@wecom/wecom-openclaw-plugin@2026.4.23",
   alias: "wework",
+});
+
+describeChannelCatalogEntryContract({
+  channelId: "openclaw-plugin-yuanbao",
+  npmSpec: "openclaw-plugin-yuanbao@2.11.0",
+  alias: "yb",
 });

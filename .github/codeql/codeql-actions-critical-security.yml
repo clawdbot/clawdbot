@@ -1,0 +1,8 @@
+name: openclaw-codeql-actions-critical-security
+
+paths:
+  - .github/actions
+  - .github/workflows
+
+paths-ignore:
+  - .github/workflows/stale.yml

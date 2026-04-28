@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   onAgentEvent: vi.fn(() => noop),
   getAgentRunContext: vi.fn(() => undefined),
-  loadConfig: vi.fn(() => ({
+  getRuntimeConfig: vi.fn(() => ({
     agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
     session: { mainKey: "main", scope: "per-sender" as const },
   })),
@@ -51,7 +51,7 @@ vi.mock("../infra/agent-events.js", () => ({
 
 vi.mock("../config/config.js", () => {
   return {
-    loadConfig: mocks.loadConfig,
+    getRuntimeConfig: mocks.getRuntimeConfig,
   };
 });
 
@@ -118,7 +118,7 @@ describe("subagent registry seam flow", () => {
     vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
     mocks.onAgentEvent.mockReturnValue(noop);
     mocks.getAgentRunContext.mockReturnValue(undefined);
-    mocks.loadConfig.mockReturnValue({
+    mocks.getRuntimeConfig.mockReturnValue({
       agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
       session: { mainKey: "main", scope: "per-sender" as const },
     });
@@ -197,6 +197,54 @@ describe("subagent registry seam flow", () => {
       .find((entry) => entry.runId === "run-interrupted-wait");
     expect(run?.endedAt).toBeUndefined();
     expect(run?.outcome).toBeUndefined();
+  });
+
+  it("keeps sessions_yield-ended subagent runs paused instead of announcing no output", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return {
+          status: "ok",
+          startedAt: 111,
+          endedAt: 222,
+          stopReason: "end_turn",
+          livenessState: "paused",
+          yielded: true,
+        };
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-yield-paused",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "wait for child continuation",
+      cleanup: "keep",
+    });
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-yield-paused");
+      expect(run?.endedAt).toBe(222);
+      expect(run?.pauseReason).toBe("sessions_yield");
+    });
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    expect(mod.countPendingDescendantRuns("agent:main:main")).toBe(1);
+
+    expect(
+      mod.replaceSubagentRunAfterSteer({
+        previousRunId: "run-yield-paused",
+        nextRunId: "run-yield-continuation",
+      }),
+    ).toBe(true);
+    const replacement = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-yield-continuation");
+    expect(replacement?.runId).toBe("run-yield-continuation");
+    expect(replacement?.pauseReason).toBeUndefined();
+    expect(replacement?.endedAt).toBeUndefined();
   });
 
   it("reconciles stale active runs from persisted terminal session state during sweep", async () => {

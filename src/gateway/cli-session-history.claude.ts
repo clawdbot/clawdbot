@@ -333,3 +333,112 @@ export function readClaudeCliSessionMessages(params: {
   }
   return coalesceClaudeCliToolMessages(messages);
 }
+
+type ClaudeCliCompactBoundaryEntry = {
+  type: "system";
+  subtype?: unknown;
+  content?: unknown;
+  timestamp?: unknown;
+  compactMetadata?: {
+    trigger?: unknown;
+    preTokens?: unknown;
+  };
+};
+
+type ClaudeCliSummaryEntry = {
+  type: "summary";
+  summary?: unknown;
+  leafUuid?: unknown;
+  timestamp?: unknown;
+};
+
+export type ClaudeCliFallbackSeed = {
+  summaryText?: string;
+  recentTurns: TranscriptLikeMessage[];
+};
+
+function isCompactBoundary(entry: ClaudeCliProjectEntry): boolean {
+  if (entry.type !== "system") {
+    return false;
+  }
+  const subtype = (entry as ClaudeCliCompactBoundaryEntry).subtype;
+  return typeof subtype === "string" && subtype === "compact_boundary";
+}
+
+function extractCompactBoundaryFallbackText(entry: ClaudeCliProjectEntry): string | undefined {
+  const content = (entry as ClaudeCliCompactBoundaryEntry).content;
+  return typeof content === "string" && content.trim() ? content.trim() : undefined;
+}
+
+function extractSummaryText(entry: ClaudeCliProjectEntry): string | undefined {
+  if (entry.type !== "summary") {
+    return undefined;
+  }
+  const summary = (entry as ClaudeCliSummaryEntry).summary;
+  return typeof summary === "string" && summary.trim() ? summary.trim() : undefined;
+}
+
+export function readClaudeCliFallbackSeed(params: {
+  cliSessionId: string;
+  homeDir?: string;
+}): ClaudeCliFallbackSeed | undefined {
+  const filePath = resolveClaudeCliSessionFilePath(params);
+  if (!filePath) {
+    return undefined;
+  }
+
+  let content: string;
+  try {
+    content = fs.readFileSync(filePath, "utf-8");
+  } catch {
+    return undefined;
+  }
+
+  let pendingSummary: string | undefined;
+  let lastSummary: string | undefined;
+  let lastBoundaryFallback: string | undefined;
+  let windowedTurns: TranscriptLikeMessage[] = [];
+  const toolNameRegistry: ToolNameRegistry = new Map();
+
+  for (const line of content.split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+    let parsed: ClaudeCliProjectEntry;
+    try {
+      parsed = JSON.parse(line) as ClaudeCliProjectEntry;
+    } catch {
+      continue;
+    }
+
+    const explicitSummary = extractSummaryText(parsed);
+    if (explicitSummary) {
+      pendingSummary = explicitSummary;
+      continue;
+    }
+
+    if (isCompactBoundary(parsed)) {
+      lastSummary = pendingSummary;
+      pendingSummary = undefined;
+      lastBoundaryFallback = extractCompactBoundaryFallbackText(parsed) ?? lastBoundaryFallback;
+      windowedTurns = [];
+      toolNameRegistry.clear();
+      continue;
+    }
+
+    const message = parseClaudeCliHistoryEntry(parsed, params.cliSessionId, toolNameRegistry);
+    if (message) {
+      windowedTurns.push(message);
+    }
+  }
+
+  const recentTurns = coalesceClaudeCliToolMessages(windowedTurns);
+  const resolvedSummaryText = lastSummary ?? pendingSummary ?? lastBoundaryFallback;
+  if (!resolvedSummaryText && recentTurns.length === 0) {
+    return undefined;
+  }
+  return {
+    ...(resolvedSummaryText ? { summaryText: resolvedSummaryText } : {}),
+    recentTurns,
+  };
+}

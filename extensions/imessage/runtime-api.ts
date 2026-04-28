@@ -1,4 +1,4 @@
-import type { OpenClawConfig as RuntimeApiOpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig as RuntimeApiOpenClawConfig } from "openclaw/plugin-sdk/config-types";
 
 export {
   DEFAULT_ACCOUNT_ID,

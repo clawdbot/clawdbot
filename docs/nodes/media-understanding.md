@@ -61,6 +61,7 @@ If understanding fails or is disabled, **the reply flow continues** with the ori
       - `attachments` policy (`mode`, `maxAttachments`, `prefer`)
       - `scope` (optional gating by channel/chatType/session key)
     - `tools.media.concurrency`: max concurrent capability runs (default **2**).
+
   </Accordion>
 </AccordionGroup>
 
@@ -157,6 +158,7 @@ Recommended defaults:
     - If a Gateway/WebChat primary model is text-only, image attachments are preserved as offloaded `media://inbound/*` refs so the image/PDF tools or configured image model can still inspect them instead of losing the attachment.
     - Explicit `openclaw infer image describe --model <provider/model>` requests are different: they run that image-capable provider/model directly, including Ollama refs such as `ollama/qwen2.5vl:7b`.
     - If `<capability>.enabled: true` but no models are configured, OpenClaw tries the **active reply model** when its provider supports the capability.
+
   </Accordion>
 </AccordionGroup>
 
@@ -220,8 +222,10 @@ When provider-based **audio** and **video** media understanding is enabled, Open
 
 - `HTTPS_PROXY`
 - `HTTP_PROXY`
+- `ALL_PROXY`
 - `https_proxy`
 - `http_proxy`
+- `all_proxy`
 
 If no proxy env vars are set, media understanding uses direct egress. If the proxy value is malformed, OpenClaw logs a warning and falls back to direct fetch.
 
@@ -257,7 +261,8 @@ For CLI entries, **set `capabilities` explicitly** to avoid surprising matches. 
 
 - `minimax` and `minimax-portal` image understanding comes from the plugin-owned `MiniMax-VL-01` media provider.
 - The bundled MiniMax text catalog still starts text-only; explicit `models.providers.minimax` entries materialize image-capable M2.7 chat refs.
-  </Note>
+
+</Note>
 
 ## Model selection guidance
 
@@ -290,6 +295,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
     - This attachment-extraction path intentionally omits the long `SECURITY NOTICE:` banner to avoid bloating the media prompt; the boundary markers and metadata still remain.
     - If a file has no extractable text, OpenClaw injects `[No extractable text]`.
     - If a PDF falls back to rendered page images in this path, the media prompt keeps the placeholder `[PDF content rendered to images; images not forwarded to model]` because this attachment-extraction step forwards text blocks, not the rendered PDF images.
+
   </Accordion>
 </AccordionGroup>
 

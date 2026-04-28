@@ -34,6 +34,7 @@ import {
   markTaskTerminalById,
   markTaskTerminalByRunId,
   recordTaskProgressByRunId,
+  reloadTaskRegistryFromStore,
   resetTaskRegistryControlRuntimeForTests,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
@@ -1831,6 +1832,75 @@ describe("task-registry", () => {
         startedAt: 100,
         lastEventAt: 150,
       });
+    });
+  });
+
+  it("reloads from durable state instead of preserving stale in-memory tasks", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const now = Date.now();
+      let durableTasks = new Map<string, ReturnType<typeof createTaskRecord>>();
+      configureTaskRegistryRuntime({
+        store: {
+          loadSnapshot: () => ({
+            tasks: durableTasks,
+            deliveryStates: new Map(),
+          }),
+          saveSnapshot: () => {},
+          upsertTask: () => {},
+          upsertTaskWithDeliveryState: () => {},
+        },
+      });
+
+      const staleTask = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterSessionKey: "agent:main:main",
+        runId: "run-stale-memory",
+        task: "Stale in-memory task",
+        status: "running",
+        deliveryStatus: "pending",
+        notifyPolicy: "silent",
+      });
+      setTaskTimingById({
+        taskId: staleTask.taskId,
+        startedAt: now - 60_000,
+        lastEventAt: now - 60_000,
+      });
+      expect(getTaskRegistrySummary().active).toBe(1);
+
+      durableTasks = new Map([
+        [
+          "task-durable",
+          {
+            taskId: "task-durable",
+            runtime: "cli",
+            requesterSessionKey: "agent:main:main",
+            ownerKey: "agent:main:main",
+            scopeKind: "session",
+            runId: "run-durable",
+            task: "Durable terminal task",
+            status: "cancelled",
+            deliveryStatus: "not_applicable",
+            notifyPolicy: "silent",
+            createdAt: now - 30_000,
+            startedAt: now - 30_000,
+            endedAt: now - 10_000,
+            lastEventAt: now - 10_000,
+          },
+        ],
+      ]);
+
+      reloadTaskRegistryFromStore();
+
+      expect(findTaskByRunId("run-stale-memory")).toBeUndefined();
+      expect(findTaskByRunId("run-durable")).toMatchObject({
+        taskId: "task-durable",
+        status: "cancelled",
+      });
+      expect(getTaskRegistrySummary().active).toBe(0);
     });
   });
 

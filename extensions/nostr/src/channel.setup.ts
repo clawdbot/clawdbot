@@ -1,5 +1,5 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { patchTopLevelChannelConfigSection } from "openclaw/plugin-sdk/setup";
 import {
   createDelegatedSetupWizardProxy,

@@ -45,6 +45,38 @@ describe("Codex app-server config", () => {
     );
   });
 
+  it("ignores app-server environment clearing for websocket transports", () => {
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {
+        appServer: {
+          transport: "websocket",
+          url: "ws://127.0.0.1:39175",
+          clearEnv: ["OPENAI_API_KEY"],
+        },
+      },
+      env: {},
+    });
+
+    expect(runtime.start).not.toHaveProperty("clearEnv");
+  });
+
+  it("normalizes app-server environment variables to clear", () => {
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {
+        appServer: {
+          clearEnv: [" OPENAI_API_KEY ", "", "  "],
+        },
+      },
+      env: {},
+    });
+
+    expect(runtime.start).toEqual(
+      expect.objectContaining({
+        clearEnv: ["OPENAI_API_KEY"],
+      }),
+    );
+  });
+
   it("drops invalid legacy service tiers without discarding the rest of the config", () => {
     const runtime = resolveCodexAppServerRuntimeOptions({
       pluginConfig: {
@@ -279,8 +311,48 @@ describe("Codex app-server config", () => {
     });
 
     expect(first).not.toEqual(second);
+    expect(
+      codexAppServerStartOptionsKey({
+        transport: "websocket",
+        command: "codex",
+        args: [],
+        url: "ws://127.0.0.1:39175",
+        authToken: "tok_first",
+        headers: {},
+      }),
+    ).toEqual(first);
     expect(first).not.toContain("tok_first");
     expect(second).not.toContain("tok_second");
+  });
+
+  it("derives distinct shared-client keys for distinct env values without exposing them", () => {
+    const first = codexAppServerStartOptionsKey({
+      transport: "stdio",
+      command: "codex",
+      args: ["app-server"],
+      headers: {},
+      env: { OPENAI_API_KEY: "sk-first" },
+    });
+    const second = codexAppServerStartOptionsKey({
+      transport: "stdio",
+      command: "codex",
+      args: ["app-server"],
+      headers: {},
+      env: { OPENAI_API_KEY: "sk-second" },
+    });
+
+    expect(first).not.toEqual(second);
+    expect(
+      codexAppServerStartOptionsKey({
+        transport: "stdio",
+        command: "codex",
+        args: ["app-server"],
+        headers: {},
+        env: { OPENAI_API_KEY: "sk-first" },
+      }),
+    ).toEqual(first);
+    expect(first).not.toContain("sk-first");
+    expect(second).not.toContain("sk-second");
   });
 
   it("keeps runtime config keys aligned with manifest schema and UI hints", async () => {

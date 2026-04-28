@@ -180,6 +180,7 @@ GLM models are available as `zai/<model>` (example: `zai/glm-5`). The default bu
     - Z.AI uses Bearer auth with your API key.
     - The `zai-api-key` onboarding choice auto-detects the matching Z.AI endpoint from the key prefix.
     - Use the explicit regional choices (`zai-coding-global`, `zai-coding-cn`, `zai-global`, `zai-cn`) when you want to force a specific API surface.
+
   </Accordion>
 </AccordionGroup>
 

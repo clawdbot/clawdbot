@@ -1,5 +1,8 @@
 {
   "id": "feishu",
+  "activation": {
+    "onStartup": false
+  },
   "channels": ["feishu"],
   "channelEnvVars": {
     "feishu": [

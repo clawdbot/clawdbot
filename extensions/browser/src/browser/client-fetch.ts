@@ -2,7 +2,7 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { formatCliCommand } from "../cli/command-format.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
@@ -19,7 +19,7 @@ class BrowserServiceError extends Error {
 }
 
 type LoopbackBrowserAuthDeps = {
-  loadConfig: typeof loadConfig;
+  getRuntimeConfig: typeof getRuntimeConfig;
   resolveBrowserControlAuth: typeof resolveBrowserControlAuth;
   getBridgeAuthForPort: typeof getBridgeAuthForPort;
 };
@@ -50,7 +50,7 @@ function withLoopbackBrowserAuthImpl(
   }
 
   try {
-    const cfg = deps.loadConfig();
+    const cfg = deps.getRuntimeConfig();
     const auth = deps.resolveBrowserControlAuth(cfg);
     if (auth.token) {
       headers.set("Authorization", `Bearer ${auth.token}`);
@@ -92,7 +92,7 @@ function withLoopbackBrowserAuth(
   init: (RequestInit & { timeoutMs?: number }) | undefined,
 ): RequestInit & { timeoutMs?: number } {
   return withLoopbackBrowserAuthImpl(url, init, {
-    loadConfig,
+    getRuntimeConfig,
     resolveBrowserControlAuth,
     getBridgeAuthForPort,
   });
@@ -113,7 +113,7 @@ function resolveDispatcherBrowserControlOwnership(url: string): BrowserControlOw
     return "unknown";
   }
   try {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const resolved = resolveBrowserConfig(cfg?.browser, cfg);
     const parsed = new URL(url, "http://localhost");
     const requestedProfile = parsed.searchParams.get("profile")?.trim();

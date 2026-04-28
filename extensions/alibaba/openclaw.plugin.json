@@ -1,5 +1,8 @@
 {
   "id": "alibaba",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providerAuthEnvVars": {
     "alibaba": ["MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY", "QWEN_API_KEY"]

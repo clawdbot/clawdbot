@@ -9,7 +9,7 @@ import { resolveBundledPluginFile } from "./test-helpers/bundled-plugin-roots.js
 
 const require = createRequire(import.meta.url);
 const tsdownModuleUrl = pathToFileURL(require.resolve("tsdown")).href;
-const bundledRepresentativeEntrypoints = ["matrix-runtime-heavy"] as const;
+const bundledRepresentativeEntrypoints = ["browser-config"] as const;
 const bundleTempRootTracker = createSuiteTempRootTracker(
   "openclaw-plugin-sdk-build",
   path.join(process.cwd(), "node_modules", ".cache"),

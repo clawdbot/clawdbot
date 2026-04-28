@@ -41,7 +41,7 @@ export function parseDiscordTarget(
     }
     throw new Error(
       options.ambiguousMessage ??
-        `Ambiguous Discord recipient "${trimmed}". Use "user:${trimmed}" for DMs or "channel:${trimmed}" for channel messages.`,
+        `Ambiguous Discord recipient "${trimmed}". For DMs use "user:${trimmed}" or "<@${trimmed}>"; for channels use "channel:${trimmed}".`,
     );
   }
   return buildMessagingTarget("channel", trimmed, trimmed);

@@ -8,7 +8,7 @@ type EmbeddedCallGateway = <T = Record<string, unknown>>(opts: CallGatewayOption
 
 interface EmbeddedGatewayRuntime {
   resolveSessionAgentId: (opts: { sessionKey: string; config: OpenClawConfig }) => string;
-  loadConfig: () => OpenClawConfig;
+  getRuntimeConfig: () => OpenClawConfig;
   augmentChatHistoryWithCliSessionImports: (opts: {
     entry: unknown;
     provider: string | undefined;
@@ -68,7 +68,7 @@ async function getRuntime(): Promise<EmbeddedGatewayRuntime> {
 
 async function handleSessionsList(params: Record<string, unknown>) {
   const rt = await getRuntime();
-  const cfg = rt.loadConfig();
+  const cfg = rt.getRuntimeConfig();
   const { storePath, store } = rt.loadCombinedSessionStoreForGateway(cfg);
   return rt.listSessionsFromStore({
     cfg,
@@ -80,7 +80,7 @@ async function handleSessionsList(params: Record<string, unknown>) {
 
 async function handleSessionsResolve(params: Record<string, unknown>) {
   const rt = await getRuntime();
-  const cfg = rt.loadConfig();
+  const cfg = rt.getRuntimeConfig();
   const resolved = await rt.resolveSessionKeyFromResolveParams({
     cfg,
     p: params as SessionsResolveParams,

@@ -1,4 +1,10 @@
-const OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE = "openclaw.runtime-context";
+import {
+  OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
+  OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+  OPENCLAW_RUNTIME_EVENT_HEADER,
+} from "../../internal-runtime-context.js";
+export { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE };
 
 type RuntimeContextSession = {
   sendCustomMessage: (
@@ -65,12 +71,16 @@ function buildRuntimeContextMessageContent(params: {
 }): string {
   return [
     params.kind === "runtime-event"
-      ? "OpenClaw runtime event."
-      : "OpenClaw runtime context for the immediately preceding user message.",
-    "This context is runtime-generated, not user-authored. Keep internal details private.",
+      ? OPENCLAW_RUNTIME_EVENT_HEADER
+      : OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
+    OPENCLAW_RUNTIME_CONTEXT_NOTICE,
     "",
     params.runtimeContext,
   ].join("\n");
+}
+
+export function buildRuntimeContextSystemContext(runtimeContext: string): string {
+  return buildRuntimeContextMessageContent({ runtimeContext, kind: "next-turn" });
 }
 
 export function buildRuntimeEventSystemContext(runtimeContext: string): string {
@@ -88,7 +98,7 @@ export async function queueRuntimeContextForNextTurn(params: {
   await params.session.sendCustomMessage(
     {
       customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
-      content: buildRuntimeContextMessageContent({ runtimeContext, kind: "next-turn" }),
+      content: runtimeContext,
       display: false,
       details: { source: "openclaw-runtime-context" },
     },

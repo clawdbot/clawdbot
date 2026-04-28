@@ -1,4 +1,4 @@
-import { importFreshModule } from "../../../test/helpers/import-fresh.js";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 
 type GetReplyModule = typeof import("./get-reply.js");
 type ReplyModule = typeof import("../reply.js");

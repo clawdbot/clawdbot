@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   assembleHarnessContextEngine,
@@ -29,6 +28,7 @@ import {
   registerNativeHookRelay,
   setActiveEmbeddedRun,
   supportsModelTools,
+  type AgentMessage,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
   type NativeHookRelayEvent,

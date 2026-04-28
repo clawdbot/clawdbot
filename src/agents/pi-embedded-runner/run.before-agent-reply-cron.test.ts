@@ -82,4 +82,22 @@ describe("runEmbeddedPiAgent cron before_agent_reply seam", () => {
     expect(mockedGlobalHookRunner.runBeforeAgentReply).not.toHaveBeenCalled();
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });
+
+  it("forwards one-shot model-run flags into the embedded attempt", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      trigger: "user",
+      modelRun: true,
+      promptMode: "none",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelRun: true,
+        promptMode: "none",
+      }),
+    );
+  });
 });

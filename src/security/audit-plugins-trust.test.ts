@@ -19,6 +19,16 @@ const mockChannelPlugins = vi.hoisted(() => [
     },
   },
 ]);
+const mockPluginRegistryIds = vi.hoisted(() => [
+  "active-memory",
+  "anthropic",
+  "brave",
+  "discord",
+  "google",
+  "lmstudio",
+  "memory-core",
+  "ollama",
+]);
 
 const readInstalledPackageVersionMock = vi.hoisted(() =>
   vi.fn(async (dir: string) => {
@@ -87,7 +97,7 @@ vi.mock("../plugins/plugin-registry.js", () => ({
   createPluginRegistryIdNormalizer: () => (id: string) => id,
   loadPluginRegistrySnapshot: () => ({
     diagnostics: [],
-    plugins: [{ pluginId: "discord" }],
+    plugins: mockPluginRegistryIds.map((pluginId) => ({ pluginId })),
   }),
 }));
 
@@ -348,6 +358,35 @@ describe("security audit install metadata findings", () => {
     expect(phantomFinding?.severity).toBe("warn");
     expect(phantomFinding?.detail).toContain("ghost-plugin-xyz");
     expect(phantomFinding?.detail).not.toContain("installed-plugin");
+  });
+
+  it("does not report bundled provider and utility plugins as phantom allowlist entries", async () => {
+    const stateDir = await makeTmpDir("phantom-bundled-providers");
+    await fs.mkdir(path.join(stateDir, "extensions", "installed-plugin"), {
+      recursive: true,
+    });
+
+    const findings = await runInstallMetadataAudit(
+      {
+        plugins: {
+          allow: [
+            "active-memory",
+            "anthropic",
+            "brave",
+            "google",
+            "lmstudio",
+            "memory-core",
+            "ollama",
+            "installed-plugin",
+          ],
+        },
+      },
+      stateDir,
+    );
+
+    expect(
+      findings.find((finding) => finding.checkId === "plugins.allow_phantom_entries"),
+    ).toBeUndefined();
   });
 });
 

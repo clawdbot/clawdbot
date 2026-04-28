@@ -1,8 +1,7 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { formatError } from "../../session.js";
 import { resolveStorePath, updateLastRoute } from "../config.runtime.js";
-
-type LoadConfigFn = typeof import("../config.runtime.js").loadConfig;
 
 export function trackBackgroundTask(
   backgroundTasks: Set<Promise<unknown>>,
@@ -16,7 +15,7 @@ export function trackBackgroundTask(
 }
 
 export function updateLastRouteInBackground(params: {
-  cfg: ReturnType<LoadConfigFn>;
+  cfg: OpenClawConfig;
   backgroundTasks: Set<Promise<unknown>>;
   storeAgentId: string;
   sessionKey: string;

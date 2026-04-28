@@ -72,7 +72,7 @@ final class ContactsService: ContactsServicing {
         contact.givenName = givenName ?? ""
         contact.familyName = familyName ?? ""
         contact.organizationName = organizationName ?? ""
-        if contact.givenName.isEmpty && contact.familyName.isEmpty, let displayName {
+        if contact.givenName.isEmpty, contact.familyName.isEmpty, let displayName {
             contact.givenName = displayName
         }
         contact.phoneNumbers = phoneNumbers.map {
@@ -86,13 +86,12 @@ final class ContactsService: ContactsServicing {
         save.add(contact, toContainerWithIdentifier: nil)
         try store.execute(save)
 
-        let persisted: CNContact
-        if !contact.identifier.isEmpty {
-            persisted = try store.unifiedContact(
+        let persisted: CNContact = if !contact.identifier.isEmpty {
+            try store.unifiedContact(
                 withIdentifier: contact.identifier,
                 keysToFetch: Self.payloadKeys)
         } else {
-            persisted = contact
+            contact
         }
 
         return OpenClawContactsAddPayload(contact: Self.payload(from: persisted))
@@ -137,7 +136,7 @@ final class ContactsService: ContactsServicing {
         phoneNumbers: [String],
         emails: [String]) throws -> CNContact?
     {
-        if phoneNumbers.isEmpty && emails.isEmpty {
+        if phoneNumbers.isEmpty, emails.isEmpty {
             return nil
         }
 
@@ -163,13 +162,13 @@ final class ContactsService: ContactsServicing {
         phoneNumbers: [String],
         emails: [String]) -> CNContact?
     {
-        let normalizedPhones = Set(phoneNumbers.map { normalizePhone($0) }.filter { !$0.isEmpty })
+        let normalizedPhones = Set(phoneNumbers.map { self.normalizePhone($0) }.filter { !$0.isEmpty })
         let normalizedEmails = Set(emails.map { $0.lowercased() }.filter { !$0.isEmpty })
         var seen = Set<String>()
 
         for contact in contacts {
             guard seen.insert(contact.identifier).inserted else { continue }
-            let contactPhones = Set(contact.phoneNumbers.map { normalizePhone($0.value.stringValue) })
+            let contactPhones = Set(contact.phoneNumbers.map { self.normalizePhone($0.value.stringValue) })
             let contactEmails = Set(contact.emailAddresses.map { String($0.value).lowercased() })
 
             if !normalizedPhones.isEmpty, !contactPhones.isDisjoint(with: normalizedPhones) {
@@ -198,13 +197,13 @@ final class ContactsService: ContactsServicing {
             givenName: contact.givenName,
             familyName: contact.familyName,
             organizationName: contact.organizationName,
-            phoneNumbers: contact.phoneNumbers.map { $0.value.stringValue },
+            phoneNumbers: contact.phoneNumbers.map(\.value.stringValue),
             emails: contact.emailAddresses.map { String($0.value) })
     }
 
-#if DEBUG
+    #if DEBUG
     static func _test_matches(contact: CNContact, phoneNumbers: [String], emails: [String]) -> Bool {
-        matchContacts(contacts: [contact], phoneNumbers: phoneNumbers, emails: emails) != nil
+        self.matchContacts(contacts: [contact], phoneNumbers: phoneNumbers, emails: emails) != nil
     }
-#endif
+    #endif
 }

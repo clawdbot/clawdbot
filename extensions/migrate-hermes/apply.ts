@@ -24,23 +24,46 @@ function withCachedConfigRuntime(
   runtime: MigrationProviderContext["runtime"] | undefined,
   fallbackConfig: MigrationProviderContext["config"],
 ): MigrationProviderContext["runtime"] | undefined {
-  if (!runtime?.config.writeConfigFile) {
+  if (!runtime) {
+    return undefined;
+  }
+  const configApi = runtime.config;
+  if (!configApi?.current || !configApi.mutateConfigFile) {
     return runtime;
   }
   let cachedConfig: MigrationProviderContext["config"] | undefined;
-  const loadConfig = () => {
-    cachedConfig ??= structuredClone(runtime.config.loadConfig?.() ?? fallbackConfig);
+  const current = (): ReturnType<typeof configApi.current> => {
+    cachedConfig ??= structuredClone(
+      (configApi.current() ?? fallbackConfig) as MigrationProviderContext["config"],
+    );
     return cachedConfig;
   };
   return {
     ...runtime,
     config: {
       ...runtime.config,
-      loadConfig,
-      writeConfigFile: async (next, options) => {
-        cachedConfig = structuredClone(next);
-        await runtime.config.writeConfigFile(next, options);
+      current,
+      mutateConfigFile: async (params) => {
+        const result = await configApi.mutateConfigFile({
+          ...params,
+          mutate: async (draft, context) => {
+            const mutationResult = await params.mutate(draft, context);
+            cachedConfig = structuredClone(draft);
+            return mutationResult;
+          },
+        });
+        cachedConfig = structuredClone(result.nextConfig);
+        return result;
       },
+      ...(configApi.replaceConfigFile
+        ? {
+            replaceConfigFile: async (params) => {
+              const result = await configApi.replaceConfigFile(params);
+              cachedConfig = structuredClone(result.nextConfig);
+              return result;
+            },
+          }
+        : {}),
     },
   };
 }

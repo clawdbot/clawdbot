@@ -130,6 +130,7 @@ Current source-of-truth:
     - `/session idle <duration|off>` and `/session max-age <duration|off>` manage thread-binding expiry.
     - `/export-session [path]` exports the current session to HTML. Alias: `/export`.
     - `/export-trajectory [path]` exports a JSONL [trajectory bundle](/tools/trajectory) for the current session. Alias: `/trajectory`.
+
   </Accordion>
   <Accordion title="Model and run controls">
     - `/think <level>` sets the thinking level. Options come from the active model's provider profile; common levels are `off`, `minimal`, `low`, `medium`, and `high`, with custom levels such as `xhigh`, `adaptive`, `max`, or binary `on` only where supported. Aliases: `/thinking`, `/t`.
@@ -142,6 +143,7 @@ Current source-of-truth:
     - `/model [name|#|status]` shows or sets the model.
     - `/models [provider] [page] [limit=<n>|size=<n>|all]` lists providers or models for a provider.
     - `/queue <mode>` manages queue behavior (`steer`, `interrupt`, `followup`, `collect`, `steer-backlog`) plus options like `debounce:2s cap:25 drop:summarize`.
+
   </Accordion>
   <Accordion title="Discovery and status">
     - `/help` shows the short help summary.
@@ -153,12 +155,14 @@ Current source-of-truth:
     - `/context [list|detail|json]` explains how context is assembled.
     - `/whoami` shows your sender id. Alias: `/id`.
     - `/usage off|tokens|full|cost` controls the per-response usage footer or prints a local cost summary.
+
   </Accordion>
   <Accordion title="Skills, allowlists, approvals">
     - `/skill <name> [input]` runs a skill by name.
     - `/allowlist [list|add|remove] ...` manages allowlist entries. Text-only.
     - `/approve <id> <decision>` resolves exec approval prompts.
     - `/btw <question>` asks a side question without changing future session context. See [BTW](/tools/btw).
+
   </Accordion>
   <Accordion title="Subagents and ACP">
     - `/subagents list|kill|log|info|send|steer|spawn` manages sub-agent runs for the current session.
@@ -168,6 +172,7 @@ Current source-of-truth:
     - `/agents` lists thread-bound agents for the current session.
     - `/kill <id|#|all>` aborts one or all running sub-agents.
     - `/steer <id|#> <message>` sends steering to a running sub-agent. Alias: `/tell`.
+
   </Accordion>
   <Accordion title="Owner-only writes and admin">
     - `/config show|get|set|unset` reads or writes `openclaw.json`. Owner-only. Requires `commands.config: true`.
@@ -176,6 +181,7 @@ Current source-of-truth:
     - `/debug show|set|unset|reset` manages runtime-only config overrides. Owner-only. Requires `commands.debug: true`.
     - `/restart` restarts OpenClaw when enabled. Default: enabled; set `commands.restart: false` to disable it.
     - `/send on|off|inherit` sets send policy. Owner-only.
+
   </Accordion>
   <Accordion title="Voice, TTS, channel control">
     - `/tts on|off|status|chat|latest|provider|limit|summary|audio|help` controls TTS. See [TTS](/tools/tts).
@@ -183,10 +189,15 @@ Current source-of-truth:
     - `/bash <command>` runs a host shell command. Text-only. Alias: `! <command>`. Requires `commands.bash: true` plus `tools.elevated` allowlists.
     - `!poll [sessionId]` checks a background bash job.
     - `!stop [sessionId]` stops a background bash job.
+
   </Accordion>
 </AccordionGroup>
 
 ### Generated dock commands
+
+Dock commands switch the current session's reply route to another linked
+channel. See [Channel docking](/concepts/channel-docking) for setup,
+examples, and troubleshooting.
 
 Dock commands are generated from channel plugins with native-command support. Current bundled set:
 
@@ -194,6 +205,12 @@ Dock commands are generated from channel plugins with native-command support. Cu
 - `/dock-mattermost` (alias: `/dock_mattermost`)
 - `/dock-slack` (alias: `/dock_slack`)
 - `/dock-telegram` (alias: `/dock_telegram`)
+
+Use dock commands from a direct chat to switch the current session's reply route to another linked channel. The agent keeps the same session context, but future replies for that session are delivered to the selected channel peer.
+
+Dock commands require `session.identityLinks`. The source sender and target peer must be in the same identity group, for example `["telegram:123", "discord:456"]`. If a Telegram user with id `123` sends `/dock_discord`, OpenClaw stores `lastChannel: "discord"` and `lastTo: "456"` on the active session. If the sender is not linked to a Discord peer, the command replies with a setup hint instead of falling through to normal chat.
+
+Docking changes the active session route only. It does not create channel accounts, grant access, bypass channel allowlists, or move transcript history to another session. Use `/dock-telegram`, `/dock-slack`, `/dock-mattermost`, or another generated dock command to switch the route again.
 
 ### Bundled plugin commands
 
@@ -231,11 +248,13 @@ User-invocable skills are also exposed as slash commands:
     - `/restart` is enabled by default; set `commands.restart: false` to disable it.
     - `/plugins install <spec>` accepts the same plugin specs as `openclaw plugins install`: local path/archive, npm package, or `clawhub:<pkg>`.
     - `/plugins enable|disable` updates plugin config and may prompt for a restart.
+
   </Accordion>
   <Accordion title="Channel-specific behavior">
     - Discord-only native command: `/vc join|leave|status` controls voice channels (not available as text). `join` requires a guild and selected voice/stage channel. Requires `channels.discord.voice` and native commands.
     - Discord thread-binding commands (`/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`) require effective thread bindings to be enabled (`session.threadBindings.enabled` and/or `channels.discord.threadBindings.enabled`).
     - ACP command reference and runtime behavior: [ACP agents](/tools/acp-agents).
+
   </Accordion>
   <Accordion title="Verbose / trace / fast / reasoning safety">
     - `/verbose` is meant for debugging and extra visibility; keep it **off** in normal use.
@@ -244,6 +263,7 @@ User-invocable skills are also exposed as slash commands:
     - `/fast` is provider-specific: OpenAI/OpenAI Codex map it to `service_tier=priority` on native Responses endpoints, while direct public Anthropic requests, including OAuth-authenticated traffic sent to `api.anthropic.com`, map it to `service_tier=auto` or `standard_only`. See [OpenAI](/providers/openai) and [Anthropic](/providers/anthropic).
     - Tool failure summaries are still shown when relevant, but detailed failure text is only included when `/verbose` is `on` or `full`.
     - `/reasoning`, `/verbose`, and `/trace` are risky in group settings: they may reveal internal reasoning, tool output, or plugin diagnostics you did not intend to expose. Prefer leaving them off, especially in group chats.
+
   </Accordion>
   <Accordion title="Model switching">
     - `/model` persists the new session model immediately.
@@ -251,6 +271,7 @@ User-invocable skills are also exposed as slash commands:
     - If a run is already active, OpenClaw marks a live switch as pending and only restarts into the new model at a clean retry point.
     - If tool activity or reply output has already started, the pending switch can stay queued until a later retry opportunity or the next user turn.
     - In the local TUI, `/crestodian [request]` returns from the normal agent TUI to Crestodian. This is separate from message-channel rescue mode and does not grant remote config authority.
+
   </Accordion>
   <Accordion title="Fast path and inline shortcuts">
     - **Fast path:** command-only messages from allowlisted senders are handled immediately (bypass queue + model).
@@ -259,6 +280,7 @@ User-invocable skills are also exposed as slash commands:
       - Example: `hey /status` triggers a status reply, and the remaining text continues through the normal flow.
     - Currently: `/help`, `/commands`, `/status`, `/whoami` (`/id`).
     - Unauthorized command-only messages are silently ignored, and inline `/...` tokens are treated as plain text.
+
   </Accordion>
   <Accordion title="Skill commands and native arguments">
     - **Skill commands:** `user-invocable` skills are exposed as slash commands. Names are sanitized to `a-z0-9_` (max 32 chars); collisions get numeric suffixes (e.g. `_2`).
@@ -267,6 +289,7 @@ User-invocable skills are also exposed as slash commands:
       - Skills may optionally declare `command-dispatch: tool` to route the command directly to a tool (deterministic, no model).
       - Example: `/prose` (OpenProse plugin) — see [OpenProse](/prose).
     - **Native command arguments:** Discord uses autocomplete for dynamic options (and button menus when you omit required args). Telegram and Slack show a button menu when a command supports choices and you omit the arg. Dynamic choices are resolved against the target session model, so model-specific options such as `/think` levels follow that session's `/model` override.
+
   </Accordion>
 </AccordionGroup>
 
@@ -404,6 +427,7 @@ Examples:
 - `/plugins list` and `/plugins show` use real plugin discovery against the current workspace plus on-disk config.
 - `/plugins enable|disable` updates plugin config only; it does not install or uninstall plugins.
 - After enable/disable changes, restart the gateway to apply them.
+
 </Note>
 
 ## Surface notes
@@ -416,6 +440,7 @@ Examples:
       - Slack: `agent:<agentId>:slack:slash:<userId>` (prefix configurable via `channels.slack.slashCommand.sessionPrefix`)
       - Telegram: `telegram:slash:<userId>` (targets the chat session via `CommandTargetSessionKey`)
     - **`/stop`** targets the active chat session so it can abort the current run.
+
   </Accordion>
   <Accordion title="Slack specifics">
     `channels.slack.slashCommand` is still supported for a single `/openclaw`-style command. If you enable `commands.native`, you must create one Slack slash command per built-in command (same names as `/help`). Command argument menus for Slack are delivered as ephemeral Block Kit buttons.

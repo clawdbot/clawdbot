@@ -211,8 +211,8 @@ ${ACPX_CMD} codex sessions close oc-codex-<conversationId>
 Defaults are:
 
 - `openclaw -> openclaw acp`
-- `claude -> npx -y @zed-industries/claude-agent-acp@0.21.0`
-- `codex -> npx @zed-industries/codex-acp@^0.9.5`
+- `claude -> npx -y @agentclientprotocol/claude-agent-acp@^0.31.0`
+- `codex -> bundled @zed-industries/codex-acp@0.12.0 through OpenClaw's isolated CODEX_HOME wrapper`
 - `copilot -> copilot --acp --stdio`
 - `cursor -> cursor-agent acp`
 - `droid -> droid exec --output-format acp`

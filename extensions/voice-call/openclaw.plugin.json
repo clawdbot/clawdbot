@@ -1,5 +1,8 @@
 {
   "id": "voice-call",
+  "activation": {
+    "onStartup": true
+  },
   "channelEnvVars": {
     "voice-call": [
       "TELNYX_API_KEY",

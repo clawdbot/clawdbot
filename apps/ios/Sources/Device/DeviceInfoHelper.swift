@@ -1,7 +1,6 @@
+import Darwin
 import Foundation
 import UIKit
-
-import Darwin
 
 /// Shared device and platform info for Settings, gateway node payloads, and device status.
 enum DeviceInfoHelper {
@@ -65,8 +64,8 @@ enum DeviceInfoHelper {
 
     /// Display string for Settings: "1.2.3" or "1.2.3 (456)" when build differs.
     static func openClawVersionString() -> String {
-        let version = appVersion()
-        let build = appBuild()
+        let version = self.appVersion()
+        let build = self.appBuild()
         if build.isEmpty || build == version {
             return version
         }

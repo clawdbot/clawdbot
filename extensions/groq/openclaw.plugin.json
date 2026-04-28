@@ -1,6 +1,23 @@
 {
   "id": "groq",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
+  "providers": ["groq"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "groq-native",
+      "hosts": ["api.groq.com"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "groq": {
+        "family": "groq"
+      }
+    }
+  },
   "providerAuthEnvVars": {
     "groq": ["GROQ_API_KEY"]
   },

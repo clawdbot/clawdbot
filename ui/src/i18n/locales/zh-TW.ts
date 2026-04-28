@@ -108,6 +108,13 @@ export const zh_TW: TranslationMap = {
       lightningHelp: "用於接收小費的 Lightning 地址（LUD-16）",
     },
   },
+  lazyView: {
+    loadingTitle: "正在載入面板",
+    errorTitle: "面板載入失敗",
+    errorSubtitle: "重新載入頁面以載入最新的 Control UI bundle，或在網路請求失敗時重試。",
+    retry: "重試",
+    unknownError: "未知的模組載入錯誤。",
+  },
   nodes: {
     binding: {
       loadConfigHint: "載入設定以編輯綁定。",

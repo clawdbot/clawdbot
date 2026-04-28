@@ -1,5 +1,8 @@
 {
   "id": "whatsapp",
+  "activation": {
+    "onStartup": false
+  },
   "channels": ["whatsapp"],
   "configSchema": {
     "type": "object",

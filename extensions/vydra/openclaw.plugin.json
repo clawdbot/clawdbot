@@ -1,5 +1,8 @@
 {
   "id": "vydra",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["vydra"],
   "providerAuthEnvVars": {

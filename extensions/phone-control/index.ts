@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -197,7 +198,7 @@ async function disarmNow(params: {
   if (!state) {
     return { changed: false, restored: [], removed: [] };
   }
-  const cfg = api.runtime.config.loadConfig();
+  const cfg = api.runtime.config.current() as OpenClawConfig;
   const allow = new Set(normalizeAllowList(cfg));
   const deny = new Set(normalizeDenyList(cfg));
   const removed: string[] = [];
@@ -229,7 +230,10 @@ async function disarmNow(params: {
       allowCommands: uniqSorted([...allow]),
       denyCommands: uniqSorted([...deny]),
     });
-    await api.runtime.config.writeConfigFile(next);
+    await api.runtime.config.replaceConfigFile({
+      nextConfig: next,
+      afterWrite: { mode: "auto" },
+    });
   }
   await writeArmState(statePath, null);
   api.logger.info(`phone-control: disarmed (${reason}) stateDir=${stateDir}`);
@@ -405,7 +409,7 @@ export default definePluginEntry({
           const expiresAtMs = Date.now() + durationMs;
 
           const commands = resolveCommandsForGroup(group);
-          const cfg = api.runtime.config.loadConfig();
+          const cfg = api.runtime.config.current() as OpenClawConfig;
           const allowSet = new Set(normalizeAllowList(cfg));
           const denySet = new Set(normalizeDenyList(cfg));
 
@@ -424,7 +428,10 @@ export default definePluginEntry({
             allowCommands: uniqSorted([...allowSet]),
             denyCommands: uniqSorted([...denySet]),
           });
-          await api.runtime.config.writeConfigFile(next);
+          await api.runtime.config.replaceConfigFile({
+            nextConfig: next,
+            afterWrite: { mode: "auto" },
+          });
 
           await writeArmState(statePath, {
             version: STATE_VERSION,

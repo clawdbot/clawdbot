@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   collectExtensionsWithTsconfig,
@@ -34,13 +34,74 @@ type TsConfigJson = {
 
 type PackageJson = {
   name?: unknown;
+  version?: unknown;
+  private?: unknown;
+  type?: unknown;
   exports?: Record<string, { types?: unknown; default?: unknown }>;
   devDependencies?: Record<string, string>;
 };
+const MEMORY_HOST_SDK_EXPORTS = [
+  "./engine",
+  "./engine-embeddings",
+  "./engine-foundation",
+  "./engine-qmd",
+  "./engine-storage",
+  "./multimodal",
+  "./query",
+  "./runtime",
+  "./runtime-cli",
+  "./runtime-core",
+  "./runtime-files",
+  "./secret",
+  "./status",
+] as const;
+const MEMORY_HOST_SDK_ALLOWED_CORE_BRIDGE_FILES = [
+  "packages/memory-host-sdk/src/host/openclaw-runtime.ts",
+] as const;
+const MEMORY_HOST_SDK_RUNTIME_ADAPTER_FILES = [
+  "packages/memory-host-sdk/src/host/openclaw-runtime-agent.ts",
+  "packages/memory-host-sdk/src/host/openclaw-runtime-auth.ts",
+  "packages/memory-host-sdk/src/host/openclaw-runtime-cli.ts",
+  "packages/memory-host-sdk/src/host/openclaw-runtime-config.ts",
+  "packages/memory-host-sdk/src/host/openclaw-runtime-io.ts",
+  "packages/memory-host-sdk/src/host/openclaw-runtime-memory.ts",
+  "packages/memory-host-sdk/src/host/openclaw-runtime-network.ts",
+  "packages/memory-host-sdk/src/host/openclaw-runtime-session.ts",
+] as const;
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe JSON file shape.
 function readJsonFile<T>(relativePath: string): T {
   return JSON.parse(readFileSync(resolve(REPO_ROOT, relativePath), "utf8")) as T;
+}
+
+function collectCodeFiles(relativeDir: string): string[] {
+  const dir = resolve(REPO_ROOT, relativeDir);
+  const files: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const nextPath = resolve(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...collectCodeFiles(relative(REPO_ROOT, nextPath).replaceAll("\\", "/")));
+      continue;
+    }
+    if (entry.isFile() && /\.(?:[cm]?ts|tsx|mts|cts)$/u.test(entry.name)) {
+      files.push(relative(REPO_ROOT, nextPath).replaceAll("\\", "/"));
+    }
+  }
+  return files.toSorted();
+}
+
+function collectCoreReferenceFiles(relativeDir: string): string[] {
+  return collectCodeFiles(relativeDir).filter((file) => {
+    const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
+    return source.includes("../../../../src/") || source.includes("../../../src/");
+  });
+}
+
+function collectOpenClawRuntimeDirectImportFiles(relativeDir: string): string[] {
+  return collectCodeFiles(relativeDir).filter((file) => {
+    const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
+    return source.includes('"./openclaw-runtime.js"');
+  });
 }
 
 describe("opt-in extension package boundaries", () => {
@@ -111,18 +172,6 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.exports?.["./acp-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/acp-runtime.d.ts",
     );
-    expect(packageJson.exports?.["./browser-config-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/browser-config-runtime.d.ts",
-    );
-    expect(packageJson.exports?.["./browser-node-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/browser-node-runtime.d.ts",
-    );
-    expect(packageJson.exports?.["./browser-setup-tools"]?.types).toBe(
-      "./dist/src/plugin-sdk/browser-setup-tools.d.ts",
-    );
-    expect(packageJson.exports?.["./browser-security-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/browser-security-runtime.d.ts",
-    );
     expect(packageJson.exports?.["./channel-secret-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/channel-secret-runtime.d.ts",
     );
@@ -182,5 +231,37 @@ describe("opt-in extension package boundaries", () => {
     expect(existsSync(resolve(REPO_ROOT, "packages/plugin-sdk/types/plugin-entry.d.ts"))).toBe(
       false,
     );
+  });
+
+  it("keeps memory-host-sdk as a private package-owned contract surface", () => {
+    const packageJson = readJsonFile<PackageJson>("packages/memory-host-sdk/package.json");
+    const packageExports = packageJson.exports as unknown as Record<string, string>;
+
+    expect(packageJson.name).toBe("@openclaw/memory-host-sdk");
+    expect(packageJson.version).toBe("0.0.0-private");
+    expect(packageJson.private).toBe(true);
+    expect(packageJson.type).toBe("module");
+    expect(Object.keys(packageExports).toSorted()).toEqual([...MEMORY_HOST_SDK_EXPORTS]);
+
+    for (const exportPath of MEMORY_HOST_SDK_EXPORTS) {
+      const target = packageExports[exportPath];
+      expect(target, exportPath).toBe(`./src/${exportPath.slice(2)}.ts`);
+      if (!target) {
+        throw new Error(`Missing memory-host-sdk export target for ${exportPath}`);
+      }
+      const source = readFileSync(resolve(REPO_ROOT, "packages/memory-host-sdk", target), "utf8");
+      expect(source, target).not.toContain("src/memory-host-sdk/");
+    }
+
+    expect(collectCoreReferenceFiles("packages/memory-host-sdk/src")).toEqual([
+      ...MEMORY_HOST_SDK_ALLOWED_CORE_BRIDGE_FILES,
+    ]);
+    expect(collectOpenClawRuntimeDirectImportFiles("packages/memory-host-sdk/src")).toEqual([
+      ...MEMORY_HOST_SDK_RUNTIME_ADAPTER_FILES,
+    ]);
+  });
+
+  it("keeps plugin-package-contract independent from core internals", () => {
+    expect(collectCoreReferenceFiles("packages/plugin-package-contract/src")).toEqual([]);
   });
 });

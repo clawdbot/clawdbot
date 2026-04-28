@@ -66,6 +66,36 @@ describe("scripts/test-docker-all scheduler", () => {
     ).toBe(false);
   });
 
+  it("can co-schedule the split installer provider lanes", () => {
+    expect(
+      canStartSchedulerLane(
+        {
+          name: "install-e2e-anthropic",
+          resources: ["npm", "service"],
+          weight: 3,
+        },
+        activePool({
+          count: 1,
+          resources: {
+            docker: 3,
+            npm: 3,
+            service: 3,
+          },
+          weight: 3,
+        }),
+        10,
+        {
+          resourceLimits: {
+            docker: 10,
+            npm: 10,
+            service: 7,
+          },
+          weightLimit: 10,
+        },
+      ),
+    ).toBe(true);
+  });
+
   it("preserves the parallelism count cap", () => {
     expect(
       canStartSchedulerLane(

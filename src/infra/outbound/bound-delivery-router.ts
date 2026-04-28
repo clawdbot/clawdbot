@@ -79,6 +79,13 @@ export function createBoundDeliveryRouter(
       }
 
       if (!input.requester) {
+        if (input.failClosed) {
+          return {
+            binding: null,
+            mode: "fallback",
+            reason: "missing-requester",
+          };
+        }
         if (activeBindings.length === 1) {
           return {
             binding: activeBindings[0] ?? null,

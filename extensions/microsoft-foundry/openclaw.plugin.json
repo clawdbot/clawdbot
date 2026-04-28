@@ -1,5 +1,8 @@
 {
   "id": "microsoft-foundry",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["microsoft-foundry"],
   "providerAuthEnvVars": {

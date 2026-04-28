@@ -3,7 +3,7 @@ import {
   loadSqliteVecExtension,
   requireNodeSqlite,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { bm25RankToScore, buildFtsQuery } from "./hybrid.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 
@@ -181,6 +181,98 @@ describe("searchKeyword trigram fallback", () => {
 
 describe("searchVector sqlite-vec KNN", () => {
   const { DatabaseSync } = requireNodeSqlite();
+
+  it("streams fallback chunk scoring without materializing candidates", async () => {
+    type ChunkRow = {
+      id: string;
+      path: string;
+      start_line: number;
+      end_line: number;
+      text: string;
+      embedding: string;
+      source: string;
+    };
+    type StatementWithAll = {
+      all: (...params: unknown[]) => ChunkRow[];
+    };
+
+    const db = new DatabaseSync(":memory:");
+    try {
+      ensureMemoryIndexSchema({
+        db,
+        embeddingCacheTable: "embedding_cache",
+        cacheEnabled: false,
+        ftsTable: "chunks_fts",
+        ftsEnabled: false,
+      });
+
+      const insertChunk = db.prepare(
+        "INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      );
+      const addChunk = (params: { id: string; model: string; vector: [number, number] }) => {
+        insertChunk.run(
+          params.id,
+          `memory/${params.id}.md`,
+          "memory",
+          1,
+          1,
+          params.id,
+          params.model,
+          `chunk ${params.id}`,
+          JSON.stringify(params.vector),
+          1,
+        );
+      };
+      addChunk({ id: "target-1", model: "target-model", vector: [1, 0] });
+      addChunk({ id: "target-2", model: "target-model", vector: [0.8, 0.2] });
+      addChunk({ id: "target-3", model: "target-model", vector: [0, 1] });
+      addChunk({ id: "other-1", model: "other-model", vector: [1, 0] });
+
+      const prepareTarget = db as unknown as { prepare: (sql: string) => unknown };
+      const originalPrepare = prepareTarget.prepare.bind(db);
+      const chunkRows = (
+        originalPrepare(
+          "SELECT id, path, start_line, end_line, text, embedding, source\n" +
+            "  FROM chunks\n" +
+            " WHERE model = ?",
+        ) as StatementWithAll
+      ).all("target-model");
+      const prepareSpy = vi.spyOn(prepareTarget, "prepare").mockImplementation((sql: string) => {
+        if (
+          sql.includes("SELECT id, path, start_line, end_line, text, embedding, source") &&
+          sql.includes("FROM chunks")
+        ) {
+          return {
+            all: () => {
+              throw new Error("fallback vector search must stream rows via iterate()");
+            },
+            iterate: () => chunkRows[Symbol.iterator](),
+          };
+        }
+        return originalPrepare(sql);
+      });
+
+      try {
+        const results = await searchVector({
+          db,
+          vectorTable: "chunks_vec",
+          providerModel: "target-model",
+          queryVec: [1, 0],
+          limit: 2,
+          snippetMaxChars: 200,
+          ensureVectorReady: async () => false,
+          sourceFilterVec: { sql: "", params: [] },
+          sourceFilterChunks: { sql: "", params: [] },
+        });
+
+        expect(results.map((row) => row.id)).toEqual(["target-1", "target-2"]);
+      } finally {
+        prepareSpy.mockRestore();
+      }
+    } finally {
+      db.close();
+    }
+  });
 
   it("fills the requested limit after model filters prune nearest KNN candidates", async () => {
     const db = new DatabaseSync(":memory:", { allowExtension: true });

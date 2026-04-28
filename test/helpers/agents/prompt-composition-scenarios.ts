@@ -78,6 +78,7 @@ function buildSystemPrompt(params: {
   skillsPrompt?: string;
   reactionGuidance?: { level: "minimal" | "extensive"; channel: string };
   contextFiles?: Array<{ path: string; content: string }>;
+  silentReplyPromptMode?: "generic" | "none";
 }) {
   const { runtimeInfo, userTimezone, userTime, userTimeFormat, toolNames } =
     buildCommonSystemParams(params.workspaceDir);
@@ -91,6 +92,7 @@ function buildSystemPrompt(params: {
     toolNames,
     modelAliasLines: [],
     promptMode: "full",
+    silentReplyPromptMode: params.silentReplyPromptMode,
     acpEnabled: true,
     skillsPrompt: params.skillsPrompt,
     reactionGuidance: params.reactionGuidance,
@@ -130,7 +132,13 @@ function buildAutoReplySystemPrompt(params: {
           silentReplyRewrite: true,
         })
       : "",
-    params.includeGroupChatContext ? buildGroupChatContext({ sessionCtx: params.sessionCtx }) : "",
+    params.includeGroupChatContext
+      ? buildGroupChatContext({
+          sessionCtx: params.sessionCtx,
+          silentToken: SILENT_REPLY_TOKEN,
+          silentReplyPolicy: "allow",
+        })
+      : "",
     params.includeGroupIntro
       ? buildGroupIntro({
           cfg: {} as OpenClawConfig,
@@ -144,6 +152,12 @@ function buildAutoReplySystemPrompt(params: {
   return buildSystemPrompt({
     workspaceDir: params.workspaceDir,
     extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
+    silentReplyPromptMode:
+      params.sessionCtx.ChatType === "direct" ||
+      params.sessionCtx.ChatType === "dm" ||
+      params.includeGroupChatContext
+        ? "none"
+        : "generic",
   });
 }
 

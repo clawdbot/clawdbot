@@ -1,17 +1,17 @@
 export { appendCronStyleCurrentTimeLine } from "openclaw/plugin-sdk/agent-runtime";
 export {
   canonicalizeMainSessionAlias,
-  loadConfig,
   loadSessionStore,
   resolveSessionKey,
   resolveStorePath,
   updateSessionStore,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/session-store-runtime";
+export { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 export {
   emitHeartbeatEvent,
   resolveHeartbeatVisibility,
   resolveIndicatorType,
-} from "openclaw/plugin-sdk/infra-runtime";
+} from "openclaw/plugin-sdk/heartbeat-runtime";
 export {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,

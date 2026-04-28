@@ -5,25 +5,25 @@ enum NodeDisplayName {
     private static let genericNames: Set<String> = ["iOS Node", "iPhone Node", "iPad Node"]
 
     static func isGeneric(_ name: String) -> Bool {
-        Self.genericNames.contains(name)
+        self.genericNames.contains(name)
     }
 
     static func defaultValue(for interfaceIdiom: UIUserInterfaceIdiom) -> String {
         switch interfaceIdiom {
         case .phone:
-            return "iPhone Node"
+            "iPhone Node"
         case .pad:
-            return "iPad Node"
+            "iPad Node"
         default:
-            return "iOS Node"
+            "iOS Node"
         }
     }
 
     static func resolve(
         existing: String?,
         deviceName: String,
-        interfaceIdiom: UIUserInterfaceIdiom
-    ) -> String {
+        interfaceIdiom: UIUserInterfaceIdiom) -> String
+    {
         let trimmedExisting = existing?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmedExisting.isEmpty, !Self.isGeneric(trimmedExisting) {
             return trimmedExisting

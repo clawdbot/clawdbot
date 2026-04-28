@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import "./agent-command.test-mocks.js";
 import * as acpManagerModule from "../acp/control-plane/manager.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
@@ -140,7 +140,9 @@ function createAcpEnabledConfig(home: string, storePath: string): OpenClawConfig
 }
 
 function mockConfig(home: string, storePath: string) {
-  loadConfigSpy.mockReturnValue(createAcpEnabledConfig(home, storePath));
+  const cfg = createAcpEnabledConfig(home, storePath);
+  loadConfigSpy.mockReturnValue(cfg);
+  configIoModule.setRuntimeConfigSnapshot(cfg, cfg);
 }
 
 function mockConfigWithAcpOverrides(
@@ -154,6 +156,7 @@ function mockConfigWithAcpOverrides(
     ...acpOverrides,
   };
   loadConfigSpy.mockReturnValue(cfg);
+  configIoModule.setRuntimeConfigSnapshot(cfg, cfg);
 }
 
 function writeAcpSessionStore(storePath: string, agent = "codex") {

@@ -204,6 +204,33 @@ describe("web session", () => {
     );
   });
 
+  it("uses lowercase HTTPS proxy before uppercase for WA WebSocket connection", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://upper-proxy.test:8080");
+    vi.stubEnv("https_proxy", "http://lower-proxy.test:8080");
+
+    await createWaSocket(false, false);
+
+    const passed = (baileys.makeWASocket as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      agent?: { proxy?: URL };
+    };
+    expect(passed.agent).toBeDefined();
+    expect(passed.agent?.proxy?.href).toContain("lower-proxy.test");
+  });
+
+  it("skips WA WebSocket env proxy agent when NO_PROXY covers WhatsApp Web", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+    vi.stubEnv("NO_PROXY", "mmg.whatsapp.net");
+
+    await createWaSocket(false, false);
+
+    const passed = (baileys.makeWASocket as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      agent?: unknown;
+      fetchAgent?: unknown;
+    };
+    expect(passed.agent).toBeUndefined();
+    expect(passed.fetchAgent).toBeDefined();
+  });
+
   it("does not create a proxy agent when no env proxy is configured", async () => {
     for (const key of [
       "ALL_PROXY",

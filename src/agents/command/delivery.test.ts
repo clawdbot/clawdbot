@@ -263,4 +263,48 @@ describe("normalizeAgentCommandReplyPayloads", () => {
       },
     ]);
   });
+
+  it("merges result metadata overrides into JSON output and returned results", async () => {
+    const runtime = {
+      log: vi.fn(),
+      writeStdout: vi.fn(),
+      writeJson: vi.fn(),
+    };
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: runtime as never,
+      opts: {
+        message: "test",
+        json: true,
+        resultMetaOverrides: {
+          transport: "embedded",
+          fallbackFrom: "gateway",
+        },
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "local" }],
+      result: createResult(),
+    });
+
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      {
+        payloads: [{ text: "local", mediaUrl: null }],
+        meta: {
+          durationMs: 1,
+          transport: "embedded",
+          fallbackFrom: "gateway",
+        },
+      },
+      2,
+    );
+    expect(delivered.meta).toMatchObject({
+      durationMs: 1,
+      transport: "embedded",
+      fallbackFrom: "gateway",
+    });
+  });
 });

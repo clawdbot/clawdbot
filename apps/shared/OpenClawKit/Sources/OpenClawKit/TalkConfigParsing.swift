@@ -20,8 +20,8 @@ public enum TalkConfigParsing {
     public static func selectProviderConfig(
         _ talk: [String: AnyCodable]?,
         defaultProvider: String,
-        allowLegacyFallback: Bool = true,
-    ) -> TalkProviderConfigSelection? {
+        allowLegacyFallback: Bool = true) -> TalkProviderConfigSelection?
+    {
         guard let talk else { return nil }
         if let resolvedSelection = self.resolvedProviderConfig(talk) {
             return resolvedSelection
@@ -63,16 +63,16 @@ public enum TalkConfigParsing {
 
     public static func resolvedSpeechLocaleID(
         _ talk: [String: AnyCodable]?,
-        fallback: String? = nil
-    ) -> String? {
+        fallback: String? = nil) -> String?
+    {
         self.normalizedSpeechLocaleID(talk?["speechLocale"]?.stringValue)
             ?? self.normalizedSpeechLocaleID(fallback)
     }
 
     public static func normalizedExplicitSpeechLocaleID(
         _ value: String?,
-        automaticID: String = "auto"
-    ) -> String? {
+        automaticID: String = "auto") -> String?
+    {
         let normalized = self.normalizedSpeechLocaleID(value)
         return normalized == automaticID ? nil : normalized
     }
@@ -80,8 +80,8 @@ public enum TalkConfigParsing {
     public static func resolvedSpeechRecognitionLocaleID(
         preferredLocaleIDs: [String?],
         fallbackLocaleID: String = "en-US",
-        supportedLocaleIDs: Set<String>
-    ) -> String? {
+        supportedLocaleIDs: Set<String>) -> String?
+    {
         let supported = Set(supportedLocaleIDs.compactMap(self.normalizedSpeechLocaleID))
         var seen = Set<String>()
         let candidates = (preferredLocaleIDs + [fallbackLocaleID])
@@ -102,8 +102,8 @@ public enum TalkConfigParsing {
     }
 
     private static func resolvedProviderConfig(
-        _ talk: [String: AnyCodable]
-    ) -> TalkProviderConfigSelection? {
+        _ talk: [String: AnyCodable]) -> TalkProviderConfigSelection?
+    {
         guard
             let resolved = talk["resolved"]?.dictionaryValue,
             let providerID = self.normalizedTalkProviderID(resolved["provider"]?.stringValue)

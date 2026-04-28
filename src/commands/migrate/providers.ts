@@ -1,4 +1,4 @@
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import {
   resolvePluginMigrationProvider,
   resolvePluginMigrationProviders,
@@ -9,7 +9,7 @@ import { buildMigrationContext } from "./context.js";
 import type { MigrateCommonOptions } from "./types.js";
 
 export function resolveMigrationProvider(providerId: string): MigrationProviderPlugin {
-  const config = loadConfig();
+  const config = getRuntimeConfig();
   const provider = resolvePluginMigrationProvider({ providerId, cfg: config });
   if (!provider) {
     const available = resolvePluginMigrationProviders({ cfg: config }).map((entry) => entry.id);

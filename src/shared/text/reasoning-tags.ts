@@ -17,6 +17,13 @@ function applyTrim(value: string, mode: ReasoningTagTrim): string {
   return value.trim();
 }
 
+export function hasOrphanReasoningCloseBoundary(params: {
+  before: string;
+  after: string;
+}): boolean {
+  return params.before.trim().length > 0 && params.after.trim().length > 0;
+}
+
 export function stripReasoningTagsFromText(
   text: string,
   options?: {
@@ -63,7 +70,8 @@ export function stripReasoningTagsFromText(
   THINKING_TAG_RE.lastIndex = 0;
   let result = "";
   let lastIndex = 0;
-  let inThinking = false;
+  let thinkingDepth = 0;
+  let firstUnclosedContentIndex: number | undefined;
 
   for (const match of cleaned.matchAll(THINKING_TAG_RE)) {
     const idx = match.index ?? 0;
@@ -73,21 +81,48 @@ export function stripReasoningTagsFromText(
       continue;
     }
 
-    if (!inThinking) {
-      result += cleaned.slice(lastIndex, idx);
-      if (!isClose) {
-        inThinking = true;
+    if (thinkingDepth === 0) {
+      if (isClose) {
+        const afterIndex = idx + match[0].length;
+        const before = cleaned.slice(lastIndex, idx);
+        const after = cleaned.slice(afterIndex);
+        if (hasOrphanReasoningCloseBoundary({ before, after })) {
+          result = "";
+        } else {
+          result += before;
+        }
+        lastIndex = afterIndex;
+        continue;
       }
+      result += cleaned.slice(lastIndex, idx);
+      thinkingDepth = 1;
+      firstUnclosedContentIndex = idx + match[0].length;
     } else if (isClose) {
-      inThinking = false;
+      thinkingDepth -= 1;
+      if (thinkingDepth === 0) {
+        firstUnclosedContentIndex = undefined;
+      }
+    } else {
+      thinkingDepth += 1;
     }
 
     lastIndex = idx + match[0].length;
   }
 
-  if (!inThinking || mode === "preserve") {
+  if (thinkingDepth === 0 || mode === "preserve") {
     result += cleaned.slice(lastIndex);
   }
 
-  return applyTrim(result, trimMode);
+  const trimmedResult = applyTrim(result, trimMode);
+  if (
+    mode === "strict" &&
+    thinkingDepth > 0 &&
+    !trimmedResult &&
+    firstUnclosedContentIndex !== undefined &&
+    cleaned.trim()
+  ) {
+    return applyTrim(cleaned.slice(firstUnclosedContentIndex), trimMode);
+  }
+
+  return trimmedResult;
 }

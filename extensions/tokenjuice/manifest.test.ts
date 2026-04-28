@@ -22,7 +22,7 @@ describe("tokenjuice package manifest", () => {
       fs.readFileSync(new URL("./package.json", import.meta.url), "utf8"),
     ) as TokenjuicePackageManifest;
 
-    expect(packageJson.dependencies?.tokenjuice).toBe("0.6.3");
+    expect(packageJson.dependencies?.tokenjuice).toBe("0.6.4");
     expect(packageJson.openclaw?.bundle?.stageRuntimeDependencies).toBe(true);
   });
 

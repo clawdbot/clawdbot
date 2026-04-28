@@ -296,10 +296,33 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(confirmRuntimeRepair).toHaveBeenCalledWith(
       expect.objectContaining({
         message: expect.stringContaining("This only renames them to *.deleted.<timestamp>."),
+        requiresInteractiveConfirmation: true,
       }),
     );
     const files = fs.readdirSync(sessionsDir);
     expect(files.some((name) => name.startsWith("orphan-session.jsonl.deleted."))).toBe(true);
+  });
+
+  it("does not auto-archive orphan transcripts from non-interactive repair mode", async () => {
+    const cfg: OpenClawConfig = {};
+    setupSessionState(cfg, process.env, process.env.HOME ?? "");
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
+    const confirmRuntimeRepair = vi.fn(
+      async (params: { initialValue?: boolean; requiresInteractiveConfirmation?: boolean }) =>
+        params.requiresInteractiveConfirmation !== true,
+    );
+    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+
+    expect(confirmRuntimeRepair).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialValue: false,
+        requiresInteractiveConfirmation: true,
+      }),
+    );
+    const files = fs.readdirSync(sessionsDir);
+    expect(files).toContain("orphan-session.jsonl");
+    expect(files.some((name) => name.startsWith("orphan-session.jsonl.deleted."))).toBe(false);
   });
 
   it.skipIf(process.platform === "win32")(

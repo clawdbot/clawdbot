@@ -1,5 +1,5 @@
 import type { SetSessionModeRequest } from "@agentclientprotocol/sdk";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
@@ -24,38 +24,55 @@ function createAgentWithSession(request: GatewayClient["request"]) {
   });
 }
 
+function createRequestRecorder(
+  handler: (...args: Parameters<GatewayClient["request"]>) => Promise<unknown>,
+) {
+  const calls: Parameters<GatewayClient["request"]>[] = [];
+  const request = (async (...args: Parameters<GatewayClient["request"]>) => {
+    calls.push(args);
+    return handler(...args);
+  }) as GatewayClient["request"];
+  return { calls, request };
+}
+
 describe("acp setSessionMode", () => {
   it("setSessionMode propagates gateway error", async () => {
-    const request = vi.fn(async () => {
+    const { calls, request } = createRequestRecorder(async () => {
       throw new Error("gateway rejected mode change");
-    }) as GatewayClient["request"];
+    });
     const agent = createAgentWithSession(request);
 
     await expect(agent.setSessionMode(createSetSessionModeRequest("high"))).rejects.toThrow(
       "gateway rejected mode change",
     );
-    expect(request).toHaveBeenCalledWith("sessions.patch", {
-      key: "agent:main:main",
-      thinkingLevel: "high",
-    });
+    expect(calls).toContainEqual([
+      "sessions.patch",
+      {
+        key: "agent:main:main",
+        thinkingLevel: "high",
+      },
+    ]);
   });
 
   it("setSessionMode succeeds when gateway accepts", async () => {
-    const request = vi.fn(async () => ({ ok: true })) as GatewayClient["request"];
+    const { calls, request } = createRequestRecorder(async () => ({ ok: true }));
     const agent = createAgentWithSession(request);
 
     await expect(agent.setSessionMode(createSetSessionModeRequest("low"))).resolves.toEqual({});
-    expect(request).toHaveBeenCalledWith("sessions.patch", {
-      key: "agent:main:main",
-      thinkingLevel: "low",
-    });
+    expect(calls).toContainEqual([
+      "sessions.patch",
+      {
+        key: "agent:main:main",
+        thinkingLevel: "low",
+      },
+    ]);
   });
 
   it("setSessionMode returns early for empty modeId", async () => {
-    const request = vi.fn(async () => ({ ok: true })) as GatewayClient["request"];
+    const { calls, request } = createRequestRecorder(async () => ({ ok: true }));
     const agent = createAgentWithSession(request);
 
     await expect(agent.setSessionMode(createSetSessionModeRequest(""))).resolves.toEqual({});
-    expect(request).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
   });
 });

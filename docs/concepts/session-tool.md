@@ -22,6 +22,27 @@ orchestrate sub-agents.
 | `subagents`        | List, steer, or kill spawned sub-agents for this session                    |
 | `session_status`   | Show a `/status`-style card and optionally set a per-session model override |
 
+These tools are still subject to the active tool profile and allow/deny
+policy. `tools.profile: "coding"` includes the full session orchestration
+set, including `sessions_spawn`, `sessions_yield`, and `subagents`.
+`tools.profile: "messaging"` includes cross-session messaging tools
+(`sessions_list`, `sessions_history`, `sessions_send`, `session_status`) but
+does not include sub-agent spawning. To keep a messaging profile and still
+allow native delegation, add:
+
+```json5
+{
+  tools: {
+    profile: "messaging",
+    alsoAllow: ["sessions_spawn", "sessions_yield", "subagents"],
+  },
+}
+```
+
+Group, provider, sandbox, and per-agent policies can still remove those tools
+after the profile stage. Use `/tools` from the affected session to inspect the
+effective tool list.
+
 ## Listing and reading sessions
 
 `sessions_list` returns sessions with their key, agentId, kind, channel, model,
@@ -82,7 +103,9 @@ agents alternate messages (up to 5 turns). The target agent can reply
 or another visible session. It reports usage, time, model/runtime state, and
 linked background-task context when present. Like `/status`, it can backfill
 sparse token/cache counters from the latest transcript usage entry, and
-`model=default` clears a per-session override.
+`model=default` clears a per-session override. Use `sessionKey="current"` for
+the caller's current session; visible client labels such as `openclaw-tui` are
+not session keys.
 
 `sessions_yield` intentionally ends the current turn so the next message can be
 the follow-up event you are waiting for. Use it after spawning sub-agents when

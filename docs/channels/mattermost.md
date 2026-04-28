@@ -90,6 +90,7 @@ Native slash commands are opt-in. When enabled, OpenClaw registers `oc_*` slash 
     - For multi-account setups, `commands` can be set at the top level or under `channels.mattermost.accounts.<id>.commands` (account values override top-level fields).
     - Command callbacks are validated with the per-command tokens returned by Mattermost when OpenClaw registers `oc_*` commands.
     - Slash callbacks fail closed when registration failed, startup was partial, or the callback token does not match one of the registered commands.
+
   </Accordion>
   <Accordion title="Reachability requirement">
     The callback endpoint must be reachable from the Mattermost server.
@@ -284,11 +285,13 @@ Enable via `channels.mattermost.streaming`:
     - `block` uses append-style draft chunks inside the preview post.
     - `progress` shows a status preview while generating and only posts the final answer at completion.
     - `off` disables preview streaming.
+
   </Accordion>
   <Accordion title="Streaming behavior notes">
     - If the stream cannot be finalized in place (for example the post was deleted mid-stream), OpenClaw falls back to sending a fresh final post so the reply is never lost.
     - Reasoning-only payloads are suppressed from channel posts, including text that arrives as a `> Reasoning:` blockquote. Set `/reasoning on` to see thinking in other surfaces; the Mattermost final post keeps the answer only.
     - See [Streaming](/concepts/streaming#preview-streaming-modes) for the channel-mapping matrix.
+
   </Accordion>
 </AccordionGroup>
 
@@ -362,6 +365,7 @@ When a user clicks a button:
     - Button callbacks use HMAC-SHA256 verification (automatic, no config needed).
     - Mattermost strips callback data from its API responses (security feature), so all buttons are removed on click — partial removal is not possible.
     - Action IDs containing hyphens or underscores are sanitized automatically (Mattermost routing limitation).
+
   </Accordion>
   <Accordion title="Config and reachability">
     - `channels.mattermost.capabilities`: array of capability strings. Add `"inlineButtons"` to enable the buttons tool description in the agent system prompt.
@@ -370,6 +374,7 @@ When a user clicks a button:
     - If `interactions.callbackBaseUrl` is omitted, OpenClaw derives the callback URL from `gateway.customBindHost` + `gateway.port`, then falls back to `http://localhost:<port>`.
     - Reachability rule: the button callback URL must be reachable from the Mattermost server. `localhost` only works when Mattermost and OpenClaw run on the same host/network namespace.
     - If your callback target is private/tailnet/internal, add its host/domain to Mattermost `ServiceSettings.AllowedUntrustedInternalConnections`.
+
   </Accordion>
 </AccordionGroup>
 
@@ -418,7 +423,8 @@ External scripts and webhooks can post buttons directly via the Mattermost REST 
 4. Action `id` must be **alphanumeric only** (`[a-zA-Z0-9]`). Hyphens and underscores break Mattermost's server-side action routing (returns 404). Strip them before use.
 5. `context.action_id` must match the button's `id` so the confirmation message shows the button name (e.g., "Approve") instead of a raw ID.
 6. `context.action_id` is required — the interaction handler returns 400 without it.
-   </Warning>
+
+</Warning>
 
 **HMAC token generation**
 
@@ -465,6 +471,7 @@ context = {**ctx, "_token": token}
     - Always sign **all** context fields (minus `_token`). The gateway strips `_token` then signs everything remaining. Signing a subset causes silent verification failure.
     - Use `sort_keys=True` — the gateway sorts keys before signing, and Mattermost may reorder context fields when storing the payload.
     - Derive the secret from the bot token (deterministic), not random bytes. The secret must be the same across the process that creates buttons and the gateway that verifies.
+
   </Accordion>
 </AccordionGroup>
 
@@ -500,6 +507,7 @@ Mattermost supports multiple accounts under `channels.mattermost.accounts`:
   <Accordion title="Auth or multi-account errors">
     - Check the bot token, base URL, and whether the account is enabled.
     - Multi-account issues: env vars only apply to the `default` account.
+
   </Accordion>
   <Accordion title="Native slash commands fail">
     - `Unauthorized: invalid command token.`: OpenClaw did not accept the callback token. Typical causes:
@@ -509,6 +517,7 @@ Mattermost supports multiple accounts under `channels.mattermost.accounts`:
       - the gateway restarted without reactivating slash commands
     - If native slash commands stop working, check logs for `mattermost: failed to register slash commands` or `mattermost: native slash commands enabled but no commands could be registered`.
     - If `callbackUrl` is omitted and logs warn that the callback resolved to `http://127.0.0.1:18789/...`, that URL is probably only reachable when Mattermost runs on the same host/network namespace as OpenClaw. Set an explicit externally reachable `commands.callbackUrl` instead.
+
   </Accordion>
   <Accordion title="Buttons issues">
     - Buttons appear as white boxes: the agent may be sending malformed button data. Check that each button has both `text` and `callback_data` fields.
@@ -518,6 +527,7 @@ Mattermost supports multiple accounts under `channels.mattermost.accounts`:
     - Gateway logs `missing _token in context`: the `_token` field is not in the button's context. Ensure it is included when building the integration payload.
     - Confirmation shows raw ID instead of button name: `context.action_id` does not match the button's `id`. Set both to the same sanitized value.
     - Agent doesn't know about buttons: add `capabilities: ["inlineButtons"]` to the Mattermost channel config.
+
   </Accordion>
 </AccordionGroup>
 

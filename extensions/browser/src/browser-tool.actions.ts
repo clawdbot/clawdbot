@@ -6,9 +6,9 @@ import {
   browserSnapshot,
   browserTabs,
   getBrowserProfileCapabilities,
+  getRuntimeConfig,
   imageResultFromFile,
   jsonResult,
-  loadConfig,
   normalizeOptionalString,
   readStringValue,
   resolveBrowserConfig,
@@ -22,8 +22,8 @@ const browserToolActionDeps = {
   browserConsoleMessages,
   browserSnapshot,
   browserTabs,
+  getRuntimeConfig,
   imageResultFromFile,
-  loadConfig,
 };
 
 const BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS = 5_000;
@@ -70,7 +70,7 @@ function existingSessionRejectsActTimeout(request: BrowserActRequest): boolean {
 }
 
 function usesExistingSessionProfile(profileName: string | undefined): boolean {
-  const cfg = browserToolActionDeps.loadConfig();
+  const cfg = browserToolActionDeps.getRuntimeConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const profile = resolveProfile(resolved, profileName ?? resolved.defaultProfile);
   return profile ? getBrowserProfileCapabilities(profile).usesChromeMcp : false;
@@ -91,7 +91,7 @@ function withConfiguredActTimeout(
     return request;
   }
 
-  const cfg = browserToolActionDeps.loadConfig();
+  const cfg = browserToolActionDeps.getRuntimeConfig();
   const configuredTimeout =
     normalizePositiveTimeoutMs(cfg.browser?.actionTimeoutMs) ?? DEFAULT_BROWSER_ACTION_TIMEOUT_MS;
   return { ...typedRequest, timeoutMs: configuredTimeout } as BrowserActRequest;
@@ -122,7 +122,7 @@ export const __testing = {
       browserSnapshot: typeof browserSnapshot;
       browserTabs: typeof browserTabs;
       imageResultFromFile: typeof imageResultFromFile;
-      loadConfig: typeof loadConfig;
+      getRuntimeConfig: typeof getRuntimeConfig;
     }> | null,
   ) {
     browserToolActionDeps.browserAct = overrides?.browserAct ?? browserAct;
@@ -132,7 +132,7 @@ export const __testing = {
     browserToolActionDeps.browserTabs = overrides?.browserTabs ?? browserTabs;
     browserToolActionDeps.imageResultFromFile =
       overrides?.imageResultFromFile ?? imageResultFromFile;
-    browserToolActionDeps.loadConfig = overrides?.loadConfig ?? loadConfig;
+    browserToolActionDeps.getRuntimeConfig = overrides?.getRuntimeConfig ?? getRuntimeConfig;
   },
 };
 
@@ -250,7 +250,7 @@ function isChromeStaleTargetError(profile: string | undefined, err: unknown): bo
     const msg = String(err);
     return msg.includes("404:") && msg.includes("tab not found");
   }
-  const cfg = browserToolActionDeps.loadConfig();
+  const cfg = browserToolActionDeps.getRuntimeConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const browserProfile = resolveProfile(resolved, profile);
   if (!browserProfile || !getBrowserProfileCapabilities(browserProfile).usesChromeMcp) {
@@ -326,7 +326,7 @@ export async function executeSnapshotAction(params: {
   onTabActivity?: (targetId: string | undefined) => void;
 }): Promise<AgentToolResult<unknown>> {
   const { input, baseUrl, profile, proxyRequest } = params;
-  const snapshotDefaults = browserToolActionDeps.loadConfig().browser?.snapshotDefaults;
+  const snapshotDefaults = browserToolActionDeps.getRuntimeConfig().browser?.snapshotDefaults;
   const format: "ai" | "aria" | undefined =
     input.snapshotFormat === "ai" ? "ai" : input.snapshotFormat === "aria" ? "aria" : undefined;
   const formatExplicit = format !== undefined;

@@ -1,5 +1,8 @@
 {
   "id": "nextcloud-talk",
+  "activation": {
+    "onStartup": false
+  },
   "channels": ["nextcloud-talk"],
   "channelEnvVars": {
     "nextcloud-talk": ["NEXTCLOUD_TALK_BOT_SECRET", "NEXTCLOUD_TALK_API_PASSWORD"]

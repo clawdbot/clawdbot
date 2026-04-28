@@ -11,6 +11,8 @@ import {
   parseModelsStatusRouteArgs,
   parseSessionsRouteArgs,
   parseStatusRouteArgs,
+  parseTasksAuditRouteArgs,
+  parseTasksListRouteArgs,
 } from "./route-args.js";
 
 type RouteArgParser<TArgs> = (argv: string[]) => TArgs | null;
@@ -130,6 +132,20 @@ export const routedCommandDefinitions = {
     runParsedArgs: async (args) => {
       const { modelsStatusCommand } = await loadModelsStatusCommand();
       await modelsStatusCommand(args, defaultRuntime);
+    },
+  }),
+  "tasks-list": defineRoutedCommand({
+    parseArgs: parseTasksListRouteArgs,
+    runParsedArgs: async (args) => {
+      const { tasksListJsonCommand } = await import("../../commands/tasks-json.js");
+      await tasksListJsonCommand(args, defaultRuntime);
+    },
+  }),
+  "tasks-audit": defineRoutedCommand({
+    parseArgs: parseTasksAuditRouteArgs,
+    runParsedArgs: async (args) => {
+      const { tasksAuditJsonCommand } = await import("../../commands/tasks-json.js");
+      await tasksAuditJsonCommand(args, defaultRuntime);
     },
   }),
   "channels-list": defineRoutedCommand({

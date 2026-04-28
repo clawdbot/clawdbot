@@ -1,75 +1,61 @@
-import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
-import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
-
-const runChannelPluginStartupMaintenanceMock = vi.fn().mockResolvedValue(undefined);
-
-vi.mock("../channels/plugins/lifecycle-startup.js", () => ({
-  runChannelPluginStartupMaintenance: runChannelPluginStartupMaintenanceMock,
-}));
-
-import {
-  getFreePort,
-  installGatewayTestHooks,
-  startGatewayServer,
-  testState,
-} from "./test-helpers.js";
-
-installGatewayTestHooks({ scope: "suite" });
+import { describe, expect, it } from "vitest";
+import { resolveGatewayStartupMaintenanceConfig } from "./server-startup-plugins.js";
 
 describe("gateway startup channel maintenance wiring", () => {
-  it("runs startup channel maintenance with the resolved startup config", async () => {
-    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.resolve(process.cwd(), "extensions");
-    process.env.OPENCLAW_SKIP_CHANNELS = "0";
-    clearPluginDiscoveryCache();
-    clearPluginManifestRegistryCache();
-    runChannelPluginStartupMaintenanceMock.mockClear();
+  it("uses channels from the resolved startup config when startup config repaired them", () => {
+    const resolved = resolveGatewayStartupMaintenanceConfig({
+      cfgAtStart: {
+        plugins: { enabled: true },
+      },
+      startupRuntimeConfig: {
+        plugins: { enabled: true },
+        channels: {
+          matrix: {
+            homeserver: "https://matrix.example.org",
+            userId: "@bot:example.org",
+            accessToken: "tok-123",
+          },
+        },
+      },
+    });
 
-    testState.channelsConfig = {
+    expect(resolved.channels).toEqual({
       matrix: {
         homeserver: "https://matrix.example.org",
         userId: "@bot:example.org",
         accessToken: "tok-123",
       },
-    };
+    });
+  });
 
-    let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
-    try {
-      server = await startGatewayServer(await getFreePort());
+  it("preserves explicit startup channel config", () => {
+    const resolved = resolveGatewayStartupMaintenanceConfig({
+      cfgAtStart: {
+        plugins: { enabled: true },
+        channels: {
+          matrix: {
+            homeserver: "https://matrix.original.example",
+            userId: "@original:example.org",
+            accessToken: "original-token",
+          },
+        },
+      },
+      startupRuntimeConfig: {
+        plugins: { enabled: true },
+        channels: {
+          matrix: {
+            homeserver: "https://matrix.repaired.example",
+            userId: "@repaired:example.org",
+            accessToken: "repaired-token",
+          },
+        },
+      },
+    });
 
-      expect(runChannelPluginStartupMaintenanceMock).toHaveBeenCalledTimes(1);
-      expect(runChannelPluginStartupMaintenanceMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          cfg: expect.objectContaining({
-            channels: expect.objectContaining({
-              matrix: expect.objectContaining({
-                homeserver: "https://matrix.example.org",
-                userId: "@bot:example.org",
-                accessToken: "tok-123",
-              }),
-            }),
-          }),
-          env: process.env,
-          log: expect.anything(),
-        }),
-      );
-    } finally {
-      await server?.close();
-      if (previousBundledPluginsDir === undefined) {
-        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-      } else {
-        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
-      }
-      if (previousSkipChannels === undefined) {
-        delete process.env.OPENCLAW_SKIP_CHANNELS;
-      } else {
-        process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
-      }
-      clearPluginDiscoveryCache();
-      clearPluginManifestRegistryCache();
-    }
+    expect(resolved.channels?.matrix).toEqual({
+      homeserver: "https://matrix.original.example",
+      userId: "@original:example.org",
+      accessToken: "original-token",
+    });
   });
 });

@@ -1,5 +1,5 @@
 import { ChannelType } from "discord-api-types/v10";
-import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { logVerboseMock } = vi.hoisted(() => ({
@@ -37,7 +37,7 @@ let createNoopThreadBindingManager: typeof import("./thread-bindings.js").create
 function createNativeCommand(
   name: string,
   opts?: {
-    cfg?: ReturnType<typeof loadConfig>;
+    cfg?: OpenClawConfig;
     discordConfig?: NonNullable<OpenClawConfig["channels"]>["discord"];
   },
 ): ReturnType<typeof import("./native-command.js").createDiscordNativeCommand> {
@@ -47,7 +47,7 @@ function createNativeCommand(
   if (!command) {
     throw new Error(`missing native command: ${name}`);
   }
-  const baseCfg: ReturnType<typeof loadConfig> = opts?.cfg ?? {};
+  const baseCfg: OpenClawConfig = opts?.cfg ?? {};
   const discordConfig: NonNullable<OpenClawConfig["channels"]>["discord"] =
     opts?.discordConfig ?? baseCfg.channels?.discord ?? {};
   const cfg =
@@ -211,7 +211,7 @@ describe("createDiscordNativeCommand option wiring", () => {
             discord: ["user:allowed-user"],
           },
         },
-      } as ReturnType<typeof loadConfig>,
+      } as OpenClawConfig,
     });
     const level = requireOption(command, "level");
     const autocomplete = requireAutocomplete(level, "think level option did not wire autocomplete");
@@ -250,7 +250,7 @@ describe("createDiscordNativeCommand option wiring", () => {
             },
           },
         },
-      } as ReturnType<typeof loadConfig>,
+      } as OpenClawConfig,
     });
     const level = requireOption(command, "level");
     const autocomplete = requireAutocomplete(level, "think level option did not wire autocomplete");
@@ -284,7 +284,7 @@ describe("createDiscordNativeCommand option wiring", () => {
             discord: ["user:allowed-user"],
           },
         },
-      } as ReturnType<typeof loadConfig>,
+      } as OpenClawConfig,
       discordConfig,
     });
     const level = requireOption(command, "level");
@@ -304,7 +304,7 @@ describe("createDiscordNativeCommand option wiring", () => {
 
   it("truncates Discord command and option descriptions to Discord's limit", () => {
     const longDescription = "x".repeat(140);
-    const cfg = {} as ReturnType<typeof loadConfig>;
+    const cfg = {} as OpenClawConfig;
     const discordConfig = {} as NonNullable<OpenClawConfig["channels"]>["discord"];
     const command = createDiscordNativeCommand({
       command: {

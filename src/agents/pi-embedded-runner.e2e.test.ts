@@ -13,7 +13,10 @@ import {
   immediateEnqueue,
   makeEmbeddedRunnerAttempt,
 } from "./test-helpers/pi-embedded-runner-e2e-fixtures.js";
-import { installEmbeddedRunnerBaseE2eMocks } from "./test-helpers/pi-embedded-runner-e2e-mocks.js";
+import {
+  installEmbeddedRunnerBaseE2eMocks,
+  installEmbeddedRunnerFastRunE2eMocks,
+} from "./test-helpers/pi-embedded-runner-e2e-mocks.js";
 
 const runEmbeddedAttemptMock = vi.fn();
 const disposeSessionMcpRuntimeMock = vi.fn<(sessionId: string) => Promise<void>>(async () => {
@@ -88,6 +91,9 @@ vi.mock("@mariozechner/pi-ai", async () => {
 
 const installRunEmbeddedMocks = () => {
   installEmbeddedRunnerBaseE2eMocks({ hookRunner: "full" });
+  installEmbeddedRunnerFastRunE2eMocks({
+    runEmbeddedAttempt: (params) => runEmbeddedAttemptMock(params),
+  });
   vi.doMock("./command/session.js", async () => {
     const actual =
       await vi.importActual<typeof import("./command/session.js")>("./command/session.js");
@@ -110,9 +116,6 @@ const installRunEmbeddedMocks = () => {
       },
     };
   });
-  vi.doMock("./pi-embedded-runner/run/attempt.js", () => ({
-    runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
-  }));
   vi.doMock("./pi-bundle-mcp-tools.js", () => ({
     disposeSessionMcpRuntime: (sessionId: string) => disposeSessionMcpRuntimeMock(sessionId),
     retireSessionMcpRuntimeForSessionKey: () => Promise.resolve(false),
@@ -139,15 +142,6 @@ const installRunEmbeddedMocks = () => {
       stopRuntimeAuthRefreshTimer: vi.fn(),
     }),
   }));
-  vi.doMock("../plugins/provider-runtime.js", async () => {
-    const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
-      "../plugins/provider-runtime.js",
-    );
-    return {
-      ...actual,
-      prepareProviderRuntimeAuth: vi.fn(async () => undefined),
-    };
-  });
   vi.doMock("./models-config.js", async () => {
     const mod = await vi.importActual<typeof import("./models-config.js")>("./models-config.js");
     return {

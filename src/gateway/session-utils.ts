@@ -10,7 +10,11 @@ import {
 } from "../agents/agent-scope.js";
 import { lookupContextTokens, resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import {
+  findModelCatalogEntry,
+  modelSupportsInput,
+  type ModelCatalogEntry,
+} from "../agents/model-catalog.js";
 import {
   inferUniqueProviderFromConfiguredModels,
   normalizeStoredOverrideModel,
@@ -34,7 +38,7 @@ import {
   shouldKeepSubagentRunChildLink,
 } from "../agents/subagent-run-liveness.js";
 import { listThinkingLevelOptions } from "../auto-reply/thinking.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -50,6 +54,7 @@ import {
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
@@ -67,8 +72,8 @@ import {
 } from "../shared/avatar-policy.js";
 import {
   normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
@@ -472,7 +477,7 @@ export function resolveDeletedAgentIdFromSessionKey(
 }
 
 export function loadSessionEntry(sessionKey: string) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const key = normalizeOptionalString(sessionKey) ?? "";
   const target = resolveGatewaySessionStoreTarget({
     cfg,
@@ -1042,6 +1047,7 @@ function resolveGatewaySessionThinkingDefault(params: {
   provider: string;
   model: string;
   agentId?: string;
+  modelCatalog?: ModelCatalogEntry[];
 }) {
   const agentThinkingDefault = params.agentId
     ? resolveAgentConfig(params.cfg, params.agentId)?.thinkingDefault
@@ -1052,11 +1058,15 @@ function resolveGatewaySessionThinkingDefault(params: {
       cfg: params.cfg,
       provider: params.provider,
       model: params.model,
+      catalog: params.modelCatalog,
     })
   );
 }
 
-export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults {
+export function getSessionDefaults(
+  cfg: OpenClawConfig,
+  modelCatalog?: ModelCatalogEntry[],
+): GatewaySessionsDefaults {
   const resolved = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
@@ -1066,7 +1076,7 @@ export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults
     cfg.agents?.defaults?.contextTokens ??
     lookupContextTokens(resolved.model, { allowAsyncLoad: false }) ??
     DEFAULT_CONTEXT_TOKENS;
-  const thinkingLevels = listThinkingLevelOptions(resolved.provider, resolved.model);
+  const thinkingLevels = listThinkingLevelOptions(resolved.provider, resolved.model, modelCatalog);
   return {
     modelProvider: resolved.provider ?? null,
     model: resolved.model ?? null,
@@ -1077,6 +1087,7 @@ export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults
       cfg,
       provider: resolved.provider,
       model: resolved.model,
+      modelCatalog,
     }),
   };
 }
@@ -1125,17 +1136,19 @@ export async function resolveGatewayModelSupportsImages(params: {
 
   try {
     const catalog = await params.loadGatewayModelCatalog();
-    const modelEntry = catalog.find(
-      (entry) =>
-        entry.id === params.model && (!params.provider || entry.provider === params.provider),
+    const modelEntry = findModelCatalogEntry(catalog, {
+      provider: params.provider,
+      modelId: params.model,
+    });
+    const normalizedProvider = normalizeOptionalLowercaseString(
+      params.provider ?? modelEntry?.provider,
     );
-    const normalizedProvider = normalizeOptionalLowercaseString(params.provider);
     const normalizedCandidates = [
       normalizeLowercaseStringOrEmpty(params.model),
       normalizeLowercaseStringOrEmpty(modelEntry?.name),
     ].filter(Boolean);
     if (modelEntry) {
-      if (modelEntry.input?.includes("image")) {
+      if (modelSupportsInput(modelEntry, "image")) {
         return true;
       }
       // Legacy safety shim for stale persisted Foundry rows that predate
@@ -1240,6 +1253,7 @@ export function buildGatewaySessionRow(params: {
   store: Record<string, SessionEntry>;
   key: string;
   entry?: SessionEntry;
+  modelCatalog?: ModelCatalogEntry[];
   now?: number;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
@@ -1420,7 +1434,14 @@ export function buildGatewaySessionRow(params: {
   const rowModel = selectedModel?.model ?? model;
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
-  const thinkingLevels = listThinkingLevelOptions(thinkingProvider, thinkingModel);
+  const thinkingLevels = listThinkingLevelOptions(
+    thinkingProvider,
+    thinkingModel,
+    params.modelCatalog,
+  );
+  const pluginExtensions = entry
+    ? projectPluginSessionExtensionsSync({ sessionKey: key, entry })
+    : [];
 
   return {
     key,
@@ -1453,6 +1474,7 @@ export function buildGatewaySessionRow(params: {
       provider: thinkingProvider,
       model: thinkingModel,
       agentId: sessionAgentId,
+      modelCatalog: params.modelCatalog,
     }),
     fastMode: entry?.fastMode,
     verboseLevel: entry?.verboseLevel,
@@ -1484,7 +1506,30 @@ export function buildGatewaySessionRow(params: {
     lastThreadId: deliveryFields.lastThreadId ?? entry?.lastThreadId,
     compactionCheckpointCount: entry?.compactionCheckpoints?.length,
     latestCompactionCheckpoint,
+    pluginExtensions: pluginExtensions.length > 0 ? pluginExtensions : undefined,
   };
+}
+
+function resolveSessionListSearchDisplayName(
+  key: string,
+  entry?: SessionEntry,
+): string | undefined {
+  if (entry?.displayName) {
+    return entry.displayName;
+  }
+  const parsed = parseGroupKey(key);
+  const channel = entry?.channel ?? parsed?.channel;
+  if (!channel) {
+    return undefined;
+  }
+  return buildGroupDisplayName({
+    provider: channel,
+    subject: entry?.subject,
+    groupChannel: entry?.groupChannel,
+    space: entry?.space,
+    id: parsed?.id,
+    key,
+  });
 }
 
 export function loadGatewaySessionRow(
@@ -1511,6 +1556,7 @@ export function listSessionsFromStore(params: {
   cfg: OpenClawConfig;
   storePath: string;
   store: Record<string, SessionEntry>;
+  modelCatalog?: ModelCatalogEntry[];
   opts: import("./protocol/index.js").SessionsListParams;
 }): SessionsListResult {
   const { cfg, storePath, store, opts } = params;
@@ -1529,7 +1575,7 @@ export function listSessionsFromStore(params: {
       ? Math.max(1, Math.floor(opts.activeMinutes))
       : undefined;
 
-  let sessions = Object.entries(store)
+  let entries = Object.entries(store)
     .filter(([key]) => {
       if (isCronRunSessionKey(key)) {
         return false;
@@ -1583,23 +1629,17 @@ export function listSessionsFromStore(params: {
       }
       return entry?.label === label;
     })
-    .map(([key, entry]) =>
-      buildGatewaySessionRow({
-        cfg,
-        storePath,
-        store,
-        key,
-        entry,
-        now,
-        includeDerivedTitles,
-        includeLastMessage,
-      }),
-    )
-    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    .toSorted((a, b) => (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0));
 
   if (search) {
-    sessions = sessions.filter((s) => {
-      const fields = [s.displayName, s.label, s.subject, s.sessionId, s.key];
+    entries = entries.filter(([key, entry]) => {
+      const fields = [
+        resolveSessionListSearchDisplayName(key, entry),
+        entry?.label,
+        entry?.subject,
+        entry?.sessionId,
+        key,
+      ];
       return fields.some(
         (f) => typeof f === "string" && normalizeLowercaseStringOrEmpty(f).includes(search),
       );
@@ -1608,19 +1648,33 @@ export function listSessionsFromStore(params: {
 
   if (activeMinutes !== undefined) {
     const cutoff = now - activeMinutes * 60_000;
-    sessions = sessions.filter((s) => (s.updatedAt ?? 0) >= cutoff);
+    entries = entries.filter(([, entry]) => (entry?.updatedAt ?? 0) >= cutoff);
   }
 
   if (typeof opts.limit === "number" && Number.isFinite(opts.limit)) {
     const limit = Math.max(1, Math.floor(opts.limit));
-    sessions = sessions.slice(0, limit);
+    entries = entries.slice(0, limit);
   }
+
+  const sessions = entries.map(([key, entry]) =>
+    buildGatewaySessionRow({
+      cfg,
+      storePath,
+      store,
+      key,
+      entry,
+      modelCatalog: params.modelCatalog,
+      now,
+      includeDerivedTitles,
+      includeLastMessage,
+    }),
+  );
 
   return {
     ts: now,
     path: storePath,
     count: sessions.length,
-    defaults: getSessionDefaults(cfg),
+    defaults: getSessionDefaults(cfg, params.modelCatalog),
     sessions,
   };
 }

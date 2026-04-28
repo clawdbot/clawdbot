@@ -24,7 +24,7 @@ vi.mock("@buape/carbon/voice", () => ({
   },
 }));
 
-vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/dangerous-name-runtime", () => ({
   isDangerousNameMatchingEnabled: () => false,
 }));
 
@@ -61,6 +61,7 @@ vi.mock("./gateway-supervisor.js", () => ({
 
 vi.mock("./listeners.js", () => ({
   DiscordMessageListener: function DiscordMessageListener() {},
+  DiscordInteractionListener: function DiscordInteractionListener() {},
   DiscordPresenceListener: function DiscordPresenceListener() {},
   DiscordReactionListener: function DiscordReactionListener() {},
   DiscordReactionRemoveListener: function DiscordReactionRemoveListener() {},

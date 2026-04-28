@@ -6,6 +6,9 @@ import type { GatewayAccount, GatewayPluginRuntime } from "./types.js";
 const sendVoiceMessageMock = vi.hoisted(() =>
   vi.fn(async () => ({ id: "voice-1", timestamp: "2026-04-25T00:00:00.000Z" })),
 );
+const sendMediaMock = vi.hoisted(() =>
+  vi.fn(async () => ({ id: "media-1", timestamp: "2026-04-25T00:00:00.000Z" })),
+);
 const sendTextMock = vi.hoisted(() =>
   vi.fn(async () => ({ id: "text-1", timestamp: "2026-04-25T00:00:00.000Z" })),
 );
@@ -26,6 +29,7 @@ vi.mock("../messaging/sender.js", () => ({
   sendText: sendTextMock,
   sendVideoMessage: vi.fn(),
   sendVoiceMessage: sendVoiceMessageMock,
+  sendMedia: sendMediaMock,
   withTokenRetry: async (_creds: unknown, fn: () => Promise<unknown>) => await fn(),
 }));
 
@@ -86,6 +90,7 @@ function makeInbound(overrides: Partial<InboundContext> = {}): InboundContext {
     voiceTranscriptSources: [],
     commandAuthorized: false,
     blocked: false,
+    skipped: false,
     typing: { keepAlive: null },
     ...overrides,
   };
@@ -188,14 +193,12 @@ describe("dispatchOutbound", () => {
       accountId: "qq-main",
     });
     expect(audioFileToSilkBase64Mock).toHaveBeenCalledWith("/tmp/openclaw-qqbot/tts.wav");
-    expect(sendVoiceMessageMock).toHaveBeenCalledWith(
-      { type: "c2c", id: "user-openid" },
-      { appId: "app", clientSecret: "secret" },
+    expect(sendMediaMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        filePath: "/tmp/openclaw-qqbot/tts.wav",
+        kind: "voice",
+        source: { base64: "silk-base64" },
         msgId: "msg-1",
         ttsText: "read this aloud",
-        voiceBase64: "silk-base64",
       }),
     );
     expect(sendTextMock).not.toHaveBeenCalled();

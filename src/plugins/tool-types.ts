@@ -9,6 +9,8 @@ export type OpenClawPluginToolContext = {
   config?: OpenClawConfig;
   /** Active runtime-resolved config snapshot when one is available. */
   runtimeConfig?: OpenClawConfig;
+  /** Returns the latest runtime-resolved config snapshot for long-lived tool definitions. */
+  getRuntimeConfig?: () => OpenClawConfig | undefined;
   /** Effective filesystem policy for the active tool run. */
   fsPolicy?: ToolFsPolicy;
   workspaceDir?: string;

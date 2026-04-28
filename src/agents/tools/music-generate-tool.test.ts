@@ -18,7 +18,7 @@ const taskExecutorMocks = vi.hoisted(() => ({
 }));
 
 const configMocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({})),
+  getRuntimeConfig: vi.fn(() => ({})),
 }));
 
 const mediaStoreMocks = vi.hoisted(() => ({

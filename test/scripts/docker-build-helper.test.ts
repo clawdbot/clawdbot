@@ -37,6 +37,9 @@ describe("docker build helper", () => {
     expect(helper).toContain("docker_build_exec()");
     expect(helper).toContain("docker_build_run()");
     expect(helper).toContain("docker buildx build --load");
+    expect(helper).toContain("docker_build_transient_failure()");
+    expect(helper).toContain("OPENCLAW_DOCKER_BUILD_RETRIES");
+    expect(helper).toContain("frontend grpc server closed unexpectedly");
   });
 
   it("keeps shell-script Docker builds behind the helper", () => {
@@ -63,7 +66,9 @@ describe("docker build helper", () => {
     expect(liveBuild).toContain("docker image inspect");
     expect(liveBuild).toContain("docker pull");
     expect(liveBuild).toContain("Live-test image not available; building");
-    expect(liveCliBackend).toContain('"$ROOT_DIR/scripts/test-live-build-docker.sh"');
+    expect(liveCliBackend).toContain(
+      'OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"',
+    );
     expect(liveCliBackend).not.toContain(
       'echo "==> Reuse live-test image: $LIVE_IMAGE_NAME (OPENCLAW_SKIP_DOCKER_BUILD=1)"',
     );
@@ -84,7 +89,10 @@ describe("docker build helper", () => {
     const scenarios = readFileSync(DOCKER_E2E_SCENARIOS_PATH, "utf8");
 
     expect(scenarios).toContain(
-      '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=both pnpm test:install:e2e"',
+      '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local pnpm test:install:e2e"',
+    );
+    expect(scenarios).toContain(
+      '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=anthropic OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-anthropic:local pnpm test:install:e2e"',
     );
   });
 
@@ -92,7 +100,8 @@ describe("docker build helper", () => {
     const scenarios = readFileSync(DOCKER_E2E_SCENARIOS_PATH, "utf8");
 
     expect(scenarios).toContain('"plugins-offline"');
-    expect(scenarios).toContain('"bundled-plugin-install-uninstall"');
+    expect(scenarios).toContain("`bundled-plugin-install-uninstall-${index}`");
+    expect(scenarios).toContain("pnpm test:docker:bundled-plugin-install-uninstall");
     expect(scenarios).toContain("OPENCLAW_PLUGINS_E2E_CLAWHUB=0");
     expect(scenarios).toContain('"bundled-channel-deps-compat"');
     expect(scenarios).toContain("test:docker:bundled-channel-deps:fast");

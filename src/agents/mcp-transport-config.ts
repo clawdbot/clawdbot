@@ -1,3 +1,4 @@
+import { resolveOpenClawMcpTransportAlias } from "../config/mcp-config-normalize.js";
 import { logWarn } from "../logger.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
@@ -61,6 +62,17 @@ function getRequestedTransport(rawServer: unknown): string {
   return normalizeLowercaseStringOrEmpty((rawServer as { transport?: string }).transport);
 }
 
+function getRequestedTransportAlias(rawServer: unknown): HttpMcpTransportType | "" {
+  if (
+    !rawServer ||
+    typeof rawServer !== "object" ||
+    typeof (rawServer as { type?: unknown }).type !== "string"
+  ) {
+    return "";
+  }
+  return resolveOpenClawMcpTransportAlias((rawServer as { type?: string }).type) ?? "";
+}
+
 function resolveHttpTransportConfig(
   serverName: string,
   rawServer: unknown,
@@ -98,6 +110,8 @@ export function resolveMcpTransportConfig(
 ): ResolvedMcpTransportConfig | null {
   const logServerName = sanitizeForLog(serverName);
   const requestedTransport = getRequestedTransport(rawServer);
+  const requestedTransportAlias = requestedTransport ? "" : getRequestedTransportAlias(rawServer);
+  const effectiveTransport = requestedTransport || requestedTransportAlias;
   const stdioLaunch = resolveStdioMcpServerLaunchConfig(rawServer, {
     onDroppedEnv: (key) => {
       logWarn(
@@ -119,17 +133,17 @@ export function resolveMcpTransportConfig(
   }
 
   if (
-    requestedTransport &&
-    requestedTransport !== "sse" &&
-    requestedTransport !== "streamable-http"
+    effectiveTransport &&
+    effectiveTransport !== "sse" &&
+    effectiveTransport !== "streamable-http"
   ) {
     logWarn(
-      `bundle-mcp: skipped server "${logServerName}" because transport "${sanitizeForLog(requestedTransport)}" is not supported.`,
+      `bundle-mcp: skipped server "${logServerName}" because transport "${sanitizeForLog(effectiveTransport)}" is not supported.`,
     );
     return null;
   }
 
-  if (requestedTransport === "streamable-http") {
+  if (effectiveTransport === "streamable-http") {
     const httpTransport = resolveHttpTransportConfig(serverName, rawServer, "streamable-http");
     if (httpTransport) {
       return httpTransport;

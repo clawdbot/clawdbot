@@ -556,7 +556,7 @@ describe("diagnostic support export", () => {
     const cases = [
       [
         "connect wss://support-user:support-password@gateway.example/ws?token=short-token&ok=1",
-        "connect wss://<redacted>:<redacted>@gateway.example/ws?token=<redacted>",
+        "connect wss://<redacted>:<redacted>@gateway.example/ws?token=<redacted>&ok=1",
       ],
       [
         "connect https://gateway.example/ws?access-token=short-token",

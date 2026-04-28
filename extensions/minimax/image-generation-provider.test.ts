@@ -1,6 +1,6 @@
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
+import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { installPinnedHostnameTestHooks } from "../../src/media-understanding/audio.test-helpers.js";
 import {
   buildMinimaxImageGenerationProvider,
   buildMinimaxPortalImageGenerationProvider,

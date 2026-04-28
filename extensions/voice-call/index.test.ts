@@ -2,8 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.ts";
 import type { OpenClawPluginApi } from "./api.js";
 import type { VoiceCallRuntime } from "./runtime-entry.js";
 
@@ -175,6 +175,32 @@ describe("voice-call plugin", () => {
 
     expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
     expect(runtimeStub.manager.initiateCall).toHaveBeenCalledTimes(1);
+    expect(respond).toHaveBeenCalledWith(true, { callId: "call-1", initiated: true });
+  });
+
+  it("does not block service startup while runtime exposure initializes", async () => {
+    let resolveRuntime: ((runtime: VoiceCallRuntime) => void) | undefined;
+    vi.mocked(createVoiceCallRuntime).mockReturnValueOnce(
+      new Promise<VoiceCallRuntime>((resolve) => {
+        resolveRuntime = resolve;
+      }),
+    );
+    const { service, methods } = setup({ provider: "mock" });
+
+    expect(service).toBeDefined();
+    expect(service!.start(createServiceContext())).toBeUndefined();
+    expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
+
+    resolveRuntime?.(runtimeStub);
+    const handler = methods.get("voicecall.initiate") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+    await handler?.({ params: { message: "Hi" }, respond });
+
     expect(respond).toHaveBeenCalledWith(true, { callId: "call-1", initiated: true });
   });
 

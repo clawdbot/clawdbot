@@ -1,10 +1,13 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   collectTelegramInvalidAllowFromWarnings,
+  collectTelegramApiRootWarnings,
   collectTelegramEmptyAllowlistExtraWarnings,
   collectTelegramGroupPolicyWarnings,
+  maybeRepairTelegramApiRoots,
   maybeRepairTelegramAllowFromUsernames,
+  scanTelegramBotEndpointApiRoots,
   scanTelegramInvalidAllowFromEntries,
   telegramDoctor,
 } from "./doctor.js";
@@ -287,5 +290,69 @@ describe("telegram doctor", () => {
 
     expect(warnings[0]).toContain("invalid sender entries");
     expect(warnings[1]).toContain("openclaw doctor --fix");
+  });
+
+  it("warns and repairs Telegram apiRoot values that include the bot endpoint", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          apiRoot: "https://api.telegram.org/bot123456:ABC",
+          accounts: {
+            work: {
+              apiRoot: "https://proxy.example.test/custom/bot234567:DEF/",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const hits = scanTelegramBotEndpointApiRoots(cfg);
+    expect(hits.map((hit) => hit.path)).toEqual([
+      "channels.telegram.apiRoot",
+      "channels.telegram.accounts.work.apiRoot",
+    ]);
+    expect(
+      collectTelegramApiRootWarnings({ hits, doctorFixCommand: "openclaw doctor --fix" }),
+    ).toContain(
+      "- channels.telegram.apiRoot points at a full Telegram bot endpoint; apiRoot must be the Bot API root only. This can make startup calls like deleteWebhook, deleteMyCommands, and setMyCommands fail with 404 even when direct curl commands work.",
+    );
+
+    const repaired = maybeRepairTelegramApiRoots(cfg);
+    expect(repaired.config.channels?.telegram?.apiRoot).toBe("https://api.telegram.org");
+    expect(repaired.config.channels?.telegram?.accounts?.work?.apiRoot).toBe(
+      "https://proxy.example.test/custom",
+    );
+    expect(repaired.changes).toEqual([
+      "- channels.telegram.apiRoot: removed trailing /bot<TOKEN> from Telegram apiRoot.",
+      "- channels.telegram.accounts.work.apiRoot: removed trailing /bot<TOKEN> from Telegram apiRoot.",
+    ]);
+  });
+
+  it("wires apiRoot preview warnings and repair through the doctor adapter", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          apiRoot: "https://api.telegram.org/bot123456:ABC",
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      await telegramDoctor.collectPreviewWarnings?.({
+        cfg,
+        doctorFixCommand: "openclaw doctor --fix",
+      }),
+    ).toContain(
+      "- channels.telegram.apiRoot points at a full Telegram bot endpoint; apiRoot must be the Bot API root only. This can make startup calls like deleteWebhook, deleteMyCommands, and setMyCommands fail with 404 even when direct curl commands work.",
+    );
+
+    const repaired = await telegramDoctor.repairConfig?.({
+      cfg,
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+    expect(repaired?.config.channels?.telegram?.apiRoot).toBe("https://api.telegram.org");
+    expect(repaired?.changes).toEqual([
+      "- channels.telegram.apiRoot: removed trailing /bot<TOKEN> from Telegram apiRoot.",
+    ]);
   });
 });

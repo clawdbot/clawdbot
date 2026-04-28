@@ -232,7 +232,7 @@ describe("cron view", () => {
     expect(runHistoryCard).not.toBeUndefined();
 
     const summaries = Array.from(
-      runHistoryCard?.querySelectorAll(".list-item .list-sub") ?? [],
+      runHistoryCard?.querySelectorAll(".cron-run-entry__body") ?? [],
     ).map((el) => (el.textContent ?? "").trim());
     expect(summaries[0]).toBe("newer run");
     expect(summaries[1]).toBe("older run");
@@ -297,6 +297,104 @@ describe("cron view", () => {
     expect(container.textContent).toContain("Delivery");
     expect(container.textContent).toContain("webhook");
     expect(container.textContent).toContain("https://example.invalid/cron");
+  });
+
+  it("renders cron job prompts and run summaries as sanitized markdown", () => {
+    const container = document.createElement("div");
+    const onLoadRuns = vi.fn();
+    const job = {
+      ...createJob("job-md"),
+      sessionTarget: "isolated" as const,
+      payload: {
+        kind: "agentTurn" as const,
+        message: "## Plan\n\n- **Ship** [docs](https://example.com)\n\n<script>alert(1)</script>",
+      },
+      delivery: { mode: "announce" as const, channel: "telegram", to: "123" },
+    };
+
+    render(
+      renderCron(
+        createProps({
+          jobs: [job],
+          runs: [
+            {
+              ts: 2,
+              jobId: "job-md",
+              status: "ok",
+              summary: "Done with **markdown**\n\n| A | B |\n| - | - |\n| 1 | 2 |",
+            },
+          ],
+          onLoadRuns,
+        }),
+      ),
+      container,
+    );
+
+    const prompt = container.querySelector(".cron-job-detail-value.chat-text");
+    expect(prompt?.querySelector("strong")?.textContent).toBe("Ship");
+    expect(prompt?.querySelector("a")?.getAttribute("href")).toBe("https://example.com");
+    expect(prompt?.querySelector("script")).toBeNull();
+
+    const promptLink = prompt?.querySelector("a");
+    promptLink?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onLoadRuns).not.toHaveBeenCalled();
+
+    const row = container.querySelector(".cron-job");
+    row?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onLoadRuns).toHaveBeenCalledWith("job-md");
+
+    const runBody = container.querySelector(".cron-run-entry__body.chat-text");
+    expect(runBody?.querySelector("strong")?.textContent).toBe("markdown");
+    expect(runBody?.querySelector("table")).not.toBeNull();
+  });
+
+  it("shows run errors in one place when no summary exists", () => {
+    const container = document.createElement("div");
+    render(
+      renderCron(
+        createProps({
+          runs: [
+            {
+              ts: 2,
+              jobId: "job-error",
+              status: "error",
+              error: "Failed with **markdown**",
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".cron-run-entry__meta")?.textContent).not.toContain(
+      "Failed with",
+    );
+    expect(container.querySelector(".cron-run-entry__body strong")?.textContent).toBe("markdown");
+  });
+
+  it("treats empty run summaries as absent when an error exists", () => {
+    const container = document.createElement("div");
+    render(
+      renderCron(
+        createProps({
+          runs: [
+            {
+              ts: 2,
+              jobId: "job-empty-summary",
+              status: "error",
+              summary: "",
+              error: "Failed with **markdown**",
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".cron-run-entry__meta")?.textContent).not.toContain(
+      "Failed with",
+    );
+    expect(container.querySelector(".cron-run-entry__body strong")?.textContent).toBe("markdown");
   });
 
   it("wires the Edit action and shows save/cancel controls when editing", () => {

@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { t } from "../../i18n/index.ts";
 import type {
   CronFieldErrors,
@@ -8,6 +9,7 @@ import type {
   CronJobsScheduleKindFilter,
 } from "../controllers/cron.ts";
 import { formatRelativeTimestamp, formatMs } from "../format.ts";
+import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatCronSchedule, formatNextRun } from "../presenter.ts";
 import type { ChannelUiMetaEntry, CronJob, CronRunLogEntry, CronStatus } from "../types.ts";
@@ -1479,17 +1481,19 @@ function renderJob(job: CronJob, props: CronProps) {
   };
   return html`
     <div class=${itemClass} @click=${() => props.onLoadRuns(job.id)}>
-      <div class="list-main">
-        <div class="list-title">${job.name}</div>
-        <div class="list-sub">${formatCronSchedule(job)}</div>
-        ${renderJobPayload(job)}
-        ${job.agentId
-          ? html`<div class="muted cron-job-agent">
-              ${t("cron.jobDetail.agent")}: ${job.agentId}
-            </div>`
-          : nothing}
+      <div class="cron-job-header">
+        <div class="list-main">
+          <div class="list-title">${job.name}</div>
+          <div class="list-sub">${formatCronSchedule(job)}</div>
+          ${job.agentId
+            ? html`<div class="muted cron-job-agent">
+                ${t("cron.jobDetail.agent")}: ${job.agentId}
+              </div>`
+            : nothing}
+        </div>
+        <div class="list-meta">${renderJobState(job)}</div>
       </div>
-      <div class="list-meta">${renderJobState(job)}</div>
+      ${renderJobPayload(job)}
       <div class="cron-job-footer">
         <div class="chip-row cron-job-chips">
           <span class=${`chip ${job.enabled ? "chip-ok" : "chip-danger"}`}>
@@ -1595,16 +1599,27 @@ function renderJobPayload(job: CronJob) {
 
   return html`
     <div class="cron-job-detail">
-      <span class="cron-job-detail-label">${t("cron.jobDetail.prompt")}</span>
-      <span class="muted cron-job-detail-value">${job.payload.message}</span>
+      <div class="cron-job-detail-section">
+        <span class="cron-job-detail-label">${t("cron.jobDetail.prompt")}</span>
+        <div class="muted cron-job-detail-value chat-text" @click=${stopPropagationForInteractive}>
+          ${unsafeHTML(toSanitizedMarkdownHtml(job.payload.message))}
+        </div>
+      </div>
+      ${delivery
+        ? html`<div class="cron-job-detail-section">
+            <span class="cron-job-detail-label">${t("cron.jobDetail.delivery")}</span>
+            <span class="muted cron-job-detail-value">${delivery.mode}${deliveryTarget}</span>
+          </div>`
+        : nothing}
     </div>
-    ${delivery
-      ? html`<div class="cron-job-detail">
-          <span class="cron-job-detail-label">${t("cron.jobDetail.delivery")}</span>
-          <span class="muted cron-job-detail-value">${delivery.mode}${deliveryTarget}</span>
-        </div>`
-      : nothing}
   `;
+}
+
+function stopPropagationForInteractive(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  if (target?.closest("a,button,input,textarea,select,summary,[role='button'],[role='link']")) {
+    event.stopPropagation();
+  }
 }
 
 function formatStateRelative(ms?: number) {
@@ -1708,59 +1723,63 @@ function renderRun(
       : usage && typeof usage.input_tokens === "number" && typeof usage.output_tokens === "number"
         ? `${usage.input_tokens} in / ${usage.output_tokens} out`
         : null;
+  const bodySource = entry.summary || entry.error || t("cron.runEntry.noSummary");
+  const showErrorInMeta = !!entry.error && !!entry.summary;
   return html`
     <div class="list-item cron-run-entry">
-      <div class="list-main cron-run-entry__main">
-        <div class="list-title cron-run-entry__title">
-          ${entry.jobName ?? entry.jobId}
-          <span class="muted"> · ${status}</span>
+      <div class="cron-run-entry__header">
+        <div class="list-main cron-run-entry__main">
+          <div class="list-title cron-run-entry__title">
+            ${entry.jobName ?? entry.jobId}
+            <span class="muted"> · ${status}</span>
+          </div>
+          <div class="chip-row" style="margin-top: 4px;">
+            <span class="chip">${delivery}</span>
+            ${entry.model ? html`<span class="chip">${entry.model}</span>` : nothing}
+            ${entry.provider ? html`<span class="chip">${entry.provider}</span>` : nothing}
+            ${usageSummary ? html`<span class="chip">${usageSummary}</span>` : nothing}
+          </div>
         </div>
-        <div class="list-sub cron-run-entry__summary">
-          ${entry.summary ?? entry.error ?? t("cron.runEntry.noSummary")}
-        </div>
-        <div class="chip-row" style="margin-top: 6px;">
-          <span class="chip">${delivery}</span>
-          ${entry.model ? html`<span class="chip">${entry.model}</span>` : nothing}
-          ${entry.provider ? html`<span class="chip">${entry.provider}</span>` : nothing}
-          ${usageSummary ? html`<span class="chip">${usageSummary}</span>` : nothing}
+        <div class="list-meta cron-run-entry__meta">
+          <div>${formatMs(entry.ts)}</div>
+          ${typeof entry.runAtMs === "number"
+            ? html`<div class="muted">${t("cron.runEntry.runAt")} ${formatMs(entry.runAtMs)}</div>`
+            : nothing}
+          <div class="muted">${entry.durationMs ?? 0}ms</div>
+          ${typeof entry.nextRunAtMs === "number"
+            ? html`<div class="muted">${formatRunNextLabel(entry.nextRunAtMs)}</div>`
+            : nothing}
+          ${chatUrl
+            ? html`<div>
+                <a
+                  class="session-link"
+                  href=${chatUrl}
+                  @click=${(e: MouseEvent) => {
+                    if (
+                      e.defaultPrevented ||
+                      e.button !== 0 ||
+                      e.metaKey ||
+                      e.ctrlKey ||
+                      e.shiftKey ||
+                      e.altKey
+                    ) {
+                      return;
+                    }
+                    if (onNavigateToChat && entry.sessionKey) {
+                      e.preventDefault();
+                      onNavigateToChat(entry.sessionKey);
+                    }
+                  }}
+                  >${t("cron.runEntry.openRunChat")}</a
+                >
+              </div>`
+            : nothing}
+          ${showErrorInMeta ? html`<div class="muted">${entry.error}</div>` : nothing}
+          ${entry.deliveryError ? html`<div class="muted">${entry.deliveryError}</div>` : nothing}
         </div>
       </div>
-      <div class="list-meta cron-run-entry__meta">
-        <div>${formatMs(entry.ts)}</div>
-        ${typeof entry.runAtMs === "number"
-          ? html`<div class="muted">${t("cron.runEntry.runAt")} ${formatMs(entry.runAtMs)}</div>`
-          : nothing}
-        <div class="muted">${entry.durationMs ?? 0}ms</div>
-        ${typeof entry.nextRunAtMs === "number"
-          ? html`<div class="muted">${formatRunNextLabel(entry.nextRunAtMs)}</div>`
-          : nothing}
-        ${chatUrl
-          ? html`<div>
-              <a
-                class="session-link"
-                href=${chatUrl}
-                @click=${(e: MouseEvent) => {
-                  if (
-                    e.defaultPrevented ||
-                    e.button !== 0 ||
-                    e.metaKey ||
-                    e.ctrlKey ||
-                    e.shiftKey ||
-                    e.altKey
-                  ) {
-                    return;
-                  }
-                  if (onNavigateToChat && entry.sessionKey) {
-                    e.preventDefault();
-                    onNavigateToChat(entry.sessionKey);
-                  }
-                }}
-                >${t("cron.runEntry.openRunChat")}</a
-              >
-            </div>`
-          : nothing}
-        ${entry.error ? html`<div class="muted">${entry.error}</div>` : nothing}
-        ${entry.deliveryError ? html`<div class="muted">${entry.deliveryError}</div>` : nothing}
+      <div class="cron-run-entry__body chat-text">
+        ${unsafeHTML(toSanitizedMarkdownHtml(bodySource))}
       </div>
     </div>
   `;

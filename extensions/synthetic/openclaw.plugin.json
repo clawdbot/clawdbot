@@ -1,5 +1,8 @@
 {
   "id": "synthetic",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["synthetic"],
   "providerAuthEnvVars": {

@@ -2,11 +2,16 @@ import { createServer } from "node:http";
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
 import * as grammy from "grammy";
-import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { isDiagnosticsEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
+import type { BackoffPolicy, RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  computeBackoff,
+  defaultRuntime,
+  formatDurationPrecise,
+  sleepWithAbort,
+} from "openclaw/plugin-sdk/runtime-env";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   logWebhookError,
@@ -25,9 +30,20 @@ import { readJsonBodyWithLimit } from "openclaw/plugin-sdk/webhook-request-guard
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
+import {
+  isRecoverableTelegramNetworkError,
+  isTelegramRateLimitError,
+  isTelegramServerError,
+} from "./network-errors.js";
 
 const TELEGRAM_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const TELEGRAM_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+const TELEGRAM_WEBHOOK_REGISTRATION_RETRY_POLICY: BackoffPolicy = {
+  initialMs: 5_000,
+  maxMs: 60_000,
+  factor: 2,
+  jitter: 0.2,
+};
 const InputFileCtor: typeof grammy.InputFile =
   typeof grammy.InputFile === "function"
     ? grammy.InputFile
@@ -245,6 +261,7 @@ export async function startTelegramWebhook(opts: {
   healthPath?: string;
   publicUrl?: string;
   webhookCertPath?: string;
+  webhookRegistrationRetryPolicy?: BackoffPolicy;
 }) {
   const path = opts.path ?? "/telegram-webhook";
   const healthPath = opts.healthPath ?? "/healthz";
@@ -258,6 +275,8 @@ export async function startTelegramWebhook(opts: {
     );
   }
   const runtime = opts.runtime ?? defaultRuntime;
+  const webhookRegistrationRetryPolicy =
+    opts.webhookRegistrationRetryPolicy ?? TELEGRAM_WEBHOOK_REGISTRATION_RETRY_POLICY;
   const diagnosticsEnabled = isDiagnosticsEnabled(opts.config);
   const bot = createTelegramBot({
     token: opts.token,
@@ -398,30 +417,8 @@ export async function startTelegramWebhook(opts: {
     port,
   });
 
-  try {
-    await withTelegramApiErrorLogging({
-      operation: "setWebhook",
-      runtime,
-      fn: () =>
-        bot.api.setWebhook(publicUrl, {
-          secret_token: secret,
-          allowed_updates: resolveTelegramAllowedUpdates(),
-          certificate: opts.webhookCertPath ? new InputFileCtor(opts.webhookCertPath) : undefined,
-        }),
-    });
-  } catch (err) {
-    server.close();
-    void bot.stop();
-    if (diagnosticsEnabled) {
-      stopDiagnosticHeartbeat();
-    }
-    throw err;
-  }
-
-  runtime.log?.(`webhook local listener on http://${host}:${boundPort}${path}`);
-  runtime.log?.(`webhook advertised to telegram on ${publicUrl}`);
-
   let shutDown = false;
+  let webhookAdvertised = false;
   const shutdown = () => {
     if (shutDown) {
       return;
@@ -440,8 +437,89 @@ export async function startTelegramWebhook(opts: {
       stopDiagnosticHeartbeat();
     }
   };
-  if (opts.abortSignal) {
+  if (opts.abortSignal?.aborted) {
+    shutdown();
+  } else if (opts.abortSignal) {
     opts.abortSignal.addEventListener("abort", shutdown, { once: true });
+  }
+
+  const advertiseWebhook = async (): Promise<void> => {
+    if (shutDown || opts.abortSignal?.aborted) {
+      return;
+    }
+    await withTelegramApiErrorLogging({
+      operation: "setWebhook",
+      runtime,
+      fn: () =>
+        bot.api.setWebhook(publicUrl, {
+          secret_token: secret,
+          allowed_updates: resolveTelegramAllowedUpdates(),
+          certificate: opts.webhookCertPath ? new InputFileCtor(opts.webhookCertPath) : undefined,
+        }),
+    });
+    if (shutDown) {
+      return;
+    }
+    webhookAdvertised = true;
+    runtime.log?.(`webhook advertised to telegram on ${publicUrl}`);
+  };
+  const shouldRetryWebhookRegistration = (err: unknown): boolean =>
+    isRecoverableTelegramNetworkError(err, { context: "webhook" }) ||
+    isTelegramServerError(err) ||
+    isTelegramRateLimitError(err);
+  const retryWebhookRegistration = async (firstAttempt: number): Promise<void> => {
+    let attempt = firstAttempt;
+    while (true) {
+      if (shutDown || opts.abortSignal?.aborted || webhookAdvertised) {
+        return;
+      }
+      const delayMs = computeBackoff(webhookRegistrationRetryPolicy, attempt);
+      runtime.log?.(
+        `telegram setWebhook retry ${attempt} scheduled in ${formatDurationPrecise(delayMs)}`,
+      );
+      try {
+        await sleepWithAbort(delayMs, opts.abortSignal);
+      } catch {
+        return;
+      }
+      if (shutDown || opts.abortSignal?.aborted || webhookAdvertised) {
+        return;
+      }
+      try {
+        await advertiseWebhook();
+        return;
+      } catch (err) {
+        if (!shouldRetryWebhookRegistration(err)) {
+          runtime.error?.(
+            `telegram setWebhook retry stopped after non-recoverable error: ${formatErrorMessage(err)}`,
+          );
+          return;
+        }
+      }
+      attempt += 1;
+    }
+  };
+  const closeAfterStartupFailure = () => {
+    shutDown = true;
+    server.close();
+    void bot.stop();
+    if (diagnosticsEnabled) {
+      stopDiagnosticHeartbeat();
+    }
+  };
+
+  runtime.log?.(`webhook local listener on http://${host}:${boundPort}${path}`);
+
+  if (!shutDown) {
+    try {
+      await advertiseWebhook();
+    } catch (err) {
+      if (!shouldRetryWebhookRegistration(err)) {
+        closeAfterStartupFailure();
+        throw err;
+      }
+      void retryWebhookRegistration(1);
+    }
   }
 
   return { server, bot, stop: shutdown };

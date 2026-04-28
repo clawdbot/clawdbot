@@ -100,6 +100,7 @@ describe("timeout-triggered compaction", () => {
     );
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.meta.error).toBeUndefined();
+    expect(result.meta.agentMeta?.compactionTokensAfter).toBe(80_000);
   });
 
   it("retries the prompt after successful timeout compaction", async () => {
@@ -237,7 +238,7 @@ describe("timeout-triggered compaction", () => {
     expect(result.payloads?.[0]?.text).toContain("timed out");
   });
 
-  it("points idle-timeout errors at the LLM idle timeout config key", async () => {
+  it("points idle-timeout errors at the provider timeout config key", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         timedOut: true,
@@ -252,7 +253,7 @@ describe("timeout-triggered compaction", () => {
 
     expect(mockedCompactDirect).not.toHaveBeenCalled();
     expect(result.payloads?.[0]?.isError).toBe(true);
-    expect(result.payloads?.[0]?.text).toContain("agents.defaults.llm.idleTimeoutSeconds");
+    expect(result.payloads?.[0]?.text).toContain("models.providers.<id>.timeoutSeconds");
     expect(result.payloads?.[0]?.text).not.toContain("agents.defaults.timeoutSeconds");
   });
 

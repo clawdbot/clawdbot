@@ -228,6 +228,7 @@ export async function applyInlineDirectiveOverrides(params: {
     defaultModel,
     aliasIndex,
     allowedModelKeys: modelState.allowedModelKeys,
+    thinkingCatalog: modelState.allowedModelCatalog,
     initialModelLabel,
     formatModelSwitchEvent,
     agentCfg,
@@ -312,10 +313,12 @@ export async function applyInlineDirectiveOverrides(params: {
       resolveDefaultThinkingLevel: () => modelState.resolveDefaultThinkingLevel(),
     });
     const currentThinkLevel = resolvedDefaultThinkLevel;
+    const thinkingCatalog = await modelState.resolveThinkingCatalog();
     const directiveReply = await (
       await loadDirectiveImpl()
     ).handleDirectiveOnly({
       ...createDirectiveHandlingBase(),
+      thinkingCatalog,
       currentThinkLevel,
       currentFastMode,
       currentVerboseLevel,
@@ -392,6 +395,7 @@ export async function applyInlineDirectiveOverrides(params: {
       agentCfg,
       modelState: {
         resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
+        resolveThinkingCatalog: modelState.resolveThinkingCatalog,
         ...directiveModelState,
       },
     });

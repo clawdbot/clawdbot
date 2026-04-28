@@ -1,5 +1,5 @@
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import { sendBlueBubblesAttachment } from "./attachments.js";
 import { editBlueBubblesMessage, setGroupIconBlueBubbles } from "./chat.js";
 import { resolveBlueBubblesMessageId } from "./monitor-reply-cache.js";
@@ -50,11 +50,24 @@ const { bluebubblesMessageActions } = await importFreshModule<typeof import("./a
   "./actions.js?actions-test",
 );
 
+function requireDefined<T>(value: T | undefined, name: string): T {
+  if (value === undefined) {
+    throw new Error(`${name} is not registered`);
+  }
+  return value;
+}
+
 describe("bluebubblesMessageActions", () => {
-  const describeMessageTool = bluebubblesMessageActions.describeMessageTool!;
-  const supportsAction = bluebubblesMessageActions.supportsAction!;
-  const extractToolSend = bluebubblesMessageActions.extractToolSend!;
-  const handleAction = bluebubblesMessageActions.handleAction!;
+  const describeMessageTool = requireDefined(
+    bluebubblesMessageActions.describeMessageTool,
+    "describeMessageTool",
+  );
+  const supportsAction = requireDefined(bluebubblesMessageActions.supportsAction, "supportsAction");
+  const extractToolSend = requireDefined(
+    bluebubblesMessageActions.extractToolSend,
+    "extractToolSend",
+  );
+  const handleAction = requireDefined(bluebubblesMessageActions.handleAction, "handleAction");
   const callHandleAction = (ctx: Omit<Parameters<typeof handleAction>[0], "channel">) =>
     handleAction({ channel: "bluebubbles", ...ctx });
   const blueBubblesConfig = (): OpenClawConfig => ({

@@ -76,7 +76,7 @@ function resolveInstalledIndexPluginIdsForProviderFilter(params: {
     cache: true,
   });
   if (snapshot.source !== "persisted" && snapshot.source !== "provided") {
-    return [];
+    return undefined;
   }
   const index = snapshot.snapshot;
   const pluginIds = [

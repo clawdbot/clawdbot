@@ -110,6 +110,14 @@ export const ja_JP: TranslationMap = {
       lightningHelp: "チップ用の Lightning アドレス（LUD-16）",
     },
   },
+  lazyView: {
+    loadingTitle: "パネルを読み込み中",
+    errorTitle: "パネルの読み込みに失敗しました",
+    errorSubtitle:
+      "最新の Control UI バンドルを読み込むにはページを再読み込みしてください。ネットワークリクエストに失敗した場合は再試行してください。",
+    retry: "再試行",
+    unknownError: "不明なモジュール読み込みエラーです。",
+  },
   nodes: {
     binding: {
       loadConfigHint: "バインディングを編集するには設定を読み込んでください。",

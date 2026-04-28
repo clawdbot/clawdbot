@@ -10,7 +10,7 @@
  *     resolved `appId` / `clientSecret` to a per-account backup file.
  *   - During plugin startup, if the live config has an empty appId or
  *     secret, the gateway consults the backup and restores the values
- *     via `writeConfigFile`.
+ *     via the config mutation API.
  *   - Backups live under `~/.openclaw/qqbot/data/` so they survive
  *     plugin directory replacement.
  *

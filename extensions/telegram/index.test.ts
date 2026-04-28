@@ -1,5 +1,5 @@
+import { assertBundledChannelEntries } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, vi } from "vitest";
-import { assertBundledChannelEntries } from "../../test/helpers/bundled-channel-entry.ts";
 import entry from "./index.js";
 import setupEntry from "./setup-entry.js";
 

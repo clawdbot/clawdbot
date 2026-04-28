@@ -5,7 +5,10 @@ import java.net.URI
 object CanvasActionTrust {
   const val scaffoldAssetUrl: String = "file:///android_asset/CanvasScaffold/scaffold.html"
 
-  fun isTrustedCanvasActionUrl(rawUrl: String?, trustedA2uiUrls: List<String>): Boolean {
+  fun isTrustedCanvasActionUrl(
+    rawUrl: String?,
+    trustedA2uiUrls: List<String>,
+  ): Boolean {
     val candidate = rawUrl?.trim().orEmpty()
     if (candidate.isEmpty()) return false
     if (candidate == scaffoldAssetUrl) return true
@@ -21,7 +24,10 @@ object CanvasActionTrust {
     }
   }
 
-  private fun matchesTrustedRemoteA2uiUrlExact(candidateUri: URI, trustedUrl: String): Boolean {
+  private fun matchesTrustedRemoteA2uiUrlExact(
+    candidateUri: URI,
+    trustedUrl: String,
+  ): Boolean {
     val trustedUri = parseUri(trustedUrl) ?: return false
     val normalizedTrusted = normalizeTrustedRemoteA2uiUri(trustedUri) ?: return false
     return candidateUri == normalizedTrusted
@@ -33,7 +39,11 @@ object CanvasActionTrust {
     val scheme = uri.scheme?.lowercase() ?: return null
     if (scheme != "http" && scheme != "https") return null
 
-    val host = uri.host?.trim()?.takeIf { it.isNotEmpty() }?.lowercase() ?: return null
+    val host =
+      uri.host
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?.lowercase() ?: return null
 
     return try {
       URI(scheme, uri.userInfo, host, uri.port, uri.rawPath, uri.rawQuery, null)

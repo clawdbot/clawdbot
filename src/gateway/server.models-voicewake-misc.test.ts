@@ -146,7 +146,10 @@ const expectedSortedCatalog = (): ModelCatalogRpcEntry[] => [
 ];
 
 describe("gateway server models + voicewake", () => {
-  const listModels = async () => rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list");
+  const listModels = async (params?: { view?: "default" | "configured" | "all" }) =>
+    params
+      ? rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", params)
+      : rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list");
 
   const seedPiCatalog = () => {
     piSdkMock.enabled = true;
@@ -473,6 +476,120 @@ describe("gateway server models + voicewake", () => {
     expect(models).toEqual(expectedSortedCatalog());
 
     expect(piSdkMock.discoverCalls).toBe(1);
+  });
+
+  test("models.list keeps default view on the full catalog when no allowlist is configured", async () => {
+    await withModelsConfig(
+      {
+        models: {
+          providers: {
+            minimax: {
+              baseUrl: "https://minimax.example.com/v1",
+              models: [{ id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed" }],
+            },
+          },
+        },
+      },
+      async () => {
+        seedPiCatalog();
+        const res = await listModels();
+        expect(res.ok).toBe(true);
+        expect(res.payload?.models).toEqual(expectedSortedCatalog());
+      },
+    );
+  });
+
+  test("models.list configured view uses models.providers when no allowlist is configured", async () => {
+    await withModelsConfig(
+      {
+        models: {
+          providers: {
+            zhipu: {
+              baseUrl: "https://zhipu.example.com/v1",
+              models: [{ id: "glm-4.5-air", name: "GLM 4.5 Air", reasoning: true }],
+            },
+            minimax: {
+              baseUrl: "https://minimax.example.com/v1",
+              models: [{ id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed" }],
+            },
+          },
+        },
+      },
+      async () => {
+        seedPiCatalog();
+        const res = await listModels({ view: "configured" });
+        expect(res.ok).toBe(true);
+        expect(res.payload?.models).toEqual([
+          {
+            id: "MiniMax-M2.7-highspeed",
+            name: "MiniMax M2.7 Highspeed",
+            provider: "minimax",
+          },
+          {
+            id: "glm-4.5-air",
+            name: "GLM 4.5 Air",
+            provider: "zhipu",
+            reasoning: true,
+          },
+        ]);
+      },
+    );
+  });
+
+  test("models.list configured view still prefers agents.defaults.models allowlist", async () => {
+    await withModelsConfig(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-test-z" },
+            models: {
+              "openai/gpt-test-z": {},
+            },
+          },
+        },
+        models: {
+          providers: {
+            minimax: {
+              baseUrl: "https://minimax.example.com/v1",
+              models: [{ id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed" }],
+            },
+          },
+        },
+      },
+      async () => {
+        seedPiCatalog();
+        const res = await listModels({ view: "configured" });
+        expect(res.ok).toBe(true);
+        expect(res.payload?.models).toEqual([
+          {
+            id: "gpt-test-z",
+            name: "gpt-test-z",
+            provider: "openai",
+          },
+        ]);
+      },
+    );
+  });
+
+  test("models.list all view bypasses agents.defaults.models allowlist", async () => {
+    await withModelsConfig(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-test-z" },
+            models: {
+              "openai/gpt-test-z": {},
+            },
+          },
+        },
+      },
+      async () => {
+        seedPiCatalog();
+        const res = await listModels({ view: "all" });
+        expect(res.ok).toBe(true);
+        expect(res.payload?.models).toEqual(expectedSortedCatalog());
+      },
+    );
   });
 
   test("models.list filters to allowlisted configured models by default", async () => {

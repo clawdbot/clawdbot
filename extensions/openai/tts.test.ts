@@ -1,6 +1,11 @@
 import { mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  finalizeDebugProxyCapture,
+  getDebugProxyCaptureStore,
+  initializeDebugProxyCapture,
+} from "openclaw/plugin-sdk/proxy-capture";
 import { describe, expect, it, vi } from "vitest";
 import { installDebugProxyTestResetHooks } from "../test-support/debug-proxy-env-test-helpers.js";
 import { createStreamingErrorResponse } from "../test-support/streaming-error-response.js";
@@ -255,7 +260,6 @@ describe("openai tts", () => {
           new Response(Buffer.from("audio-bytes"), { status: 200 }),
         ) as unknown as typeof globalThis.fetch;
 
-      const { getDebugProxyCaptureStore } = await import("../../src/proxy-capture/store.sqlite.js");
       const store = getDebugProxyCaptureStore(
         process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
         process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
@@ -304,9 +308,7 @@ describe("openai tts", () => {
           new Response(Buffer.from("audio-bytes"), { status: 200 }),
         ) as unknown as typeof globalThis.fetch;
 
-      const runtime = await import("../../src/proxy-capture/runtime.js");
-      const { getDebugProxyCaptureStore } = await import("../../src/proxy-capture/store.sqlite.js");
-      runtime.initializeDebugProxyCapture("test");
+      initializeDebugProxyCapture("test");
 
       await openaiTTS({
         text: "hello",
@@ -318,7 +320,7 @@ describe("openai tts", () => {
         timeoutMs: 5_000,
       });
       await new Promise((resolve) => setTimeout(resolve, 0));
-      runtime.finalizeDebugProxyCapture();
+      finalizeDebugProxyCapture();
 
       const store = getDebugProxyCaptureStore(
         process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,

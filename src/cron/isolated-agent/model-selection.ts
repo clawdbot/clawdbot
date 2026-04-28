@@ -35,12 +35,19 @@ export type ResolveCronModelSelectionResult =
       ok: true;
       provider: string;
       model: string;
-      warning?: string;
     }
   | {
       ok: false;
       error: string;
     };
+
+function formatCronPayloadModelRejection(modelOverride: string, error: string): string {
+  if (error.startsWith("model not allowed:")) {
+    const modelRef = error.slice("model not allowed:".length).trim();
+    return `cron payload.model '${modelOverride}' rejected by agents.defaults.models allowlist: ${modelRef}`;
+  }
+  return `cron payload.model '${modelOverride}' rejected: ${error}`;
+}
 
 export async function resolveCronModelSelection(
   params: ResolveCronModelSelectionParams,
@@ -112,15 +119,10 @@ export async function resolveCronModelSelection(
       defaultModel: resolvedDefault.model,
     });
     if ("error" in resolvedOverride) {
-      if (resolvedOverride.error.startsWith("model not allowed:")) {
-        return {
-          ok: true,
-          provider,
-          model,
-          warning: `cron: payload.model '${modelOverride}' not allowed, falling back to agent defaults`,
-        };
-      }
-      return { ok: false, error: resolvedOverride.error };
+      return {
+        ok: false,
+        error: formatCronPayloadModelRejection(modelOverride, resolvedOverride.error),
+      };
     }
     provider = resolvedOverride.ref.provider;
     model = resolvedOverride.ref.model;

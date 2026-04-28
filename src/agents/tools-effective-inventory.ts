@@ -1,15 +1,17 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { extractModelCompat } from "../plugins/provider-model-compat.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { buildPluginToolMetadataKey, getPluginToolMeta } from "../plugins/tools.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { getChannelAgentToolMeta } from "./channel-tools.js";
-import { resolveModel } from "./pi-embedded-runner/model.js";
+import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 import { resolveEffectiveToolPolicy } from "./pi-tools.policy.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "./provider-id.js";
 import { summarizeToolDescriptionText } from "./tool-description-summary.js";
 import { resolveToolDisplay } from "./tool-display.js";
 import { normalizeToolName } from "./tool-policy.js";
@@ -164,20 +166,30 @@ function disambiguateLabels(entries: EffectiveToolInventoryEntry[]): EffectiveTo
 
 function resolveEffectiveModelCompat(params: {
   cfg: OpenClawConfig;
-  agentDir: string;
   modelProvider?: string;
   modelId?: string;
 }) {
-  const provider = params.modelProvider?.trim();
-  const modelId = params.modelId?.trim();
+  const provider = normalizeProviderId(params.modelProvider ?? "");
+  const modelId = params.modelId?.trim() ?? "";
   if (!provider || !modelId) {
     return undefined;
   }
-  try {
-    return extractModelCompat(resolveModel(provider, modelId, params.agentDir, params.cfg).model);
-  } catch {
+  const providerConfig = findNormalizedProviderValue(params.cfg.models?.providers, provider);
+  const models = Array.isArray(providerConfig?.models) ? providerConfig.models : [];
+  if (models.length === 0) {
     return undefined;
   }
+  const normalizedModelId = normalizeStaticProviderModelId(provider, modelId);
+  const normalizedModelKey = normalizeLowercaseStringOrEmpty(normalizedModelId);
+  const providerPrefixedModelKey = normalizeLowercaseStringOrEmpty(
+    `${provider}/${normalizedModelId}`,
+  );
+  const match = models.find((model) => {
+    const id = normalizeStaticProviderModelId(provider, model.id);
+    const key = normalizeLowercaseStringOrEmpty(id);
+    return key === normalizedModelKey || key === providerPrefixedModelKey;
+  });
+  return extractModelCompat(match);
 }
 
 export function resolveEffectiveToolInventory(
@@ -190,7 +202,6 @@ export function resolveEffectiveToolInventory(
   const agentDir = params.agentDir ?? resolveAgentDir(params.cfg, agentId);
   const modelCompat = resolveEffectiveModelCompat({
     cfg: params.cfg,
-    agentDir,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
@@ -231,17 +242,35 @@ export function resolveEffectiveToolInventory(
     modelId: params.modelId,
   });
   const profile = effectivePolicy.providerProfile ?? effectivePolicy.profile ?? "full";
+  // Key metadata by plugin ownership and tool name so only the owning plugin can
+  // project display/risk metadata for its own tool.
+  const pluginToolMetadata = new Map(
+    (getActivePluginRegistry()?.toolMetadata ?? []).map((entry) => [
+      buildPluginToolMetadataKey(entry.pluginId, entry.metadata.toolName),
+      entry.metadata,
+    ]),
+  );
 
   const entries = disambiguateLabels(
     effectiveTools
       .map((tool) => {
         const source = resolveEffectiveToolSource(tool);
+        const metadata = source.pluginId
+          ? pluginToolMetadata.get(buildPluginToolMetadataKey(source.pluginId, tool.name))
+          : undefined;
         return Object.assign(
           {
             id: tool.name,
-            label: resolveEffectiveToolLabel(tool),
-            description: summarizeToolDescription(tool),
-            rawDescription: resolveRawToolDescription(tool) || summarizeToolDescription(tool),
+            label:
+              normalizeOptionalString(metadata?.displayName) ?? resolveEffectiveToolLabel(tool),
+            description:
+              normalizeOptionalString(metadata?.description) ?? summarizeToolDescription(tool),
+            rawDescription:
+              normalizeOptionalString(metadata?.description) ??
+              resolveRawToolDescription(tool) ??
+              summarizeToolDescription(tool),
+            ...(metadata?.risk ? { risk: metadata.risk } : {}),
+            ...(metadata?.tags ? { tags: metadata.tags } : {}),
           },
           source,
         ) satisfies EffectiveToolInventoryEntry;

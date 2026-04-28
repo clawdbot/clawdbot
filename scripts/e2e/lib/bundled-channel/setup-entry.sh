@@ -32,7 +32,10 @@ package_root() {
 
 echo "Installing mounted OpenClaw package..."
 package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
-npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-setup-entry-install.log 2>&1
+if ! npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-setup-entry-install.log 2>&1; then
+  cat /tmp/openclaw-setup-entry-install.log >&2 || true
+  exit 1
+fi
 
 root="$(package_root)"
 for channel in "${!SETUP_ENTRY_DEP_SENTINELS[@]}"; do

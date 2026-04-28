@@ -67,6 +67,7 @@ type OutboundPayloadPlanContext = {
    * (see `pending-spawn-query.ts`).
    */
   hasPendingSpawnedChildren?: boolean;
+  extractMarkdownImages?: boolean;
 };
 
 export type OutboundPayloadMirror = {
@@ -131,11 +132,14 @@ type PreparedOutboundPayloadPlanEntry = {
 
 function createOutboundPayloadPlanEntry(
   payload: ReplyPayload,
+  context: Pick<OutboundPayloadPlanContext, "extractMarkdownImages"> = {},
 ): PreparedOutboundPayloadPlanEntry | null {
   if (shouldSuppressReasoningPayload(payload)) {
     return null;
   }
-  const parsed = parseReplyDirectives(payload.text ?? "");
+  const parsed = parseReplyDirectives(payload.text ?? "", {
+    extractMarkdownImages: context.extractMarkdownImages,
+  });
   const explicitMediaUrls = payload.mediaUrls ?? parsed.mediaUrls;
   const explicitMediaUrl = payload.mediaUrl ?? parsed.mediaUrl;
   const mergedMedia = mergeMediaUrls(
@@ -193,7 +197,9 @@ export function createOutboundPayloadPlan(
     context.hasPendingSpawnedChildren ?? resolvePendingSpawnedChildren(context.sessionKey);
   const prepared: PreparedOutboundPayloadPlanEntry[] = [];
   for (const payload of payloads) {
-    const entry = createOutboundPayloadPlanEntry(payload);
+    const entry = createOutboundPayloadPlanEntry(payload, {
+      extractMarkdownImages: context.extractMarkdownImages,
+    });
     if (!entry) {
       continue;
     }

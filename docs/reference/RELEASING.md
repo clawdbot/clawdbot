@@ -103,7 +103,10 @@ the maintainer-only release runbook.
   `OpenClaw Release Checks` for install smoke, package acceptance, Docker
   release-path suites, live/E2E, OpenWebUI, QA Lab parity, Matrix, and Telegram
   lanes. Provide `npm_telegram_package_spec` only after a package has been
-  published and the post-publish Telegram E2E should run too. Example:
+  published and the post-publish Telegram E2E should run too. Provide
+  `evidence_package_spec` when the private evidence report should prove that the
+  validation matches a published npm package without forcing Telegram E2E.
+  Example:
   `gh workflow run full-release-validation.yml --ref main -f ref=release/YYYY.M.D`
 - Run the manual `Package Acceptance` workflow when you want side-channel proof
   for a package candidate while release work continues. Use `source=npm` for
@@ -232,9 +235,10 @@ branch, tag, or full commit SHA as `ref`:
 gh workflow run full-release-validation.yml \
   --ref main \
   -f ref=release/YYYY.M.D \
-  -f workflow_ref=main \
   -f provider=openai \
-  -f mode=both
+  -f mode=both \
+  -f release_profile=full \
+  -f evidence_package_spec=openclaw@YYYY.M.D-beta.N
 ```
 
 The workflow resolves the target ref, dispatches manual `CI` with
@@ -245,7 +249,24 @@ install smoke, cross-OS release checks, live/E2E Docker release-path coverage,
 Package Acceptance with Telegram package QA, QA Lab parity, live Matrix, and
 live Telegram. A full run is only acceptable when the `Full Release Validation`
 summary shows `normal_ci` and `release_checks` as successful, and any optional
-`npm_telegram` child is either successful or intentionally skipped.
+`npm_telegram` child is either successful or intentionally skipped. The final
+verifier summary includes slowest-job tables for each child run, so the release
+manager can see the current critical path without downloading logs.
+Child workflows are dispatched from the trusted ref that runs `Full Release
+Validation`, normally `--ref main`, even when the target `ref` points at an
+older release branch or tag. There is no separate Full Release Validation
+workflow-ref input; choose the trusted harness by choosing the workflow run ref.
+
+Use `release_profile` to select live/provider breadth:
+
+- `minimum`: fastest release-critical OpenAI/core live and Docker path
+- `stable`: minimum plus stable provider/backend coverage for release approval
+- `full`: stable plus broad advisory provider/media coverage
+
+`OpenClaw Release Checks` uses the trusted workflow ref to resolve the target
+ref once as `release-package-under-test` and reuses that artifact in both
+release-path Docker checks and Package Acceptance. This keeps all
+package-facing boxes on the same bytes and avoids repeated package builds.
 
 Use these variants depending on release stage:
 
@@ -254,15 +275,14 @@ Use these variants depending on release stage:
 gh workflow run full-release-validation.yml \
   --ref main \
   -f ref=release/YYYY.M.D \
-  -f workflow_ref=main \
   -f provider=openai \
-  -f mode=both
+  -f mode=both \
+  -f release_profile=stable
 
 # Validate an exact pushed commit.
 gh workflow run full-release-validation.yml \
   --ref main \
   -f ref=<40-char-sha> \
-  -f workflow_ref=main \
   -f provider=openai \
   -f mode=both
 
@@ -270,9 +290,9 @@ gh workflow run full-release-validation.yml \
 gh workflow run full-release-validation.yml \
   --ref main \
   -f ref=release/YYYY.M.D \
-  -f workflow_ref=main \
   -f provider=openai \
   -f mode=both \
+  -f evidence_package_spec=openclaw@YYYY.M.D-beta.N \
   -f npm_telegram_package_spec=openclaw@YYYY.M.D-beta.N \
   -f npm_telegram_provider_mode=mock-openai
 ```
@@ -281,7 +301,15 @@ Do not use the full umbrella as the first rerun after a focused fix. If one box
 fails, use the failed child workflow, job, Docker lane, package profile, model
 provider, or QA lane for the next proof. Run the full umbrella again only when
 the fix changed shared release orchestration or made earlier all-box evidence
-stale.
+stale. The umbrella's final verifier re-checks the recorded child workflow run
+ids, so after a child workflow is rerun successfully, rerun only the failed
+`Verify full validation` parent job.
+
+For bounded recovery, pass `rerun_group` to the umbrella. `all` is the real
+release-candidate run, `ci` runs only the normal CI child, `release-checks` runs
+every release box, and the narrower release groups are `install-smoke`,
+`cross-os`, `live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, and
+`npm-telegram` when the standalone package Telegram lane is supplied.
 
 ### Vitest
 
@@ -318,11 +346,17 @@ Release Docker coverage includes:
 
 - full install smoke with the slow Bun global install smoke enabled
 - repository E2E lanes
-- release-path Docker chunks: `core`, `package-update`, and
-  `plugins-integrations`
-- OpenWebUI coverage inside the `plugins-integrations` chunk when requested
-- split bundled-channel dependency lanes inside `plugins-integrations` instead
-  of the serial all-in-one bundled-channel lane
+- release-path Docker chunks: `core`, `package-update-openai`,
+  `package-update-anthropic`, `package-update-core`, `plugins-runtime-core`,
+  `plugins-runtime-install-a`, `plugins-runtime-install-b`,
+  `bundled-channels-core`, `bundled-channels-update-a`,
+  `bundled-channels-update-b`, and `bundled-channels-contracts`
+- OpenWebUI coverage inside the `plugins-runtime-core` chunk when requested
+- split bundled-channel dependency lanes across channel-smoke, update-target,
+  and setup/runtime contract chunks instead of one large bundled-channel job
+- split bundled plugin install/uninstall lanes
+  `bundled-plugin-install-uninstall-0` through
+  `bundled-plugin-install-uninstall-7`
 - live/E2E provider suites and Docker live model coverage when release checks
   include live suites
 
@@ -372,14 +406,16 @@ Supported candidate sources:
 - `source=artifact`: reuse a `.tgz` uploaded by another GitHub Actions run
 
 `OpenClaw Release Checks` runs Package Acceptance with `source=ref`,
-`package_ref=<release-ref>`, `suite_profile=package`, and
-`telegram_mode=mock-openai`. That profile covers install, update, plugin
-package contracts through offline plugin fixtures, and Telegram package QA
-against the same resolved tarball. It is the GitHub-native replacement for most
-of the package/update coverage that previously required Parallels. Cross-OS
-release checks still matter for OS-specific onboarding, installer, and platform
-behavior, but package/update product validation should prefer Package
-Acceptance.
+`package_ref=<release-ref>`, `suite_profile=custom`,
+`docker_lanes=bundled-channel-deps-compat plugins-offline`, and
+`telegram_mode=mock-openai`. The release-path Docker chunks cover the
+overlapping install, update, and plugin-update lanes; Package Acceptance keeps
+artifact-native bundled-channel compat, offline plugin fixtures, and Telegram
+package QA against the same resolved tarball. It is the GitHub-native
+replacement for most of the package/update coverage that previously required
+Parallels. Cross-OS release checks still matter for OS-specific onboarding,
+installer, and platform behavior, but package/update product validation should
+prefer Package Acceptance.
 
 Legacy package-acceptance leniency is intentionally time boxed. Packages through
 `2026.4.25` may use the compatibility path for metadata gaps already published
@@ -387,8 +423,10 @@ to npm: private QA inventory entries missing from the tarball, missing
 `gateway install --wrapper`, missing patch files in the tarball-derived git
 fixture, missing persisted `update.channel`, legacy plugin install-record
 locations, missing marketplace install-record persistence, and config metadata
-migration during `plugins update`. Packages after `2026.4.25` must satisfy the
-modern package contracts; those same gaps fail release validation.
+migration during `plugins update`. The published `2026.4.26` package may warn
+for local build metadata stamp files that were already shipped. Later packages
+must satisfy the modern package contracts; those same gaps fail release
+validation.
 
 Use broader Package Acceptance profiles when the release question is about an
 actual installable package:

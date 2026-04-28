@@ -3,7 +3,7 @@ import Observation
 import UserNotifications
 import WatchKit
 
-enum WatchPayloadType: String, Codable, Sendable, Equatable {
+enum WatchPayloadType: String, Codable, Equatable {
     case notify = "watch.notify"
     case reply = "watch.reply"
     case execApprovalPrompt = "watch.execApproval.prompt"
@@ -14,18 +14,18 @@ enum WatchPayloadType: String, Codable, Sendable, Equatable {
     case execApprovalSnapshotRequest = "watch.execApproval.snapshotRequest"
 }
 
-enum WatchRiskLevel: String, Codable, Sendable, Equatable {
+enum WatchRiskLevel: String, Codable, Equatable {
     case low
     case medium
     case high
 }
 
-enum WatchExecApprovalDecision: String, Codable, Sendable, Equatable {
+enum WatchExecApprovalDecision: String, Codable, Equatable {
     case allowOnce = "allow-once"
     case deny
 }
 
-enum WatchExecApprovalCloseReason: String, Codable, Sendable, Equatable {
+enum WatchExecApprovalCloseReason: String, Codable, Equatable {
     case expired
     case notFound = "not-found"
     case unavailable
@@ -33,7 +33,7 @@ enum WatchExecApprovalCloseReason: String, Codable, Sendable, Equatable {
     case resolved
 }
 
-struct WatchExecApprovalItem: Codable, Sendable, Equatable, Identifiable {
+struct WatchExecApprovalItem: Codable, Equatable, Identifiable {
     var id: String
     var commandText: String
     var commandPreview: String?
@@ -45,51 +45,51 @@ struct WatchExecApprovalItem: Codable, Sendable, Equatable, Identifiable {
     var risk: WatchRiskLevel?
 }
 
-struct WatchExecApprovalPromptMessage: Codable, Sendable, Equatable {
+struct WatchExecApprovalPromptMessage: Codable, Equatable {
     var approval: WatchExecApprovalItem
     var sentAtMs: Int?
     var deliveryId: String?
     var resetResolvingState: Bool?
 }
 
-struct WatchExecApprovalResolvedMessage: Codable, Sendable, Equatable {
+struct WatchExecApprovalResolvedMessage: Codable, Equatable {
     var approvalId: String
     var decision: WatchExecApprovalDecision?
     var resolvedAtMs: Int?
     var source: String?
 }
 
-struct WatchExecApprovalExpiredMessage: Codable, Sendable, Equatable {
+struct WatchExecApprovalExpiredMessage: Codable, Equatable {
     var approvalId: String
     var reason: WatchExecApprovalCloseReason
     var expiredAtMs: Int?
 }
 
-struct WatchExecApprovalSnapshotMessage: Codable, Sendable, Equatable {
+struct WatchExecApprovalSnapshotMessage: Codable, Equatable {
     var approvals: [WatchExecApprovalItem]
     var sentAtMs: Int?
     var snapshotId: String?
 }
 
-struct WatchExecApprovalSnapshotRequestMessage: Codable, Sendable, Equatable {
+struct WatchExecApprovalSnapshotRequestMessage: Codable, Equatable {
     var requestId: String
     var sentAtMs: Int?
 }
 
-struct WatchExecApprovalResolveMessage: Codable, Sendable, Equatable {
+struct WatchExecApprovalResolveMessage: Codable, Equatable {
     var approvalId: String
     var decision: WatchExecApprovalDecision
     var replyId: String
     var sentAtMs: Int?
 }
 
-struct WatchPromptAction: Codable, Sendable, Equatable, Identifiable {
+struct WatchPromptAction: Codable, Equatable, Identifiable {
     var id: String
     var label: String
     var style: String?
 }
 
-struct WatchNotifyMessage: Sendable {
+struct WatchNotifyMessage {
     var id: String?
     var title: String
     var body: String
@@ -103,7 +103,7 @@ struct WatchNotifyMessage: Sendable {
     var actions: [WatchPromptAction]
 }
 
-struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
+struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
     var approval: WatchExecApprovalItem
     var transport: String
     var updatedAt: Date
@@ -112,7 +112,9 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
     var statusText: String?
     var statusAt: Date?
 
-    var id: String { self.approval.id }
+    var id: String {
+        self.approval.id
+    }
 }
 
 @MainActor @Observable final class WatchInboxStore {
@@ -333,14 +335,13 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
 
     func consume(execApprovalResolved message: WatchExecApprovalResolvedMessage) {
         self.removeExecApproval(id: message.approvalId)
-        let statusText: String
-        switch message.decision {
+        let statusText = switch message.decision {
         case .allowOnce:
-            statusText = "Allowed once"
+            "Allowed once"
         case .deny:
-            statusText = "Denied"
+            "Denied"
         case nil:
-            statusText = "Approval resolved"
+            "Approval resolved"
         }
         self.lastExecApprovalOutcomeText = statusText
         self.lastExecApprovalOutcomeAt = Date()
@@ -349,18 +350,17 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
 
     func consume(execApprovalExpired message: WatchExecApprovalExpiredMessage) {
         self.removeExecApproval(id: message.approvalId)
-        let statusText: String
-        switch message.reason {
+        let statusText = switch message.reason {
         case .expired:
-            statusText = "Approval expired"
+            "Approval expired"
         case .notFound:
-            statusText = "Approval no longer available"
+            "Approval no longer available"
         case .resolved:
-            statusText = "Approval resolved elsewhere"
+            "Approval resolved elsewhere"
         case .replaced:
-            statusText = "Approval replaced"
+            "Approval replaced"
         case .unavailable:
-            statusText = "Approval unavailable"
+            "Approval unavailable"
         }
         self.lastExecApprovalOutcomeText = statusText
         self.lastExecApprovalOutcomeAt = Date()
@@ -482,7 +482,7 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
 
     private func restorePersistedState() {
         guard let data = self.defaults.data(forKey: Self.persistedStateKey),
-            let state = try? JSONDecoder().decode(PersistedState.self, from: data)
+              let state = try? JSONDecoder().decode(PersistedState.self, from: data)
         else {
             return
         }
@@ -555,11 +555,11 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
     private func mapHapticRisk(_ risk: String?) -> WKHapticType {
         switch risk?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "high":
-            return .failure
+            .failure
         case "medium":
-            return .notification
+            .notification
         default:
-            return .click
+            .click
         }
     }
 

@@ -11,8 +11,8 @@ enum SignificantLocationMonitor {
         locationService: any LocationServicing,
         locationMode: OpenClawLocationMode,
         gateway: GatewayNodeSession,
-        beforeSend: (@MainActor @Sendable () async -> Void)? = nil
-    ) {
+        beforeSend: (@MainActor @Sendable () async -> Void)? = nil)
+    {
         guard locationMode == .always else { return }
         let status = locationService.authorizationStatus()
         guard status == .authorizedAlways else { return }

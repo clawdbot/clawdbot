@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import * as dns from "node:dns";
-import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createPinnedLookup,
@@ -16,6 +16,7 @@ import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
+import { normalizeTelegramApiRoot } from "./api-root.js";
 import {
   resolveTelegramAutoSelectFamilyDecision,
   resolveTelegramDnsResultOrderDecision,
@@ -458,6 +459,11 @@ export type TelegramTransport = {
   sourceFetch: typeof fetch;
   dispatcherAttempts?: TelegramDispatcherAttempt[];
   /**
+   * Promote this transport to its next fallback dispatcher before the next
+   * request. Returns false when no fallback path exists.
+   */
+  forceFallback?: (reason: string) => boolean;
+  /**
    * Release all dispatchers owned by this transport and the TCP sockets they
    * hold. Safe to call multiple times; subsequent calls resolve immediately.
    *
@@ -617,6 +623,19 @@ export function resolveTelegramTransport(
   });
 
   let stickyAttemptIndex = 0;
+  const promoteStickyAttempt = (nextIndex: number, err: unknown, reason?: string): boolean => {
+    if (nextIndex <= stickyAttemptIndex || nextIndex >= transportAttempts.length) {
+      return false;
+    }
+    const nextAttempt = transportAttempts[nextIndex];
+    if (nextAttempt.logMessage) {
+      const reasonText = reason ? `, reason=${reason}` : "";
+      log.warn(`${nextAttempt.logMessage} (codes=${formatErrorCodes(err)}${reasonText})`);
+    }
+    stickyAttemptIndex = nextIndex;
+    return true;
+  };
+
   const resolvedFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const callerProvidedDispatcher = Boolean(
       (init as RequestInitWithDispatcher | undefined)?.dispatcher,
@@ -652,9 +671,7 @@ export function resolveTelegramTransport(
 
     for (let nextIndex = startIndex + 1; nextIndex < transportAttempts.length; nextIndex += 1) {
       const nextAttempt = transportAttempts[nextIndex];
-      if (nextAttempt.logMessage) {
-        log.warn(`${nextAttempt.logMessage} (codes=${formatErrorCodes(err)})`);
-      }
+      promoteStickyAttempt(nextIndex, err);
       try {
         const response = await sourceFetch(
           input,
@@ -669,7 +686,6 @@ export function resolveTelegramTransport(
           flowId: randomUUID(),
           meta: { subsystem: "telegram-fetch", fallbackAttempt: nextIndex },
         });
-        stickyAttemptIndex = nextIndex;
         return response;
       } catch (caught) {
         err = caught;
@@ -697,6 +713,8 @@ export function resolveTelegramTransport(
     fetch: resolvedFetch,
     sourceFetch,
     dispatcherAttempts: transportAttempts.map((attempt) => attempt.exportAttempt),
+    forceFallback: (reason: string) =>
+      promoteStickyAttempt(stickyAttemptIndex + 1, new Error("forced fallback"), reason),
     close,
   };
 }
@@ -713,6 +731,5 @@ export function resolveTelegramFetch(
  * Returns a trimmed URL without trailing slash, or the standard default.
  */
 export function resolveTelegramApiBase(apiRoot?: string): string {
-  const trimmed = apiRoot?.trim();
-  return trimmed ? trimmed.replace(/\/+$/, "") : `https://${TELEGRAM_API_HOSTNAME}`;
+  return normalizeTelegramApiRoot(apiRoot);
 }

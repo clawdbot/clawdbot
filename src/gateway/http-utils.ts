@@ -7,7 +7,7 @@ import {
   parseModelRef,
   resolveDefaultModelForAgent,
 } from "../agents/model-selection.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -49,7 +49,7 @@ export function resolveAgentIdFromHeader(req: IncomingMessage): string | undefin
 
 export function resolveAgentIdFromModel(
   model: string | undefined,
-  cfg = loadConfig(),
+  cfg = getRuntimeConfig(),
 ): string | undefined {
   const raw = model?.trim();
   if (!raw) {
@@ -87,7 +87,7 @@ export async function resolveOpenAiCompatModelOverride(params: {
     return {};
   }
 
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const defaultModelRef = resolveDefaultModelForAgent({ cfg, agentId: params.agentId });
   const defaultProvider = defaultModelRef.provider;
   const parsed = parseModelRef(raw, defaultProvider);
@@ -116,7 +116,7 @@ export function resolveAgentIdForRequest(params: {
   req: IncomingMessage;
   model: string | undefined;
 }): string {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const fromHeader = resolveAgentIdFromHeader(params.req);
   if (fromHeader) {
     return fromHeader;

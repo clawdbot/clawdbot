@@ -5,6 +5,7 @@ import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/pi-embedded-runner/types.js";
 import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
+import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
@@ -309,7 +310,7 @@ export async function runPreparedReply(
   let currentSystemSent = systemSent;
 
   const isFirstTurnInSession = isNewSession || !currentSystemSent;
-  const isGroupChat = sessionCtx.ChatType === "group";
+  const isGroupChat = sessionCtx.ChatType === "group" || sessionCtx.ChatType === "channel";
   const wasMentioned = ctx.WasMentioned === true;
   const isHeartbeat = opts?.isHeartbeat === true;
   const { typingPolicy, suppressTyping } = resolveRunTypingPolicy({
@@ -325,6 +326,7 @@ export async function runPreparedReply(
     isHeartbeat,
     typingPolicy,
     suppressTyping,
+    sourceReplyDeliveryMode: opts?.sourceReplyDeliveryMode,
   });
   const shouldInjectGroupIntro = Boolean(
     isGroupChat && (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
@@ -339,7 +341,15 @@ export async function runPreparedReply(
         })
       : "";
   // Always include persistent group chat context (provider + reply guidance).
-  const groupChatContext = isGroupChat ? buildGroupChatContext({ sessionCtx }) : "";
+  const groupChatContext = isGroupChat
+    ? buildGroupChatContext({
+        sessionCtx,
+        sourceReplyDeliveryMode: opts?.sourceReplyDeliveryMode,
+        silentReplyPolicy: silentReplySettings.policy,
+        silentReplyRewrite: silentReplySettings.rewrite,
+        silentToken: SILENT_REPLY_TOKEN,
+      })
+    : "";
   // Behavioral intro (activation mode, lurking, etc.) only on first turn / activation needed
   const groupIntro = shouldInjectGroupIntro
     ? buildGroupIntro({
@@ -391,6 +401,10 @@ export async function runPreparedReply(
       fullAccessBlockedReason: fullAccessState.blockedReason,
     }),
   ].filter(Boolean);
+  const silentReplyPromptMode: SilentReplyPromptMode =
+    directChatContext || groupChatContext || opts?.sourceReplyDeliveryMode === "message_tool_only"
+      ? "none"
+      : "generic";
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
   const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
@@ -501,9 +515,11 @@ export async function runPreparedReply(
     : [inboundUserContext, "[User sent media without caption]"].filter(Boolean).join("\n\n");
   const transcriptBodyBase = isHeartbeat
     ? HEARTBEAT_TRANSCRIPT_PROMPT
-    : hasUserBody
-      ? baseBodyFinal
-      : "[User sent media without caption]";
+    : isBareSessionReset
+      ? softResetTail || `[OpenClaw session ${startupAction}]`
+      : hasUserBody
+        ? baseBodyFinal
+        : "[User sent media without caption]";
   let prefixedBodyBase = await applySessionHints({
     baseBody: effectiveBaseBody,
     abortedLastRun,
@@ -521,7 +537,11 @@ export async function runPreparedReply(
   if (!resolvedThinkLevel && prefixedBodyBase) {
     const parts = prefixedBodyBase.split(/\s+/);
     const maybeLevel = normalizeThinkLevel(parts[0]);
-    if (maybeLevel && isThinkingLevelSupported({ provider, model, level: maybeLevel })) {
+    const thinkingCatalog = maybeLevel ? await modelState.resolveThinkingCatalog() : undefined;
+    if (
+      maybeLevel &&
+      isThinkingLevelSupported({ provider, model, level: maybeLevel, catalog: thinkingCatalog })
+    ) {
       resolvedThinkLevel = maybeLevel;
       prefixedBodyBase = parts.slice(1).join(" ").trim();
     }
@@ -593,18 +613,27 @@ export async function runPreparedReply(
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
-  if (!isThinkingLevelSupported({ provider, model, level: resolvedThinkLevel })) {
+  const thinkingCatalog = await modelState.resolveThinkingCatalog();
+  if (
+    !isThinkingLevelSupported({
+      provider,
+      model,
+      level: resolvedThinkLevel,
+      catalog: thinkingCatalog,
+    })
+  ) {
     const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
     if (explicitThink) {
       typing.cleanup();
       return {
-        text: `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model)}.`,
+        text: `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog)}.`,
       };
     }
     const fallbackThinkLevel = resolveSupportedThinkingLevel({
       provider,
       model,
       level: resolvedThinkLevel,
+      catalog: thinkingCatalog,
     });
     if (fallbackThinkLevel !== resolvedThinkLevel) {
       const previousThinkLevel = resolvedThinkLevel;
@@ -757,6 +786,10 @@ export async function runPreparedReply(
     ({ activeSessionId, isActive, isStreaming } = queueState.busyState);
   }
   const authProfileIdSource = preparedSessionState.sessionEntry?.authProfileOverrideSource;
+  const runHasSessionModelOverride = Boolean(
+    normalizeOptionalString(preparedSessionState.sessionEntry?.modelOverride) ||
+    normalizeOptionalString(preparedSessionState.sessionEntry?.providerOverride),
+  );
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
@@ -804,6 +837,10 @@ export async function runPreparedReply(
       skillsSnapshot,
       provider,
       model,
+      hasSessionModelOverride: runHasSessionModelOverride,
+      modelOverrideSource: runHasSessionModelOverride
+        ? preparedSessionState.sessionEntry?.modelOverrideSource
+        : undefined,
       authProfileId,
       authProfileIdSource,
       thinkLevel: resolvedThinkLevel,
@@ -834,6 +871,8 @@ export async function runPreparedReply(
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
       inputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
+      sourceReplyDeliveryMode: opts?.sourceReplyDeliveryMode,
+      silentReplyPromptMode,
       extraSystemPromptStatic: extraSystemPromptStaticParts.join("\n\n"),
       skipProviderRuntimeHints: useFastReplyRuntime,
       allowEmptyAssistantReplyAsSilent,

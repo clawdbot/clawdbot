@@ -4,7 +4,7 @@ import type {
   MarkdownTableMode,
   OpenClawConfig,
   ReplyToMode,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/config-types";
 import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildOutboundSessionContext,

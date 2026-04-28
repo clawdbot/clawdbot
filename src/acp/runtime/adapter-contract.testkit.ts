@@ -51,6 +51,7 @@ export async function runAcpRuntimeAdapterContract(
         event.type === "tool_call",
     ),
   ).toBe(true);
+  expect(successEvents.some((event) => event.type === "done")).toBe(true);
   await params.assertSuccessEvents?.(successEvents);
 
   if (params.includeControlChecks ?? true) {

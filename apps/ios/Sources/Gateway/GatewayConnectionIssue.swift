@@ -19,9 +19,9 @@ enum GatewayConnectionIssue: Equatable {
     var needsAuthToken: Bool {
         switch self {
         case .tokenMissing, .unauthorized:
-            return true
+            true
         default:
-            return false
+            false
         }
     }
 
@@ -40,17 +40,17 @@ enum GatewayConnectionIssue: Equatable {
         }
         switch problem.kind {
         case .deviceIdentityRequired,
-            .deviceSignatureExpired,
-            .deviceNonceRequired,
-            .deviceNonceMismatch,
-            .deviceSignatureInvalid,
-            .devicePublicKeyInvalid,
-            .deviceIdMismatch,
-            .tailscaleIdentityMissing,
-            .tailscaleProxyMissing,
-            .tailscaleWhoisFailed,
-            .tailscaleIdentityMismatch,
-            .authRateLimited:
+             .deviceSignatureExpired,
+             .deviceNonceRequired,
+             .deviceNonceMismatch,
+             .deviceSignatureInvalid,
+             .devicePublicKeyInvalid,
+             .deviceIdMismatch,
+             .tailscaleIdentityMissing,
+             .tailscaleProxyMissing,
+             .tailscaleWhoisFailed,
+             .tailscaleIdentityMismatch,
+             .authRateLimited:
             return .unauthorized
         case .timeout, .connectionRefused, .reachabilityFailed, .websocketCancelled:
             return .network

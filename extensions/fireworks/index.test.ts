@@ -1,7 +1,9 @@
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  registerSingleProviderPlugin,
+  resolveProviderPluginChoice,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
-import { resolveProviderPluginChoice } from "../../src/plugins/provider-auth-choice.runtime.js";
-import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import {
   createProviderDynamicModelContext,
   runSingleProviderCatalog,

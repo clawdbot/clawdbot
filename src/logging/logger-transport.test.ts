@@ -1,5 +1,5 @@
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { importFreshModule } from "../../test/helpers/import-fresh.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 
 type LoggerModule = typeof import("./logger.js");

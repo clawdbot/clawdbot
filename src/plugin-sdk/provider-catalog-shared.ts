@@ -3,10 +3,16 @@
 // Keep provider-owned exports out of this subpath so plugin loaders can import it
 // without recursing through provider-specific facades.
 
+import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import { findNormalizedProviderKey } from "../agents/provider-id.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveProviderRequestCapabilities } from "./provider-http.js";
+import { normalizeModelCatalog } from "../model-catalog/normalize.js";
+import type {
+  ModelCatalogCost,
+  ModelCatalogModel,
+  ModelCatalogTieredCost,
+} from "../model-catalog/types.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
 
 export type { ProviderCatalogContext, ProviderCatalogResult } from "../plugins/types.js";
@@ -25,6 +31,96 @@ export type ConfiguredProviderCatalogEntry = {
   reasoning?: boolean;
   input?: Array<"text" | "image" | "audio" | "video" | "document">;
 };
+
+function countRawManifestCatalogModels(catalog: unknown): number | undefined {
+  if (!catalog || typeof catalog !== "object") {
+    return undefined;
+  }
+  const models = (catalog as { models?: unknown }).models;
+  return Array.isArray(models) ? models.length : undefined;
+}
+
+function cloneManifestCatalogTieredCost(
+  tier: ModelCatalogTieredCost,
+): NonNullable<ModelDefinitionConfig["cost"]["tieredPricing"]>[number] {
+  return {
+    input: tier.input,
+    output: tier.output,
+    cacheRead: tier.cacheRead,
+    cacheWrite: tier.cacheWrite,
+    range: tier.range.length === 1 ? [tier.range[0]] : [tier.range[0], tier.range[1]],
+  };
+}
+
+function cloneManifestCatalogCost(cost: ModelCatalogCost): ModelDefinitionConfig["cost"] {
+  return {
+    input: cost.input ?? 0,
+    output: cost.output ?? 0,
+    cacheRead: cost.cacheRead ?? 0,
+    cacheWrite: cost.cacheWrite ?? 0,
+    ...(cost.tieredPricing
+      ? { tieredPricing: cost.tieredPricing.map(cloneManifestCatalogTieredCost) }
+      : {}),
+  };
+}
+
+function buildManifestCatalogModelInput(model: ModelCatalogModel): ModelDefinitionConfig["input"] {
+  if (model.input?.includes("document")) {
+    throw new Error(
+      `Manifest modelCatalog row ${model.id} uses unsupported runtime input document`,
+    );
+  }
+  return model.input?.filter((item): item is "text" | "image" => item !== "document") ?? ["text"];
+}
+
+function buildManifestCatalogModel(model: ModelCatalogModel): ModelDefinitionConfig {
+  if (model.contextWindow === undefined) {
+    throw new Error(`Manifest modelCatalog row ${model.id} is missing contextWindow`);
+  }
+  if (model.maxTokens === undefined) {
+    throw new Error(`Manifest modelCatalog row ${model.id} is missing maxTokens`);
+  }
+  return {
+    id: model.id,
+    name: model.name ?? model.id,
+    ...(model.api ? { api: model.api } : {}),
+    ...(model.baseUrl ? { baseUrl: model.baseUrl } : {}),
+    reasoning: model.reasoning ?? false,
+    input: buildManifestCatalogModelInput(model),
+    cost: cloneManifestCatalogCost(model.cost ?? {}),
+    contextWindow: model.contextWindow,
+    ...(model.contextTokens !== undefined ? { contextTokens: model.contextTokens } : {}),
+    maxTokens: model.maxTokens,
+    ...(model.headers ? { headers: { ...model.headers } } : {}),
+    ...(model.compat ? { compat: { ...model.compat } } : {}),
+  };
+}
+
+export function buildManifestModelProviderConfig(params: {
+  providerId: string;
+  catalog: unknown;
+}): ModelProviderConfig {
+  const catalog = normalizeModelCatalog(
+    { providers: { [params.providerId]: params.catalog } },
+    { ownedProviders: new Set([params.providerId]) },
+  )?.providers?.[params.providerId];
+  if (!catalog) {
+    throw new Error(`Missing modelCatalog.providers.${params.providerId}`);
+  }
+  if (!catalog.baseUrl) {
+    throw new Error(`Missing modelCatalog.providers.${params.providerId}.baseUrl`);
+  }
+  const rawModelCount = countRawManifestCatalogModels(params.catalog);
+  if (rawModelCount !== undefined && rawModelCount !== catalog.models.length) {
+    throw new Error(`Invalid modelCatalog.providers.${params.providerId}.models`);
+  }
+  return {
+    baseUrl: catalog.baseUrl,
+    ...(catalog.api ? { api: catalog.api } : {}),
+    ...(catalog.headers ? { headers: { ...catalog.headers } } : {}),
+    models: catalog.models.map(buildManifestCatalogModel),
+  };
+}
 
 function normalizeConfiguredCatalogModelInput(
   input: unknown,

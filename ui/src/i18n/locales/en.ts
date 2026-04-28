@@ -107,6 +107,14 @@ export const en: TranslationMap = {
       lightningHelp: "Lightning address for tips (LUD-16)",
     },
   },
+  lazyView: {
+    loadingTitle: "Loading panel",
+    errorTitle: "Panel failed to load",
+    errorSubtitle:
+      "Reload the page to load the latest Control UI bundle, or retry if the network request failed.",
+    retry: "Retry",
+    unknownError: "Unknown module load error.",
+  },
   nodes: {
     binding: {
       loadConfigHint: "Load config to edit bindings.",

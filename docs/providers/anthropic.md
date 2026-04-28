@@ -147,6 +147,7 @@ Override per-message with `/think:<level>` or in model params:
 Related Anthropic docs:
 - [Adaptive thinking](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking)
 - [Extended thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
+
 </Note>
 
 ## Prompt caching
@@ -209,6 +210,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     - Anthropic Claude models on Bedrock (`amazon-bedrock/*anthropic.claude*`) accept `cacheRetention` pass-through when configured.
     - Non-Anthropic Bedrock models are forced to `cacheRetention: "none"` at runtime.
     - API-key smart defaults also seed `cacheRetention: "short"` for Claude-on-Bedrock refs when no explicit value is set.
+
   </Accordion>
 </AccordionGroup>
 
@@ -241,6 +243,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     - Only injected for direct `api.anthropic.com` requests. Proxy routes leave `service_tier` untouched.
     - Explicit `serviceTier` or `service_tier` params override `/fast` when both are set.
     - On accounts without Priority Tier capacity, `service_tier: "auto"` may resolve to `standard`.
+
     </Note>
 
   </Accordion>

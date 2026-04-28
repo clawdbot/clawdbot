@@ -17,13 +17,16 @@ const runtimeLog = runtime.log;
 const runtimeError = runtime.error;
 const runtimeExit = runtime.exit;
 
-vi.mock("../runtime.js", async () => {
+vi.doMock("../runtime.js", async () => {
   return mockRuntimeModule(
     () => vi.importActual<typeof import("../runtime.js")>("../runtime.js"),
     runtime,
   );
 });
-vi.mock("../config/config.js", () => ({ loadConfig: mocks.loadConfig }));
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: mocks.loadConfig,
+  loadConfig: mocks.loadConfig,
+}));
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: mocks.runCommandWithTimeout }));
 vi.mock("../media/qr-terminal.ts", () => ({
   renderQrTerminal: mocks.renderTerminal,

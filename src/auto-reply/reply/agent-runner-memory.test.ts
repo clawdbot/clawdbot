@@ -154,10 +154,12 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     const flushCall = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as {
       prompt?: string;
+      transcriptPrompt?: string;
       memoryFlushWritePath?: string;
       silentExpected?: boolean;
     };
     expect(flushCall.prompt).toContain("Pre-compaction memory flush.");
+    expect(flushCall.transcriptPrompt).toBe("");
     expect(flushCall.memoryFlushWritePath).toMatch(/^memory\/\d{4}-\d{2}-\d{2}\.md$/);
     expect(flushCall.silentExpected).toBe(true);
     expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledWith({
@@ -174,6 +176,68 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(persisted.main.compactionCount).toBe(2);
     expect(persisted.main.memoryFlushCompactionCount).toBe(2);
     expect(persisted.main.memoryFlushAt).toBe(1_700_000_000_000);
+  });
+
+  it("runs memory flush on the configured maintenance model without active fallbacks", async () => {
+    registerMemoryFlushPlanResolver(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 20_000,
+      model: "ollama/qwen3:8b",
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+
+    await runMemoryFlushIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude",
+              fallbacks: ["openai/gpt-5.4"],
+            },
+            compaction: {
+              memoryFlush: {
+                model: "ollama/qwen3:8b",
+              },
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({ provider: "anthropic", model: "claude" }),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(runWithModelFallbackMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "ollama",
+        model: "qwen3:8b",
+        fallbacksOverride: [],
+      }),
+    );
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "ollama",
+        model: "qwen3:8b",
+        authProfileId: undefined,
+        authProfileIdSource: undefined,
+      }),
+    );
   });
 
   it("skips memory flush for CLI providers", async () => {
@@ -523,6 +587,7 @@ describe("runMemoryFlushIfNeeded", () => {
 
     const flushCall = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as {
       prompt?: string;
+      transcriptPrompt?: string;
       extraSystemPrompt?: string;
       bootstrapPromptWarningSignaturesSeen?: string[];
       bootstrapPromptWarningSignature?: string;
@@ -532,6 +597,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(flushCall.prompt).toContain("Write notes.");
     expect(flushCall.prompt).toContain("NO_REPLY");
     expect(flushCall.prompt).toContain("MEMORY.md");
+    expect(flushCall.transcriptPrompt).toBe("");
     expect(flushCall.extraSystemPrompt).toContain("extra system");
     expect(flushCall.extraSystemPrompt).toContain("Flush memory now.");
     expect(flushCall.memoryFlushWritePath).toBe("memory/2023-11-14.md");

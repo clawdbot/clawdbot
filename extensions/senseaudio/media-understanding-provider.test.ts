@@ -3,12 +3,12 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
-import { describe, expect, it } from "vitest";
 import {
   createAuthCaptureJsonFetch,
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
-} from "../../src/media-understanding/audio.test-helpers.ts";
+} from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it } from "vitest";
 import { transcribeSenseAudioAudio } from "./media-understanding-provider.js";
 
 installPinnedHostnameTestHooks();

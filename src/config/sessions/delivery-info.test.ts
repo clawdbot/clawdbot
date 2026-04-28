@@ -8,7 +8,7 @@ const storeState = vi.hoisted(() => ({
 }));
 
 vi.mock("../io.js", () => ({
-  loadConfig: () => ({}),
+  getRuntimeConfig: () => ({}),
 }));
 
 vi.mock("./paths.js", () => ({

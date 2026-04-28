@@ -8,7 +8,12 @@ import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import { coercePersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
-import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
+import {
+  replaceConfigFile,
+  resolveStateDir,
+  type ConfigFileSnapshot,
+  type OpenClawConfig,
+} from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
 import type { SecretProviderConfig } from "../config/types.secrets.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -49,6 +54,7 @@ type ApplyWrite = {
 
 type ProjectedState = {
   nextConfig: OpenClawConfig;
+  configSnapshot: ConfigFileSnapshot;
   configPath: string;
   configWriteOptions: ConfigWriteOptions;
   authStoreByPath: Map<string, Record<string, unknown>>;
@@ -270,6 +276,7 @@ async function projectPlanState(params: {
 
   return {
     nextConfig,
+    configSnapshot: snapshot,
     configPath,
     configWriteOptions: writeOptions,
     authStoreByPath,
@@ -823,7 +830,13 @@ export async function runSecretsApply(params: {
   }
 
   try {
-    await io.writeConfigFile(projected.nextConfig, projected.configWriteOptions);
+    await replaceConfigFile({
+      nextConfig: projected.nextConfig,
+      snapshot: projected.configSnapshot,
+      writeOptions: projected.configWriteOptions,
+      io,
+      afterWrite: { mode: "auto" },
+    });
     for (const write of writes) {
       writeTextFileAtomic(write.path, write.content, write.mode);
     }

@@ -52,4 +52,38 @@ describe("hook correlation fields", () => {
       TEST_PLUGIN_AGENT_CTX,
     );
   });
+
+  it("times out never-settling agent_end handlers", async () => {
+    vi.useFakeTimers();
+    try {
+      const handler = vi.fn(() => new Promise<void>(() => {}));
+      addTestHook({
+        registry,
+        pluginId: "plugin-a",
+        hookName: "agent_end",
+        handler: handler as PluginHookRegistration["handler"],
+      });
+      const logger = {
+        error: vi.fn(),
+        warn: vi.fn(),
+      };
+
+      const runner = createHookRunner(registry, {
+        logger,
+        voidHookTimeoutMsByHook: { agent_end: 5 },
+      });
+      const run = runner.runAgentEnd({ messages: [], success: true }, TEST_PLUGIN_AGENT_CTX);
+
+      await vi.advanceTimersByTimeAsync(5);
+
+      await expect(run).resolves.toBeUndefined();
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "[hooks] agent_end handler from plugin-a failed: timed out after 5ms",
+        ),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

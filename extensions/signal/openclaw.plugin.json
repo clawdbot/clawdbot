@@ -1,5 +1,8 @@
 {
   "id": "signal",
+  "activation": {
+    "onStartup": false
+  },
   "channels": ["signal"],
   "configSchema": {
     "type": "object",

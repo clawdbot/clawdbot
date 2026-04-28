@@ -51,6 +51,8 @@ export const ConfigSchemaLookupParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const UpdateStatusParamsSchema = Type.Object({}, { additionalProperties: false });
+
 export const UpdateRunParamsSchema = Type.Object(
   {
     sessionKey: Type.Optional(Type.String()),

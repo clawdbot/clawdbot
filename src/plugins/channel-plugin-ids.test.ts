@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 
 const listPotentialConfiguredChannelIds = vi.hoisted(() => vi.fn());
 const listPotentialConfiguredChannelPresenceSignals = vi.hoisted(() => vi.fn());
@@ -15,6 +17,9 @@ const hasMeaningfulChannelConfig = vi.hoisted(() =>
   }),
 );
 const loadPluginManifestRegistry = vi.hoisted(() => vi.fn());
+const loadPluginManifestRegistryForInstalledIndex = vi.hoisted(() => vi.fn());
+const loadPluginManifestRegistryForPluginRegistry = vi.hoisted(() => vi.fn());
+const loadPluginRegistrySnapshot = vi.hoisted(() => vi.fn());
 
 vi.mock("../channels/config-presence.js", () => ({
   listPotentialConfiguredChannelIds,
@@ -28,6 +33,23 @@ vi.mock("./manifest-registry.js", async (importOriginal) => {
   return {
     ...actual,
     loadPluginManifestRegistry,
+  };
+});
+
+vi.mock("./manifest-registry-installed.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./manifest-registry-installed.js")>();
+  return {
+    ...actual,
+    loadPluginManifestRegistryForInstalledIndex,
+  };
+});
+
+vi.mock("./plugin-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./plugin-registry.js")>();
+  return {
+    ...actual,
+    loadPluginManifestRegistryForPluginRegistry,
+    loadPluginRegistrySnapshot,
   };
 });
 
@@ -223,6 +245,28 @@ function createManifestRegistryFixture() {
         providers: [],
         cliBackends: [],
       },
+      {
+        id: "demo-global-startup-opt-out",
+        channels: [],
+        activation: {
+          onStartup: false,
+        },
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
+        id: "demo-global-explicit-startup",
+        channels: [],
+        activation: {
+          onStartup: true,
+        },
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
     ].map(withManifestLoadPaths),
     diagnostics: [],
   };
@@ -244,6 +288,79 @@ function createManifestRegistryFixtureWithWorkspaceDemoChannel() {
         cliBackends: [],
       },
     ].map(withManifestLoadPaths),
+  };
+}
+
+function normalizeStartupAgentHarnesses(record: PluginManifestRecord): readonly string[] {
+  return [
+    ...new Set([...(record.activation?.onAgentHarnesses ?? []), ...(record.cliBackends ?? [])]),
+  ].toSorted((left, right) => left.localeCompare(right));
+}
+
+function hasRuntimeContractSurface(record: PluginManifestRecord): boolean {
+  return record.providers.length > 0 || record.cliBackends.length > 0;
+}
+
+function hasPluginKind(record: PluginManifestRecord, kind: string): boolean {
+  return Array.isArray(record.kind) ? record.kind.includes(kind as never) : record.kind === kind;
+}
+
+function createInstalledPluginRecordFixture(
+  record: PluginManifestRecord,
+): InstalledPluginIndexRecord {
+  const memory = hasPluginKind(record, "memory");
+  return {
+    pluginId: record.id,
+    manifestPath: record.manifestPath,
+    manifestHash: `test-${record.id}`,
+    source: record.source,
+    rootDir: record.rootDir,
+    origin: record.origin,
+    enabled: true,
+    ...(record.enabledByDefault === true ? { enabledByDefault: true } : {}),
+    startup: {
+      sidecar:
+        record.activation?.onStartup === true ||
+        (record.activation?.onStartup === undefined &&
+          record.channels.length === 0 &&
+          !hasRuntimeContractSurface(record) &&
+          !memory),
+      memory,
+      deferConfiguredChannelFullLoadUntilAfterListen:
+        record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
+      agentHarnesses: normalizeStartupAgentHarnesses(record),
+    },
+    compat: [],
+  };
+}
+
+function createInstalledPluginIndexFixture(
+  registry: PluginManifestRegistry = loadPluginManifestRegistry(),
+): InstalledPluginIndex {
+  return {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "test",
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins: registry.plugins.map(createInstalledPluginRecordFixture),
+    diagnostics: registry.diagnostics,
+  };
+}
+
+function filterManifestRegistryForInstalledIndex(params: {
+  pluginIds?: readonly string[];
+  includeDisabled?: boolean;
+}): PluginManifestRegistry {
+  const registry = loadPluginManifestRegistry() as PluginManifestRegistry;
+  const pluginIdSet = params.pluginIds?.length ? new Set(params.pluginIds) : null;
+  return {
+    ...registry,
+    plugins: pluginIdSet
+      ? registry.plugins.filter((plugin) => pluginIdSet.has(plugin.id))
+      : registry.plugins,
   };
 }
 
@@ -413,6 +530,15 @@ describe("resolveGatewayStartupPluginIds", () => {
       return true;
     });
     loadPluginManifestRegistry.mockReset().mockReturnValue(createManifestRegistryFixture());
+    loadPluginRegistrySnapshot
+      .mockReset()
+      .mockImplementation(() => createInstalledPluginIndexFixture());
+    loadPluginManifestRegistryForInstalledIndex
+      .mockReset()
+      .mockImplementation(filterManifestRegistryForInstalledIndex);
+    loadPluginManifestRegistryForPluginRegistry
+      .mockReset()
+      .mockImplementation(() => loadPluginManifestRegistry());
   });
 
   it.each([
@@ -485,6 +611,98 @@ describe("resolveGatewayStartupPluginIds", () => {
       config: effectiveConfig,
       activationSourceConfig: rawConfig,
       expected: ["browser"],
+    });
+  });
+
+  it("does not let runtime-default plugin entries bypass the authored startup allowlist", () => {
+    const activationSourceConfig = {
+      channels: {},
+      plugins: {
+        allow: ["bench-plugin"],
+        entries: {
+          browser: {
+            enabled: false,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const runtimeConfig = {
+      ...activationSourceConfig,
+      plugins: {
+        ...activationSourceConfig.plugins,
+        entries: {
+          ...activationSourceConfig.plugins?.entries,
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: false,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expectStartupPluginIdsCase({
+      config: runtimeConfig,
+      activationSourceConfig,
+      expected: [],
+    });
+  });
+
+  it("keeps deprecated implicit startup sidecar fallback for legacy plugins", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        enabledPluginIds: ["demo-global-sidecar"],
+        allowPluginIds: ["demo-global-sidecar"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: ["demo-global-sidecar"],
+    });
+  });
+
+  it("can disable deprecated implicit startup sidecar fallback for future-mode testing", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        enabledPluginIds: ["demo-global-sidecar"],
+        allowPluginIds: ["demo-global-sidecar"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      env: {
+        ...process.env,
+        OPENCLAW_DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS: "1",
+      },
+      expected: [],
+    });
+  });
+
+  it("skips deprecated implicit startup sidecar fallback when activation.onStartup is false", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        enabledPluginIds: ["demo-global-startup-opt-out"],
+        allowPluginIds: ["demo-global-startup-opt-out"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: [],
+    });
+  });
+
+  it("loads explicit startup plugins when activation.onStartup is true", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        enabledPluginIds: ["demo-global-explicit-startup"],
+        allowPluginIds: ["demo-global-explicit-startup"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      env: {
+        ...process.env,
+        OPENCLAW_DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS: "1",
+      },
+      expected: ["demo-global-explicit-startup"],
     });
   });
 

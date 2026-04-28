@@ -1,4 +1,4 @@
-export { loadConfig } from "openclaw/plugin-sdk/browser-config-runtime";
+export { getRuntimeConfig } from "./sdk-config.js";
 export {
   callGatewayTool,
   imageResultFromFile,
@@ -7,9 +7,9 @@ export {
   readStringParam,
   resolveNodeIdFromList,
   selectDefaultNodeFromList,
-} from "openclaw/plugin-sdk/browser-setup-tools";
-export type { AnyAgentTool, NodeListNode } from "openclaw/plugin-sdk/browser-setup-tools";
-export { wrapExternalContent } from "openclaw/plugin-sdk/browser-security-runtime";
+} from "./sdk-setup-tools.js";
+export type { AnyAgentTool, NodeListNode } from "./sdk-setup-tools.js";
+export { wrapExternalContent } from "./sdk-security-runtime.js";
 export { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 export { BrowserToolSchema } from "./browser-tool.schema.js";
 export {

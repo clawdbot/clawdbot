@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 
@@ -40,6 +41,35 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 describe("google-meet node host bridge sessions", () => {
+  it("starts observe-only Chrome without BlackHole or bridge processes", async () => {
+    const { handleGoogleMeetNodeHostCommand } = await import("./src/node-host.js");
+    const originalPlatform = process.platform;
+    children.length = 0;
+    vi.mocked(spawnSync).mockClear();
+
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    try {
+      const start = JSON.parse(
+        await handleGoogleMeetNodeHostCommand(
+          JSON.stringify({
+            action: "start",
+            url: "https://meet.google.com/xyz-abcd-uvw",
+            mode: "transcribe",
+            launch: false,
+            audioInputCommand: ["mock-rec"],
+            audioOutputCommand: ["mock-play"],
+          }),
+        ),
+      );
+
+      expect(start).toEqual({ launched: false });
+      expect(spawnSync).not.toHaveBeenCalled();
+      expect(children).toHaveLength(0);
+    } finally {
+      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+    }
+  });
+
   it("clears output playback without closing the active bridge when the old output exits", async () => {
     const { handleGoogleMeetNodeHostCommand } = await import("./src/node-host.js");
     const originalPlatform = process.platform;

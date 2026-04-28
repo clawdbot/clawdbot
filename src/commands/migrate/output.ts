@@ -1,5 +1,5 @@
-import type { MigrationApplyResult, MigrationItem, MigrationPlan } from "../../plugins/types.js";
 import { redactMigrationPlan } from "../../plugin-sdk/migration.js";
+import type { MigrationApplyResult, MigrationItem, MigrationPlan } from "../../plugins/types.js";
 import { writeRuntimeJson } from "../../runtime.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";

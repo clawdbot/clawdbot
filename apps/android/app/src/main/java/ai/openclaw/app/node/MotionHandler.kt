@@ -1,5 +1,6 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.gateway.GatewaySession
 import android.Manifest
 import android.content.Context
 import android.hardware.Sensor
@@ -8,17 +9,15 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
-import ai.openclaw.app.gateway.GatewaySession
-import java.time.Instant
 import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.time.Instant
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.sqrt
@@ -67,9 +66,15 @@ internal interface MotionDataSource {
 
   fun hasPermission(context: Context): Boolean
 
-  suspend fun activity(context: Context, request: MotionActivityRequest): MotionActivityRecord
+  suspend fun activity(
+    context: Context,
+    request: MotionActivityRequest,
+  ): MotionActivityRecord
 
-  suspend fun pedometer(context: Context, request: MotionPedometerRequest): PedometerRecord
+  suspend fun pedometer(
+    context: Context,
+    request: MotionPedometerRequest,
+  ): PedometerRecord
 }
 
 private object SystemMotionDataSource : MotionDataSource {
@@ -83,22 +88,27 @@ private object SystemMotionDataSource : MotionDataSource {
     return sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) != null
   }
 
-  override fun hasPermission(context: Context): Boolean {
-    return ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) ==
+  override fun hasPermission(context: Context): Boolean =
+    ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) ==
       android.content.pm.PackageManager.PERMISSION_GRANTED
-  }
 
-  override suspend fun activity(context: Context, request: MotionActivityRequest): MotionActivityRecord {
+  override suspend fun activity(
+    context: Context,
+    request: MotionActivityRequest,
+  ): MotionActivityRecord {
     if (!request.startISO.isNullOrBlank() || !request.endISO.isNullOrBlank()) {
       throw IllegalArgumentException("MOTION_RANGE_UNAVAILABLE: historical activity range not supported on Android")
     }
-    val sensorManager = context.getSystemService(SensorManager::class.java)
-      ?: throw IllegalStateException("MOTION_UNAVAILABLE: sensor manager unavailable")
-    val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-      ?: throw IllegalStateException("MOTION_UNAVAILABLE: accelerometer not available")
+    val sensorManager =
+      context.getSystemService(SensorManager::class.java)
+        ?: throw IllegalStateException("MOTION_UNAVAILABLE: sensor manager unavailable")
+    val accelerometer =
+      sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        ?: throw IllegalStateException("MOTION_UNAVAILABLE: accelerometer not available")
 
-    val sample = readAccelerometerSample(sensorManager, accelerometer)
-      ?: throw IllegalStateException("MOTION_UNAVAILABLE: no accelerometer sample")
+    val sample =
+      readAccelerometerSample(sensorManager, accelerometer)
+        ?: throw IllegalStateException("MOTION_UNAVAILABLE: no accelerometer sample")
     val end = Instant.now()
     val start = end.minusSeconds(2)
     val classification = classifyActivity(sample.averageDelta)
@@ -115,17 +125,23 @@ private object SystemMotionDataSource : MotionDataSource {
     )
   }
 
-  override suspend fun pedometer(context: Context, request: MotionPedometerRequest): PedometerRecord {
+  override suspend fun pedometer(
+    context: Context,
+    request: MotionPedometerRequest,
+  ): PedometerRecord {
     if (!request.startISO.isNullOrBlank() || !request.endISO.isNullOrBlank()) {
       throw IllegalArgumentException("PEDOMETER_RANGE_UNAVAILABLE: historical pedometer range not supported on Android")
     }
-    val sensorManager = context.getSystemService(SensorManager::class.java)
-      ?: throw IllegalStateException("PEDOMETER_UNAVAILABLE: sensor manager unavailable")
-    val stepCounter = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
-      ?: throw IllegalStateException("PEDOMETER_UNAVAILABLE: step counting not supported")
+    val sensorManager =
+      context.getSystemService(SensorManager::class.java)
+        ?: throw IllegalStateException("PEDOMETER_UNAVAILABLE: sensor manager unavailable")
+    val stepCounter =
+      sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
+        ?: throw IllegalStateException("PEDOMETER_UNAVAILABLE: step counting not supported")
 
-    val steps = readStepCounter(sensorManager, stepCounter)
-      ?: throw IllegalStateException("PEDOMETER_UNAVAILABLE: no step counter sample")
+    val steps =
+      readStepCounter(sensorManager, stepCounter)
+        ?: throw IllegalStateException("PEDOMETER_UNAVAILABLE: no step counter sample")
     val bootMs = System.currentTimeMillis() - SystemClock.elapsedRealtime()
     return PedometerRecord(
       startISO = Instant.ofEpochMilli(max(0L, bootMs)).toString(),
@@ -143,7 +159,10 @@ private object SystemMotionDataSource : MotionDataSource {
   )
 
   @OptIn(InternalCoroutinesApi::class)
-  private suspend fun readStepCounter(sensorManager: SensorManager, sensor: Sensor): Int? {
+  private suspend fun readStepCounter(
+    sensorManager: SensorManager,
+    sensor: Sensor,
+  ): Int? {
     val sample =
       withTimeoutOrNull(1200L) {
         suspendCancellableCoroutine<Float?> { cont ->
@@ -156,7 +175,10 @@ private object SystemMotionDataSource : MotionDataSource {
                 sensorManager.unregisterListener(this)
               }
 
-              override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+              override fun onAccuracyChanged(
+                sensor: Sensor?,
+                accuracy: Int,
+              ) = Unit
             }
           val registered = sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
           if (!registered) {
@@ -194,17 +216,21 @@ private object SystemMotionDataSource : MotionDataSource {
                 sumDelta += abs(magnitude - SensorManager.GRAVITY_EARTH.toDouble())
                 count += 1
                 if (count >= ACCELEROMETER_SAMPLE_TARGET) {
-                  val result = AccelerometerSample(
-                    samples = count,
-                    averageDelta = sumDelta / count,
-                  )
+                  val result =
+                    AccelerometerSample(
+                      samples = count,
+                      averageDelta = sumDelta / count,
+                    )
                   val token = cont.tryResume(result) ?: return
                   cont.completeResume(token)
                   sensorManager.unregisterListener(this)
                 }
               }
 
-              override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+              override fun onAccuracyChanged(
+                sensor: Sensor?,
+                accuracy: Int,
+              ) = Unit
             }
           val registered = sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
           if (!registered) {
@@ -217,15 +243,17 @@ private object SystemMotionDataSource : MotionDataSource {
     return sample
   }
 
-  private fun classifyActivity(averageDelta: Double): String {
-    return when {
+  private fun classifyActivity(averageDelta: Double): String =
+    when {
       averageDelta <= 0.55 -> "stationary"
       averageDelta <= 1.80 -> "walking"
       else -> "running"
     }
-  }
 
-  private fun classifyConfidence(samples: Int, averageDelta: Double): String {
+  private fun classifyConfidence(
+    samples: Int,
+    averageDelta: Double,
+  ): String {
     if (samples < 6) return "low"
     if (samples >= 14 && averageDelta > 0.4) return "high"
     return "medium"

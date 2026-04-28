@@ -1,4 +1,4 @@
-import type { SsrFPolicy } from "../../../../src/infra/net/ssrf.js";
+import type { SsrFPolicy } from "./ssrf-policy.js";
 
 export type BatchHttpClientConfig = {
   baseUrl?: string;

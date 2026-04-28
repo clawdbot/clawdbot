@@ -1,6 +1,7 @@
 // Public agent/model/runtime helpers for plugins that integrate with core agent flows.
 
 export * from "../agents/agent-scope.js";
+export { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 export * from "../agents/current-time.js";
 export * from "../agents/date-time.js";
 export * from "../agents/defaults.js";

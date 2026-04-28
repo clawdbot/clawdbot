@@ -1,4 +1,4 @@
-import type { SlackSlashCommandConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { SlackSlashCommandConfig } from "openclaw/plugin-sdk/config-types";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 /**

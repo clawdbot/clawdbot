@@ -1,19 +1,10 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
-
-const resolvePluginCapabilityProviderMock = vi.hoisted(() => vi.fn());
-const resolvePluginCapabilityProvidersMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../plugins/capability-provider-runtime.js", () => ({
-  resolvePluginCapabilityProvider: resolvePluginCapabilityProviderMock,
-  resolvePluginCapabilityProviders: resolvePluginCapabilityProvidersMock,
-}));
-
-let getSpeechProvider: typeof import("./provider-registry.js").getSpeechProvider;
-let listSpeechProviders: typeof import("./provider-registry.js").listSpeechProviders;
-let canonicalizeSpeechProviderId: typeof import("./provider-registry.js").canonicalizeSpeechProviderId;
-let normalizeSpeechProviderId: typeof import("./provider-registry.js").normalizeSpeechProviderId;
+import {
+  createSpeechProviderRegistry,
+  normalizeSpeechProviderId,
+} from "./provider-registry-core.js";
 
 function createSpeechProvider(id: string, aliases?: string[]): SpeechProviderPlugin {
   return {
@@ -31,58 +22,57 @@ function createSpeechProvider(id: string, aliases?: string[]): SpeechProviderPlu
 }
 
 describe("speech provider registry", () => {
-  beforeAll(async () => {
-    ({
-      getSpeechProvider,
-      listSpeechProviders,
-      canonicalizeSpeechProviderId,
-      normalizeSpeechProviderId,
-    } = await import("./provider-registry.js"));
-  });
+  const getProviderCalls: Array<{ providerId: string; cfg?: OpenClawConfig }> = [];
+  const listProvidersCalls: Array<{ cfg?: OpenClawConfig }> = [];
+  let providers: SpeechProviderPlugin[] = [];
+  let directProvider: SpeechProviderPlugin | undefined;
+  let registry: ReturnType<typeof createSpeechProviderRegistry>;
 
   beforeEach(() => {
-    resolvePluginCapabilityProviderMock.mockReset();
-    resolvePluginCapabilityProviderMock.mockReturnValue(undefined);
-    resolvePluginCapabilityProvidersMock.mockReset();
-    resolvePluginCapabilityProvidersMock.mockReturnValue([]);
+    providers = [];
+    directProvider = undefined;
+    getProviderCalls.length = 0;
+    listProvidersCalls.length = 0;
+    registry = createSpeechProviderRegistry({
+      getProvider: (providerId, cfg) => {
+        getProviderCalls.push({ providerId, cfg });
+        return directProvider;
+      },
+      listProviders: (cfg) => {
+        listProvidersCalls.push({ cfg });
+        return providers;
+      },
+    });
   });
 
   it("lists providers from the speech capability runtime", () => {
     const cfg = {} as OpenClawConfig;
-    resolvePluginCapabilityProvidersMock.mockReturnValue([createSpeechProvider("demo-speech")]);
+    providers = [createSpeechProvider("demo-speech")];
 
-    expect(listSpeechProviders(cfg).map((provider) => provider.id)).toEqual(["demo-speech"]);
-    expect(resolvePluginCapabilityProvidersMock).toHaveBeenCalledWith({
-      key: "speechProviders",
-      cfg,
-    });
+    expect(registry.listSpeechProviders(cfg).map((provider) => provider.id)).toEqual([
+      "demo-speech",
+    ]);
+    expect(listProvidersCalls).toEqual([{ cfg }]);
   });
 
   it("gets providers by normalized id through the capability runtime", () => {
     const cfg = {} as OpenClawConfig;
-    const provider = createSpeechProvider("microsoft", ["edge"]);
-    resolvePluginCapabilityProviderMock.mockReturnValue(provider);
+    directProvider = createSpeechProvider("microsoft", ["edge"]);
 
-    expect(getSpeechProvider(" MICROSOFT ", cfg)).toBe(provider);
-    expect(resolvePluginCapabilityProviderMock).toHaveBeenCalledWith({
-      key: "speechProviders",
-      providerId: "microsoft",
-      cfg,
-    });
+    expect(registry.getSpeechProvider(" MICROSOFT ", cfg)).toBe(directProvider);
+    expect(getProviderCalls).toEqual([{ providerId: "microsoft", cfg }]);
   });
 
   it("canonicalizes aliases from listed providers when direct lookup misses", () => {
-    resolvePluginCapabilityProvidersMock.mockReturnValue([
-      createSpeechProvider("microsoft", ["edge"]),
-    ]);
+    providers = [createSpeechProvider("microsoft", ["edge"])];
 
     expect(normalizeSpeechProviderId("edge")).toBe("edge");
-    expect(canonicalizeSpeechProviderId("edge")).toBe("microsoft");
+    expect(registry.canonicalizeSpeechProviderId("edge")).toBe("microsoft");
   });
 
   it("returns empty results when the capability runtime has no speech providers", () => {
-    expect(listSpeechProviders()).toEqual([]);
-    expect(getSpeechProvider("demo-speech")).toBeUndefined();
-    expect(canonicalizeSpeechProviderId("demo-speech")).toBe("demo-speech");
+    expect(registry.listSpeechProviders()).toEqual([]);
+    expect(registry.getSpeechProvider("demo-speech")).toBeUndefined();
+    expect(registry.canonicalizeSpeechProviderId("demo-speech")).toBe("demo-speech");
   });
 });

@@ -37,7 +37,7 @@ describe("engine/ref/format-ref-entry", () => {
     );
 
     expect(formatted).toBe(
-      'see these [image: photo.png (/tmp/photo.png)] [voice message (content: "spoken words" - platform ASR) (https://example.test/voice.amr)] [file: notes.txt]',
+      'see these MEDIA:/tmp/photo.png MEDIA:https://example.test/voice.amr (transcript: "spoken words") [source: platform ASR] [file: notes.txt]',
     );
   });
 
@@ -49,7 +49,7 @@ describe("engine/ref/format-ref-entry", () => {
           attachments: [{ type: "voice", localPath: "/tmp/voice.wav" }],
         }),
       ),
-    ).toBe("[voice message (/tmp/voice.wav)]");
+    ).toBe("MEDIA:/tmp/voice.wav");
   });
 
   it("returns an explicit empty marker for blank entries", () => {

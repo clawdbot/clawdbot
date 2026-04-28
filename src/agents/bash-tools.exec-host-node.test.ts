@@ -151,6 +151,17 @@ type MockNodeInvokeParams = {
   params?: Record<string, unknown>;
 };
 
+function expectSystemRunInvoke(params: { invokeTimeoutMs: number; runTimeoutMs: number }) {
+  expect(callGatewayToolMock).toHaveBeenCalledWith(
+    "node.invoke",
+    expect.objectContaining({ timeoutMs: params.invokeTimeoutMs }),
+    expect.objectContaining({
+      command: "system.run",
+      params: expect.objectContaining({ timeoutMs: params.runTimeoutMs }),
+    }),
+  );
+}
+
 describe("executeNodeHostCommand", () => {
   beforeAll(async () => {
     ({ executeNodeHostCommand } = await import("./bash-tools.exec-host-node.js"));
@@ -276,13 +287,14 @@ describe("executeNodeHostCommand", () => {
     expect(callGatewayToolMock).toHaveBeenNthCalledWith(
       3,
       "node.invoke",
-      expect.anything(),
+      expect.objectContaining({ timeoutMs: 35_000 }),
       expect.objectContaining({
         command: "system.run",
         params: expect.objectContaining({
           approved: true,
           approvalDecision: "allow-once",
           systemRunPlan: preparedPlan,
+          timeoutMs: 30_000,
         }),
       }),
     );
@@ -365,13 +377,14 @@ describe("executeNodeHostCommand", () => {
     expect(callGatewayToolMock).toHaveBeenCalledTimes(1);
     expect(callGatewayToolMock).toHaveBeenCalledWith(
       "node.invoke",
-      expect.anything(),
+      expect.objectContaining({ timeoutMs: 35_000 }),
       expect.objectContaining({
         command: "system.run",
         params: expect.objectContaining({
           command: ["bash", "-lc", "bun ./script.ts"],
           rawCommand: "bun ./script.ts",
           suppressNotifyOnExit: true,
+          timeoutMs: 30_000,
         }),
       }),
     );
@@ -384,6 +397,82 @@ describe("executeNodeHostCommand", () => {
         }),
       }),
     );
+  });
+
+  it("returns a non-empty placeholder for silent node exec results", async () => {
+    callGatewayToolMock.mockImplementationOnce(
+      async (method: string, _options: unknown, params: MockNodeInvokeParams | undefined) => {
+        if (method === "node.invoke" && params?.command === "system.run") {
+          return {
+            payload: {
+              success: true,
+              stdout: "",
+              stderr: "",
+              exitCode: 0,
+              timedOut: false,
+            },
+          };
+        }
+        throw new Error(`unexpected node invoke command: ${String(params?.command)}`);
+      },
+    );
+
+    const result = await executeNodeHostCommand({
+      command: "mkdir /tmp/quiet",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expect(result.content).toEqual([{ type: "text", text: "(no output)" }]);
+    expect(result.details).toMatchObject({
+      status: "completed",
+      exitCode: 0,
+      aggregated: "",
+      cwd: "/tmp/work",
+    });
+  });
+
+  it("forwards explicit timeouts to node system.run", async () => {
+    await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      timeoutSec: 12,
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expectSystemRunInvoke({ invokeTimeoutMs: 17_000, runTimeoutMs: 12_000 });
+  });
+
+  it("forwards timeout zero to node system.run and keeps the invoke wait bounded", async () => {
+    await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      timeoutSec: 0,
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expectSystemRunInvoke({ invokeTimeoutMs: 35_000, runTimeoutMs: 0 });
   });
 
   it("denies timed-out inline-eval requests instead of invoking the node", async () => {

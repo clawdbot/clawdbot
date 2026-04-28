@@ -13,7 +13,13 @@ import {
   type RuntimeEnv,
 } from "../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
-import type { CoreConfig, ReplyToMode } from "../../types.js";
+import type {
+  CoreConfig,
+  MatrixConfig,
+  MatrixStreamingConfig,
+  MatrixStreamingMode,
+  ReplyToMode,
+} from "../../types.js";
 import { resolveMatrixAccountConfig } from "../account-config.js";
 import { resolveConfiguredMatrixBotUserIds } from "../accounts.js";
 import { setActiveMatrixClient } from "../active-client.js";
@@ -60,6 +66,46 @@ export type MonitorMatrixOpts = {
   setStatus?: (next: import("openclaw/plugin-sdk/channel-contract").ChannelAccountSnapshot) => void;
 };
 
+function isMatrixStreamingConfig(
+  streaming: MatrixConfig["streaming"],
+): streaming is MatrixStreamingConfig {
+  return Boolean(streaming && typeof streaming === "object" && !Array.isArray(streaming));
+}
+
+function resolveMatrixStreamingMode(streaming: MatrixConfig["streaming"]): MatrixStreamingMode {
+  if (streaming === true || streaming === "partial") {
+    return "partial";
+  }
+  if (streaming === "quiet") {
+    return "quiet";
+  }
+  if (isMatrixStreamingConfig(streaming)) {
+    if (streaming.mode === "partial" || streaming.mode === "quiet") {
+      return streaming.mode;
+    }
+  }
+  return "off";
+}
+
+function resolveMatrixPreviewToolProgress(streaming: MatrixConfig["streaming"]): boolean {
+  if (!isMatrixStreamingConfig(streaming)) {
+    return true;
+  }
+  return streaming.preview?.toolProgress ?? true;
+}
+
+function resolveMatrixPreviewToolProgressEnabled(streaming: MatrixConfig["streaming"]): boolean {
+  return (
+    resolveMatrixStreamingMode(streaming) !== "off" && resolveMatrixPreviewToolProgress(streaming)
+  );
+}
+
+export const __testing = {
+  resolveMatrixPreviewToolProgress,
+  resolveMatrixPreviewToolProgressEnabled,
+  resolveMatrixStreamingMode,
+};
+
 const DEFAULT_MEDIA_MAX_MB = 20;
 
 export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promise<void> {
@@ -71,7 +117,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     throw new Error("Matrix provider requires Node (bun runtime not supported)");
   }
   const core = getMatrixRuntime();
-  let cfg = core.config.loadConfig() as CoreConfig;
+  let cfg = core.config.current() as CoreConfig;
   if (cfg.channels?.["matrix"]?.enabled === false) {
     return;
   }
@@ -244,12 +290,10 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const historyLimit = Math.max(0, accountConfig.historyLimit ?? globalGroupChatHistoryLimit ?? 0);
   const mediaMaxMb = opts.mediaMaxMb ?? accountConfig.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
   const mediaMaxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
-  const streaming: "partial" | "quiet" | "off" =
-    accountConfig.streaming === true || accountConfig.streaming === "partial"
-      ? "partial"
-      : accountConfig.streaming === "quiet"
-        ? "quiet"
-        : "off";
+  const streaming = resolveMatrixStreamingMode(accountConfig.streaming);
+  const previewToolProgressEnabled = resolveMatrixPreviewToolProgressEnabled(
+    accountConfig.streaming,
+  );
   const blockStreamingEnabled = accountConfig.blockStreaming === true;
   const startupMs = Date.now();
   const startupGraceMs = 0;
@@ -340,6 +384,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       dmThreadReplies,
       dmSessionScope,
       streaming,
+      previewToolProgressEnabled,
       blockStreamingEnabled,
       dmEnabled,
       dmPolicy,
@@ -436,8 +481,13 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       accountConfig,
       logger,
       logVerboseMessage,
-      loadConfig: () => core.config.loadConfig() as CoreConfig,
-      writeConfigFile: async (nextCfg) => await core.config.writeConfigFile(nextCfg),
+      getRuntimeConfig: () => core.config.current() as CoreConfig,
+      replaceConfigFile: async (nextCfg) => {
+        await core.config.replaceConfigFile({
+          nextConfig: nextCfg,
+          afterWrite: { mode: "auto" },
+        });
+      },
       loadWebMedia: async (url, maxBytes) => await core.media.loadWebMedia(url, maxBytes),
       env: process.env,
       abortSignal: opts.abortSignal,

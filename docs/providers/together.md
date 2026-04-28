@@ -119,6 +119,7 @@ provider selection, and failover behavior.
     - If models are not appearing, confirm the API key is set in the correct
       environment for your Gateway process.
     - Model refs use the form `together/<model-id>`.
+
   </Accordion>
 </AccordionGroup>
 

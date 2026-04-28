@@ -4,7 +4,7 @@ import type { Command } from "commander";
 import { findBundledPluginSource } from "../plugins/bundled-sources.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveFileNpmSpecToLocalPath } from "./plugins-command-helpers.js";
+import { parseNpmPrefixSpec, resolveFileNpmSpecToLocalPath } from "./plugins-command-helpers.js";
 
 export type PluginInstallInvalidConfigPolicy = "deny" | "allow-bundled-recovery";
 
@@ -73,7 +73,14 @@ function resolveBundledInstallRecoveryMetadata(
       return direct;
     }
   }
-  for (const value of [request.rawSpec.trim(), request.normalizedSpec.trim()]) {
+  const rawNpmPrefixSpec = parseNpmPrefixSpec(request.rawSpec);
+  const normalizedNpmPrefixSpec = parseNpmPrefixSpec(request.normalizedSpec);
+  for (const value of [
+    request.rawSpec.trim(),
+    request.normalizedSpec.trim(),
+    rawNpmPrefixSpec ?? "",
+    normalizedNpmPrefixSpec ?? "",
+  ]) {
     if (!value) {
       continue;
     }

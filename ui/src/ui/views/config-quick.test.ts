@@ -285,14 +285,14 @@ describe("renderQuickSettings", () => {
     }
   });
 
-  it("always shows the custom theme option in quick settings", () => {
+  it("shows an import theme option in quick settings before a theme is imported", () => {
     const container = document.createElement("div");
 
     render(renderQuickSettings(createProps()), container);
 
     expect(
       Array.from(container.querySelectorAll("button")).some(
-        (button) => button.textContent?.trim() === "Custom",
+        (button) => button.textContent?.trim() === "Import",
       ),
     ).toBe(true);
   });
@@ -314,7 +314,7 @@ describe("renderQuickSettings", () => {
     );
 
     const customButton = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent?.trim() === "Custom",
+      (button) => button.textContent?.trim() === "Import",
     );
     customButton?.click();
 
@@ -332,6 +332,7 @@ describe("renderQuickSettings", () => {
         createProps({
           theme: "claw",
           hasCustomTheme: true,
+          customThemeLabel: "Light Green",
           setTheme,
           onOpenCustomThemeImport,
         }),
@@ -340,7 +341,7 @@ describe("renderQuickSettings", () => {
     );
 
     const customButton = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent?.trim() === "Custom",
+      (button) => button.textContent?.trim() === "Light Green",
     );
     customButton?.click();
 

@@ -5,9 +5,14 @@ import {
   normalizeOptionalLowercaseString,
 } from "../../shared/string-coerce.js";
 import {
+  resolveTrajectoryFilePath,
+  resolveTrajectoryPointerFilePath,
+} from "../../trajectory/paths.js";
+import {
   isCompactionCheckpointTranscriptFileName,
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
+  isTrajectorySessionArtifactName,
 } from "./artifacts.js";
 import { resolveSessionFilePath } from "./paths.js";
 import type { SessionEntry } from "./types.js";
@@ -119,18 +124,39 @@ function resolveSessionTranscriptPathForEntry(params: {
   }
 }
 
-function resolveReferencedSessionTranscriptPaths(params: {
+function resolveSessionArtifactPathsForEntry(params: {
+  sessionsDir: string;
+  entry: SessionEntry;
+}): string[] {
+  const transcriptPath = resolveSessionTranscriptPathForEntry(params);
+  if (!transcriptPath) {
+    return [];
+  }
+  const paths = [transcriptPath];
+  if (params.entry.sessionId) {
+    paths.push(resolveTrajectoryPointerFilePath(transcriptPath));
+    paths.push(
+      resolveTrajectoryFilePath({
+        env: {},
+        sessionFile: transcriptPath,
+        sessionId: params.entry.sessionId,
+      }),
+    );
+  }
+  return paths;
+}
+
+function resolveReferencedSessionArtifactPaths(params: {
   sessionsDir: string;
   store: Record<string, SessionEntry>;
 }): Set<string> {
   const referenced = new Set<string>();
   const resolvedSessionsDir = canonicalizePathForComparison(params.sessionsDir);
   for (const entry of Object.values(params.store)) {
-    const resolved = resolveSessionTranscriptPathForEntry({
+    for (const resolved of resolveSessionArtifactPathsForEntry({
       sessionsDir: params.sessionsDir,
       entry,
-    });
-    if (resolved) {
+    })) {
       referenced.add(canonicalizePathForComparison(resolved));
     }
     for (const checkpoint of entry.compactionCheckpoints ?? []) {
@@ -267,7 +293,7 @@ export async function enforceSessionDiskBudget(params: {
   let removedEntries = 0;
   let freedBytes = 0;
 
-  const referencedPaths = resolveReferencedSessionTranscriptPaths({
+  const referencedPaths = resolveReferencedSessionArtifactPaths({
     sessionsDir,
     store: params.store,
   });
@@ -277,6 +303,7 @@ export async function enforceSessionDiskBudget(params: {
         isSessionArchiveArtifactName(file.name) ||
         (isCompactionCheckpointTranscriptFileName(file.name) &&
           !referencedPaths.has(file.canonicalPath)) ||
+        (isTrajectorySessionArtifactName(file.name) && !referencedPaths.has(file.canonicalPath)) ||
         (isPrimarySessionTranscriptFileName(file.name) && !referencedPaths.has(file.canonicalPath)),
     )
     .toSorted((a, b) => a.mtimeMs - b.mtimeMs);
@@ -342,22 +369,20 @@ export async function enforceSessionDiskBudget(params: {
         continue;
       }
       sessionIdRefCounts.delete(sessionId);
-      const transcriptPath = resolveSessionTranscriptPathForEntry({ sessionsDir, entry });
-      if (!transcriptPath) {
-        continue;
+      for (const artifactPath of resolveSessionArtifactPathsForEntry({ sessionsDir, entry })) {
+        const deletedBytes = await removeFileForBudget({
+          filePath: artifactPath,
+          dryRun,
+          fileSizesByPath,
+          simulatedRemovedPaths,
+        });
+        if (deletedBytes <= 0) {
+          continue;
+        }
+        total -= deletedBytes;
+        freedBytes += deletedBytes;
+        removedFiles += 1;
       }
-      const deletedBytes = await removeFileForBudget({
-        filePath: transcriptPath,
-        dryRun,
-        fileSizesByPath,
-        simulatedRemovedPaths,
-      });
-      if (deletedBytes <= 0) {
-        continue;
-      }
-      total -= deletedBytes;
-      freedBytes += deletedBytes;
-      removedFiles += 1;
     }
   }
 

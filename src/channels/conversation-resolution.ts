@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 import { normalizeConversationTargetRef } from "../infra/outbound/session-binding-normalization.js";
+import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { getActivePluginChannelRegistry } from "../plugins/runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -249,9 +250,7 @@ export function resolveCommandConversationResolution(
     plugin,
     cfg: params.cfg,
   });
-  const threadId = normalizeOptionalString(
-    params.threadId != null ? String(params.threadId) : undefined,
-  );
+  const threadId = stringifyRouteThreadId(params.threadId);
 
   const commandParams: ChannelCommandConversationContext = {
     accountId,
@@ -358,9 +357,7 @@ export function resolveInboundConversationResolution(
     plugin,
     cfg: params.cfg,
   });
-  const threadId = normalizeOptionalString(
-    params.threadId != null ? String(params.threadId) : undefined,
-  );
+  const threadId = stringifyRouteThreadId(params.threadId);
   const resolverParams = {
     from: normalizeOptionalString(params.from),
     to: normalizeOptionalString(params.to),

@@ -4,7 +4,6 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { Command } from "commander";
-import { agentCommand } from "../agents/agent-command.js";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   listProfilesForProvider,
@@ -13,7 +12,11 @@ import {
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
-import { loadConfig } from "../config/config.js";
+import {
+  completeWithPreparedSimpleCompletionModel,
+  prepareSimpleCompletionModelForAgent,
+} from "../agents/simple-completion-runtime.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
@@ -79,7 +82,6 @@ import {
   runWebSearch,
 } from "../web-search/runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
-import { createDefaultDeps } from "./deps.js";
 import { removeCommandByName } from "./program/command-tree.js";
 import { collectOption } from "./program/helpers.js";
 
@@ -110,7 +112,7 @@ type CapabilityEnvelope = {
 const CAPABILITY_METADATA: CapabilityMetadata[] = [
   {
     id: "model.run",
-    description: "Run a one-shot text inference turn through the agent runtime.",
+    description: "Run a one-shot text inference turn through the selected model provider.",
     transports: ["local", "gateway"],
     flags: ["--prompt", "--model", "--local", "--gateway", "--json"],
     resultShape: "normalized payloads plus provider/model attribution",
@@ -568,42 +570,76 @@ function requireProviderModelOverride(
   };
 }
 
+function collectModelRunText(content: Array<{ type: string; text?: string }>): string {
+  return content
+    .map((block) => (block.type === "text" && typeof block.text === "string" ? block.text : ""))
+    .join("")
+    .trim();
+}
+
+function requireModelRunPrompt(value: unknown): string {
+  if (typeof value !== "string" || normalizeOptionalString(value) === undefined) {
+    throw new Error("--prompt cannot be empty or whitespace-only.");
+  }
+  return value;
+}
+
 async function runModelRun(params: {
   prompt: string;
   model?: string;
   transport: CapabilityTransport;
 }) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const agentId = resolveDefaultAgentId(cfg);
   if (params.transport === "local") {
-    const result = await agentCommand(
-      {
-        message: params.prompt,
-        agentId,
-        model: params.model,
-        json: false,
-        modelRun: true,
-        promptMode: "none",
-        cleanupBundleMcpOnRunEnd: true,
+    const prepared = await prepareSimpleCompletionModelForAgent({
+      cfg,
+      agentId,
+      modelRef: params.model,
+      allowMissingApiKeyModes: ["aws-sdk"],
+      skipPiDiscovery: true,
+    });
+    if ("error" in prepared) {
+      throw new Error(prepared.error);
+    }
+    const result = await completeWithPreparedSimpleCompletionModel({
+      model: prepared.model,
+      auth: prepared.auth,
+      context: {
+        messages: [
+          {
+            role: "user",
+            content: params.prompt,
+            timestamp: Date.now(),
+          },
+        ],
       },
-      {
-        ...defaultRuntime,
-        log: () => {},
+      options: {
+        maxTokens:
+          typeof prepared.model.maxTokens === "number" && Number.isFinite(prepared.model.maxTokens)
+            ? prepared.model.maxTokens
+            : undefined,
       },
-      createDefaultDeps(),
-    );
+    });
+    const text = collectModelRunText(result.content);
+    if (!text) {
+      throw new Error(
+        `No text output returned for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}".`,
+      );
+    }
     return {
       ok: true,
       capability: "model.run",
       transport: "local" as const,
-      provider: result?.meta?.agentMeta?.provider,
-      model: result?.meta?.agentMeta?.model,
+      provider: prepared.selection.provider,
+      model: prepared.selection.modelId,
       attempts: [],
-      outputs: (result?.payloads ?? []).map((payload) => ({
-        text: payload.text,
-        mediaUrl: payload.mediaUrl,
-        mediaUrls: payload.mediaUrls,
-      })),
+      outputs: [
+        {
+          text,
+          mediaUrl: null,
+        },
+      ],
     } satisfies CapabilityEnvelope;
   }
 
@@ -646,7 +682,7 @@ async function runModelRun(params: {
 }
 
 async function buildModelProviders() {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const catalog = await loadModelCatalog({ config: cfg });
   const selectedProvider = resolveSelectedProviderFromModelRef(
     resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
@@ -700,7 +736,7 @@ async function runModelAuthStatus() {
 }
 
 async function runModelAuthLogout(provider: string) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
   const store = loadAuthProfileStoreForRuntime(agentDir);
   const profileIds = listProfilesForProvider(store, provider);
@@ -753,7 +789,7 @@ async function runImageGenerate(params: {
   output?: string;
   timeoutMs?: number;
 }) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
   const inputImages =
     params.file && params.file.length > 0
@@ -820,7 +856,7 @@ async function runImageDescribe(params: {
   files: string[];
   model?: string;
 }) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
   const activeModel = requireProviderModelOverride(params.model);
   const outputs = await Promise.all(
@@ -869,7 +905,7 @@ async function runAudioTranscribe(params: {
   model?: string;
   prompt?: string;
 }) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const activeModel = requireProviderModelOverride(params.model);
   const result = await transcribeAudioFile({
     filePath: path.resolve(params.file),
@@ -959,7 +995,7 @@ async function runVideoGenerate(params: {
   watermark?: boolean;
   timeoutMs?: number;
 }) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
   const result = await generateVideo({
     cfg,
@@ -1034,7 +1070,7 @@ async function runVideoGenerate(params: {
 }
 
 async function runVideoDescribe(params: { file: string; model?: string }) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const activeModel = requireProviderModelOverride(params.model);
   const result = await describeVideoFile({
     filePath: path.resolve(params.file),
@@ -1065,7 +1101,9 @@ async function runTtsConvert(params: {
   transport: CapabilityTransport;
 }) {
   if (params.transport === "gateway") {
-    const gatewayConnection = buildGatewayConnectionDetailsWithResolvers({ config: loadConfig() });
+    const gatewayConnection = buildGatewayConnectionDetailsWithResolvers({
+      config: getRuntimeConfig(),
+    });
     const result: {
       audioPath?: string;
       provider?: string;
@@ -1111,7 +1149,7 @@ async function runTtsConvert(params: {
     } satisfies CapabilityEnvelope;
   }
 
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const overrides = resolveExplicitTtsOverrides({
     cfg,
     provider: params.provider,
@@ -1157,7 +1195,7 @@ async function runTtsConvert(params: {
 }
 
 async function runTtsProviders(transport: CapabilityTransport) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   if (transport === "gateway") {
     const payload: {
       providers?: Array<Record<string, unknown>>;
@@ -1209,7 +1247,7 @@ async function runTtsPersonas(transport: CapabilityTransport) {
       timeoutMs: 30_000,
     });
   }
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const config = resolveTtsConfig(cfg);
   const prefsPath = resolveTtsPrefsPath(config);
   const active = getTtsPersona(config, prefsPath);
@@ -1227,7 +1265,7 @@ async function runTtsPersonas(transport: CapabilityTransport) {
 }
 
 async function runTtsVoices(providerRaw?: string) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const config = resolveTtsConfig(cfg);
   const prefsPath = resolveTtsPrefsPath(config);
   const provider = normalizeOptionalString(providerRaw) || getTtsProvider(config, prefsPath);
@@ -1266,7 +1304,7 @@ async function runTtsStateMutation(params: {
     return payload;
   }
 
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const config = resolveTtsConfig(cfg);
   const prefsPath = resolveTtsPrefsPath(config);
   if (params.capability === "tts.enable") {
@@ -1303,7 +1341,7 @@ async function runTtsStateMutation(params: {
 }
 
 async function runWebSearchCommand(params: { query: string; provider?: string; limit?: number }) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const result = await runWebSearch({
     config: cfg,
     providerId: params.provider,
@@ -1324,7 +1362,7 @@ async function runWebSearchCommand(params: { query: string; provider?: string; l
 }
 
 async function runWebFetchCommand(params: { url: string; provider?: string; format?: string }) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const resolved = resolveWebFetchDefinition({
     config: cfg,
     providerId: params.provider,
@@ -1352,7 +1390,7 @@ async function runMemoryEmbeddingCreate(params: {
   model?: string;
 }) {
   ensureMemoryEmbeddingProvidersRegistered();
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const modelRef = resolveModelRefOverride(params.model);
   const requestedProvider = normalizeOptionalString(params.provider) || modelRef.provider || "auto";
   const result = await createEmbeddingProvider({
@@ -1456,6 +1494,7 @@ export function registerCapabilityCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const prompt = requireModelRunPrompt(opts.prompt);
         const transport = resolveTransport({
           local: Boolean(opts.local),
           gateway: Boolean(opts.gateway),
@@ -1463,7 +1502,7 @@ export function registerCapabilityCli(program: Command) {
           defaultTransport: "local",
         });
         const result = await runModelRun({
-          prompt: String(opts.prompt),
+          prompt,
           model: opts.model as string | undefined,
           transport,
         });
@@ -1477,7 +1516,7 @@ export function registerCapabilityCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await loadModelCatalog({ config: loadConfig() });
+        const result = await loadModelCatalog({ config: getRuntimeConfig() });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, providerSummaryText);
       });
     });
@@ -1490,7 +1529,7 @@ export function registerCapabilityCli(program: Command) {
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const target = normalizeStringifiedOptionalString(opts.model) ?? "";
-        const catalog = await loadModelCatalog({ config: loadConfig() });
+        const catalog = await loadModelCatalog({ config: getRuntimeConfig() });
         const entry =
           catalog.find((candidate) => `${candidate.provider}/${candidate.id}` === target) ??
           catalog.find((candidate) => candidate.id === target);
@@ -1673,7 +1712,7 @@ export function registerCapabilityCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const cfg = loadConfig();
+        const cfg = getRuntimeConfig();
         const selectedProvider = resolveSelectedProviderFromModelRef(
           resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageGenerationModel),
         );
@@ -1721,7 +1760,7 @@ export function registerCapabilityCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const cfg = loadConfig();
+        const cfg = getRuntimeConfig();
         const providers = [...buildMediaUnderstandingRegistry(undefined, cfg).values()]
           .filter((provider) => provider.capabilities?.includes("audio"))
           .map((provider) => ({
@@ -1998,7 +2037,7 @@ export function registerCapabilityCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const cfg = loadConfig();
+        const cfg = getRuntimeConfig();
         const selectedGenerationProvider = resolveSelectedProviderFromModelRef(
           resolveAgentModelPrimaryValue(cfg.agents?.defaults?.videoGenerationModel),
         );
@@ -2076,7 +2115,7 @@ export function registerCapabilityCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const cfg = loadConfig();
+        const cfg = getRuntimeConfig();
         const selectedSearchProvider =
           typeof cfg.tools?.web?.search?.provider === "string"
             ? normalizeLowercaseStringOrEmpty(cfg.tools.web.search.provider)
@@ -2134,7 +2173,7 @@ export function registerCapabilityCli(program: Command) {
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         ensureMemoryEmbeddingProvidersRegistered();
-        const cfg = loadConfig();
+        const cfg = getRuntimeConfig();
         const agentId = resolveDefaultAgentId(cfg);
         const resolvedMemory = resolveMemorySearchConfig(cfg, agentId);
         const selectedProvider =

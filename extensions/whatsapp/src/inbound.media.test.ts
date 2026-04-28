@@ -29,13 +29,13 @@ let currentMockSocket:
     }
   | undefined;
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
-    "openclaw/plugin-sdk/config-runtime",
-  );
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
+  >("openclaw/plugin-sdk/runtime-config-snapshot");
   return {
     ...actual,
-    loadConfig: vi.fn().mockReturnValue({
+    getRuntimeConfig: vi.fn().mockReturnValue({
       channels: {
         whatsapp: {
           allowFrom: ["*"], // Allow all in tests
@@ -49,13 +49,29 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
   };
 });
 
-vi.mock("../../../src/pairing/pairing-store.js", () => {
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
+    "openclaw/plugin-sdk/conversation-runtime",
+  );
   return {
+    ...actual,
     readChannelAllowFromStore(...args: unknown[]) {
       return readAllowFromStoreMock(...args);
     },
     upsertChannelPairingRequest(...args: unknown[]) {
       return upsertPairingRequestMock(...args);
+    },
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/channel-pairing", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-pairing")>(
+    "openclaw/plugin-sdk/channel-pairing",
+  );
+  return {
+    ...actual,
+    readChannelAllowFromStore(...args: unknown[]) {
+      return readAllowFromStoreMock(...args);
     },
   };
 });

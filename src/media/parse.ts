@@ -26,6 +26,10 @@ export type ParsedMediaOutputSegment =
       url: string;
     };
 
+export type SplitMediaFromOutputOptions = {
+  extractMarkdownImages?: boolean;
+};
+
 export function normalizeMediaSource(src: string) {
   return src.startsWith("file://") ? src.replace("file://", "") : src;
 }
@@ -462,7 +466,10 @@ function isInsideFence(fenceSpans: Array<{ start: number; end: number }>, offset
   return fenceSpans.some((span) => offset >= span.start && offset < span.end);
 }
 
-export function splitMediaFromOutput(raw: string): {
+export function splitMediaFromOutput(
+  raw: string,
+  options: SplitMediaFromOutputOptions = {},
+): {
   text: string;
   mediaUrls?: string[];
   mediaUrl?: string; // legacy first item for backward compatibility
@@ -475,8 +482,9 @@ export function splitMediaFromOutput(raw: string): {
   if (!trimmedRaw.trim()) {
     return { text: "" };
   }
+  const extractMarkdownImages = options.extractMarkdownImages === true;
   const mayContainMediaToken = /media:/i.test(trimmedRaw);
-  const mayContainMarkdownImage = /!\[[^\]]*]\(/.test(trimmedRaw);
+  const mayContainMarkdownImage = extractMarkdownImages && /!\[[^\]]*]\(/.test(trimmedRaw);
   const mayContainAudioTag = trimmedRaw.includes("[[");
   if (!mayContainMediaToken && !mayContainMarkdownImage && !mayContainAudioTag) {
     return { text: trimmedRaw };
@@ -518,7 +526,9 @@ export function splitMediaFromOutput(raw: string): {
 
     const trimmedStart = line.trimStart();
     if (!trimmedStart.toUpperCase().startsWith("MEDIA:")) {
-      const markdownImageResult = collectMarkdownImageSegments({ line, media });
+      const markdownImageResult = extractMarkdownImages
+        ? collectMarkdownImageSegments({ line, media })
+        : { lineSegments: [], foundMedia: false };
       if (!markdownImageResult.foundMedia) {
         keptLines.push(line);
         pushTextSegment(line);

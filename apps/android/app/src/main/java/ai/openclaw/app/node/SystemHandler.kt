@@ -1,5 +1,6 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.gateway.GatewaySession
 import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -9,7 +10,6 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
-import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -47,7 +47,8 @@ private class AndroidSystemNotificationPoster(
     val channelId = ensureChannel(request.priority)
     val silent = isSilentSound(request.sound)
     val notification =
-      NotificationCompat.Builder(appContext, channelId)
+      NotificationCompat
+        .Builder(appContext, channelId)
         .setSmallIcon(android.R.drawable.ic_dialog_info)
         .setContentTitle(request.title)
         .setContentText(request.body)
@@ -83,13 +84,12 @@ private class AndroidSystemNotificationPoster(
     return channelId
   }
 
-  private fun compatPriority(priority: String?): Int {
-    return when (priority.orEmpty().trim().lowercase()) {
+  private fun compatPriority(priority: String?): Int =
+    when (priority.orEmpty().trim().lowercase()) {
       "passive" -> NotificationCompat.PRIORITY_LOW
       "timesensitive" -> NotificationCompat.PRIORITY_HIGH
       else -> NotificationCompat.PRIORITY_DEFAULT
     }
-  }
 
   private fun isSilentSound(sound: String?): Boolean {
     val normalized = sound?.trim()?.lowercase() ?: return false

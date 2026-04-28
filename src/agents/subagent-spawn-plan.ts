@@ -11,7 +11,14 @@ export function splitModelRef(ref?: string) {
   if (!trimmed) {
     return { provider: undefined, model: undefined };
   }
-  const [provider, model] = trimmed.split("/", 2);
+  const slash = trimmed.indexOf("/");
+  if (slash > 0 && slash < trimmed.length - 1) {
+    const provider = trimmed.slice(0, slash);
+    const model = trimmed.slice(slash + 1);
+    return { provider, model };
+  }
+  const provider = undefined;
+  const model = trimmed;
   if (model) {
     return { provider, model };
   }
@@ -66,7 +73,12 @@ export function resolveSubagentModelAndThinkingPlan(params: {
     modelApplied: Boolean(resolvedModel),
     thinkingOverride: thinkingPlan.thinkingOverride,
     initialSessionPatch: {
-      ...(resolvedModel ? { model: resolvedModel } : {}),
+      ...(resolvedModel
+        ? {
+            model: resolvedModel,
+            modelOverrideSource: params.modelOverride?.trim() ? "user" : "auto",
+          }
+        : {}),
       ...thinkingPlan.initialSessionPatch,
     },
   };

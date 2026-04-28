@@ -10,7 +10,7 @@ import { modelKey } from "./shared.js";
 
 export async function loadListModelRegistry(
   cfg: OpenClawConfig,
-  opts?: { providerFilter?: string },
+  opts?: { providerFilter?: string; normalizeModels?: boolean },
 ) {
   const loaded = await loadModelRegistry(cfg, opts);
   return {

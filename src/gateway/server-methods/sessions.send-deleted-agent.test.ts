@@ -21,6 +21,7 @@ describe("sessions.send / sessions.steer deleted-agent guard", () => {
         chatAbortControllers: new Map(),
         broadcastToConnIds: vi.fn(),
         getSessionEventSubscriberConnIds: () => new Set<string>(),
+        getRuntimeConfig: () => ({}),
       } as unknown as GatewayRequestContext;
 
       await sessionsHandlers[method]({

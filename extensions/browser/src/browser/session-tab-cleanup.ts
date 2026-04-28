@@ -3,7 +3,7 @@ import {
   isCronSessionKey,
   isSubagentSessionKey,
 } from "openclaw/plugin-sdk/routing";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { resolveBrowserConfig, type ResolvedBrowserTabCleanupConfig } from "./config.js";
 import { sweepTrackedBrowserTabs } from "./session-tab-registry.js";
 
@@ -22,7 +22,7 @@ export function isPrimaryTrackedBrowserSessionKey(sessionKey: string): boolean {
 }
 
 export function resolveBrowserTabCleanupRuntimeConfig(): ResolvedBrowserTabCleanupConfig {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   return resolveBrowserConfig(cfg.browser, cfg).tabCleanup;
 }
 

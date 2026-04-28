@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../protocol/index.js";
-import { toolsEffectiveHandlers } from "./tools-effective.js";
+import { __testing, toolsEffectiveHandlers } from "./tools-effective.js";
 
 const runtimeMocks = vi.hoisted(() => ({
   deliveryContextFromSession: vi.fn(() => ({
@@ -10,7 +10,7 @@ const runtimeMocks = vi.hoisted(() => ({
     threadId: "thread-2",
   })),
   listAgentIds: vi.fn(() => ["main"]),
-  loadConfig: vi.fn(() => ({})),
+  getRuntimeConfig: vi.fn(() => ({})),
   loadSessionEntry: vi.fn(() => ({
     cfg: {},
     canonicalKey: "main:abc",
@@ -29,6 +29,9 @@ const runtimeMocks = vi.hoisted(() => ({
       model: "gpt-4.1",
     },
   })),
+  getActivePluginChannelRegistryVersion: vi.fn(() => 1),
+  getActivePluginRegistryVersion: vi.fn(() => 1),
+  resolveRuntimeConfigCacheKey: vi.fn(() => "runtime:1:test"),
   resolveEffectiveToolInventory: vi.fn(() => ({
     agentId: "main",
     profile: "coding",
@@ -66,7 +69,7 @@ function createInvokeParams(params: Record<string, unknown>) {
       await toolsEffectiveHandlers["tools.effective"]({
         params,
         respond: respond as never,
-        context: {} as never,
+        context: { getRuntimeConfig: () => ({}) } as never,
         client: null,
         req: { type: "req", id: "req-1", method: "tools.effective" },
         isWebchatConnect: () => false,
@@ -77,6 +80,10 @@ function createInvokeParams(params: Record<string, unknown>) {
 describe("tools.effective handler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    __testing.resetToolsEffectiveCacheForTest();
+    __testing.resetToolsEffectiveNowForTest();
+    runtimeMocks.getActivePluginChannelRegistryVersion.mockReturnValue(1);
+    runtimeMocks.getActivePluginRegistryVersion.mockReturnValue(1);
   });
 
   it("rejects invalid params", async () => {
@@ -167,6 +174,105 @@ describe("tools.effective handler", () => {
     );
   });
 
+  it("serves repeated requests from the fresh inventory cache", async () => {
+    const first = createInvokeParams({ sessionKey: "main:abc" });
+    await first.invoke();
+    const second = createInvokeParams({ sessionKey: "main:abc" });
+    await second.invoke();
+
+    expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(1);
+    expect((first.respond.mock.calls[0] as RespondCall | undefined)?.[0]).toBe(true);
+    expect((second.respond.mock.calls[0] as RespondCall | undefined)?.[0]).toBe(true);
+  });
+
+  it("invalidates the cache when only the channel registry version changes", async () => {
+    const first = createInvokeParams({ sessionKey: "main:abc" });
+    await first.invoke();
+
+    runtimeMocks.getActivePluginChannelRegistryVersion.mockReturnValue(2);
+    const second = createInvokeParams({ sessionKey: "main:abc" });
+    await second.invoke();
+
+    expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(2);
+    expect((second.respond.mock.calls[0] as RespondCall | undefined)?.[0]).toBe(true);
+  });
+
+  it("coalesces identical cache misses while inventory resolution is pending", async () => {
+    const first = createInvokeParams({ sessionKey: "main:abc" });
+    const second = createInvokeParams({ sessionKey: "main:abc" });
+
+    await Promise.all([first.invoke(), second.invoke()]);
+
+    expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(1);
+    expect((first.respond.mock.calls[0] as RespondCall | undefined)?.[0]).toBe(true);
+    expect((second.respond.mock.calls[0] as RespondCall | undefined)?.[0]).toBe(true);
+  });
+
+  it("returns stale cached inventory immediately while refreshing in the background", async () => {
+    let now = 1_000;
+    __testing.setToolsEffectiveNowForTest(() => now);
+    const stalePayload = {
+      agentId: "main",
+      profile: "coding",
+      groups: [
+        {
+          id: "core",
+          label: "Built-in tools",
+          source: "core",
+          tools: [
+            {
+              id: "read",
+              label: "Read",
+              description: "Read files",
+              rawDescription: "Read files",
+              source: "core",
+            },
+          ],
+        },
+      ],
+    };
+    const refreshedPayload = {
+      agentId: "main",
+      profile: "coding",
+      groups: [
+        {
+          id: "core",
+          label: "Built-in tools",
+          source: "core",
+          tools: [
+            {
+              id: "exec",
+              label: "Exec",
+              description: "Run shell commands",
+              rawDescription: "Run shell commands",
+              source: "core",
+            },
+          ],
+        },
+      ],
+    };
+    runtimeMocks.resolveEffectiveToolInventory
+      .mockReturnValueOnce(stalePayload)
+      .mockReturnValueOnce(refreshedPayload);
+
+    const initial = createInvokeParams({ sessionKey: "main:abc" });
+    await initial.invoke();
+    now += 11_000;
+
+    const stale = createInvokeParams({ sessionKey: "main:abc" });
+    await stale.invoke();
+
+    expect((stale.respond.mock.calls[0] as RespondCall | undefined)?.[1]).toBe(stalePayload);
+    expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(1);
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(2);
+
+    const fresh = createInvokeParams({ sessionKey: "main:abc" });
+    await fresh.invoke();
+    expect((fresh.respond.mock.calls[0] as RespondCall | undefined)?.[1]).toBe(refreshedPayload);
+  });
+
   it("falls back to origin.threadId when delivery context omits thread metadata", async () => {
     runtimeMocks.loadSessionEntry.mockReturnValueOnce({
       cfg: {},
@@ -213,7 +319,7 @@ describe("tools.effective handler", () => {
     await toolsEffectiveHandlers["tools.effective"]({
       params: { sessionKey: "main:abc" },
       respond: respond as never,
-      context: {} as never,
+      context: { getRuntimeConfig: () => ({}) } as never,
       client: {
         connect: { scopes: ["operator.admin"] },
       } as never,

@@ -1,5 +1,8 @@
 {
   "id": "amazon-bedrock-mantle",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "configSchema": {
     "type": "object",

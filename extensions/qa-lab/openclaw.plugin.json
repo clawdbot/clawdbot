@@ -1,5 +1,8 @@
 {
   "id": "qa-lab",
+  "activation": {
+    "onStartup": false
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

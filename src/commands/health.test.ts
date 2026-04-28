@@ -97,6 +97,34 @@ describe("healthCommand", () => {
     expect(parsed.sessions.count).toBe(1);
   });
 
+  it("passes explicit gateway credentials through to the gateway call", async () => {
+    const snapshot = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+
+    await healthCommand(
+      {
+        json: true,
+        timeoutMs: 5000,
+        config: {},
+        token: "setup-token",
+        password: "setup-password",
+      },
+      runtime as never,
+    );
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "health",
+        token: "setup-token",
+        password: "setup-password",
+      }),
+    );
+  });
+
   it("formats per-account probe timings", () => {
     const summary = createHealthSummary({
       channels: {

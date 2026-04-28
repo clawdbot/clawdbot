@@ -1,8 +1,8 @@
-import { resolveMarkdownTableMode as resolveMarkdownTableModeImpl } from "openclaw/plugin-sdk/config-runtime";
 import {
   recordInboundSessionMetaSafe as recordInboundSessionMetaSafeImpl,
   resolveConversationLabel as resolveConversationLabelImpl,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { resolveMarkdownTableMode as resolveMarkdownTableModeImpl } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   dispatchReplyWithDispatcher as dispatchReplyWithDispatcherImpl,
   finalizeInboundContext as finalizeInboundContextImpl,
@@ -21,7 +21,7 @@ type ResolveConversationLabel =
 type RecordInboundSessionMetaSafe =
   typeof import("openclaw/plugin-sdk/conversation-runtime").recordInboundSessionMetaSafe;
 type ResolveMarkdownTableMode =
-  typeof import("openclaw/plugin-sdk/config-runtime").resolveMarkdownTableMode;
+  typeof import("openclaw/plugin-sdk/markdown-table-runtime").resolveMarkdownTableMode;
 type ResolveAgentRoute = typeof import("openclaw/plugin-sdk/routing").resolveAgentRoute;
 type DeliverSlackSlashReplies = typeof import("./replies.js").deliverSlackSlashReplies;
 

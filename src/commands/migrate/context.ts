@@ -1,5 +1,5 @@
 import path from "node:path";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { MigrationProviderContext } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -36,7 +36,7 @@ export function buildMigrationContext(params: {
   reportDir?: string;
   json?: boolean;
 }): MigrationProviderContext {
-  const config = loadConfig();
+  const config = getRuntimeConfig();
   const stateDir = resolveStateDir();
   return {
     config,

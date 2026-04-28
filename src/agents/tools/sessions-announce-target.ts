@@ -2,6 +2,7 @@ import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/ind
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
 import { normalizeOptionalStringifiedId } from "../../shared/string-coerce.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import type { SessionListRow } from "./sessions-helpers.js";
 import type { AnnounceTarget } from "./sessions-send-helpers.js";
 import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
@@ -45,30 +46,10 @@ export async function resolveAnnounceTarget(params: {
       sessions.find((entry) => entry?.key === params.sessionKey) ??
       sessions.find((entry) => entry?.key === params.displayKey);
 
-    const deliveryContext =
-      match?.deliveryContext && typeof match.deliveryContext === "object"
-        ? (match.deliveryContext as Record<string, unknown>)
-        : undefined;
-    const origin =
-      match?.origin && typeof match.origin === "object"
-        ? (match.origin as Record<string, unknown>)
-        : undefined;
-    const channel =
-      (typeof deliveryContext?.channel === "string" ? deliveryContext.channel : undefined) ??
-      (typeof match?.lastChannel === "string" ? match.lastChannel : undefined) ??
-      (typeof origin?.provider === "string" ? origin.provider : undefined);
-    const to =
-      (typeof deliveryContext?.to === "string" ? deliveryContext.to : undefined) ??
-      (typeof match?.lastTo === "string" ? match.lastTo : undefined);
-    const accountId =
-      (typeof deliveryContext?.accountId === "string" ? deliveryContext.accountId : undefined) ??
-      (typeof match?.lastAccountId === "string" ? match.lastAccountId : undefined) ??
-      (typeof origin?.accountId === "string" ? origin.accountId : undefined);
-    const threadId = normalizeOptionalStringifiedId(
-      deliveryContext?.threadId ?? match?.lastThreadId ?? origin?.threadId ?? fallbackThreadId,
-    );
-    if (channel && to) {
-      return { channel, to, accountId, threadId };
+    const context = deliveryContextFromSession(match);
+    const threadId = normalizeOptionalStringifiedId(context?.threadId ?? fallbackThreadId);
+    if (context?.channel && context.to) {
+      return { channel: context.channel, to: context.to, accountId: context.accountId, threadId };
     }
   } catch {
     // ignore

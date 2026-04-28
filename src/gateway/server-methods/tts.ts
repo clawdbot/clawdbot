@@ -1,4 +1,3 @@
-import { loadConfig } from "../../config/config.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   canonicalizeSpeechProviderId,
@@ -27,9 +26,9 @@ import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const ttsHandlers: GatewayRequestHandlers = {
-  "tts.status": async ({ respond }) => {
+  "tts.status": async ({ respond, context }) => {
     try {
-      const cfg = loadConfig();
+      const cfg = context.getRuntimeConfig();
       const config = resolveTtsConfig(cfg);
       const prefsPath = resolveTtsPrefsPath(config);
       const provider = getTtsProvider(config, prefsPath);
@@ -67,9 +66,9 @@ export const ttsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
-  "tts.enable": async ({ respond }) => {
+  "tts.enable": async ({ respond, context }) => {
     try {
-      const cfg = loadConfig();
+      const cfg = context.getRuntimeConfig();
       const config = resolveTtsConfig(cfg);
       const prefsPath = resolveTtsPrefsPath(config);
       setTtsEnabled(prefsPath, true);
@@ -78,9 +77,9 @@ export const ttsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
-  "tts.disable": async ({ respond }) => {
+  "tts.disable": async ({ respond, context }) => {
     try {
-      const cfg = loadConfig();
+      const cfg = context.getRuntimeConfig();
       const config = resolveTtsConfig(cfg);
       const prefsPath = resolveTtsPrefsPath(config);
       setTtsEnabled(prefsPath, false);
@@ -89,7 +88,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
-  "tts.convert": async ({ params, respond }) => {
+  "tts.convert": async ({ params, respond, context }) => {
     const text = normalizeOptionalString(params.text) ?? "";
     if (!text) {
       respond(
@@ -100,7 +99,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const cfg = loadConfig();
+      const cfg = context.getRuntimeConfig();
       const channel = normalizeOptionalString(params.channel);
       const providerRaw = normalizeOptionalString(params.provider);
       const modelId = normalizeOptionalString(params.modelId);
@@ -142,8 +141,8 @@ export const ttsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
-  "tts.setProvider": async ({ params, respond }) => {
-    const cfg = loadConfig();
+  "tts.setProvider": async ({ params, respond, context }) => {
+    const cfg = context.getRuntimeConfig();
     const provider = canonicalizeSpeechProviderId(
       normalizeOptionalString(params.provider) ?? "",
       cfg,
@@ -168,9 +167,9 @@ export const ttsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
-  "tts.personas": async ({ respond }) => {
+  "tts.personas": async ({ respond, context }) => {
     try {
-      const cfg = loadConfig();
+      const cfg = context.getRuntimeConfig();
       const config = resolveTtsConfig(cfg);
       const prefsPath = resolveTtsPrefsPath(config);
       const active = getTtsPersona(config, prefsPath);
@@ -189,8 +188,8 @@ export const ttsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
-  "tts.setPersona": async ({ params, respond }) => {
-    const cfg = loadConfig();
+  "tts.setPersona": async ({ params, respond, context }) => {
+    const cfg = context.getRuntimeConfig();
     const rawPersona = normalizeOptionalString(params.persona);
     try {
       const config = resolveTtsConfig(cfg);
@@ -220,9 +219,9 @@ export const ttsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
-  "tts.providers": async ({ respond }) => {
+  "tts.providers": async ({ respond, context }) => {
     try {
-      const cfg = loadConfig();
+      const cfg = context.getRuntimeConfig();
       const config = resolveTtsConfig(cfg);
       const prefsPath = resolveTtsPrefsPath(config);
       respond(true, {

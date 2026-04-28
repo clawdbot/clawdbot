@@ -7,7 +7,7 @@ import {
 } from "./context.js";
 import { createSessionManagerRuntimeRegistry } from "./pi-hooks/session-manager-runtime-registry.js";
 
-vi.mock("../config/config.js", () => ({ loadConfig: () => ({}) }));
+vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
 
 function testModelContextWindow(id: string, contextWindow: number) {
   return {

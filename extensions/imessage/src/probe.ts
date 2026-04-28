@@ -1,6 +1,6 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { detectBinary } from "openclaw/plugin-sdk/setup";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
@@ -69,7 +69,7 @@ export async function probeIMessage(
   timeoutMs?: number,
   opts: IMessageProbeOptions = {},
 ): Promise<IMessageProbe> {
-  const cfg = opts.cliPath || opts.dbPath ? undefined : loadConfig();
+  const cfg = opts.cliPath || opts.dbPath ? undefined : getRuntimeConfig();
   const cliPath = opts.cliPath?.trim() || cfg?.channels?.imessage?.cliPath?.trim() || "imsg";
   const dbPath = opts.dbPath?.trim() || cfg?.channels?.imessage?.dbPath?.trim();
   // Use explicit timeout if provided, otherwise fall back to config, then default

@@ -121,30 +121,11 @@ export function dispatchEvent(
   }
 
   if (eventType === GatewayEvent.GROUP_AT_MESSAGE_CREATE) {
-    const ev = data as GroupMessageEvent;
-    recordKnownUser({
-      openid: ev.author.member_openid,
-      type: "group",
-      groupOpenid: ev.group_openid,
-      accountId,
-    });
-    const refs = parseRefIndices(ev.message_scene?.ext, ev.message_type, ev.msg_elements);
-    return {
-      action: "message",
-      msg: {
-        type: "group",
-        senderId: ev.author.member_openid,
-        content: ev.content,
-        messageId: ev.id,
-        timestamp: ev.timestamp,
-        groupOpenid: ev.group_openid,
-        attachments: ev.attachments,
-        refMsgIdx: refs.refMsgIdx,
-        msgIdx: refs.msgIdx,
-        msgType: ev.message_type,
-        msgElements: ev.msg_elements,
-      },
-    };
+    return { action: "message", msg: buildGroupQueuedMessage(data, accountId, eventType) };
+  }
+
+  if (eventType === GatewayEvent.GROUP_MESSAGE_CREATE) {
+    return { action: "message", msg: buildGroupQueuedMessage(data, accountId, eventType) };
   }
 
   if (eventType === GatewayEvent.INTERACTION_CREATE) {
@@ -152,4 +133,45 @@ export function dispatchEvent(
   }
 
   return { action: "ignore" };
+}
+
+/**
+ * Build a {@link QueuedMessage} from a raw QQ group event payload.
+ *
+ * Used for both `GROUP_AT_MESSAGE_CREATE` (bot was @-ed) and
+ * `GROUP_MESSAGE_CREATE` (non-@ background chatter). The only difference
+ * between the two is the carried `eventType` — downstream gating uses
+ * that to decide whether to treat the message as a bot-directed turn.
+ */
+function buildGroupQueuedMessage(
+  data: unknown,
+  accountId: string,
+  eventType: string,
+): QueuedMessage {
+  const ev = data as GroupMessageEvent;
+  recordKnownUser({
+    openid: ev.author.member_openid,
+    type: "group",
+    groupOpenid: ev.group_openid,
+    accountId,
+  });
+  const refs = parseRefIndices(ev.message_scene?.ext, ev.message_type, ev.msg_elements);
+  return {
+    type: "group",
+    senderId: ev.author.member_openid,
+    senderName: ev.author.username,
+    senderIsBot: ev.author.bot,
+    content: ev.content,
+    messageId: ev.id,
+    timestamp: ev.timestamp,
+    groupOpenid: ev.group_openid,
+    attachments: ev.attachments,
+    refMsgIdx: refs.refMsgIdx,
+    msgIdx: refs.msgIdx,
+    msgType: ev.message_type,
+    msgElements: ev.msg_elements,
+    eventType,
+    mentions: ev.mentions,
+    messageScene: ev.message_scene,
+  };
 }

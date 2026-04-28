@@ -157,22 +157,34 @@ export function resolveUsableCustomProviderApiKey(params: {
   if (!isNonSecretApiKeyMarker(customKey)) {
     return { apiKey: customKey, source: "models.json" };
   }
-  if (!isKnownEnvApiKeyMarker(customKey)) {
-    return null;
+  if (isKnownEnvApiKeyMarker(customKey)) {
+    const envValue = normalizeOptionalSecretInput((params.env ?? process.env)[customKey]);
+    if (!envValue) {
+      return null;
+    }
+    const applied = new Set(getShellEnvAppliedKeys());
+    return {
+      apiKey: envValue,
+      source: resolveEnvSourceLabel({
+        applied,
+        envVars: [customKey],
+        label: `${customKey} (models.json marker)`,
+      }),
+    };
   }
-  const envValue = normalizeOptionalSecretInput((params.env ?? process.env)[customKey]);
-  if (!envValue) {
-    return null;
+  if (
+    customProviderConfig &&
+    isCustomLocalProviderConfig(customProviderConfig) &&
+    (customProviderConfig.api === "openai-completions" || customProviderConfig.api === "ollama") &&
+    customProviderConfig.baseUrl &&
+    isLocalBaseUrl(customProviderConfig.baseUrl)
+  ) {
+    return {
+      apiKey: customProviderConfig.api === "ollama" ? customKey : CUSTOM_LOCAL_AUTH_MARKER,
+      source: "models.json (local marker)",
+    };
   }
-  const applied = new Set(getShellEnvAppliedKeys());
-  return {
-    apiKey: envValue,
-    source: resolveEnvSourceLabel({
-      applied,
-      envVars: [customKey],
-      label: `${customKey} (models.json marker)`,
-    }),
-  };
+  return null;
 }
 
 export function hasUsableCustomProviderApiKey(
@@ -209,18 +221,35 @@ function resolveProviderAuthOverride(
 
 function isLocalBaseUrl(baseUrl: string): boolean {
   try {
-    const host = normalizeLowercaseStringOrEmpty(new URL(baseUrl).hostname);
+    let host = normalizeLowercaseStringOrEmpty(new URL(baseUrl).hostname);
+    if (host.startsWith("[") && host.endsWith("]")) {
+      host = host.slice(1, -1);
+    }
     return (
       host === "localhost" ||
       host === "127.0.0.1" ||
       host === "0.0.0.0" ||
-      host === "[::1]" ||
-      host === "[::ffff:7f00:1]" ||
-      host === "[::ffff:127.0.0.1]"
+      host === "::1" ||
+      host === "::ffff:7f00:1" ||
+      host === "::ffff:127.0.0.1" ||
+      host.endsWith(".local") ||
+      isPrivateIpv4Host(host)
     );
   } catch {
     return false;
   }
+}
+
+function isPrivateIpv4Host(host: string): boolean {
+  if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+    return false;
+  }
+  const octets = host.split(".").map((part) => Number.parseInt(part, 10));
+  if (octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return false;
+  }
+  const [a, b] = octets;
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
 }
 
 function hasExplicitProviderApiKeyConfig(providerConfig: ModelProviderConfig): boolean {
@@ -494,6 +523,22 @@ export async function resolveApiKeyForProvider(params: {
   }
 
   const providerConfig = resolveProviderConfig(cfg, provider);
+  const configuredLocalKey = resolveUsableCustomProviderApiKey({ cfg, provider });
+  if (configuredLocalKey && isNonSecretApiKeyMarker(configuredLocalKey.apiKey)) {
+    return {
+      apiKey: configuredLocalKey.apiKey,
+      source: configuredLocalKey.source,
+      mode: "api-key",
+    };
+  }
+  const localMarkerEnv = resolveEnvApiKey(provider);
+  if (localMarkerEnv && isNonSecretApiKeyMarker(localMarkerEnv.apiKey)) {
+    return {
+      apiKey: localMarkerEnv.apiKey,
+      source: localMarkerEnv.source,
+      mode: "api-key",
+    };
+  }
   const store = params.store ?? ensureAuthProfileStore(params.agentDir);
   const order = resolveAuthProfileOrder({
     cfg,

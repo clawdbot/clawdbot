@@ -48,6 +48,11 @@ describe("live tool probe utils", () => {
         expected: true,
       },
       {
+        name: "detects tool authorization refusals",
+        text: "Before proceeding, I must confirm: are you authorizing me to execute the read tool with the provided arguments?",
+        expected: true,
+      },
+      {
         name: "ignores generic helper text",
         text: "I can help with that request.",
         expected: false,

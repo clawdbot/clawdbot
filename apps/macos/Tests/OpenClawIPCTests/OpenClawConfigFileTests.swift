@@ -176,57 +176,59 @@ struct OpenClawConfigFileTests {
             "OPENCLAW_STATE_DIR": stateDir.path,
             "OPENCLAW_CONFIG_PATH": configPath.path,
         ]) {
-            OpenClawConfigFile.saveDict([
-                "update": ["channel": "beta"],
-                "browser": ["enabled": true],
-                "gateway": ["mode": "local"],
-                "channels": [
-                    "discord": [
-                        "enabled": true,
-                        "dmPolicy": "pairing",
+            try OpenClawConfigFile.withTestingFileLock {
+                OpenClawConfigFile.saveDict([
+                    "update": ["channel": "beta"],
+                    "browser": ["enabled": true],
+                    "gateway": ["mode": "local"],
+                    "channels": [
+                        "discord": [
+                            "enabled": true,
+                            "dmPolicy": "pairing",
+                        ],
                     ],
-                ],
-            ])
-            _ = OpenClawConfigFile.loadDict()
+                ])
+                _ = OpenClawConfigFile.loadDict()
 
-            let clobbered = """
-            {
-              "update": {
-                "channel": "beta"
-              }
-            }
-            """
-            try clobbered.write(to: configPath, atomically: true, encoding: .utf8)
+                let clobbered = """
+                {
+                  "update": {
+                    "channel": "beta"
+                  }
+                }
+                """
+                try clobbered.write(to: configPath, atomically: true, encoding: .utf8)
 
-            let loaded = OpenClawConfigFile.loadDict()
-            #expect((loaded["gateway"] as? [String: Any]) == nil)
+                let loaded = OpenClawConfigFile.loadDict()
+                #expect((loaded["gateway"] as? [String: Any]) == nil)
 
-            let rawAudit = try String(contentsOf: auditPath, encoding: .utf8)
-            let lines = rawAudit
-                .split(whereSeparator: \.isNewline)
-                .map(String.init)
-            let observeLine = lines.reversed().first { $0.contains("\"event\":\"config.observe\"") }
-            #expect(observeLine != nil)
-            guard let observeLine else {
-                Issue.record("Missing config.observe audit line")
-                return
-            }
-            let auditRoot = try JSONSerialization.jsonObject(with: Data(observeLine.utf8)) as? [String: Any]
-            #expect(auditRoot?["source"] as? String == "macos-openclaw-config-file")
-            #expect(auditRoot?["configPath"] as? String == configPath.path)
-            #expect(auditRoot?["mode"] is NSNumber)
-            #expect(auditRoot?["ino"] as? String != nil)
-            #expect(auditRoot?["lastKnownGoodMode"] is NSNumber)
-            #expect(auditRoot?["backupMode"] is NSNull)
-            let suspicious = auditRoot?["suspicious"] as? [String] ?? []
-            #expect(suspicious.contains("gateway-mode-missing-vs-last-good"))
-            #expect(suspicious.contains("update-channel-only-root"))
+                let rawAudit = try String(contentsOf: auditPath, encoding: .utf8)
+                let lines = rawAudit
+                    .split(whereSeparator: \.isNewline)
+                    .map(String.init)
+                let observeLine = lines.reversed().first { $0.contains("\"event\":\"config.observe\"") }
+                #expect(observeLine != nil)
+                guard let observeLine else {
+                    Issue.record("Missing config.observe audit line")
+                    return
+                }
+                let auditRoot = try JSONSerialization.jsonObject(with: Data(observeLine.utf8)) as? [String: Any]
+                #expect(auditRoot?["source"] as? String == "macos-openclaw-config-file")
+                #expect(auditRoot?["configPath"] as? String == configPath.path)
+                #expect(auditRoot?["mode"] is NSNumber)
+                #expect(auditRoot?["ino"] as? String != nil)
+                #expect(auditRoot?["lastKnownGoodMode"] is NSNumber)
+                #expect(auditRoot?["backupMode"] is NSNull)
+                let suspicious = auditRoot?["suspicious"] as? [String] ?? []
+                #expect(suspicious.contains("gateway-mode-missing-vs-last-good"))
+                #expect(suspicious.contains("update-channel-only-root"))
 
-            let clobberedPath = auditRoot?["clobberedPath"] as? String
-            #expect(clobberedPath != nil)
-            if let clobberedPath {
-                let preserved = try String(contentsOfFile: clobberedPath, encoding: .utf8)
-                #expect(preserved == clobbered)
+                let clobberedPath = auditRoot?["clobberedPath"] as? String
+                #expect(clobberedPath != nil)
+                if let clobberedPath {
+                    let preserved = try String(contentsOfFile: clobberedPath, encoding: .utf8)
+                    #expect(preserved == clobbered)
+                }
             }
         }
     }

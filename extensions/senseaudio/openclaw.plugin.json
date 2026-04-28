@@ -1,5 +1,8 @@
 {
   "id": "senseaudio",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providerAuthEnvVars": {
     "senseaudio": ["SENSEAUDIO_API_KEY"]

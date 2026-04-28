@@ -125,7 +125,7 @@ describe("before_tool_call hook integration", () => {
     );
   });
 
-  it("blocks tool execution when hook returns block=true", async () => {
+  it("returns first-class blocked tool result when hook returns block=true", async () => {
     beforeToolCallHook = installBeforeToolCallHook({
       runBeforeToolCallImpl: async () => ({
         block: true,
@@ -138,7 +138,14 @@ describe("before_tool_call hook integration", () => {
 
     await expect(
       tool.execute("call-3", { cmd: "rm -rf /" }, undefined, extensionContext),
-    ).rejects.toThrow("blocked");
+    ).resolves.toEqual({
+      content: [{ type: "text", text: "blocked" }],
+      details: {
+        status: "blocked",
+        deniedReason: "plugin-before-tool-call",
+        reason: "blocked",
+      },
+    });
     expect(execute).not.toHaveBeenCalled();
   });
 
@@ -156,7 +163,14 @@ describe("before_tool_call hook integration", () => {
 
     await expect(
       tool.execute("call-stop", { cmd: "rm -rf /" }, undefined, extensionContext),
-    ).rejects.toThrow("blocked-high");
+    ).resolves.toEqual({
+      content: [{ type: "text", text: "blocked-high" }],
+      details: {
+        status: "blocked",
+        deniedReason: "plugin-before-tool-call",
+        reason: "blocked-high",
+      },
+    });
 
     expect(high).toHaveBeenCalledTimes(1);
     expect(low).not.toHaveBeenCalled();
@@ -194,6 +208,7 @@ describe("before_tool_call hook integration", () => {
 
     await tool.execute("call-5", "not-an-object", undefined, extensionContext);
 
+    expect(execute).toHaveBeenCalledWith("call-5", "not-an-object", undefined, extensionContext);
     expect(beforeToolCallHook).toHaveBeenCalledWith(
       {
         toolName: "read",

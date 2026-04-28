@@ -269,7 +269,7 @@ describe("executeSlashCommand directives", () => {
       "**Current model:** `gpt-4.1-mini`\n**Available:** `gpt-4.1-mini`, `gpt-4.1`",
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
-    expect(request).toHaveBeenNthCalledWith(2, "models.list", {});
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", { view: "configured" });
   });
 
   it("mirrors resolved provider-qualified model refs after /model changes", async () => {
@@ -587,7 +587,7 @@ describe("executeSlashCommand directives", () => {
       "Current thinking level: low.\nOptions: off, minimal, low, medium, high.",
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
-    expect(request).toHaveBeenNthCalledWith(2, "models.list", {});
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", { view: "configured" });
   });
 
   it("accepts minimal and xhigh thinking levels", async () => {

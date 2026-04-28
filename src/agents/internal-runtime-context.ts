@@ -4,12 +4,15 @@ export const INTERNAL_RUNTIME_CONTEXT_END = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>
 const ESCAPED_INTERNAL_RUNTIME_CONTEXT_BEGIN = "[[OPENCLAW_INTERNAL_CONTEXT_BEGIN]]";
 const ESCAPED_INTERNAL_RUNTIME_CONTEXT_END = "[[OPENCLAW_INTERNAL_CONTEXT_END]]";
 
+export const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
+  "This context is runtime-generated, not user-authored. Keep internal details private.";
+export const OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER =
+  "OpenClaw runtime context for the immediately preceding user message.";
+export const OPENCLAW_RUNTIME_EVENT_HEADER = "OpenClaw runtime event.";
+export const OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE = "openclaw.runtime-context";
+
 const LEGACY_INTERNAL_CONTEXT_HEADER =
-  [
-    "OpenClaw runtime context (internal):",
-    "This context is runtime-generated, not user-authored. Keep internal details private.",
-    "",
-  ].join("\n") + "\n";
+  ["OpenClaw runtime context (internal):", OPENCLAW_RUNTIME_CONTEXT_NOTICE, ""].join("\n") + "\n";
 
 const LEGACY_INTERNAL_EVENT_MARKER = "[Internal task completion event]";
 const LEGACY_INTERNAL_EVENT_SEPARATOR = "\n\n---\n\n";
@@ -154,6 +157,42 @@ function stripLegacyInternalRuntimeContext(text: string): string {
   }
 }
 
+function isRuntimeContextPromptHeader(line: string): boolean {
+  return (
+    line === OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER || line === OPENCLAW_RUNTIME_EVENT_HEADER
+  );
+}
+
+function stripRuntimeContextPromptPreface(text: string): string {
+  const lines = text.split(/\r?\n/);
+  let changed = false;
+  const output: string[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    const nextLine = lines[index + 1] ?? "";
+    if (
+      isRuntimeContextPromptHeader(line.trim()) &&
+      nextLine.trim() === OPENCLAW_RUNTIME_CONTEXT_NOTICE
+    ) {
+      changed = true;
+      index += 1;
+      while (index + 1 < lines.length && (lines[index + 1] ?? "").trim() === "") {
+        index += 1;
+      }
+      continue;
+    }
+    output.push(line);
+  }
+
+  return changed
+    ? output
+        .join("\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim()
+    : text;
+}
+
 export function stripInternalRuntimeContext(text: string): string {
   if (!text) {
     return text;
@@ -163,7 +202,9 @@ export function stripInternalRuntimeContext(text: string): string {
     INTERNAL_RUNTIME_CONTEXT_BEGIN,
     INTERNAL_RUNTIME_CONTEXT_END,
   );
-  return stripLegacyInternalRuntimeContext(withoutDelimitedBlocks);
+  return stripRuntimeContextPromptPreface(
+    stripLegacyInternalRuntimeContext(withoutDelimitedBlocks),
+  );
 }
 
 export function hasInternalRuntimeContext(text: string): boolean {
@@ -172,6 +213,27 @@ export function hasInternalRuntimeContext(text: string): boolean {
   }
   return (
     findDelimitedTokenIndex(text, INTERNAL_RUNTIME_CONTEXT_BEGIN, 0) !== -1 ||
-    text.includes(LEGACY_INTERNAL_CONTEXT_HEADER)
+    text.includes(LEGACY_INTERNAL_CONTEXT_HEADER) ||
+    text.includes(
+      `${OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER}\n${OPENCLAW_RUNTIME_CONTEXT_NOTICE}`,
+    ) ||
+    text.includes(`${OPENCLAW_RUNTIME_EVENT_HEADER}\n${OPENCLAW_RUNTIME_CONTEXT_NOTICE}`)
   );
+}
+
+export function isOpenClawRuntimeContextCustomMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const candidate = message as { role?: unknown; customType?: unknown };
+  return (
+    candidate.role === "custom" && candidate.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE
+  );
+}
+
+export function stripRuntimeContextCustomMessages<T>(messages: T[]): T[] {
+  if (!messages.some(isOpenClawRuntimeContextCustomMessage)) {
+    return messages;
+  }
+  return messages.filter((message) => !isOpenClawRuntimeContextCustomMessage(message));
 }

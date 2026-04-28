@@ -1,16 +1,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { MemoryPluginPublicArtifact } from "openclaw/plugin-sdk/memory-host-core";
+import {
+  clearMemoryPluginState,
+  type MemoryPluginPublicArtifact,
+  registerMemoryCapability,
+} from "openclaw/plugin-sdk/memory-host-core";
 import {
   appendMemoryHostEvent,
   resolveMemoryHostEventLogPath,
 } from "openclaw/plugin-sdk/memory-host-events";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import {
-  clearMemoryPluginState,
-  registerMemoryCapability,
-} from "../../../src/plugins/memory-state.js";
 import type { OpenClawConfig } from "../api.js";
 import { syncMemoryWikiBridgeSources } from "./bridge.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";

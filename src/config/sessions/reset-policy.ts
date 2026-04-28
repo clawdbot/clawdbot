@@ -76,8 +76,10 @@ export function evaluateSessionFreshness(params: {
   now: number;
   policy: SessionResetPolicy;
 }): SessionFreshness {
-  const sessionStartedAt = resolveTimestamp(params.sessionStartedAt) ?? params.updatedAt;
-  const lastInteractionAt = resolveTimestamp(params.lastInteractionAt) ?? sessionStartedAt;
+  const updatedAt = resolveTimestamp(params.updatedAt, params.now) ?? 0;
+  const sessionStartedAt = resolveTimestamp(params.sessionStartedAt, params.now) ?? updatedAt;
+  const lastInteractionAt =
+    resolveTimestamp(params.lastInteractionAt, params.now) ?? sessionStartedAt;
   const dailyResetAt =
     params.policy.mode === "daily"
       ? resolveDailyResetAtMs(params.now, params.policy.atHour)
@@ -95,8 +97,14 @@ export function evaluateSessionFreshness(params: {
   };
 }
 
-function resolveTimestamp(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+function resolveTimestamp(value: number | undefined, now?: number): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  if (typeof now === "number" && Number.isFinite(now) && value > now) {
+    return undefined;
+  }
+  return value;
 }
 
 function normalizeResetAtHour(value: number | undefined): number {

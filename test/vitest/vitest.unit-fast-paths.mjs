@@ -33,6 +33,7 @@ const unitFastCandidateGlobs = [
   "src/media-generation/**/*.test.ts",
   "src/media-understanding/**/*.test.ts",
   "src/memory-host-sdk/**/*.test.ts",
+  "src/model-catalog/**/*.test.ts",
   "src/music-generation/**/*.test.ts",
   "src/node-host/**/*.test.ts",
   "src/plugin-sdk/**/*.test.ts",
@@ -53,12 +54,135 @@ const unitFastCandidateGlobs = [
   "test/**/*.test.ts",
 ];
 export const forcedUnitFastTestFiles = [
+  "packages/memory-host-sdk/src/host/batch-http.test.ts",
+  "packages/memory-host-sdk/src/host/backend-config.test.ts",
+  "packages/memory-host-sdk/src/host/embeddings-remote-fetch.test.ts",
+  "packages/memory-host-sdk/src/host/internal.test.ts",
+  "packages/memory-host-sdk/src/host/post-json.test.ts",
+  "packages/memory-host-sdk/src/host/qmd-process.test.ts",
+  "packages/memory-host-sdk/src/host/session-files.test.ts",
+  "src/acp/client.test.ts",
+  "src/acp/control-plane/manager.test.ts",
+  "src/acp/session-mapper.test.ts",
+  "src/acp/persistent-bindings.lifecycle.test.ts",
+  "src/acp/translator.prompt-prefix.test.ts",
+  "src/acp/translator.cancel-scoping.test.ts",
+  "src/acp/translator.stop-reason.test.ts",
+  "src/acp/persistent-bindings.test.ts",
+  "src/acp/server.startup.test.ts",
+  "src/acp/translator.session-rate-limit.test.ts",
+  "src/acp/translator.set-session-mode.test.ts",
+  "src/browser-lifecycle-cleanup.test.ts",
+  "src/canvas-host/server.test.ts",
+  "src/crestodian/audit.test.ts",
+  "src/crestodian/assistant.configured.test.ts",
+  "src/crestodian/crestodian.test.ts",
+  "src/crestodian/operations.test.ts",
   "src/crestodian/overview.test.ts",
+  "src/crestodian/rescue-policy.test.ts",
+  "src/crestodian/rescue-message.test.ts",
+  "src/crestodian/tui-backend.test.ts",
   "src/flows/channel-setup.test.ts",
+  "src/flows/channel-setup.status.test.ts",
+  "src/flows/provider-flow.test.ts",
+  "src/context-engine/context-engine.test.ts",
+  "src/canvas-host/server.state-dir.test.ts",
+  "src/docs/clawhub-plugin-docs.test.ts",
+  "src/docs/install-cloud-secrets.test.ts",
+  "src/docker-build-cache.test.ts",
+  "src/docker-image-digests.test.ts",
+  "src/dockerfile.test.ts",
+  "src/entry.compile-cache.test.ts",
+  "src/entry.respawn.test.ts",
+  "src/entry.version-fast-path.test.ts",
+  "src/entry.test.ts",
+  "src/flows/doctor-startup-channel-maintenance.test.ts",
+  "src/flows/search-setup.test.ts",
+  "src/i18n/registry.test.ts",
+  "src/image-generation/openai-compatible-image-provider.test.ts",
+  "src/install-sh-version.test.ts",
+  "src/logger.test.ts",
+  "src/library.test.ts",
+  "src/memory-host-sdk/host/embeddings.test.ts",
+  "src/memory-host-sdk/host/internal.test.ts",
+  "src/memory-host-sdk/host/batch-http.test.ts",
+  "src/memory-host-sdk/host/backend-config.test.ts",
+  "src/memory-host-sdk/host/embeddings-remote-fetch.test.ts",
+  "src/memory-host-sdk/host/mirror.test.ts",
+  "src/memory-host-sdk/host/post-json.test.ts",
   "src/memory-host-sdk/host/session-files.test.ts",
+  "src/music-generation/runtime.test.ts",
+  "src/mcp/channel-server.shutdown-unhandled-rejection.test.ts",
+  "src/node-host/runner.credentials.test.ts",
+  "src/node-host/plugin-node-host.test.ts",
   "src/node-host/invoke-system-run-plan.test.ts",
   "src/node-host/invoke-system-run.test.ts",
+  "src/pairing/pairing-challenge.test.ts",
+  "src/pairing/allow-from-store-read.test.ts",
   "src/pairing/pairing-store.test.ts",
+  "src/pairing/setup-code.test.ts",
+  "src/plugin-activation-boundary.test.ts",
+  "src/plugin-sdk/memory-host-events.test.ts",
+  "src/proxy-capture/runtime.test.ts",
+  "src/proxy-capture/proxy-server.test.ts",
+  "src/proxy-capture/store.sqlite.test.ts",
+  "src/realtime-voice/agent-consult-runtime.test.ts",
+  "src/realtime-voice/session-runtime.test.ts",
+  "src/security/audit-channel-dm-policy.test.ts",
+  "src/security/audit-channel-source-config-slack.test.ts",
+  "src/security/audit-channel-readonly-resolution.test.ts",
+  "src/security/audit-config-symlink.test.ts",
+  "src/security/audit-exec-surface.test.ts",
+  "src/security/audit-exec-sandbox-host.test.ts",
+  "src/security/audit-exec-safe-bins.test.ts",
+  "src/security/dangerous-config-flags.test.ts",
+  "src/security/audit-extra.sync.test.ts",
+  "src/security/audit-filesystem-windows.test.ts",
+  "src/security/audit-gateway-exposure.test.ts",
+  "src/security/audit-gateway.test.ts",
+  "src/security/audit-gateway-auth-selection.test.ts",
+  "src/security/audit-gateway-http-auth.test.ts",
+  "src/security/audit-gateway-tools-http.test.ts",
+  "src/security/audit-sandbox-docker-config.test.ts",
+  "src/security/audit-sandbox-browser.test.ts",
+  "src/security/safe-regex.test.ts",
+  "src/security/audit-small-model-risk.test.ts",
+  "src/security/audit-node-command-findings.test.ts",
+  "src/security/audit-extra.async.test.ts",
+  "src/security/audit-trust-model.test.ts",
+  "src/security/dm-policy-shared.test.ts",
+  "src/security/audit-plugins-trust.test.ts",
+  "src/security/audit-plugin-readonly-scope.test.ts",
+  "src/security/audit-loopback-logging.test.ts",
+  "src/security/audit-workspace-skill-escape.test.ts",
+  "src/security/external-content.test.ts",
+  "src/security/fix.test.ts",
+  "src/security/scan-paths.test.ts",
+  "src/security/skill-scanner.test.ts",
+  "src/security/audit-config-include-perms.test.ts",
+  "src/security/context-visibility.test.ts",
+  "src/realtime-transcription/websocket-session.test.ts",
+  "src/realtime-voice/agent-consult-tool.test.ts",
+  "src/routing/resolve-route.test.ts",
+  "src/sessions/transcript-events.test.ts",
+  "src/security/windows-acl.test.ts",
+  "src/trajectory/cleanup.test.ts",
+  "src/trajectory/export.test.ts",
+  "src/trajectory/metadata.test.ts",
+  "src/trajectory/runtime.test.ts",
+  "src/tts/openai-compatible-speech-provider.test.ts",
+  "src/tts/provider-registry.test.ts",
+  "src/tts/status-config.test.ts",
+  "src/tts/tts-config.test.ts",
+  "src/ui-app-settings.agents-files-refresh.test.ts",
+  "src/terminal/restore.test.ts",
+  "src/terminal/table.test.ts",
+  "src/test-helpers/state-dir-env.test.ts",
+  "src/test-utils/env.test.ts",
+  "src/test-utils/temp-home.test.ts",
+  "src/utils.test.ts",
+  "src/version.test.ts",
+  "src/video-generation/provider-registry.test.ts",
 ];
 const forcedUnitFastTestFileSet = new Set(forcedUnitFastTestFiles);
 const unitFastCandidateExactFiles = [...pluginSdkLightTestFiles, ...commandsLightTestFiles];
@@ -77,10 +201,16 @@ const broadUnitFastCandidateSkipGlobs = [
   "src/config/**/*.test.ts",
   "src/gateway/**/*.test.ts",
   "src/media-generation/**/*.contract.test.ts",
+  "src/media-generation/runtime-shared.test.ts",
+  "src/music-generation/runtime.test.ts",
+  "src/proxy-capture/runtime.test.ts",
   "src/plugins/contracts/**/*.test.ts",
   "src/plugin-sdk/browser-subpaths.test.ts",
   "src/security/**/*.test.ts",
   "src/secrets/**/*.test.ts",
+  "test/helpers/stt-live-audio.test.ts",
+  "test/vitest-extensions-config.test.ts",
+  "test/vitest-unit-paths.test.ts",
   ...boundaryTestFiles,
 ];
 
@@ -161,6 +291,21 @@ function walkFiles(directory, files = []) {
   return files;
 }
 
+const walkedTestFilesByCwd = new Map();
+
+function collectRepoTestFiles(cwd) {
+  const normalizedCwd = normalizeRepoPath(cwd);
+  const cached = walkedTestFilesByCwd.get(normalizedCwd);
+  if (cached) {
+    return cached;
+  }
+  const files = ["src", "packages", "test"]
+    .flatMap((directory) => walkFiles(path.join(cwd, directory)))
+    .map((file) => normalizeRepoPath(path.relative(cwd, file)));
+  walkedTestFilesByCwd.set(normalizedCwd, files);
+  return files;
+}
+
 export function classifyUnitFastTestFileContent(source) {
   const reasons = [];
   for (const { code, pattern } of disqualifyingPatterns) {
@@ -172,39 +317,40 @@ export function classifyUnitFastTestFileContent(source) {
 }
 
 export function collectUnitFastTestCandidates(cwd = process.cwd()) {
-  const discovered = ["src", "packages", "test"]
-    .flatMap((directory) => walkFiles(path.join(cwd, directory)))
-    .map((file) => normalizeRepoPath(path.relative(cwd, file)))
-    .filter(
-      (file) =>
-        matchesAnyGlob(file, unitFastCandidateGlobs) &&
-        !matchesAnyGlob(file, broadUnitFastCandidateSkipGlobs),
-    );
+  const discovered = collectRepoTestFiles(cwd).filter(
+    (file) =>
+      matchesAnyGlob(file, unitFastCandidateGlobs) &&
+      !matchesAnyGlob(file, broadUnitFastCandidateSkipGlobs),
+  );
   return [
     ...new Set([...discovered, ...unitFastCandidateExactFiles, ...forcedUnitFastTestFiles]),
   ].toSorted((a, b) => a.localeCompare(b));
 }
 
 export function collectBroadUnitFastTestCandidates(cwd = process.cwd()) {
-  const discovered = ["src", "packages", "test"]
-    .flatMap((directory) => walkFiles(path.join(cwd, directory)))
-    .map((file) => normalizeRepoPath(path.relative(cwd, file)))
-    .filter(
-      (file) =>
-        matchesAnyGlob(file, broadUnitFastCandidateGlobs) &&
-        !matchesAnyGlob(file, broadUnitFastCandidateSkipGlobs),
-    );
+  const discovered = collectRepoTestFiles(cwd).filter(
+    (file) =>
+      matchesAnyGlob(file, broadUnitFastCandidateGlobs) &&
+      !matchesAnyGlob(file, broadUnitFastCandidateSkipGlobs),
+  );
   return [
     ...new Set([...discovered, ...unitFastCandidateExactFiles, ...forcedUnitFastTestFiles]),
   ].toSorted((a, b) => a.localeCompare(b));
 }
 
+const unitFastAnalysisByKey = new Map();
+
 export function collectUnitFastTestFileAnalysis(cwd = process.cwd(), options = {}) {
+  const cacheKey = `${normalizeRepoPath(cwd)}\0${options.scope ?? "default"}`;
+  const cached = unitFastAnalysisByKey.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
   const candidates =
     options.scope === "broad"
       ? collectBroadUnitFastTestCandidates(cwd)
       : collectUnitFastTestCandidates(cwd);
-  return candidates.map((file) => {
+  const analysis = candidates.map((file) => {
     const absolutePath = path.join(cwd, file);
     let source = "";
     try {
@@ -225,6 +371,8 @@ export function collectUnitFastTestFileAnalysis(cwd = process.cwd(), options = {
       reasons,
     };
   });
+  unitFastAnalysisByKey.set(cacheKey, analysis);
+  return analysis;
 }
 
 let cachedUnitFastTestFiles = null;

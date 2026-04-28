@@ -19,7 +19,7 @@ a per-agent SQLite database and needs no extra dependencies to get started.
 
 ## Getting started
 
-If you have an API key for OpenAI, Gemini, Voyage, or Mistral, the builtin
+If you have an API key for OpenAI, Gemini, Voyage, Mistral, or DeepInfra, the builtin
 engine auto-detects it and enables vector search. No config needed.
 
 To set a provider explicitly:
@@ -60,14 +60,15 @@ at a GGUF file:
 
 ## Supported embedding providers
 
-| Provider | ID        | Auto-detected | Notes                               |
-| -------- | --------- | ------------- | ----------------------------------- |
-| OpenAI   | `openai`  | Yes           | Default: `text-embedding-3-small`   |
-| Gemini   | `gemini`  | Yes           | Supports multimodal (image + audio) |
-| Voyage   | `voyage`  | Yes           |                                     |
-| Mistral  | `mistral` | Yes           |                                     |
-| Ollama   | `ollama`  | No            | Local, set explicitly               |
-| Local    | `local`   | Yes (first)   | Optional `node-llama-cpp` runtime   |
+| Provider  | ID          | Auto-detected | Notes                               |
+| --------- | ----------- | ------------- | ----------------------------------- |
+| OpenAI    | `openai`    | Yes           | Default: `text-embedding-3-small`   |
+| Gemini    | `gemini`    | Yes           | Supports multimodal (image + audio) |
+| Voyage    | `voyage`    | Yes           |                                     |
+| Mistral   | `mistral`   | Yes           |                                     |
+| DeepInfra | `deepinfra` | Yes           | Default: `BAAI/bge-m3`              |
+| Ollama    | `ollama`    | No            | Local, set explicitly               |
+| Local     | `local`     | Yes (first)   | Optional `node-llama-cpp` runtime   |
 
 Auto-detection picks the first provider whose API key can be resolved, in the
 order shown. Set `memorySearch.provider` to override.
@@ -78,6 +79,8 @@ OpenClaw indexes `MEMORY.md` and `memory/*.md` into chunks (~400 tokens with
 80-token overlap) and stores them in a per-agent SQLite database.
 
 - **Index location:** `~/.openclaw/memory/<agentId>.sqlite`
+- **Storage maintenance:** SQLite WAL sidecars are bounded with periodic and
+  shutdown checkpoints.
 - **File watching:** changes to memory files trigger a debounced reindex (1.5s).
 - **Auto-reindex:** when the embedding provider, model, or chunking config
   changes, the entire index is rebuilt automatically.

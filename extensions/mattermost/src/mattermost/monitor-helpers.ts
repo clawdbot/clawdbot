@@ -1,4 +1,3 @@
-import { rawDataToString } from "openclaw/plugin-sdk/browser-node-runtime";
 import { formatInboundFromLabel as formatInboundFromLabelShared } from "openclaw/plugin-sdk/channel-inbound";
 import { createDedupeCache, type OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { resolveThreadSessionKeys as resolveThreadSessionKeysShared } from "openclaw/plugin-sdk/routing";
@@ -6,6 +5,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 
 export { createDedupeCache, rawDataToString };
 

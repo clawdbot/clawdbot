@@ -1,5 +1,5 @@
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import type { OpenClawPluginApi } from "./api.js";
 import plugin from "./index.js";
 
@@ -14,8 +14,10 @@ function createApi(params?: {
     source: "test",
     pluginConfig: params?.pluginConfig ?? {},
     runtime: {
-      taskFlow: {
-        bindSession: vi.fn(({ sessionKey }: { sessionKey: string }) => ({ sessionKey })),
+      tasks: {
+        managedFlows: {
+          bindSession: vi.fn(({ sessionKey }: { sessionKey: string }) => ({ sessionKey })),
+        },
       },
     } as unknown as OpenClawPluginApi["runtime"],
     registerHttpRoute: params?.registerHttpRoute ?? vi.fn(),

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelRuntimeSurface } from "../channels/plugins/channel-runtime-surface.types.js";
 import {
   type ChannelGatewayContext,
   type ChannelId,
@@ -11,6 +12,7 @@ import {
 } from "../logging/subsystem.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelRuntimeContextRegistry } from "../plugins/runtime/channel-runtime-contexts.js";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
@@ -102,11 +104,17 @@ function createDeferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve: resolvePromise };
 }
 
-function installTestRegistry(...plugins: ChannelPlugin<TestAccount>[]) {
+function installTestRegistry(
+  ...plugins: Array<
+    ChannelPlugin<TestAccount> | { plugin: ChannelPlugin<TestAccount>; origin: string }
+  >
+) {
   const registry = createEmptyPluginRegistry();
-  for (const plugin of plugins) {
+  for (const candidate of plugins) {
+    const plugin = "plugin" in candidate ? candidate.plugin : candidate;
     registry.channels.push({
       pluginId: plugin.id,
+      ...("origin" in candidate ? { origin: candidate.origin as never } : {}),
       source: "test",
       plugin,
     });
@@ -115,10 +123,12 @@ function installTestRegistry(...plugins: ChannelPlugin<TestAccount>[]) {
 }
 
 function createManager(options?: {
-  channelRuntime?: PluginRuntime["channel"];
-  resolveChannelRuntime?: () => PluginRuntime["channel"] | Promise<PluginRuntime["channel"]>;
-  loadConfig?: () => Record<string, unknown>;
+  channelRuntime?: ChannelRuntimeSurface;
+  resolveChannelRuntime?: () => ChannelRuntimeSurface | Promise<ChannelRuntimeSurface>;
+  resolveStartupChannelRuntime?: () => ChannelRuntimeSurface | Promise<ChannelRuntimeSurface>;
+  getRuntimeConfig?: () => Record<string, unknown>;
   channelIds?: ChannelId[];
+  startupTrace?: { measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T> };
 }) {
   const log = createSubsystemLogger("gateway/server-channels-test");
   const channelLogs = { discord: log } as Record<ChannelId, SubsystemLogger>;
@@ -130,13 +140,17 @@ function createManager(options?: {
     channelRuntimeEnvs[channelId] ??= runtime;
   }
   return createChannelManager({
-    loadConfig: () => options?.loadConfig?.() ?? {},
+    getRuntimeConfig: () => options?.getRuntimeConfig?.() ?? {},
     channelLogs,
     channelRuntimeEnvs,
     ...(options?.channelRuntime ? { channelRuntime: options.channelRuntime } : {}),
     ...(options?.resolveChannelRuntime
       ? { resolveChannelRuntime: options.resolveChannelRuntime }
       : {}),
+    ...(options?.resolveStartupChannelRuntime
+      ? { resolveStartupChannelRuntime: options.resolveStartupChannelRuntime }
+      : {}),
+    ...(options?.startupTrace ? { startupTrace: options.startupTrace } : {}),
   });
 }
 
@@ -172,9 +186,45 @@ describe("server-channels auto restart", () => {
     const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
     expect(account?.running).toBe(false);
     expect(account?.reconnectAttempts).toBe(11);
+    expect(account?.lastError).toBe("channel exited without an error");
 
     await vi.advanceTimersByTimeAsync(200);
     expect(startAccount).toHaveBeenCalledTimes(11);
+  });
+
+  it("records a clean channel monitor exit before auto-restart", async () => {
+    const startAccount = vi.fn(async () => {});
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(startAccount).toHaveBeenCalled();
+    expect(account?.running).toBe(false);
+    expect(account?.restartPending).toBe(true);
+    expect(account?.lastError).toBe("channel exited without an error");
+  });
+
+  it("does not record a clean-exit error for manual abort stops", async () => {
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { abortSignal: AbortSignal }) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(false);
+    expect(account?.lastError).toBeNull();
   });
 
   it("does not auto-restart after manual stop during backoff", async () => {
@@ -375,6 +425,56 @@ describe("server-channels auto restart", () => {
     expect(ctx?.channelRuntime).not.toBe(channelRuntime);
   });
 
+  it("uses a lightweight startup runtime for bundled channels", async () => {
+    const fullRuntime = {
+      ...createRuntimeChannel(),
+      marker: "full-channel-runtime",
+    } as PluginRuntime["channel"] & { marker: string };
+    const startupRuntime = {
+      runtimeContexts: createChannelRuntimeContextRegistry(),
+      marker: "startup-channel-runtime",
+    };
+    const resolveChannelRuntime = vi.fn(() => fullRuntime);
+    const resolveStartupChannelRuntime = vi.fn(() => startupRuntime);
+    const startAccount = vi.fn(async (_ctx: ChannelGatewayContext<TestAccount>) => {});
+
+    installTestRegistry({ plugin: createTestPlugin({ startAccount }), origin: "bundled" });
+    const manager = createManager({ resolveChannelRuntime, resolveStartupChannelRuntime });
+
+    await manager.startChannels();
+
+    expect(resolveStartupChannelRuntime).toHaveBeenCalledTimes(1);
+    expect(resolveChannelRuntime).not.toHaveBeenCalled();
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    const [ctx] = startAccount.mock.calls[0] ?? [];
+    expect(ctx?.channelRuntime).toMatchObject({ marker: "startup-channel-runtime" });
+    expect(ctx?.channelRuntime).not.toBe(startupRuntime);
+  });
+
+  it("keeps the full runtime path for non-bundled channels", async () => {
+    const fullRuntime = {
+      ...createRuntimeChannel(),
+      marker: "full-channel-runtime",
+    } as PluginRuntime["channel"] & { marker: string };
+    const startupRuntime = {
+      runtimeContexts: createChannelRuntimeContextRegistry(),
+      marker: "startup-channel-runtime",
+    };
+    const resolveChannelRuntime = vi.fn(() => fullRuntime);
+    const resolveStartupChannelRuntime = vi.fn(() => startupRuntime);
+    const startAccount = vi.fn(async (_ctx: ChannelGatewayContext<TestAccount>) => {});
+
+    installTestRegistry({ plugin: createTestPlugin({ startAccount }), origin: "workspace" });
+    const manager = createManager({ resolveChannelRuntime, resolveStartupChannelRuntime });
+
+    await manager.startChannels();
+
+    expect(resolveStartupChannelRuntime).not.toHaveBeenCalled();
+    expect(resolveChannelRuntime).toHaveBeenCalledTimes(1);
+    const [ctx] = startAccount.mock.calls[0] ?? [];
+    expect(ctx?.channelRuntime).toMatchObject({ marker: "full-channel-runtime" });
+  });
+
   it("does not resolve channelRuntime for disabled accounts", async () => {
     const channelRuntime = createRuntimeChannel();
     const resolveChannelRuntime = vi.fn(() => channelRuntime);
@@ -456,6 +556,30 @@ describe("server-channels auto restart", () => {
     expect(succeedingStart).toHaveBeenCalledTimes(1);
   });
 
+  it("emits startup trace spans for channel preflight and handoff", async () => {
+    const measureMock = vi.fn(async (name: string, run: () => unknown) => await run());
+    const startupTrace = {
+      measure: async <T>(name: string, run: () => T | Promise<T>) =>
+        (await measureMock(name, run)) as T,
+    };
+    const startAccount = vi.fn(async () => {});
+
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager({ startupTrace });
+
+    await manager.startChannels();
+
+    const names = measureMock.mock.calls.map(([name]) => name);
+    expect(names).toEqual(
+      expect.arrayContaining([
+        "channels.discord.start",
+        "channels.discord.list-accounts",
+        "channels.discord.runtime",
+        "channels.discord.approval-bootstrap",
+      ]),
+    );
+  });
+
   it("evicts stale account lifecycle state during whole-channel reload", async () => {
     let accountIds = [DEFAULT_ACCOUNT_ID];
     const startAccount = vi.fn(
@@ -518,7 +642,7 @@ describe("server-channels auto restart", () => {
     );
 
     const manager = createManager({
-      loadConfig: () => ({
+      getRuntimeConfig: () => ({
         channels: {
           discord: {
             accounts: {
@@ -547,7 +671,7 @@ describe("server-channels auto restart", () => {
     );
 
     const manager = createManager({
-      loadConfig: () => ({
+      getRuntimeConfig: () => ({
         channels: {
           discord: {
             healthMonitor: { enabled: false },
@@ -570,7 +694,7 @@ describe("server-channels auto restart", () => {
     );
 
     const manager = createManager({
-      loadConfig: () => ({
+      getRuntimeConfig: () => ({
         channels: {
           discord: {
             accounts: {
@@ -611,7 +735,7 @@ describe("server-channels auto restart", () => {
     );
 
     const manager = createManager({
-      loadConfig: () => ({
+      getRuntimeConfig: () => ({
         channels: {
           discord: {
             accounts: {

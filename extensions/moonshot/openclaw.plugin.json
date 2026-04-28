@@ -1,8 +1,25 @@
 {
   "id": "moonshot",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providerDiscoveryEntry": "./provider-discovery.ts",
   "providers": ["moonshot"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "moonshot-native",
+      "baseUrls": ["https://api.moonshot.ai/v1", "https://api.moonshot.cn/v1"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "moonshot": {
+        "family": "moonshot",
+        "compatibilityFamily": "moonshot"
+      }
+    }
+  },
   "modelPricing": {
     "providers": {
       "moonshot": {

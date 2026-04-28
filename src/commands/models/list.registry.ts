@@ -8,7 +8,10 @@ import {
   resolveAwsSdkEnvVarName,
   resolveEnvApiKey,
 } from "../../agents/model-auth.js";
-import { shouldSuppressBuiltInModel } from "../../agents/model-suppression.js";
+import {
+  shouldSuppressBuiltInModel,
+  shouldSuppressBuiltInModelFromManifest,
+} from "../../agents/model-suppression.js";
 import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
@@ -85,7 +88,11 @@ function validateAvailableModels(availableModels: unknown): Model<Api>[] {
   return availableModels as Model<Api>[];
 }
 
-function loadAvailableModels(registry: ModelRegistry, cfg: OpenClawConfig): Model<Api>[] {
+function loadAvailableModels(
+  registry: ModelRegistry,
+  cfg: OpenClawConfig,
+  opts?: { runtimeSuppression?: boolean },
+): Model<Api>[] {
   let availableModels: unknown;
   try {
     availableModels = registry.getAvailable();
@@ -93,40 +100,55 @@ function loadAvailableModels(registry: ModelRegistry, cfg: OpenClawConfig): Mode
     throw normalizeAvailabilityError(err);
   }
   try {
-    return validateAvailableModels(availableModels).filter(
-      (model) =>
-        !shouldSuppressBuiltInModel({
-          provider: model.provider,
-          id: model.id,
-          baseUrl: model.baseUrl,
-          config: cfg,
-        }),
+    return validateAvailableModels(availableModels).filter((model) =>
+      opts?.runtimeSuppression === false
+        ? !shouldSuppressBuiltInModelFromManifest({
+            provider: model.provider,
+            id: model.id,
+            config: cfg,
+          })
+        : !shouldSuppressBuiltInModel({
+            provider: model.provider,
+            id: model.id,
+            baseUrl: model.baseUrl,
+            config: cfg,
+          }),
     );
   } catch (err) {
     throw normalizeAvailabilityError(err);
   }
 }
 
-export async function loadModelRegistry(cfg: OpenClawConfig, opts?: { providerFilter?: string }) {
+export async function loadModelRegistry(
+  cfg: OpenClawConfig,
+  opts?: { providerFilter?: string; normalizeModels?: boolean },
+) {
+  const runtimeSuppression = opts?.normalizeModels !== false;
   const agentDir = resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(agentDir, { readOnly: true });
   const registry = discoverModels(authStorage, agentDir, {
     providerFilter: opts?.providerFilter,
+    normalizeModels: opts?.normalizeModels,
   });
-  const models = registry.getAll().filter(
-    (model) =>
-      !shouldSuppressBuiltInModel({
-        provider: model.provider,
-        id: model.id,
-        baseUrl: model.baseUrl,
-        config: cfg,
-      }),
+  const models = registry.getAll().filter((model) =>
+    runtimeSuppression
+      ? !shouldSuppressBuiltInModel({
+          provider: model.provider,
+          id: model.id,
+          baseUrl: model.baseUrl,
+          config: cfg,
+        })
+      : !shouldSuppressBuiltInModelFromManifest({
+          provider: model.provider,
+          id: model.id,
+          config: cfg,
+        }),
   );
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
 
   try {
-    const availableModels = loadAvailableModels(registry, cfg);
+    const availableModels = loadAvailableModels(registry, cfg, { runtimeSuppression });
     availableKeys = new Set(availableModels.map((model) => modelKey(model.provider, model.id)));
   } catch (err) {
     if (!shouldFallbackToAuthHeuristics(err)) {

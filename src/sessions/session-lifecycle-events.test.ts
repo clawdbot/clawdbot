@@ -1,9 +1,22 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { emitSessionLifecycleEvent, onSessionLifecycleEvent } from "./session-lifecycle-events.js";
+
+function createListenerSpy(options: { throws?: boolean } = {}) {
+  const calls: unknown[][] = [];
+  return {
+    calls,
+    listener: (...args: unknown[]) => {
+      calls.push(args);
+      if (options.throws) {
+        throw new Error("boom");
+      }
+    },
+  };
+}
 
 describe("session lifecycle events", () => {
   it("delivers events to active listeners and stops after unsubscribe", () => {
-    const listener = vi.fn();
+    const { calls, listener } = createListenerSpy();
     const unsubscribe = onSessionLifecycleEvent(listener);
 
     emitSessionLifecycleEvent({
@@ -11,28 +24,29 @@ describe("session lifecycle events", () => {
       reason: "created",
       label: "Main",
     });
-    expect(listener).toHaveBeenCalledTimes(1);
-    expect(listener).toHaveBeenCalledWith({
-      sessionKey: "agent:main:main",
-      reason: "created",
-      label: "Main",
-    });
+    expect(calls).toEqual([
+      [
+        {
+          sessionKey: "agent:main:main",
+          reason: "created",
+          label: "Main",
+        },
+      ],
+    ]);
 
     unsubscribe();
     emitSessionLifecycleEvent({
       sessionKey: "agent:main:main",
       reason: "updated",
     });
-    expect(listener).toHaveBeenCalledTimes(1);
+    expect(calls).toHaveLength(1);
   });
 
   it("keeps notifying other listeners when one throws", () => {
-    const noisy = vi.fn(() => {
-      throw new Error("boom");
-    });
-    const healthy = vi.fn();
-    const unsubscribeNoisy = onSessionLifecycleEvent(noisy);
-    const unsubscribeHealthy = onSessionLifecycleEvent(healthy);
+    const noisy = createListenerSpy({ throws: true });
+    const healthy = createListenerSpy();
+    const unsubscribeNoisy = onSessionLifecycleEvent(noisy.listener);
+    const unsubscribeHealthy = onSessionLifecycleEvent(healthy.listener);
 
     expect(() =>
       emitSessionLifecycleEvent({
@@ -41,8 +55,8 @@ describe("session lifecycle events", () => {
       }),
     ).not.toThrow();
 
-    expect(noisy).toHaveBeenCalledTimes(1);
-    expect(healthy).toHaveBeenCalledTimes(1);
+    expect(noisy.calls).toHaveLength(1);
+    expect(healthy.calls).toHaveLength(1);
 
     unsubscribeNoisy();
     unsubscribeHealthy();

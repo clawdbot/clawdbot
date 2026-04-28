@@ -13,7 +13,7 @@ const MATRIX_ACTION_TEST_CFG = {
 function installMatrixActionTestRuntime(): void {
   setMatrixRuntime({
     config: {
-      loadConfig: () => ({}),
+      current: () => ({}),
     },
     channel: {
       text: {

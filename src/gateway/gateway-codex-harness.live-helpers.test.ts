@@ -27,6 +27,50 @@ describe("gateway codex harness live helpers", () => {
     expect(isExpectedCodexStatusCommandText(text)).toBe(true);
   });
 
+  it("accepts current status prose that reports healthy session context without the session id", () => {
+    const text = [
+      "Status: running on `openai/gpt-5.5` with low reasoning/text settings.",
+      "",
+      "Session context is healthy: `22k/272k` tokens used, `0` compactions, `53%` cache hit. Current workspace is `/tmp/openclaw-live-codex-harness/workspace/dev`.",
+    ].join("\n");
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("accepts current app-server status prose without the OpenClaw prefix", () => {
+    const text = [
+      "Status: running on `openai/gpt-5.5` in `/tmp/openclaw-live-codex-harness/workspace/dev`.",
+      "",
+      "Context is at 22k / 272k tokens, with no compactions. There’s 1 active task: `/codex status`.",
+    ].join("\n");
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("accepts current app-server status prose with session-is wording", () => {
+    const text =
+      "Status: running on `openai/gpt-5.5`, context at 22k/272k tokens (8%), no compactions. Session is `agent:dev:live-codex-harness`; execution is direct with elevated mode.";
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("accepts the current status card emitted by OpenAI Codex", () => {
+    const text = [
+      "Current session status:",
+      "",
+      "- Model: `openai/gpt-5.5`",
+      "- Context: `22k/272k` tokens, `8%`",
+      "- Cache hit: `52%`",
+      "- Compactions: `0`",
+      "- Execution: `direct`",
+      "- Runtime: `OpenAI Codex`",
+      "- Think: `low`",
+      "- Active tasks: `1`",
+    ].join("\n");
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
   it("rejects status prose for a different codex session", () => {
     const text =
       "OpenClaw is running on `openai/gpt-5.5` with low reasoning/text settings. Context is at `22k/272k` tokens, no compactions, and the current session is `agent:dev:other`.";
@@ -71,6 +115,23 @@ describe("gateway codex harness live helpers", () => {
       "- `codex/gpt-5.4`",
       "",
       "I couldn’t get a fuller model catalog from the local `codex` CLI here.",
+    ].join("\n");
+
+    expect(
+      EXPECTED_CODEX_MODELS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+    expect(isExpectedCodexModelsCommandText(text)).toBe(true);
+  });
+
+  it("accepts the current Codex agent model list from the live harness", () => {
+    const text = [
+      "Available Codex agent models:",
+      "",
+      "- `dev`: `openai/gpt-5.5`",
+      "  - Runtime: `codex`",
+      "  - Configured: `false`",
+      "",
+      "No other agent models are currently exposed for this session.",
     ].join("\n");
 
     expect(

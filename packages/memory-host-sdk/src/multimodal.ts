@@ -1,1 +1,5 @@
-export * from "../../../src/memory-host-sdk/multimodal.js";
+export {
+  isMemoryMultimodalEnabled,
+  normalizeMemoryMultimodalSettings,
+  type MemoryMultimodalSettings,
+} from "./host/multimodal.js";

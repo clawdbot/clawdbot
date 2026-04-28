@@ -1,5 +1,5 @@
+import { expectOpenDmPolicyConfigIssue } from "openclaw/plugin-sdk/channel-test-helpers";
 import { describe, it } from "vitest";
-import { expectOpenDmPolicyConfigIssue } from "../../../test/helpers/plugins/status-issues.js";
 import { collectZaloStatusIssues } from "./status-issues.js";
 
 describe("collectZaloStatusIssues", () => {

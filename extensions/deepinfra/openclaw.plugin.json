@@ -1,0 +1,194 @@
+{
+  "id": "deepinfra",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["deepinfra"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "deepinfra-native",
+      "hosts": ["api.deepinfra.com"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "deepinfra": {
+        "family": "deepinfra"
+      }
+    }
+  },
+  "modelCatalog": {
+    "providers": {
+      "deepinfra": {
+        "baseUrl": "https://api.deepinfra.com/v1/openai",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "deepseek-ai/DeepSeek-V3.2",
+            "name": "DeepSeek V3.2",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 163840,
+            "maxTokens": 163840,
+            "cost": {
+              "input": 0.26,
+              "output": 0.38,
+              "cacheRead": 0.13,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "zai-org/GLM-5.1",
+            "name": "GLM-5.1",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 202752,
+            "maxTokens": 202752,
+            "cost": {
+              "input": 1.05,
+              "output": 3.5,
+              "cacheRead": 0.205000005,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "stepfun-ai/Step-3.5-Flash",
+            "name": "Step 3.5 Flash",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 262144,
+            "cost": {
+              "input": 0.1,
+              "output": 0.3,
+              "cacheRead": 0.02,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "MiniMaxAI/MiniMax-M2.5",
+            "name": "MiniMax M2.5",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 196608,
+            "maxTokens": 196608,
+            "cost": {
+              "input": 0.15,
+              "output": 1.15,
+              "cacheRead": 0.03,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "moonshotai/Kimi-K2.5",
+            "name": "Kimi K2.5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 262144,
+            "cost": {
+              "input": 0.45,
+              "output": 2.25,
+              "cacheRead": 0.070000002,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B",
+            "name": "NVIDIA Nemotron 3 Super 120B A12B",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 262144,
+            "cost": {
+              "input": 0.1,
+              "output": 0.5,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+            "name": "Llama 3.3 70B Instruct Turbo",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 0.1,
+              "output": 0.32,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true
+            }
+          }
+        ]
+      }
+    }
+  },
+  "providerAuthEnvVars": {
+    "deepinfra": ["DEEPINFRA_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "deepinfra",
+      "method": "api-key",
+      "choiceId": "deepinfra-api-key",
+      "choiceLabel": "DeepInfra API key",
+      "choiceHint": "Unified API for open source models",
+      "groupId": "deepinfra",
+      "groupLabel": "DeepInfra",
+      "groupHint": "Unified API for open source models",
+      "optionKey": "deepinfraApiKey",
+      "cliFlag": "--deepinfra-api-key",
+      "cliOption": "--deepinfra-api-key <key>",
+      "cliDescription": "DeepInfra API key"
+    }
+  ],
+  "contracts": {
+    "mediaUnderstandingProviders": ["deepinfra"],
+    "memoryEmbeddingProviders": ["deepinfra"],
+    "imageGenerationProviders": ["deepinfra"],
+    "speechProviders": ["deepinfra"],
+    "videoGenerationProviders": ["deepinfra"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "deepinfra": {
+      "capabilities": ["image", "audio"],
+      "defaultModels": {
+        "image": "moonshotai/Kimi-K2.5",
+        "audio": "openai/whisper-large-v3-turbo"
+      },
+      "autoPriority": {
+        "image": 45,
+        "audio": 45
+      }
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

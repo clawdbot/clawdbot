@@ -9,6 +9,7 @@ import { truncateUtf16Safe } from "../utils.js";
 
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
 
+export type { AgentMessage } from "@mariozechner/pi-agent-core";
 export type {
   AgentHarness,
   AgentHarnessAttemptParams,
@@ -24,11 +25,12 @@ export type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../agents/pi-embedded-runner/run/types.js";
+export type { ContextEngine as HarnessContextEngine } from "../context-engine/types.js";
 export type { CompactEmbeddedPiSessionParams } from "../agents/pi-embedded-runner/compact.js";
 export type { EmbeddedPiCompactResult } from "../agents/pi-embedded-runner/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 export type { MessagingToolSend } from "../agents/pi-embedded-messaging.types.js";
-export type { AgentApprovalEventData } from "../infra/agent-events.js";
+export type { AgentApprovalEventData, AgentEventPayload } from "../infra/agent-events.js";
 export type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 export type { NormalizedUsage } from "../agents/usage.js";
 export type {
@@ -57,11 +59,19 @@ export type {
 export { VERSION as OPENCLAW_VERSION } from "../version.js";
 export { formatErrorMessage } from "../infra/errors.js";
 export { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
-export { emitAgentEvent } from "../infra/agent-events.js";
+export { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 export { log as embeddedAgentLog } from "../agents/pi-embedded-runner/logger.js";
+export { buildAgentRuntimePlan } from "../agents/runtime-plan/build.js";
+export { classifyEmbeddedPiRunResultForModelFallback } from "../agents/pi-embedded-runner/result-fallback-classifier.js";
 export { resolveEmbeddedAgentRuntime } from "../agents/pi-embedded-runner/runtime.js";
 export { resolveUserPath } from "../utils.js";
 export { callGatewayTool } from "../agents/tools/gateway.js";
+export type { NodeListNode } from "../agents/tools/nodes-utils.js";
+export {
+  listNodes,
+  resolveNodeIdFromList,
+  selectDefaultNodeFromList,
+} from "../agents/tools/nodes-utils.js";
 export { formatToolAggregate } from "../auto-reply/tool-meta.js";
 export { isMessagingTool, isMessagingToolSendAction } from "../agents/pi-embedded-messaging.js";
 export {
@@ -123,6 +133,7 @@ export {
 } from "../agents/harness/lifecycle-hook-helpers.js";
 export {
   buildNativeHookRelayCommand,
+  __testing as nativeHookRelayTesting,
   registerNativeHookRelay,
 } from "../agents/harness/native-hook-relay.js";
 

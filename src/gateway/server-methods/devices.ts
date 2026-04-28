@@ -109,6 +109,10 @@ function deniesCrossDeviceManagement(authz: DeviceManagementAuthz): boolean {
   );
 }
 
+function shouldReturnRotatedDeviceToken(authz: DeviceManagementAuthz): boolean {
+  return Boolean(authz.callerDeviceId && authz.callerDeviceId === authz.normalizedTargetDeviceId);
+}
+
 export const deviceHandlers: GatewayRequestHandlers = {
   "device.pair.list": async ({ params, respond, client }) => {
     if (!validateDevicePairListParams(params)) {
@@ -367,7 +371,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       {
         deviceId,
         role: entry.role,
-        token: entry.token,
+        ...(shouldReturnRotatedDeviceToken(authz) ? { token: entry.token } : {}),
         scopes: entry.scopes,
         rotatedAtMs: entry.rotatedAtMs ?? entry.createdAtMs,
       },

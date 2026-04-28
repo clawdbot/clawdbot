@@ -8,21 +8,24 @@ title: "Migrate"
 
 # `openclaw migrate`
 
-Import state from another agent system through a plugin-owned migration provider.
+Import state from another agent system through a plugin-owned migration provider. Bundled providers cover [Claude](/install/migrating-claude) and [Hermes](/install/migrating-hermes); third-party plugins can register additional providers.
 
 <Tip>
-For a user-facing walkthrough of moving from Hermes, see [Migrating from Hermes](/install/migrating-hermes).
+For user-facing walkthroughs, see [Migrating from Claude](/install/migrating-claude) and [Migrating from Hermes](/install/migrating-hermes). The [migration hub](/install/migrating) lists all paths.
 </Tip>
 
 ## Commands
 
 ```bash
 openclaw migrate list
+openclaw migrate claude --dry-run
 openclaw migrate hermes --dry-run
 openclaw migrate hermes
+openclaw migrate apply claude --yes
 openclaw migrate apply hermes --yes
 openclaw migrate apply hermes --include-secrets --yes
 openclaw onboard --flow import
+openclaw onboard --import-from claude --import-source ~/.claude
 openclaw onboard --import-from hermes --import-source ~/.hermes
 ```
 
@@ -76,11 +79,31 @@ openclaw onboard --import-from hermes --import-source ~/.hermes
   </Accordion>
 </AccordionGroup>
 
+## Claude provider
+
+The bundled Claude provider detects Claude Code state at `~/.claude` by default. Use `--from <path>` to import a specific Claude Code home or project root.
+
+<Tip>
+For a user-facing walkthrough, see [Migrating from Claude](/install/migrating-claude).
+</Tip>
+
+### What Claude imports
+
+- Project `CLAUDE.md` and `.claude/CLAUDE.md` into the OpenClaw agent workspace.
+- User `~/.claude/CLAUDE.md` appended to workspace `USER.md`.
+- MCP server definitions from project `.mcp.json`, Claude Code `~/.claude.json`, and Claude Desktop `claude_desktop_config.json`.
+- Claude skill directories that include `SKILL.md`.
+- Claude command Markdown files converted into OpenClaw skills with manual invocation only.
+
+### Archive and manual-review state
+
+Claude hooks, permissions, environment defaults, local memory, path-scoped rules, subagents, caches, plans, and project history are preserved in the migration report or reported as manual-review items. OpenClaw does not execute hooks, copy broad allowlists, or import OAuth/Desktop credential state automatically.
+
 ## Hermes provider
 
 The bundled Hermes provider detects state at `~/.hermes` by default. Use `--from <path>` when Hermes lives elsewhere.
 
-### What gets imported
+### What Hermes imports
 
 - Default model configuration from `config.yaml`.
 - Configured model providers and custom OpenAI-compatible endpoints from `providers` and `custom_providers`.
@@ -141,6 +164,7 @@ Onboarding imports require a fresh OpenClaw setup. Reset config, credentials, se
 ## Related
 
 - [Migrating from Hermes](/install/migrating-hermes): user-facing walkthrough.
+- [Migrating from Claude](/install/migrating-claude): user-facing walkthrough.
 - [Migrating](/install/migrating): move OpenClaw to a new machine.
 - [Doctor](/gateway/doctor): health check after applying a migration.
 - [Plugins](/tools/plugin): plugin install and registration.

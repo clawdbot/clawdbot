@@ -13,18 +13,6 @@
       "openclaw/plugin-sdk/browser-maintenance": [
         "../../dist/plugin-sdk/src/plugin-sdk/browser-maintenance.d.ts"
       ],
-      "openclaw/plugin-sdk/browser-config-runtime": [
-        "../../dist/plugin-sdk/src/plugin-sdk/browser-config-runtime.d.ts"
-      ],
-      "openclaw/plugin-sdk/browser-node-runtime": [
-        "../../dist/plugin-sdk/src/plugin-sdk/browser-node-runtime.d.ts"
-      ],
-      "openclaw/plugin-sdk/browser-setup-tools": [
-        "../../dist/plugin-sdk/src/plugin-sdk/browser-setup-tools.d.ts"
-      ],
-      "openclaw/plugin-sdk/browser-security-runtime": [
-        "../../dist/plugin-sdk/src/plugin-sdk/browser-security-runtime.d.ts"
-      ],
       "openclaw/plugin-sdk/channel-secret-runtime": [
         "../../dist/plugin-sdk/src/plugin-sdk/channel-secret-runtime.d.ts"
       ],

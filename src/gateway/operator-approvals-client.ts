@@ -6,7 +6,12 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "./protocol/client-in
 export async function createOperatorApprovalsGatewayClient(
   params: Pick<
     GatewayClientOptions,
-    "clientDisplayName" | "onClose" | "onConnectError" | "onEvent" | "onHelloOk"
+    | "clientDisplayName"
+    | "onClose"
+    | "onConnectError"
+    | "onEvent"
+    | "onHelloOk"
+    | "onReconnectPaused"
   > & {
     config: OpenClawConfig;
     gatewayUrl?: string;
@@ -29,6 +34,7 @@ export async function createOperatorApprovalsGatewayClient(
     onEvent: params.onEvent,
     onHelloOk: params.onHelloOk,
     onConnectError: params.onConnectError,
+    onReconnectPaused: params.onReconnectPaused,
     onClose: params.onClose,
   });
 }

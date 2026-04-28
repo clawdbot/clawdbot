@@ -12,12 +12,14 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 const mockLoadConfig = vi.hoisted(() => vi.fn<() => OpenClawConfig>());
 const mockReadConfigFileSnapshot = vi.hoisted(() => vi.fn<() => Promise<ConfigFileSnapshot>>());
 const mockLoadPluginManifestRegistry = vi.hoisted(() => vi.fn());
+const mockGetCurrentPluginMetadataSnapshot = vi.hoisted(() => vi.fn());
 
 let readBestEffortRuntimeConfigSchema: typeof import("./runtime-schema.js").readBestEffortRuntimeConfigSchema;
 let loadGatewayRuntimeConfigSchema: typeof import("./runtime-schema.js").loadGatewayRuntimeConfigSchema;
 
 vi.mock("./config.js", () => {
   return {
+    getRuntimeConfig: () => mockLoadConfig(),
     loadConfig: () => mockLoadConfig(),
     readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
   };
@@ -30,6 +32,11 @@ vi.mock("../plugins/manifest-registry.js", () => ({
 vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: (...args: unknown[]) =>
     mockLoadPluginManifestRegistry(...args),
+}));
+
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: (...args: unknown[]) =>
+    mockGetCurrentPluginMetadataSnapshot(...args),
 }));
 
 function makeSnapshot(params: { valid: boolean; config?: OpenClawConfig }): ConfigFileSnapshot {
@@ -181,8 +188,12 @@ describe("readBestEffortRuntimeConfigSchema", () => {
     expect(mockLoadPluginManifestRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
         config: { plugins: { entries: { demo: { enabled: true } } } },
-        cache: false,
+        cache: true,
       }),
+    );
+    expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty("cache", false);
+    expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty(
+      "bundledChannelConfigCollector",
     );
     expect(channelProps?.telegram).toBeTruthy();
     expect(channelProps?.matrix).toBeTruthy();
@@ -197,8 +208,12 @@ describe("readBestEffortRuntimeConfigSchema", () => {
     expect(mockLoadPluginManifestRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
         config: { plugins: { enabled: true } },
-        cache: false,
+        cache: true,
       }),
+    );
+    expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty("cache", false);
+    expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty(
+      "bundledChannelConfigCollector",
     );
     expect(channelProps?.telegram).toBeTruthy();
     expect(channelProps?.slack).toBeTruthy();
@@ -222,10 +237,62 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     expect(mockLoadPluginManifestRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
         config: { plugins: { entries: { demo: { enabled: true } } } },
-        cache: false,
+        cache: true,
       }),
     );
+    expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty(
+      "bundledChannelConfigCollector",
+    );
     expect(channelProps?.telegram).toBeTruthy();
+    expect(channelProps?.matrix).toBeTruthy();
+  });
+
+  it("reuses the current gateway plugin metadata snapshot for config schema requests", () => {
+    mockGetCurrentPluginMetadataSnapshot.mockReturnValueOnce({
+      manifestRegistry: {
+        diagnostics: [],
+        plugins: [
+          {
+            id: "telegram",
+            name: "Telegram",
+            description: "Telegram plugin",
+            origin: "bundled",
+            channels: ["telegram"],
+          },
+          {
+            id: "matrix",
+            name: "Matrix",
+            description: "Matrix plugin",
+            origin: "workspace",
+            channels: ["matrix"],
+            channelConfigs: {
+              matrix: {
+                schema: {
+                  type: "object",
+                  properties: {
+                    homeserver: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const result = loadGatewayRuntimeConfigSchema();
+    const schema = result.schema as { properties?: Record<string, unknown> };
+    const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;
+    const channelProps = channelsNode?.properties as Record<string, unknown> | undefined;
+
+    expect(mockGetCurrentPluginMetadataSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: { plugins: { entries: { demo: { enabled: true } } } },
+      }),
+    );
+    expect(mockLoadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(channelProps?.telegram).toBeTruthy();
+    expect(JSON.stringify(channelProps?.telegram)).toContain("botToken");
     expect(channelProps?.matrix).toBeTruthy();
   });
 
@@ -245,7 +312,8 @@ describe("loadGatewayRuntimeConfigSchema", () => {
 
     expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(3);
     for (const call of mockLoadPluginManifestRegistry.mock.calls) {
-      expect(call[0]).toMatchObject({ cache: false });
+      expect(call[0]).toMatchObject({ cache: true });
+      expect(call[0]).not.toHaveProperty("bundledChannelConfigCollector");
     }
     expect(getActivePluginRegistry()).toBe(activeRegistry);
     expect(getActivePluginRegistryKey()).toBe("startup-registry");

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import AjvPkg from "ajv";
+import type { JsonSchemaObject } from "openclaw/plugin-sdk/config-schema";
 import { describe, expect, it } from "vitest";
-import type { JsonSchemaObject } from "../../../src/shared/json-schema.types.js";
 import {
   DEFAULT_WIKI_RENDER_MODE,
   DEFAULT_WIKI_SEARCH_BACKEND,

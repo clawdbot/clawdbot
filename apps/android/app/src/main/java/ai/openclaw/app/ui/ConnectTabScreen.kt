@@ -1,7 +1,10 @@
 package ai.openclaw.app.ui
 
-import androidx.compose.foundation.BorderStroke
+import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.ui.mobileCardSurface
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -38,7 +41,6 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,14 +50,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import ai.openclaw.app.MainViewModel
-import ai.openclaw.app.gateway.GatewayEndpoint
-import ai.openclaw.app.ui.mobileCardSurface
 
 private enum class ConnectInputMode {
   SetupCode,
@@ -127,9 +126,10 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
   }
 
   val setupResolvedEndpoint = remember(setupCode) { decodeGatewaySetupCode(setupCode)?.url?.let { parseGatewayEndpoint(it)?.displayUrl } }
-  val manualResolvedEndpoint = remember(manualHostInput, manualPortInput, manualTlsInput) {
-    composeGatewayManualUrl(manualHostInput, manualPortInput, manualTlsInput)?.let { parseGatewayEndpoint(it)?.displayUrl }
-  }
+  val manualResolvedEndpoint =
+    remember(manualHostInput, manualPortInput, manualTlsInput) {
+      composeGatewayManualUrl(manualHostInput, manualPortInput, manualTlsInput)?.let { parseGatewayEndpoint(it)?.displayUrl }
+    }
 
   val activeEndpoint =
     remember(isConnected, remoteAddress, setupResolvedEndpoint, manualResolvedEndpoint, inputMode) {
@@ -544,7 +544,11 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
               colors = outlinedColors(),
             )
 
-            Text("Password (optional)", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
+            Text(
+              "Password (optional)",
+              style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
+              color = mobileTextSecondary,
+            )
             OutlinedTextField(
               value = passwordInput,
               onValueChange = { passwordInput = it },
@@ -578,7 +582,11 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
 }
 
 @Composable
-private fun MethodChip(label: String, active: Boolean, onClick: () -> Unit) {
+private fun MethodChip(
+  label: String,
+  active: Boolean,
+  onClick: () -> Unit,
+) {
   Button(
     onClick = onClick,
     modifier = Modifier.height(40.dp),
@@ -596,7 +604,10 @@ private fun MethodChip(label: String, active: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun QuickFillChip(label: String, onClick: () -> Unit) {
+private fun QuickFillChip(
+  label: String,
+  onClick: () -> Unit,
+) {
   Button(
     onClick = onClick,
     shape = RoundedCornerShape(999.dp),

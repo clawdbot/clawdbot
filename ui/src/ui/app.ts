@@ -16,9 +16,14 @@ import {
 } from "./app-channels.ts";
 import {
   handleAbortChat as handleAbortChatInternal,
+  handleChatDraftChange as handleChatDraftChangeInternal,
+  handleChatInputHistoryKey as handleChatInputHistoryKeyInternal,
   handleSendChat as handleSendChatInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
+  resetChatInputHistoryNavigation as resetChatInputHistoryNavigationInternal,
   steerQueuedChatMessage as steerQueuedChatMessageInternal,
+  type ChatInputHistoryKeyInput,
+  type ChatInputHistoryKeyResult,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
 import type { EventLogEntry } from "./app-events.ts";
@@ -161,6 +166,7 @@ export class OpenClawApp extends LitElement {
   @state() customThemeImportMessage: { kind: "success" | "error"; text: string } | null = null;
   @state() customThemeImportExpanded = false;
   @state() customThemeImportFocusToken = 0;
+  private customThemeImportSelectOnSuccess = false;
   @state() hello: GatewayHelloOk | null = null;
   @state() lastError: string | null = null;
   @state() lastErrorCode: string | null = null;
@@ -216,6 +222,11 @@ export class OpenClawApp extends LitElement {
   @state() navDrawerOpen = false;
 
   onSlashAction?: (action: string) => void;
+  chatLocalInputHistoryBySession: Record<string, Array<{ text: string; ts: number }>> = {};
+  chatInputHistorySessionKey: string | null = null;
+  chatInputHistoryItems: string[] | null = null;
+  @state() chatInputHistoryIndex = -1;
+  chatDraftBeforeHistory: string | null = null;
 
   // Sidebar state for tool output viewing
   @state() sidebarOpen = false;
@@ -284,6 +295,8 @@ export class OpenClawApp extends LitElement {
   @state() configSearchQuery = "";
   @state() configActiveSection: string | null = null;
   @state() configActiveSubsection: string | null = null;
+  @state() pendingUpdateExpectedVersion: string | null = null;
+  @state() updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null = null;
   @state() communicationsFormMode: "form" | "raw" = "form";
   @state() communicationsSearchQuery = "";
   @state() communicationsActiveSection: string | null = null;
@@ -705,6 +718,9 @@ export class OpenClawApp extends LitElement {
   openCustomThemeImport() {
     this.customThemeImportExpanded = true;
     this.customThemeImportFocusToken += 1;
+    if (!this.settings.customTheme) {
+      this.customThemeImportSelectOnSuccess = true;
+    }
   }
 
   async importCustomTheme() {
@@ -716,11 +732,18 @@ export class OpenClawApp extends LitElement {
     this.customThemeImportMessage = null;
     try {
       const customTheme = await importCustomThemeFromUrl(this.customThemeImportUrl);
+      const shouldSelectImportedTheme =
+        this.theme === "custom" ||
+        !this.settings.customTheme ||
+        this.customThemeImportSelectOnSuccess;
       applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], {
         ...this.settings,
+        theme: shouldSelectImportedTheme ? "custom" : this.settings.theme,
         customTheme,
       });
+      this.themeOrder = this.buildThemeOrder(shouldSelectImportedTheme ? "custom" : this.theme);
       this.customThemeImportUrl = "";
+      this.customThemeImportSelectOnSuccess = false;
       this.customThemeImportMessage = {
         kind: "success",
         text: `Imported ${customTheme.label}.`,
@@ -738,6 +761,7 @@ export class OpenClawApp extends LitElement {
   clearCustomTheme() {
     const nextTheme = this.theme === "custom" ? "claw" : this.theme;
     this.customThemeImportExpanded = true;
+    this.customThemeImportSelectOnSuccess = false;
     applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], {
       ...this.settings,
       theme: nextTheme,
@@ -774,6 +798,26 @@ export class OpenClawApp extends LitElement {
 
   async handleAbortChat() {
     await handleAbortChatInternal(this as unknown as Parameters<typeof handleAbortChatInternal>[0]);
+  }
+
+  handleChatDraftChange(next: string) {
+    handleChatDraftChangeInternal(
+      this as unknown as Parameters<typeof handleChatDraftChangeInternal>[0],
+      next,
+    );
+  }
+
+  handleChatInputHistoryKey(input: ChatInputHistoryKeyInput): ChatInputHistoryKeyResult {
+    return handleChatInputHistoryKeyInternal(
+      this as unknown as Parameters<typeof handleChatInputHistoryKeyInternal>[0],
+      input,
+    );
+  }
+
+  resetChatInputHistoryNavigation() {
+    resetChatInputHistoryNavigationInternal(
+      this as unknown as Parameters<typeof resetChatInputHistoryNavigationInternal>[0],
+    );
   }
 
   removeQueuedMessage(id: string) {

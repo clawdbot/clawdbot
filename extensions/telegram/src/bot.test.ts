@@ -1,11 +1,12 @@
 import { rm } from "node:fs/promises";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
 } from "openclaw/plugin-sdk/plugin-runtime";
+import { loadSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
+import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { mockPinnedHostnameResolution } from "../../../src/test-helpers/ssrf.js";
 import type { TelegramInteractiveHandlerContext } from "./interactive-dispatch.js";
 const {
   answerCallbackQuerySpy,
@@ -30,7 +31,6 @@ const {
   wasSentByBot,
 } = await import("./bot.create-telegram-bot.test-harness.js");
 
-let loadSessionStore: typeof import("../../../src/config/sessions.js").loadSessionStore;
 let createTelegramBotBase: typeof import("./bot-core.js").createTelegramBotCore;
 let setTelegramBotRuntimeForTest: typeof import("./bot-core.js").setTelegramBotRuntimeForTest;
 let createTelegramBot: (
@@ -72,7 +72,7 @@ function waitForReplyCalls(count: number) {
 }
 
 async function loadEnvelopeTimestampHelpers() {
-  return await import("../../../test/helpers/envelope-timestamp.js");
+  return await import("openclaw/plugin-sdk/channel-test-helpers");
 }
 
 async function loadInboundContextContract() {
@@ -82,7 +82,6 @@ async function loadInboundContextContract() {
 const ORIGINAL_TZ = process.env.TZ;
 describe("createTelegramBot", () => {
   beforeAll(async () => {
-    ({ loadSessionStore } = await import("../../../src/config/sessions.js"));
     ({ createTelegramBotCore: createTelegramBotBase, setTelegramBotRuntimeForTest } =
       await import("./bot-core.js"));
   });

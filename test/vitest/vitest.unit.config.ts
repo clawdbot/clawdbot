@@ -35,6 +35,7 @@ export function createUnitVitestConfigWithOptions(
     extraExcludePatterns?: string[];
     name?: string;
     argv?: string[];
+    passWithNoTests?: boolean;
   } = {},
 ) {
   const isolate = resolveVitestIsolation(env);
@@ -85,7 +86,7 @@ export function createUnitVitestConfigWithOptions(
           ]),
         ],
       },
-      ...(cliIncludePatterns !== null ? { passWithNoTests: true } : {}),
+      ...(options.passWithNoTests || cliIncludePatterns !== null ? { passWithNoTests: true } : {}),
     },
   });
 }

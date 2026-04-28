@@ -1,6 +1,1 @@
-export {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-  readStringValue,
-} from "../../../src/shared/string-coerce.js";
+export * from "../../../src/plugin-sdk/text-runtime.js";

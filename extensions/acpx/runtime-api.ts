@@ -1,11 +1,11 @@
-export type { AcpRuntimeErrorCode } from "openclaw/plugin-sdk/acp-runtime";
+export type { AcpRuntimeErrorCode } from "openclaw/plugin-sdk/acp-runtime-backend";
 export {
   AcpRuntimeError,
   getAcpRuntimeBackend,
   tryDispatchAcpReplyHook,
   registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
-} from "openclaw/plugin-sdk/acp-runtime";
+} from "openclaw/plugin-sdk/acp-runtime-backend";
 export type {
   AcpRuntime,
   AcpRuntimeCapabilities,
@@ -17,7 +17,7 @@ export type {
   AcpRuntimeTurnAttachment,
   AcpRuntimeTurnInput,
   AcpSessionUpdateTag,
-} from "openclaw/plugin-sdk/acp-runtime";
+} from "openclaw/plugin-sdk/acp-runtime-backend";
 export type {
   OpenClawPluginApi,
   OpenClawPluginConfigSchema,

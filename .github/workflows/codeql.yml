@@ -2,12 +2,22 @@ name: CodeQL
 
 on:
   workflow_dispatch:
+    inputs:
+      profile:
+        description: CodeQL security profile to run
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - security
+          - macos-security
   schedule:
     - cron: "0 6 * * *"
 
 concurrency:
-  group: codeql-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: codeql-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.sha }}
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -18,121 +28,107 @@ permissions:
   security-events: write
 
 jobs:
-  analyze:
-    name: Analyze (${{ matrix.language }})
+  critical-security:
+    name: Critical Security (${{ matrix.language }})
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'security' }}
     runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - language: javascript-typescript
-            runs_on: blacksmith-32vcpu-ubuntu-2404
-            needs_node: true
-            needs_python: false
-            needs_java: false
-            needs_swift_tools: false
-            needs_manual_build: false
-            needs_autobuild: false
-            config_file: ./.github/codeql/codeql-javascript-typescript.yml
+            runs_on: blacksmith-8vcpu-ubuntu-2404
+            timeout_minutes: 25
+            config_file: ./.github/codeql/codeql-javascript-typescript-critical-security.yml
           - language: actions
-            runs_on: blacksmith-16vcpu-ubuntu-2404
-            needs_node: false
-            needs_python: false
-            needs_java: false
-            needs_swift_tools: false
-            needs_manual_build: false
-            needs_autobuild: false
-            config_file: ""
-          - language: python
-            runs_on: blacksmith-16vcpu-ubuntu-2404
-            needs_node: false
-            needs_python: true
-            needs_java: false
-            needs_swift_tools: false
-            needs_manual_build: false
-            needs_autobuild: false
-            config_file: ""
-          - language: java-kotlin
-            runs_on: blacksmith-16vcpu-ubuntu-2404
-            needs_node: false
-            needs_python: false
-            needs_java: true
-            needs_swift_tools: false
-            needs_manual_build: true
-            needs_autobuild: false
-            config_file: ""
-          - language: swift
-            runs_on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-latest' || 'macos-latest' }}
-            needs_node: false
-            needs_python: false
-            needs_java: false
-            needs_swift_tools: true
-            needs_manual_build: true
-            needs_autobuild: false
-            config_file: ""
+            runs_on: blacksmith-8vcpu-ubuntu-2404
+            timeout_minutes: 10
+            config_file: ./.github/codeql/codeql-actions-critical-security.yml
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           submodules: false
 
-      - name: Setup Node environment
-        if: matrix.needs_node
-        uses: ./.github/actions/setup-node-env
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
         with:
-          install-bun: "false"
+          languages: ${{ matrix.language }}
+          config-file: ${{ matrix.config_file }}
 
-      - name: Setup Python
-        if: matrix.needs_python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+      - name: Analyze
+        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
         with:
-          python-version: "3.12"
+          category: "/codeql-critical-security/${{ matrix.language }}"
 
-      - name: Setup Java
-        if: matrix.needs_java
-        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5
+  macos-security:
+    name: Critical Security (macOS)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.profile == 'macos-security' }}
+    runs-on: blacksmith-6vcpu-macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          distribution: temurin
-          java-version: "21"
+          submodules: false
 
-      - name: Setup Swift build tools
-        if: matrix.needs_swift_tools
+      - name: Select Xcode
         run: |
           sudo xcode-select -s /Applications/Xcode_26.1.app
           xcodebuild -version
-          brew install xcodegen swiftlint swiftformat
           swift --version
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@b25d0ebf40e5b63ee81e1bd6e5d2a12b7c2aeb61 # v4
+        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
         with:
-          languages: ${{ matrix.language }}
-          queries: security-and-quality
-          config-file: ${{ matrix.config_file || '' }}
+          languages: swift
+          build-mode: manual
+          config-file: ./.github/codeql/codeql-macos-critical-security.yml
 
-      - name: Autobuild
-        if: matrix.needs_autobuild
-        uses: github/codeql-action/autobuild@b25d0ebf40e5b63ee81e1bd6e5d2a12b7c2aeb61 # v4
-
-      - name: Build Android for CodeQL
-        if: matrix.language == 'java-kotlin'
-        working-directory: apps/android
-        run: ./gradlew --no-daemon :app:assemblePlayDebug
-
-      - name: Build Swift for CodeQL
-        if: matrix.language == 'swift'
-        run: |
-          set -euo pipefail
-          swift build --package-path apps/macos --configuration release
-          cd apps/ios
-          xcodegen generate
-          xcodebuild build \
-            -project OpenClaw.xcodeproj \
-            -scheme OpenClaw \
-            -destination "generic/platform=iOS Simulator" \
-            CODE_SIGNING_ALLOWED=NO
+      - name: Build macOS for CodeQL
+        run: swift build --package-path apps/macos --product OpenClaw
 
       - name: Analyze
-        uses: github/codeql-action/analyze@b25d0ebf40e5b63ee81e1bd6e5d2a12b7c2aeb61 # v4
+        id: analyze
+        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
         with:
-          category: "/language:${{ matrix.language }}"
+          output: sarif-results
+          upload: failure-only
+          category: "/codeql-critical-security/macos"
+
+      - name: Remove dependency build results
+        env:
+          SARIF_OUTPUT: sarif-results
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          if [ ! -d "$SARIF_OUTPUT" ]; then
+            echo "SARIF output directory not found: $SARIF_OUTPUT" >&2
+            exit 1
+          fi
+
+          mkdir -p sarif-results-filtered
+
+          files=("$SARIF_OUTPUT"/*.sarif)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No SARIF files found in $SARIF_OUTPUT" >&2
+            exit 1
+          fi
+
+          for file in "${files[@]}"; do
+            jq '
+              def in_dependency_build:
+                ((.locations // []) | length > 0)
+                and all(.locations[]; (.physicalLocation.artifactLocation.uri? // "") | test("^apps/macos/\\.build/"));
+
+              .runs |= map(.results = ((.results // []) | map(select(in_dependency_build | not))))
+            ' "$file" > "sarif-results-filtered/$(basename "$file")"
+          done
+
+      - name: Upload filtered SARIF
+        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        with:
+          sarif_file: sarif-results-filtered
+          category: "/codeql-critical-security/macos"

@@ -100,9 +100,7 @@ describe("startLazyPluginServiceModule", () => {
       platformSpy.mockRestore();
     }
 
-    expect(importModule).toHaveBeenCalledWith(
-      "file:///C:/Users/alice/plugin%20folder/x%23y.mjs",
-    );
+    expect(importModule).toHaveBeenCalledWith("file:///C:/Users/alice/plugin%20folder/x%23y.mjs");
   });
 
   it("leaves caller-supplied override loaders responsible for their own specifiers", async () => {

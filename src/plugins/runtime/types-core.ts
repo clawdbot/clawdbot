@@ -16,6 +16,51 @@ type RuntimeWriteConfigOptions = {
   unsetPaths?: string[][];
 };
 
+export type DeepReadonly<T> = T extends (...args: never[]) => unknown
+  ? T
+  : T extends readonly (infer U)[]
+    ? ReadonlyArray<DeepReadonly<U>>
+    : T extends object
+      ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
+      : T;
+
+type RuntimeConfigAfterWrite = import("../../config/config.js").ConfigWriteAfterWrite;
+type RuntimeConfigReplaceResult = import("../../config/mutate.js").ConfigReplaceResult;
+type RuntimeConfigMutationBase = import("../../config/mutate.js").ConfigMutationBase;
+type RuntimeConfigMutationContext = {
+  snapshot: import("../../config/types.openclaw.js").ConfigFileSnapshot;
+  previousHash: string | null;
+};
+type RuntimeMutateConfigFileParams<T = void> = {
+  base?: RuntimeConfigMutationBase;
+  baseHash?: string;
+  afterWrite: RuntimeConfigAfterWrite;
+  writeOptions?: RuntimeWriteConfigOptions;
+  mutate: (
+    draft: import("../../config/types.openclaw.js").OpenClawConfig,
+    context: RuntimeConfigMutationContext,
+  ) => Promise<T | void> | T | void;
+};
+type RuntimeReplaceConfigFileParams = {
+  nextConfig: import("../../config/types.openclaw.js").OpenClawConfig;
+  baseHash?: string;
+  afterWrite: RuntimeConfigAfterWrite;
+  writeOptions?: RuntimeWriteConfigOptions;
+};
+export type PluginRuntimeThinkingPolicyRequest = {
+  provider?: string | null;
+  model?: string | null;
+  catalog?: import("../../auto-reply/thinking.js").ThinkingCatalogEntry[];
+};
+export type PluginRuntimeThinkingPolicyLevel = {
+  id: import("../../auto-reply/thinking.js").ThinkLevel;
+  label: string;
+};
+export type PluginRuntimeThinkingPolicy = {
+  levels: PluginRuntimeThinkingPolicyLevel[];
+  defaultLevel?: import("../../auto-reply/thinking.js").ThinkLevel | null;
+};
+
 /** Structured logger surface injected into runtime-backed plugin helpers. */
 export type RuntimeLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
@@ -36,10 +81,38 @@ export type RunHeartbeatOnceOptions = {
 export type PluginRuntimeCore = {
   version: string;
   config: {
+    /** Current process runtime config snapshot. Prefer config passed into the active call path. */
+    current: () => DeepReadonly<import("../../config/types.openclaw.js").OpenClawConfig>;
+    /**
+     * Persist a focused config mutation. Callers must choose the post-write
+     * behavior explicitly so the gateway can hot-reload, restart, or defer.
+     */
+    mutateConfigFile: <T = void>(
+      params: RuntimeMutateConfigFileParams<T>,
+    ) => Promise<RuntimeConfigReplaceResult & { result: T | undefined }>;
+    /**
+     * Persist a full config replacement. Callers must choose the post-write
+     * behavior explicitly so the gateway can hot-reload, restart, or defer.
+     */
+    replaceConfigFile: (
+      params: RuntimeReplaceConfigFileParams,
+    ) => Promise<RuntimeConfigReplaceResult>;
+    /**
+     * @deprecated Use current(), or pass the already loaded config through the
+     * call path. Runtime code must not reload config on demand. Bundled
+     * plugins and repo code are blocked from using this by the
+     * deprecated-internal-config-api architecture guard.
+     */
     loadConfig: () => import("../../config/types.openclaw.js").OpenClawConfig;
+    /**
+     * @deprecated Use mutateConfigFile() or replaceConfigFile() with an
+     * explicit afterWrite intent so restart behavior stays under host control.
+     * Bundled plugins and repo code are blocked from using this by the
+     * deprecated-internal-config-api architecture guard.
+     */
     writeConfigFile: (
       cfg: import("../../config/types.openclaw.js").OpenClawConfig,
-      options?: RuntimeWriteConfigOptions,
+      options?: RuntimeWriteConfigOptions & { afterWrite?: RuntimeConfigAfterWrite },
     ) => Promise<void>;
   };
   agent: {
@@ -56,6 +129,12 @@ export type PluginRuntimeCore = {
       model: string;
       catalog?: import("../../agents/model-catalog.types.js").ModelCatalogEntry[];
     }) => import("../../auto-reply/thinking.js").ThinkLevel;
+    normalizeThinkingLevel: (
+      raw?: string | null,
+    ) => import("../../auto-reply/thinking.js").ThinkLevel | undefined;
+    resolveThinkingPolicy: (
+      params: PluginRuntimeThinkingPolicyRequest,
+    ) => PluginRuntimeThinkingPolicy;
     runEmbeddedAgent: import("../../agents/pi-embedded-runtime.types.js").RunEmbeddedAgentFn;
     runEmbeddedPiAgent: import("../../agents/pi-embedded-runtime.types.js").RunEmbeddedPiAgentFn;
     resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
@@ -152,6 +231,7 @@ export type PluginRuntimeCore = {
   tasks: {
     runs: PluginRuntimeTaskRuns;
     flows: PluginRuntimeTaskFlows;
+    managedFlows: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
     /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
     flow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   };

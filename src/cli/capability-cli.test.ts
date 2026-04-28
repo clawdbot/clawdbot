@@ -34,9 +34,25 @@ const mocks = vi.hoisted(() => ({
   ),
   resolveMemorySearchConfig: vi.fn(() => null),
   loadModelCatalog: vi.fn(async () => []),
-  agentCommand: vi.fn(async () => ({
-    payloads: [{ text: "local reply" }],
-    meta: { agentMeta: { provider: "openai", model: "gpt-5.4" } },
+  prepareSimpleCompletionModelForAgent: vi.fn(async () => ({
+    selection: {
+      provider: "openai",
+      modelId: "gpt-5.4",
+      agentDir: "/tmp/agent",
+    },
+    model: {
+      provider: "openai",
+      id: "gpt-5.4",
+      maxTokens: 128,
+    },
+    auth: {
+      apiKey: "sk-test",
+      source: "env:TEST_API_KEY",
+      mode: "api-key",
+    },
+  })),
+  completeWithPreparedSimpleCompletionModel: vi.fn(async () => ({
+    content: [{ type: "text", text: "local reply" }],
   })),
   callGateway: vi.fn(async ({ method }: { method: string }) => {
     if (method === "tts.status") {
@@ -127,12 +143,8 @@ vi.mock("../runtime.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: mocks.loadConfig as typeof import("../config/config.js").getRuntimeConfig,
   loadConfig: mocks.loadConfig as typeof import("../config/config.js").loadConfig,
-}));
-
-vi.mock("../agents/agent-command.js", () => ({
-  agentCommand:
-    mocks.agentCommand as unknown as typeof import("../agents/agent-command.js").agentCommand,
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -143,6 +155,13 @@ vi.mock("../agents/agent-scope.js", () => ({
 vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog:
     mocks.loadModelCatalog as typeof import("../agents/model-catalog.js").loadModelCatalog,
+}));
+
+vi.mock("../agents/simple-completion-runtime.js", () => ({
+  prepareSimpleCompletionModelForAgent:
+    mocks.prepareSimpleCompletionModelForAgent as unknown as typeof import("../agents/simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+  completeWithPreparedSimpleCompletionModel:
+    mocks.completeWithPreparedSimpleCompletionModel as unknown as typeof import("../agents/simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
 }));
 
 vi.mock("../agents/auth-profiles.js", () => ({
@@ -290,7 +309,8 @@ describe("capability cli", () => {
         return store;
       });
     mocks.resolveMemorySearchConfig.mockReset().mockReturnValue(null);
-    mocks.agentCommand.mockClear();
+    mocks.prepareSimpleCompletionModelForAgent.mockClear();
+    mocks.completeWithPreparedSimpleCompletionModel.mockClear();
     mocks.callGateway.mockClear().mockImplementation((async ({ method }: { method: string }) => {
       if (method === "tts.status") {
         return { enabled: true, provider: "openai" };
@@ -361,7 +381,8 @@ describe("capability cli", () => {
       argv: ["capability", "model", "run", "--prompt", "hello", "--json"],
     });
 
-    expect(mocks.agentCommand).toHaveBeenCalledTimes(1);
+    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledTimes(1);
+    expect(mocks.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledTimes(1);
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -371,22 +392,70 @@ describe("capability cli", () => {
     );
   });
 
-  it("runs local model probes without chat-agent prompt policy or tools", async () => {
+  it("runs local model probes through the lean completion path", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
       argv: ["capability", "model", "run", "--prompt", "hello", "--json"],
     });
 
-    expect(mocks.agentCommand).toHaveBeenCalledWith(
+    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
       expect.objectContaining({
-        cleanupBundleMcpOnRunEnd: true,
-        modelRun: true,
-        promptMode: "none",
+        agentId: "main",
+        allowMissingApiKeyModes: ["aws-sdk"],
+        skipPiDiscovery: true,
       }),
-      expect.anything(),
-      expect.anything(),
+    );
+    expect(mocks.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: {
+          messages: [
+            expect.objectContaining({
+              role: "user",
+              content: "hello",
+            }),
+          ],
+        },
+      }),
     );
   });
+
+  it("fails local model probes when the provider returns no text output", async () => {
+    mocks.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
+      content: [],
+    } as never);
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "model", "run", "--prompt", "hello", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining('No text output returned for provider "openai" model "gpt-5.4"'),
+    );
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+  });
+
+  it.each(["", "   ", "\n\t"])(
+    "rejects empty model run prompts before local dispatch (%j)",
+    async (prompt) => {
+      await expect(
+        runRegisteredCli({
+          register: registerCapabilityCli as (program: Command) => void,
+          argv: ["capability", "model", "run", "--prompt", prompt, "--json"],
+        }),
+      ).rejects.toThrow("exit 1");
+
+      expect(mocks.runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("--prompt cannot be empty or whitespace-only."),
+      );
+      expect(mocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+      expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    },
+  );
 
   it("runs gateway model probes without chat-agent prompt policy or tools", async () => {
     await runRegisteredCli({
@@ -404,6 +473,21 @@ describe("capability cli", () => {
         }),
       }),
     );
+  });
+
+  it("rejects empty model run prompts before gateway dispatch", async () => {
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "model", "run", "--prompt", " ", "--gateway", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("--prompt cannot be empty or whitespace-only."),
+    );
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
   it("defaults tts status to gateway transport", async () => {

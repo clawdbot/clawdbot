@@ -40,6 +40,14 @@ const COMMON_AUTH_ERROR_PATTERNS = [
   /\bfailed to (?:extract|parse|validate|decode)\b.*\btoken\b/,
 ] as const satisfies readonly ErrorPattern[];
 
+const CJK_AUTH_ERROR_PATTERNS = [
+  "无权访问",
+  "认证失败",
+  "鉴权失败",
+  "密钥无效",
+  "apikey 无效",
+] as const satisfies readonly ErrorPattern[];
+
 const ZAI_BILLING_CODE_1311_RE = /"code"\s*:\s*1311\b/;
 const ZAI_AUTH_CODE_1113_RE = /"code"\s*:\s*1113\b/;
 const STATUS_INTERNAL_SERVER_ERROR_RE = /\bstatus:\s*internal server error\b/i;
@@ -69,6 +77,14 @@ const ERROR_PATTERNS = {
     /\btpm\b/i,
     "tokens per minute",
     "tokens per day",
+    // Chinese provider rate-limit messages
+    "请求过于频繁",
+    "调用频率",
+    "频率限制",
+    "配额不足",
+    "配额已用尽",
+    "额度不足",
+    "额度已用尽",
   ],
   overloaded: [
     /overloaded_error|"type"\s*:\s*"overloaded_error"/i,
@@ -79,6 +95,9 @@ const ERROR_PATTERNS = {
     // provider-overload (#32828).
     /service[_ ]unavailable.*(?:overload|capacity|high[_ ]demand)|(?:overload|capacity|high[_ ]demand).*service[_ ]unavailable/i,
     "high demand",
+    // Chinese provider overloaded messages
+    "服务过载",
+    "当前负载过高",
   ],
   serverError: [
     "an error occurred while processing",
@@ -92,6 +111,13 @@ const ERROR_PATTERNS = {
     "upstream error",
     "upstream connect error",
     "connection reset",
+    // Chinese provider server error messages
+    "内部错误",
+    "服务器错误",
+    "服务器内部错误",
+    "系统错误",
+    "系统繁忙",
+    "系统异常",
   ],
   timeout: [
     "timeout",
@@ -106,6 +132,14 @@ const ERROR_PATTERNS = {
     "network request failed",
     "fetch failed",
     "socket hang up",
+    // Chinese provider error messages (ZhipuAI/GLM, Bailian, Kimi/Moonshot, DeepSeek, etc.)
+    "网络错误",
+    "网络异常",
+    "服务暂时不可用",
+    "服务繁忙",
+    "请求超时",
+    "连接超时",
+    "连接错误",
     /\beconn(?:refused|reset|aborted)\b/i,
     /\benetunreach\b/i,
     /\behostunreach\b/i,
@@ -153,6 +187,11 @@ const ERROR_PATTERNS = {
     /out of extra usage/i,
     /draw from your extra usage/i,
     /extra usage is required(?: for long context requests)?/i,
+    // Chinese provider billing messages
+    "余额不足",
+    "账户余额不足",
+    "欠费",
+    "账户已欠费",
     // Z.ai: error 1311 = model not included in current subscription plan (#48988)
     ZAI_BILLING_CODE_1311_RE,
   ],
@@ -161,6 +200,7 @@ const ERROR_PATTERNS = {
     ...AMBIGUOUS_AUTH_ERROR_PATTERNS,
     ...COMMON_AUTH_ERROR_PATTERNS,
     ...ZAI_AUTH_ERROR_PATTERNS,
+    ...CJK_AUTH_ERROR_PATTERNS,
   ],
   format: [
     "string should match pattern",
@@ -245,6 +285,7 @@ export function isAuthErrorMessage(raw: string): boolean {
     AMBIGUOUS_AUTH_ERROR_PATTERNS,
     COMMON_AUTH_ERROR_PATTERNS,
     ZAI_AUTH_ERROR_PATTERNS,
+    CJK_AUTH_ERROR_PATTERNS,
   ]);
 }
 

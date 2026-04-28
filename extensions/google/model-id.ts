@@ -7,6 +7,8 @@ export function normalizeGoogleModelId(id: string): string {
   if (id === "gemini-3-flash") {
     return "gemini-3-flash-preview";
   }
+  // Google exposes Gemini 3.1 Pro in the Gemini API as the preview-suffixed id.
+  // Keep the bare form as a user convenience alias, not as a canonical API id.
   if (id === "gemini-3.1-pro") {
     return "gemini-3.1-pro-preview";
   }

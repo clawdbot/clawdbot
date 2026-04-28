@@ -57,6 +57,7 @@ describe("createGatewayRequestContext", () => {
       findRunningWizard: vi.fn(() => null),
       purgeWizardSession: vi.fn(),
       getRuntimeSnapshot: vi.fn(() => ({}) as never),
+      getRuntimeConfig: vi.fn(() => ({}) as never),
       startChannel: vi.fn(async () => undefined),
       stopChannel: vi.fn(async () => undefined),
       markChannelLoggedOut: vi.fn(),

@@ -2,8 +2,7 @@ import { resolveAccountEntry } from "openclaw/plugin-sdk/account-core";
 import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
-import { drainPendingDeliveries } from "openclaw/plugin-sdk/infra-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -14,6 +13,7 @@ import {
   formatDurationPrecise,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "../accounts.js";
 import { WHATSAPP_AUTH_UNSTABLE_CODE, WhatsAppAuthUnstableError } from "../auth-store.js";
 import {
@@ -28,7 +28,7 @@ import {
   sleepWithAbort,
 } from "../reconnect.js";
 import { formatError, getWebAuthAgeMs, readWebSelfId } from "../session.js";
-import { getRuntimeConfigSourceSnapshot, loadConfig } from "./config.runtime.js";
+import { getRuntimeConfig, getRuntimeConfigSourceSnapshot } from "./config.runtime.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
 import { createWebChannelStatusController } from "./monitor-state.js";
@@ -62,8 +62,8 @@ function isNoListenerReconnectError(lastError?: string): boolean {
 }
 
 function resolveExplicitWhatsAppDebounceOverride(params: {
-  cfg: ReturnType<typeof loadConfig>;
-  sourceCfg?: ReturnType<typeof loadConfig> | null;
+  cfg: ReturnType<typeof getRuntimeConfig>;
+  sourceCfg?: ReturnType<typeof getRuntimeConfig> | null;
   accountId: string;
 }): number | undefined {
   const channel = params.sourceCfg?.channels?.whatsapp;
@@ -114,7 +114,7 @@ export async function monitorWebChannel(
   const statusController = createWebChannelStatusController(tuning.statusSink);
   statusController.emit();
 
-  const baseCfg = loadConfig();
+  const baseCfg = getRuntimeConfig();
   const sourceCfg = getRuntimeConfigSourceSnapshot();
   const account = resolveWhatsAppAccount({
     cfg: baseCfg,
@@ -138,7 +138,7 @@ export async function monitorWebChannel(
         groups: account.groups,
       },
     },
-  } satisfies ReturnType<typeof loadConfig>;
+  } satisfies ReturnType<typeof getRuntimeConfig>;
 
   const maxMediaBytes = resolveWhatsAppMediaMaxBytes(account);
   const heartbeatSeconds = resolveHeartbeatSeconds(cfg, tuning.heartbeatSeconds);

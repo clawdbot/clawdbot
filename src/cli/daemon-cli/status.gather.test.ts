@@ -98,6 +98,7 @@ vi.mock("../../config/config.js", () => ({
       },
     };
   },
+  getRuntimeConfig: () => cliLoadedConfig,
   loadConfig: () => cliLoadedConfig,
   resolveConfigPath: (env: NodeJS.ProcessEnv, stateDir: string) => resolveConfigPath(env, stateDir),
   resolveGatewayPort: (cfg?: unknown, env?: unknown) => resolveGatewayPort(cfg, env),

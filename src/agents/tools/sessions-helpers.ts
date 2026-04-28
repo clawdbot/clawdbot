@@ -20,6 +20,7 @@ export {
   listSpawnedSessionKeys,
   looksLikeSessionId,
   looksLikeSessionKey,
+  resolveCurrentSessionClientAlias,
   resolveDisplaySessionKey,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -33,7 +34,7 @@ export {
   sanitizeTextContent,
   stripToolMessages,
 } from "./chat-history-text.js";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
@@ -97,7 +98,7 @@ export function resolveSessionToolContext(opts?: {
   sandboxed?: boolean;
   config?: OpenClawConfig;
 }) {
-  const cfg = opts?.config ?? loadConfig();
+  const cfg = opts?.config ?? getRuntimeConfig();
   return {
     cfg,
     ...resolveSandboxedSessionToolContext({

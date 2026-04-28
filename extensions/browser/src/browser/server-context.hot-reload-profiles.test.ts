@@ -46,15 +46,9 @@ vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    createConfigIO: () => ({
-      loadConfig: () => {
-        // Always return fresh config for createConfigIO to simulate fresh disk read
-        return buildConfig();
-      },
-    }),
     getRuntimeConfigSnapshot: () => null,
-    loadConfig: () => {
-      // simulate stale loadConfig that doesn't see updates unless cache cleared
+    getRuntimeConfig: () => {
+      // simulate stale getRuntimeConfig that doesn't see updates unless cache cleared
       if (!mockState.cachedConfig) {
         mockState.cachedConfig = buildConfig();
       }
@@ -68,7 +62,7 @@ vi.mock("./config-refresh-source.js", () => ({
   loadBrowserConfigForRuntimeRefresh: () => buildConfig(),
 }));
 
-const { loadConfig } = await import("../config/config.js");
+const { getRuntimeConfig } = await import("../config/config.js");
 const { resolveBrowserConfig, resolveProfile } = await import("./config.js");
 const { refreshResolvedBrowserConfigFromDisk, resolveBrowserProfileWithHotReload } =
   await import("./resolved-config-refresh.js");
@@ -84,8 +78,8 @@ describe("server-context hot-reload profiles", () => {
 
   it("forProfile hot-reloads newly added profiles from config", async () => {
     // Start with only openclaw profile
-    // 1. Prime the cache by calling loadConfig() first
-    const cfg = loadConfig();
+    // 1. Prime the cache by calling getRuntimeConfig() first
+    const cfg = getRuntimeConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
 
     // Verify cache is primed (without desktop)
@@ -109,12 +103,11 @@ describe("server-context hot-reload profiles", () => {
     // 2. Simulate adding a new profile to config (like user editing openclaw.json)
     mockState.cfgProfiles.desktop = { cdpUrl: "http://127.0.0.1:9222", color: "#0066CC" };
 
-    // 3. Verify without clearConfigCache, loadConfig() still returns stale cached value
-    const staleCfg = loadConfig();
+    // 3. Verify without clearConfigCache, getRuntimeConfig() still returns stale cached value
+    const staleCfg = getRuntimeConfig();
     expect(staleCfg.browser?.profiles?.desktop).toBeUndefined(); // Cache is stale!
 
-    // 4. Hot-reload should read fresh config for the lookup (createConfigIO().loadConfig()),
-    // without flushing the global loadConfig cache.
+    // 4. Hot-reload uses the refresh source without flushing the global getRuntimeConfig cache.
     const profile = resolveBrowserProfileWithHotReload({
       current: state,
       refreshConfigFromDisk: true,
@@ -126,14 +119,14 @@ describe("server-context hot-reload profiles", () => {
     // 5. Verify the new profile was merged into the cached state
     expect(state.resolved.profiles.desktop).toBeDefined();
 
-    // 6. Verify GLOBAL cache was NOT cleared - subsequent simple loadConfig() still sees STALE value
+    // 6. Verify GLOBAL cache was NOT cleared - subsequent simple getRuntimeConfig() still sees STALE value
     // This confirms the fix: we read fresh config for the specific profile lookup without flushing the global cache
-    const stillStaleCfg = loadConfig();
+    const stillStaleCfg = getRuntimeConfig();
     expect(stillStaleCfg.browser?.profiles?.desktop).toBeUndefined();
   });
 
   it("forProfile still throws for profiles that don't exist in fresh config", async () => {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const state = {
       server: null,
@@ -152,8 +145,8 @@ describe("server-context hot-reload profiles", () => {
     ).toBeNull();
   });
 
-  it("forProfile refreshes existing profile config after loadConfig cache updates", async () => {
-    const cfg = loadConfig();
+  it("forProfile refreshes existing profile config after getRuntimeConfig cache updates", async () => {
+    const cfg = getRuntimeConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const state = {
       server: null,
@@ -175,7 +168,7 @@ describe("server-context hot-reload profiles", () => {
   });
 
   it("listProfiles refreshes config before enumerating profiles", async () => {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const state = {
       server: null,
@@ -196,7 +189,7 @@ describe("server-context hot-reload profiles", () => {
   });
 
   it("marks existing runtime state for reconcile when profile invariants change", async () => {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const openclawProfile = resolveProfile(resolved, "openclaw");
     expect(openclawProfile).toBeTruthy();
@@ -234,7 +227,7 @@ describe("server-context hot-reload profiles", () => {
   });
 
   it("marks local managed runtime state for reconcile when profile headless changes", async () => {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const openclawProfile = resolveProfile(resolved, "openclaw");
     expect(openclawProfile).toBeTruthy();
@@ -283,7 +276,7 @@ describe("server-context hot-reload profiles", () => {
       executablePath: "/usr/bin/chrome-old",
     };
     mockState.cachedConfig = null;
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const openclawProfile = resolveProfile(resolved, "openclaw");
     expect(openclawProfile).toBeTruthy();
@@ -333,7 +326,7 @@ describe("server-context hot-reload profiles", () => {
       driver: "existing-session",
     };
 
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const remoteProfile = resolveProfile(resolved, "remote");
     expect(remoteProfile).toBeTruthy();
@@ -387,7 +380,7 @@ describe("server-context hot-reload profiles", () => {
       headless: true,
     };
 
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const remoteProfile = resolveProfile(resolved, "remote");
     expect(remoteProfile).toBeTruthy();

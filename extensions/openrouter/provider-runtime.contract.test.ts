@@ -1,3 +1,3 @@
-import { describeOpenRouterProviderRuntimeContract } from "../../test/helpers/plugins/provider-runtime-contract.js";
+import { describeOpenRouterProviderRuntimeContract } from "openclaw/plugin-sdk/provider-test-contracts";
 
 describeOpenRouterProviderRuntimeContract(() => import("./index.js"));

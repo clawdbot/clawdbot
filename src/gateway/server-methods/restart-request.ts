@@ -1,3 +1,4 @@
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 type RestartDeliveryContext = {
@@ -29,10 +30,7 @@ function parseRestartDeliveryContext(params: unknown): {
     deliveryContext.channel || deliveryContext.to || deliveryContext.accountId
       ? deliveryContext
       : undefined;
-  const threadId =
-    typeof context.threadId === "number" && Number.isFinite(context.threadId)
-      ? String(Math.trunc(context.threadId))
-      : normalizeOptionalString(context.threadId);
+  const threadId = stringifyRouteThreadId(context.threadId);
   return { deliveryContext: normalizedContext, threadId };
 }
 

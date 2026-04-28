@@ -39,14 +39,64 @@ struct ModelCatalogLoaderTests {
     }
 
     @Test
-    func `load with no export returns empty choices`() async throws {
+    func `load with no export rejects catalog`() async throws {
         let src = "const NOPE = 1;"
         let tmp = FileManager().temporaryDirectory
             .appendingPathComponent("models-\(UUID().uuidString).ts")
         defer { try? FileManager().removeItem(at: tmp) }
         try src.write(to: tmp, atomically: true, encoding: .utf8)
 
+        do {
+            _ = try await ModelCatalogLoader.load(from: tmp.path)
+            Issue.record("expected missing MODELS export rejection")
+        } catch {
+            #expect(String(describing: error).isEmpty == false)
+        }
+    }
+
+    @Test
+    func `load ignores fake exports in comments and strings`() async throws {
+        let src = #"""
+        // export const MODELS = { bad: { "bad": { name: "Bad", contextWindow: 1 } } };
+        const text = "export const MODELS = { alsoBad: {} }";
+        export const MODELS = {
+          openai: {
+            "gpt-4o": { name: "GPT-4o", contextWindow: 128000 } satisfies ModelConfig<string, number>,
+          },
+        };
+        """#
+
+        let tmp = FileManager().temporaryDirectory
+            .appendingPathComponent("models-\(UUID().uuidString).ts")
+        defer { try? FileManager().removeItem(at: tmp) }
+        try src.write(to: tmp, atomically: true, encoding: .utf8)
+
         let choices = try await ModelCatalogLoader.load(from: tmp.path)
-        #expect(choices.isEmpty)
+        #expect(choices.count == 1)
+        #expect(choices.first?.id == "gpt-4o")
+        #expect(choices.first?.provider == "openai")
+    }
+
+    @Test
+    func `load rejects executable catalog expressions`() async throws {
+        let src = """
+        export const MODELS = {
+          openai: {
+            "gpt-4o": { name: (() => { throw new Error("nope") })(), contextWindow: 128000 },
+          },
+        };
+        """
+
+        let tmp = FileManager().temporaryDirectory
+            .appendingPathComponent("models-\(UUID().uuidString).ts")
+        defer { try? FileManager().removeItem(at: tmp) }
+        try src.write(to: tmp, atomically: true, encoding: .utf8)
+
+        do {
+            _ = try await ModelCatalogLoader.load(from: tmp.path)
+            Issue.record("expected executable catalog expression rejection")
+        } catch {
+            #expect(String(describing: error).isEmpty == false)
+        }
     }
 }

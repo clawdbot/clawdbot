@@ -102,6 +102,8 @@ USER.md
 .agents/skills/*
 !.agents/skills/blacksmith-testbox/
 !.agents/skills/blacksmith-testbox/**
+!.agents/skills/gitcrawl/
+!.agents/skills/gitcrawl/**
 !.agents/skills/openclaw-ghsa-maintainer/
 !.agents/skills/openclaw-ghsa-maintainer/**
 !.agents/skills/openclaw-parallels-smoke/

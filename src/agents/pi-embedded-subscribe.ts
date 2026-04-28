@@ -9,6 +9,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
 import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-spans.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { hasOrphanReasoningCloseBoundary } from "../shared/text/reasoning-tags.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import {
   isMessagingToolDuplicateNormalized,
@@ -118,6 +119,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingAssistantUsage: undefined,
     assistantUsageCommitted: false,
     compactionInFlight: false,
+    lastCompactionTokensAfter: undefined,
     pendingCompactionRetry: 0,
     compactionRetryResolve: undefined,
     compactionRetryReject: undefined,
@@ -443,6 +445,12 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const incrementCompactionCount = () => {
     compactionCount += 1;
   };
+  const noteCompactionTokensAfter = (value: unknown) => {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+      return;
+    }
+    state.lastCompactionTokensAfter = Math.floor(value);
+  };
 
   const blockChunking = params.blockReplyChunking;
   const blockChunker = blockChunking ? new EmbeddedBlockChunker(blockChunking) : null;
@@ -531,10 +539,22 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       if (codeSpans.isInside(idx)) {
         continue;
       }
+      const isClose = match[1] === "/";
       if (!inThinking) {
+        if (isClose) {
+          const afterIndex = idx + match[0].length;
+          const before = text.slice(lastIndex, idx);
+          const after = text.slice(afterIndex);
+          if (hasOrphanReasoningCloseBoundary({ before, after })) {
+            processed = "";
+          } else {
+            processed += before;
+          }
+          lastIndex = afterIndex;
+          continue;
+        }
         processed += text.slice(lastIndex, idx);
       }
-      const isClose = match[1] === "/";
       inThinking = !isClose;
       lastIndex = idx + match[0].length;
     }
@@ -813,8 +833,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     recordAssistantUsage,
     commitAssistantUsage,
     incrementCompactionCount,
+    noteCompactionTokensAfter,
     getUsageTotals,
     getCompactionCount: () => compactionCount,
+    getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
   };
 
   const sessionUnsubscribe = params.session.subscribe(createEmbeddedPiSessionEventHandler(ctx));
@@ -859,12 +881,20 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     setTerminalLifecycleMeta: (meta: {
       replayInvalid?: boolean;
       livenessState?: EmbeddedRunLivenessState;
+      stopReason?: string;
+      yielded?: boolean;
     }) => {
       if (typeof meta.replayInvalid === "boolean") {
         state.replayState = { ...state.replayState, replayInvalid: meta.replayInvalid };
       }
       if (meta.livenessState) {
         state.livenessState = meta.livenessState;
+      }
+      if (typeof meta.stopReason === "string") {
+        state.terminalStopReason = meta.stopReason;
+      }
+      if (typeof meta.yielded === "boolean") {
+        state.yielded = meta.yielded;
       }
     },
     isCompacting: () => state.compactionInFlight || state.pendingCompactionRetry > 0,
@@ -883,6 +913,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),
     getUsageTotals,
     getCompactionCount: () => compactionCount,
+    getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
     getItemLifecycle: () => ({
       startedCount: state.itemStartedCount,
       completedCount: state.itemCompletedCount,

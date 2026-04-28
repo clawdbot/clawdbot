@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTempHome } from "../../../test/helpers/temp-home.js";
 
 const legacyCryptoInspectorAvailability = vi.hoisted(() => ({
   available: true,

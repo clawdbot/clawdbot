@@ -210,6 +210,14 @@ describe("createBackspaceDeduper", () => {
     expect(dedupe("\x7f")).toBe("\x7f");
   });
 
+  it("treats ASCII BS as backspace when it is the first event", () => {
+    const { dedupe, advance } = createTimedDedupe();
+
+    expect(dedupe("\x08")).toBe("\x08");
+    advance(1);
+    expect(dedupe("\x7f")).toBe("");
+  });
+
   it("never suppresses non-backspace keys", () => {
     const dedupe = createBackspaceDeduper();
     expect(dedupe("a")).toBe("a");

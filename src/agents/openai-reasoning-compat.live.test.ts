@@ -3,7 +3,7 @@ import { completeSimple, type Api, type Model } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
@@ -124,7 +124,7 @@ describeLive("openai reasoning compat live", () => {
     "remaps low reasoning for the configured OpenAI mini target",
     async () => {
       const { provider, modelId } = resolveTargetModelRef();
-      const cfg = loadConfig();
+      const cfg = getRuntimeConfig();
       await ensureOpenClawModelsJson(cfg);
 
       const agentDir = resolveOpenClawAgentDir();
@@ -178,7 +178,7 @@ describeLive("openai reasoning compat live", () => {
     "accepts repaired OpenAI Codex parallel tool replay with aborted missing results",
     async () => {
       const { provider, modelId } = resolveTargetModelRef();
-      const cfg = loadConfig();
+      const cfg = getRuntimeConfig();
       await ensureOpenClawModelsJson(cfg);
 
       const agentDir = resolveOpenClawAgentDir();

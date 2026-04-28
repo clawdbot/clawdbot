@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { expect, vi, type Mock } from "vitest";
-import { createPluginRuntimeMock } from "../../../../test/helpers/plugins/plugin-runtime-mock.js";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
 import { createFeishuMessageReceiveHandler } from "../monitor.message-handler.js";
 import { setFeishuRuntime } from "../runtime.js";

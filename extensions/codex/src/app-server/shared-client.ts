@@ -59,6 +59,7 @@ export async function getSharedCodexAppServerClient(options?: {
           client,
           agentDir,
           authProfileId: options?.authProfileId,
+          startOptions,
         });
         return client;
       } catch (error) {
@@ -104,6 +105,7 @@ export async function createIsolatedCodexAppServerClient(options?: {
       client,
       agentDir,
       authProfileId: options?.authProfileId,
+      startOptions,
     });
     return client;
   } catch (error) {

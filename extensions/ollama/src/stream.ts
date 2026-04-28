@@ -314,9 +314,16 @@ export function createConfiguredOllamaCompatStreamWrapper(
     streamFn = wrapOllamaCompatNumCtx(streamFn, resolveOllamaNumCtx(model));
   }
 
-  const ollamaThinkValue = isNativeOllamaTransport
+  const configuredThinkValue = model ? resolveOllamaThinkParamValue(model.params) : undefined;
+  const runtimeThinkValue = isNativeOllamaTransport
     ? resolveOllamaThinkValue(ctx.thinkingLevel)
     : undefined;
+  // "off" is also the implicit agent default. Preserve explicit native Ollama
+  // model config unless the active run requests a non-off thinking level.
+  const ollamaThinkValue =
+    runtimeThinkValue === false && configuredThinkValue !== undefined
+      ? undefined
+      : runtimeThinkValue;
   if (ollamaThinkValue !== undefined) {
     streamFn = createOllamaThinkingWrapper(streamFn, ollamaThinkValue);
   }

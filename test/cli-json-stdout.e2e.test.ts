@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { withTempHome } from "./helpers/temp-home.ts";
 
 describe("cli json stdout contract", () => {
   it("keeps `update status --json` stdout parseable even with legacy doctor preflight inputs", async () => {

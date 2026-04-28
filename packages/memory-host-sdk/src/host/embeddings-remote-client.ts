@@ -1,8 +1,9 @@
-import { requireApiKey, resolveApiKeyForProvider } from "../../../../src/agents/model-auth.js";
-import type { SsrFPolicy } from "../../../../src/infra/net/ssrf.js";
-import type { EmbeddingProviderOptions } from "./embeddings.js";
+import type { EmbeddingProviderOptions } from "./embeddings.types.js";
+import { requireApiKey, resolveApiKeyForProvider } from "./openclaw-runtime-auth.js";
 import { buildRemoteBaseUrlPolicy } from "./remote-http.js";
 import { resolveMemorySecretInputString } from "./secret-input.js";
+import type { SsrFPolicy } from "./ssrf-policy.js";
+import { normalizeOptionalString } from "./string-utils.js";
 
 export type RemoteEmbeddingProviderId = string;
 
@@ -16,7 +17,7 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
     value: remote?.apiKey,
     path: "agents.*.memorySearch.remote.apiKey",
   });
-  const remoteBaseUrl = remote?.baseUrl?.trim();
+  const remoteBaseUrl = normalizeOptionalString(remote?.baseUrl);
   const providerConfig = params.options.config.models?.providers?.[params.provider];
   const apiKey = remoteApiKey
     ? remoteApiKey
@@ -28,7 +29,8 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
         }),
         params.provider,
       );
-  const baseUrl = remoteBaseUrl || providerConfig?.baseUrl?.trim() || params.defaultBaseUrl;
+  const baseUrl =
+    remoteBaseUrl || normalizeOptionalString(providerConfig?.baseUrl) || params.defaultBaseUrl;
   const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",

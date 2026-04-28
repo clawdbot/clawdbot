@@ -506,6 +506,7 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
 export function resolveReasoningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
+  modelApi?: string;
   executionContract?: string;
   aborted: boolean;
   timedOut: boolean;
@@ -519,6 +520,7 @@ export function resolveReasoningOnlyRetryInstruction(params: {
     !shouldApplyNonVisibleTurnRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
+      modelApi: params.modelApi,
       executionContract: params.executionContract,
     })
   ) {
@@ -542,6 +544,7 @@ export function resolveReasoningOnlyRetryInstruction(params: {
 export function resolveEmptyResponseRetryInstruction(params: {
   provider?: string;
   modelId?: string;
+  modelApi?: string;
   executionContract?: string;
   payloadCount: number;
   aborted: boolean;
@@ -575,6 +578,7 @@ export function resolveEmptyResponseRetryInstruction(params: {
     shouldApplyNonVisibleTurnRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
+      modelApi: params.modelApi,
       executionContract: params.executionContract,
     }) ||
     // Keep the generic zero-usage stop retry for providers that expose a
@@ -605,9 +609,13 @@ function shouldApplyPlanningOnlyRetryGuard(params: {
 function shouldApplyNonVisibleTurnRetryGuard(params: {
   provider?: string;
   modelId?: string;
+  modelApi?: string;
   executionContract?: string;
 }): boolean {
   if (shouldApplyPlanningOnlyRetryGuard(params)) {
+    return true;
+  }
+  if (normalizeLowercaseStringOrEmpty(params.modelApi ?? "") === "openai-completions") {
     return true;
   }
   // Non-visible final turns are narrower than planning-only turns: there is no

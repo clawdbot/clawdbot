@@ -65,6 +65,57 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.summary).toBe("Write completed successfully.");
   });
 
+  it("treats trailing message delivery warnings as non-fatal when final assistant text exists", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "Draft output" }, { text: "⚠️ ✉️ Message failed", isError: true }],
+      finalAssistantVisibleText: "Final cron report",
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.embeddedRunError).toBeUndefined();
+    expect(result.pendingPresentationWarningError).toBe("⚠️ ✉️ Message failed");
+    expect(result.summary).toBe("Final cron report");
+    expect(result.outputText).toBe("Final cron report");
+    expect(result.deliveryPayloads).toEqual([{ text: "Final cron report" }]);
+  });
+
+  it("keeps trailing canvas warnings fatal even when earlier assistant output exists", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "Saved report to disk." }, { text: "⚠️ 🖼️ Canvas failed", isError: true }],
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.pendingPresentationWarningError).toBeUndefined();
+    expect(result.embeddedRunError).toBe("⚠️ 🖼️ Canvas failed");
+    expect(result.deliveryPayloads).toEqual([{ text: "⚠️ 🖼️ Canvas failed", isError: true }]);
+  });
+
+  it("keeps standalone presentation warnings fatal when there is no cron output", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "⚠️ ✉️ Message failed", isError: true }],
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toBe("⚠️ ✉️ Message failed");
+    expect(result.deliveryPayloads).toEqual([{ text: "⚠️ ✉️ Message failed", isError: true }]);
+  });
+
+  it("keeps real trailing errors fatal even when earlier assistant output exists", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "Partial result" }, { text: "model provider unreachable", isError: true }],
+      finalAssistantVisibleText: "Partial result",
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toBe("model provider unreachable");
+    expect(result.outputText).toBe("model provider unreachable");
+    expect(result.deliveryPayloads).toEqual([
+      { text: "model provider unreachable", isError: true },
+    ]);
+  });
+
   it("keeps error payloads fatal when the run also reported a run-level error", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [

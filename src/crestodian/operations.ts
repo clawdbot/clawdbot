@@ -10,6 +10,8 @@ import type { CrestodianOverview } from "./overview.js";
 
 type ConfigModule = typeof import("../config/config.js");
 type ConfigFileSnapshot = Awaited<ReturnType<ConfigModule["readConfigFileSnapshot"]>>;
+type CrestodianOverviewLoader = () => Promise<CrestodianOverview>;
+type CrestodianOverviewFormatter = (overview: CrestodianOverview) => string;
 
 export type CrestodianOperation =
   | { kind: "none"; message: string }
@@ -47,6 +49,8 @@ export type CrestodianOperationResult = {
 };
 
 export type CrestodianCommandDeps = {
+  formatOverview?: CrestodianOverviewFormatter;
+  loadOverview?: CrestodianOverviewLoader;
   runAgentsAdd?: (
     opts: {
       name?: string;
@@ -352,6 +356,27 @@ async function readConfigFileSnapshotLazy(): Promise<ConfigFileSnapshot> {
   return await readConfigFileSnapshot();
 }
 
+async function loadOverviewForOperation(
+  deps: CrestodianCommandDeps | undefined,
+): Promise<CrestodianOverview> {
+  if (deps?.loadOverview) {
+    return await deps.loadOverview();
+  }
+  const { loadCrestodianOverview } = await import("./overview.js");
+  return await loadCrestodianOverview();
+}
+
+async function formatOverviewForOperation(
+  overview: CrestodianOverview,
+  deps: CrestodianCommandDeps | undefined,
+): Promise<string> {
+  if (deps?.formatOverview) {
+    return deps.formatOverview(overview);
+  }
+  const { formatCrestodianOverview } = await import("./overview.js");
+  return formatCrestodianOverview(overview);
+}
+
 async function loadConfigFileMutationHelpers(): Promise<{
   mutateConfigFile: ConfigModule["mutateConfigFile"];
   readConfigFileSnapshot: ConfigModule["readConfigFileSnapshot"];
@@ -388,9 +413,9 @@ function createNoExitRuntime(runtime: RuntimeEnv): RuntimeEnv {
 async function resolveTuiAgentId(params: {
   requestedAgentId: string | undefined;
   requestedWorkspace?: string;
+  deps?: CrestodianCommandDeps;
 }): Promise<string | undefined> {
-  const { loadCrestodianOverview } = await import("./overview.js");
-  const overview = await loadCrestodianOverview();
+  const overview = await loadOverviewForOperation(params.deps);
   const workspace = params.requestedWorkspace
     ? resolveUserPath(params.requestedWorkspace)
     : undefined;
@@ -429,14 +454,12 @@ export async function executeCrestodianOperation(
     return { applied: false, exitsInteractive: operation.message.includes("Bye.") };
   }
   if (operation.kind === "overview") {
-    const { formatCrestodianOverview, loadCrestodianOverview } = await import("./overview.js");
-    const overview = await loadCrestodianOverview();
-    runtime.log(formatCrestodianOverview(overview));
+    const overview = await loadOverviewForOperation(opts.deps);
+    runtime.log(await formatOverviewForOperation(overview, opts.deps));
     return { applied: false };
   }
   if (operation.kind === "agents") {
-    const { loadCrestodianOverview } = await import("./overview.js");
-    const overview = await loadCrestodianOverview();
+    const overview = await loadOverviewForOperation(opts.deps);
     runtime.log(
       [
         "Agents:",
@@ -456,8 +479,7 @@ export async function executeCrestodianOperation(
     return { applied: false };
   }
   if (operation.kind === "models") {
-    const { loadCrestodianOverview } = await import("./overview.js");
-    const overview = await loadCrestodianOverview();
+    const overview = await loadOverviewForOperation(opts.deps);
     runtime.log(
       [
         `Default model: ${overview.defaultModel ?? "not configured"}`,
@@ -480,8 +502,7 @@ export async function executeCrestodianOperation(
     return { applied: false };
   }
   if (operation.kind === "setup") {
-    const { loadCrestodianOverview } = await import("./overview.js");
-    const overview = await loadCrestodianOverview();
+    const overview = await loadOverviewForOperation(opts.deps);
     const setupModel = chooseSetupModel(overview, operation.model);
     if (!opts.approved) {
       const message = [
@@ -720,8 +741,7 @@ export async function executeCrestodianOperation(
     return { applied: false };
   }
   if (operation.kind === "gateway-status") {
-    const { loadCrestodianOverview } = await import("./overview.js");
-    const overview = await loadCrestodianOverview();
+    const overview = await loadOverviewForOperation(opts.deps);
     runtime.log(formatGatewayStatusLine(overview));
     return { applied: false };
   }
@@ -782,6 +802,7 @@ export async function executeCrestodianOperation(
     const agentId = await resolveTuiAgentId({
       requestedAgentId: operation.agentId,
       requestedWorkspace: operation.workspace,
+      deps: opts.deps,
     });
     const session = agentId ? buildAgentMainSessionKey({ agentId }) : undefined;
     const runTui = opts.deps?.runTui ?? (await import("../tui/tui.js")).runTui;

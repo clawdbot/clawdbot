@@ -15,6 +15,8 @@ export type ActiveChannelPluginRuntimeShape = {
 
 export type ActivePluginChannelRegistration = {
   plugin: ActiveChannelPluginRuntimeShape;
+  pluginId?: string | null;
+  origin?: string | null;
 };
 
 export type ActivePluginChannelRegistry = {

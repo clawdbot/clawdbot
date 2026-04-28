@@ -6,11 +6,12 @@ import {
 } from "./subagent-announce-capture.js";
 import {
   callGateway,
-  loadConfig,
+  getRuntimeConfig,
   loadSessionStore,
   resolveAgentIdFromSessionKey,
   resolveStorePath,
 } from "./subagent-announce.runtime.js";
+import { assistantCallsSessionsYield, isSessionsYieldToolResult } from "./subagent-yield-output.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
 import { extractAssistantText, sanitizeTextContent } from "./tools/session-message-text.js";
 import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
@@ -19,13 +20,13 @@ const FAST_TEST_RETRY_INTERVAL_MS = 8;
 
 type SubagentAnnounceOutputDeps = {
   callGateway: typeof callGateway;
-  loadConfig: typeof loadConfig;
+  getRuntimeConfig: typeof getRuntimeConfig;
   readLatestAssistantReply: typeof readLatestAssistantReply;
 };
 
 const defaultSubagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = {
   callGateway,
-  loadConfig,
+  getRuntimeConfig,
   readLatestAssistantReply,
 };
 
@@ -46,6 +47,7 @@ type SubagentOutputSnapshot = {
   latestRawText?: string;
   assistantFragments: string[];
   toolCallCount: number;
+  waitingForContinuation?: boolean;
 };
 
 export type AgentWaitResult = {
@@ -53,6 +55,9 @@ export type AgentWaitResult = {
   startedAt?: number;
   endedAt?: number;
   error?: string;
+  stopReason?: string;
+  livenessState?: string;
+  yielded?: boolean;
 };
 
 export type SubagentRunOutcome = {
@@ -199,6 +204,7 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
     assistantFragments: [],
     toolCallCount: 0,
   };
+  let previousAssistantCalledYield = false;
   for (const message of messages) {
     if (!message || typeof message !== "object") {
       continue;
@@ -206,25 +212,50 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
     const role = (message as { role?: unknown }).role;
     if (role === "assistant") {
       snapshot.toolCallCount += countAssistantToolCalls((message as { content?: unknown }).content);
+      if (assistantCallsSessionsYield(message)) {
+        snapshot.latestAssistantText = undefined;
+        snapshot.latestRawText = undefined;
+        snapshot.latestSilentText = undefined;
+        snapshot.assistantFragments = [];
+        snapshot.waitingForContinuation = true;
+        previousAssistantCalledYield = true;
+        continue;
+      }
       const text = extractSubagentOutputText(message).trim();
       if (!text) {
+        previousAssistantCalledYield = false;
         continue;
       }
       if (isAnnounceSkip(text) || isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
         snapshot.latestSilentText = text;
         snapshot.latestAssistantText = undefined;
         snapshot.assistantFragments = [];
+        snapshot.waitingForContinuation = false;
+        previousAssistantCalledYield = false;
         continue;
       }
       snapshot.latestSilentText = undefined;
       snapshot.latestAssistantText = text;
       snapshot.assistantFragments.push(text);
+      snapshot.waitingForContinuation = false;
+      previousAssistantCalledYield = false;
+      continue;
+    }
+    if (isSessionsYieldToolResult(message, previousAssistantCalledYield)) {
+      snapshot.latestAssistantText = undefined;
+      snapshot.latestRawText = undefined;
+      snapshot.latestSilentText = undefined;
+      snapshot.assistantFragments = [];
+      snapshot.waitingForContinuation = true;
+      previousAssistantCalledYield = false;
       continue;
     }
     const text = extractSubagentOutputText(message).trim();
     if (text) {
       snapshot.latestRawText = text;
+      snapshot.waitingForContinuation = false;
     }
+    previousAssistantCalledYield = false;
   }
   return snapshot;
 }
@@ -256,6 +287,9 @@ function selectSubagentOutputText(
   snapshot: SubagentOutputSnapshot,
   outcome?: SubagentRunOutcome,
 ): string | undefined {
+  if (snapshot.waitingForContinuation) {
+    return undefined;
+  }
   if (snapshot.latestSilentText) {
     return snapshot.latestSilentText;
   }
@@ -278,9 +312,13 @@ export async function readSubagentOutput(
     params: { sessionKey, limit: 100 },
   });
   const messages = Array.isArray(history?.messages) ? history.messages : [];
-  const selected = selectSubagentOutputText(summarizeSubagentOutputHistory(messages), outcome);
+  const snapshot = summarizeSubagentOutputHistory(messages);
+  const selected = selectSubagentOutputText(snapshot, outcome);
   if (selected?.trim()) {
     return selected;
+  }
+  if (snapshot.waitingForContinuation) {
+    return undefined;
   }
   const latestAssistant = await subagentAnnounceOutputDeps.readLatestAssistantReply({
     sessionKey,
@@ -523,7 +561,7 @@ export async function buildCompactAnnounceStatsLine(params: {
   startedAt?: number;
   endedAt?: number;
 }) {
-  const cfg = subagentAnnounceOutputDeps.loadConfig();
+  const cfg = subagentAnnounceOutputDeps.getRuntimeConfig();
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   let entry = loadSessionStore(storePath)[params.sessionKey];

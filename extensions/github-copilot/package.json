@@ -8,7 +8,7 @@
     "@clack/prompts": "^1.2.0"
   },
   "devDependencies": {
-    "@mariozechner/pi-ai": "0.70.2",
+    "@mariozechner/pi-ai": "0.70.5",
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {

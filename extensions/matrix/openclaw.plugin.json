@@ -1,5 +1,8 @@
 {
   "id": "matrix",
+  "activation": {
+    "onStartup": false
+  },
   "channels": ["matrix"],
   "channelEnvVars": {
     "matrix": [

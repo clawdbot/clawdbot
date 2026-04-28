@@ -51,7 +51,7 @@ export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
   if (storeConfig && !isStorePathTemplate(storeConfig)) {
     const storePath = resolveStorePath(storeConfig);
     const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
-    const store = loadSessionStore(storePath);
+    const store = loadSessionStore(storePath, { clone: false });
     const combined: Record<string, SessionEntry> = {};
     for (const [key, entry] of Object.entries(store)) {
       const canonicalKey = resolveStoredSessionKeyForAgentStore({
@@ -75,7 +75,7 @@ export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
   for (const target of targets) {
     const agentId = target.agentId;
     const storePath = target.storePath;
-    const store = loadSessionStore(storePath);
+    const store = loadSessionStore(storePath, { clone: false });
     for (const [key, entry] of Object.entries(store)) {
       const canonicalKey = resolveStoredSessionKeyForAgentStore({
         cfg,

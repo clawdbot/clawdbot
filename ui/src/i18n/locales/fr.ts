@@ -110,6 +110,14 @@ export const fr: TranslationMap = {
       lightningHelp: "Adresse Lightning pour les pourboires (LUD-16)",
     },
   },
+  lazyView: {
+    loadingTitle: "Chargement du panneau",
+    errorTitle: "Échec du chargement du panneau",
+    errorSubtitle:
+      "Rechargez la page pour charger la dernière version du bundle Control UI, ou réessayez si la requête réseau a échoué.",
+    retry: "Réessayer",
+    unknownError: "Erreur inconnue de chargement du module.",
+  },
   nodes: {
     binding: {
       loadConfigHint: "Chargez la config pour modifier les bindings.",

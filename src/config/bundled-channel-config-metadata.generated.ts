@@ -7371,6 +7371,25 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             {
               type: "boolean",
             },
+            {
+              type: "object",
+              properties: {
+                mode: {
+                  type: "string",
+                  enum: ["partial", "quiet", "off"],
+                },
+                preview: {
+                  type: "object",
+                  properties: {
+                    toolProgress: {
+                      type: "boolean",
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              additionalProperties: false,
+            },
           ],
         },
         replyToMode: {
@@ -10010,6 +10029,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   type: "string",
                   enum: ["off", "partial"],
                 },
+                c2cStreamApi: {
+                  type: "boolean",
+                },
               },
               required: ["mode"],
               additionalProperties: {},
@@ -10249,6 +10271,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                         default: "partial",
                         type: "string",
                         enum: ["off", "partial"],
+                      },
+                      c2cStreamApi: {
+                        type: "boolean",
                       },
                     },
                     required: ["mode"],
@@ -15152,7 +15177,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       },
       apiRoot: {
         label: "Telegram API Root URL",
-        help: "Custom Telegram Bot API root URL. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
+        help: "Custom Telegram Bot API root URL. Use the API root only (for example https://api.telegram.org), not a full /bot<TOKEN> endpoint. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
       },
       trustedLocalFileRoots: {
         label: "Telegram Trusted Local File Roots",

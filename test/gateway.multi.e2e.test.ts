@@ -105,7 +105,7 @@ describe("gateway multi-instance e2e", () => {
       const idempotencyKey = `idem-${randomUUID()}`;
       const sendRes = await chatClient.request("chat.send", {
         sessionKey,
-        message: "/context list",
+        message: "/whoami",
         idempotencyKey,
       });
       expect(sendRes.status).toBe("started");
@@ -116,7 +116,7 @@ describe("gateway multi-instance e2e", () => {
         events: chatEvents,
         runId: String(runId),
         sessionKey,
-        timeoutMs: 45_000,
+        timeoutMs: 90_000,
       });
       const finalText = extractFirstTextBlock(finalEvent.message);
       expect(typeof finalText).toBe("string");

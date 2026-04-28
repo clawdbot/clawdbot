@@ -179,15 +179,15 @@ Codex after changing config.
 - Codex app-server `0.125.0` or newer. The bundled plugin manages a compatible
   Codex app-server binary by default, so local `codex` commands on `PATH` do
   not affect normal harness startup.
-- Codex auth available to the app-server process.
+- Codex auth available to the app-server process or to OpenClaw's Codex auth
+  bridge.
 
 The plugin blocks older or unversioned app-server handshakes. That keeps
 OpenClaw on the protocol surface it has been tested against.
 
-For live and Docker smoke tests, auth usually comes from `OPENAI_API_KEY`, plus
-optional Codex CLI files such as `~/.codex/auth.json` and
-`~/.codex/config.toml`. Use the same auth material your local Codex app-server
-uses.
+For live and Docker smoke tests, auth usually comes from the Codex CLI account
+or an OpenClaw `openai-codex` auth profile. Local stdio app-server launches can
+also fall back to `CODEX_API_KEY` / `OPENAI_API_KEY` when no account is present.
 
 ## Minimal config
 
@@ -508,22 +508,64 @@ For an already-running app-server, use WebSocket transport:
 }
 ```
 
+Stdio app-server launches inherit OpenClaw's process environment by default,
+but OpenClaw owns the Codex app-server account bridge. Auth is selected in this
+order:
+
+1. An explicit OpenClaw Codex auth profile for the agent.
+2. The app-server's existing account, such as a local Codex CLI ChatGPT sign-in.
+3. For local stdio app-server launches only, `CODEX_API_KEY`, then
+   `OPENAI_API_KEY`, when no app-server account is present and OpenAI auth is
+   still required.
+
+When OpenClaw sees a ChatGPT subscription-style Codex auth profile, it removes
+`CODEX_API_KEY` and `OPENAI_API_KEY` from the spawned Codex child process. That
+keeps Gateway-level API keys available for embeddings or direct OpenAI models
+without making native Codex app-server turns bill through the API by accident.
+Explicit Codex API-key profiles and local stdio env-key fallback use app-server
+login instead of inherited child-process env. WebSocket app-server connections
+do not receive Gateway env API-key fallback; use an explicit auth profile or the
+remote app-server's own account.
+
+If a deployment needs additional environment isolation, add those variables to
+`appServer.clearEnv`:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          appServer: {
+            clearEnv: ["CODEX_API_KEY", "OPENAI_API_KEY"],
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+`appServer.clearEnv` only affects the spawned Codex app-server child process.
+
 Supported `appServer` fields:
 
-| Field               | Default                                  | Meaning                                                                                                      |
-| ------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `transport`         | `"stdio"`                                | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                     |
-| `command`           | managed Codex binary                     | Executable for stdio transport. Leave unset to use the managed binary; set it only for an explicit override. |
-| `args`              | `["app-server", "--listen", "stdio://"]` | Arguments for stdio transport.                                                                               |
-| `url`               | unset                                    | WebSocket app-server URL.                                                                                    |
-| `authToken`         | unset                                    | Bearer token for WebSocket transport.                                                                        |
-| `headers`           | `{}`                                     | Extra WebSocket headers.                                                                                     |
-| `requestTimeoutMs`  | `60000`                                  | Timeout for app-server control-plane calls.                                                                  |
-| `mode`              | `"yolo"`                                 | Preset for YOLO or guardian-reviewed execution.                                                              |
-| `approvalPolicy`    | `"never"`                                | Native Codex approval policy sent to thread start/resume/turn.                                               |
-| `sandbox`           | `"danger-full-access"`                   | Native Codex sandbox mode sent to thread start/resume.                                                       |
-| `approvalsReviewer` | `"user"`                                 | Use `"auto_review"` to let Codex review native approval prompts. `guardian_subagent` remains a legacy alias. |
-| `serviceTier`       | unset                                    | Optional Codex app-server service tier: `"fast"`, `"flex"`, or `null`. Invalid legacy values are ignored.    |
+| Field               | Default                                  | Meaning                                                                                                                             |
+| ------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `transport`         | `"stdio"`                                | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                                            |
+| `command`           | managed Codex binary                     | Executable for stdio transport. Leave unset to use the managed binary; set it only for an explicit override.                        |
+| `args`              | `["app-server", "--listen", "stdio://"]` | Arguments for stdio transport.                                                                                                      |
+| `url`               | unset                                    | WebSocket app-server URL.                                                                                                           |
+| `authToken`         | unset                                    | Bearer token for WebSocket transport.                                                                                               |
+| `headers`           | `{}`                                     | Extra WebSocket headers.                                                                                                            |
+| `clearEnv`          | `[]`                                     | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment. |
+| `requestTimeoutMs`  | `60000`                                  | Timeout for app-server control-plane calls.                                                                                         |
+| `mode`              | `"yolo"`                                 | Preset for YOLO or guardian-reviewed execution.                                                                                     |
+| `approvalPolicy`    | `"never"`                                | Native Codex approval policy sent to thread start/resume/turn.                                                                      |
+| `sandbox`           | `"danger-full-access"`                   | Native Codex sandbox mode sent to thread start/resume.                                                                              |
+| `approvalsReviewer` | `"user"`                                 | Use `"auto_review"` to let Codex review native approval prompts. `guardian_subagent` remains a legacy alias.                        |
+| `serviceTier`       | unset                                    | Optional Codex app-server service tier: `"fast"`, `"flex"`, or `null`. Invalid legacy values are ignored.                           |
 
 Environment overrides remain available for local testing:
 
@@ -544,14 +586,20 @@ same reviewed file as the rest of the Codex harness setup.
 
 ## Computer use
 
-Computer Use is a Codex-native MCP plugin. OpenClaw does not vendor the desktop
-control app or execute desktop actions itself; it enables Codex app-server
-plugins, installs the configured Codex marketplace plugin when requested, checks
-that the `computer-use` MCP server is available, and then lets Codex handle the
-native MCP tool calls during Codex-mode turns.
+Computer Use is covered in its own setup guide:
+[Codex Computer Use](/plugins/codex-computer-use).
 
-Set `plugins.entries.codex.config.computerUse` when you want Codex-mode turns to
-require Computer Use:
+The short version: OpenClaw does not vendor the desktop-control app or execute
+desktop actions itself. It prepares Codex app-server, verifies that the
+`computer-use` MCP server is available, and then lets Codex handle the native
+MCP tool calls during Codex-mode turns.
+
+For direct TryCua driver access outside the Codex marketplace flow, register
+`cua-driver mcp` with `openclaw mcp set cua-driver '{"command":"cua-driver","args":["mcp"]}'`.
+See [Codex Computer Use](/plugins/codex-computer-use) for the distinction
+between Codex-owned Computer Use and direct MCP registration.
+
+Minimal config:
 
 ```json5
 {
@@ -570,33 +618,16 @@ require Computer Use:
   agents: {
     defaults: {
       model: "openai/gpt-5.5",
-      embeddedHarness: {
-        runtime: "codex",
+      agentRuntime: {
+        id: "codex",
+        fallback: "none",
       },
     },
   },
 }
 ```
 
-With no marketplace fields, OpenClaw asks Codex app-server to use its discovered
-marketplaces. On a fresh Codex home, app-server seeds the official curated
-marketplace and OpenClaw follows the same loading shape as Codex: it polls
-`plugin/list` during install before treating Computer Use as unavailable. The
-default discovery wait is 60 seconds and can be tuned with
-`marketplaceDiscoveryTimeoutMs`. If multiple known Codex marketplaces contain
-Computer Use, OpenClaw uses the Codex marketplace preference order before
-failing closed for unknown ambiguous matches.
-
-Use `marketplaceSource` for a non-default Codex marketplace source that
-app-server can add, or `marketplacePath` for a local marketplace file that
-already exists on the machine. If the marketplace is already registered with
-Codex app-server, use `marketplaceName` instead. The defaults are
-`pluginName: "computer-use"` and `mcpServerName: "computer-use"`.
-For safety, turn-start auto-install only uses marketplaces app-server has
-already discovered. Use `/codex computer-use install` for explicit installs from
-a configured `marketplaceSource` or `marketplacePath`.
-
-The same setup can be checked or installed from the command surface:
+The setup can be checked or installed from the command surface:
 
 - `/codex computer-use status`
 - `/codex computer-use install`
@@ -606,7 +637,16 @@ The same setup can be checked or installed from the command surface:
 Computer Use is macOS-specific and may require local OS permissions before the
 Codex MCP server can control apps. If `computerUse.enabled` is true and the MCP
 server is unavailable, Codex-mode turns fail before the thread starts instead of
-silently running without the native Computer Use tools.
+silently running without the native Computer Use tools. See
+[Codex Computer Use](/plugins/codex-computer-use) for marketplace choices,
+remote catalog limits, status reasons, and troubleshooting.
+
+When `computerUse.autoInstall` is true, OpenClaw can register the standard
+bundled Codex Desktop marketplace from
+`/Applications/Codex.app/Contents/Resources/plugins/openai-bundled` if Codex
+has not discovered a local marketplace yet. Use `/new` or `/reset` after
+changing runtime or Computer Use config so existing sessions do not keep an old
+PI or Codex thread binding.
 
 ## Common recipes
 
@@ -867,6 +907,12 @@ and that the remote app-server speaks the same Codex app-server protocol version
 `codex/*` ref. Plain `openai/gpt-*` and other provider refs stay on their normal
 provider path in `auto` mode. If you force `agentRuntime.id: "codex"`, every embedded
 turn for that agent must be a Codex-supported OpenAI model.
+
+**Computer Use is installed but tools do not run:** check
+`/codex computer-use status` from a fresh session. If a tool reports
+`Native hook relay unavailable`, use `/new` or `/reset`; if it persists, restart
+the gateway to clear stale native hook registrations. If `computer-use.list_apps`
+times out, restart Codex Computer Use or Codex Desktop and retry.
 
 ## Related
 

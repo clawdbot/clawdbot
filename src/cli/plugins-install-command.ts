@@ -7,7 +7,8 @@ import { resolveArchiveKind } from "../infra/archive.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
-import { formatClawHubSpecifier, installPluginFromClawHub } from "../plugins/clawhub.js";
+import { installPluginFromClawHub } from "../plugins/clawhub.js";
+import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
@@ -40,6 +41,7 @@ import {
   createPluginInstallLogger,
   decidePreferredClawHubFallback,
   formatPluginInstallWithHookFallbackError,
+  parseNpmPrefixSpec,
 } from "./plugins-command-helpers.js";
 import { persistHookPackInstall, persistPluginInstall } from "./plugins-install-persist.js";
 import type { ConfigSnapshotForInstallPersist } from "./plugins-install-persist.js";
@@ -108,8 +110,6 @@ async function installBundledPluginSource(params: {
   bundledSource: BundledPluginSource;
   warning: string;
 }) {
-  const existing = params.snapshot.config.plugins?.load?.paths ?? [];
-  const mergedPaths = Array.from(new Set([...existing, params.bundledSource.localPath]));
   const existingEntry = params.snapshot.config.plugins?.entries?.[params.bundledSource.pluginId];
   const shouldEnable = hasValidBundledPluginConfig({
     bundledSource: params.bundledSource,
@@ -123,16 +123,7 @@ async function installBundledPluginSource(params: {
     : `Installed bundled plugin "${params.bundledSource.pluginId}" without enabling it because it requires configuration first. Configure it, then run \`openclaw plugins enable ${params.bundledSource.pluginId}\`.`;
   await persistPluginInstall({
     snapshot: {
-      config: {
-        ...configBase,
-        plugins: {
-          ...configBase.plugins,
-          load: {
-            ...configBase.plugins?.load,
-            paths: mergedPaths,
-          },
-        },
-      },
+      config: configBase,
       baseHash: params.snapshot.baseHash,
     },
     pluginId: params.bundledSource.pluginId,
@@ -258,6 +249,76 @@ async function tryInstallHookPackFromNpmSpec(params: {
     snapshot: params.snapshot,
     hookPackId: result.hookPackId,
     hooks: result.hooks,
+    install: installRecord,
+  });
+  return { ok: true };
+}
+
+async function tryInstallPluginOrHookPackFromNpmSpec(params: {
+  snapshot: ConfigSnapshotForInstallPersist;
+  installMode: "install" | "update";
+  spec: string;
+  pin?: boolean;
+  safetyOverrides: InstallSafetyOverrides;
+  allowBundledFallback: boolean;
+  extensionsDir: string;
+}): Promise<{ ok: true } | { ok: false }> {
+  const result = await installPluginFromNpmSpec({
+    ...params.safetyOverrides,
+    mode: params.installMode,
+    spec: params.spec,
+    extensionsDir: params.extensionsDir,
+    logger: createPluginInstallLogger(),
+  });
+  if (!result.ok) {
+    if (isTerminalPluginInstallSecurityFailure(result.code)) {
+      defaultRuntime.error(result.error);
+      return { ok: false };
+    }
+    if (params.allowBundledFallback) {
+      const bundledFallbackPlan = resolveBundledInstallPlanForNpmFailure({
+        rawSpec: params.spec,
+        code: result.code,
+        findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
+      });
+      if (bundledFallbackPlan) {
+        await installBundledPluginSource({
+          snapshot: params.snapshot,
+          rawSpec: params.spec,
+          bundledSource: bundledFallbackPlan.bundledSource,
+          warning: bundledFallbackPlan.warning,
+        });
+        return { ok: true };
+      }
+    }
+    const hookFallback = await tryInstallHookPackFromNpmSpec({
+      snapshot: params.snapshot,
+      installMode: params.installMode,
+      spec: params.spec,
+      pin: params.pin,
+    });
+    if (hookFallback.ok) {
+      return { ok: true };
+    }
+    defaultRuntime.error(
+      formatPluginInstallWithHookFallbackError(result.error, hookFallback.error),
+    );
+    return { ok: false };
+  }
+
+  clearPluginManifestRegistryCache();
+  const installRecord = resolvePinnedNpmInstallRecordForCli(
+    params.spec,
+    Boolean(params.pin),
+    result.targetDir,
+    result.version,
+    result.npmResolution,
+    defaultRuntime.log,
+    theme.warn,
+  );
+  await persistPluginInstall({
+    snapshot: params.snapshot,
+    pluginId: result.pluginId,
     install: installRecord,
   });
   return { ok: true };
@@ -399,6 +460,7 @@ export async function runPluginInstallCommand(params: {
   const cfg = snapshot.config;
   const installMode = resolveInstallMode(opts.force);
   const safetyOverrides = resolveInstallSafetyOverrides(opts);
+  const extensionsDir = resolveDefaultPluginExtensionsDir();
 
   if (opts.marketplace) {
     const result = await installPluginFromMarketplace({
@@ -406,6 +468,7 @@ export async function runPluginInstallCommand(params: {
       marketplace: opts.marketplace,
       mode: installMode,
       plugin: raw,
+      extensionsDir,
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
@@ -439,6 +502,7 @@ export async function runPluginInstallCommand(params: {
         mode: installMode,
         path: resolved,
         dryRun: true,
+        extensionsDir,
         logger: createPluginInstallLogger(),
       });
       if (!probe.ok) {
@@ -492,6 +556,7 @@ export async function runPluginInstallCommand(params: {
       ...safetyOverrides,
       mode: installMode,
       path: resolved,
+      extensionsDir,
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
@@ -534,6 +599,27 @@ export async function runPluginInstallCommand(params: {
     return defaultRuntime.exit(1);
   }
 
+  const npmPrefixSpec = parseNpmPrefixSpec(raw);
+  if (npmPrefixSpec !== null) {
+    if (!npmPrefixSpec) {
+      defaultRuntime.error("unsupported npm: spec: missing package");
+      return defaultRuntime.exit(1);
+    }
+    const npmPrefixResult = await tryInstallPluginOrHookPackFromNpmSpec({
+      snapshot,
+      installMode,
+      spec: npmPrefixSpec,
+      pin: opts.pin,
+      safetyOverrides,
+      allowBundledFallback: false,
+      extensionsDir,
+    });
+    if (!npmPrefixResult.ok) {
+      return defaultRuntime.exit(1);
+    }
+    return;
+  }
+
   if (
     looksLikeLocalInstallSpec(raw, [
       ".ts",
@@ -570,6 +656,7 @@ export async function runPluginInstallCommand(params: {
       ...safetyOverrides,
       mode: installMode,
       spec: raw,
+      extensionsDir,
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
@@ -583,10 +670,7 @@ export async function runPluginInstallCommand(params: {
       pluginId: result.pluginId,
       install: {
         source: "clawhub",
-        spec: formatClawHubSpecifier({
-          name: result.clawhub.clawhubPackage,
-          version: result.clawhub.version,
-        }),
+        spec: raw,
         installPath: result.targetDir,
         version: result.version,
         integrity: result.clawhub.integrity,
@@ -606,6 +690,7 @@ export async function runPluginInstallCommand(params: {
       ...safetyOverrides,
       mode: installMode,
       spec: preferredClawHubSpec,
+      extensionsDir,
       logger: createPluginInstallLogger(),
     });
     if (clawhubResult.ok) {
@@ -615,10 +700,7 @@ export async function runPluginInstallCommand(params: {
         pluginId: clawhubResult.pluginId,
         install: {
           source: "clawhub",
-          spec: formatClawHubSpecifier({
-            name: clawhubResult.clawhub.clawhubPackage,
-            version: clawhubResult.clawhub.version,
-          }),
+          spec: preferredClawHubSpec,
           installPath: clawhubResult.targetDir,
           version: clawhubResult.version,
           integrity: clawhubResult.clawhub.integrity,
@@ -637,60 +719,16 @@ export async function runPluginInstallCommand(params: {
     }
   }
 
-  const result = await installPluginFromNpmSpec({
-    ...safetyOverrides,
-    mode: installMode,
-    spec: raw,
-    logger: createPluginInstallLogger(),
-  });
-  if (!result.ok) {
-    if (isTerminalPluginInstallSecurityFailure(result.code)) {
-      defaultRuntime.error(result.error);
-      return defaultRuntime.exit(1);
-    }
-    const bundledFallbackPlan = resolveBundledInstallPlanForNpmFailure({
-      rawSpec: raw,
-      code: result.code,
-      findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
-    });
-    if (!bundledFallbackPlan) {
-      const hookFallback = await tryInstallHookPackFromNpmSpec({
-        snapshot,
-        installMode,
-        spec: raw,
-        pin: opts.pin,
-      });
-      if (hookFallback.ok) {
-        return;
-      }
-      defaultRuntime.error(
-        formatPluginInstallWithHookFallbackError(result.error, hookFallback.error),
-      );
-      return defaultRuntime.exit(1);
-    }
-
-    await installBundledPluginSource({
-      snapshot,
-      rawSpec: raw,
-      bundledSource: bundledFallbackPlan.bundledSource,
-      warning: bundledFallbackPlan.warning,
-    });
-    return;
-  }
-
-  clearPluginManifestRegistryCache();
-  const installRecord = resolvePinnedNpmInstallRecordForCli(
-    raw,
-    Boolean(opts.pin),
-    result.targetDir,
-    result.version,
-    result.npmResolution,
-    defaultRuntime.log,
-    theme.warn,
-  );
-  await persistPluginInstall({
+  const npmResult = await tryInstallPluginOrHookPackFromNpmSpec({
     snapshot,
-    pluginId: result.pluginId,
-    install: installRecord,
+    installMode,
+    spec: raw,
+    pin: opts.pin,
+    safetyOverrides,
+    allowBundledFallback: true,
+    extensionsDir,
   });
+  if (!npmResult.ok) {
+    return defaultRuntime.exit(1);
+  }
 }

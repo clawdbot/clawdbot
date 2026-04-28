@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../../../test/helpers/plugins/plugin-api.js";
 import type { OpenClawConfig, OpenClawPluginApi } from "../runtime-api.js";
 import { registerSlackPluginHttpRoutes } from "./plugin-routes.js";
 import { registerSlackHttpHandler } from "./registry.js";
@@ -10,7 +10,7 @@ function createApi(config: OpenClawConfig, registerHttpRoute = vi.fn()): OpenCla
     id: "slack",
     config,
     registerHttpRoute,
-  }) as OpenClawPluginApi;
+  });
 }
 
 describe("registerSlackPluginHttpRoutes", () => {

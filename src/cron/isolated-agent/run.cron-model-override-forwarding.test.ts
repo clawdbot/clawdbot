@@ -4,11 +4,14 @@ import {
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
   makeCronSessionEntry,
+  isThinkingLevelSupportedMock,
+  loadModelCatalogMock,
   resolveAgentConfigMock,
   resolveAgentModelFallbacksOverrideMock,
   resolveAllowedModelRefMock,
   resolveConfiguredModelRefMock,
   resolveCronSessionMock,
+  resolveSupportedThinkingLevelMock,
   resetRunCronIsolatedAgentTurnHarness,
   restoreFastTestEnv,
   runEmbeddedPiAgentMock,
@@ -145,6 +148,56 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
       | undefined;
     expect(embeddedCall?.provider).toBe("google");
     expect(embeddedCall?.model).toBe("gemini-2.0-flash");
+  });
+
+  it("validates cron thinking with catalog reasoning metadata", async () => {
+    resolveAllowedModelRefMock.mockImplementation(() => ({
+      ref: { provider: "ollama", model: "qwen3:0.6b" },
+    }));
+    loadModelCatalogMock.mockResolvedValue([
+      {
+        provider: "ollama",
+        id: "qwen3:0.6b",
+        name: "qwen3:0.6b",
+        reasoning: true,
+      },
+    ]);
+    isThinkingLevelSupportedMock.mockImplementation(
+      ({ catalog, level }: { catalog?: Array<{ reasoning?: boolean }>; level?: string }) =>
+        level === "medium" && catalog?.[0]?.reasoning === true,
+    );
+    resolveSupportedThinkingLevelMock.mockReturnValue("off");
+    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
+      const result = await run(provider, model);
+      return { result, provider, model, attempts: [] };
+    });
+
+    await runCronIsolatedAgentTurn(
+      makeParams({
+        job: makeJob({
+          payload: {
+            kind: "agentTurn",
+            message: "summarize",
+            model: "ollama/qwen3:0.6b",
+            thinking: "medium",
+          },
+        }),
+      }),
+    );
+
+    expect(isThinkingLevelSupportedMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "ollama",
+        model: "qwen3:0.6b",
+        level: "medium",
+        catalog: expect.arrayContaining([
+          expect.objectContaining({ provider: "ollama", id: "qwen3:0.6b", reasoning: true }),
+        ]),
+      }),
+    );
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "ollama", model: "qwen3:0.6b", thinkLevel: "medium" }),
+    );
   });
 
   it("does not add agent primary model as fallback when cron payload model is set", async () => {

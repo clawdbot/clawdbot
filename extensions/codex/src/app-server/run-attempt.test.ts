@@ -7,19 +7,19 @@ import {
   queueAgentHarnessMessage,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __testing as nativeHookRelayTesting } from "../../../../src/agents/harness/native-hook-relay.js";
-import { buildAgentRuntimePlan } from "../../../../src/agents/runtime-plan/build.js";
 import {
+  buildAgentRuntimePlan,
+  nativeHookRelayTesting,
   onAgentEvent,
   resetAgentEventsForTest,
   type AgentEventPayload,
-} from "../../../../src/infra/agent-events.js";
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
-} from "../../../../src/plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../../../../src/plugins/hooks.test-helpers.js";
+} from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import type { CodexServerNotification } from "./protocol.js";

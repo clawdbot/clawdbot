@@ -1,5 +1,5 @@
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import plugin from "./index.js";
 
 const promptAndConfigureOllamaMock = vi.hoisted(() =>
@@ -367,6 +367,57 @@ describe("ollama plugin", () => {
     expect(buildOllamaProviderMock).toHaveBeenCalledWith(undefined, {
       quiet: true,
     });
+  });
+
+  it("resolves dynamic local models from Ollama without generating PI models.json", async () => {
+    const provider = registerProvider();
+    const previous = process.env.OLLAMA_API_KEY;
+    process.env.OLLAMA_API_KEY = "ollama-local";
+    buildOllamaProviderMock.mockResolvedValueOnce({
+      baseUrl: "http://127.0.0.1:11434",
+      api: "ollama",
+      models: [
+        {
+          id: "llama3.2:latest",
+          name: "llama3.2:latest",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 8192,
+          maxTokens: 2048,
+        },
+      ],
+    });
+
+    try {
+      await provider.prepareDynamicModel?.({
+        config: {},
+        provider: "ollama",
+        modelId: "llama3.2:latest",
+        modelRegistry: { find: vi.fn(() => null) },
+      } as never);
+
+      expect(
+        provider.resolveDynamicModel?.({
+          config: {},
+          provider: "ollama",
+          modelId: "llama3.2:latest",
+          modelRegistry: { find: vi.fn(() => null) },
+        } as never),
+      ).toMatchObject({
+        provider: "ollama",
+        id: "llama3.2:latest",
+        api: "ollama",
+        baseUrl: "http://127.0.0.1:11434",
+      });
+      expect(buildOllamaProviderMock).toHaveBeenCalledWith(undefined, { quiet: true });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OLLAMA_API_KEY;
+      } else {
+        process.env.OLLAMA_API_KEY = previous;
+      }
+    }
   });
 
   it("skips implicit localhost discovery when a custom remote Ollama provider is configured", async () => {

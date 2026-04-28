@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { listPairingChannels, notifyPairingApproved } from "../channels/plugins/pairing.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 import { approveChannelPairingCode, listChannelPairingRequests } from "../pairing/pairing-store.js";
 import type { PairingChannel } from "../pairing/pairing-store.types.js";
@@ -38,7 +38,7 @@ function parseChannel(raw: unknown, channels: PairingChannel[]): PairingChannel 
 }
 
 async function notifyApproved(channel: PairingChannel, id: string) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   await notifyPairingApproved({ channelId: channel, id, cfg });
 }
 

@@ -47,6 +47,16 @@ export const REALTIME_VOICE_AGENT_CONSULT_TOOL: RealtimeVoiceTool = {
   },
 };
 
+export function buildRealtimeVoiceAgentConsultWorkingResponse(
+  audienceLabel = "person",
+): Record<string, unknown> {
+  return {
+    status: "working",
+    tool: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+    message: `Tell the ${audienceLabel} briefly that you are checking, then wait for the final OpenClaw result before answering with the actual result.`,
+  };
+}
+
 const SAFE_READ_ONLY_TOOLS = [
   "read",
   "web_search",

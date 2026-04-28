@@ -3,6 +3,7 @@ export {
   findCommandByNativeName,
   formatCommandArgMenuTitle,
   listChatCommands,
+  listNativeCommandSpecs,
   listNativeCommandSpecsForConfig,
   parseCommandArgs,
   resolveCommandArgChoices,

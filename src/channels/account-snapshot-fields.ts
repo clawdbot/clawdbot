@@ -26,6 +26,16 @@ function readNumber(record: Record<string, unknown>, key: string): number | unde
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function readNullableNumber(
+  record: Record<string, unknown>,
+  key: string,
+): number | null | undefined {
+  if (record[key] === null) {
+    return null;
+  }
+  return readNumber(record, key);
+}
+
 function readStringArray(record: Record<string, unknown>, key: string): string[] | undefined {
   const value = record[key];
   if (!Array.isArray(value)) {
@@ -162,6 +172,7 @@ export function projectSafeChannelAccountSnapshotFields(
     return {};
   }
   const name = normalizeOptionalString(record.name);
+  const statusState = normalizeOptionalString(record.statusState);
   const healthState = normalizeOptionalString(record.healthState);
   const mode = normalizeOptionalString(record.mode);
   const dmPolicy = normalizeOptionalString(record.dmPolicy);
@@ -180,16 +191,39 @@ export function projectSafeChannelAccountSnapshotFields(
     ...(readBoolean(record, "connected") !== undefined
       ? { connected: readBoolean(record, "connected") }
       : {}),
+    ...(readBoolean(record, "restartPending") !== undefined
+      ? { restartPending: readBoolean(record, "restartPending") }
+      : {}),
     ...(readNumber(record, "reconnectAttempts") !== undefined
       ? { reconnectAttempts: readNumber(record, "reconnectAttempts") }
+      : {}),
+    ...(readNullableNumber(record, "lastConnectedAt") !== undefined
+      ? { lastConnectedAt: readNullableNumber(record, "lastConnectedAt") }
       : {}),
     ...(readNumber(record, "lastInboundAt") !== undefined
       ? { lastInboundAt: readNumber(record, "lastInboundAt") }
       : {}),
+    ...(readNullableNumber(record, "lastOutboundAt") !== undefined
+      ? { lastOutboundAt: readNullableNumber(record, "lastOutboundAt") }
+      : {}),
+    ...(readNullableNumber(record, "lastMessageAt") !== undefined
+      ? { lastMessageAt: readNullableNumber(record, "lastMessageAt") }
+      : {}),
+    ...(readNullableNumber(record, "lastEventAt") !== undefined
+      ? { lastEventAt: readNullableNumber(record, "lastEventAt") }
+      : {}),
     ...(readNumber(record, "lastTransportActivityAt") !== undefined
       ? { lastTransportActivityAt: readNumber(record, "lastTransportActivityAt") }
       : {}),
+    ...(statusState ? { statusState } : {}),
     ...(healthState ? { healthState } : {}),
+    ...(readBoolean(record, "busy") !== undefined ? { busy: readBoolean(record, "busy") } : {}),
+    ...(readNumber(record, "activeRuns") !== undefined
+      ? { activeRuns: readNumber(record, "activeRuns") }
+      : {}),
+    ...(readNullableNumber(record, "lastRunActivityAt") !== undefined
+      ? { lastRunActivityAt: readNullableNumber(record, "lastRunActivityAt") }
+      : {}),
     ...(mode ? { mode } : {}),
     ...(dmPolicy ? { dmPolicy } : {}),
     ...(readStringArray(record, "allowFrom")

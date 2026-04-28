@@ -89,13 +89,6 @@ vi.mock("../tool-display.ts", () => ({
   }),
 }));
 
-vi.mock("./speech.ts", () => ({
-  isTtsSpeaking: () => false,
-  isTtsSupported: () => false,
-  speakText: () => false,
-  stopTts: () => undefined,
-}));
-
 type RenderMessageGroupOptions = Parameters<typeof renderMessageGroup>[1];
 
 function renderAssistantMessage(
@@ -262,6 +255,18 @@ afterEach(() => {
 });
 
 describe("grouped chat rendering", () => {
+  it("does not render the stale assistant read-aloud footer action", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: "hello from assistant",
+      timestamp: 1000,
+    });
+
+    expect(container.querySelector(".chat-tts-btn")).toBeNull();
+    expect(container.querySelector('[aria-label="Read aloud"]')).toBeNull();
+  });
+
   it("positions delete confirm by message side", () => {
     const container = document.createElement("div");
     clearDeleteConfirmSkip();

@@ -2,8 +2,10 @@ import { Type } from "typebox";
 import { ENV_SECRET_REF_ID_RE } from "../../../config/types.secrets.js";
 import {
   EXEC_SECRET_REF_ID_JSON_SCHEMA_PATTERN,
-  FILE_SECRET_REF_ID_PATTERN,
+  FILE_SECRET_REF_ID_ABSOLUTE_JSON_SCHEMA_PATTERN,
+  FILE_SECRET_REF_ID_INVALID_ESCAPE_JSON_SCHEMA_PATTERN,
   SECRET_PROVIDER_ALIAS_PATTERN,
+  SINGLE_VALUE_FILE_REF_ID,
 } from "../../../secrets/ref-contract.js";
 import { INPUT_PROVENANCE_KIND_VALUES } from "../../../sessions/input-provenance.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../../sessions/session-label.js";
@@ -53,11 +55,24 @@ const EnvSecretRefSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const FileSecretRefIdSchema = Type.Unsafe<string>({
+  type: "string",
+  anyOf: [
+    { const: SINGLE_VALUE_FILE_REF_ID },
+    {
+      allOf: [
+        { pattern: FILE_SECRET_REF_ID_ABSOLUTE_JSON_SCHEMA_PATTERN },
+        { not: { pattern: FILE_SECRET_REF_ID_INVALID_ESCAPE_JSON_SCHEMA_PATTERN } },
+      ],
+    },
+  ],
+});
+
 const FileSecretRefSchema = Type.Object(
   {
     source: Type.Literal("file"),
     provider: SecretProviderAliasString,
-    id: Type.String({ pattern: FILE_SECRET_REF_ID_PATTERN.source }),
+    id: FileSecretRefIdSchema,
   },
   { additionalProperties: false },
 );

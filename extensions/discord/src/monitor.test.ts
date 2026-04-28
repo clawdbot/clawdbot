@@ -1,6 +1,6 @@
 import { ChannelType, type Guild } from "@buape/carbon";
+import { typedCases } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { typedCases } from "../../../test/helpers/plugins/typed-cases.js";
 import {
   allowListMatches,
   type DiscordGuildEntryResolved,
@@ -25,9 +25,15 @@ type DiscordReactionClient = Parameters<
 
 const readAllowFromStoreMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../src/pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
-}));
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
+    "openclaw/plugin-sdk/conversation-runtime",
+  );
+  return {
+    ...actual,
+    readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
+  };
+});
 
 const fakeGuild = (id: string, name: string) => ({ id, name }) as Guild;
 
@@ -905,7 +911,7 @@ const { enqueueSystemEventSpy, resolveAgentRouteMock } = vi.hoisted(() => ({
   })),
 }));
 
-const channelRuntimeModule = await import("openclaw/plugin-sdk/infra-runtime");
+const channelRuntimeModule = await import("openclaw/plugin-sdk/system-event-runtime");
 vi.spyOn(channelRuntimeModule, "enqueueSystemEvent").mockImplementation(enqueueSystemEventSpy);
 
 const routingModule = await import("openclaw/plugin-sdk/routing");
@@ -979,6 +985,10 @@ function makeReactionClient(options?: {
   } as unknown as DiscordReactionClient;
 }
 
+function getReactionClientFetchChannelMock(client: DiscordReactionClient) {
+  return (client as unknown as { fetchChannel: ReturnType<typeof vi.fn> }).fetchChannel;
+}
+
 function makeReactionListenerParams(overrides?: {
   botUserId?: string;
   dmEnabled?: boolean;
@@ -991,7 +1001,7 @@ function makeReactionListenerParams(overrides?: {
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
 }) {
   return {
-    cfg: {} as ReturnType<typeof import("openclaw/plugin-sdk/config-runtime").loadConfig>,
+    cfg: {} as import("openclaw/plugin-sdk/config-types").OpenClawConfig,
     accountId: "acc-1",
     runtime: {} as import("openclaw/plugin-sdk/runtime-env").RuntimeEnv,
     botUserId: overrides?.botUserId ?? "bot-1",
@@ -1121,6 +1131,7 @@ describe("discord DM reaction handling", () => {
 
     await listener.handle(data, client);
 
+    expect(getReactionClientFetchChannelMock(client)).not.toHaveBeenCalled();
     expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
   });
 
@@ -1185,6 +1196,7 @@ describe("discord DM reaction handling", () => {
 
     await listener.handle(data, client);
 
+    expect(getReactionClientFetchChannelMock(client)).toHaveBeenCalled();
     expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
     const [text] = enqueueSystemEventSpy.mock.calls[0];
     expect(text).toContain("Discord reaction added");
@@ -1245,6 +1257,7 @@ describe("discord reaction notification modes", () => {
       channelId: string | undefined;
       parentId: string | undefined;
       messageAuthorId: string;
+      expectedFetchChannelCalls: number;
       expectedMessageFetchCalls: number;
       expectedEnqueueCalls: number;
     }>([
@@ -1257,6 +1270,7 @@ describe("discord reaction notification modes", () => {
         channelId: undefined,
         parentId: undefined,
         messageAuthorId: "other-user",
+        expectedFetchChannelCalls: 0,
         expectedMessageFetchCalls: 0,
         expectedEnqueueCalls: 0,
       },
@@ -1269,6 +1283,7 @@ describe("discord reaction notification modes", () => {
         channelId: undefined,
         parentId: undefined,
         messageAuthorId: "other-user",
+        expectedFetchChannelCalls: 1,
         expectedMessageFetchCalls: 0,
         expectedEnqueueCalls: 1,
       },
@@ -1281,8 +1296,22 @@ describe("discord reaction notification modes", () => {
         channelId: undefined,
         parentId: undefined,
         messageAuthorId: "other-user",
+        expectedFetchChannelCalls: 1,
         expectedMessageFetchCalls: 0,
         expectedEnqueueCalls: 1,
+      },
+      {
+        name: "allowlist mode denied without channel overrides",
+        reactionNotifications: "allowlist" as const,
+        users: ["trusted-user"] as string[],
+        userId: "untrusted-user",
+        channelType: ChannelType.GuildText,
+        channelId: undefined,
+        parentId: undefined,
+        messageAuthorId: "other-user",
+        expectedFetchChannelCalls: 0,
+        expectedMessageFetchCalls: 0,
+        expectedEnqueueCalls: 0,
       },
       {
         name: "own mode",
@@ -1293,6 +1322,7 @@ describe("discord reaction notification modes", () => {
         channelId: undefined,
         parentId: undefined,
         messageAuthorId: "bot-1",
+        expectedFetchChannelCalls: 1,
         expectedMessageFetchCalls: 1,
         expectedEnqueueCalls: 1,
       },
@@ -1305,6 +1335,7 @@ describe("discord reaction notification modes", () => {
         channelId: "thread-1",
         parentId: "parent-1",
         messageAuthorId: "other-user",
+        expectedFetchChannelCalls: 2,
         expectedMessageFetchCalls: 0,
         expectedEnqueueCalls: 1,
       },
@@ -1338,6 +1369,9 @@ describe("discord reaction notification modes", () => {
 
       await listener.handle(data, client);
 
+      expect(getReactionClientFetchChannelMock(client), testCase.name).toHaveBeenCalledTimes(
+        testCase.expectedFetchChannelCalls,
+      );
       expect(messageFetch, testCase.name).toHaveBeenCalledTimes(testCase.expectedMessageFetchCalls);
       expect(enqueueSystemEventSpy, testCase.name).toHaveBeenCalledTimes(
         testCase.expectedEnqueueCalls,

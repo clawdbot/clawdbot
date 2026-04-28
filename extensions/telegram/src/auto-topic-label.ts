@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { generateConversationLabel } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 export {
   AUTO_TOPIC_LABEL_DEFAULT_PROMPT,

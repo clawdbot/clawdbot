@@ -31,6 +31,7 @@ Production-ready for DMs and channels via Slack app integrations. Default mode i
         - paste the [example manifest](#manifest-and-scope-checklist) from below and continue to create
         - generate an **App-Level Token** (`xapp-...`) with `connections:write`
         - install app and copy the **Bot Token** (`xoxb-...`) shown
+
       </Step>
 
       <Step title="Configure OpenClaw">
@@ -619,6 +620,7 @@ Notes:
     - `channels.slack.chunkMode="newline"` enables paragraph-first splitting
     - file sends use Slack upload APIs and can include thread replies (`thread_ts`)
     - outbound media cap follows `channels.slack.mediaMaxMb` when configured; otherwise channel sends use MIME-kind defaults from media pipeline
+
   </Accordion>
 
   <Accordion title="Delivery targets">

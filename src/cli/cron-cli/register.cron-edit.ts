@@ -18,6 +18,10 @@ import {
   parseDurationMs,
   warnIfCronSchedulerDisabled,
 } from "./shared.js";
+import { normalizeCronSessionTargetOption, parseCronThreadIdOption } from "./thread-id-shared.js";
+
+const CRON_EDIT_LOOKUP_PAGE_SIZE = 200;
+const CRON_EDIT_LOOKUP_MAX_PAGES = 50;
 
 const assignIf = (
   target: Record<string, unknown>,
@@ -29,6 +33,32 @@ const assignIf = (
     target[key] = value;
   }
 };
+
+async function loadCronJobForEditSchedulePatch(
+  opts: Record<string, unknown>,
+  id: string,
+): Promise<CronJob | undefined> {
+  let offset = 0;
+  for (let page = 0; page < CRON_EDIT_LOOKUP_MAX_PAGES; page += 1) {
+    const listed = (await callGatewayFromCli("cron.list", opts, {
+      includeDisabled: true,
+      limit: CRON_EDIT_LOOKUP_PAGE_SIZE,
+      offset,
+    })) as { jobs?: CronJob[]; hasMore?: boolean; nextOffset?: number | null } | null;
+    const existing = (listed?.jobs ?? []).find((job) => job.id === id);
+    if (existing) {
+      return existing;
+    }
+    if (!listed?.hasMore || typeof listed.nextOffset !== "number") {
+      return undefined;
+    }
+    if (listed.nextOffset <= offset) {
+      throw new Error("cron.list pagination did not advance while looking up cron job");
+    }
+    offset = listed.nextOffset;
+  }
+  throw new Error("cron.list pagination exceeded maximum pages while looking up cron job");
+}
 
 export function registerCronEditCommand(cron: Command) {
   addGatewayClientOptions(
@@ -74,6 +104,7 @@ export function registerCronEditCommand(cron: Command) {
         "--to <dest>",
         "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
       )
+      .option("--thread-id <id>", "Telegram forum topic thread id")
       .option("--account <id>", "Channel account id for delivery (multi-account setups)")
       .option("--best-effort-deliver", "Do not fail job if delivery fails")
       .option("--no-best-effort-deliver", "Fail job when delivery fails")
@@ -95,12 +126,24 @@ export function registerCronEditCommand(cron: Command) {
       )
       .action(async (id, opts) => {
         try {
-          if (opts.session === "main" && opts.message) {
+          const sessionTarget =
+            typeof opts.session === "string"
+              ? normalizeCronSessionTargetOption(opts.session)
+              : undefined;
+          if (typeof opts.session === "string" && !sessionTarget) {
+            throw new Error("--session must be main, isolated, current, or session:<id>");
+          }
+          if (sessionTarget === "main" && opts.message) {
             throw new Error(
               "Main jobs cannot use --message; use --system-event or --session isolated.",
             );
           }
-          if (opts.session === "isolated" && opts.systemEvent) {
+          if (
+            (sessionTarget === "isolated" ||
+              sessionTarget === "current" ||
+              sessionTarget?.startsWith("session:")) &&
+            opts.systemEvent
+          ) {
             throw new Error(
               "Isolated jobs cannot use --system-event; use --message or --session main.",
             );
@@ -134,7 +177,7 @@ export function registerCronEditCommand(cron: Command) {
             patch.deleteAfterRun = false;
           }
           if (typeof opts.session === "string") {
-            patch.sessionTarget = opts.session;
+            patch.sessionTarget = sessionTarget;
           }
           if (typeof opts.wake === "string") {
             patch.wakeMode = opts.wake;
@@ -169,10 +212,7 @@ export function registerCronEditCommand(cron: Command) {
           if (scheduleRequest.kind === "direct") {
             patch.schedule = scheduleRequest.schedule;
           } else if (scheduleRequest.kind === "patch-existing-cron") {
-            const listed = (await callGatewayFromCli("cron.list", opts, {
-              includeDisabled: true,
-            })) as { jobs?: CronJob[] } | null;
-            const existing = (listed?.jobs ?? []).find((job) => job.id === id);
+            const existing = await loadCronJobForEditSchedulePatch(opts, String(id));
             if (!existing) {
               throw new Error(`unknown cron job id: ${id}`);
             }
@@ -188,7 +228,10 @@ export function registerCronEditCommand(cron: Command) {
             : undefined;
           const hasTimeoutSeconds = Boolean(timeoutSeconds && Number.isFinite(timeoutSeconds));
           const hasDeliveryModeFlag = opts.announce || typeof opts.deliver === "boolean";
-          const hasDeliveryTarget = typeof opts.channel === "string" || typeof opts.to === "string";
+          const threadId = parseCronThreadIdOption(opts.threadId);
+          const hasDeliveryThreadId = typeof threadId === "number";
+          const hasDeliveryTarget =
+            typeof opts.channel === "string" || typeof opts.to === "string" || hasDeliveryThreadId;
           const hasDeliveryAccount = typeof opts.account === "string";
           const hasBestEffort = typeof opts.bestEffortDeliver === "boolean";
           const hasAgentTurnPatch =
@@ -247,6 +290,9 @@ export function registerCronEditCommand(cron: Command) {
             if (typeof opts.to === "string") {
               const to = opts.to.trim();
               delivery.to = to ? to : undefined;
+            }
+            if (hasDeliveryThreadId) {
+              delivery.threadId = threadId;
             }
             if (typeof opts.account === "string") {
               const account = opts.account.trim();

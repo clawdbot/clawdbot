@@ -1,7 +1,9 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
+  type ClaudeCliFallbackSeed,
   CLAUDE_CLI_PROVIDER,
+  readClaudeCliFallbackSeed,
   readClaudeCliSessionMessages,
   resolveClaudeCliBindingSessionId,
   resolveClaudeCliSessionFilePath,
@@ -10,9 +12,12 @@ import { mergeImportedChatHistoryMessages } from "./cli-session-history.merge.js
 
 export {
   mergeImportedChatHistoryMessages,
+  readClaudeCliFallbackSeed,
   readClaudeCliSessionMessages,
+  resolveClaudeCliBindingSessionId,
   resolveClaudeCliSessionFilePath,
 };
+export type { ClaudeCliFallbackSeed };
 
 export function augmentChatHistoryWithCliSessionImports(params: {
   entry: SessionEntry | undefined;

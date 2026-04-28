@@ -227,6 +227,9 @@ async function runDispatch(params: {
   images?: Array<{ data: string; mimeType: string }>;
   ctxOverrides?: Record<string, unknown>;
   sessionKeyOverride?: string;
+  suppressUserDelivery?: boolean;
+  suppressReplyLifecycle?: boolean;
+  sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
 }) {
   const targetSessionKey = params.sessionKeyOverride ?? sessionKey;
   return tryDispatchAcpReply({
@@ -242,6 +245,9 @@ async function runDispatch(params: {
     sessionKey: targetSessionKey,
     images: params.images,
     inboundAudio: false,
+    suppressUserDelivery: params.suppressUserDelivery,
+    suppressReplyLifecycle: params.suppressReplyLifecycle,
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     shouldRouteToOriginating: params.shouldRouteToOriginating ?? false,
     ...(params.shouldRouteToOriginating
       ? {
@@ -419,6 +425,43 @@ describe("tryDispatchAcpReply", () => {
     expect(routeMocks.routeReply).toHaveBeenCalledWith(expect.objectContaining({ mirror: false }));
   });
 
+  it("adds source delivery guidance to tool-only ACP turns", async () => {
+    setReadyAcpResolution();
+
+    await runDispatch({
+      bodyForAgent: "reply privately unless you send explicitly",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(managerMocks.runTurn).toHaveBeenCalledTimes(1);
+    const call = managerMocks.runTurn.mock.calls[0]?.[0] as { text?: string } | undefined;
+    expect(call?.text).toContain("Source channel delivery is private by default");
+    expect(call?.text).toContain("message(action=send)");
+    expect(call?.text).toContain("The target defaults to the current source channel");
+    expect(call?.text).toContain("reply privately unless you send explicitly");
+  });
+
+  it("starts reply lifecycle for tool-only ACP turns while suppressing automatic delivery", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("hidden final");
+    const onReplyStart = vi.fn();
+    const { dispatcher } = createDispatcher();
+
+    const result = await runDispatch({
+      bodyForAgent: "reply via message tool if needed",
+      dispatcher,
+      onReplyStart,
+      suppressUserDelivery: true,
+      suppressReplyLifecycle: false,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(result?.queuedFinal).toBe(false);
+    expect(onReplyStart).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+  });
+
   it("edits ACP tool lifecycle updates in place when supported", async () => {
     setReadyAcpResolution();
     mockToolLifecycleTurn("call-1");
@@ -526,6 +569,44 @@ describe("tryDispatchAcpReply", () => {
     });
 
     expect(mediaUnderstandingMocks.applyMediaUnderstanding).not.toHaveBeenCalled();
+  });
+
+  it("passes the ACP agent directory to media understanding", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("image turn");
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const agentDir = path.join(tempDir, "codex-agent");
+    const imagePath = path.join(tempDir, "inbound.png");
+    try {
+      await fs.mkdir(agentDir);
+      await fs.writeFile(imagePath, "image-bytes");
+
+      await runDispatch({
+        bodyForAgent: "describe image",
+        cfg: createAcpTestConfig({
+          agents: {
+            list: [{ id: "codex-acp", agentDir }],
+          },
+          channels: {
+            imessage: {
+              attachmentRoots: [tempDir],
+            },
+          },
+        }),
+        ctxOverrides: {
+          Provider: "imessage",
+          Surface: "imessage",
+          MediaPath: imagePath,
+          MediaType: "image/png",
+        },
+      });
+
+      expect(mediaUnderstandingMocks.applyMediaUnderstanding).toHaveBeenCalledWith(
+        expect.objectContaining({ agentDir }),
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("forwards normalized image attachments into ACP turns", async () => {

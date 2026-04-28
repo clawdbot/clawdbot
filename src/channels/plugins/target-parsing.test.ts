@@ -1,13 +1,17 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import {
+  channelRouteTargetsMatchExact,
+  channelRouteTargetsShareConversation,
+} from "../../plugin-sdk/channel-route.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   comparableChannelTargetsMatch,
-  comparableChannelTargetsShareRoute,
   parseExplicitTargetForChannel,
   parseExplicitTargetForLoadedChannel,
   resolveComparableTargetForChannel,
-  resolveComparableTargetForLoadedChannel,
+  resolveRouteTargetForChannel,
+  resolveRouteTargetForLoadedChannel,
 } from "./target-parsing.js";
 
 function parseThreadedTargetForTest(raw: string): {
@@ -125,24 +129,26 @@ describe("parseExplicitTargetForChannel", () => {
     });
   });
 
-  it("builds comparable targets from plugin-owned grammar", () => {
+  it("builds route targets from plugin-owned grammar", () => {
     expect(
-      resolveComparableTargetForChannel({
+      resolveRouteTargetForChannel({
         channel: "mock-threaded",
         rawTarget: "threaded:group:room-a:topic:77",
       }),
     ).toEqual({
+      channel: "mock-threaded",
       rawTo: "threaded:group:room-a:topic:77",
       to: "room-a",
       threadId: 77,
       chatType: "group",
     });
     expect(
-      resolveComparableTargetForLoadedChannel({
+      resolveRouteTargetForLoadedChannel({
         channel: "mock-threaded",
         rawTarget: "threaded:group:room-a:topic:77",
       }),
     ).toEqual({
+      channel: "mock-threaded",
       rawTo: "threaded:group:room-a:topic:77",
       to: "room-a",
       threadId: 77,
@@ -150,26 +156,64 @@ describe("parseExplicitTargetForChannel", () => {
     });
   });
 
-  it("matches comparable targets when only the plugin grammar differs", () => {
-    const topicTarget = resolveComparableTargetForChannel({
+  it("matches route targets when only the plugin grammar differs", () => {
+    const topicTarget = resolveRouteTargetForChannel({
       channel: "mock-threaded",
       rawTarget: "threaded:room-a:topic:77",
     });
-    const bareTarget = resolveComparableTargetForChannel({
+    const bareTarget = resolveRouteTargetForChannel({
       channel: "mock-threaded",
       rawTarget: "room-a",
     });
 
     expect(
-      comparableChannelTargetsMatch({
+      channelRouteTargetsMatchExact({
         left: topicTarget,
         right: bareTarget,
       }),
     ).toBe(false);
     expect(
-      comparableChannelTargetsShareRoute({
+      channelRouteTargetsShareConversation({
         left: topicTarget,
         right: bareTarget,
+      }),
+    ).toBe(true);
+  });
+
+  it("compares numeric and string thread ids through the shared route contract", () => {
+    const numericThread = resolveRouteTargetForChannel({
+      channel: "mock-threaded",
+      rawTarget: "threaded:room-a:topic:77",
+    });
+    const stringThread = resolveRouteTargetForChannel({
+      channel: "mock-threaded",
+      rawTarget: "room-a",
+      fallbackThreadId: "77",
+    });
+
+    expect(
+      channelRouteTargetsMatchExact({
+        left: numericThread,
+        right: stringThread,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps deprecated comparable target helpers as route wrappers", () => {
+    const numericThread = resolveComparableTargetForChannel({
+      channel: "mock-threaded",
+      rawTarget: "threaded:room-a:topic:77",
+    });
+    const stringThread = resolveRouteTargetForChannel({
+      channel: "mock-threaded",
+      rawTarget: "room-a",
+      fallbackThreadId: "77",
+    });
+
+    expect(
+      comparableChannelTargetsMatch({
+        left: numericThread,
+        right: stringThread,
       }),
     ).toBe(true);
   });

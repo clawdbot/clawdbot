@@ -58,6 +58,16 @@ export function resolveCurrentModelRef(ctx: MigrationProviderContext): string | 
   return resolveDefaultAgentModelState(ctx.config).effectivePrimary;
 }
 
+class ModelApplyAbortError extends Error {
+  constructor(
+    readonly status: "conflict" | "skipped",
+    readonly reason: string,
+  ) {
+    super(reason);
+    this.name = "ModelApplyAbortError";
+  }
+}
+
 export async function applyModelItem(
   ctx: MigrationProviderContext,
   item: MigrationItem,
@@ -67,21 +77,40 @@ export async function applyModelItem(
     return item;
   }
   try {
-    if (!ctx.runtime?.config.writeConfigFile) {
+    const configApi = ctx.runtime?.config;
+    if (!configApi?.current || !configApi.mutateConfigFile) {
       return hermesItemError(item, HERMES_REASON_CONFIG_RUNTIME_UNAVAILABLE);
     }
-    const nextConfig = structuredClone(ctx.runtime?.config.loadConfig?.() ?? ctx.config);
-    const currentState = resolveDefaultAgentModelState(nextConfig);
+    const currentState = resolveDefaultAgentModelState(
+      configApi.current() as MigrationProviderContext["config"],
+    );
     if (currentState.effectivePrimary === details.model) {
       return hermesItemSkipped(item, HERMES_REASON_ALREADY_CONFIGURED);
     }
     if (currentState.effectivePrimary && !ctx.overwrite) {
       return hermesItemConflict(item, HERMES_REASON_DEFAULT_MODEL_CONFIGURED);
     }
-    setAgentEffectiveModelPrimary(nextConfig, currentState.agentId, details.model);
-    await ctx.runtime.config.writeConfigFile(nextConfig);
+    await configApi.mutateConfigFile({
+      base: "runtime",
+      afterWrite: { mode: "auto" },
+      mutate(draft) {
+        const mutationState = resolveDefaultAgentModelState(draft);
+        if (mutationState.effectivePrimary === details.model) {
+          throw new ModelApplyAbortError("skipped", HERMES_REASON_ALREADY_CONFIGURED);
+        }
+        if (mutationState.effectivePrimary && !ctx.overwrite) {
+          throw new ModelApplyAbortError("conflict", HERMES_REASON_DEFAULT_MODEL_CONFIGURED);
+        }
+        setAgentEffectiveModelPrimary(draft, mutationState.agentId, details.model);
+      },
+    });
     return { ...item, status: "migrated" };
   } catch (err) {
+    if (err instanceof ModelApplyAbortError) {
+      return err.status === "conflict"
+        ? hermesItemConflict(item, err.reason)
+        : hermesItemSkipped(item, err.reason);
+    }
     return hermesItemError(item, err instanceof Error ? err.message : String(err));
   }
 }

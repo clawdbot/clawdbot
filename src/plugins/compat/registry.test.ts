@@ -46,6 +46,11 @@ const knownDeprecatedSurfaceMarkers = [
     marker: "AgentToolResultMiddlewareHarness",
   },
   {
+    code: "runtime-config-load-write",
+    file: "src/plugins/runtime/runtime-config.ts",
+    marker: "RUNTIME_CONFIG_LOAD_WRITE_COMPAT_CODE",
+  },
+  {
     code: "runtime-taskflow-legacy-alias",
     file: "src/plugins/runtime/types-core.ts",
     marker: "taskFlow",
@@ -88,7 +93,7 @@ const knownDeprecatedSurfaceMarkers = [
   {
     code: "plugin-sdk-test-utils-alias",
     file: "src/plugin-sdk/test-utils.ts",
-    marker: "Deprecated compatibility alias",
+    marker: "focused `openclaw/plugin-sdk/*` test subpaths",
   },
   {
     code: "plugin-install-config-ledger",
@@ -114,6 +119,26 @@ const knownDeprecatedSurfaceMarkers = [
     code: "plugin-owned-x-search-config",
     file: "src/commands/doctor/shared/legacy-x-search-migrate.ts",
     marker: "tools.web.x_search",
+  },
+  {
+    code: "bundled-channel-config-schema-legacy",
+    file: "src/plugin-sdk/channel-config-schema-legacy.ts",
+    marker: "Deprecated bundled-channel compatibility surface",
+  },
+  {
+    code: "plugin-sdk-testing-barrel",
+    file: "src/plugin-sdk/testing.ts",
+    marker: "@deprecated Broad compatibility barrel",
+  },
+  {
+    code: "channel-route-key-aliases",
+    file: "src/plugin-sdk/channel-route.ts",
+    marker: "channelRouteIdentityKey",
+  },
+  {
+    code: "channel-target-comparable-aliases",
+    file: "src/channels/plugins/target-parsing-loaded.ts",
+    marker: "ComparableChannelTarget",
   },
 ] as const;
 

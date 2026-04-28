@@ -36,7 +36,7 @@ describe("startGatewayEarlyRuntime", () => {
       skillsRefreshDelayMs: 30_000,
       getSkillsRefreshTimer: () => null,
       setSkillsRefreshTimer: () => {},
-      loadConfig: () => ({}) as never,
+      getRuntimeConfig: () => ({}) as never,
     });
 
     expect(earlyRuntime).not.toHaveProperty("mcpServer");

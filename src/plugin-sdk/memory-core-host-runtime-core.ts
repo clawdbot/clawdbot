@@ -5,4 +5,9 @@ export type {
   MemoryCorpusSupplement,
   MemoryCorpusSupplementRegistration,
 } from "../plugins/memory-state.js";
-export { listMemoryCorpusSupplements } from "../plugins/memory-state.js";
+export {
+  clearMemoryPluginState,
+  listMemoryCorpusSupplements,
+  registerMemoryCapability,
+  registerMemoryCorpusSupplement,
+} from "../plugins/memory-state.js";

@@ -5,7 +5,7 @@ import type {
   ThinkLevel,
   VerboseLevel,
 } from "../../auto-reply/thinking.js";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import {
   loadSessionStore,
   resolveStorePath,
@@ -42,14 +42,15 @@ import {
 import type { AnyAgentTool } from "./common.js";
 import { readStringParam } from "./common.js";
 import {
-  createSessionVisibilityGuard,
-  shouldResolveSessionIdInput,
   createAgentToAgentPolicy,
+  createSessionVisibilityGuard,
+  resolveCurrentSessionClientAlias,
   resolveEffectiveSessionToolsVisibility,
   resolveInternalSessionKey,
-  resolveSessionReference,
   resolveSandboxedSessionToolContext,
+  resolveSessionReference,
   resolveVisibleSessionReference,
+  shouldResolveSessionIdInput,
 } from "./sessions-helpers.js";
 
 const SessionStatusToolSchema = Type.Object({
@@ -263,7 +264,7 @@ export function createSessionStatusTool(opts?: {
     parameters: SessionStatusToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const cfg = opts?.config ?? loadConfig();
+      const cfg = opts?.config ?? getRuntimeConfig();
       const { mainKey, alias, effectiveRequesterKey } = resolveSandboxedSessionToolContext({
         cfg,
         agentSessionKey: opts?.agentSessionKey,
@@ -322,6 +323,13 @@ export function createSessionStatusTool(opts?: {
 
       const requestedKeyParam = readStringParam(params, "sessionKey");
       let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
+      const currentSessionAlias = resolveCurrentSessionClientAlias({
+        key: requestedKeyRaw ?? "",
+        requesterInternalKey: effectiveRequesterKey,
+      });
+      if (currentSessionAlias) {
+        requestedKeyRaw = currentSessionAlias;
+      }
       const requestedKeyInput = requestedKeyRaw?.trim() ?? "";
       let resolvedViaSessionId = false;
       let resolvedViaImplicitCurrentFallback = false;

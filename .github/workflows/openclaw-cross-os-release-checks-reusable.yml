@@ -51,6 +51,31 @@ on:
         required: false
         default: ""
         type: string
+      candidate_artifact_name:
+        description: Optional current-run artifact name containing the candidate OpenClaw tarball
+        required: false
+        default: ""
+        type: string
+      candidate_artifact_run_id:
+        description: Optional workflow run id for candidate_artifact_name
+        required: false
+        default: ""
+        type: string
+      candidate_file_name:
+        description: Optional candidate tarball file name inside candidate_artifact_name
+        required: false
+        default: ""
+        type: string
+      candidate_version:
+        description: Optional candidate OpenClaw package version
+        required: false
+        default: ""
+        type: string
+      candidate_source_sha:
+        description: Optional source SHA used to build the candidate tarball
+        required: false
+        default: ""
+        type: string
   workflow_call:
     inputs:
       ref:
@@ -90,6 +115,31 @@ on:
         required: false
         default: ""
         type: string
+      candidate_artifact_name:
+        description: Optional current-run artifact name containing the candidate OpenClaw tarball
+        required: false
+        default: ""
+        type: string
+      candidate_artifact_run_id:
+        description: Optional workflow run id for candidate_artifact_name
+        required: false
+        default: ""
+        type: string
+      candidate_file_name:
+        description: Optional candidate tarball file name inside candidate_artifact_name
+        required: false
+        default: ""
+        type: string
+      candidate_version:
+        description: Optional candidate OpenClaw package version
+        required: false
+        default: ""
+        type: string
+      candidate_source_sha:
+        description: Optional source SHA used to build the candidate tarball
+        required: false
+        default: ""
+        type: string
     secrets:
       OPENAI_API_KEY:
         required: false
@@ -119,7 +169,7 @@ env:
 
 jobs:
   prepare:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     outputs:
       baseline_file_name: ${{ steps.baseline_metadata.outputs.file_name }}
       baseline_spec: ${{ steps.baseline.outputs.value }}
@@ -260,6 +310,7 @@ jobs:
           persist-credentials: false
 
       - name: Checkout public source ref
+        if: inputs.candidate_artifact_name == ''
         uses: actions/checkout@v6
         with:
           repository: ${{ env.OPENCLAW_REPOSITORY }}
@@ -270,7 +321,7 @@ jobs:
           submodules: recursive
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
           version: ${{ env.PNPM_VERSION }}
           run_install: false
@@ -280,16 +331,63 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
-          cache-dependency-path: source/pnpm-lock.yaml
+          cache-dependency-path: ${{ inputs.candidate_artifact_name == '' && 'source/pnpm-lock.yaml' || 'workflow/pnpm-lock.yaml' }}
 
       - name: Build candidate artifact once
+        if: inputs.candidate_artifact_name == ''
         env:
           OUTPUT_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare
         run: |
-          pnpm dlx "tsx@${TSX_VERSION}" workflow/scripts/openclaw-cross-os-release-checks.ts \
+          bash workflow/scripts/github/run-openclaw-cross-os-release-checks.sh \
             --prepare-only \
             --source-dir source \
             --output-dir "${OUTPUT_DIR}"
+
+      - name: Download provided candidate artifact
+        if: inputs.candidate_artifact_name != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.candidate_artifact_name }}
+          run-id: ${{ inputs.candidate_artifact_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/package
+
+      - name: Capture provided candidate artifact metadata
+        if: inputs.candidate_artifact_name != ''
+        env:
+          PACKAGE_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/package
+          INPUT_CANDIDATE_FILE_NAME: ${{ inputs.candidate_file_name }}
+          INPUT_CANDIDATE_VERSION: ${{ inputs.candidate_version }}
+          INPUT_CANDIDATE_SOURCE_SHA: ${{ inputs.candidate_source_sha }}
+          CANDIDATE_JSON: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/candidate.json
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+
+          const packageDir = process.env.PACKAGE_DIR;
+          const requestedFileName = process.env.INPUT_CANDIDATE_FILE_NAME.trim();
+          const files = fs.readdirSync(packageDir).filter((file) => file.endsWith(".tgz"));
+          const candidateFileName = requestedFileName || (files.length === 1 ? files[0] : "");
+          if (!candidateFileName) {
+            throw new Error(`Expected exactly one candidate .tgz in ${packageDir}; found ${files.length}.`);
+          }
+          if (!fs.existsSync(path.join(packageDir, candidateFileName))) {
+            throw new Error(`Provided candidate artifact does not contain ${candidateFileName}.`);
+          }
+          const candidateVersion = process.env.INPUT_CANDIDATE_VERSION.trim();
+          if (!candidateVersion) {
+            throw new Error("candidate_version is required when candidate_artifact_name is provided.");
+          }
+          const sourceSha = process.env.INPUT_CANDIDATE_SOURCE_SHA.trim();
+          if (!/^[0-9a-f]{40}$/iu.test(sourceSha)) {
+            throw new Error("candidate_source_sha must be a full commit SHA when candidate_artifact_name is provided.");
+          }
+          fs.writeFileSync(
+            process.env.CANDIDATE_JSON,
+            `${JSON.stringify({ candidateFileName, candidateVersion, sourceSha }, null, 2)}\n`,
+          );
+          NODE
 
       - name: Resolve baseline package spec
         if: ${{ inputs.mode != 'fresh' }}
@@ -370,7 +468,7 @@ jobs:
           VAR_WINDOWS_RUNNER: ${{ vars.OPENCLAW_RELEASE_CHECKS_WINDOWS_RUNNER }}
           VAR_MACOS_RUNNER: ${{ vars.OPENCLAW_RELEASE_CHECKS_MACOS_RUNNER }}
         run: |
-          MATRIX_JSON="$(pnpm dlx "tsx@${TSX_VERSION}" workflow/scripts/openclaw-cross-os-release-checks.ts \
+          MATRIX_JSON="$(bash workflow/scripts/github/run-openclaw-cross-os-release-checks.sh \
             --resolve-matrix \
             --ref "${INPUT_REF}" \
             --mode "${INPUT_MODE}" \
@@ -398,7 +496,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
           version: ${{ env.PNPM_VERSION }}
           run_install: false
@@ -448,7 +546,7 @@ jobs:
           if [[ -n "${OPENCLAW_DISCORD_SMOKE_BOT_TOKEN}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_GUILD_ID}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_CHANNEL_ID}" ]]; then
             DISCORD_ARGS+=(--run-discord-roundtrip true)
           fi
-          pnpm dlx "tsx@${TSX_VERSION}" workflow/scripts/openclaw-cross-os-release-checks.ts \
+          bash workflow/scripts/github/run-openclaw-cross-os-release-checks.sh \
             --candidate-tgz "${CANDIDATE_TGZ}" \
             --candidate-version "${CANDIDATE_VERSION}" \
             --source-sha "${SOURCE_SHA}" \

@@ -1,14 +1,14 @@
-import { beforeAll, describe, expect, it } from "vitest";
-import {
-  expectDashscopeVideoTaskPoll,
-  expectSuccessfulDashscopeVideoResult,
-  mockSuccessfulDashscopeVideoTask,
-} from "../../test/helpers/media-generation/dashscope-video-provider.js";
-import { expectExplicitVideoGenerationCapabilities } from "../../test/helpers/media-generation/provider-capability-assertions.js";
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
-} from "../../test/helpers/media-generation/provider-http-mocks.js";
+} from "openclaw/plugin-sdk/provider-http-test-mocks";
+import {
+  expectDashscopeVideoTaskPoll,
+  expectExplicitVideoGenerationCapabilities,
+  expectSuccessfulDashscopeVideoResult,
+  mockSuccessfulDashscopeVideoTask,
+} from "openclaw/plugin-sdk/provider-test-contracts";
+import { beforeAll, describe, expect, it } from "vitest";
 
 const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
 

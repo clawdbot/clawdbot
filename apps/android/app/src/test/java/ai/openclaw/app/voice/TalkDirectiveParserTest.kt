@@ -8,10 +8,11 @@ import org.junit.Test
 class TalkDirectiveParserTest {
   @Test
   fun parsesDirectiveAndStripsHeader() {
-    val input = """
+    val input =
+      """
       {"voice":"voice-123","once":true}
       Hello from talk mode.
-    """.trimIndent()
+      """.trimIndent()
     val result = TalkDirectiveParser.parse(input)
     assertEquals("voice-123", result.directive?.voiceId)
     assertEquals(true, result.directive?.once)
@@ -20,10 +21,11 @@ class TalkDirectiveParserTest {
 
   @Test
   fun ignoresUnknownKeysButReportsThem() {
-    val input = """
+    val input =
+      """
       {"voice":"abc","foo":1,"bar":"baz"}
       Hi there.
-    """.trimIndent()
+      """.trimIndent()
     val result = TalkDirectiveParser.parse(input)
     assertEquals("abc", result.directive?.voiceId)
     assertTrue(result.unknownKeys.containsAll(listOf("bar", "foo")))
@@ -31,10 +33,11 @@ class TalkDirectiveParserTest {
 
   @Test
   fun parsesAlternateKeys() {
-    val input = """
+    val input =
+      """
       {"model_id":"eleven_v3","similarity_boost":0.4,"no_speaker_boost":true,"rate":200}
       Speak.
-    """.trimIndent()
+      """.trimIndent()
     val result = TalkDirectiveParser.parse(input)
     assertEquals("eleven_v3", result.directive?.modelId)
     assertEquals(0.4, result.directive?.similarity)
@@ -44,10 +47,11 @@ class TalkDirectiveParserTest {
 
   @Test
   fun returnsNullWhenNoDirectivePresent() {
-    val input = """
+    val input =
+      """
       {}
       Hello.
-    """.trimIndent()
+      """.trimIndent()
     val result = TalkDirectiveParser.parse(input)
     assertNull(result.directive)
     assertEquals(input, result.stripped)

@@ -7,15 +7,15 @@ import {
   resolveInboundMentionDecision,
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth-native";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-runtime";
-import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/config-types";
 import {
   createInternalHookEvent,
   fireAndForgetHook,

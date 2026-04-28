@@ -37,6 +37,18 @@ func (invalidFrontmatterTranslator) TranslateRaw(_ context.Context, text, _, _ s
 
 func (invalidFrontmatterTranslator) Close() {}
 
+type transcriptFrontmatterTranslator struct{}
+
+func (transcriptFrontmatterTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	return text + ` analysis to=functions.read {"path":"/home/runner/work/docs/docs/source/.agents/skills/openclaw-pr-maintainer/SKILL.md"} code`, nil
+}
+
+func (transcriptFrontmatterTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	return text, nil
+}
+
+func (transcriptFrontmatterTranslator) Close() {}
+
 func TestRunDocsI18NRewritesFinalLocalizedPageLinks(t *testing.T) {
 	t.Parallel()
 
@@ -104,5 +116,48 @@ func TestTranslateSnippetDoesNotCacheFallbackToSource(t *testing.T) {
 	cacheKey := cacheKey(cacheNamespace(), "en", "zh-CN", "gateway/index.md:frontmatter:title", hashText(source))
 	if _, ok := tm.Get(cacheKey); ok {
 		t.Fatalf("expected fallback translation not to be cached")
+	}
+}
+
+func TestTranslateSnippetRejectsTranscriptArtifact(t *testing.T) {
+	t.Parallel()
+
+	tm := &TranslationMemory{entries: map[string]TMEntry{}}
+	source := "Working with reactions across channels"
+
+	translated, err := translateSnippet(context.Background(), transcriptFrontmatterTranslator{}, tm, "tools/reactions.md:frontmatter:read_when:0", source, "en", "th")
+	if err != nil {
+		t.Fatalf("translateSnippet returned error: %v", err)
+	}
+	if translated != source {
+		t.Fatalf("expected fallback to source text, got %q", translated)
+	}
+
+	cacheKey := cacheKey(cacheNamespace(), "en", "th", "tools/reactions.md:frontmatter:read_when:0", hashText(source))
+	if _, ok := tm.Get(cacheKey); ok {
+		t.Fatalf("expected fallback translation not to be cached")
+	}
+}
+
+func TestValidateNoTranslationTranscriptArtifacts(t *testing.T) {
+	t.Parallel()
+
+	tests := []string{
+		`表情回应 analysis to=functions.read {"path":"/home/runner/work/docs/docs/source/.agents/skills/openclaw-qa-testing/SKILL.md"} code`,
+		"<openclaw_docs_i18n_input>\nTranslated\n</openclaw_docs_i18n_input>",
+		`กำลังทำงานกับ reactions to=functions.read commentary ￣第四色json 皇平台`,
+		`คุณต้องการแผนที่เอกสาร analysis to=final code omitted`,
+		`Potrzebujesz listy funkcji TUI force_parallel: false} code`,
+		`กำลังตัดสินใจว่าจะกำหนดค่าผู้ให้บริการสื่อรายใด 全民彩票 casino`,
+	}
+	for _, translated := range tests {
+		if err := validateNoTranslationTranscriptArtifacts("Working with reactions across channels", translated); err == nil {
+			t.Fatalf("expected artifact to be rejected: %q", translated)
+		}
+	}
+
+	source := "Document `functions.read` examples exactly."
+	if err := validateNoTranslationTranscriptArtifacts(source, "Document `functions.read` examples exactly."); err != nil {
+		t.Fatalf("expected source-owned token to be allowed: %v", err)
 	}
 }

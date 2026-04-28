@@ -1,5 +1,5 @@
 import { promptYesNo } from "../cli/prompt.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { redactMigrationPlan } from "../plugin-sdk/migration.js";
 import { resolvePluginMigrationProviders } from "../plugins/migration-provider-runtime.js";
 import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
@@ -17,11 +17,13 @@ import type {
 export type { MigrateApplyOptions, MigrateCommonOptions, MigrateDefaultOptions };
 
 export async function migrateListCommand(runtime: RuntimeEnv, opts: { json?: boolean } = {}) {
-  const providers = resolvePluginMigrationProviders({ cfg: loadConfig() }).map((provider) => ({
-    id: provider.id,
-    label: provider.label,
-    description: provider.description,
-  }));
+  const providers = resolvePluginMigrationProviders({ cfg: getRuntimeConfig() }).map(
+    (provider) => ({
+      id: provider.id,
+      label: provider.label,
+      description: provider.description,
+    }),
+  );
   if (opts.json) {
     writeRuntimeJson(runtime, { providers });
     return;

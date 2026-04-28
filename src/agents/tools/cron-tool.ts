@@ -1,5 +1,5 @@
 import { Type, type TSchema } from "typebox";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
@@ -183,6 +183,11 @@ const CronDeliverySchema = Type.Optional(
       mode: optionalStringEnum(CRON_DELIVERY_MODES, { description: "Delivery mode" }),
       channel: Type.Optional(Type.String({ description: "Delivery channel" })),
       to: Type.Optional(Type.String({ description: "Delivery target" })),
+      threadId: Type.Optional(
+        Type.Union([Type.String(), Type.Number()], {
+          description: "Thread/topic id for channels that support threaded delivery",
+        }),
+      ),
       bestEffort: Type.Optional(Type.Boolean()),
       accountId: Type.Optional(Type.String({ description: "Account target for delivery" })),
       failureDestination: Type.Optional(
@@ -354,7 +359,7 @@ async function buildReminderContextLines(params: {
   if (!sessionKey) {
     return [];
   }
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const { mainKey, alias } = resolveMainSessionAlias(cfg);
   const resolvedKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
   try {
@@ -576,9 +581,10 @@ PAYLOAD TYPES (payload.kind):
   { "kind": "agentTurn", "message": "<prompt>", "model": "<optional>", "thinking": "<optional>", "timeoutSeconds": <optional, 0 means no timeout> }
 
 DELIVERY (top-level):
-  { "mode": "none|announce|webhook", "channel": "<optional>", "to": "<optional>", "bestEffort": <optional-bool> }
+  { "mode": "none|announce|webhook", "channel": "<optional>", "to": "<optional>", "threadId": "<optional>", "bestEffort": <optional-bool> }
   - Default for isolated agentTurn jobs (when delivery omitted): "announce"
   - announce: send to chat channel (optional channel/to target)
+  - threadId: chat thread/topic id for channels that support threaded delivery
   - webhook: send finished-run event as HTTP POST to delivery.to (URL required)
   - If the task needs to send to a specific chat/recipient, set announce delivery.channel/to; do not call messaging tools inside the run.
 
@@ -638,7 +644,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               sessionContext: { sessionKey: opts?.agentSessionKey },
             }) ?? params.job;
           if (job && typeof job === "object") {
-            const cfg = loadConfig();
+            const cfg = getRuntimeConfig();
             const { mainKey, alias } = resolveMainSessionAlias(cfg);
             const resolvedSessionKey = opts?.agentSessionKey
               ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })

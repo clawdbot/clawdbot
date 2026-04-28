@@ -106,4 +106,105 @@ describe("channel plugin blockers", () => {
       },
     ]);
   });
+
+  it("does not report a disabled bundled owner when a configured external plugin owns the channel", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [
+        {
+          id: "feishu",
+          origin: "bundled",
+          channels: ["feishu"],
+          enabledByDefault: true,
+        },
+        {
+          id: "openclaw-lark",
+          origin: "config",
+          channels: ["feishu"],
+          enabledByDefault: false,
+          channelConfigs: {
+            feishu: {
+              schema: {
+                type: "object",
+              },
+            },
+          },
+        },
+      ],
+      diagnostics: [],
+    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+
+    const hits = scanConfiguredChannelPluginBlockers({
+      plugins: {
+        entries: {
+          feishu: {
+            enabled: false,
+          },
+          "openclaw-lark": {
+            enabled: true,
+          },
+        },
+      },
+      channels: {
+        feishu: {
+          footer: {
+            model: false,
+          },
+        },
+      },
+    });
+
+    expect(hits).toEqual([]);
+  });
+
+  it("still reports the disabled bundled owner when an external channel owner is not trusted", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [
+        {
+          id: "feishu",
+          origin: "bundled",
+          channels: ["feishu"],
+          enabledByDefault: true,
+        },
+        {
+          id: "openclaw-lark",
+          origin: "config",
+          channels: ["feishu"],
+          enabledByDefault: false,
+          channelConfigs: {
+            feishu: {
+              schema: {
+                type: "object",
+              },
+            },
+          },
+        },
+      ],
+      diagnostics: [],
+    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+
+    const hits = scanConfiguredChannelPluginBlockers({
+      plugins: {
+        entries: {
+          feishu: {
+            enabled: false,
+          },
+        },
+      },
+      channels: {
+        feishu: {
+          footer: {
+            model: false,
+          },
+        },
+      },
+    });
+
+    expect(hits).toEqual([
+      {
+        channelId: "feishu",
+        pluginId: "feishu",
+        reason: "disabled in config",
+      },
+    ]);
+  });
 });

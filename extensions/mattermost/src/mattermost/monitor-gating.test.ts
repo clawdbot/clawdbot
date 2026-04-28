@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   evaluateMattermostMentionGate,
   mapMattermostChannelTypeToChatType,
+  resolveMattermostTrustedChatKind,
 } from "./monitor-gating.js";
 
 describe("mattermost monitor gating", () => {
@@ -11,6 +12,23 @@ describe("mattermost monitor gating", () => {
     expect(mapMattermostChannelTypeToChatType("P")).toBe("group");
     expect(mapMattermostChannelTypeToChatType("O")).toBe("channel");
     expect(mapMattermostChannelTypeToChatType(undefined)).toBe("channel");
+  });
+
+  it("derives chat kind from trusted channel lookup before fallback state", () => {
+    expect(
+      resolveMattermostTrustedChatKind({
+        channelType: "O",
+        fallback: "direct",
+      }),
+    ).toBe("channel");
+    expect(
+      resolveMattermostTrustedChatKind({
+        channelType: "D",
+        fallback: "channel",
+      }),
+    ).toBe("direct");
+    expect(resolveMattermostTrustedChatKind({ fallback: "group" })).toBe("group");
+    expect(resolveMattermostTrustedChatKind({})).toBe("channel");
   });
 
   it("drops non-mentioned traffic when onchar is enabled but not triggered", () => {

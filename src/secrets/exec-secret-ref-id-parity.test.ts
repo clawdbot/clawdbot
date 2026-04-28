@@ -4,7 +4,9 @@ import { validateConfigObjectRaw } from "../config/validation.js";
 import { SecretRefSchema as GatewaySecretRefSchema } from "../gateway/protocol/schema/primitives.js";
 import { buildSecretInputSchema } from "../plugin-sdk/secret-input-schema.js";
 import {
+  INVALID_FILE_SECRET_REF_IDS,
   INVALID_EXEC_SECRET_REF_IDS,
+  VALID_FILE_SECRET_REF_IDS,
   VALID_EXEC_SECRET_REF_IDS,
 } from "../test-utils/secret-ref-test-vectors.js";
 import {
@@ -13,7 +15,7 @@ import {
   TALK_TEST_PROVIDER_ID,
 } from "../test-utils/talk-test-provider.js";
 import { isSecretsApplyPlan } from "./plan.js";
-import { isValidExecSecretRefId } from "./ref-contract.js";
+import { isValidExecSecretRefId, isValidFileSecretRefId } from "./ref-contract.js";
 import { materializePathTokens, parsePathPattern } from "./target-registry-pattern.js";
 import { canonicalizeSecretTargetCoverageId } from "./target-registry-test-helpers.js";
 import { listSecretTargetRegistryEntries } from "./target-registry.js";
@@ -39,6 +41,21 @@ describe("exec SecretRef id parity", () => {
     return result.ok;
   }
 
+  function configAcceptsFileRef(id: string): boolean {
+    const result = validateConfigObjectRaw({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: { source: "file", provider: "default", id },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+    return result.ok;
+  }
+
   function planAcceptsExecRef(id: string): boolean {
     return isSecretsApplyPlan({
       version: 1,
@@ -54,6 +71,17 @@ describe("exec SecretRef id parity", () => {
           ref: { source: "exec", provider: "vault", id },
         },
       ],
+    });
+  }
+
+  for (const id of [...VALID_FILE_SECRET_REF_IDS, ...INVALID_FILE_SECRET_REF_IDS]) {
+    it(`keeps config/gateway/plugin parity for file id "${id}"`, () => {
+      const expected = isValidFileSecretRefId(id);
+      expect(configAcceptsFileRef(id)).toBe(expected);
+      expect(validateGatewaySecretRef({ source: "file", provider: "default", id })).toBe(expected);
+      expect(
+        pluginSdkSecretInput.safeParse({ source: "file", provider: "default", id }).success,
+      ).toBe(expected);
     });
   }
 

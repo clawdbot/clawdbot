@@ -144,7 +144,7 @@ a real boundary bypass is demonstrated:
   explicit CIDR/IP entries, only applies to first-time `role: node` pairing with
   no requested scopes, and does not auto-approve operator/browser/Control UI,
   WebChat, role upgrades, scope upgrades, metadata changes, public-key changes,
-  or same-host loopback trusted-proxy header paths.
+  or same-host loopback trusted-proxy header paths unless loopback trusted-proxy auth was explicitly enabled.
 - "Missing per-user authorization" findings that treat `sessionKey` as an
   auth token.
 
@@ -303,6 +303,7 @@ production.
     - `hooks.mappings[<index>].allowUnsafeExternalContent=true`
     - `tools.exec.applyPatch.workspaceOnly=false`
     - `plugins.entries.acpx.config.permissionMode=approve-all`
+
   </Accordion>
 
   <Accordion title="All `dangerous*` / `dangerously*` keys in the config schema">
@@ -347,9 +348,9 @@ When the Gateway detects proxy headers from an address that is **not** in `trust
 
 `gateway.trustedProxies` also feeds `gateway.auth.mode: "trusted-proxy"`, but that auth mode is stricter:
 
-- trusted-proxy auth **fails closed on loopback-source proxies**
-- same-host loopback reverse proxies can still use `gateway.trustedProxies` for local-client detection and forwarded IP handling
-- for same-host loopback reverse proxies, use token/password auth instead of `gateway.auth.mode: "trusted-proxy"`
+- trusted-proxy auth **fails closed on loopback-source proxies by default**
+- same-host loopback reverse proxies can use `gateway.trustedProxies` for local-client detection and forwarded IP handling
+- same-host loopback reverse proxies can satisfy `gateway.auth.mode: "trusted-proxy"` only when `gateway.auth.trustedProxy.allowLoopback = true`; otherwise use token/password auth
 
 ```yaml
 gateway:
@@ -369,7 +370,7 @@ Trusted proxy headers do not make node device pairing automatically trusted.
 `gateway.nodes.pairing.autoApproveCidrs` is a separate, disabled-by-default
 operator policy. Even when enabled, loopback-source trusted-proxy header paths
 are excluded from node auto-approval because local callers can forge those
-headers.
+headers, including when loopback trusted-proxy auth is explicitly enabled.
 
 Good reverse proxy behavior (overwrite incoming forwarding headers):
 
@@ -733,7 +734,7 @@ If you load canvas content in a normal browser, treat it like any other untruste
 Bind mode controls where the Gateway listens:
 
 - `gateway.bind: "loopback"` (default): only local clients can connect.
-- Non-loopback binds (`"lan"`, `"tailnet"`, `"custom"`) expand the attack surface. Only use them with gateway auth (shared token/password or a correctly configured non-loopback trusted proxy) and a real firewall.
+- Non-loopback binds (`"lan"`, `"tailnet"`, `"custom"`) expand the attack surface. Only use them with gateway auth (shared token/password or a correctly configured trusted proxy) and a real firewall.
 
 Rules of thumb:
 

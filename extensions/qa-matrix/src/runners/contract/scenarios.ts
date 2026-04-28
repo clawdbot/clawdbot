@@ -1,4 +1,5 @@
 import {
+  MATRIX_QA_BOT_DM_ROOM_KEY,
   MATRIX_QA_DRIVER_DM_ROOM_KEY,
   MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY,
   MATRIX_QA_E2EE_ROOM_KEY,
@@ -61,6 +62,7 @@ export type {
 export type { MatrixQaScenarioContext, MatrixQaSyncState };
 
 export const __testing = {
+  MATRIX_QA_BOT_DM_ROOM_KEY,
   MATRIX_QA_DRIVER_DM_ROOM_KEY,
   MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY,
   MATRIX_QA_E2EE_ROOM_KEY,

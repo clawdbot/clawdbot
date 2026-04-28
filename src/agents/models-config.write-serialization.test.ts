@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
   installModelsConfigTestHooks,
@@ -13,15 +16,63 @@ const planOpenClawModelsJsonMock = vi.fn();
 installModelsConfigTestHooks();
 
 let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
+let clearCurrentPluginMetadataSnapshot: typeof import("../plugins/current-plugin-metadata-snapshot.js").clearCurrentPluginMetadataSnapshot;
+let setCurrentPluginMetadataSnapshot: typeof import("../plugins/current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
+
+function createPluginMetadataSnapshot(workspaceDir: string): PluginMetadataSnapshot {
+  const policyHash = resolveInstalledPluginIndexPolicyHash({});
+  return {
+    policyHash,
+    workspaceDir,
+    index: {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash,
+      generatedAtMs: 1,
+      installRecords: {},
+      plugins: [],
+      diagnostics: [],
+    },
+    registryDiagnostics: [],
+    manifestRegistry: { plugins: [], diagnostics: [] },
+    plugins: [],
+    diagnostics: [],
+    byPluginId: new Map(),
+    normalizePluginId: (pluginId) => pluginId,
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+    },
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: 0,
+      manifestPluginCount: 0,
+    },
+  };
+}
 
 beforeAll(async () => {
   vi.doMock("./models-config.plan.js", () => ({
     planOpenClawModelsJson: (...args: unknown[]) => planOpenClawModelsJsonMock(...args),
   }));
   ({ ensureOpenClawModelsJson } = await import("./models-config.js"));
+  ({ clearCurrentPluginMetadataSnapshot, setCurrentPluginMetadataSnapshot } =
+    await import("../plugins/current-plugin-metadata-snapshot.js"));
 });
 
 beforeEach(() => {
+  clearCurrentPluginMetadataSnapshot();
   planOpenClawModelsJsonMock
     .mockReset()
     .mockImplementation(async (params: { cfg?: typeof CUSTOM_PROXY_MODELS_CONFIG }) => ({
@@ -31,6 +82,101 @@ beforeEach(() => {
 });
 
 describe("models-config write serialization", () => {
+  it("does not reuse default workspace plugin metadata for explicit agent dirs without workspace", async () => {
+    await withModelsTempHome(async (home) => {
+      const snapshot = createPluginMetadataSnapshot(path.join(home, "default-workspace"));
+      setCurrentPluginMetadataSnapshot(snapshot, { config: {} });
+      const agentDir = path.join(home, "agent-non-default");
+
+      await ensureOpenClawModelsJson({}, agentDir);
+
+      expect(planOpenClawModelsJsonMock).toHaveBeenCalledWith(
+        expect.not.objectContaining({ pluginMetadataSnapshot: snapshot }),
+      );
+    });
+  });
+
+  it("reuses current plugin metadata for explicit agent dirs with matching workspace", async () => {
+    await withModelsTempHome(async (home) => {
+      const workspaceDir = path.join(home, "agent-workspace");
+      const snapshot = createPluginMetadataSnapshot(workspaceDir);
+      setCurrentPluginMetadataSnapshot(snapshot, { config: {} });
+      const agentDir = path.join(home, "agent-non-default");
+
+      await ensureOpenClawModelsJson({}, agentDir, { workspaceDir });
+
+      expect(planOpenClawModelsJsonMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceDir,
+          pluginMetadataSnapshot: snapshot,
+        }),
+      );
+    });
+  });
+
+  it("does not reuse scoped startup discovery cache for a different provider scope", async () => {
+    await withModelsTempHome(async (home) => {
+      planOpenClawModelsJsonMock.mockImplementation(async () => ({ action: "skip" }));
+      const agentDir = path.join(home, "agent");
+      await ensureOpenClawModelsJson({}, agentDir, {
+        providerDiscoveryProviderIds: ["openai"],
+        providerDiscoveryTimeoutMs: 5000,
+      });
+      await ensureOpenClawModelsJson({}, agentDir, {
+        providerDiscoveryProviderIds: ["anthropic"],
+        providerDiscoveryTimeoutMs: 5000,
+      });
+
+      expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(2);
+      expect(planOpenClawModelsJsonMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          providerDiscoveryProviderIds: ["anthropic"],
+          providerDiscoveryTimeoutMs: 5000,
+        }),
+      );
+    });
+  });
+
+  it("keeps the ready cache warm after models.json is written", async () => {
+    await withModelsTempHome(async () => {
+      await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
+      await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
+
+      expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("invalidates the ready cache when models.json changes externally", async () => {
+    await withModelsTempHome(async () => {
+      await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
+      await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
+
+      const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
+      await fs.writeFile(modelPath, `${JSON.stringify({ external: true })}\n`, "utf8");
+      const externalMtime = new Date(Date.now() + 2000);
+      await fs.utimes(modelPath, externalMtime, externalMtime);
+      await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
+
+      expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("keeps distinct config fingerprints cached without evicting each other", async () => {
+    await withModelsTempHome(async () => {
+      planOpenClawModelsJsonMock.mockImplementation(async () => ({ action: "noop" }));
+      const first = structuredClone(CUSTOM_PROXY_MODELS_CONFIG);
+      const second = structuredClone(CUSTOM_PROXY_MODELS_CONFIG);
+      first.agents = { defaults: { model: "openai/gpt-5.4" } };
+      second.agents = { defaults: { model: "anthropic/claude-sonnet-4-5" } };
+
+      await ensureOpenClawModelsJson(first);
+      await ensureOpenClawModelsJson(second);
+      await ensureOpenClawModelsJson(first);
+
+      expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("serializes concurrent models.json writes to avoid overlap", async () => {
     await withModelsTempHome(async () => {
       const first = structuredClone(CUSTOM_PROXY_MODELS_CONFIG);

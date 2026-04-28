@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import { readCaptureBlobText, writeCaptureBlob } from "./blob-store.js";
 import type {
   CaptureBlobRecord,
@@ -18,11 +19,16 @@ function ensureParentDir(filePath: string) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
 }
 
-function openDatabase(dbPath: string): DatabaseSync {
+type OpenedDatabase = {
+  db: DatabaseSync;
+  walMaintenance: SqliteWalMaintenance;
+};
+
+function openDatabase(dbPath: string): OpenedDatabase {
   ensureParentDir(dbPath);
   const { DatabaseSync } = requireNodeSqlite();
   const db = new DatabaseSync(dbPath);
-  db.exec("PRAGMA journal_mode = WAL");
+  const walMaintenance = configureSqliteWalMaintenance(db);
   db.exec("PRAGMA busy_timeout = 5000");
   db.exec(`
     CREATE TABLE IF NOT EXISTS capture_sessions (
@@ -62,7 +68,7 @@ function openDatabase(dbPath: string): DatabaseSync {
     CREATE INDEX IF NOT EXISTS capture_events_session_ts_idx ON capture_events(session_id, ts);
     CREATE INDEX IF NOT EXISTS capture_events_flow_idx ON capture_events(flow_id, ts);
   `);
-  return db;
+  return { db, walMaintenance };
 }
 
 function serializeJson(value: unknown): string | null {
@@ -93,19 +99,23 @@ function sortObservedCounts(counts: Map<string, number>): CaptureObservedDimensi
 
 export class DebugProxyCaptureStore {
   readonly db: DatabaseSync;
+  private readonly walMaintenance: SqliteWalMaintenance;
   private closed = false;
 
   constructor(
     readonly dbPath: string,
     readonly blobDir: string,
   ) {
-    this.db = openDatabase(dbPath);
+    const opened = openDatabase(dbPath);
+    this.db = opened.db;
+    this.walMaintenance = opened.walMaintenance;
   }
 
   close(): void {
     if (this.closed) {
       return;
     }
+    this.walMaintenance.close();
     this.db.close();
     this.closed = true;
   }

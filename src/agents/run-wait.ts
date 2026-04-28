@@ -22,6 +22,9 @@ export type AgentWaitResult = {
   error?: string;
   startedAt?: number;
   endedAt?: number;
+  stopReason?: string;
+  livenessState?: string;
+  yielded?: boolean;
 };
 
 export type AgentRunsDrainResult = {
@@ -35,6 +38,9 @@ type RawAgentWaitResponse = {
   error?: string;
   startedAt?: unknown;
   endedAt?: unknown;
+  stopReason?: unknown;
+  livenessState?: unknown;
+  yielded?: unknown;
 };
 
 function normalizeAgentWaitResult(
@@ -46,6 +52,9 @@ function normalizeAgentWaitResult(
     error: typeof wait?.error === "string" ? wait.error : undefined,
     startedAt: typeof wait?.startedAt === "number" ? wait.startedAt : undefined,
     endedAt: typeof wait?.endedAt === "number" ? wait.endedAt : undefined,
+    stopReason: typeof wait?.stopReason === "string" ? wait.stopReason : undefined,
+    livenessState: typeof wait?.livenessState === "string" ? wait.livenessState : undefined,
+    yielded: wait?.yielded === true ? true : undefined,
   };
 }
 

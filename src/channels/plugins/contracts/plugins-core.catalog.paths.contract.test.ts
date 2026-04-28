@@ -1,3 +1,3 @@
-import { describeChannelPluginCatalogPathResolutionContract } from "../../../../test/helpers/channels/channel-plugin-catalog-contract-suites.js";
+import { describeChannelPluginCatalogPathResolutionContract } from "./test-helpers/channel-plugin-catalog-contract-suites.js";
 
 describeChannelPluginCatalogPathResolutionContract();

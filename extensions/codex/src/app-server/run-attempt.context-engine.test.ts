@@ -4,9 +4,11 @@ import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  embeddedAgentLog,
+  type HarnessContextEngine as ContextEngine,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ContextEngine } from "../../../../src/context-engine/types.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
 import { createCodexTestModel } from "./test-support.js";
@@ -168,16 +170,7 @@ function createStartedThreadHarness(
   };
 }
 
-type MockContextEngine = ContextEngine & {
-  bootstrap: ReturnType<typeof vi.fn>;
-  assemble: ReturnType<typeof vi.fn>;
-  maintain: ReturnType<typeof vi.fn>;
-  afterTurn?: ReturnType<typeof vi.fn>;
-  ingestBatch?: ReturnType<typeof vi.fn>;
-  ingest?: ReturnType<typeof vi.fn>;
-};
-
-function createContextEngine(overrides: Partial<ContextEngine> = {}): MockContextEngine {
+function createContextEngine(overrides: Partial<ContextEngine> = {}): ContextEngine {
   const engine: ContextEngine = {
     info: {
       id: "lossless-claw",
@@ -199,7 +192,7 @@ function createContextEngine(overrides: Partial<ContextEngine> = {}): MockContex
     })),
     ...overrides,
   };
-  return engine as MockContextEngine;
+  return engine;
 }
 
 describe("runCodexAppServerAttempt context-engine lifecycle", () => {

@@ -501,6 +501,74 @@ describe("readSessionMessages", () => {
     expect(typeof marker.timestamp).toBe("number");
   });
 
+  test("reads only the active branch when transcript rewrites abandon older entries", () => {
+    const sessionId = "test-session-active-branch";
+    const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      {
+        type: "session",
+        version: 3,
+        id: sessionId,
+        cwd: tmpDir,
+        timestamp: "2026-04-27T00:00:00.000Z",
+      },
+      {
+        type: "message",
+        id: "original",
+        parentId: null,
+        timestamp: "2026-04-27T00:00:01.000Z",
+        message: {
+          role: "user",
+          content: "Sender (untrusted metadata): webchat\n\noriginal wrapped prompt",
+          timestamp: 1,
+        },
+      },
+      {
+        type: "message",
+        id: "clean",
+        parentId: null,
+        timestamp: "2026-04-27T00:00:02.000Z",
+        message: { role: "user", content: "clean prompt", timestamp: 2 },
+      },
+      {
+        type: "message",
+        id: "answer",
+        parentId: "clean",
+        timestamp: "2026-04-27T00:00:03.000Z",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "clean answer" }],
+          api: "chat",
+          provider: "openclaw",
+          model: "test",
+          usage: {},
+          stopReason: "stop",
+          timestamp: 3,
+        },
+      },
+    ];
+    fs.writeFileSync(sessionFile, lines.map((line) => JSON.stringify(line)).join("\n"), "utf-8");
+    const rawTranscript = fs.readFileSync(sessionFile, "utf-8");
+    expect(rawTranscript).toContain("original wrapped prompt");
+    expect(rawTranscript).toContain("clean prompt");
+
+    const out = readSessionMessages(sessionId, storePath, sessionFile);
+    expect(out).toHaveLength(2);
+    expect(out).toEqual([
+      expect.objectContaining({
+        role: "user",
+        content: "clean prompt",
+        __openclaw: expect.objectContaining({ seq: 1 }),
+      }),
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: "clean answer" }],
+        __openclaw: expect.objectContaining({ seq: 2 }),
+      }),
+    ]);
+    expect(JSON.stringify(out)).not.toContain("original wrapped prompt");
+  });
+
   test.each([
     {
       sessionId: "cross-agent-default-root",

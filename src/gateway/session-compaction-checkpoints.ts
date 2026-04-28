@@ -16,6 +16,7 @@ import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 
 const log = createSubsystemLogger("gateway/session-compaction-checkpoints");
 const MAX_COMPACTION_CHECKPOINTS_PER_SESSION = 25;
+export const MAX_COMPACTION_CHECKPOINT_SNAPSHOT_BYTES = 64 * 1024 * 1024;
 
 export type CapturedCompactionCheckpointSnapshot = {
   sessionId: string;
@@ -62,6 +63,7 @@ export function resolveSessionCompactionCheckpointReason(params: {
 export function captureCompactionCheckpointSnapshot(params: {
   sessionManager: Pick<SessionManager, "getLeafId">;
   sessionFile: string;
+  maxBytes?: number;
 }): CapturedCompactionCheckpointSnapshot | null {
   const getLeafId =
     params.sessionManager && typeof params.sessionManager.getLeafId === "function"
@@ -69,6 +71,15 @@ export function captureCompactionCheckpointSnapshot(params: {
       : null;
   const sessionFile = params.sessionFile.trim();
   if (!getLeafId || !sessionFile) {
+    return null;
+  }
+  const maxBytes = params.maxBytes ?? MAX_COMPACTION_CHECKPOINT_SNAPSHOT_BYTES;
+  try {
+    const stat = fsSync.statSync(sessionFile);
+    if (!stat.isFile() || stat.size > maxBytes) {
+      return null;
+    }
+  } catch {
     return null;
   }
   const leafId = getLeafId();

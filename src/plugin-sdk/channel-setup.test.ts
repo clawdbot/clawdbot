@@ -1,5 +1,5 @@
+import { runSetupWizardFinalize } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
-import { runSetupWizardFinalize } from "../../test/helpers/plugins/setup-wizard.js";
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
 
 describe("createOptionalChannelSetupSurface", () => {

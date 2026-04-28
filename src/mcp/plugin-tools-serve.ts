@@ -9,7 +9,7 @@
 import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolvePluginTools } from "../plugins/tools.js";
@@ -28,13 +28,13 @@ export function createPluginToolsMcpServer(
     tools?: AnyAgentTool[];
   } = {},
 ): Server {
-  const cfg = params.config ?? loadConfig();
+  const cfg = params.config ?? getRuntimeConfig();
   const tools = params.tools ?? resolveTools(cfg);
   return createToolsMcpServer({ name: "openclaw-plugin-tools", tools });
 }
 
 export async function servePluginToolsMcp(): Promise<void> {
-  const config = loadConfig();
+  const config = getRuntimeConfig();
   const tools = resolveTools(config);
   const server = createPluginToolsMcpServer({ config, tools });
   if (tools.length === 0) {

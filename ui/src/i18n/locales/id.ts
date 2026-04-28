@@ -109,6 +109,14 @@ export const id: TranslationMap = {
       lightningHelp: "Alamat Lightning untuk tip (LUD-16)",
     },
   },
+  lazyView: {
+    loadingTitle: "Memuat panel",
+    errorTitle: "Panel gagal dimuat",
+    errorSubtitle:
+      "Muat ulang halaman untuk memuat bundel Control UI terbaru, atau coba lagi jika permintaan jaringan gagal.",
+    retry: "Coba lagi",
+    unknownError: "Kesalahan pemuatan modul yang tidak diketahui.",
+  },
   nodes: {
     binding: {
       loadConfigHint: "Muat config untuk mengedit binding.",

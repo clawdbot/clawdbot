@@ -32,6 +32,7 @@ type SessionDefaultsSnapshot = {
 type SessionSwitchHost = AppViewState & {
   chatStreamStartedAt: number | null;
   chatSideResultTerminalRuns: Set<string>;
+  resetChatInputHistoryNavigation(): void;
   resetToolStream(): void;
   resetChatScroll(): void;
 };
@@ -84,6 +85,7 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.chatAvatarStatus = null;
   state.chatAvatarReason = null;
   state.chatQueue = [];
+  host.resetChatInputHistoryNavigation();
   host.chatStreamStartedAt = null;
   state.chatRunId = null;
   host.chatSideResultTerminalRuns.clear();

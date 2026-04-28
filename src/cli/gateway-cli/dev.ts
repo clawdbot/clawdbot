@@ -4,7 +4,7 @@ import path from "node:path";
 import { resolveWorkspaceTemplateDir } from "../../agents/workspace-templates.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { handleReset } from "../../commands/onboard-helpers.js";
-import { createConfigIO, writeConfigFile } from "../../config/config.js";
+import { createConfigIO, replaceConfigFile } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
@@ -101,29 +101,32 @@ export async function ensureDevGatewayConfig(opts: { reset?: boolean }) {
     return;
   }
 
-  await writeConfigFile({
-    gateway: {
-      mode: "local",
-      bind: "loopback",
-    },
-    agents: {
-      defaults: {
-        workspace,
-        skipBootstrap: true,
+  await replaceConfigFile({
+    nextConfig: {
+      gateway: {
+        mode: "local",
+        bind: "loopback",
       },
-      list: [
-        {
-          id: "dev",
-          default: true,
+      agents: {
+        defaults: {
           workspace,
-          identity: {
-            name: DEV_IDENTITY_NAME,
-            theme: DEV_IDENTITY_THEME,
-            emoji: DEV_IDENTITY_EMOJI,
-          },
+          skipBootstrap: true,
         },
-      ],
+        list: [
+          {
+            id: "dev",
+            default: true,
+            workspace,
+            identity: {
+              name: DEV_IDENTITY_NAME,
+              theme: DEV_IDENTITY_THEME,
+              emoji: DEV_IDENTITY_EMOJI,
+            },
+          },
+        ],
+      },
     },
+    afterWrite: { mode: "auto" },
   });
   await ensureDevWorkspace(workspace);
   defaultRuntime.log(`Dev config ready: ${shortenHomePath(configPath)}`);

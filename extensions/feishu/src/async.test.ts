@@ -6,6 +6,14 @@ afterEach(() => {
 });
 
 describe("waitForAbortableDelay", () => {
+  it("resolves false immediately when already aborted", async () => {
+    vi.useFakeTimers();
+    const abortController = new AbortController();
+    abortController.abort();
+
+    await expect(waitForAbortableDelay(60_000, abortController.signal)).resolves.toBe(false);
+  });
+
   it("resolves false immediately when aborted during backoff", async () => {
     vi.useFakeTimers();
     const abortController = new AbortController();

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js";
 import * as manifestRegistry from "../../../plugins/manifest-registry.js";
 import {
@@ -7,6 +8,18 @@ import {
   maybeRepairStalePluginConfig,
   scanStalePluginConfig,
 } from "./stale-plugin-config.js";
+
+const installedPluginIndexMocks = vi.hoisted(() => ({
+  loadInstalledPluginIndexInstallRecordsSync: vi.fn<() => Record<string, PluginInstallRecord>>(
+    () => ({}),
+  ),
+}));
+
+vi.mock("../../../plugins/installed-plugin-index-records.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/installed-plugin-index-records.js")>()),
+  loadInstalledPluginIndexInstallRecordsSync:
+    installedPluginIndexMocks.loadInstalledPluginIndexInstallRecordsSync,
+}));
 
 function manifest(id: string): PluginManifestRecord {
   return {
@@ -25,6 +38,8 @@ function manifest(id: string): PluginManifestRecord {
 
 describe("doctor stale plugin config helpers", () => {
   beforeEach(() => {
+    installedPluginIndexMocks.loadInstalledPluginIndexInstallRecordsSync.mockReset();
+    installedPluginIndexMocks.loadInstalledPluginIndexInstallRecordsSync.mockReturnValue({});
     vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
       plugins: [manifest("discord"), manifest("voice-call"), manifest("openai")],
       diagnostics: [],
@@ -97,6 +112,134 @@ describe("doctor stale plugin config helpers", () => {
       expect.stringContaining('plugins.allow: stale plugin reference "acpx"'),
       expect.stringContaining('Run "openclaw doctor --fix"'),
     ]);
+  });
+
+  it("removes stale third-party channel config and dependent channel refs", () => {
+    const result = maybeRepairStalePluginConfig({
+      plugins: {
+        allow: ["discord", "openclaw-weixin"],
+        entries: {
+          discord: { enabled: true },
+          "openclaw-weixin": { enabled: true },
+        },
+      },
+      channels: {
+        "openclaw-weixin": {
+          enabled: true,
+          token: "stale",
+        },
+        telegram: {
+          botToken: "keep",
+        },
+        modelByChannel: {
+          openai: {
+            "openclaw-weixin": "openai/gpt-5.4",
+            telegram: "openai/gpt-5.4",
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          heartbeat: {
+            target: "openclaw-weixin",
+            every: "30m",
+          },
+        },
+        list: [
+          {
+            id: "pi",
+            heartbeat: {
+              target: "openclaw-weixin",
+            },
+          },
+          {
+            id: "ops",
+            heartbeat: {
+              target: "telegram",
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig);
+
+    expect(result.changes).toEqual([
+      "- plugins.allow: removed 1 stale plugin id (openclaw-weixin)",
+      "- plugins.entries: removed 1 stale plugin entry (openclaw-weixin)",
+      "- channels: removed 1 stale channel config (openclaw-weixin)",
+      "- agents heartbeat: removed 2 stale heartbeat targets (openclaw-weixin)",
+      "- channels.modelByChannel: removed 1 stale channel model override (openclaw-weixin)",
+    ]);
+    expect(result.config.plugins?.allow).toEqual(["discord"]);
+    expect(result.config.plugins?.entries).toEqual({
+      discord: { enabled: true },
+    });
+    expect(result.config.channels?.["openclaw-weixin"]).toBeUndefined();
+    expect(result.config.channels?.telegram).toEqual({ botToken: "keep" });
+    expect(result.config.channels?.modelByChannel).toEqual({
+      openai: {
+        telegram: "openai/gpt-5.4",
+      },
+    });
+    expect(result.config.agents?.defaults?.heartbeat).toEqual({ every: "30m" });
+    expect(result.config.agents?.list?.[0]?.heartbeat).toEqual({});
+    expect(result.config.agents?.list?.[1]?.heartbeat).toEqual({ target: "telegram" });
+  });
+
+  it("does not remove unknown channel config without stale plugin evidence", () => {
+    const cfg = {
+      channels: {
+        telegrm: {
+          botToken: "typo",
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(scanStalePluginConfig(cfg)).toEqual([]);
+    expect(maybeRepairStalePluginConfig(cfg)).toEqual({ config: cfg, changes: [] });
+  });
+
+  it("treats stale plugin refs as inert while plugins are globally disabled", () => {
+    const cfg = {
+      plugins: {
+        enabled: false,
+        allow: ["acpx"],
+        entries: {
+          acpx: { enabled: true },
+        },
+      },
+      channels: {
+        "openclaw-weixin": {
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(scanStalePluginConfig(cfg)).toEqual([]);
+    expect(maybeRepairStalePluginConfig(cfg)).toEqual({ config: cfg, changes: [] });
+    expect(manifestRegistry.loadPluginManifestRegistry).not.toHaveBeenCalled();
+  });
+
+  it("uses missing persisted install records as stale channel evidence", () => {
+    installedPluginIndexMocks.loadInstalledPluginIndexInstallRecordsSync.mockReturnValue({
+      "openclaw-weixin": {
+        source: "npm",
+        resolvedName: "@tencent-weixin/openclaw-weixin",
+        installedAt: "2026-04-12T00:00:00.000Z",
+      },
+    });
+
+    const result = maybeRepairStalePluginConfig({
+      channels: {
+        "openclaw-weixin": {
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(result.changes).toEqual([
+      "- channels: removed 1 stale channel config (openclaw-weixin)",
+    ]);
+    expect(result.config.channels?.["openclaw-weixin"]).toBeUndefined();
   });
 
   it("does not auto-repair stale refs while plugin discovery has errors", () => {

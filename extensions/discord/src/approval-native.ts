@@ -2,7 +2,7 @@ import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-s
 import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { resolveApprovalRequestSessionConversation } from "openclaw/plugin-sdk/approval-native-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
-import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-types";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -132,7 +132,6 @@ function createDiscordOriginTargetResolver(configOverride?: DiscordExecApprovalC
           }
         : null;
     },
-    targetsMatch: (a, b) => a.to === b.to && a.threadId === b.threadId,
     resolveFallbackTarget: (request) => {
       const sessionConversation = resolveApprovalRequestSessionConversation({
         request,

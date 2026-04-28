@@ -1,5 +1,6 @@
-import type { GatewayClient } from "../gateway/client.js";
+import type { GatewayClient, GatewayReconnectPausedInfo } from "../gateway/client.js";
 import { createOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
+import { readConnectErrorDetailCode } from "../gateway/protocol/connect-error-details.js";
 import type { EventFrame } from "../gateway/protocol/index.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatErrorMessage } from "./errors.js";
@@ -18,6 +19,26 @@ export type {
 
 type ApprovalRequestEvent = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalResolvedEvent = ExecApprovalResolved | PluginApprovalResolved;
+
+export class ExecApprovalChannelRuntimeTerminalStartError extends Error {
+  readonly detailCode: string | null;
+
+  constructor(info: GatewayReconnectPausedInfo, cause?: unknown) {
+    super(
+      `native approval gateway client paused reconnect after startup auth failure` +
+        ` (${info.detailCode ?? "unknown"}): gateway closed (${info.code}): ${info.reason}`,
+      cause === undefined ? undefined : { cause },
+    );
+    this.name = "ExecApprovalChannelRuntimeTerminalStartError";
+    this.detailCode = info.detailCode;
+  }
+}
+
+export function isExecApprovalChannelRuntimeTerminalStartError(
+  error: unknown,
+): error is ExecApprovalChannelRuntimeTerminalStartError {
+  return error instanceof ExecApprovalChannelRuntimeTerminalStartError;
+}
 
 type PendingApprovalEntry<
   TPending,
@@ -42,6 +63,13 @@ function resolveApprovalReplayMethods(
     methods.push("plugin.approval.list");
   }
   return methods;
+}
+
+function readGatewayConnectErrorDetailCode(error: unknown): string | null {
+  if (!error || typeof error !== "object") {
+    return null;
+  }
+  return readConnectErrorDetailCode((error as { details?: unknown }).details);
 }
 
 export function createExecApprovalChannelRuntime<
@@ -284,6 +312,7 @@ export function createExecApprovalChannelRuntime<
           resolveReady = resolve;
           rejectReady = reject;
         });
+        let lastConnectError: unknown = null;
         const settleReady = (fn: () => void) => {
           if (readySettled) {
             return;
@@ -303,11 +332,22 @@ export function createExecApprovalChannelRuntime<
           },
           onConnectError: (err) => {
             log.error(`connect error: ${err.message}`);
+            lastConnectError = err;
+            if (readGatewayConnectErrorDetailCode(err)) {
+              return;
+            }
             settleReady(() => rejectReady(err));
+          },
+          onReconnectPaused: (info) => {
+            settleReady(() =>
+              rejectReady(new ExecApprovalChannelRuntimeTerminalStartError(info, lastConnectError)),
+            );
           },
           onClose: (code, reason) => {
             log.debug(`gateway closed: ${code} ${reason}`);
-            settleReady(() => rejectReady(new Error(`gateway closed: ${code} ${reason}`)));
+            settleReady(() =>
+              rejectReady(lastConnectError ?? new Error(`gateway closed: ${code} ${reason}`)),
+            );
           },
         });
 

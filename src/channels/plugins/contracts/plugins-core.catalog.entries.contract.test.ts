@@ -1,3 +1,3 @@
-import { describeChannelPluginCatalogEntriesContract } from "../../../../test/helpers/channels/channel-plugin-catalog-contract-suites.js";
+import { describeChannelPluginCatalogEntriesContract } from "./test-helpers/channel-plugin-catalog-contract-suites.js";
 
 describeChannelPluginCatalogEntriesContract();

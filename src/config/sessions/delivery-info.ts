@@ -1,5 +1,5 @@
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
-import { loadConfig } from "../io.js";
+import { getRuntimeConfig } from "../io.js";
 import { resolveStorePath } from "./paths.js";
 import { loadSessionStore } from "./store.js";
 export { parseSessionThreadInfo } from "./thread-info.js";
@@ -31,7 +31,7 @@ export function extractDeliveryInfo(sessionKey: string | undefined): {
     | { channel?: string; to?: string; accountId?: string; threadId?: string }
     | undefined;
   try {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const storePath = resolveStorePath(cfg.session?.store);
     const store = loadSessionStore(storePath);
     let entry = store[sessionKey];

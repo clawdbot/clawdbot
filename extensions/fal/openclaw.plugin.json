@@ -1,5 +1,8 @@
 {
   "id": "fal",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["fal"],
   "providerAuthEnvVars": {

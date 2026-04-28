@@ -1,3 +1,3 @@
-import { describeVeniceProviderRuntimeContract } from "../../test/helpers/plugins/provider-runtime-contract.js";
+import { describeVeniceProviderRuntimeContract } from "openclaw/plugin-sdk/provider-test-contracts";
 
 describeVeniceProviderRuntimeContract(() => import("./index.js"));

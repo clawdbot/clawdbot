@@ -1,4 +1,4 @@
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { getAgentRunContext, registerAgentRunContext } from "../infra/agent-events.js";
 import { toAgentRequestSessionKey } from "../routing/session-key.js";
@@ -49,7 +49,7 @@ export function resolveSessionKeyForRun(runId: string) {
     }
     resolvedSessionKeyByRunId.delete(runId);
   }
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const { store } = loadCombinedSessionStoreForGateway(cfg);
   const matches = Object.entries(store).filter(
     (entry): entry is [string, SessionEntry] => entry[1]?.sessionId === runId,

@@ -1,4 +1,7 @@
-// Deprecated compatibility alias.
-// Prefer openclaw/plugin-sdk/testing for public test helpers.
+/**
+ * @deprecated Compatibility alias for the legacy `plugin-sdk/testing` barrel.
+ *
+ * Prefer focused `openclaw/plugin-sdk/*` test subpaths for public test helpers.
+ */
 
 export * from "./testing.js";

@@ -84,7 +84,7 @@ struct ExecSkillBinTrustTests {
                     requirements: SkillRequirements(bins: bins, env: [], config: []),
                     missing: SkillMissing(bins: [], env: [], config: []),
                     configChecks: [],
-                    install: [])
+                    install: []),
             ])
     }
 }

@@ -82,9 +82,17 @@ describe("CronToolSchema", () => {
     expect(patchStagger?.description).toBe("Random jitter in ms (kind=cron)");
   });
 
-  it("job.delivery exposes mode, channel, to, bestEffort, accountId, failureDestination", () => {
+  it("job.delivery exposes mode, channel, to, threadId, bestEffort, accountId, failureDestination", () => {
     expect(keysAt(schemaRecord, "job.delivery")).toEqual(
-      ["accountId", "bestEffort", "channel", "failureDestination", "mode", "to"].toSorted(),
+      [
+        "accountId",
+        "bestEffort",
+        "channel",
+        "failureDestination",
+        "mode",
+        "threadId",
+        "to",
+      ].toSorted(),
     );
   });
 

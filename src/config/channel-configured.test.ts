@@ -25,16 +25,6 @@ vi.mock("../channels/plugins/configured-state.js", () => ({
   },
 }));
 
-vi.mock("../channels/plugins/persisted-auth-state.js", () => ({
-  hasBundledChannelPersistedAuthState: ({
-    channelId,
-    env,
-  }: {
-    channelId: string;
-    env?: NodeJS.ProcessEnv;
-  }) => channelId === "matrix" && env?.OPENCLAW_STATE_DIR === "state-with-matrix-creds",
-}));
-
 vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
   getBootstrapChannelPlugin: () => undefined,
 }));
@@ -78,9 +68,9 @@ describe("isChannelConfigured", () => {
     ).toBe(true);
   });
 
-  it("detects persisted Matrix credentials through package metadata", () => {
+  it("does not treat persisted Matrix credentials as configured channel state", () => {
     expect(
       isChannelConfigured({}, "matrix", { OPENCLAW_STATE_DIR: "state-with-matrix-creds" }),
-    ).toBe(true);
+    ).toBe(false);
   });
 });

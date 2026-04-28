@@ -63,6 +63,10 @@ export type ModelCatalogSuppression = {
   provider: string;
   model: string;
   reason?: string;
+  when?: {
+    baseUrlHosts?: string[];
+    providerConfigApiIn?: string[];
+  };
 };
 
 export type ModelCatalog = {

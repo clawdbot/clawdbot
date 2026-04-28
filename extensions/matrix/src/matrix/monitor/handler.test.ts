@@ -1488,6 +1488,7 @@ describe("matrix monitor handler pairing account scope", () => {
       replyToMode: "off",
       threadReplies: "inbound",
       streaming: "off",
+      previewToolProgressEnabled: false,
       blockStreamingEnabled: false,
       dmEnabled: true,
       dmPolicy: "open",
@@ -2506,6 +2507,31 @@ describe("matrix monitor handler draft streaming", () => {
       context?: { assistantMessageIndex?: number },
     ) => Promise<void> | void;
     onAssistantMessageStart?: () => void;
+    suppressDefaultToolProgressMessages?: boolean;
+    onToolStart?: (payload: { name?: string }) => Promise<void>;
+    onItemEvent?: (payload: {
+      progressText?: string;
+      summary?: string;
+      title?: string;
+      name?: string;
+    }) => Promise<void>;
+    onPlanUpdate?: (payload: {
+      phase: string;
+      explanation?: string;
+      steps?: string[];
+    }) => Promise<void>;
+    onApprovalEvent?: (payload: { phase: string; command?: string }) => Promise<void>;
+    onCommandOutput?: (payload: {
+      phase: string;
+      name?: string;
+      exitCode?: number;
+      title?: string;
+    }) => Promise<void>;
+    onPatchSummary?: (payload: {
+      phase: string;
+      summary?: string;
+      title?: string;
+    }) => Promise<void>;
     disableBlockStreaming?: boolean;
   };
 
@@ -2513,6 +2539,7 @@ describe("matrix monitor handler draft streaming", () => {
     replyToMode?: "off" | "first" | "all" | "batched";
     blockStreamingEnabled?: boolean;
     streaming?: "partial" | "quiet";
+    previewToolProgressEnabled?: boolean;
   }) {
     let capturedDeliver: DeliverFn | undefined;
     let capturedReplyOpts: ReplyOpts | undefined;
@@ -2542,6 +2569,7 @@ describe("matrix monitor handler draft streaming", () => {
 
     const { handler } = createMatrixHandlerTestHarness({
       streaming: opts?.streaming ?? "quiet",
+      previewToolProgressEnabled: opts?.previewToolProgressEnabled ?? false,
       blockStreamingEnabled: opts?.blockStreamingEnabled ?? false,
       replyToMode: opts?.replyToMode ?? "off",
       client: { redactEvent: redactEventMock },
@@ -2621,6 +2649,69 @@ describe("matrix monitor handler draft streaming", () => {
     );
     expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
     expect(redactEventMock).not.toHaveBeenCalled();
+    await finish();
+  });
+
+  it("streams tool progress into the Matrix draft preview when enabled", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness({
+      previewToolProgressEnabled: true,
+    });
+    const { deliver, opts, finish } = await dispatch();
+
+    expect(opts.suppressDefaultToolProgressMessages).toBe(true);
+    await opts.onToolStart?.({ name: "read_file" });
+
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+    expect(sendSingleTextMessageMatrixMock.mock.calls[0]?.[1]).toBe(
+      "Working...\n- `tool: read_file`",
+    );
+
+    await deliver({ text: "Done" }, { kind: "final" });
+
+    expect(editMessageMatrixMock).toHaveBeenCalledWith(
+      "!room:example.org",
+      "$draft1",
+      "Done",
+      expect.objectContaining({
+        extraContent: { [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true },
+      }),
+    );
+    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
+    expect(redactEventMock).not.toHaveBeenCalled();
+    await finish();
+  });
+
+  it("keeps Matrix tool progress mentions inside code formatting", async () => {
+    const { dispatch } = createStreamingHarness({
+      previewToolProgressEnabled: true,
+      streaming: "partial",
+    });
+    const { opts, finish } = await dispatch();
+
+    await opts.onItemEvent?.({
+      progressText: "@room ping @alice:example.org [label](https://example.org)",
+    });
+
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+    expect(sendSingleTextMessageMatrixMock.mock.calls[0]?.[1]).toBe(
+      "Working...\n- `@room ping @alice:example.org [label](https://example.org)`",
+    );
+    await finish();
+  });
+
+  it("leaves Matrix tool progress on the default tool delivery path when disabled", async () => {
+    const { dispatch } = createStreamingHarness({
+      previewToolProgressEnabled: false,
+    });
+    const { opts, finish } = await dispatch();
+
+    expect(opts.suppressDefaultToolProgressMessages).toBeUndefined();
+    expect(opts.onToolStart).toBeUndefined();
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
     await finish();
   });
 

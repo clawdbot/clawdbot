@@ -220,8 +220,8 @@ async function resolveMessageConfig(cfg?: OpenClawConfig): Promise<OpenClawConfi
   if (cfg) {
     return cfg;
   }
-  const { loadConfig } = await loadMessageConfigRuntime();
-  return loadConfig();
+  const { getRuntimeConfig } = await loadMessageConfigRuntime();
+  return getRuntimeConfig();
 }
 
 async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<string> {

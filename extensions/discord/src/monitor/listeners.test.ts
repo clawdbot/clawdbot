@@ -1,9 +1,10 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 let DiscordMessageListener: typeof import("./listeners.js").DiscordMessageListener;
+let DiscordInteractionListener: typeof import("./listeners.js").DiscordInteractionListener;
 
 beforeAll(async () => {
-  ({ DiscordMessageListener } = await import("./listeners.js"));
+  ({ DiscordMessageListener, DiscordInteractionListener } = await import("./listeners.js"));
 });
 
 function createLogger() {
@@ -146,6 +147,53 @@ describe("DiscordMessageListener", () => {
 
     await listener.handle(fakeEvent("ch-1"), {} as never);
     await listener.handle(fakeEvent("ch-2"), {} as never);
+
+    expect(onEvent).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("DiscordInteractionListener", () => {
+  it("returns immediately without awaiting Carbon interaction handling", async () => {
+    const handlerDone = createDeferred();
+    const handleInteraction = vi.fn(async () => {
+      await handlerDone.promise;
+    });
+    const logger = createLogger();
+    const listener = new DiscordInteractionListener(logger as never);
+
+    await expect(
+      listener.handle({ id: "interaction-1" } as never, { handleInteraction } as never),
+    ).resolves.toBeUndefined();
+    await flushAsyncWork();
+    expect(handleInteraction).toHaveBeenCalledTimes(1);
+    expect(logger.error).not.toHaveBeenCalled();
+
+    handlerDone.resolve?.();
+    await flushAsyncWork();
+  });
+
+  it("logs async interaction failures", async () => {
+    const handleInteraction = vi.fn(async () => {
+      throw new Error("interaction boom");
+    });
+    const logger = createLogger();
+    const listener = new DiscordInteractionListener(logger as never);
+
+    await listener.handle({ id: "interaction-1" } as never, { handleInteraction } as never);
+    await flushAsyncWork();
+
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining("discord interaction handler failed: Error: interaction boom"),
+    );
+  });
+
+  it("calls onEvent callback for each interaction", async () => {
+    const handleInteraction = vi.fn(async () => {});
+    const onEvent = vi.fn();
+    const listener = new DiscordInteractionListener(undefined, onEvent);
+
+    await listener.handle({ id: "interaction-1" } as never, { handleInteraction } as never);
+    await listener.handle({ id: "interaction-2" } as never, { handleInteraction } as never);
 
     expect(onEvent).toHaveBeenCalledTimes(2);
   });

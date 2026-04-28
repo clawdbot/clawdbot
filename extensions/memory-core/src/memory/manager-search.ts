@@ -205,51 +205,34 @@ export async function searchVector(params: {
     }));
   }
 
-  const candidates = listChunks({
+  return searchChunksByEmbedding({
     db: params.db,
     providerModel: params.providerModel,
     sourceFilter: params.sourceFilterChunks,
+    queryVec: params.queryVec,
+    limit: params.limit,
+    snippetMaxChars: params.snippetMaxChars,
   });
-  const scored = candidates
-    .map((chunk) => ({
-      chunk,
-      score: cosineSimilarity(params.queryVec, chunk.embedding),
-    }))
-    .filter((entry) => Number.isFinite(entry.score));
-  return scored
-    .toSorted((a, b) => b.score - a.score)
-    .slice(0, params.limit)
-    .map((entry) => ({
-      id: entry.chunk.id,
-      path: entry.chunk.path,
-      startLine: entry.chunk.startLine,
-      endLine: entry.chunk.endLine,
-      score: entry.score,
-      snippet: truncateUtf16Safe(entry.chunk.text, params.snippetMaxChars),
-      source: entry.chunk.source,
-    }));
 }
 
-export function listChunks(params: {
+export function searchChunksByEmbedding(params: {
   db: DatabaseSync;
   providerModel: string;
   sourceFilter: { sql: string; params: SearchSource[] };
-}): Array<{
-  id: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-  text: string;
-  embedding: number[];
-  source: SearchSource;
-}> {
+  queryVec: number[];
+  limit: number;
+  snippetMaxChars: number;
+}): SearchRowResult[] {
+  if (params.limit <= 0) {
+    return [];
+  }
   const rows = params.db
     .prepare(
       `SELECT id, path, start_line, end_line, text, embedding, source\n` +
         `  FROM chunks\n` +
         ` WHERE model = ?${params.sourceFilter.sql}`,
     )
-    .all(params.providerModel, ...params.sourceFilter.params) as Array<{
+    .iterate(params.providerModel, ...params.sourceFilter.params) as IterableIterator<{
     id: string;
     path: string;
     start_line: number;
@@ -259,15 +242,36 @@ export function listChunks(params: {
     source: SearchSource;
   }>;
 
-  return rows.map((row) => ({
-    id: row.id,
-    path: row.path,
-    startLine: row.start_line,
-    endLine: row.end_line,
-    text: row.text,
-    embedding: parseEmbedding(row.embedding),
-    source: row.source,
-  }));
+  const topResults: SearchRowResult[] = [];
+  for (const row of rows) {
+    const score = cosineSimilarity(params.queryVec, parseEmbedding(row.embedding));
+    if (!Number.isFinite(score)) {
+      continue;
+    }
+    const result: SearchRowResult = {
+      id: row.id,
+      path: row.path,
+      startLine: row.start_line,
+      endLine: row.end_line,
+      score,
+      snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
+      source: row.source,
+    };
+    if (topResults.length < params.limit) {
+      topResults.push(result);
+      if (topResults.length === params.limit) {
+        topResults.sort((a, b) => b.score - a.score);
+      }
+      continue;
+    }
+    const lowest = topResults.at(-1);
+    if (lowest && result.score > lowest.score) {
+      topResults[topResults.length - 1] = result;
+      topResults.sort((a, b) => b.score - a.score);
+    }
+  }
+  topResults.sort((a, b) => b.score - a.score);
+  return topResults;
 }
 
 export async function searchKeyword(params: {

@@ -5,7 +5,7 @@ import {
   normalizeChannelId,
 } from "../channels/plugins/index.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
-import { loadConfig, readConfigFileSnapshot, type OpenClawConfig } from "../config/config.js";
+import { getRuntimeConfig, readConfigFileSnapshot, type OpenClawConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { callGateway } from "../gateway/call.js";
 import { setVerbose } from "../globals.js";
@@ -174,7 +174,7 @@ export async function runChannelLogin(
 ) {
   const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
   const autoEnabled = applyPluginAutoEnable({
-    config: loadConfig(),
+    config: getRuntimeConfig(),
     env: process.env,
   });
   const loadedCfg = autoEnabled.config;
@@ -217,7 +217,7 @@ export async function runChannelLogout(
 ) {
   const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
   const autoEnabled = applyPluginAutoEnable({
-    config: loadConfig(),
+    config: getRuntimeConfig(),
     env: process.env,
   });
   const loadedCfg = autoEnabled.config;

@@ -32,6 +32,15 @@ const PACKAGE_DTS_REQUIRED_OUTPUTS = [
   "packages/plugin-sdk/dist/src/plugin-sdk/provider-auth.d.ts",
   "packages/plugin-sdk/dist/src/plugin-sdk/video-generation.d.ts",
 ];
+const QA_CHANNEL_DTS_INPUTS = [
+  "extensions/qa-channel/api.ts",
+  "extensions/qa-channel/runtime-api.ts",
+  "extensions/qa-channel/test-api.ts",
+  "extensions/qa-channel/src",
+  "extensions/qa-channel/tsconfig.json",
+];
+const QA_CHANNEL_DTS_STAMP = "dist/plugin-sdk/extensions/qa-channel/.boundary-dts.stamp";
+const QA_CHANNEL_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/qa-channel/api.d.ts"];
 const ENTRY_SHIMS_INPUTS = [
   "scripts/write-plugin-sdk-entry-dts.ts",
   "scripts/lib/plugin-sdk-entrypoints.json",
@@ -271,15 +280,22 @@ export async function main(argv = process.argv.slice(2)) {
       ],
       outputPaths: ["dist/plugin-sdk/.boundary-entry-shims.stamp"],
     });
+    const qaChannelDtsFresh =
+      isArtifactSetFresh({
+        inputPaths: QA_CHANNEL_DTS_INPUTS,
+        outputPaths: [QA_CHANNEL_DTS_STAMP, ...QA_CHANNEL_DTS_REQUIRED_OUTPUTS],
+        includeFile: isRelevantTypeInput,
+      }) && !hasMissingOutput(QA_CHANNEL_DTS_REQUIRED_OUTPUTS);
 
-    const pendingSteps = [];
+    const prerequisiteSteps = [];
+    const dependentSteps = [];
     if (mode === "all") {
       if (!rootDtsFresh) {
         removeIncrementalStateForMissingOutput({
           outputPaths: ROOT_DTS_REQUIRED_OUTPUTS,
           tsBuildInfoPath: "dist/plugin-sdk/.tsbuildinfo",
         });
-        pendingSteps.push({
+        prerequisiteSteps.push({
           label: "plugin-sdk boundary dts",
           args: [runTsgoScript, "-p", "tsconfig.plugin-sdk.dts.json", "--declaration", "true"],
           env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
@@ -295,7 +311,7 @@ export async function main(argv = process.argv.slice(2)) {
         outputPaths: PACKAGE_DTS_REQUIRED_OUTPUTS,
         tsBuildInfoPath: "packages/plugin-sdk/dist/.tsbuildinfo",
       });
-      pendingSteps.push({
+      prerequisiteSteps.push({
         label: "plugin-sdk package boundary dts",
         args: [runTsgoScript, "-p", "packages/plugin-sdk/tsconfig.json", "--declaration", "true"],
         env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
@@ -305,17 +321,50 @@ export async function main(argv = process.argv.slice(2)) {
     } else {
       process.stdout.write("[plugin-sdk package boundary dts] fresh; skipping\n");
     }
+    if (mode === "all") {
+      if (!qaChannelDtsFresh) {
+        removeIncrementalStateForMissingOutput({
+          outputPaths: QA_CHANNEL_DTS_REQUIRED_OUTPUTS,
+          tsBuildInfoPath: "dist/plugin-sdk/extensions/qa-channel/.tsbuildinfo",
+        });
+        dependentSteps.push({
+          label: "qa-channel boundary dts",
+          args: [
+            runTsgoScript,
+            "-p",
+            "extensions/qa-channel/tsconfig.json",
+            "--declaration",
+            "true",
+            "--emitDeclarationOnly",
+            "true",
+            "--noEmit",
+            "false",
+            "--outDir",
+            "dist/plugin-sdk/extensions/qa-channel",
+            "--rootDir",
+            "extensions/qa-channel",
+            "--tsBuildInfoFile",
+            "dist/plugin-sdk/extensions/qa-channel/.tsbuildinfo",
+          ],
+          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
+          timeoutMs: 300_000,
+          stampPath: QA_CHANNEL_DTS_STAMP,
+        });
+      } else {
+        process.stdout.write("[qa-channel boundary dts] fresh; skipping\n");
+      }
+    }
 
-    if (pendingSteps.length > 0) {
-      await runNodeSteps(pendingSteps);
-      for (const step of pendingSteps) {
+    if (prerequisiteSteps.length > 0) {
+      await runNodeSteps(prerequisiteSteps);
+      for (const step of prerequisiteSteps) {
         if (step.stampPath) {
           writeStampFile(step.stampPath);
         }
       }
     }
 
-    if (mode === "all" && (!entryShimsFresh || pendingSteps.length > 0)) {
+    if (mode === "all" && (!entryShimsFresh || prerequisiteSteps.length > 0)) {
       await runNodeStep(
         "plugin-sdk boundary root shims",
         ["--import", "tsx", resolve(repoRoot, "scripts/write-plugin-sdk-entry-dts.ts")],
@@ -323,6 +372,15 @@ export async function main(argv = process.argv.slice(2)) {
       );
     } else if (mode === "all") {
       process.stdout.write("[plugin-sdk boundary root shims] fresh; skipping\n");
+    }
+
+    if (dependentSteps.length > 0) {
+      await runNodeSteps(dependentSteps);
+      for (const step of dependentSteps) {
+        if (step.stampPath) {
+          writeStampFile(step.stampPath);
+        }
+      }
     }
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);

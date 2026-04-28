@@ -30,14 +30,14 @@ const api = {
     use: vi.fn(),
   },
 };
-const { initSpy, runSpy, loadConfig } = vi.hoisted(() => ({
+const { initSpy, runSpy, getRuntimeConfigMock } = vi.hoisted(() => ({
   initSpy: vi.fn(async () => undefined),
   runSpy: vi.fn(() => ({
     task: () => Promise.resolve(),
     stop: vi.fn(),
     isRunning: (): boolean => false,
   })),
-  loadConfig: vi.fn(() => ({
+  getRuntimeConfigMock: vi.fn(() => ({
     agents: { defaults: { maxConcurrent: 2 } },
     channels: { telegram: {} },
   })),
@@ -263,11 +263,9 @@ async function monitorWithAutoAbort(opts: Omit<MonitorTelegramOpts, "abortSignal
   });
 }
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
   return {
-    loadConfig,
-    resolveAgentMaxConcurrent: (cfg: { agents?: { defaults?: { maxConcurrent?: number } } }) =>
-      cfg.agents?.defaults?.maxConcurrent ?? 1,
+    getRuntimeConfig: getRuntimeConfigMock,
   };
 });
 
@@ -343,7 +341,7 @@ describe("monitorTelegramProvider (grammY)", () => {
 
   beforeEach(() => {
     resetTelegramPollingLeasesForTests();
-    loadConfig.mockReturnValue({
+    getRuntimeConfigMock.mockReturnValue({
       agents: { defaults: { maxConcurrent: 2 } },
       channels: { telegram: {} },
     });
@@ -399,7 +397,7 @@ describe("monitorTelegramProvider (grammY)", () => {
 
   it("uses agent maxConcurrent for runner concurrency", async () => {
     runSpy.mockClear();
-    loadConfig.mockReturnValue({
+    getRuntimeConfigMock.mockReturnValue({
       agents: { defaults: { maxConcurrent: 3 } },
       channels: { telegram: {} },
     });

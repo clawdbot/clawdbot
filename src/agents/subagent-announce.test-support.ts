@@ -3,7 +3,7 @@ import type { callGateway } from "../gateway/call.js";
 
 type DeliveryRuntimeMockOptions = {
   callGateway: (request: unknown) => Promise<unknown>;
-  loadConfig: () => OpenClawConfig;
+  getRuntimeConfig: () => OpenClawConfig;
   loadSessionStore: (storePath: string) => unknown;
   resolveAgentIdFromSessionKey: (sessionKey: string) => string;
   resolveMainSessionKey: (cfg: unknown) => string;
@@ -47,7 +47,7 @@ export function createSubagentAnnounceDeliveryRuntimeMock(options: DeliveryRunti
   return {
     callGateway: (async <T = Record<string, unknown>>(request: Parameters<typeof callGateway>[0]) =>
       (await options.callGateway(request)) as T) as typeof callGateway,
-    loadConfig: options.loadConfig,
+    getRuntimeConfig: options.getRuntimeConfig,
     loadSessionStore: options.loadSessionStore,
     resolveAgentIdFromSessionKey: options.resolveAgentIdFromSessionKey,
     resolveMainSessionKey: options.resolveMainSessionKey,

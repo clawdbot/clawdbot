@@ -38,6 +38,7 @@ type SessionInfoDefaults = {
   model?: string | null;
   modelProvider?: string | null;
   contextTokens?: number | null;
+  thinkingLevels?: Array<{ id: string; label: string }>;
 };
 
 type SessionInfoEntry = SessionInfo & {
@@ -167,6 +168,9 @@ export function createSessionActions(context: SessionActionContext) {
     const next = { ...state.sessionInfo };
     if (entry?.thinkingLevel !== undefined) {
       next.thinkingLevel = entry.thinkingLevel;
+    }
+    if (entry?.thinkingLevels !== undefined || defaults?.thinkingLevels !== undefined) {
+      next.thinkingLevels = entry?.thinkingLevels ?? defaults?.thinkingLevels;
     }
     if (entry?.fastMode !== undefined) {
       next.fastMode = entry.fastMode;

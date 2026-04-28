@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
 import {
   clearMemoryPluginState,
   registerMemoryCorpusSupplement,
-} from "../../../src/plugins/memory-state.js";
+} from "openclaw/plugin-sdk/memory-host-core";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   getMemorySearchManagerMockCalls,
   getReadAgentMemoryFileMockCalls,

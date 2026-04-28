@@ -136,6 +136,17 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Subagent details");
   });
 
+  it("can omit generic silent-reply guidance for channel-aware prompts", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      extraSystemPrompt: 'If no response is needed, reply with exactly "NO_REPLY".',
+      silentReplyPromptMode: "none",
+    });
+
+    expect(prompt).not.toContain("## Silent Replies");
+    expect(prompt).toContain('reply with exactly "NO_REPLY"');
+  });
+
   it("includes skills in minimal prompt mode when skillsPrompt is provided (cron regression)", () => {
     // Isolated cron sessions use promptMode="minimal" but must still receive skills.
     const skillsPrompt =
@@ -335,7 +346,10 @@ describe("buildAgentSystemPrompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["sessions_spawn", "subagents", "agents_list", "exec"],
-      nativeCommandNames: ["codex"],
+      nativeCommandGuidanceLines: [
+        "Native Codex app-server plugin is available (`/codex ...`). For Codex bind/control/thread/resume/steer/stop requests, prefer `/codex bind`, `/codex threads`, `/codex resume`, `/codex steer`, and `/codex stop` over ACP.",
+        "Use ACP for Codex only when the user explicitly asks for ACP/acpx or wants to test the ACP path.",
+      ],
       acpEnabled: true,
     });
 
@@ -744,6 +758,26 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("`style` can be `primary`, `success`, or `danger`");
   });
 
+  it("describes message-tool-only source delivery without requiring target", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      sourceReplyDeliveryMode: "message_tool_only",
+      runtimeInfo: {
+        channel: "discord",
+      },
+    });
+
+    expect(prompt).toContain("private by default for this source channel");
+    expect(prompt).toContain("use `message(action=send)` for visible channel output");
+    expect(prompt).toContain("The target defaults to the current source channel");
+    expect(prompt).toContain("final answers are private in this mode");
+    expect(prompt).not.toContain(
+      `respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies)`,
+    );
+    expect(prompt).not.toContain("For `action=send`, include `target` and `message`.");
+  });
+
   it("suppresses plain chat approval commands when inline approval UI is available", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -1038,7 +1072,9 @@ describe("buildSubagentSystemPrompt", () => {
       task: "research task",
       childDepth: 1,
       maxSpawnDepth: 2,
-      nativeCommandNames: ["codex"],
+      nativeCommandGuidanceLines: [
+        "Native Codex app-server plugin is available (`/codex ...`). Prefer that path for Codex bind/control/thread/resume/steer/stop requests; use Codex ACP only when explicitly requested.",
+      ],
       acpEnabled: true,
     });
 

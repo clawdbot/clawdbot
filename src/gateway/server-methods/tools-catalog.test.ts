@@ -4,7 +4,7 @@ import { ErrorCodes } from "../protocol/index.js";
 import { toolsCatalogHandlers } from "./tools-catalog.js";
 
 vi.mock("../../config/config.js", () => ({
-  loadConfig: vi.fn(() => ({})),
+  getRuntimeConfig: vi.fn(() => ({})),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -17,6 +17,8 @@ vi.mock("../../agents/agent-scope.js", () => ({
 const pluginToolMetaState = new Map<string, { pluginId: string; optional: boolean }>();
 
 vi.mock("../../plugins/tools.js", () => ({
+  buildPluginToolMetadataKey: (pluginId: string, toolName: string) =>
+    JSON.stringify([pluginId, toolName]),
   resolvePluginTools: vi.fn(() => [
     { name: "voice_call", label: "voice_call", description: "Plugin calling tool" },
     {
@@ -39,7 +41,7 @@ function createInvokeParams(params: Record<string, unknown>) {
       await toolsCatalogHandlers["tools.catalog"]({
         params,
         respond: respond as never,
-        context: {} as never,
+        context: { getRuntimeConfig: () => ({}) } as never,
         client: null,
         req: { type: "req", id: "req-1", method: "tools.catalog" },
         isWebchatConnect: () => false,

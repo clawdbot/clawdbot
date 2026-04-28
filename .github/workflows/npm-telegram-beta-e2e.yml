@@ -18,6 +18,11 @@ on:
         required: false
         default: ""
         type: string
+      harness_ref:
+        description: Source ref for the private QA harness; defaults to the dispatched workflow ref
+        required: false
+        default: ""
+        type: string
       provider_mode:
         description: QA provider mode
         required: true
@@ -43,6 +48,11 @@ on:
         type: string
       package_label:
         description: Optional display label for an artifact-backed package candidate
+        required: false
+        default: ""
+        type: string
+      harness_ref:
+        description: Source ref for the private QA harness; defaults to the called workflow ref
         required: false
         default: ""
         type: string
@@ -91,7 +101,7 @@ jobs:
       - name: Checkout dispatch ref
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.harness_ref || github.sha }}
           fetch-depth: 1
 
       - name: Set up Blacksmith Docker Builder
@@ -215,6 +225,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: npm-telegram-beta-e2e-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.run_lane.outputs.output_dir }}
+          path: .artifacts/qa-e2e/
           retention-days: 14
           if-no-files-found: warn

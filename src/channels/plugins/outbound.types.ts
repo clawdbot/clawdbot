@@ -76,6 +76,8 @@ export type ChannelOutboundAdapter = {
   deliveryMode: "direct" | "gateway" | "hybrid";
   chunker?: ((text: string, limit: number, ctx?: ChannelOutboundChunkContext) => string[]) | null;
   chunkerMode?: "text" | "markdown";
+  /** Lift remote Markdown image syntax in text into outbound media attachments. */
+  extractMarkdownImages?: boolean;
   textChunkLimit?: number;
   sanitizeText?: (params: { text: string; payload: ReplyPayload }) => string;
   pollMaxOptions?: number;

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import type { captureEnv } from "../test-utils/env.js";
@@ -102,7 +102,7 @@ export function createOpenAIFileRuntimeConfig(secretFile: string): OpenClawConfi
 }
 
 export function expectResolvedOpenAIRuntime(agentDir: string) {
-  expect(loadConfig().models?.providers?.openai?.apiKey).toBe("sk-file-runtime");
+  expect(getRuntimeConfig().models?.providers?.openai?.apiKey).toBe("sk-file-runtime");
   const activeAuthStore = getActiveSecretsRuntimeSnapshot()?.authStores.find(
     (entry) => entry.agentDir === agentDir,
   )?.store;

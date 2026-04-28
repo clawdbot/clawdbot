@@ -5,7 +5,7 @@ import {
   safePathSegmentHashed,
   unscopedPackageName,
 } from "../infra/install-safe-path.js";
-import { CONFIG_DIR, resolveUserPath } from "../utils.js";
+import { resolveConfigDir, resolveUserPath } from "../utils.js";
 
 export function safePluginInstallFileName(input: string): string {
   return safeDirName(input);
@@ -73,10 +73,17 @@ export function matchesExpectedPluginId(params: {
   );
 }
 
+export function resolveDefaultPluginExtensionsDir(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir?: () => string,
+): string {
+  return path.join(resolveConfigDir(env, homedir), "extensions");
+}
+
 export function resolvePluginInstallDir(pluginId: string, extensionsDir?: string): string {
   const extensionsBase = extensionsDir
     ? resolveUserPath(extensionsDir)
-    : path.join(CONFIG_DIR, "extensions");
+    : resolveDefaultPluginExtensionsDir();
   const pluginIdError = validatePluginId(pluginId);
   if (pluginIdError) {
     throw new Error(pluginIdError);

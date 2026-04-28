@@ -251,7 +251,7 @@ describe("handleCommands reset hooks", () => {
       },
     );
 
-    await maybeHandleResetCommand(params);
+    const result = await maybeHandleResetCommand(params);
 
     expect(routeReplyMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -262,6 +262,7 @@ describe("handleCommands reset hooks", () => {
         threadId: "thread-1",
       }),
     );
+    expect(result).toEqual({ shouldContinue: false });
   });
 
   it("prefers the target session entry when emitting reset hooks", async () => {
@@ -429,5 +430,53 @@ describe("handleCommands reset hooks", () => {
     });
     expect(triggerInternalHookMock).not.toHaveBeenCalled();
     expect(resetMocks.resetConfiguredBindingTargetInPlace).not.toHaveBeenCalled();
+  });
+
+  it("acknowledges bare /reset without falling through to model execution", async () => {
+    const params = buildResetParams("/reset", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "✅ Session reset." },
+    });
+    expect(triggerInternalHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "command", action: "reset" }),
+    );
+  });
+
+  it("acknowledges bare /new without falling through to model execution", async () => {
+    const params = buildResetParams("/new", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "✅ New session started." },
+    });
+    expect(triggerInternalHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "command", action: "new" }),
+    );
+  });
+
+  it("keeps reset tails falling through so the model receives the user input", async () => {
+    const params = buildResetParams("/new take notes", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toBeNull();
+    expect(triggerInternalHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "command", action: "new" }),
+    );
   });
 });

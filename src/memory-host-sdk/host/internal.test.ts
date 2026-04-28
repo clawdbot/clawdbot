@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../media/mime.js", () => ({
   detectMime: async (opts: { filePath?: string }) => {
@@ -30,17 +30,11 @@ import {
   type MemoryMultimodalSettings,
 } from "./multimodal.js";
 
-let sharedTempRoot = "";
+const sharedTempRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "memory-host-sdk-tests-"));
 let sharedTempId = 0;
 
-beforeAll(() => {
-  sharedTempRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "memory-host-sdk-tests-"));
-});
-
 afterAll(() => {
-  if (sharedTempRoot) {
-    fsSync.rmSync(sharedTempRoot, { recursive: true, force: true });
-  }
+  fsSync.rmSync(sharedTempRoot, { recursive: true, force: true });
 });
 
 function setupTempDirLifecycle(prefix: string): () => string {

@@ -97,6 +97,23 @@ describe("media understanding attachments SSRF", () => {
     });
   });
 
+  it("resolves relative attachment paths against the provided workspaceDir", async () => {
+    await withTempDir({ prefix: "openclaw-media-cache-workspace-" }, async (base) => {
+      const workspaceDir = path.join(base, "workspace");
+      const attachmentPath = path.join(workspaceDir, "media", "inbound", "report.pdf");
+      await fs.mkdir(path.dirname(attachmentPath), { recursive: true });
+      await fs.writeFile(attachmentPath, "ok");
+
+      const cache = new MediaAttachmentCache([{ index: 0, path: "media/inbound/report.pdf" }], {
+        localPathRoots: [workspaceDir],
+        workspaceDir,
+      });
+
+      const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
+      expect(result.buffer.toString()).toBe("ok");
+    });
+  });
+
   it("blocks local attachments outside configured roots", async () => {
     if (process.platform === "win32") {
       return;

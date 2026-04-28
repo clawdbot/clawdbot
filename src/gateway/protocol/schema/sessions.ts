@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 
 export const SessionCompactionCheckpointReasonSchema = Type.Union([
@@ -168,6 +169,26 @@ export const SessionsPatchParamsSchema = Type.Object(
     groupActivation: Type.Optional(
       Type.Union([Type.Literal("mention"), Type.Literal("always"), Type.Null()]),
     ),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsPluginPatchParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    pluginId: NonEmptyString,
+    namespace: NonEmptyString,
+    value: Type.Optional(PluginJsonValueSchema),
+    unset: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsPluginPatchResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    key: NonEmptyString,
+    value: Type.Optional(PluginJsonValueSchema),
   },
   { additionalProperties: false },
 );

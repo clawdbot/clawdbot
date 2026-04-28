@@ -1,5 +1,8 @@
 {
   "id": "diffs",
+  "activation": {
+    "onStartup": true
+  },
   "name": "Diffs",
   "description": "Read-only diff viewer and file renderer for agents.",
   "skills": ["./skills"],

@@ -11,6 +11,8 @@ export function buildSubagentSystemPrompt(params: {
   acpEnabled?: boolean;
   /** Registered runtime slash/native command names such as `codex`. */
   nativeCommandNames?: string[];
+  /** Plugin-owned prompt guidance for registered native slash commands. */
+  nativeCommandGuidanceLines?: string[];
   /** Depth of the child being spawned (1 = sub-agent, 2 = sub-sub-agent). */
   childDepth?: number;
   /** Config value: max allowed spawn depth. */
@@ -25,8 +27,8 @@ export function buildSubagentSystemPrompt(params: {
       ? params.maxSpawnDepth
       : DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   const acpEnabled = params.acpEnabled === true;
-  const nativeCodexCommandAvailable = (params.nativeCommandNames ?? []).some(
-    (name) => name.trim().replace(/^\/+/, "").toLowerCase() === "codex",
+  const nativeCommandGuidanceLines = Array.from(
+    new Set((params.nativeCommandGuidanceLines ?? []).map((line) => line.trim()).filter(Boolean)),
   );
   const canSpawn = childDepth < maxSpawnDepth;
   const parentLabel = childDepth >= 2 ? "parent orchestrator" : "main agent";
@@ -95,11 +97,7 @@ export function buildSubagentSystemPrompt(params: {
       "Coordinate their work and synthesize results before reporting back.",
       ...(acpEnabled
         ? [
-            ...(nativeCodexCommandAvailable
-              ? [
-                  "Native Codex app-server plugin is available (`/codex ...`). Prefer that path for Codex bind/control/thread/resume/steer/stop requests; use Codex ACP only when explicitly requested.",
-                ]
-              : []),
+            ...nativeCommandGuidanceLines,
             'For ACP harness sessions (claudecode/gemini/opencode, or Codex only when explicit ACP/acpx), use `sessions_spawn` with `runtime: "acp"` (set `agentId` unless `acp.defaultAgent` is configured).',
             '`agents_list` and `subagents` apply to OpenClaw sub-agents (`runtime: "subagent"`); ACP harness ids are controlled by `acp.allowedAgents`.',
             "Do not ask users to run slash commands or CLI when `sessions_spawn` can do it directly.",

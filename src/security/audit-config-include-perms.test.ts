@@ -1,53 +1,49 @@
-import fs from "node:fs/promises";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
 import { collectIncludeFilePermFindings } from "./audit-extra.async.js";
 
-const isWindows = process.platform === "win32";
+const inspectPathPermissionsMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./audit-fs.js", () => ({
+  inspectPathPermissions: inspectPathPermissionsMock,
+  formatPermissionDetail: (targetPath: string) => `${targetPath} mocked-perms`,
+  formatPermissionRemediation: ({ targetPath }: { targetPath: string }) =>
+    `chmod 600 ${targetPath}`,
+}));
 
 describe("security audit config include permissions", () => {
+  beforeEach(() => {
+    inspectPathPermissionsMock.mockReset();
+  });
+
   it("flags group/world-readable config include files", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-include-perms-"));
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-include-perms-"));
     const stateDir = path.join(tmp, "state");
-    await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
 
     const includePath = path.join(stateDir, "extra.json5");
-    await fs.writeFile(includePath, "{ logging: { redactSensitive: 'off' } }\n", "utf-8");
-    if (isWindows) {
-      const { execSync } = await import("node:child_process");
-      execSync(`icacls "${includePath}" /grant Everyone:W`, { stdio: "ignore" });
-    } else {
-      await fs.chmod(includePath, 0o644);
-    }
-
-    const configPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(configPath, `{ "$include": "./extra.json5" }\n`, "utf-8");
-    await fs.chmod(configPath, 0o600);
-
-    const user = "DESKTOP-TEST\\Tester";
-    const execIcacls = isWindows
-      ? async (_cmd: string, args: string[]) => {
-          const target = args[0];
-          if (target === includePath) {
-            return {
-              stdout: `${target} NT AUTHORITY\\SYSTEM:(F)\n BUILTIN\\Users:(W)\n ${user}:(F)\n`,
-              stderr: "",
-            };
-          }
-          return {
-            stdout: `${target} NT AUTHORITY\\SYSTEM:(F)\n ${user}:(F)\n`,
-            stderr: "",
-          };
-        }
-      : undefined;
+    fs.writeFileSync(includePath, "{ logging: { redactSensitive: 'off' } }\n", "utf-8");
+    inspectPathPermissionsMock.mockResolvedValue({
+      ok: true,
+      isSymlink: false,
+      isDir: false,
+      mode: 0o644,
+      bits: 0o644,
+      source: "posix",
+      worldWritable: false,
+      groupWritable: false,
+      worldReadable: true,
+      groupReadable: true,
+    });
 
     const configSnapshot: ConfigFileSnapshot = {
-      path: configPath,
+      path: path.join(stateDir, "openclaw.json"),
       exists: true,
-      raw: `{ "$include": "./extra.json5" }\n`,
-      parsed: { $include: "./extra.json5" },
+      raw: `{ "$include": ${JSON.stringify(includePath)} }\n`,
+      parsed: { $include: includePath },
       sourceConfig: {} as ConfigFileSnapshot["sourceConfig"],
       resolved: {} as ConfigFileSnapshot["resolved"],
       valid: true,
@@ -60,20 +56,19 @@ describe("security audit config include permissions", () => {
 
     const findings = await collectIncludeFilePermFindings({
       configSnapshot,
-      platform: isWindows ? "win32" : undefined,
-      env: isWindows
-        ? { ...process.env, USERNAME: "Tester", USERDOMAIN: "DESKTOP-TEST" }
-        : undefined,
-      execIcacls,
     });
 
-    const expectedCheckId = isWindows
-      ? "fs.config_include.perms_writable"
-      : "fs.config_include.perms_world_readable";
-
+    expect(inspectPathPermissionsMock).toHaveBeenCalledWith(includePath, {
+      env: undefined,
+      exec: undefined,
+      platform: undefined,
+    });
     expect(findings).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ checkId: expectedCheckId, severity: "critical" }),
+        expect.objectContaining({
+          checkId: "fs.config_include.perms_world_readable",
+          severity: "critical",
+        }),
       ]),
     );
   });

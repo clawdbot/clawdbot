@@ -73,6 +73,57 @@ describe("memory embedding provider runtime resolution", () => {
     });
   });
 
+  it("uses a configured provider api as the memory adapter owner", () => {
+    const ollamaAdapter = createCapabilityAdapter("ollama");
+    mocks.resolvePluginCapabilityProvider.mockImplementation(({ providerId }) =>
+      providerId === "ollama" ? ollamaAdapter : undefined,
+    );
+
+    expect(
+      runtimeModule.getMemoryEmbeddingProvider("ollama-5080", {
+        models: {
+          providers: {
+            "ollama-5080": {
+              api: "ollama",
+              baseUrl: "http://10.0.0.8:11435",
+              models: [],
+            },
+          },
+        },
+      } as never),
+    ).toBe(ollamaAdapter);
+    expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledWith({
+      key: "memoryEmbeddingProviders",
+      providerId: "ollama-5080",
+      cfg: expect.any(Object),
+    });
+    expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledWith({
+      key: "memoryEmbeddingProviders",
+      providerId: "ollama",
+      cfg: expect.any(Object),
+    });
+  });
+
+  it("uses registered adapters through a configured provider api", () => {
+    const ollamaAdapter = createCapabilityAdapter("ollama");
+    registerMemoryEmbeddingProvider(ollamaAdapter);
+
+    expect(
+      runtimeModule.getMemoryEmbeddingProvider("ollama-gpu1", {
+        models: {
+          providers: {
+            "ollama-gpu1": {
+              api: "ollama",
+              baseUrl: "http://ollama-host:11435",
+              models: [],
+            },
+          },
+        },
+      } as never),
+    ).toBe(ollamaAdapter);
+    expect(mocks.resolvePluginCapabilityProvider).not.toHaveBeenCalled();
+  });
+
   it("prefers registered adapters over declared capability fallback adapters with the same id", () => {
     const registered = {
       id: "openai",

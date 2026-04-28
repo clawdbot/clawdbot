@@ -45,6 +45,10 @@ export type DiagnosticStabilityEventRecord = {
   thresholdBytes?: number;
   rssGrowthBytes?: number;
   windowMs?: number;
+  eventLoopDelayP99Ms?: number;
+  eventLoopDelayMaxMs?: number;
+  eventLoopUtilization?: number;
+  cpuCoreRatio?: number;
   ageMs?: number;
   queueDepth?: number;
   queueSize?: number;
@@ -266,6 +270,19 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.waiting = event.waiting;
       record.queued = event.queued;
       break;
+    case "diagnostic.liveness.warning":
+      record.level = "warning";
+      record.durationMs = event.intervalMs;
+      record.count = event.reasons.length;
+      assignReasonCode(record, event.reasons[0]);
+      record.eventLoopDelayP99Ms = event.eventLoopDelayP99Ms;
+      record.eventLoopDelayMaxMs = event.eventLoopDelayMaxMs;
+      record.eventLoopUtilization = event.eventLoopUtilization;
+      record.cpuCoreRatio = event.cpuCoreRatio;
+      record.active = event.active;
+      record.waiting = event.waiting;
+      record.queued = event.queued;
+      break;
     case "tool.loop":
       record.toolName = event.toolName;
       record.level = event.level;
@@ -285,6 +302,11 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.toolName = event.toolName;
       record.durationMs = event.durationMs;
       assignReasonCode(record, event.errorCategory);
+      break;
+    case "tool.execution.blocked":
+      record.toolName = event.toolName;
+      record.outcome = "blocked";
+      assignReasonCode(record, event.deniedReason);
       break;
     case "exec.process.completed":
       record.target = event.target;

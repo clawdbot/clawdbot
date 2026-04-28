@@ -1,5 +1,5 @@
+import { createParameterFreeTool } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { describe, expect, it, vi } from "vitest";
-import { createParameterFreeTool } from "../../../test/helpers/agents/schema-normalization-runtime-contract.js";
 import { buildAgentRuntimePlan } from "./build.js";
 
 vi.mock("../../plugins/provider-hook-runtime.js", () => ({

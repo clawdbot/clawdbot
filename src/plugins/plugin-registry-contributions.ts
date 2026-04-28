@@ -14,10 +14,18 @@ import type {
 } from "./manifest-registry.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import {
+  createPluginRegistryIdNormalizer,
+  type PluginRegistryIdNormalizerOptions,
+} from "./plugin-registry-id-normalizer.js";
+import {
   loadPluginRegistrySnapshot,
   type LoadPluginRegistryParams,
   type PluginRegistrySnapshot,
 } from "./plugin-registry-snapshot.js";
+export {
+  createPluginRegistryIdNormalizer,
+  type PluginRegistryIdNormalizerOptions,
+} from "./plugin-registry-id-normalizer.js";
 
 export type PluginLookUpTable = {
   index: PluginRegistrySnapshot;
@@ -101,21 +109,8 @@ export type ResolveManifestContractPluginIdsByCompatibilityRuntimePathParams =
     origin?: PluginOrigin;
   };
 
-export type PluginRegistryIdNormalizerOptions = {
-  manifestRegistry?: PluginManifestRegistry;
-  lookUpTable?: Pick<PluginLookUpTable, "manifestRegistry">;
-};
-
 function normalizeContributionId(value: string): string {
   return value.trim();
-}
-
-function normalizePluginRegistryAlias(value: string): string {
-  return value.trim();
-}
-
-function normalizePluginRegistryAliasKey(value: string): string {
-  return normalizePluginRegistryAlias(value).toLowerCase();
 }
 
 function sortUnique(values: Iterable<string>): string[] {
@@ -173,7 +168,10 @@ function listManifestContributionIds(
     case "cliBackends":
       return [...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])];
     case "modelCatalogProviders":
-      return collectObjectKeys(plugin.modelCatalog?.providers);
+      return [
+        ...collectObjectKeys(plugin.modelCatalog?.providers),
+        ...collectObjectKeys(plugin.modelCatalog?.aliases),
+      ];
     case "commandAliases":
       return plugin.commandAliases?.map((alias) => alias.name) ?? [];
     case "contracts":
@@ -293,54 +291,6 @@ export function loadPluginManifestRegistryForPluginRegistry(
       ? { bundledChannelConfigCollector: params.bundledChannelConfigCollector }
       : {}),
   });
-}
-
-export function createPluginRegistryIdNormalizer(
-  index: PluginRegistrySnapshot,
-  options: PluginRegistryIdNormalizerOptions = {},
-): (pluginId: string) => string {
-  const aliases = new Map<string, string>();
-  for (const plugin of index.plugins) {
-    const pluginId = normalizePluginRegistryAlias(plugin.pluginId);
-    if (pluginId) {
-      aliases.set(normalizePluginRegistryAliasKey(pluginId), plugin.pluginId);
-    }
-  }
-  const registry =
-    options.lookUpTable?.manifestRegistry ??
-    options.manifestRegistry ??
-    loadPluginManifestRegistryForInstalledIndex({
-      index,
-      includeDisabled: true,
-    });
-  for (const plugin of [...registry.plugins].toSorted((left, right) =>
-    left.id.localeCompare(right.id),
-  )) {
-    const pluginId = normalizePluginRegistryAlias(plugin.id);
-    if (!pluginId) {
-      continue;
-    }
-    aliases.set(normalizePluginRegistryAliasKey(pluginId), plugin.id);
-    for (const alias of [
-      plugin.id,
-      ...listManifestContributionIds(plugin, "providers"),
-      ...listManifestContributionIds(plugin, "channels"),
-      ...listManifestContributionIds(plugin, "setupProviders"),
-      ...listManifestContributionIds(plugin, "cliBackends"),
-      ...listManifestContributionIds(plugin, "modelCatalogProviders"),
-      ...(plugin.legacyPluginIds ?? []),
-    ]) {
-      const normalizedAlias = normalizePluginRegistryAlias(alias);
-      const normalizedAliasKey = normalizePluginRegistryAliasKey(alias);
-      if (normalizedAlias && !aliases.has(normalizedAliasKey)) {
-        aliases.set(normalizedAliasKey, pluginId);
-      }
-    }
-  }
-  return (pluginId: string) => {
-    const trimmed = normalizePluginRegistryAlias(pluginId);
-    return aliases.get(normalizePluginRegistryAliasKey(trimmed)) ?? trimmed;
-  };
 }
 
 export function normalizePluginsConfigWithRegistry(

@@ -1067,7 +1067,42 @@ describe("convertMessagesToInputItems", () => {
       typeof convertMessagesToInputItems
     >[0]);
     expect(items.map((item) => item.type)).toEqual(["reasoning", "message"]);
-    expect(items[0]).toMatchObject({ type: "reasoning", id: "rs_test" });
+    expect(items[0]).toMatchObject({ type: "reasoning", id: "rs_test", summary: [] });
+  });
+
+  it("replays encrypted reasoning content from thinking signatures", () => {
+    const msg = {
+      role: "assistant" as const,
+      content: [
+        {
+          type: "thinking" as const,
+          thinking: "",
+          thinkingSignature: JSON.stringify({
+            type: "reasoning",
+            id: "rs_encrypted",
+            encrypted_content: "encrypted-payload",
+            summary: [],
+          }),
+        },
+        { type: "text" as const, text: "Here is my answer." },
+      ],
+      stopReason: "stop",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.4",
+      usage: {},
+      timestamp: 0,
+    };
+    const items = convertMessagesToInputItems([msg] as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(items.map((item) => item.type)).toEqual(["reasoning", "message"]);
+    expect(items[0]).toMatchObject({
+      type: "reasoning",
+      id: "rs_encrypted",
+      encrypted_content: "encrypted-payload",
+      summary: [],
+    });
   });
 
   it("replays reasoning blocks when signature type is reasoning.*", () => {
@@ -1440,7 +1475,11 @@ describe("buildAssistantMessageFromResponse", () => {
       | undefined;
     expect(thinkingBlock?.thinking).toBe("Plan step A\nPlan step B");
     expect(thinkingBlock?.thinkingSignature).toBe(
-      JSON.stringify({ id: "rs_123", type: "reasoning" }),
+      JSON.stringify({
+        type: "reasoning",
+        id: "rs_123",
+        summary: [{ text: "Plan step A" }, { text: "Plan step B" }],
+      }),
     );
   });
 
@@ -1466,9 +1505,11 @@ describe("buildAssistantMessageFromResponse", () => {
       | undefined;
     expect(thinkingBlock?.type).toBe("thinking");
     expect(thinkingBlock?.thinking).toBe("Derived hidden reasoning");
-    expect(thinkingBlock?.thinkingSignature).toBe(
-      JSON.stringify({ id: "rs_456", type: "reasoning.summary" }),
-    );
+    expect(JSON.parse(thinkingBlock?.thinkingSignature ?? "{}")).toEqual({
+      type: "reasoning.summary",
+      id: "rs_456",
+      content: "Derived hidden reasoning",
+    });
   });
 
   it("prefers reasoning summary text over fallback content and preserves item order", () => {
@@ -1502,9 +1543,12 @@ describe("buildAssistantMessageFromResponse", () => {
       | { type: "thinking"; thinking: string; thinkingSignature?: string }
       | undefined;
     expect(thinkingBlock?.thinking).toBe("Plan A\nPlan B");
-    expect(thinkingBlock?.thinkingSignature).toBe(
-      JSON.stringify({ id: "rs_789", type: "reasoning.summary" }),
-    );
+    expect(JSON.parse(thinkingBlock?.thinkingSignature ?? "{}")).toEqual({
+      type: "reasoning.summary",
+      id: "rs_789",
+      content: "hidden fallback content",
+      summary: ["Plan A", { text: "Plan B" }, { nope: true }],
+    });
   });
 
   it("drops invalid reasoning ids from thinking signatures while preserving the visible block", () => {
@@ -1526,6 +1570,57 @@ describe("buildAssistantMessageFromResponse", () => {
 
     const msg = buildAssistantMessageFromResponse(response, modelInfo);
     expect(msg.content).toEqual([{ type: "thinking", thinking: "Hidden reasoning" }]);
+  });
+
+  it("preserves encrypted-only reasoning items with empty visible thinking", () => {
+    const response = {
+      id: "resp_encrypted_reasoning",
+      object: "response",
+      created_at: Date.now(),
+      status: "completed",
+      model: "gpt-5.4",
+      output: [
+        {
+          type: "reasoning",
+          id: "rs_encrypted_empty",
+          encrypted_content: "encrypted-payload",
+          summary: [],
+        },
+        {
+          type: "message",
+          id: "msg_encrypted_empty",
+          role: "assistant",
+          content: [{ type: "output_text", text: "NO_REPLY" }],
+        },
+      ],
+      usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
+    } as unknown as ResponseObject;
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+    expect(msg.content.map((block) => block.type)).toEqual(["thinking", "text"]);
+    const thinkingBlock = msg.content[0] as {
+      type: "thinking";
+      thinking: string;
+      thinkingSignature?: string;
+    };
+    expect(thinkingBlock.thinking).toBe("");
+    expect(JSON.parse(thinkingBlock.thinkingSignature ?? "{}")).toEqual({
+      encrypted_content: "encrypted-payload",
+      id: "rs_encrypted_empty",
+      summary: [],
+      type: "reasoning",
+    });
+
+    const replayItems = convertMessagesToInputItems([msg] as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(replayItems.map((item) => item.type)).toEqual(["reasoning", "message"]);
+    expect(replayItems[0]).toMatchObject({
+      type: "reasoning",
+      id: "rs_encrypted_empty",
+      encrypted_content: "encrypted-payload",
+      summary: [],
+    });
   });
 
   it("preserves function call item ids for replay when reasoning is present", () => {
@@ -1824,6 +1919,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     releaseWsSession("sess-fallback");
     releaseWsSession("sess-boundary-http-fallback");
     releaseWsSession("sess-full-context-replay");
+    releaseWsSession("sess-encrypted-full-context-replay");
     releaseWsSession("sess-incremental");
     releaseWsSession("sess-full");
     releaseWsSession("sess-onpayload");
@@ -3030,6 +3126,105 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent2.input).toEqual([]);
   });
 
+  it("replays encrypted-only reasoning when websocket must send full context", async () => {
+    const sessionId = "sess-encrypted-full-context-replay";
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId);
+
+    const ctx1 = {
+      systemPrompt: "You are helpful.",
+      messages: [userMsg("Run ls")] as Parameters<typeof convertMessagesToInputItems>[0],
+      tools: [],
+    };
+    const turn1Response = {
+      id: "resp_turn1_encrypted_reasoning",
+      object: "response",
+      created_at: Date.now(),
+      status: "completed",
+      model: "gpt-5.4",
+      output: [
+        {
+          type: "reasoning",
+          id: "rs_turn1_encrypted",
+          encrypted_content: "encrypted-payload",
+          summary: [],
+        },
+        {
+          type: "function_call",
+          id: "fc_turn1",
+          call_id: "call_turn1",
+          name: "exec",
+          arguments: '{"cmd":"ls"}',
+        },
+      ],
+      usage: { input_tokens: 12, output_tokens: 8, total_tokens: 20 },
+    } as ResponseObject;
+
+    const stream1 = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      ctx1 as Parameters<typeof streamFn>[1],
+    );
+    const done1 = (async () => {
+      for await (const _ of await resolveStream(stream1)) {
+        /* consume */
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({ type: "response.completed", response: turn1Response });
+    await done1;
+
+    const ctx2 = {
+      systemPrompt: "You are helpful. Use the updated instruction.",
+      messages: [
+        userMsg("Run ls"),
+        buildAssistantMessageFromResponse(turn1Response, modelStub),
+        toolResultMsg("call_turn1|fc_turn1", "TOOL_OK"),
+      ] as Parameters<typeof convertMessagesToInputItems>[0],
+      tools: [],
+    };
+
+    const stream2 = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      ctx2 as Parameters<typeof streamFn>[1],
+    );
+    const done2 = (async () => {
+      for await (const _ of await resolveStream(stream2)) {
+        /* consume */
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    manager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp_turn2", "Done"),
+    });
+    await done2;
+
+    const sent2 = manager.sentEvents[1] as {
+      previous_response_id?: string;
+      input: Array<Record<string, unknown>>;
+    };
+    expect(sent2.previous_response_id).toBeUndefined();
+    expect(sent2.input).toEqual([
+      { type: "message", role: "user", content: "Run ls" },
+      {
+        type: "reasoning",
+        id: "rs_turn1_encrypted",
+        encrypted_content: "encrypted-payload",
+        summary: [],
+      },
+      {
+        type: "function_call",
+        id: "fc_turn1",
+        call_id: "call_turn1",
+        name: "exec",
+        arguments: '{"cmd":"ls"}',
+      },
+      { type: "function_call_output", call_id: "call_turn1", output: "TOOL_OK" },
+    ]);
+  });
+
   it("sends instructions (system prompt) in each request", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-tools");
     const ctx = {
@@ -3353,6 +3548,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
     expect(sent.type).toBe("response.create");
     expect(sent.reasoning).toEqual({ effort: "high", summary: "auto" });
+    expect(sent.include).toEqual(["reasoning.encrypted_content"]);
   });
 
   it("defaults response.create reasoning effort to high for reasoning models", async () => {
@@ -3382,6 +3578,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
     expect(sent.type).toBe("response.create");
     expect(sent.reasoning).toEqual({ effort: "high" });
+    expect(sent.include).toEqual(["reasoning.encrypted_content"]);
   });
 
   it("forwards shared reasoning to response.create reasoning effort", async () => {

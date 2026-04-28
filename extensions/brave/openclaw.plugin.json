@@ -1,5 +1,8 @@
 {
   "id": "brave",
+  "activation": {
+    "onStartup": false
+  },
   "providerAuthEnvVars": {
     "brave": ["BRAVE_API_KEY"]
   },

@@ -18,7 +18,7 @@ import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js"
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { clearSessionStoreCacheForTest, loadSessionStore, updateSessionStore } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
-import { mergeSessionEntry, type SessionEntry } from "./types.js";
+import { mergeSessionEntry, mergeSessionEntryWithPolicy, type SessionEntry } from "./types.js";
 
 describe("session path safety", () => {
   it("rejects unsafe session IDs", () => {
@@ -202,6 +202,38 @@ describe("resolveSessionResetPolicy", () => {
       idleExpiresAt: 5 * 60_000,
     });
   });
+
+  it("does not let future legacy updatedAt values keep daily sessions fresh", () => {
+    const now = new Date(2026, 3, 25, 12, 0, 0, 0).getTime();
+    const freshness = evaluateSessionFreshness({
+      updatedAt: now + 30 * 24 * 60 * 60_000,
+      now,
+      policy: {
+        mode: "daily",
+        atHour: 4,
+      },
+    });
+
+    expect(freshness.fresh).toBe(false);
+  });
+
+  it("does not let future legacy updatedAt values keep idle sessions fresh", () => {
+    const now = 60 * 60_000;
+    const freshness = evaluateSessionFreshness({
+      updatedAt: now + 30 * 24 * 60 * 60_000,
+      now,
+      policy: {
+        mode: "idle",
+        atHour: 4,
+        idleMinutes: 5,
+      },
+    });
+
+    expect(freshness).toMatchObject({
+      fresh: false,
+      idleExpiresAt: 5 * 60_000,
+    });
+  });
 });
 
 describe("session lifecycle timestamps", () => {
@@ -347,6 +379,36 @@ describe("session store lock (Promise chain mutex)", () => {
     );
     expect(merged.model).toBe("gpt-5.4");
     expect(merged.modelProvider).toBeUndefined();
+  });
+
+  it("caps future updatedAt values at the session merge boundary", () => {
+    const now = 1_000;
+    const merged = mergeSessionEntryWithPolicy(
+      {
+        sessionId: "sess-future",
+        updatedAt: now + 10_000,
+      },
+      {
+        updatedAt: now + 20_000,
+      },
+      { now },
+    );
+
+    expect(merged.updatedAt).toBe(now);
+  });
+
+  it("caps future updatedAt values while preserving activity", () => {
+    const now = 1_000;
+    const merged = mergeSessionEntryWithPolicy(
+      {
+        sessionId: "sess-preserve-future",
+        updatedAt: now + 10_000,
+      },
+      {},
+      { now, policy: "preserve-activity" },
+    );
+
+    expect(merged.updatedAt).toBe(now);
   });
 
   it("normalizes orphan modelProvider fields at store write boundary", async () => {

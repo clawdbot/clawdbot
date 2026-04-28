@@ -7,6 +7,20 @@ import { collectFilesSync, isCodeFile, relativeToCwd } from "./check-file-utils.
 // imports/exports, require/dynamic import, and test mocks (vi.mock/jest.mock).
 const ROOT_IMPORT_PATTERN = /["']openclaw\/plugin-sdk["']/;
 const LEGACY_COMPAT_IMPORT_PATTERN = /["']openclaw\/plugin-sdk\/compat["']/;
+const LEGACY_BROAD_SUBPATH_PATTERNS = [
+  {
+    pattern: /["']openclaw\/plugin-sdk\/channel-runtime["']/,
+    label: "openclaw/plugin-sdk/channel-runtime",
+  },
+  {
+    pattern: /["']openclaw\/plugin-sdk\/config-runtime["']/,
+    label: "openclaw/plugin-sdk/config-runtime",
+  },
+  {
+    pattern: /["']openclaw\/plugin-sdk\/infra-runtime["']/,
+    label: "openclaw/plugin-sdk/infra-runtime",
+  },
+] as const;
 
 function hasMonolithicRootImport(content: string): boolean {
   return ROOT_IMPORT_PATTERN.test(content);
@@ -14,6 +28,12 @@ function hasMonolithicRootImport(content: string): boolean {
 
 function hasLegacyCompatImport(content: string): boolean {
   return LEGACY_COMPAT_IMPORT_PATTERN.test(content);
+}
+
+function findLegacyBroadSubpathImports(content: string): string[] {
+  return LEGACY_BROAD_SUBPATH_PATTERNS.filter(({ pattern }) => pattern.test(content)).map(
+    ({ label }) => label,
+  );
 }
 
 function collectPluginSourceFiles(rootDir: string): string[] {
@@ -71,6 +91,7 @@ function main() {
 
   const monolithicOffenders: string[] = [];
   const legacyCompatOffenders: string[] = [];
+  const legacyBroadSubpathOffenders = new Map<string, string[]>();
   for (const entryFile of filesToCheck) {
     let content = "";
     try {
@@ -84,9 +105,17 @@ function main() {
     if (hasLegacyCompatImport(content)) {
       legacyCompatOffenders.push(entryFile);
     }
+    const legacyBroadSubpaths = findLegacyBroadSubpathImports(content);
+    if (legacyBroadSubpaths.length > 0) {
+      legacyBroadSubpathOffenders.set(entryFile, legacyBroadSubpaths);
+    }
   }
 
-  if (monolithicOffenders.length > 0 || legacyCompatOffenders.length > 0) {
+  if (
+    monolithicOffenders.length > 0 ||
+    legacyCompatOffenders.length > 0 ||
+    legacyBroadSubpathOffenders.size > 0
+  ) {
     if (monolithicOffenders.length > 0) {
       console.error("Bundled plugin source files must not import monolithic openclaw/plugin-sdk.");
       for (const file of monolithicOffenders.toSorted()) {
@@ -101,9 +130,23 @@ function main() {
         console.error(`- ${relativeToCwd(file)}`);
       }
     }
-    if (monolithicOffenders.length > 0 || legacyCompatOffenders.length > 0) {
+    if (legacyBroadSubpathOffenders.size > 0) {
       console.error(
-        "Use openclaw/plugin-sdk/<domain> or openclaw/plugin-sdk/<channel> subpaths for bundled plugins; root and compat are legacy surfaces only.",
+        "Bundled plugin source files must not import deprecated broad plugin-sdk subpaths.",
+      );
+      for (const [file, labels] of [...legacyBroadSubpathOffenders.entries()].toSorted(
+        ([left], [right]) => left.localeCompare(right),
+      )) {
+        console.error(`- ${relativeToCwd(file)} (${labels.join(", ")})`);
+      }
+    }
+    if (
+      monolithicOffenders.length > 0 ||
+      legacyCompatOffenders.length > 0 ||
+      legacyBroadSubpathOffenders.size > 0
+    ) {
+      console.error(
+        "Use focused openclaw/plugin-sdk/<domain> subpaths for bundled plugins; root, compat, and broad runtime barrels are legacy surfaces only.",
       );
     }
     process.exit(1);

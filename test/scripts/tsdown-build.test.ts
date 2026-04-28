@@ -106,21 +106,82 @@ describe("resolveTsdownBuildInvocation", () => {
     ).rejects.toThrow();
   });
 
-  it("cleans tsdown output roots before using tsdown --no-clean", async () => {
+  it("cleans tsdown output roots before using tsdown --no-clean without deleting staged runtime deps", async () => {
     const rootDir = createTempDir("openclaw-tsdown-clean-");
     const distFile = path.join(rootDir, "dist", "stale.js");
+    const pluginManifest = path.join(rootDir, "extensions", "telegram", "openclaw.plugin.json");
+    const pluginSourceManifest = path.join(rootDir, "extensions", "telegram", "package.json");
+    const pluginGeneratedFile = path.join(rootDir, "dist", "extensions", "telegram", "index.js");
+    const pluginRuntimeDepFile = path.join(
+      rootDir,
+      "dist",
+      "extensions",
+      "telegram",
+      "node_modules",
+      "grammy",
+      "package.json",
+    );
+    const stalePluginRuntimeDepFile = path.join(
+      rootDir,
+      "dist",
+      "extensions",
+      "old-plugin",
+      "node_modules",
+      "left-pad",
+      "package.json",
+    );
+    const unstagedPluginSourceManifest = path.join(
+      rootDir,
+      "extensions",
+      "unstaged-plugin",
+      "package.json",
+    );
+    const unstagedPluginRuntimeDepFile = path.join(
+      rootDir,
+      "dist",
+      "extensions",
+      "unstaged-plugin",
+      "node_modules",
+      "left-pad",
+      "package.json",
+    );
     const distRuntimeFile = path.join(rootDir, "dist-runtime", "stale.js");
     const unrelatedFile = path.join(rootDir, "tmp", "keep.js");
     await fsPromises.mkdir(path.dirname(distFile), { recursive: true });
+    await fsPromises.mkdir(path.dirname(pluginManifest), { recursive: true });
+    await fsPromises.mkdir(path.dirname(pluginSourceManifest), { recursive: true });
+    await fsPromises.mkdir(path.dirname(pluginGeneratedFile), { recursive: true });
+    await fsPromises.mkdir(path.dirname(pluginRuntimeDepFile), { recursive: true });
+    await fsPromises.mkdir(path.dirname(stalePluginRuntimeDepFile), { recursive: true });
+    await fsPromises.mkdir(path.dirname(unstagedPluginSourceManifest), { recursive: true });
+    await fsPromises.mkdir(path.dirname(unstagedPluginRuntimeDepFile), { recursive: true });
     await fsPromises.mkdir(path.dirname(distRuntimeFile), { recursive: true });
     await fsPromises.mkdir(path.dirname(unrelatedFile), { recursive: true });
     await fsPromises.writeFile(distFile, "stale\n");
+    await fsPromises.writeFile(pluginManifest, '{"id":"telegram"}\n');
+    await fsPromises.writeFile(
+      pluginSourceManifest,
+      '{"openclaw":{"bundle":{"stageRuntimeDependencies":true}}}\n',
+    );
+    await fsPromises.writeFile(pluginGeneratedFile, "generated\n");
+    await fsPromises.writeFile(pluginRuntimeDepFile, "{}\n");
+    await fsPromises.writeFile(stalePluginRuntimeDepFile, "{}\n");
+    await fsPromises.writeFile(unstagedPluginSourceManifest, "{}\n");
+    await fsPromises.writeFile(unstagedPluginRuntimeDepFile, "{}\n");
     await fsPromises.writeFile(distRuntimeFile, "stale\n");
     await fsPromises.writeFile(unrelatedFile, "keep\n");
 
     cleanTsdownOutputRoots({ cwd: rootDir });
 
-    await expect(fsPromises.stat(path.join(rootDir, "dist"))).rejects.toThrow();
+    await expect(fsPromises.stat(distFile)).rejects.toThrow();
+    await expect(fsPromises.stat(pluginGeneratedFile)).rejects.toThrow();
+    await expect(fsPromises.readFile(pluginRuntimeDepFile, "utf8")).resolves.toBe("{}\n");
+    await expect(
+      fsPromises.stat(path.join(rootDir, "dist", "extensions", "old-plugin")),
+    ).rejects.toThrow();
+    await expect(
+      fsPromises.stat(path.join(rootDir, "dist", "extensions", "unstaged-plugin")),
+    ).rejects.toThrow();
     await expect(fsPromises.stat(path.join(rootDir, "dist-runtime"))).rejects.toThrow();
     await expect(fsPromises.readFile(unrelatedFile, "utf8")).resolves.toBe("keep\n");
   });

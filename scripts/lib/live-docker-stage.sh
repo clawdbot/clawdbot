@@ -103,8 +103,9 @@ openclaw_live_prepare_staged_config() {
     return 0
   fi
 
+  local scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
   (
     cd /app
-    node --import tsx /src/scripts/live-docker-normalize-config.ts
+    node --import tsx "$scripts_dir/live-docker-normalize-config.ts"
   )
 }

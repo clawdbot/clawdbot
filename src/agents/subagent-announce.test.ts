@@ -16,7 +16,7 @@ const readLatestAssistantReplyMock = vi.fn(async (_params?: unknown) => "raw sub
 const isEmbeddedPiRunActiveMock = vi.fn((_sessionId: string) => false);
 const queueEmbeddedPiMessageMock = vi.fn((_sessionId: string, _text: string) => false);
 const waitForEmbeddedPiRunEndMock = vi.fn(async (_sessionId: string, _timeoutMs?: number) => true);
-let mockConfig: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
+let mockConfig: ReturnType<(typeof import("../config/config.js"))["getRuntimeConfig"]> = {
   session: {
     mainKey: "main",
     scope: "per-sender",
@@ -39,7 +39,7 @@ const { subagentRegistryRuntimeMock } = vi.hoisted(() => ({
 vi.mock("./subagent-announce.runtime.js", () => ({
   callGateway: (request: unknown) => callGatewayMock(request),
   isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
-  loadConfig: () => mockConfig,
+  getRuntimeConfig: () => mockConfig,
   loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
   queueEmbeddedPiMessage: (sessionId: string, text: string) =>
     queueEmbeddedPiMessageMock(sessionId, text),
@@ -58,7 +58,7 @@ vi.mock("./tools/agent-step.js", () => ({
 vi.mock("./subagent-announce-delivery.runtime.js", () =>
   createSubagentAnnounceDeliveryRuntimeMock({
     callGateway: (request: unknown) => callGatewayMock(request),
-    loadConfig: () => mockConfig,
+    getRuntimeConfig: () => mockConfig,
     loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
     resolveAgentIdFromSessionKey: (sessionKey: string) =>
       resolveAgentIdFromSessionKeyMock(sessionKey),
@@ -468,7 +468,7 @@ describe("subagent announce seam flow", () => {
       expect.objectContaining({
         deliver: true,
         channel: "telegram",
-        accountId: "bot:123",
+        accountId: "bot-123",
         to: "-1001234567890",
       }),
     );

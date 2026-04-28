@@ -1,7 +1,7 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/testing";
+import { expectDirectoryIds } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, expectTypeOf, it } from "vitest";
-import { expectDirectoryIds } from "../../../test/helpers/channels/directory-ids.js";
 import {
   listSlackDirectoryGroupsFromConfig,
   listSlackDirectoryPeersFromConfig,

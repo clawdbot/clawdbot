@@ -45,6 +45,15 @@ extension AttributedString {
         }
 
         return ranges.compactMap { range in
+            guard #available(macOS 26.0, iOS 26.0, *) else {
+                return AttributedString(self[range].characters)
+            }
+            return self.sentenceWithAudioTimeRange(range)
+        }
+    }
+
+    @available(macOS 26.0, iOS 26.0, *)
+    private func sentenceWithAudioTimeRange(_ range: Range<AttributedString.Index>) -> AttributedString? {
             let audioTimeRanges = self[range].runs.filter {
                 !String(self[$0.range].characters)
                     .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -57,6 +66,5 @@ extension AttributedString {
                 start: start,
                 end: end)
             return AttributedString(self[range].characters, attributes: attributes)
-        }
     }
 }

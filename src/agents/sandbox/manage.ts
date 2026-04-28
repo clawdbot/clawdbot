@@ -1,4 +1,4 @@
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { stopBrowserBridgeServer } from "../../plugin-sdk/browser-bridge.js";
 import { getSandboxBackendManager } from "./backend.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
@@ -33,7 +33,7 @@ function toBrowserDockerRuntimeEntry(entry: SandboxBrowserRegistryEntry): Sandbo
 }
 
 export async function listSandboxContainers(): Promise<SandboxContainerInfo[]> {
-  const config = loadConfig();
+  const config = getRuntimeConfig();
   const registry = await readRegistry();
   const results: SandboxContainerInfo[] = [];
 
@@ -66,7 +66,7 @@ export async function listSandboxContainers(): Promise<SandboxContainerInfo[]> {
 }
 
 export async function listSandboxBrowsers(): Promise<SandboxBrowserInfo[]> {
-  const config = loadConfig();
+  const config = getRuntimeConfig();
   const registry = await readBrowserRegistry();
   const results: SandboxBrowserInfo[] = [];
 
@@ -89,7 +89,7 @@ export async function listSandboxBrowsers(): Promise<SandboxBrowserInfo[]> {
 }
 
 export async function removeSandboxContainer(containerName: string): Promise<void> {
-  const config = loadConfig();
+  const config = getRuntimeConfig();
   const registry = await readRegistry();
   const entry = registry.entries.find((item) => item.containerName === containerName);
   if (entry) {
@@ -104,7 +104,7 @@ export async function removeSandboxContainer(containerName: string): Promise<voi
 }
 
 export async function removeSandboxBrowserContainer(containerName: string): Promise<void> {
-  const config = loadConfig();
+  const config = getRuntimeConfig();
   const registry = await readBrowserRegistry();
   const entry = registry.entries.find((item) => item.containerName === containerName);
   if (entry) {

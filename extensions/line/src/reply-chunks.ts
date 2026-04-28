@@ -1,5 +1,5 @@
 import type { messagingApi } from "@line/bot-sdk";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 
 export type LineReplyMessage = messagingApi.TextMessage;
 

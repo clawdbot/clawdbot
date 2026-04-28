@@ -1,10 +1,11 @@
-import type { SsrFPolicy } from "../../../../src/infra/net/ssrf.js";
 import { postJson } from "./post-json.js";
+import type { SsrFPolicy } from "./ssrf-policy.js";
 
 export async function fetchRemoteEmbeddingVectors(params: {
   url: string;
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
+  fetchImpl?: typeof fetch;
   body: unknown;
   errorPrefix: string;
 }): Promise<number[][]> {
@@ -12,6 +13,7 @@ export async function fetchRemoteEmbeddingVectors(params: {
     url: params.url,
     headers: params.headers,
     ssrfPolicy: params.ssrfPolicy,
+    fetchImpl: params.fetchImpl,
     body: params.body,
     errorPrefix: params.errorPrefix,
     parse: (payload) => {

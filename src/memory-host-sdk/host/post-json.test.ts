@@ -1,30 +1,39 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./remote-http.js", () => ({
   withRemoteHttpResponse: vi.fn(),
 }));
 
-let postJson: typeof import("./post-json.js").postJson;
-let withRemoteHttpResponse: typeof import("./remote-http.js").withRemoteHttpResponse;
+const { postJson } = await import("./post-json.js");
+const { withRemoteHttpResponse } = await import("./remote-http.js");
+const remoteHttpMock = vi.mocked(withRemoteHttpResponse);
+
+function jsonResponse(payload: unknown, status = 200): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => payload,
+    text: async () => JSON.stringify(payload),
+  } as Response;
+}
+
+function textResponse(body: string, status: number): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => JSON.parse(body) as unknown,
+    text: async () => body,
+  } as Response;
+}
 
 describe("postJson", () => {
-  let remoteHttpMock: ReturnType<typeof vi.mocked<typeof withRemoteHttpResponse>>;
-
-  beforeAll(async () => {
-    ({ postJson } = await import("./post-json.js"));
-    ({ withRemoteHttpResponse } = await import("./remote-http.js"));
-    remoteHttpMock = vi.mocked(withRemoteHttpResponse);
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it("parses JSON payload on successful response", async () => {
     remoteHttpMock.mockImplementationOnce(async (params) => {
-      return await params.onResponse(
-        new Response(JSON.stringify({ data: [{ embedding: [1, 2] }] }), { status: 200 }),
-      );
+      return await params.onResponse(jsonResponse({ data: [{ embedding: [1, 2] }] }));
     });
 
     const result = await postJson({
@@ -40,7 +49,7 @@ describe("postJson", () => {
 
   it("attaches status to thrown error when requested", async () => {
     remoteHttpMock.mockImplementationOnce(async (params) => {
-      return await params.onResponse(new Response("bad gateway", { status: 502 }));
+      return await params.onResponse(textResponse("bad gateway", 502));
     });
 
     await expect(

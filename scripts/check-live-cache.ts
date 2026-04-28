@@ -7,6 +7,12 @@ if (!LIVE_CACHE_TEST_ENABLED) {
 }
 
 const result = await runLiveCacheRegression();
+if (result.warnings.length > 0) {
+  process.stderr.write("\n[live-cache] non-blocking cache observations:\n");
+  for (const warning of result.warnings) {
+    process.stderr.write(`- ${warning}\n`);
+  }
+}
 if (result.regressions.length > 0) {
   process.stderr.write("\n[live-cache] regressions detected:\n");
   for (const regression of result.regressions) {

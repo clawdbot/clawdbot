@@ -1,5 +1,8 @@
 {
   "id": "duckduckgo",
+  "activation": {
+    "onStartup": false
+  },
   "uiHints": {
     "webSearch.region": {
       "label": "DuckDuckGo Region",

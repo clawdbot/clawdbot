@@ -10,7 +10,7 @@ import {
 import type {
   DiscordAccountConfig,
   DiscordAutoPresenceConfig,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/config-types";
 import { warn } from "openclaw/plugin-sdk/runtime-env";
 import { resolveDiscordPresenceUpdate } from "./presence.js";
 

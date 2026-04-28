@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { SessionManager, type SessionEntry } from "@mariozechner/pi-coding-agent";
 import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "../agents/usage.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
@@ -103,6 +104,60 @@ export function readSessionMessages(
   }
 
   const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
+  const hasTreeEntries = lines.some((line) => {
+    if (!line.trim()) {
+      return false;
+    }
+    try {
+      const parsed = JSON.parse(line) as { type?: unknown; id?: unknown; parentId?: unknown };
+      return parsed.type !== "session" && typeof parsed.id === "string" && "parentId" in parsed;
+    } catch {
+      return false;
+    }
+  });
+  let branchEntries: SessionEntry[] | null = null;
+  if (hasTreeEntries) {
+    try {
+      branchEntries = SessionManager.open(filePath).getBranch();
+    } catch {
+      branchEntries = null;
+    }
+  }
+
+  if (branchEntries) {
+    const messages: unknown[] = [];
+    let messageSeq = 0;
+    for (const entry of branchEntries) {
+      if (entry.type === "message" && entry.message) {
+        messageSeq += 1;
+        messages.push(
+          attachOpenClawTranscriptMeta(entry.message, {
+            ...(typeof entry.id === "string" ? { id: entry.id } : {}),
+            seq: messageSeq,
+          }),
+        );
+        continue;
+      }
+
+      if (entry.type === "compaction") {
+        const ts = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
+        const timestamp = Number.isFinite(ts) ? ts : Date.now();
+        messageSeq += 1;
+        messages.push({
+          role: "system",
+          content: [{ type: "text", text: "Compaction" }],
+          timestamp,
+          __openclaw: {
+            kind: "compaction",
+            id: typeof entry.id === "string" ? entry.id : undefined,
+            seq: messageSeq,
+          },
+        });
+      }
+    }
+    return messages;
+  }
+
   const messages: unknown[] = [];
   let messageSeq = 0;
   for (const line of lines) {

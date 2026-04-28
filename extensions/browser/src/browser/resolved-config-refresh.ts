@@ -91,9 +91,8 @@ export function refreshResolvedBrowserConfigFromDisk(params: {
     return;
   }
 
-  // Route-level browser config hot reload should observe on-disk changes immediately.
-  // The shared loadConfig() helper may return a cached snapshot for the configured TTL,
-  // which can leave request-time browser guards stale (for example evaluateEnabled).
+  // Route-level refresh should use the shared runtime config. Config mutations
+  // refresh that snapshot and decide whether the wider runtime should restart.
   const cfg = loadBrowserConfigForRuntimeRefresh();
   const freshResolved = resolveBrowserConfig(cfg.browser, cfg);
   applyResolvedConfig(params.current, freshResolved);

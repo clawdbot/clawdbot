@@ -26,28 +26,34 @@
 
 import os from "node:os";
 import { ApiClient } from "../api/api-client.js";
+import { ChunkedMediaApi as ChunkedMediaApiClass } from "../api/media-chunked.js";
 import { MediaApi as MediaApiClass } from "../api/media.js";
 import type { Credentials } from "../api/messages.js";
 import { MessageApi as MessageApiClass } from "../api/messages.js";
 import { getNextMsgSeq } from "../api/routes.js";
 import { TokenManager } from "../api/token.js";
 import {
+  ApiError,
   MediaFileType,
   type ChatScope,
   type EngineLogger,
   type MessageResponse,
   type OutboundMeta,
+  type UploadMediaResponse,
 } from "../types.js";
+import { LARGE_FILE_THRESHOLD } from "../utils/file-utils.js";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError, debugWarn } from "../utils/log.js";
 import { sanitizeFileName } from "../utils/string-normalize.js";
 import { computeFileHash, getCachedFileInfo, setCachedFileInfo } from "../utils/upload-cache.js";
+import { normalizeSource, type MediaSource, type RawMediaSource } from "./media-source.js";
 
 // ============ Re-exported types ============
 
 export { ApiError } from "../types.js";
 export type { OutboundMeta, MessageResponse, UploadMediaResponse } from "../types.js";
 export { MediaFileType } from "../types.js";
+export { UploadDailyLimitExceededError } from "../api/media-chunked.js";
 
 // ============ Plugin User-Agent ============
 
@@ -92,6 +98,7 @@ interface AccountContext {
   client: ApiClient;
   tokenMgr: TokenManager;
   mediaApi: MediaApiClass;
+  chunkedMediaApi: ChunkedMediaApiClass;
   messageApi: MessageApiClass;
   markdownSupport: boolean;
 }
@@ -116,22 +123,31 @@ const _fallbackLogger: EngineLogger = {
 function buildAccountContext(logger: EngineLogger, markdownSupport: boolean): AccountContext {
   const client = new ApiClient({ logger, userAgent: buildUserAgent });
   const tokenMgr = new TokenManager({ logger, userAgent: buildUserAgent });
+  // The one-shot and chunked uploaders share the same cache adapter so repeat
+  // sends of identical bytes hit the same `file_info` regardless of which
+  // path the first send used.
+  const sharedUploadCache = {
+    computeHash: computeFileHash,
+    get: (hash: string, scope: string, targetId: string, fileType: number) =>
+      getCachedFileInfo(hash, scope as ChatScope, targetId, fileType),
+    set: (
+      hash: string,
+      scope: string,
+      targetId: string,
+      fileType: number,
+      fileInfo: string,
+      fileUuid: string,
+      ttl: number,
+    ) => setCachedFileInfo(hash, scope as ChatScope, targetId, fileType, fileInfo, fileUuid, ttl),
+  };
   const mediaApi = new MediaApiClass(client, tokenMgr, {
     logger,
-    uploadCache: {
-      computeHash: computeFileHash,
-      get: (hash: string, scope: string, targetId: string, fileType: number) =>
-        getCachedFileInfo(hash, scope as ChatScope, targetId, fileType),
-      set: (
-        hash: string,
-        scope: string,
-        targetId: string,
-        fileType: number,
-        fileInfo: string,
-        fileUuid: string,
-        ttl: number,
-      ) => setCachedFileInfo(hash, scope as ChatScope, targetId, fileType, fileInfo, fileUuid, ttl),
-    },
+    uploadCache: sharedUploadCache,
+    sanitizeFileName,
+  });
+  const chunkedMediaApi = new ChunkedMediaApiClass(client, tokenMgr, {
+    logger,
+    uploadCache: sharedUploadCache,
     sanitizeFileName,
   });
   const messageApi = new MessageApiClass(client, tokenMgr, {
@@ -139,7 +155,7 @@ function buildAccountContext(logger: EngineLogger, markdownSupport: boolean): Ac
     logger,
   });
 
-  return { logger, client, tokenMgr, mediaApi, messageApi, markdownSupport };
+  return { logger, client, tokenMgr, mediaApi, chunkedMediaApi, messageApi, markdownSupport };
 }
 
 /**
@@ -210,6 +226,11 @@ export function getMessageApi(appId: string): MessageApiClass {
 /** Get the MediaApi instance for the given appId. */
 export function getMediaApi(appId: string): MediaApiClass {
   return resolveAccount(appId).mediaApi;
+}
+
+/** Get the ChunkedMediaApi instance for the given appId. */
+export function getChunkedMediaApi(appId: string): ChunkedMediaApiClass {
+  return resolveAccount(appId).chunkedMediaApi;
 }
 
 /** Get the TokenManager instance for the given appId. */
@@ -317,10 +338,14 @@ export async function acknowledgeInteraction(
   creds: AccountCreds,
   interactionId: string,
   code: 0 | 1 | 2 | 3 | 4 | 5 = 0,
+  data?: Record<string, unknown>,
 ): Promise<void> {
   const ctx = resolveAccount(creds.appId);
   const token = await ctx.tokenMgr.getAccessToken(creds.appId, creds.clientSecret);
-  await ctx.client.request(token, "PUT", `/interactions/${interactionId}`, { code });
+  await ctx.client.request(token, "PUT", `/interactions/${interactionId}`, {
+    code,
+    ...(data ? { data } : {}),
+  });
 }
 
 // ============ Types ============
@@ -341,6 +366,10 @@ export interface AccountCreds {
 
 /**
  * Execute an API call with automatic token-retry on 401 errors.
+ *
+ * Primary signal is structured: `ApiError.httpStatus === 401`. A string
+ * fallback remains for non-`ApiError` paths (e.g. synthetic errors from
+ * custom adapters), but logs a warning so such cases can be surfaced.
  */
 export async function withTokenRetry<T>(
   creds: AccountCreds,
@@ -352,9 +381,23 @@ export async function withTokenRetry<T>(
     const token = await getAccessToken(creds.appId, creds.clientSecret);
     return await sendFn(token);
   } catch (err) {
+    const isStructured401 = err instanceof ApiError && err.httpStatus === 401;
+    if (isStructured401) {
+      log?.debug?.(`Token expired (ApiError 401), refreshing...`);
+      clearTokenCache(creds.appId);
+      const newToken = await getAccessToken(creds.appId, creds.clientSecret);
+      return await sendFn(newToken);
+    }
+
+    // String fallback — retain for non-ApiError code paths but make it visible.
     const errMsg = formatErrorMessage(err);
-    if (errMsg.includes("401") || errMsg.includes("token") || errMsg.includes("access_token")) {
-      log?.debug?.(`Token may be expired, refreshing...`);
+    const looksLike401 =
+      errMsg.includes("401") || errMsg.includes("token") || errMsg.includes("access_token");
+    if (looksLike401) {
+      log?.warn?.(
+        `Token retry triggered by string heuristic (err is not ApiError). ` +
+          `Consider propagating ApiError end-to-end. msg=${errMsg.slice(0, 120)}`,
+      );
       clearTokenCache(creds.appId);
       const newToken = await getAccessToken(creds.appId, creds.clientSecret);
       return await sendFn(newToken);
@@ -482,189 +525,254 @@ export function createRawInputNotifyFn(
   };
 }
 
-// ============ Image sending ============
+// ============ Media sending (unified) ============
+
+/** Rich-media kind accepted by {@link sendMedia}. */
+export type MediaKind = "image" | "voice" | "video" | "file";
+
+/** Map a {@link MediaKind} to the wire-level {@link MediaFileType} code. */
+const KIND_TO_FILE_TYPE: Record<MediaKind, MediaFileType> = {
+  image: MediaFileType.IMAGE,
+  voice: MediaFileType.VOICE,
+  video: MediaFileType.VIDEO,
+  file: MediaFileType.FILE,
+};
+
+/** Re-export source types so callers can construct them without importing media-source. */
+export type { MediaSource, RawMediaSource } from "./media-source.js";
 
 /**
- * Upload and send an image message to any C2C/Group target.
+ * Options for the unified {@link sendMedia} API.
+ *
+ * This replaces the legacy four-method surface
+ * (`sendImage / sendVoiceMessage / sendVideoMessage / sendFileMessage`).
  */
-export async function sendImage(
-  target: DeliveryTarget,
-  imageUrl: string,
-  creds: AccountCreds,
-  opts?: { msgId?: string; content?: string; localPath?: string },
-): Promise<MessageResponse> {
-  if (target.type !== "c2c" && target.type !== "group") {
-    throw new Error(`Image sending not supported for target type: ${target.type}`);
+export interface SendMediaOptions {
+  /** Delivery target. Only `c2c` and `group` support rich media. */
+  target: DeliveryTarget;
+  /** Account credentials. */
+  creds: AccountCreds;
+  /** Media kind (drives `file_type`, meta, and content semantics). */
+  kind: MediaKind;
+  /** Media source — URL, base64, on-disk path, or in-memory buffer. */
+  source: RawMediaSource;
+  /** Passive reply message ID; omit for proactive sends. */
+  msgId?: string;
+  /**
+   * Accompanying text. Only honored for `image` / `video` kinds — the QQ
+   * API ignores it for voice/file.
+   */
+  content?: string;
+  /** Override the server-visible file name (FILE kind only). */
+  fileName?: string;
+  /** Original TTS text — recorded in {@link OutboundMeta.ttsText} for voice. */
+  ttsText?: string;
+  /**
+   * Local path to record in {@link OutboundMeta.mediaLocalPath}. Usually set
+   * by adapters that already downloaded the source to disk; otherwise
+   * inferred automatically when `source` is `{ localPath }`.
+   */
+  localPathForMeta?: string;
+  /**
+   * Original URL to record in {@link OutboundMeta.mediaUrl}. Usually set by
+   * adapters that downloaded a remote URL before uploading; otherwise
+   * inferred automatically when `source` is `{ url }` (non-data URL).
+   */
+  origUrlForMeta?: string;
+}
+
+/**
+ * Upload and send a rich-media message to any C2C or Group target.
+ *
+ * This is the **single** rich-media entry point for the plugin. All adapter
+ * layers (outbound.ts, reply-dispatcher.ts, outbound-deliver.ts,
+ * bridge/commands, gateway/outbound-dispatch.ts) funnel through here.
+ *
+ * Dispatch structure:
+ *
+ * ```
+ * sendMedia(opts)
+ *   └─ sendMediaInternal(ctx, opts)
+ *        ├─ normalizeSource  ← unified data:URL parsing + O_NOFOLLOW file safety
+ *        ├─ uploadOnce       ← one-shot upload via MediaApi (chunked hook TBD)
+ *        ├─ sendMediaMessage
+ *        └─ notifyMediaHook  ← meta assembled per kind
+ * ```
+ *
+ * Future chunked upload will slot into the dispatch without touching callers.
+ */
+export async function sendMedia(opts: SendMediaOptions): Promise<MessageResponse> {
+  if (!supportsRichMedia(opts.target.type)) {
+    throw new Error(`Media sending not supported for target type: ${opts.target.type}`);
   }
+  const ctx = resolveAccount(opts.creds.appId);
+  return sendMediaInternal(ctx, opts);
+}
 
-  const ctx = resolveAccount(creds.appId);
-  const scope: ChatScope = target.type;
-  const c: Credentials = { appId: creds.appId, clientSecret: creds.clientSecret };
-
-  const isBase64 = imageUrl.startsWith("data:");
-  let uploadOpts: { url?: string; fileData?: string };
-  if (isBase64) {
-    const matches = imageUrl.match(/^data:([^;]+);base64,(.+)$/);
-    if (!matches) {
-      throw new Error("Invalid Base64 Data URL format");
-    }
-    uploadOpts = { fileData: matches[2] };
-  } else {
-    uploadOpts = { url: imageUrl };
-  }
-
-  const uploadResult = await ctx.mediaApi.uploadMedia(
-    scope,
-    target.id,
-    MediaFileType.IMAGE,
-    c,
-    uploadOpts,
-  );
-
+/**
+ * Assemble an {@link OutboundMeta} record from the normalized source and the
+ * caller-provided overrides.
+ *
+ * The meta layout is identical across kinds except:
+ * - `image` / `video` carry `text` (the accompanying content string).
+ * - `voice` carries `ttsText` (original TTS input, if any).
+ */
+function buildOutboundMeta(opts: SendMediaOptions, source: MediaSource): OutboundMeta {
   const meta: OutboundMeta = {
-    text: opts?.content,
-    mediaType: "image",
-    ...(!isBase64 ? { mediaUrl: imageUrl } : {}),
-    ...(opts?.localPath ? { mediaLocalPath: opts.localPath } : {}),
+    mediaType: opts.kind,
   };
 
-  const result = await ctx.mediaApi.sendMediaMessage(scope, target.id, uploadResult.file_info, c, {
-    msgId: opts?.msgId,
-    content: opts?.content,
+  if (opts.kind === "image" || opts.kind === "video") {
+    if (opts.content) {
+      meta.text = opts.content;
+    }
+  }
+  if (opts.kind === "voice" && opts.ttsText) {
+    meta.ttsText = opts.ttsText;
+  }
+
+  // Prefer explicit caller overrides; otherwise derive from the source.
+  const inferredUrl = source.kind === "url" ? source.url : undefined;
+  const mediaUrl = opts.origUrlForMeta ?? inferredUrl;
+  if (mediaUrl) {
+    meta.mediaUrl = mediaUrl;
+  }
+
+  const inferredLocal = source.kind === "localPath" ? source.path : undefined;
+  const mediaLocalPath = opts.localPathForMeta ?? inferredLocal;
+  if (mediaLocalPath) {
+    meta.mediaLocalPath = mediaLocalPath;
+  }
+
+  return meta;
+}
+
+/**
+ * Core dispatch for rich media. Not exported — callers must go through
+ * {@link sendMedia}.
+ *
+ * Upload dispatch lives in {@link dispatchUpload}: sources smaller than
+ * {@link LARGE_FILE_THRESHOLD} (or not supporting chunked transport, i.e.
+ * url/base64) go to {@link MediaApi.uploadMedia}; larger `localPath` /
+ * `buffer` sources go to {@link ChunkedMediaApi.uploadChunked}.
+ */
+async function sendMediaInternal(
+  ctx: AccountContext,
+  opts: SendMediaOptions,
+): Promise<MessageResponse> {
+  const scope: ChatScope = opts.target.type as ChatScope;
+  const c: Credentials = {
+    appId: opts.creds.appId,
+    clientSecret: opts.creds.clientSecret,
+  };
+
+  // The outbound layer enforces per-file-type ceilings; normalizeSource's
+  // default is the smaller one-shot limit. We pass the chunked limit here
+  // to let the dispatcher decide per source.size whether to route to the
+  // chunked uploader. Upstream (outbound/sendPhoto etc.) remains the
+  // authoritative size-by-file-type gate.
+  const source = await normalizeSource(opts.source, {
+    maxSize: Number.MAX_SAFE_INTEGER,
   });
 
-  notifyMediaHook(creds.appId, result, meta);
+  const uploadResult = await dispatchUpload(
+    ctx,
+    scope,
+    opts.target.id,
+    KIND_TO_FILE_TYPE[opts.kind],
+    source,
+    c,
+    opts.fileName,
+  );
 
+  // Content is semantically meaningful only for image / video — the voice
+  // and file APIs ignore it.
+  const msgContent = opts.kind === "image" || opts.kind === "video" ? opts.content : undefined;
+
+  const result = await ctx.mediaApi.sendMediaMessage(
+    scope,
+    opts.target.id,
+    uploadResult.file_info,
+    c,
+    {
+      msgId: opts.msgId,
+      content: msgContent,
+    },
+  );
+
+  notifyMediaHook(opts.creds.appId, result, buildOutboundMeta(opts, source));
   return result;
 }
 
-// ============ Voice sending ============
-
 /**
- * Upload and send a voice message.
+ * Upload a {@link MediaSource} via the one-shot or chunked path, chosen by
+ * size + kind.
+ *
+ * Routing rules (kept here as the single source of truth so callers need
+ * not know which endpoint was used):
+ *
+ * - `url` / `base64`: always one-shot — the server accepts these directly
+ *   and the chunked endpoint has no representation for them.
+ * - `localPath` / `buffer` with `size >= LARGE_FILE_THRESHOLD`: chunked.
+ * - Everything else: one-shot.
  */
-export async function sendVoiceMessage(
-  target: DeliveryTarget,
-  creds: AccountCreds,
-  opts: {
-    voiceBase64?: string;
-    voiceUrl?: string;
-    msgId?: string;
-    ttsText?: string;
-    filePath?: string;
-  },
-): Promise<MessageResponse> {
-  if (target.type !== "c2c" && target.type !== "group") {
-    throw new Error(`Voice sending not supported for target type: ${target.type}`);
+async function dispatchUpload(
+  ctx: AccountContext,
+  scope: ChatScope,
+  targetId: string,
+  fileType: MediaFileType,
+  source: MediaSource,
+  creds: Credentials,
+  fileName?: string,
+): Promise<UploadMediaResponse> {
+  switch (source.kind) {
+    case "url":
+      return ctx.mediaApi.uploadMedia(scope, targetId, fileType, creds, {
+        url: source.url,
+        fileName,
+      });
+    case "base64":
+      return ctx.mediaApi.uploadMedia(scope, targetId, fileType, creds, {
+        fileData: source.data,
+        fileName,
+      });
+    case "localPath":
+      if (source.size >= LARGE_FILE_THRESHOLD) {
+        return ctx.chunkedMediaApi.uploadChunked({
+          scope,
+          targetId,
+          fileType,
+          source,
+          creds,
+          fileName,
+        });
+      }
+      return ctx.mediaApi.uploadMedia(scope, targetId, fileType, creds, {
+        localPath: source.path,
+        fileName,
+      });
+    case "buffer":
+      if (source.buffer.length >= LARGE_FILE_THRESHOLD) {
+        return ctx.chunkedMediaApi.uploadChunked({
+          scope,
+          targetId,
+          fileType,
+          source,
+          creds,
+          fileName: fileName ?? source.fileName,
+        });
+      }
+      return ctx.mediaApi.uploadMedia(scope, targetId, fileType, creds, {
+        buffer: source.buffer,
+        fileName: fileName ?? source.fileName,
+      });
+    default: {
+      const _exhaustive: never = source;
+      throw new Error(
+        `dispatchUpload: unsupported MediaSource kind: ${JSON.stringify(_exhaustive)}`,
+      );
+    }
   }
-
-  const ctx = resolveAccount(creds.appId);
-  const scope: ChatScope = target.type;
-  const c: Credentials = { appId: creds.appId, clientSecret: creds.clientSecret };
-
-  const uploadResult = await ctx.mediaApi.uploadMedia(scope, target.id, MediaFileType.VOICE, c, {
-    url: opts.voiceUrl,
-    fileData: opts.voiceBase64,
-  });
-
-  const result = await ctx.mediaApi.sendMediaMessage(scope, target.id, uploadResult.file_info, c, {
-    msgId: opts.msgId,
-  });
-
-  notifyMediaHook(creds.appId, result, {
-    mediaType: "voice",
-    ...(opts.ttsText ? { ttsText: opts.ttsText } : {}),
-    ...(opts.filePath ? { mediaLocalPath: opts.filePath } : {}),
-  });
-
-  return result;
-}
-
-// ============ Video sending ============
-
-/**
- * Upload and send a video message.
- */
-export async function sendVideoMessage(
-  target: DeliveryTarget,
-  creds: AccountCreds,
-  opts: {
-    videoUrl?: string;
-    videoBase64?: string;
-    msgId?: string;
-    content?: string;
-    localPath?: string;
-  },
-): Promise<MessageResponse> {
-  if (target.type !== "c2c" && target.type !== "group") {
-    throw new Error(`Video sending not supported for target type: ${target.type}`);
-  }
-
-  const ctx = resolveAccount(creds.appId);
-  const scope: ChatScope = target.type;
-  const c: Credentials = { appId: creds.appId, clientSecret: creds.clientSecret };
-
-  const uploadResult = await ctx.mediaApi.uploadMedia(scope, target.id, MediaFileType.VIDEO, c, {
-    url: opts.videoUrl,
-    fileData: opts.videoBase64,
-  });
-
-  const result = await ctx.mediaApi.sendMediaMessage(scope, target.id, uploadResult.file_info, c, {
-    msgId: opts.msgId,
-    content: opts.content,
-  });
-
-  notifyMediaHook(creds.appId, result, {
-    text: opts.content,
-    mediaType: "video",
-    ...(opts.videoUrl ? { mediaUrl: opts.videoUrl } : {}),
-    ...(opts.localPath ? { mediaLocalPath: opts.localPath } : {}),
-  });
-
-  return result;
-}
-
-// ============ File sending ============
-
-/**
- * Upload and send a file message.
- */
-export async function sendFileMessage(
-  target: DeliveryTarget,
-  creds: AccountCreds,
-  opts: {
-    fileBase64?: string;
-    fileUrl?: string;
-    msgId?: string;
-    fileName?: string;
-    localFilePath?: string;
-  },
-): Promise<MessageResponse> {
-  if (target.type !== "c2c" && target.type !== "group") {
-    throw new Error(`File sending not supported for target type: ${target.type}`);
-  }
-
-  const ctx = resolveAccount(creds.appId);
-  const scope: ChatScope = target.type;
-  const c: Credentials = { appId: creds.appId, clientSecret: creds.clientSecret };
-
-  const uploadResult = await ctx.mediaApi.uploadMedia(scope, target.id, MediaFileType.FILE, c, {
-    url: opts.fileUrl,
-    fileData: opts.fileBase64,
-    fileName: opts.fileName,
-  });
-
-  const result = await ctx.mediaApi.sendMediaMessage(scope, target.id, uploadResult.file_info, c, {
-    msgId: opts.msgId,
-  });
-
-  notifyMediaHook(creds.appId, result, {
-    mediaType: "file",
-    mediaUrl: opts.fileUrl,
-    mediaLocalPath: opts.localFilePath ?? opts.fileName,
-  });
-
-  return result;
 }
 
 // ============ Helpers ============

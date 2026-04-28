@@ -32,7 +32,7 @@ import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { isRateLimitErrorMessage } from "../agents/pi-embedded-helpers/errors.js";
 import { discoverAuthStorage, discoverModels } from "../agents/pi-model-discovery.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
-import { clearRuntimeConfigSnapshot, loadConfig } from "../config/io.js";
+import { clearRuntimeConfigSnapshot, getRuntimeConfig } from "../config/io.js";
 import type { ModelsConfig, ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
@@ -44,6 +44,7 @@ import { renderCatNoncePngBase64 } from "./live-image-probe.js";
 import {
   hasExpectedSingleNonce,
   hasExpectedToolNonce,
+  isLikelyToolNonceRefusal,
   shouldRetryExecReadProbe,
   shouldRetryToolReadProbe,
 } from "./live-tool-probe-utils.js";
@@ -82,6 +83,10 @@ const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
   "openai/gpt-5.4-pro",
 ]);
 const GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
+  "fireworks/accounts/fireworks/models/glm-5",
+  "fireworks/accounts/fireworks/models/kimi-k2p5",
+  "fireworks/accounts/fireworks/models/kimi-k2p6",
+  "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
   "google/gemini-3.1-flash-lite-preview",
 ]);
 const GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS = new Set(["google/gemini-3-flash-preview"]);
@@ -494,6 +499,23 @@ describe("shouldSkipExecReadNonceMissForLiveModel", () => {
     expect(shouldSkipExecReadNonceMissForLiveModel("google/gemini-3.1-flash-lite")).toBe(true);
     expect(shouldSkipExecReadNonceMissForLiveModel("google/gemini-3.1-flash-preview")).toBe(false);
   });
+
+  it("matches hosted Fireworks models that execute but miss readback nonces", () => {
+    expect(
+      shouldSkipExecReadNonceMissForLiveModel("fireworks/accounts/fireworks/models/glm-5"),
+    ).toBe(true);
+    expect(
+      shouldSkipExecReadNonceMissForLiveModel("fireworks/accounts/fireworks/models/kimi-k2p5"),
+    ).toBe(true);
+    expect(
+      shouldSkipExecReadNonceMissForLiveModel("fireworks/accounts/fireworks/models/kimi-k2p6"),
+    ).toBe(true);
+    expect(
+      shouldSkipExecReadNonceMissForLiveModel(
+        "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("resolveGatewayLiveModelTimeoutMs", () => {
@@ -633,20 +655,7 @@ function isOpenAIReasoningSequenceError(error: string): boolean {
 }
 
 function isToolNonceRefusal(error: string): boolean {
-  const msg = error.toLowerCase();
-  if (!msg.includes("nonce")) {
-    return false;
-  }
-  return (
-    msg.includes("token") ||
-    msg.includes("secret") ||
-    msg.includes("local file") ||
-    msg.includes("disclose") ||
-    msg.includes("can't help") ||
-    msg.includes("can’t help") ||
-    msg.includes("can't comply") ||
-    msg.includes("can’t comply")
-  );
+  return isLikelyToolNonceRefusal(error);
 }
 
 function isToolNonceProbeMiss(error: string): boolean {
@@ -2130,7 +2139,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     async () =>
       await withSuppressedGatewayLiveWarnings(async () => {
         clearRuntimeConfigSnapshot();
-        const cfg = loadConfig();
+        const cfg = getRuntimeConfig();
         await ensureOpenClawModelsJson(cfg);
 
         const agentDir = resolveOpenClawAgentDir();
@@ -2280,7 +2289,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     const token = `test-${randomUUID()}`;
     process.env.OPENCLAW_GATEWAY_TOKEN = token;
 
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     await ensureOpenClawModelsJson(cfg);
 
     const agentDir = resolveOpenClawAgentDir();

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { logVerbose } from "../../globals.js";
 import type { MsgContext } from "../templating.js";
 import { withFastReplyConfig } from "./get-reply-fast-path.js";
 import {
@@ -74,6 +75,7 @@ describe("getReplyFromConfig message hooks", () => {
     mocks.triggerInternalHook.mockReset();
     mocks.resolveReplyDirectives.mockReset();
     mocks.initSessionState.mockReset();
+    vi.mocked(logVerbose).mockReset();
 
     mocks.applyMediaUnderstanding.mockImplementation(async (...args: unknown[]) => {
       const { ctx } = args[0] as { ctx: MsgContext };
@@ -197,5 +199,63 @@ describe("getReplyFromConfig message hooks", () => {
 
     expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
     expect(mocks.applyLinkUnderstanding).not.toHaveBeenCalled();
+  });
+
+  it("continues dispatching when media understanding fails before reply routing", async () => {
+    mocks.applyMediaUnderstanding.mockRejectedValueOnce(
+      new Error("Cannot find module '/tmp/openclaw/dist/media-understanding/apply.runtime-old.js'"),
+    );
+
+    const reply = await getReplyFromConfig(buildCtx(), undefined, withFastReplyConfig({}));
+
+    expect(reply).toEqual({ text: "ok" });
+    expect(mocks.applyMediaUnderstanding).toHaveBeenCalledTimes(1);
+    expect(mocks.initSessionState).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledTimes(1);
+    expect(mocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
+    expect(mocks.createInternalHookEvent).toHaveBeenCalledWith(
+      "message",
+      "preprocessed",
+      "agent:main:telegram:-100123",
+      expect.any(Object),
+    );
+    expect(logVerbose).toHaveBeenCalledWith(
+      expect.stringContaining("media understanding failed, proceeding with raw content"),
+    );
+  });
+
+  it("continues dispatching URL messages when link understanding fails before reply routing", async () => {
+    mocks.applyLinkUnderstanding.mockRejectedValueOnce(
+      new Error("Cannot find module '/tmp/openclaw/dist/link-understanding/apply.runtime-old.js'"),
+    );
+
+    const reply = await getReplyFromConfig(
+      buildCtx({
+        Body: "read https://example.test/page",
+        BodyForAgent: "read https://example.test/page",
+        RawBody: "read https://example.test/page",
+        CommandBody: "read https://example.test/page",
+        BodyForCommands: "read https://example.test/page",
+        MediaPath: undefined,
+        MediaUrl: undefined,
+        MediaPaths: undefined,
+        MediaUrls: undefined,
+        MediaTypes: undefined,
+        MediaType: undefined,
+        Sticker: undefined,
+        StickerMediaIncluded: undefined,
+      }),
+      undefined,
+      withFastReplyConfig({}),
+    );
+
+    expect(reply).toEqual({ text: "ok" });
+    expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
+    expect(mocks.applyLinkUnderstanding).toHaveBeenCalledTimes(1);
+    expect(mocks.initSessionState).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledTimes(1);
+    expect(logVerbose).toHaveBeenCalledWith(
+      expect.stringContaining("link understanding failed, proceeding with raw content"),
+    );
   });
 });

@@ -147,6 +147,24 @@ type ChannelHandlerParams = {
 };
 
 // Channel docking: outbound delivery delegates to plugin.outbound adapters.
+async function resolveChannelOutboundDirectiveOptions(params: {
+  cfg: OpenClawConfig;
+  channel: Exclude<OutboundChannel, "none">;
+}): Promise<{ extractMarkdownImages?: boolean }> {
+  let outbound = await loadChannelOutboundAdapter(params.channel);
+  if (!outbound) {
+    const { bootstrapOutboundChannelPlugin } = await loadChannelBootstrapRuntime();
+    bootstrapOutboundChannelPlugin({
+      channel: params.channel,
+      cfg: params.cfg,
+    });
+    outbound = await loadChannelOutboundAdapter(params.channel);
+  }
+  return {
+    extractMarkdownImages: outbound?.extractMarkdownImages === true ? true : undefined,
+  };
+}
+
 async function createChannelHandler(params: ChannelHandlerParams): Promise<ChannelHandler> {
   let outbound = await loadChannelOutboundAdapter(params.channel);
   if (!outbound) {
@@ -841,11 +859,13 @@ async function deliverOutboundPayloadsCore(
   params: DeliverOutboundPayloadsCoreParams,
 ): Promise<OutboundDeliveryResult[]> {
   const { cfg, channel, to, payloads } = params;
+  const directiveOptions = await resolveChannelOutboundDirectiveOptions({ cfg, channel });
   const outboundPayloadPlan = createOutboundPayloadPlan(payloads, {
     cfg,
     sessionKey: params.session?.policyKey ?? params.session?.key,
     surface: channel,
     conversationType: params.session?.conversationType,
+    extractMarkdownImages: directiveOptions.extractMarkdownImages,
   });
   const accountId = params.accountId;
   const deps = params.deps;

@@ -1,3 +1,3 @@
-import { describeProviderWizardModelPickerContract } from "../../../test/helpers/plugins/provider-wizard-contract-suites.js";
+import { describeProviderWizardModelPickerContract } from "openclaw/plugin-sdk/provider-test-contracts";
 
 describeProviderWizardModelPickerContract();

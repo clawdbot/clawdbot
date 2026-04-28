@@ -15,14 +15,40 @@ function buildGatewayProbeCredentialPolicy(params: {
   env?: NodeJS.ProcessEnv;
   explicitAuth?: ExplicitGatewayAuth;
 }) {
+  const cfg = resolveGatewayProbeCredentialConfig(params);
   return {
-    config: params.cfg,
-    cfg: params.cfg,
+    config: cfg,
+    cfg,
     env: params.env,
     explicitAuth: params.explicitAuth,
     modeOverride: params.mode,
     mode: params.mode,
     remoteTokenFallback: "remote-only" as const,
+  };
+}
+
+function resolveGatewayProbeCredentialConfig(params: {
+  cfg: OpenClawConfig;
+  mode: "local" | "remote";
+}): OpenClawConfig {
+  if (params.mode !== "local") {
+    return params.cfg;
+  }
+
+  const remote = params.cfg.gateway?.remote;
+  if (!remote || (remote.token === undefined && remote.password === undefined)) {
+    return params.cfg;
+  }
+
+  const remoteWithoutAuth = { ...remote };
+  delete remoteWithoutAuth.token;
+  delete remoteWithoutAuth.password;
+  return {
+    ...params.cfg,
+    gateway: {
+      ...params.cfg.gateway,
+      remote: remoteWithoutAuth,
+    },
   };
 }
 

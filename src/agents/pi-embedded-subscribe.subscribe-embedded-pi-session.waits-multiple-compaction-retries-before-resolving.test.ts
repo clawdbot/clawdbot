@@ -39,12 +39,22 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.getCompactionCount()).toBe(0);
 
     // willRetry with result — counter IS incremented (overflow compaction succeeded)
-    emit({ type: "compaction_end", willRetry: true, result: { summary: "s" } });
+    emit({
+      type: "compaction_end",
+      willRetry: true,
+      result: { summary: "s", tokensAfter: 12_345 },
+    });
     expect(subscription.getCompactionCount()).toBe(1);
+    expect(subscription.getLastCompactionTokensAfter()).toBe(12_345);
 
     // willRetry=false with result — counter incremented again
-    emit({ type: "compaction_end", willRetry: false, result: { summary: "s2" } });
+    emit({
+      type: "compaction_end",
+      willRetry: false,
+      result: { summary: "s2", tokensAfter: 6_789 },
+    });
     expect(subscription.getCompactionCount()).toBe(2);
+    expect(subscription.getLastCompactionTokensAfter()).toBe(6_789);
   });
 
   it("does not count compaction when result is absent", async () => {

@@ -99,10 +99,18 @@ vi.mock("./channel-plugin-blockers.js", () => ({
 vi.mock("./stale-plugin-config.js", () => ({
   scanStalePluginConfig: (cfg: {
     plugins?: { allow?: string[]; entries?: Record<string, unknown> };
+    channels?: Record<string, unknown>;
   }) => {
     const knownIds = new Set(manifestState.plugins.map((plugin) => plugin.id));
-    const ids = [...(cfg.plugins?.allow ?? []), ...Object.keys(cfg.plugins?.entries ?? {})];
-    return [...new Set(ids)].filter((id) => !knownIds.has(id)).map((id) => ({ id }));
+    const hits = [...(cfg.plugins?.allow ?? []), ...Object.keys(cfg.plugins?.entries ?? {})]
+      .filter((id) => !knownIds.has(id))
+      .map((id) => ({ id, surface: "plugin" }));
+    if (cfg.channels?.["openclaw-weixin"]) {
+      hits.push({ id: "openclaw-weixin", surface: "channel" });
+    }
+    return hits.filter(
+      (hit, index) => hits.findIndex((candidate) => candidate.id === hit.id) === index,
+    );
   },
   isStalePluginAutoRepairBlocked: () =>
     manifestState.diagnostics.some((diagnostic) => diagnostic.level === "error"),
@@ -113,16 +121,19 @@ vi.mock("./stale-plugin-config.js", () => ({
   }: {
     autoRepairBlocked: boolean;
     doctorFixCommand: string;
-    hits: Array<{ id: string }>;
+    hits: Array<{ id: string; surface: string }>;
   }) =>
-    hits.map(
-      (hit) =>
-        `plugins.allow: stale plugin reference "${hit.id}". plugins.entries.${hit.id} is unused. ${
-          autoRepairBlocked
-            ? `Auto-removal is paused; rerun "${doctorFixCommand}".`
-            : `Run "${doctorFixCommand}".`
-        }`,
-    ),
+    hits.map((hit) => {
+      const prefix =
+        hit.surface === "channel"
+          ? `channels.${hit.id}: dangling channel config.`
+          : `plugins.allow: stale plugin reference "${hit.id}". plugins.entries.${hit.id} is unused.`;
+      return `${prefix} ${
+        autoRepairBlocked
+          ? `Auto-removal is paused; rerun "${doctorFixCommand}".`
+          : `Run "${doctorFixCommand}".`
+      }`;
+    }),
 }));
 
 vi.mock("./bundled-plugin-load-paths.js", () => ({
@@ -239,6 +250,23 @@ describe("doctor preview warnings", () => {
     expect(warnings[0]).not.toContain("Auto-removal is paused");
   });
 
+  it("includes stale channel config warnings without plugin config", async () => {
+    const warnings = await collectDoctorPreviewWarnings({
+      cfg: {
+        channels: {
+          "openclaw-weixin": {
+            enabled: true,
+          },
+        },
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining("channels.openclaw-weixin: dangling channel config"),
+    ]);
+  });
+
   it("includes bundled plugin load path migration warnings", async () => {
     const packageRoot = path.resolve("app-node-modules", "openclaw");
     const legacyPath = path.join(packageRoot, "extensions", "feishu");
@@ -333,5 +361,35 @@ describe("doctor preview warnings", () => {
       ),
     ]);
     expect(warnings[0]).not.toContain("first-time setup mode");
+  });
+
+  it("keeps global plugin-disable blocker warnings but omits stale plugin cleanup warnings", async () => {
+    manifestState.plugins = [channelManifest("telegram", "telegram")];
+
+    const warnings = await collectDoctorPreviewWarnings({
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "123:abc",
+            groupPolicy: "allowlist",
+          },
+        },
+        plugins: {
+          enabled: false,
+          allow: ["acpx"],
+          entries: {
+            acpx: { enabled: true },
+          },
+        },
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining(
+        "channels.telegram: channel is configured, but plugins.enabled=false blocks channel plugins globally.",
+      ),
+    ]);
+    expect(warnings.join("\n")).not.toContain("stale plugin reference");
   });
 });

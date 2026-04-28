@@ -1,4 +1,4 @@
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   convertMarkdownTables,
   normalizeLowercaseStringOrEmpty,

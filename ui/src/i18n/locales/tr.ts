@@ -110,6 +110,14 @@ export const tr: TranslationMap = {
       lightningHelp: "Bahşişler için Lightning adresi (LUD-16)",
     },
   },
+  lazyView: {
+    loadingTitle: "Panel yükleniyor",
+    errorTitle: "Panel yüklenemedi",
+    errorSubtitle:
+      "En son Control UI paketini yüklemek için sayfayı yeniden yükleyin veya ağ isteği başarısız olduysa tekrar deneyin.",
+    retry: "Tekrar dene",
+    unknownError: "Bilinmeyen modül yükleme hatası.",
+  },
   nodes: {
     binding: {
       loadConfigHint: "Bağlamaları düzenlemek için yapılandırmayı yükleyin.",
@@ -923,7 +931,7 @@ export const tr: TranslationMap = {
       agentMessageRequired: "Aracı mesajı gerekli.",
       timeoutInvalid: "Ayarlanırsa zaman aşımı 0 saniyeden büyük olmalıdır.",
       webhookUrlRequired: "Webhook URL gerekli.",
-      webhookUrlInvalid: "Webhook URL http:// veya https:// ile başlamalıdır.",
+      webhookUrlInvalid: "Webhook URL http:// veya https:// ile ba��lamalıdır.",
       invalidRunTime: "Geçersiz çalıştırma zamanı.",
       invalidIntervalAmount: "Geçersiz aralık miktarı.",
       cronExprRequiredShort: "Cron ifadesi gerekli.",

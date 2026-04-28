@@ -1,5 +1,5 @@
+import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { OpenClawConfig, PluginRuntime, ResolvedLineAccount } from "../api.js";
 import { lineGatewayAdapter } from "./gateway.js";
 import { setLineRuntime } from "./runtime.js";
@@ -7,12 +7,12 @@ import { setLineRuntime } from "./runtime.js";
 const DEFAULT_ACCOUNT_ID = "default";
 
 type LineRuntimeMocks = {
-  writeConfigFile: ReturnType<typeof vi.fn>;
+  replaceConfigFile: ReturnType<typeof vi.fn>;
   resolveLineAccount: ReturnType<typeof vi.fn>;
 };
 
 function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
-  const writeConfigFile = vi.fn(async () => {});
+  const replaceConfigFile = vi.fn(async () => {});
   const resolveLineAccount = vi.fn(
     ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string }) => {
       const lineConfig = (cfg.channels?.line ?? {}) as {
@@ -34,10 +34,10 @@ function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
   );
 
   const runtime = {
-    config: { writeConfigFile },
+    config: { replaceConfigFile },
   } as unknown as PluginRuntime;
 
-  return { runtime, mocks: { writeConfigFile, resolveLineAccount } };
+  return { runtime, mocks: { replaceConfigFile, resolveLineAccount } };
 }
 
 function resolveAccount(
@@ -89,7 +89,10 @@ describe("linePlugin gateway.logoutAccount", () => {
 
     expect(result.cleared).toBe(true);
     expect(result.loggedOut).toBe(true);
-    expect(mocks.writeConfigFile).toHaveBeenCalledWith({});
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: {},
+      afterWrite: { mode: "auto" },
+    });
   });
 
   it("clears tokenFile/secretFile on account logout", async () => {
@@ -112,7 +115,10 @@ describe("linePlugin gateway.logoutAccount", () => {
 
     expect(result.cleared).toBe(true);
     expect(result.loggedOut).toBe(true);
-    expect(mocks.writeConfigFile).toHaveBeenCalledWith({});
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: {},
+      afterWrite: { mode: "auto" },
+    });
   });
 
   it("does not write config when account has no token/secret fields", async () => {
@@ -134,6 +140,6 @@ describe("linePlugin gateway.logoutAccount", () => {
 
     expect(result.cleared).toBe(false);
     expect(result.loggedOut).toBe(true);
-    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 });

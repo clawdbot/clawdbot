@@ -14,10 +14,11 @@ title: "Gateway lock"
 
 ## Mechanism
 
-- The gateway binds the WebSocket listener (default `ws://127.0.0.1:18789`) immediately on startup using an exclusive TCP listener.
+- The gateway first acquires a per-config lock file under the state lock directory and probes the configured port for an existing listener.
+- If the recorded lock owner is gone, the port is free, or the lock is stale, startup reclaims the lock and continues.
+- The gateway then binds the HTTP/WebSocket listener (default `ws://127.0.0.1:18789`) using an exclusive TCP listener.
 - If the bind fails with `EADDRINUSE`, startup throws `GatewayLockError("another gateway instance is already listening on ws://127.0.0.1:<port>")`.
-- The OS releases the listener automatically on any process exit, including crashes and SIGKILL—no separate lock file or cleanup step is needed.
-- On shutdown the gateway closes the WebSocket server and underlying HTTP server to free the port promptly.
+- On shutdown the gateway closes the HTTP/WebSocket server and removes the lock file.
 
 ## Error surface
 
@@ -27,7 +28,8 @@ title: "Gateway lock"
 ## Operational notes
 
 - If the port is occupied by _another_ process, the error is the same; free the port or choose another with `openclaw gateway --port <port>`.
-- The macOS app still maintains its own lightweight PID guard before spawning the gateway; the runtime lock is enforced by the WebSocket bind.
+- Under a service supervisor, a new gateway process that sees an existing healthy `/healthz` responder exits successfully and leaves that process in control. If the existing process never becomes healthy, retries are bounded and startup fails with a clear lock error instead of looping forever.
+- The macOS app still maintains its own lightweight PID guard before spawning the gateway; the runtime lock is enforced by the lock file plus HTTP/WebSocket bind.
 
 ## Related
 

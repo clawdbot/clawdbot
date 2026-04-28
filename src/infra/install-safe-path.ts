@@ -91,14 +91,30 @@ export async function assertCanonicalPathWithinBase(params: {
   }
 
   const baseLstat = await fs.lstat(baseDir);
-  if (!baseLstat.isDirectory() || baseLstat.isSymbolicLink()) {
-    throw new Error(`Invalid ${params.boundaryLabel}: base directory must be a real directory`);
+  if (baseLstat.isSymbolicLink()) {
+    const baseStat = await fs.stat(baseDir);
+    if (!baseStat.isDirectory()) {
+      throw new Error(
+        `Invalid ${params.boundaryLabel}: base directory must resolve to a directory`,
+      );
+    }
+  } else if (!baseLstat.isDirectory()) {
+    throw new Error(`Invalid ${params.boundaryLabel}: base directory must be a directory`);
   }
   const baseRealPath = await fs.realpath(baseDir);
 
   const validateDirectory = async (dirPath: string): Promise<void> => {
+    const resolvedDirPath = path.resolve(dirPath);
     const dirLstat = await fs.lstat(dirPath);
-    if (!dirLstat.isDirectory() || dirLstat.isSymbolicLink()) {
+    if (dirLstat.isSymbolicLink()) {
+      if (resolvedDirPath !== baseDir) {
+        throw new Error(`Invalid path: must stay within ${params.boundaryLabel}`);
+      }
+      const dirStat = await fs.stat(dirPath);
+      if (!dirStat.isDirectory()) {
+        throw new Error(`Invalid path: must stay within ${params.boundaryLabel}`);
+      }
+    } else if (!dirLstat.isDirectory()) {
       throw new Error(`Invalid path: must stay within ${params.boundaryLabel}`);
     }
     const dirRealPath = await fs.realpath(dirPath);

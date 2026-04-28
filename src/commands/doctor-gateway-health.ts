@@ -78,6 +78,7 @@ export async function probeGatewayMemoryStatus(params: {
   try {
     const payload = await callGateway<DoctorMemoryStatusPayload>({
       method: "doctor.memory.status",
+      params: { probe: false },
       timeoutMs,
       config: params.cfg,
     });

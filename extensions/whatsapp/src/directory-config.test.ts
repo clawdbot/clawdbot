@@ -1,5 +1,5 @@
+import { createDirectoryTestRuntime } from "openclaw/plugin-sdk/channel-test-helpers";
 import { describe, expect, it } from "vitest";
-import { createDirectoryTestRuntime } from "../../../test/helpers/plugins/directory.ts";
 import {
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,

@@ -3,7 +3,7 @@ import {
   listChannelPlugins,
   resolveChannelApprovalCapability,
 } from "../channels/plugins/index.js";
-import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -49,7 +49,7 @@ export function resolveExecApprovalInitiatingSurfaceState(params: {
     return { kind: "enabled", channel, channelLabel, accountId };
   }
 
-  const cfg = params.cfg ?? loadConfig();
+  const cfg = params.cfg ?? getRuntimeConfig();
   const capability = resolveChannelApprovalCapability(getChannelPlugin(channel));
   const state =
     capability?.getExecInitiatingSurfaceState?.({

@@ -5,29 +5,43 @@ import type { PluginHookName } from "./types.js";
 
 export const LEGACY_BEFORE_AGENT_START_MESSAGE =
   "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.";
+export const LEGACY_IMPLICIT_STARTUP_SIDECAR_MESSAGE =
+  "relies on deprecated implicit startup loading; add activation.onStartup: true for startup work or activation.onStartup: false for startup-lazy plugins.";
 export const HOOK_ONLY_MESSAGE =
   "is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.";
 
 export function createCompatibilityNotice(
   params: Pick<PluginCompatibilityNotice, "pluginId" | "code">,
 ): PluginCompatibilityNotice {
-  if (params.code === "legacy-before-agent-start") {
-    return {
-      pluginId: params.pluginId,
-      code: params.code,
-      compatCode: "legacy-before-agent-start",
-      severity: "warn",
-      message: LEGACY_BEFORE_AGENT_START_MESSAGE,
-    };
+  switch (params.code) {
+    case "legacy-before-agent-start":
+      return {
+        pluginId: params.pluginId,
+        code: params.code,
+        compatCode: "legacy-before-agent-start",
+        severity: "warn",
+        message: LEGACY_BEFORE_AGENT_START_MESSAGE,
+      };
+    case "legacy-implicit-startup-sidecar":
+      return {
+        pluginId: params.pluginId,
+        code: params.code,
+        compatCode: "legacy-implicit-startup-sidecar",
+        severity: "warn",
+        message: LEGACY_IMPLICIT_STARTUP_SIDECAR_MESSAGE,
+      };
+    case "hook-only":
+      return {
+        pluginId: params.pluginId,
+        code: params.code,
+        compatCode: "hook-only-plugin-shape",
+        severity: "info",
+        message: HOOK_ONLY_MESSAGE,
+      };
   }
-
-  return {
-    pluginId: params.pluginId,
-    code: params.code,
-    compatCode: "hook-only-plugin-shape",
-    severity: "info",
-    message: HOOK_ONLY_MESSAGE,
-  };
+  const unsupportedCode: never = params.code;
+  void unsupportedCode;
+  throw new Error("unsupported compatibility notice code");
 }
 
 export function createPluginRecord(
@@ -146,6 +160,13 @@ export function createPluginLoadResult(
     cliRegistrars: [],
     services: [],
     commands: [],
+    sessionExtensions: [],
+    trustedToolPolicies: [],
+    toolMetadata: [],
+    controlUiDescriptors: [],
+    runtimeLifecycles: [],
+    agentEventSubscriptions: [],
+    sessionSchedulerJobs: [],
     conversationBindingResolvedHandlers: [],
     ...rest,
     gatewayDiscoveryServices: rest.gatewayDiscoveryServices ?? [],

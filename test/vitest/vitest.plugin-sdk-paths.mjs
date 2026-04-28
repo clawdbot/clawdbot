@@ -9,8 +9,12 @@ const pluginSdkLightEntries = [
   },
   { source: "src/plugin-sdk/lazy-value.ts", test: "src/plugin-sdk/lazy-value.test.ts" },
   {
+    source: "src/plugin-sdk/memory-host-events.ts",
+    test: "src/plugin-sdk/memory-host-events.test.ts",
+  },
+  {
     source: "src/plugin-sdk/persistent-dedupe.ts",
-    test: "src/plugin-sdk/persistent-dedupe.test.ts",
+    test: "src/plugin-sdk/memory-host-events.test.ts",
   },
   { source: "src/plugin-sdk/provider-entry.ts", test: "src/plugin-sdk/provider-entry.test.ts" },
   {

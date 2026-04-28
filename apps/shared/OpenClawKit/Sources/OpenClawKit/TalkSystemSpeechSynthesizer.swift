@@ -16,7 +16,9 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
     private var currentToken = UUID()
     private var watchdog: Task<Void, Never>?
 
-    public var isSpeaking: Bool { self.synth.isSpeaking }
+    public var isSpeaking: Bool {
+        self.synth.isSpeaking
+    }
 
     override private init() {
         super.init()
@@ -35,8 +37,8 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
     public func speak(
         text: String,
         language: String? = nil,
-        onStart: (() -> Void)? = nil
-    ) async throws {
+        onStart: (() -> Void)? = nil) async throws
+    {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
@@ -51,7 +53,9 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
         }
         self.currentUtterance = utterance
 
-        let watchdogTimeout = Self.watchdogTimeoutSeconds(text: trimmed, language: language ?? utterance.voice?.language)
+        let watchdogTimeout = Self.watchdogTimeoutSeconds(
+            text: trimmed,
+            language: language ?? utterance.voice?.language)
         self.watchdog?.cancel()
         self.watchdog = Task { @MainActor [weak self] in
             guard let self else { return }

@@ -5,6 +5,7 @@
   "enabledByDefault": false,
   "commandAliases": [{ "name": "googlemeet" }],
   "activation": {
+    "onStartup": true,
     "onCommands": ["googlemeet"],
     "onCapabilities": ["tool"]
   },
@@ -56,12 +57,17 @@
     },
     "chrome.audioInputCommand": {
       "label": "Audio Input Command",
-      "help": "Command that writes 8 kHz G.711 mu-law meeting audio to stdout.",
+      "help": "Command that writes meeting audio to stdout in chrome.audioFormat.",
       "advanced": true
     },
     "chrome.audioOutputCommand": {
       "label": "Audio Output Command",
-      "help": "Command that reads 8 kHz G.711 mu-law assistant audio from stdin.",
+      "help": "Command that reads assistant audio from stdin in chrome.audioFormat.",
+      "advanced": true
+    },
+    "chrome.audioFormat": {
+      "label": "Audio Format",
+      "help": "Command-pair audio format. PCM16 24 kHz is the default Chrome/Meet path; G.711 mu-law 8 kHz remains available for legacy command pairs.",
       "advanced": true
     },
     "chrome.audioBridgeCommand": {
@@ -232,21 +238,30 @@
             "type": "number",
             "default": 20000
           },
+          "audioFormat": {
+            "type": "string",
+            "enum": ["pcm16-24khz", "g711-ulaw-8khz"],
+            "default": "pcm16-24khz"
+          },
           "audioInputCommand": {
             "type": "array",
             "default": [
-              "rec",
+              "sox",
               "-q",
+              "-t",
+              "coreaudio",
+              "BlackHole 2ch",
               "-t",
               "raw",
               "-r",
-              "8000",
+              "24000",
               "-c",
               "1",
               "-e",
-              "mu-law",
+              "signed-integer",
               "-b",
-              "8",
+              "16",
+              "-L",
               "-"
             ],
             "items": {
@@ -256,19 +271,23 @@
           "audioOutputCommand": {
             "type": "array",
             "default": [
-              "play",
+              "sox",
               "-q",
               "-t",
               "raw",
               "-r",
-              "8000",
+              "24000",
               "-c",
               "1",
               "-e",
-              "mu-law",
+              "signed-integer",
               "-b",
-              "8",
-              "-"
+              "16",
+              "-L",
+              "-",
+              "-t",
+              "coreaudio",
+              "BlackHole 2ch"
             ],
             "items": {
               "type": "string"

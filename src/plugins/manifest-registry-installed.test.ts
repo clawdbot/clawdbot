@@ -1,17 +1,22 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   readPersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndex,
 } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
+import {
+  clearInstalledManifestRegistryCache,
+  loadPluginManifestRegistryForInstalledIndex,
+} from "./manifest-registry-installed.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  clearInstalledManifestRegistryCache();
+  vi.restoreAllMocks();
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -71,6 +76,94 @@ function createIndex(rootDir: string): InstalledPluginIndex {
 }
 
 describe("loadPluginManifestRegistryForInstalledIndex", () => {
+  it("reuses installed-index manifest registries for identical runtime lookups", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndex(rootDir);
+    const readFileSync = vi.spyOn(fs, "readFileSync");
+    const env = {
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+
+    const first = loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env,
+      includeDisabled: true,
+    });
+    const readsAfterFirstLoad = readFileSync.mock.calls.length;
+    const second = loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env,
+      includeDisabled: true,
+    });
+
+    expect(second).toBe(first);
+    expect(readFileSync.mock.calls.length).toBe(readsAfterFirstLoad);
+  });
+
+  it("refreshes the installed-index manifest registry cache when manifest files change", () => {
+    const rootDir = makeTempDir();
+    const manifestPath = path.join(rootDir, "openclaw.plugin.json");
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndex(rootDir);
+    const env = {
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+
+    const first = loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env,
+      includeDisabled: true,
+    });
+    expect(first.plugins[0]?.modelSupport).toEqual({
+      modelPrefixes: ["installed-"],
+    });
+
+    writePlugin(rootDir, "installed", "updated-installed-");
+    const nextMtime = new Date(Date.now() + 5000);
+    fs.utimesSync(manifestPath, nextMtime, nextMtime);
+
+    const second = loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env,
+      includeDisabled: true,
+    });
+
+    expect(second).not.toBe(first);
+    expect(second.plugins[0]?.modelSupport).toEqual({
+      modelPrefixes: ["updated-installed-"],
+    });
+  });
+
+  it("bypasses the installed-index manifest registry cache when disabled", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndex(rootDir);
+    const readFileSync = vi.spyOn(fs, "readFileSync");
+    const env = {
+      OPENCLAW_DISABLE_INSTALLED_PLUGIN_MANIFEST_REGISTRY_CACHE: "1",
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+
+    const first = loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env,
+      includeDisabled: true,
+    });
+    const readsAfterFirstLoad = readFileSync.mock.calls.length;
+    const second = loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env,
+      includeDisabled: true,
+    });
+
+    expect(second).not.toBe(first);
+    expect(readFileSync.mock.calls.length).toBeGreaterThan(readsAfterFirstLoad);
+  });
+
   it("loads manifest metadata only for plugins present in the installed index", () => {
     const installedRoot = makeTempDir();
     const unrelatedRoot = makeTempDir();

@@ -1,7 +1,9 @@
 import Foundation
 
 public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable {
-    public var id: String { self.selectionID }
+    public var id: String {
+        self.selectionID
+    }
 
     public let modelID: String
     public let name: String
@@ -44,7 +46,9 @@ public struct OpenClawChatSessionsDefaults: Codable, Sendable {
 }
 
 public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashable {
-    public var id: String { self.key }
+    public var id: String {
+        self.key
+    }
 
     public let key: String
     public let kind: String?

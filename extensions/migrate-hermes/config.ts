@@ -23,6 +23,13 @@ type ConfigPatchDetails = {
 const CONFIG_RUNTIME_UNAVAILABLE = "config runtime unavailable";
 const MISSING_CONFIG_PATCH = "missing config patch";
 
+class ConfigPatchConflictError extends Error {
+  constructor(readonly reason: string) {
+    super(reason);
+    this.name = "ConfigPatchConflictError";
+  }
+}
+
 function envKeyForProvider(providerId: string): string {
   return `${providerId.toUpperCase().replaceAll(/[^A-Z0-9]/gu, "_")}_API_KEY`;
 }
@@ -413,18 +420,30 @@ export async function applyConfigItem(
   if (!details) {
     return markMigrationItemError(item, MISSING_CONFIG_PATCH);
   }
-  if (!ctx.runtime?.config.writeConfigFile) {
+  const configApi = ctx.runtime?.config;
+  if (!configApi?.current || !configApi.mutateConfigFile) {
     return markMigrationItemError(item, CONFIG_RUNTIME_UNAVAILABLE);
   }
   try {
-    const nextConfig = structuredClone(ctx.runtime.config.loadConfig?.() ?? ctx.config);
-    if (!ctx.overwrite && hasPatchConflict(nextConfig, details.path, details.value)) {
+    const currentConfig = configApi.current() as MigrationProviderContext["config"];
+    if (!ctx.overwrite && hasPatchConflict(currentConfig, details.path, details.value)) {
       return markMigrationItemConflict(item, MIGRATION_REASON_TARGET_EXISTS);
     }
-    writePath(nextConfig as Record<string, unknown>, details.path, details.value);
-    await ctx.runtime.config.writeConfigFile(nextConfig);
+    await configApi.mutateConfigFile({
+      base: "runtime",
+      afterWrite: { mode: "auto" },
+      mutate(draft) {
+        if (!ctx.overwrite && hasPatchConflict(draft, details.path, details.value)) {
+          throw new ConfigPatchConflictError(MIGRATION_REASON_TARGET_EXISTS);
+        }
+        writePath(draft as Record<string, unknown>, details.path, details.value);
+      },
+    });
     return { ...item, status: "migrated" };
   } catch (err) {
+    if (err instanceof ConfigPatchConflictError) {
+      return markMigrationItemConflict(item, err.reason);
+    }
     return markMigrationItemError(item, err instanceof Error ? err.message : String(err));
   }
 }

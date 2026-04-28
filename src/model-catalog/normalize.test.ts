@@ -84,6 +84,10 @@ describe("model catalog normalization", () => {
             provider: "Azure-OpenAI-Responses",
             model: "gpt-5.3-codex-spark",
             reason: "not available",
+            when: {
+              baseUrlHosts: ["CODING-INTL.DASHSCOPE.ALIYUNCS.COM"],
+              providerConfigApiIn: ["Qwen", "ModelStudio"],
+            },
           },
         ],
         discovery: {
@@ -154,6 +158,10 @@ describe("model catalog normalization", () => {
           provider: "azure-openai-responses",
           model: "gpt-5.3-codex-spark",
           reason: "not available",
+          when: {
+            baseUrlHosts: ["coding-intl.dashscope.aliyuncs.com"],
+            providerConfigApiIn: ["qwen", "modelstudio"],
+          },
         },
       ],
       discovery: {

@@ -477,7 +477,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       sendInvokeResult,
       sendExecFinishedEvent,
       preferMacAppExecHost: params.preferMacAppExecHost,
-      loadConfig: () => getRuntimeConfigSnapshot() ?? {},
+      getRuntimeConfig: () => getRuntimeConfigSnapshot() ?? {},
     });
 
     return {

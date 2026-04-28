@@ -35,7 +35,7 @@ describe("synthetic auth runtime refs", () => {
     getPluginRegistryState.mockReset();
     pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReset().mockReturnValue({
       source: "persisted",
-      snapshot: { plugins: [] },
+      snapshot: { plugins: [] as Array<{ syntheticAuthRefs?: string[] }> },
       diagnostics: [],
     });
   });

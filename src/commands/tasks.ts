@@ -1,4 +1,4 @@
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -47,11 +47,11 @@ const RUN_PAD = 10;
 const info = theme.info;
 
 async function loadTaskCancelConfig() {
-  return loadConfig();
+  return getRuntimeConfig();
 }
 
 function configureTaskMaintenanceFromConfig(): void {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   configureTaskRegistryMaintenance({
     cronStorePath: resolveCronStorePath(cfg.cron?.store),
   });

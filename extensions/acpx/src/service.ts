@@ -14,12 +14,6 @@ import {
   toAcpMcpServers,
   type ResolvedAcpxPluginConfig,
 } from "./config.js";
-import {
-  ACPX_BACKEND_ID,
-  AcpxRuntime,
-  createAgentRegistry,
-  createFileSessionStore,
-} from "./runtime.js";
 
 type AcpxRuntimeLike = AcpRuntime & {
   probeAvailability(): Promise<void>;
@@ -32,6 +26,10 @@ type AcpxRuntimeLike = AcpRuntime & {
 };
 
 const ENABLE_STARTUP_PROBE_ENV = "OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE";
+const ACPX_BACKEND_ID = "acpx";
+
+type AcpxRuntimeModule = typeof import("./runtime.js");
+let runtimeModulePromise: Promise<AcpxRuntimeModule> | null = null;
 
 type AcpxRuntimeFactoryParams = {
   pluginConfig: ResolvedAcpxPluginConfig;
@@ -40,27 +38,83 @@ type AcpxRuntimeFactoryParams = {
 
 type CreateAcpxRuntimeServiceParams = {
   pluginConfig?: unknown;
-  runtimeFactory?: (params: AcpxRuntimeFactoryParams) => AcpxRuntimeLike;
+  runtimeFactory?: (params: AcpxRuntimeFactoryParams) => AcpxRuntimeLike | Promise<AcpxRuntimeLike>;
 };
 
-function createDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntimeLike {
-  return new AcpxRuntime({
-    cwd: params.pluginConfig.cwd,
-    sessionStore: createFileSessionStore({
-      stateDir: params.pluginConfig.stateDir,
-    }),
-    agentRegistry: createAgentRegistry({
-      overrides: params.pluginConfig.agents,
-    }),
-    probeAgent: params.pluginConfig.probeAgent,
-    mcpServers: toAcpMcpServers(params.pluginConfig.mcpServers),
-    permissionMode: params.pluginConfig.permissionMode,
-    nonInteractivePermissions: params.pluginConfig.nonInteractivePermissions,
-    timeoutMs:
-      params.pluginConfig.timeoutSeconds != null
-        ? params.pluginConfig.timeoutSeconds * 1_000
-        : undefined,
-  });
+function loadRuntimeModule(): Promise<AcpxRuntimeModule> {
+  runtimeModulePromise ??= import("./runtime.js");
+  return runtimeModulePromise;
+}
+
+function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntimeLike {
+  let runtime: AcpxRuntimeLike | null = null;
+  let runtimePromise: Promise<AcpxRuntimeLike> | null = null;
+
+  async function resolveRuntime(): Promise<AcpxRuntimeLike> {
+    if (runtime) {
+      return runtime;
+    }
+    runtimePromise ??= loadRuntimeModule().then((module) => {
+      runtime = new module.AcpxRuntime({
+        cwd: params.pluginConfig.cwd,
+        sessionStore: module.createFileSessionStore({
+          stateDir: params.pluginConfig.stateDir,
+        }),
+        agentRegistry: module.createAgentRegistry({
+          overrides: params.pluginConfig.agents,
+        }),
+        probeAgent: params.pluginConfig.probeAgent,
+        mcpServers: toAcpMcpServers(params.pluginConfig.mcpServers),
+        permissionMode: params.pluginConfig.permissionMode,
+        nonInteractivePermissions: params.pluginConfig.nonInteractivePermissions,
+        timeoutMs:
+          params.pluginConfig.timeoutSeconds != null
+            ? params.pluginConfig.timeoutSeconds * 1_000
+            : undefined,
+      }) as AcpxRuntimeLike;
+      return runtime;
+    });
+    return await runtimePromise;
+  }
+
+  return {
+    async ensureSession(input) {
+      return await (await resolveRuntime()).ensureSession(input);
+    },
+    async *runTurn(input) {
+      yield* (await resolveRuntime()).runTurn(input);
+    },
+    async getCapabilities(input) {
+      return (await (await resolveRuntime()).getCapabilities?.(input)) ?? { controls: [] };
+    },
+    async getStatus(input) {
+      return (await (await resolveRuntime()).getStatus?.(input)) ?? {};
+    },
+    async setMode(input) {
+      await (await resolveRuntime()).setMode?.(input);
+    },
+    async setConfigOption(input) {
+      await (await resolveRuntime()).setConfigOption?.(input);
+    },
+    async doctor() {
+      return (await (await resolveRuntime()).doctor?.()) ?? { ok: true, message: "ok" };
+    },
+    async prepareFreshSession(input) {
+      await (await resolveRuntime()).prepareFreshSession?.(input);
+    },
+    async cancel(input) {
+      await (await resolveRuntime()).cancel(input);
+    },
+    async close(input) {
+      await (await resolveRuntime()).close(input);
+    },
+    async probeAvailability() {
+      await (await resolveRuntime()).probeAvailability();
+    },
+    isHealthy() {
+      return runtime?.isHealthy() ?? false;
+    },
+  };
 }
 
 function warnOnIgnoredLegacyCompatibilityConfig(params: {
@@ -167,11 +221,15 @@ export function createAcpxRuntimeService(
         logger: ctx.logger,
       });
 
-      const runtimeFactory = params.runtimeFactory ?? createDefaultRuntime;
-      runtime = runtimeFactory({
-        pluginConfig,
-        logger: ctx.logger,
-      });
+      runtime = params.runtimeFactory
+        ? await params.runtimeFactory({
+            pluginConfig,
+            logger: ctx.logger,
+          })
+        : createLazyDefaultRuntime({
+            pluginConfig,
+            logger: ctx.logger,
+          });
 
       registerAcpRuntimeBackend({
         id: ACPX_BACKEND_ID,

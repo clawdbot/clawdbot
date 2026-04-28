@@ -2,6 +2,9 @@
 
 export const activePrLimit = 10;
 
+const thirdPartyExtensionMessage =
+  "Please publish this as a third-party plugin on [ClawHub](https://clawhub.ai) instead of adding it to the core repo. Docs: https://docs.openclaw.ai/plugin and https://docs.openclaw.ai/tools/clawhub";
+
 export const rules = [
   {
     label: "r: skill",
@@ -39,8 +42,7 @@ export const rules = [
   {
     label: "r: third-party-extension",
     close: true,
-    message:
-      "Please publish this as a third-party plugin on [ClawHub](https://clawhub.ai) instead of adding it to the core repo. Docs: https://docs.openclaw.ai/plugin and https://docs.openclaw.ai/tools/clawhub",
+    message: thirdPartyExtensionMessage,
   },
   {
     label: "r: moltbook",
@@ -184,6 +186,55 @@ const maintainerAuthorLabel = "maintainer";
 const candidateLabelValues = Object.values(candidateLabels);
 const noisyPrMessage =
   "Closing this PR because it looks dirty (too many unrelated or unexpected changes). This usually happens when a branch picks up unrelated commits or a merge went sideways. Please recreate the PR from a clean branch.";
+
+const candidateActionRules = [
+  {
+    label: candidateLabels.dirtyCandidate,
+    close: true,
+    message: noisyPrMessage,
+  },
+  {
+    label: candidateLabels.externalPluginCandidate,
+    close: true,
+    message: thirdPartyExtensionMessage,
+  },
+  {
+    label: candidateLabels.riskyInfra,
+    close: true,
+    message:
+      "Closing this PR because it changes infra/CI/release/ops plumbing without maintainer context and validation. That surface is high-blast-radius; open an issue/RFC or get owner approval before sending a patch.",
+  },
+  {
+    label: candidateLabels.docsDiscoverability,
+    close: true,
+    message:
+      "Closing this PR because docs discoverability and community-plugin listing changes should go through ClawHub or a maintainer-owned docs plan, not drive-by core churn.",
+  },
+  {
+    label: candidateLabels.lowSignalDocs,
+    close: true,
+    message:
+      "Closing this PR because the docs-only change is too low-signal for the core repo. Please reopen or resubmit with a concrete OpenClaw docs gap and linked context.",
+  },
+  {
+    label: candidateLabels.testOnlyNoBug,
+    close: true,
+    message:
+      "Closing this PR because it only changes tests without a linked bug, owner request, or behavior change. Test-only PRs need a concrete regression or maintainer-requested gap.",
+  },
+  {
+    label: candidateLabels.refactorOnly,
+    close: true,
+    message:
+      "Closing this PR because it is refactor/cleanup-only without maintainer context. We avoid churn in core unless it unlocks a concrete fix, architecture change, or owned cleanup.",
+  },
+  {
+    label: candidateLabels.blankTemplate,
+    close: true,
+    message:
+      "Closing this PR because the template is mostly blank and does not describe a concrete OpenClaw problem, fix, or test plan. Please reopen or resubmit with the missing context filled in.",
+  },
+];
 
 const normalizeLogin = (login) => login.toLowerCase();
 
@@ -643,6 +694,67 @@ async function applyPullRequestCandidateLabels(github, context, core, pullReques
   );
 }
 
+function isAutomationActor(context) {
+  const sender = context.payload.sender;
+  const login = sender?.login ?? context.actor ?? "";
+  return sender?.type === "Bot" || /\[bot\]$/i.test(login);
+}
+
+function candidateActionRuleForLabelSet(labelSet, preferredLabel = "") {
+  const preferredRule = candidateActionRules.find(
+    (rule) => rule.label === preferredLabel && labelSet.has(rule.label),
+  );
+  if (preferredRule) {
+    return preferredRule;
+  }
+  return candidateActionRules.find((rule) => labelSet.has(rule.label));
+}
+
+async function applyPullRequestCandidateAction({
+  github,
+  context,
+  pullRequest,
+  labelSet,
+  hasTriggerLabel,
+  isLabelEvent,
+}) {
+  if (isAutomationActor(context)) {
+    return false;
+  }
+
+  const eventLabel = context.payload.label?.name ?? "";
+  const isCandidateLabelEvent = isLabelEvent && candidateLabelValues.includes(eventLabel);
+  if (!hasTriggerLabel && !isCandidateLabelEvent) {
+    return false;
+  }
+
+  const rule = candidateActionRuleForLabelSet(
+    labelSet,
+    isCandidateLabelEvent ? eventLabel : undefined,
+  );
+  if (!rule) {
+    return false;
+  }
+
+  await github.rest.issues.createComment({
+    owner: context.repo.owner,
+    repo: context.repo.repo,
+    issue_number: pullRequest.number,
+    body: rule.message,
+  });
+
+  if (rule.close) {
+    await github.rest.issues.update({
+      owner: context.repo.owner,
+      repo: context.repo.repo,
+      issue_number: pullRequest.number,
+      state: "closed",
+    });
+  }
+
+  return true;
+}
+
 async function removeLabels(github, context, issueNumber, labels, labelSet) {
   for (const label of labels) {
     if (!labelSet.has(label)) {
@@ -867,6 +979,18 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
         issue_number: pullRequest.number,
         state: "closed",
       });
+      return;
+    }
+
+    const handledCandidateAction = await applyPullRequestCandidateAction({
+      github,
+      context,
+      pullRequest,
+      labelSet,
+      hasTriggerLabel,
+      isLabelEvent,
+    });
+    if (handledCandidateAction) {
       return;
     }
   }

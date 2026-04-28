@@ -217,7 +217,7 @@ describe("fetchBrowserJson loopback auth (bridge auth registry)", () => {
       candidate === port ? { token: "registry-token" } : undefined,
     );
     const init = __test.withLoopbackBrowserAuth(`http://127.0.0.1:${port}/`, undefined, {
-      loadConfig: () => ({}),
+      getRuntimeConfig: () => ({}),
       resolveBrowserControlAuth: () => ({}),
       getBridgeAuthForPort,
     });

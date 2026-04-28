@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:child_process", async () => {
-  const { mockNodeBuiltinModule } = await import("../../../../test/helpers/node-builtin-mocks.js");
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
   return mockNodeBuiltinModule(
     () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
     {
@@ -10,7 +10,7 @@ vi.mock("node:child_process", async () => {
   );
 });
 vi.mock("node:fs", async () => {
-  const { mockNodeBuiltinModule } = await import("../../../../test/helpers/node-builtin-mocks.js");
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
   const existsSync = vi.fn();
   const readFileSync = vi.fn();
   return mockNodeBuiltinModule(
@@ -20,7 +20,7 @@ vi.mock("node:fs", async () => {
   );
 });
 vi.mock("node:os", async () => {
-  const { mockNodeBuiltinModule } = await import("../../../../test/helpers/node-builtin-mocks.js");
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
   const homedir = vi.fn();
   return mockNodeBuiltinModule(
     () => vi.importActual<typeof import("node:os")>("node:os"),

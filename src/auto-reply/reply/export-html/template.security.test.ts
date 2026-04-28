@@ -84,12 +84,23 @@ function installScrollIntoViewStub(document: Document) {
 }
 
 async function renderTemplate(sessionData: SessionData) {
-  const html = templateHtml
-    .replace("{{CSS}}", "")
-    .replace("{{SESSION_DATA}}", Buffer.from(JSON.stringify(sessionData), "utf8").toString("base64"))
-    .replace("{{MARKED_JS}}", "")
-    .replace("{{HIGHLIGHT_JS}}", "")
-    .replace("{{JS}}", "");
+  const html = [
+    ["CSS", ""],
+    ["SESSION_DATA", Buffer.from(JSON.stringify(sessionData), "utf8").toString("base64")],
+    ["MARKED_JS", ""],
+    ["HIGHLIGHT_JS", ""],
+    ["JS", ""],
+  ].reduce(
+    (currentHtml, [name, value]) =>
+      currentHtml.replace(
+        new RegExp(
+          `(<(?:script|style)\\b(?=[^>]*\\bdata-openclaw-export-placeholder="${name}")[^>]*>)(</(?:script|style)>)`,
+        ),
+        (_match: string, openTag: string, closeTag: string) =>
+          `${openTag.replace(/\sdata-openclaw-export-placeholder="[^"]*"/, "")}${value}${closeTag}`,
+      ),
+    templateHtml,
+  );
 
   const parseHTML = await loadParseHTML();
   const { document, window } = parseHTML(html);

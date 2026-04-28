@@ -101,6 +101,7 @@ export function createSubscriptionMock(): SubscriptionMock {
     getLastToolError: () => undefined,
     getUsageTotals: () => undefined,
     getCompactionCount: () => 0,
+    getLastCompactionTokensAfter: () => undefined,
     getItemLifecycle: () => ({ startedCount: 0, completedCount: 0, activeCount: 0 }),
     isCompacting: () => false,
     isCompactionInFlight: () => false,
@@ -678,6 +679,7 @@ export type MutableSession = {
   agent: {
     streamFn?: unknown;
     transport?: string;
+    reset: () => void;
     state: {
       messages: unknown[];
       systemPrompt?: string;
@@ -797,6 +799,9 @@ export function createDefaultEmbeddedSession(params?: {
     isCompacting: false,
     isStreaming: false,
     agent: {
+      reset: () => {
+        session.messages = [];
+      },
       state: {
         get messages() {
           return session.messages;

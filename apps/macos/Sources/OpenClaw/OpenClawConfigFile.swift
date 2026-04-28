@@ -6,6 +6,19 @@ enum OpenClawConfigFile {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "config")
     private static let configAuditFileName = "config-audit.jsonl"
     private static let configHealthFileName = "config-health.json"
+    private static let fileLock = NSRecursiveLock()
+
+    private static func withFileLock<T>(_ body: () throws -> T) rethrows -> T {
+        self.fileLock.lock()
+        defer { self.fileLock.unlock() }
+        return try body()
+    }
+
+    #if DEBUG
+    static func withTestingFileLock<T>(_ body: () throws -> T) rethrows -> T {
+        try self.withFileLock(body)
+    }
+    #endif
 
     static func url() -> URL {
         OpenClawPaths.configURL
@@ -20,96 +33,100 @@ enum OpenClawConfigFile {
     }
 
     static func loadDict() -> [String: Any] {
-        let url = self.url()
-        guard FileManager().fileExists(atPath: url.path) else { return [:] }
-        do {
-            let data = try Data(contentsOf: url)
-            guard let root = self.parseConfigData(data) else {
-                self.observeConfigRead(data: data, root: nil, configURL: url, valid: false)
-                self.logger.warning("config JSON root invalid")
+        self.withFileLock {
+            let url = self.url()
+            guard FileManager().fileExists(atPath: url.path) else { return [:] }
+            do {
+                let data = try Data(contentsOf: url)
+                guard let root = self.parseConfigData(data) else {
+                    self.observeConfigRead(data: data, root: nil, configURL: url, valid: false)
+                    self.logger.warning("config JSON root invalid")
+                    return [:]
+                }
+                self.observeConfigRead(data: data, root: root, configURL: url, valid: true)
+                return root
+            } catch {
+                self.logger.warning("config read failed: \(error.localizedDescription)")
                 return [:]
             }
-            self.observeConfigRead(data: data, root: root, configURL: url, valid: true)
-            return root
-        } catch {
-            self.logger.warning("config read failed: \(error.localizedDescription)")
-            return [:]
         }
     }
 
     static func saveDict(_ dict: [String: Any]) {
-        // Nix mode disables config writes in production, but tests rely on saving temp configs.
-        if ProcessInfo.processInfo.isNixMode, !ProcessInfo.processInfo.isRunningTests { return }
-        let url = self.url()
-        let previousData = try? Data(contentsOf: url)
-        let previousRoot = previousData.flatMap { self.parseConfigData($0) }
-        let previousBytes = previousData?.count
-        let previousAttributes = try? FileManager().attributesOfItem(atPath: url.path)
-        let hadMetaBefore = self.hasMeta(previousRoot)
-        let gatewayModeBefore = self.gatewayMode(previousRoot)
+        self.withFileLock {
+            // Nix mode disables config writes in production, but tests rely on saving temp configs.
+            if ProcessInfo.processInfo.isNixMode, !ProcessInfo.processInfo.isRunningTests { return }
+            let url = self.url()
+            let previousData = try? Data(contentsOf: url)
+            let previousRoot = previousData.flatMap { self.parseConfigData($0) }
+            let previousBytes = previousData?.count
+            let previousAttributes = try? FileManager().attributesOfItem(atPath: url.path)
+            let hadMetaBefore = self.hasMeta(previousRoot)
+            let gatewayModeBefore = self.gatewayMode(previousRoot)
 
-        var output = dict
-        self.stampMeta(&output)
+            var output = dict
+            self.stampMeta(&output)
 
-        do {
-            let data = try JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys])
-            try FileManager().createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true)
-            try data.write(to: url, options: [.atomic])
-            let nextBytes = data.count
-            let nextAttributes = try? FileManager().attributesOfItem(atPath: url.path)
-            let gatewayModeAfter = self.gatewayMode(output)
-            let suspicious = self.configWriteSuspiciousReasons(
-                existsBefore: previousData != nil,
-                previousBytes: previousBytes,
-                nextBytes: nextBytes,
-                hadMetaBefore: hadMetaBefore,
-                gatewayModeBefore: gatewayModeBefore,
-                gatewayModeAfter: gatewayModeAfter)
-            if !suspicious.isEmpty {
-                self.logger.warning("config write anomaly (\(suspicious.joined(separator: ", "))) at \(url.path)")
+            do {
+                let data = try JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys])
+                try FileManager().createDirectory(
+                    at: url.deletingLastPathComponent(),
+                    withIntermediateDirectories: true)
+                try data.write(to: url, options: [.atomic])
+                let nextBytes = data.count
+                let nextAttributes = try? FileManager().attributesOfItem(atPath: url.path)
+                let gatewayModeAfter = self.gatewayMode(output)
+                let suspicious = self.configWriteSuspiciousReasons(
+                    existsBefore: previousData != nil,
+                    previousBytes: previousBytes,
+                    nextBytes: nextBytes,
+                    hadMetaBefore: hadMetaBefore,
+                    gatewayModeBefore: gatewayModeBefore,
+                    gatewayModeAfter: gatewayModeAfter)
+                if !suspicious.isEmpty {
+                    self.logger.warning("config write anomaly (\(suspicious.joined(separator: ", "))) at \(url.path)")
+                }
+                self.appendConfigWriteAudit([
+                    "result": "success",
+                    "configPath": url.path,
+                    "existsBefore": previousData != nil,
+                    "previousBytes": previousBytes ?? NSNull(),
+                    "nextBytes": nextBytes,
+                    "previousDev": self.fileSystemNumber(previousAttributes?[.systemNumber]) ?? NSNull(),
+                    "nextDev": self.fileSystemNumber(nextAttributes?[.systemNumber]) ?? NSNull(),
+                    "previousIno": self.fileSystemNumber(previousAttributes?[.systemFileNumber]) ?? NSNull(),
+                    "nextIno": self.fileSystemNumber(nextAttributes?[.systemFileNumber]) ?? NSNull(),
+                    "previousMode": self.posixMode(previousAttributes?[.posixPermissions]) ?? NSNull(),
+                    "nextMode": self.posixMode(nextAttributes?[.posixPermissions]) ?? NSNull(),
+                    "previousNlink": self.fileAttributeInt(previousAttributes?[.referenceCount]) ?? NSNull(),
+                    "nextNlink": self.fileAttributeInt(nextAttributes?[.referenceCount]) ?? NSNull(),
+                    "previousUid": self.fileAttributeInt(previousAttributes?[.ownerAccountID]) ?? NSNull(),
+                    "nextUid": self.fileAttributeInt(nextAttributes?[.ownerAccountID]) ?? NSNull(),
+                    "previousGid": self.fileAttributeInt(previousAttributes?[.groupOwnerAccountID]) ?? NSNull(),
+                    "nextGid": self.fileAttributeInt(nextAttributes?[.groupOwnerAccountID]) ?? NSNull(),
+                    "hasMetaBefore": hadMetaBefore,
+                    "hasMetaAfter": self.hasMeta(output),
+                    "gatewayModeBefore": gatewayModeBefore ?? NSNull(),
+                    "gatewayModeAfter": gatewayModeAfter ?? NSNull(),
+                    "suspicious": suspicious,
+                ])
+                self.observeConfigRead(data: data, root: output, configURL: url, valid: true)
+            } catch {
+                self.logger.error("config save failed: \(error.localizedDescription)")
+                self.appendConfigWriteAudit([
+                    "result": "failed",
+                    "configPath": url.path,
+                    "existsBefore": previousData != nil,
+                    "previousBytes": previousBytes ?? NSNull(),
+                    "nextBytes": NSNull(),
+                    "hasMetaBefore": hadMetaBefore,
+                    "hasMetaAfter": self.hasMeta(output),
+                    "gatewayModeBefore": gatewayModeBefore ?? NSNull(),
+                    "gatewayModeAfter": self.gatewayMode(output) ?? NSNull(),
+                    "suspicious": [],
+                    "error": error.localizedDescription,
+                ])
             }
-            self.appendConfigWriteAudit([
-                "result": "success",
-                "configPath": url.path,
-                "existsBefore": previousData != nil,
-                "previousBytes": previousBytes ?? NSNull(),
-                "nextBytes": nextBytes,
-                "previousDev": self.fileSystemNumber(previousAttributes?[.systemNumber]) ?? NSNull(),
-                "nextDev": self.fileSystemNumber(nextAttributes?[.systemNumber]) ?? NSNull(),
-                "previousIno": self.fileSystemNumber(previousAttributes?[.systemFileNumber]) ?? NSNull(),
-                "nextIno": self.fileSystemNumber(nextAttributes?[.systemFileNumber]) ?? NSNull(),
-                "previousMode": self.posixMode(previousAttributes?[.posixPermissions]) ?? NSNull(),
-                "nextMode": self.posixMode(nextAttributes?[.posixPermissions]) ?? NSNull(),
-                "previousNlink": self.fileAttributeInt(previousAttributes?[.referenceCount]) ?? NSNull(),
-                "nextNlink": self.fileAttributeInt(nextAttributes?[.referenceCount]) ?? NSNull(),
-                "previousUid": self.fileAttributeInt(previousAttributes?[.ownerAccountID]) ?? NSNull(),
-                "nextUid": self.fileAttributeInt(nextAttributes?[.ownerAccountID]) ?? NSNull(),
-                "previousGid": self.fileAttributeInt(previousAttributes?[.groupOwnerAccountID]) ?? NSNull(),
-                "nextGid": self.fileAttributeInt(nextAttributes?[.groupOwnerAccountID]) ?? NSNull(),
-                "hasMetaBefore": hadMetaBefore,
-                "hasMetaAfter": self.hasMeta(output),
-                "gatewayModeBefore": gatewayModeBefore ?? NSNull(),
-                "gatewayModeAfter": gatewayModeAfter ?? NSNull(),
-                "suspicious": suspicious,
-            ])
-            self.observeConfigRead(data: data, root: output, configURL: url, valid: true)
-        } catch {
-            self.logger.error("config save failed: \(error.localizedDescription)")
-            self.appendConfigWriteAudit([
-                "result": "failed",
-                "configPath": url.path,
-                "existsBefore": previousData != nil,
-                "previousBytes": previousBytes ?? NSNull(),
-                "nextBytes": NSNull(),
-                "hasMetaBefore": hadMetaBefore,
-                "hasMetaAfter": self.hasMeta(output),
-                "gatewayModeBefore": gatewayModeBefore ?? NSNull(),
-                "gatewayModeAfter": self.gatewayMode(output) ?? NSNull(),
-                "suspicious": [],
-                "error": error.localizedDescription,
-            ])
         }
     }
 

@@ -1,8 +1,10 @@
 import { getModels } from "@mariozechner/pi-ai";
+import {
+  registerProviderPlugin,
+  registerSingleProviderPlugin,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
-import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
-import { registerProviderPlugin } from "../../test/helpers/plugins/provider-registration.js";
-import { expectPassthroughReplayPolicy } from "../../test/helpers/provider-replay-policy.ts";
 import plugin from "./index.js";
 
 describe("opencode-go provider plugin", () => {
@@ -49,6 +51,8 @@ describe("opencode-go provider plugin", () => {
 
     const models = new Map(getModels("opencode-go").map((model) => [model.id, model]));
     expect([...models.keys()]).toEqual([
+      "deepseek-v4-flash",
+      "deepseek-v4-pro",
       "glm-5",
       "glm-5.1",
       "kimi-k2.5",

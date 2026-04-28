@@ -1,5 +1,8 @@
 {
   "id": "tts-local-cli",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "contracts": {
     "speechProviders": ["tts-local-cli", "cli"]

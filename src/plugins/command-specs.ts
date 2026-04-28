@@ -2,7 +2,24 @@ import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import { resolveReadOnlyChannelCommandDefaults } from "../channels/plugins/read-only-command-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { listProviderPluginCommandSpecs } from "./command-registry-state.js";
+import { pluginCommands } from "./command-registry-state.js";
+import type { OpenClawPluginCommandDefinition } from "./types.js";
+
+function resolvePluginNativeName(
+  command: OpenClawPluginCommandDefinition,
+  provider?: string,
+): string {
+  const providerName = normalizeOptionalLowercaseString(provider);
+  const providerOverride = providerName ? command.nativeNames?.[providerName] : undefined;
+  if (typeof providerOverride === "string" && providerOverride.trim()) {
+    return providerOverride.trim();
+  }
+  const defaultOverride = command.nativeNames?.default;
+  if (typeof defaultOverride === "string" && defaultOverride.trim()) {
+    return defaultOverride.trim();
+  }
+  return command.name;
+}
 
 export function getPluginCommandSpecs(
   provider?: string,
@@ -33,4 +50,17 @@ export function getPluginCommandSpecs(
     return [];
   }
   return listProviderPluginCommandSpecs(provider);
+}
+
+/** Resolve plugin command specs for a provider's native naming surface without support gating. */
+export function listProviderPluginCommandSpecs(provider?: string): Array<{
+  name: string;
+  description: string;
+  acceptsArgs: boolean;
+}> {
+  return Array.from(pluginCommands.values()).map((cmd) => ({
+    name: resolvePluginNativeName(cmd, provider),
+    description: cmd.description,
+    acceptsArgs: cmd.acceptsArgs ?? false,
+  }));
 }

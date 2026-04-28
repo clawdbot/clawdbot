@@ -1,9 +1,9 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getRequiredHookHandler,
   registerHookHandlersForTest,
-} from "../../../test/helpers/plugins/subagent-hooks.js";
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type ThreadBindingRecord = {
   accountId: string;

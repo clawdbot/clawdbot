@@ -2,7 +2,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
-import type { ChannelMessageActionContext, ChannelPlugin } from "../../channels/plugins/types.js";
+import type {
+  ChannelMessageActionContext,
+  ChannelMessageActionName,
+  ChannelPlugin,
+} from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -93,6 +97,39 @@ function createPollForwardingPlugin(params: {
     actions: {
       describeMessageTool: () => ({ actions: ["poll"] }),
       supportsAction: ({ action }) => action === "poll",
+      handleAction: params.handleAction,
+    },
+  };
+}
+
+function createGatewayActionPlugin(params: {
+  pluginId: string;
+  label: string;
+  blurb: string;
+  actions: ChannelMessageActionName[];
+  gatewayActions?: ChannelMessageActionName[];
+  capabilities?: ChannelPlugin["capabilities"];
+  messaging?: ChannelPlugin["messaging"];
+  handleAction: ChannelActionHandler;
+}): ChannelPlugin {
+  const actions = new Set(params.actions);
+  const gatewayActions = new Set(params.gatewayActions ?? params.actions);
+  return {
+    id: params.pluginId,
+    meta: {
+      id: params.pluginId,
+      label: params.label,
+      selectionLabel: params.label,
+      docsPath: `/channels/${params.pluginId}`,
+      blurb: params.blurb,
+    },
+    capabilities: params.capabilities ?? { chatTypes: ["direct"] },
+    config: createAlwaysConfiguredPluginConfig(),
+    messaging: params.messaging,
+    actions: {
+      describeMessageTool: () => ({ actions: params.actions }),
+      supportsAction: ({ action }) => actions.has(action),
+      resolveExecutionMode: ({ action }) => (gatewayActions.has(action) ? "gateway" : "local"),
       handleAction: params.handleAction,
     },
   };
@@ -318,24 +355,14 @@ describe("runMessageAction plugin dispatch", () => {
           local: true,
         }),
       );
-      const gatewayPlugin: ChannelPlugin = {
-        id: "gatewaychat",
-        meta: {
-          id: "gatewaychat",
-          label: "Gateway Chat",
-          selectionLabel: "Gateway Chat",
-          docsPath: "/channels/gatewaychat",
-          blurb: "Gateway Chat reaction test plugin.",
-        },
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat reaction test plugin.",
+        actions: ["react"],
         capabilities: { chatTypes: ["direct"], reactions: true },
-        config: createAlwaysConfiguredPluginConfig(),
-        actions: {
-          describeMessageTool: () => ({ actions: ["react"] }),
-          supportsAction: ({ action }) => action === "react",
-          resolveExecutionMode: ({ action }) => (action === "react" ? "gateway" : "local"),
-          handleAction,
-        },
-      };
+        handleAction,
+      });
       setActivePluginRegistry(
         createTestRegistry([
           {
@@ -408,6 +435,83 @@ describe("runMessageAction plugin dispatch", () => {
         payload: {
           ok: true,
           added: "✅",
+        },
+      });
+    });
+
+    it("routes gateway-executed plugin sends through gateway RPC instead of local dispatch", async () => {
+      const handleAction = vi.fn(async () => jsonResult({ ok: true, local: true }));
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat send test plugin.",
+        actions: ["send"],
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+          },
+        },
+        handleAction,
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "gatewaychat",
+            source: "test",
+            plugin: gatewayPlugin,
+          },
+        ]),
+      );
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({
+        ok: true,
+        messageId: "gw-send-1",
+      });
+
+      const result = await runMessageAction({
+        cfg: {
+          channels: {
+            gatewaychat: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "gatewaychat",
+          target: "user-123",
+          message: "hello from cli",
+        },
+        gateway: {
+          clientName: "cli",
+          mode: "cli",
+        },
+        dryRun: false,
+      });
+
+      expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "message.action",
+          params: expect.objectContaining({
+            channel: "gatewaychat",
+            action: "send",
+            params: expect.objectContaining({
+              to: "user-123",
+              message: "hello from cli",
+            }),
+            idempotencyKey: "idem-gateway-action",
+          }),
+        }),
+      );
+      expect(mocks.executeSendAction).not.toHaveBeenCalled();
+      expect(handleAction).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        kind: "send",
+        channel: "gatewaychat",
+        action: "send",
+        handledBy: "plugin",
+        payload: {
+          ok: true,
+          messageId: "gw-send-1",
         },
       });
     });
@@ -909,6 +1013,85 @@ describe("runMessageAction plugin dispatch", () => {
           pollDurationSeconds: 120,
           pollPublic: true,
           threadId: "42",
+        },
+      });
+    });
+
+    it("routes gateway-executed plugin polls through gateway RPC instead of local dispatch", async () => {
+      const handleAction = vi.fn(async () => jsonResult({ ok: true, local: true }));
+      const pollGatewayPlugin = createGatewayActionPlugin({
+        pluginId: "pollchat",
+        label: "Poll Chat",
+        blurb: "Poll chat gateway forwarding test plugin.",
+        actions: ["poll"],
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+          },
+        },
+        handleAction,
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "pollchat",
+            source: "test",
+            plugin: pollGatewayPlugin,
+          },
+        ]),
+      );
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({
+        ok: true,
+        pollId: "gw-poll-1",
+      });
+
+      const result = await runMessageAction({
+        cfg: {
+          channels: {
+            pollchat: {
+              botToken: "tok",
+            },
+          },
+        } as OpenClawConfig,
+        action: "poll",
+        params: {
+          channel: "pollchat",
+          target: "pollchat:123",
+          pollQuestion: "Lunch?",
+          pollOption: ["Pizza", "Sushi"],
+        },
+        gateway: {
+          clientName: "cli",
+          mode: "cli",
+        },
+        dryRun: false,
+      });
+
+      expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "message.action",
+          params: expect.objectContaining({
+            channel: "pollchat",
+            action: "poll",
+            params: expect.objectContaining({
+              to: "pollchat:123",
+              pollQuestion: "Lunch?",
+              pollOption: ["Pizza", "Sushi"],
+            }),
+            idempotencyKey: "idem-gateway-action",
+          }),
+        }),
+      );
+      expect(mocks.executePollAction).not.toHaveBeenCalled();
+      expect(handleAction).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        kind: "poll",
+        channel: "pollchat",
+        action: "poll",
+        handledBy: "plugin",
+        payload: {
+          ok: true,
+          pollId: "gw-poll-1",
         },
       });
     });

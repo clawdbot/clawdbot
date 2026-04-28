@@ -23,6 +23,10 @@ const mockState = vi.hoisted(() => ({
   finalPayload: null as {
     text?: string;
     mediaUrl?: string;
+    mediaUrls?: string[];
+    spokenText?: string;
+    audioAsVoice?: boolean;
+    trustedLocalMedia?: boolean;
     sensitiveMedia?: boolean;
     replyToId?: string;
     replyToCurrent?: boolean;
@@ -34,6 +38,8 @@ const mockState = vi.hoisted(() => ({
       text?: string;
       mediaUrl?: string;
       mediaUrls?: string[];
+      spokenText?: string;
+      audioAsVoice?: boolean;
       trustedLocalMedia?: boolean;
       replyToId?: string;
       replyToCurrent?: boolean;
@@ -60,6 +66,15 @@ const mockState = vi.hoisted(() => ({
   saveMediaWait: null as Promise<void> | null,
   activeSaveMediaCalls: 0,
   maxActiveSaveMediaCalls: 0,
+  sandboxWorkspace: null as { workspaceDir: string; containerWorkdir?: string } | null,
+  stageSandboxMediaError: null as Error | null,
+  stagedRelativePaths: null as string[] | null,
+  // `unstagedSources` lets tests simulate partial staging failure: absolute
+  // source paths listed here are excluded from the returned `staged` map even
+  // though ctx still carries their rewritten paths. This mirrors how the real
+  // stageSandboxMedia silently skips over-cap files.
+  unstagedSources: null as string[] | null,
+  deleteMediaBufferCalls: [] as Array<{ id: string; subdir?: string }>,
 }));
 
 const bindingMocks = vi.hoisted(() => ({
@@ -113,6 +128,10 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
         sendFinalReply: (payload: {
           text?: string;
           mediaUrl?: string;
+          mediaUrls?: string[];
+          spokenText?: string;
+          audioAsVoice?: boolean;
+          trustedLocalMedia?: boolean;
           sensitiveMedia?: boolean;
           replyToId?: string;
           replyToCurrent?: boolean;
@@ -122,6 +141,8 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
           text?: string;
           mediaUrl?: string;
           mediaUrls?: string[];
+          spokenText?: string;
+          audioAsVoice?: boolean;
           trustedLocalMedia?: boolean;
           replyToId?: string;
           replyToCurrent?: boolean;
@@ -131,6 +152,8 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
           text?: string;
           mediaUrl?: string;
           mediaUrls?: string[];
+          spokenText?: string;
+          audioAsVoice?: boolean;
           trustedLocalMedia?: boolean;
           replyToId?: string;
           replyToCurrent?: boolean;
@@ -202,11 +225,54 @@ vi.mock("../../sessions/transcript-events.js", () => ({
   ),
 }));
 
+vi.mock("../../agents/sandbox/context.js", async () => {
+  const original = await vi.importActual<typeof import("../../agents/sandbox/context.js")>(
+    "../../agents/sandbox/context.js",
+  );
+  return {
+    ...original,
+    ensureSandboxWorkspaceForSession: vi.fn(async () => mockState.sandboxWorkspace),
+  };
+});
+
+vi.mock("../../auto-reply/reply/stage-sandbox-media.js", () => ({
+  stageSandboxMedia: vi.fn(
+    async (params: { ctx: { MediaPaths?: string[]; MediaPath?: string } }) => {
+      if (mockState.stageSandboxMediaError) {
+        throw mockState.stageSandboxMediaError;
+      }
+      const staged = new Map<string, string>();
+      const originalPaths = params.ctx.MediaPaths ?? [];
+      if (mockState.stagedRelativePaths) {
+        const mapping = mockState.stagedRelativePaths;
+        params.ctx.MediaPaths = [...mapping];
+        params.ctx.MediaPath = mapping[0];
+        for (let i = 0; i < mapping.length; i += 1) {
+          const source = originalPaths[i];
+          const dest = mapping[i];
+          if (source && dest) {
+            staged.set(source, dest);
+          }
+        }
+      }
+      if (mockState.unstagedSources) {
+        for (const source of mockState.unstagedSources) {
+          staged.delete(source);
+        }
+      }
+      return { staged };
+    },
+  ),
+}));
+
 vi.mock("../../media/store.js", async () => {
   const original =
     await vi.importActual<typeof import("../../media/store.js")>("../../media/store.js");
   return {
     ...original,
+    deleteMediaBuffer: vi.fn(async (id: string, subdir?: string) => {
+      mockState.deleteMediaBufferCalls.push({ id, subdir });
+    }),
     saveMediaBuffer: vi.fn(async (buffer: Buffer, contentType?: string, subdir?: string) => {
       mockState.activeSaveMediaCalls += 1;
       mockState.maxActiveSaveMediaCalls = Math.max(
@@ -257,6 +323,7 @@ function createTranscriptFixture(prefix: string) {
     "utf-8",
   );
   mockState.transcriptPath = transcriptPath;
+  return dir;
 }
 
 function extractFirstTextBlock(payload: unknown): string | undefined {
@@ -450,6 +517,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.maxActiveSaveMediaCalls = 0;
     bindingMocks.resolveByConversation.mockReset();
     bindingMocks.resolveByConversation.mockReturnValue(null);
+    mockState.sandboxWorkspace = null;
+    mockState.stageSandboxMediaError = null;
+    mockState.stagedRelativePaths = null;
+    mockState.unstagedSources = null;
+    mockState.deleteMediaBufferCalls = [];
   });
 
   it("registers tool-event recipients for clients advertising tool-events capability", async () => {
@@ -577,6 +649,121 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         },
       });
     });
+  });
+
+  it("persists auto-TTS final media as audio-only so webchat does not duplicate assistant text", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-tts-final-");
+    const audioPath = path.join(transcriptDir, "tts.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: {
+          text: "This text is already in the model transcript.",
+          spokenText: "This text is already in the model transcript.",
+          mediaUrl: audioPath,
+          mediaUrls: [audioPath],
+          trustedLocalMedia: true,
+          audioAsVoice: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-tts",
+      expectBroadcast: false,
+      waitFor: "dedupe",
+    });
+
+    const assistantUpdates = mockState.emittedTranscriptUpdates.filter(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    );
+    expect(assistantUpdates).toHaveLength(1);
+    expect(assistantUpdates[0]).toMatchObject({
+      message: {
+        role: "assistant",
+        idempotencyKey: "idem-agent-tts:assistant-media",
+        content: [
+          { type: "text", text: "Audio reply" },
+          {
+            type: "audio",
+            source: {
+              type: "base64",
+              media_type: "audio/mpeg",
+            },
+          },
+        ],
+      },
+    });
+    expect(JSON.stringify(assistantUpdates[0]?.message)).not.toContain(
+      "This text is already in the model transcript.",
+    );
+  });
+
+  it("keeps visible text on non-agent TTS final media because no model transcript exists", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-command-tts-final-");
+    const audioPath = path.join(transcriptDir, "tts.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.finalPayload = {
+      text: "Command result with TTS.",
+      spokenText: "Command result with TTS.",
+      mediaUrl: audioPath,
+      mediaUrls: [audioPath],
+      trustedLocalMedia: true,
+      audioAsVoice: true,
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-command-tts",
+    });
+
+    expect(payload?.message).toMatchObject({
+      role: "assistant",
+      content: [
+        { type: "text", text: "Command result with TTS." },
+        {
+          type: "audio",
+          source: {
+            type: "base64",
+            media_type: "audio/mpeg",
+          },
+        },
+      ],
+    });
+    const assistantUpdates = mockState.emittedTranscriptUpdates.filter(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    );
+    expect(assistantUpdates).toHaveLength(1);
+    expect(JSON.stringify(assistantUpdates[0]?.message)).toContain("Command result with TTS.");
   });
 
   it("renders image reply payloads as assistant image content instead of MEDIA text", async () => {
@@ -1835,10 +2022,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           }
         | undefined;
       expect(mockState.lastDispatchImages).toBeUndefined();
-      expect(mockState.lastDispatchImageOrder).toEqual(["offloaded"]);
-      expect(mockState.lastDispatchCtx?.Body).toMatch(
-        /^summarize this\n\[media attached: media:\/\/inbound\//,
-      );
+      expect(mockState.lastDispatchImageOrder).toBeUndefined();
+      expect(mockState.lastDispatchCtx?.Body).toBe("summarize this");
       expect(mockState.savedMediaCalls).toEqual([
         expect.objectContaining({
           contentType: "application/pdf",
@@ -1846,7 +2031,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           size: expect.any(Number),
         }),
       ]);
-      expect(message?.content).toMatch(/^summarize this\n\[media attached: media:\/\/inbound\//);
+      expect(message?.content).toBe("summarize this");
       expect(message?.MediaPath).toBe("/tmp/chat-send-brief.pdf");
       expect(message?.MediaPaths).toEqual(["/tmp/chat-send-brief.pdf"]);
       expect(message?.MediaType).toBe("application/pdf");
@@ -2172,7 +2357,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(JSON.stringify(transcriptUpdate)).not.toContain("[[audio_as_voice]]");
   });
 
-  it("offloads image attachments for text-only session models", async () => {
+  it("routes text-only image offloads into media-understanding fields", async () => {
     createTranscriptFixture("openclaw-chat-send-text-only-attachments-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
@@ -2205,13 +2390,66 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         ],
       },
       expectBroadcast: false,
+      waitFor: "none",
     });
 
     expect(mockState.lastDispatchImages).toBeUndefined();
-    expect(mockState.lastDispatchImageOrder).toEqual(["offloaded"]);
-    expect(mockState.lastDispatchCtx?.Body).toMatch(
-      /^describe image\n\[media attached: media:\/\/inbound\//,
-    );
+    expect(mockState.lastDispatchImageOrder).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.Body).toBe("describe image");
+    expect(mockState.lastDispatchCtx?.Body).not.toContain("media://");
+    expect(mockState.lastDispatchCtx?.MediaPath).toBe("/tmp/1.png");
+    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual(["/tmp/1.png"]);
+    expect(mockState.lastDispatchCtx?.MediaType).toBe("image/png");
+    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["image/png"]);
+    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+    expect(mockState.savedMediaCalls).toEqual([
+      expect.objectContaining({ contentType: "image/png", subdir: "inbound" }),
+    ]);
+  });
+
+  it("keeps image attachments inline for configured custom vision models", async () => {
+    createTranscriptFixture("openclaw-chat-send-configured-custom-vision-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "modelscope",
+      model: "Qwen/Qwen3.5-35B-A3B",
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "modelscope",
+        id: "qwen/qwen3.5-35b-a3b",
+        name: "Qwen3.5 35B",
+        input: ["text", "image"],
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-configured-custom-vision",
+      message: "describe image",
+      requestParams: {
+        attachments: [
+          {
+            mimeType: "image/png",
+            content:
+              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+          },
+        ],
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchImages).toEqual([
+      expect.objectContaining({
+        mimeType: "image/png",
+        data: expect.any(String),
+      }),
+    ]);
+    expect(mockState.lastDispatchImageOrder).toEqual(["inline"]);
+    expect(mockState.lastDispatchCtx?.Body).toBe("describe image");
     expect(mockState.savedMediaCalls).toEqual([
       expect.objectContaining({ contentType: "image/png", subdir: "inbound" }),
     ]);
@@ -2319,16 +2557,306 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         ],
       },
       expectBroadcast: false,
+      waitFor: "none",
     });
 
     expect(mockState.lastDispatchImages).toBeUndefined();
-    expect(mockState.lastDispatchImageOrder).toEqual(["offloaded"]);
-    expect(mockState.lastDispatchCtx?.Body).toMatch(
-      /^describe image\n\[media attached: media:\/\/inbound\//,
-    );
+    expect(mockState.lastDispatchImageOrder).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.Body).toBe("describe image");
+    expect(mockState.lastDispatchCtx?.Body).not.toContain("media://");
+    expect(mockState.lastDispatchCtx?.MediaPath).toBe("/tmp/1.png");
+    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual(["/tmp/1.png"]);
+    expect(mockState.lastDispatchCtx?.MediaType).toBe("image/png");
+    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["image/png"]);
+    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
     expect(mockState.savedMediaCalls).toEqual([
       expect.objectContaining({ contentType: "image/png", subdir: "inbound" }),
     ]);
+  });
+
+  it("routes non-image offloaded refs into ctx.MediaPaths + MediaTypes for chat.send", async () => {
+    createTranscriptFixture("openclaw-chat-send-non-image-ctx-media-paths-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "test-provider",
+      model: "vision-model",
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "vision-model",
+        name: "Vision model",
+        input: ["text", "image"],
+      },
+    ];
+    mockState.savedMediaResults = [
+      { path: "/home/user/.openclaw/media/inbound/report.pdf", contentType: "application/pdf" },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+    const pdf = Buffer.from("%PDF-1.4\n%µ¶\n1 0 obj\n<<>>\nendobj\n").toString("base64");
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-non-image-ctx-media",
+      message: "read this",
+      requestParams: {
+        attachments: [
+          {
+            type: "file",
+            mimeType: "application/pdf",
+            fileName: "report.pdf",
+            content: pdf,
+          },
+        ],
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([
+      "/home/user/.openclaw/media/inbound/report.pdf",
+    ]);
+    expect(mockState.lastDispatchCtx?.MediaPath).toBe(
+      "/home/user/.openclaw/media/inbound/report.pdf",
+    );
+    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["application/pdf"]);
+    expect(mockState.lastDispatchCtx?.MediaType).toBe("application/pdf");
+    // Non-image offloads MUST NOT inject a media://URI into the prompt body —
+    // they ride through ctx.MediaPaths so buildInboundMediaNote prepends the
+    // real path, avoiding duplicate media markers.
+    expect(mockState.lastDispatchCtx?.Body).not.toContain("media://");
+    expect(mockState.lastDispatchCtx?.BodyForAgent).not.toContain("media://");
+    expect(mockState.lastDispatchImages).toBeUndefined();
+    // Marker replaces the implicit "relative-path no-op" coupling in
+    // get-reply.ts with an explicit skip contract.
+    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+  });
+
+  it("preserves sandbox-relative MediaPaths and stores workspace context for media-understanding", async () => {
+    createTranscriptFixture("openclaw-chat-send-non-image-absolutize-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "test-provider",
+      model: "vision-model",
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "vision-model",
+        name: "Vision model",
+        input: ["text", "image"],
+      },
+    ];
+    mockState.savedMediaResults = [
+      { path: "/home/user/.openclaw/media/inbound/report.pdf", contentType: "application/pdf" },
+    ];
+    mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
+    mockState.stagedRelativePaths = ["media/inbound/report.pdf"];
+    const respond = vi.fn();
+    const context = createChatContext();
+    const pdf = Buffer.from("%PDF-1.4\n%µ¶\n1 0 obj\n<<>>\nendobj\n").toString("base64");
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-non-image-absolutize",
+      message: "read this",
+      requestParams: {
+        attachments: [
+          {
+            type: "file",
+            mimeType: "application/pdf",
+            fileName: "report.pdf",
+            content: pdf,
+          },
+        ],
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual(["media/inbound/report.pdf"]);
+    expect(mockState.lastDispatchCtx?.MediaPath).toBe("media/inbound/report.pdf");
+    expect(mockState.lastDispatchCtx?.MediaWorkspaceDir).toBe("/sandbox/workspace");
+    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+  });
+
+  it("wraps stageSandboxMedia infrastructure errors as 5xx UNAVAILABLE and cleans up media-store files", async () => {
+    createTranscriptFixture("openclaw-chat-send-stage-unavailable-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "test-provider",
+      model: "vision-model",
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "vision-model",
+        name: "Vision model",
+        input: ["text", "image"],
+      },
+    ];
+    mockState.savedMediaResults = [
+      { path: "/home/user/.openclaw/media/inbound/report.pdf", contentType: "application/pdf" },
+    ];
+    mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
+    mockState.stageSandboxMediaError = Object.assign(new Error("ENOSPC: no space left on device"), {
+      code: "ENOSPC",
+    });
+    const respond = vi.fn();
+    const context = createChatContext();
+    const pdf = Buffer.from("%PDF-1.4\n%µ¶\n1 0 obj\n<<>>\nendobj\n").toString("base64");
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-stage-unavailable",
+      message: "read this",
+      requestParams: {
+        attachments: [
+          {
+            type: "file",
+            mimeType: "application/pdf",
+            fileName: "report.pdf",
+            content: pdf,
+          },
+        ],
+      },
+      expectBroadcast: false,
+      waitFor: "none",
+    });
+
+    // Plain Error from stageSandboxMedia would be misclassified as INVALID_REQUEST
+    // by the outer catch. Wrapping it in MediaOffloadError routes it to UNAVAILABLE
+    // so the client retries instead of treating it as a bad request.
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+    expect(respond).toHaveBeenCalledTimes(1);
+    const [ok, payload, error] = respond.mock.calls[0] ?? [];
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect(error?.code).toBe(ErrorCodes.UNAVAILABLE);
+    expect(error?.message ?? String(error)).toMatch(/ENOSPC|non-image attachments/i);
+    // Orphaned media-store files are cleaned up before the 5xx surfaces.
+    expect(mockState.deleteMediaBufferCalls).toEqual([{ id: "saved-media", subdir: "inbound" }]);
+  });
+
+  it("surfaces partial non-image staging failures as 5xx UNAVAILABLE", async () => {
+    // Regression: stageSandboxMedia keeps unstaged entries as their original
+    // absolute path, so a simple `stagedPaths.length === nonImage.length`
+    // check could not detect when one of the files silently fell out (e.g. a
+    // file between the RPC cap and the staging cap). Prestage must compare
+    // the returned `staged` map against the input refs.
+    createTranscriptFixture("openclaw-chat-send-partial-stage-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "test-provider",
+      model: "vision-model",
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "vision-model",
+        name: "Vision model",
+        input: ["text", "image"],
+      },
+    ];
+    mockState.savedMediaResults = [
+      { path: "/home/user/.openclaw/media/inbound/report.pdf", contentType: "application/pdf" },
+      { path: "/home/user/.openclaw/media/inbound/oversize.pdf", contentType: "application/pdf" },
+    ];
+    mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
+    mockState.stagedRelativePaths = ["media/inbound/report.pdf", "media/inbound/oversize.pdf"];
+    mockState.unstagedSources = ["/home/user/.openclaw/media/inbound/oversize.pdf"];
+    const respond = vi.fn();
+    const context = createChatContext();
+    const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-partial-stage",
+      message: "read these",
+      requestParams: {
+        attachments: [
+          { type: "file", mimeType: "application/pdf", fileName: "report.pdf", content: pdf },
+          { type: "file", mimeType: "application/pdf", fileName: "oversize.pdf", content: pdf },
+        ],
+      },
+      expectBroadcast: false,
+      waitFor: "none",
+    });
+
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+    expect(respond).toHaveBeenCalledTimes(1);
+    const [ok, payload, error] = respond.mock.calls[0] ?? [];
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect(error?.code).toBe(ErrorCodes.UNAVAILABLE);
+    expect(error?.message ?? String(error)).toMatch(/staging incomplete/i);
+    // Both media-store entries are cleaned up before the 5xx surfaces.
+    expect(mockState.deleteMediaBufferCalls.map((c) => c.id).toSorted()).toEqual([
+      "saved-media",
+      "saved-media",
+    ]);
+  });
+
+  it("rejects sandbox-oversized non-image attachments as 4xx before staging", async () => {
+    // Regression: resolveChatAttachmentMaxBytes defaults to 20MB, but
+    // stageSandboxMedia caps each file at STAGED_MEDIA_MAX_BYTES (5MB) and
+    // silently drops oversize files. Without a pre-check, a sandbox session
+    // accepting a 5-20MB non-image would fail staging and surface as a
+    // retryable 5xx UNAVAILABLE, misleading clients into retrying a
+    // deterministically broken request.
+    createTranscriptFixture("openclaw-chat-send-sandbox-oversize-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "test-provider",
+      model: "vision-model",
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "vision-model",
+        name: "Vision model",
+        input: ["text", "image"],
+      },
+    ];
+    mockState.savedMediaResults = [
+      { path: "/home/user/.openclaw/media/inbound/huge.pdf", contentType: "application/pdf" },
+    ];
+    mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
+    const respond = vi.fn();
+    const context = createChatContext();
+    // 6MB buffer — above STAGED_MEDIA_MAX_BYTES (5MB) but below the 20MB parse cap.
+    const oversized = Buffer.alloc(6 * 1024 * 1024);
+    oversized.set(Buffer.from("%PDF-1.4\n"), 0);
+    const pdf = oversized.toString("base64");
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-sandbox-oversize",
+      message: "read this",
+      requestParams: {
+        attachments: [
+          { type: "file", mimeType: "application/pdf", fileName: "huge.pdf", content: pdf },
+        ],
+      },
+      expectBroadcast: false,
+      waitFor: "none",
+    });
+
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+    expect(respond).toHaveBeenCalledTimes(1);
+    const [ok, payload, error] = respond.mock.calls[0] ?? [];
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    // 4xx, not 5xx — retrying a file that exceeds the staging cap cannot
+    // succeed, so the failure must be surfaced as a client-side rejection.
+    expect(error?.code).toBe(ErrorCodes.INVALID_REQUEST);
+    expect(error?.message ?? String(error)).toMatch(/sandbox staging limit/i);
+    // Orphaned media-store entries are cleaned up before the 4xx surfaces.
+    expect(mockState.deleteMediaBufferCalls).toEqual([{ id: "saved-media", subdir: "inbound" }]);
   });
 
   it("passes imageOrder for mixed inline and offloaded chat.send attachments", async () => {

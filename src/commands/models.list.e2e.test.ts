@@ -22,9 +22,13 @@ const loadProviderCatalogModelsForList = vi.fn<() => Promise<Array<Record<string
   async () => [],
 );
 const loadStaticManifestCatalogRowsForList = vi.fn<() => Array<Record<string, unknown>>>(() => []);
+const loadSupplementalManifestCatalogRowsForList = vi.fn<() => Array<Record<string, unknown>>>(
+  () => [],
+);
 const loadProviderIndexCatalogRowsForList = vi.fn<() => Array<Record<string, unknown>>>(() => []);
 const hasProviderStaticCatalogForFilter = vi.fn().mockResolvedValue(false);
 const shouldSuppressBuiltInModel = vi.fn().mockReturnValue(false);
+const shouldSuppressBuiltInModelFromManifest = vi.fn().mockReturnValue(false);
 const modelRegistryState = {
   models: [] as Array<Record<string, unknown>>,
   available: [] as Array<Record<string, unknown>>,
@@ -195,6 +199,7 @@ vi.mock("./models/list.provider-catalog.js", async (importOriginal) => {
 
 vi.mock("./models/list.manifest-catalog.js", () => ({
   loadStaticManifestCatalogRowsForList,
+  loadSupplementalManifestCatalogRowsForList,
 }));
 
 vi.mock("./models/list.provider-index-catalog.js", () => ({
@@ -203,6 +208,7 @@ vi.mock("./models/list.provider-index-catalog.js", () => ({
 
 vi.mock("../agents/model-suppression.js", () => ({
   shouldSuppressBuiltInModel,
+  shouldSuppressBuiltInModelFromManifest,
 }));
 
 function makeRuntime() {
@@ -252,6 +258,8 @@ beforeEach(() => {
   loadProviderCatalogModelsForList.mockResolvedValue([]);
   loadStaticManifestCatalogRowsForList.mockReset();
   loadStaticManifestCatalogRowsForList.mockReturnValue([]);
+  loadSupplementalManifestCatalogRowsForList.mockReset();
+  loadSupplementalManifestCatalogRowsForList.mockReturnValue([]);
   loadProviderIndexCatalogRowsForList.mockReset();
   loadProviderIndexCatalogRowsForList.mockReturnValue([]);
   hasProviderStaticCatalogForFilter.mockReset();
@@ -563,13 +571,13 @@ describe("models list/status", () => {
   });
 
   it("filters stale spark rows from models list and registry views", async () => {
-    shouldSuppressBuiltInModel.mockImplementation(
-      ({ provider, id }: { provider?: string | null; id?: string | null }) =>
-        id === "gpt-5.3-codex-spark" &&
-        (provider === "openai" ||
-          provider === "azure-openai-responses" ||
-          provider === "openai-codex"),
-    );
+    const suppressSpark = ({ provider, id }: { provider?: string | null; id?: string | null }) =>
+      id === "gpt-5.3-codex-spark" &&
+      (provider === "openai" ||
+        provider === "azure-openai-responses" ||
+        provider === "openai-codex");
+    shouldSuppressBuiltInModel.mockImplementation(suppressSpark);
+    shouldSuppressBuiltInModelFromManifest.mockImplementation(suppressSpark);
     setDefaultModel("openai/gpt-5.5");
     modelRegistryState.models = [OPENAI_MODEL, OPENAI_SPARK_MODEL, AZURE_OPENAI_SPARK_MODEL];
     modelRegistryState.available = [OPENAI_MODEL, OPENAI_SPARK_MODEL, AZURE_OPENAI_SPARK_MODEL];

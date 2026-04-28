@@ -70,6 +70,20 @@ export interface GatewayPluginRuntime {
       error?: string;
     }>;
   };
+  /**
+   * Config API for reading/writing the framework configuration.
+   *
+   * Used by the interaction handler (config query/update) directly
+   * within the engine layer. Optional because not all runtime
+   * environments provide config write capability.
+   */
+  config?: {
+    current: () => Record<string, unknown>;
+    replaceConfigFile: (params: {
+      nextConfig: unknown;
+      afterWrite: { mode: "auto" };
+    }) => Promise<unknown>;
+  };
 }
 
 // ============ Shared result types ============
@@ -146,17 +160,81 @@ export interface GroupMessageEvent {
   id: string;
   content: string;
   timestamp: string;
-  author: { member_openid: string };
+  author: {
+    member_openid: string;
+    username?: string;
+    /** True when the sender is itself a bot. */
+    bot?: boolean;
+  };
   group_openid: string;
   attachments?: RawMessageAttachment[];
-  message_scene?: { ext?: string[] };
+  /** Optional @mentions list with per-entry is_you / member_openid / nickname. */
+  mentions?: Array<{
+    scope?: "all" | "single";
+    id?: string;
+    user_openid?: string;
+    member_openid?: string;
+    nickname?: string;
+    username?: string;
+    bot?: boolean;
+    /** `true` when this mention targets the bot itself. */
+    is_you?: boolean;
+  }>;
+  message_scene?: { source?: string; ext?: string[] };
   message_type?: number;
   msg_elements?: RawMsgElement[];
 }
 
 // ============ Gateway Context ============
 
-/** Full gateway startup context. Only `runtime` is injected; everything else is imported directly. */
+import type { EngineAdapters } from "../adapter/index.js";
+
+/**
+ * Group-chat behaviour options.
+ *
+ * Grouped under a dedicated sub-object on {@link CoreGatewayContext} so
+ * future additions (admin lookup, proactive push, per-group toggles)
+ * don't keep polluting the top-level context type.
+ */
+export interface GatewayGroupOptions {
+  /**
+   * Whether group-chat gating is enabled. Defaults to `true`; set to
+   * `false` to disable all group processing (e.g. for a DM-only smoke
+   * test). When disabled, the engine does not allocate a history
+   * buffer and does not instantiate the session-store reader.
+   */
+  enabled?: boolean;
+  /**
+   * Whether the framework has text-based control commands enabled. When
+   * `false`, the group gate skips the "unauthorized command" check and
+   * the command-bypass path.
+   */
+  allowTextCommands?: boolean;
+  /**
+   * Optional probe that returns true when `content` is a recognised
+   * control command. Injected to avoid hard-coding a command list in
+   * the engine. When omitted, no message is treated as a control
+   * command and the bypass path never activates.
+   */
+  isControlCommand?: (content: string) => boolean;
+  /**
+   * Platform hook that contributes a channel-level group intro hint
+   * (e.g. "当前群: 开发讨论组"). Invoked per-group when building the
+   * system prompt.
+   */
+  resolveIntroHint?: (params: {
+    cfg: unknown;
+    accountId: string;
+    groupId: string;
+  }) => string | undefined;
+  /**
+   * Session-store reader for the `/activation` command override. When
+   * omitted, the engine loads a default node-based reader lazily.
+   */
+  sessionStoreReader?: import("../group/activation.js").SessionStoreReader;
+}
+
+/** Full gateway startup context. */
 export interface CoreGatewayContext {
   account: GatewayAccount;
   abortSignal: AbortSignal;
@@ -172,4 +250,8 @@ export interface CoreGatewayContext {
   log?: EngineLogger;
   /** PluginRuntime injected by the framework — same object in both versions. */
   runtime: GatewayPluginRuntime;
+  /** Group-chat tuning options. */
+  group?: GatewayGroupOptions;
+  /** Adapter ports — delegates audio, history, mention gating, commands to bridge implementations. */
+  adapters: EngineAdapters;
 }

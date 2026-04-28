@@ -20,6 +20,7 @@ const {
   executePreparedCliRunMock,
   prepareCliRunContextMock,
   closeClaudeLiveSessionForContextMock,
+  closeMcpLoopbackServerMock,
 } = vi.hoisted(() => ({
   hasHooksMock: vi.fn<(hookName: string) => boolean>(() => false),
   runBeforeAgentReplyMock: vi.fn<(event: unknown, ctx: unknown) => Promise<BeforeAgentReplyResult>>(
@@ -30,6 +31,7 @@ const {
   })),
   prepareCliRunContextMock: vi.fn(),
   closeClaudeLiveSessionForContextMock: vi.fn(),
+  closeMcpLoopbackServerMock: vi.fn(),
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -49,6 +51,10 @@ vi.mock("./cli-runner/execute.runtime.js", () => ({
 
 vi.mock("./cli-runner/claude-live-session.js", () => ({
   closeClaudeLiveSessionForContext: closeClaudeLiveSessionForContextMock,
+}));
+
+vi.mock("../gateway/mcp-http.js", () => ({
+  closeMcpLoopbackServer: closeMcpLoopbackServerMock,
 }));
 
 const baseRunParams = {
@@ -93,6 +99,7 @@ beforeEach(() => {
     makeStubContext(params as typeof baseRunParams & { trigger?: string }),
   );
   closeClaudeLiveSessionForContextMock.mockReset();
+  closeMcpLoopbackServerMock.mockReset();
 });
 
 afterEach(() => {
@@ -184,5 +191,15 @@ describe("runCliAgent cron before_agent_reply seam", () => {
     expect(closeClaudeLiveSessionForContextMock).toHaveBeenCalledWith(
       await prepareCliRunContextMock.mock.results[0].value,
     );
+  });
+
+  it("can close temporary bundle MCP loopback resources after a run", async () => {
+    const { runCliAgent } = await import("./cli-runner.js");
+    executePreparedCliRunMock.mockResolvedValue({ text: "real reply" });
+
+    await runCliAgent({ ...baseRunParams, cleanupBundleMcpOnRunEnd: true });
+
+    expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
+    expect(closeMcpLoopbackServerMock).toHaveBeenCalledTimes(1);
   });
 });

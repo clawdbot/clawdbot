@@ -1,12 +1,11 @@
 import { resetModelCatalogCache } from "../agents/model-catalog.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/pi-bundle-mcp-tools.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/run-state.js";
+import { abortEmbeddedPiRun } from "../agents/pi-embedded-runner/runs.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
-import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
@@ -60,6 +59,23 @@ type GatewayReloadLog = {
 const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
 const CHANNEL_RELOAD_DEFERRAL_POLL_MS = 500;
 const CHANNEL_RELOAD_STILL_PENDING_WARN_MS = 30_000;
+
+function abortActiveAgentRunsAfterConfigRecovery(params: {
+  reason: string;
+  logReload: GatewayReloadLog;
+}) {
+  const aborted = abortEmbeddedPiRun(undefined, { mode: "all" });
+  if (!aborted) {
+    return;
+  }
+  params.logReload.warn(
+    `config recovery aborted active agent run(s) after reload-${params.reason}`,
+  );
+}
+
+export const __testing = {
+  abortActiveAgentRunsAfterConfigRecovery,
+};
 
 async function disposeMcpRuntimesWithTimeout(params: {
   dispose: () => Promise<void>;
@@ -269,6 +285,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     if (plan.restartGmailWatcher) {
+      const [{ stopGmailWatcher }, { startGmailWatcherWithLogs }] = await Promise.all([
+        import("../hooks/gmail-watcher.js"),
+        import("../hooks/gmail-watcher-lifecycle.js"),
+      ]);
       await stopGmailWatcher().catch((err) => {
         params.logHooks.warn(`gmail watcher stop failed during reload: ${String(err)}`);
       });
@@ -416,6 +436,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
       await params.recoverSnapshot({ snapshot, reason: `reload-${reason}` }),
     promoteSnapshot: async (snapshot, _reason) => await params.promoteSnapshot(snapshot),
     onRecovered: ({ reason, snapshot, recoveredSnapshot }) => {
+      abortActiveAgentRunsAfterConfigRecovery({ reason, logReload: params.logReload });
       enqueueConfigRecoveryNotice({
         cfg: recoveredSnapshot.config,
         phase: "reload",

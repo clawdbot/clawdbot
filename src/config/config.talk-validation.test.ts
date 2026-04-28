@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { clearConfigCache, clearRuntimeConfigSnapshot, loadConfig } from "./config.js";
+import { getRuntimeConfig, clearConfigCache, clearRuntimeConfigSnapshot } from "./config.js";
 import { withTempHomeConfig } from "./test-helpers.js";
 
 describe("talk config validation fail-closed behavior", () => {
@@ -15,7 +15,7 @@ describe("talk config validation fail-closed behavior", () => {
 
       let thrown: unknown;
       try {
-        loadConfig();
+        getRuntimeConfig();
       } catch (error) {
         thrown = error;
       }

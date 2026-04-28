@@ -26,10 +26,6 @@ const log = createSubsystemLogger("plugins");
 
 const CAPABILITY_VITEST_SHIM_ALIASES = [
   {
-    subpath: "llm-task",
-    target: new URL("./capability-runtime-vitest-shims/llm-task.ts", import.meta.url),
-  },
-  {
     subpath: "config-runtime",
     target: new URL("./capability-runtime-vitest-shims/config-runtime.ts", import.meta.url),
   },

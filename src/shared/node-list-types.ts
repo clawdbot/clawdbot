@@ -17,6 +17,8 @@ export type NodeListNode = {
   paired?: boolean;
   connected?: boolean;
   connectedAtMs?: number;
+  lastSeenAtMs?: number;
+  lastSeenReason?: string;
   approvedAtMs?: number;
 };
 
@@ -47,6 +49,8 @@ export type PairedNode = {
   createdAtMs?: number;
   approvedAtMs?: number;
   lastConnectedAtMs?: number;
+  lastSeenAtMs?: number;
+  lastSeenReason?: string;
 };
 
 export type PairingList = {

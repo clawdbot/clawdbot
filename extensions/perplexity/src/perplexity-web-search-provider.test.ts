@@ -1,4 +1,4 @@
-import { withEnv } from "openclaw/plugin-sdk/testing";
+import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { __testing } from "./perplexity-web-search-provider.runtime.js";
 

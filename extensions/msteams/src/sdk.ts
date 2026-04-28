@@ -659,9 +659,11 @@ const BOT_FRAMEWORK_ISSUERS: ReadonlyArray<{
 ];
 
 type BotFrameworkJwtDeps = {
-  jwt: typeof import("jsonwebtoken");
+  jwt: Pick<typeof import("jsonwebtoken"), "decode" | "verify">;
   JwksClient: typeof import("jwks-rsa").JwksClient;
 };
+type JsonwebtokenRuntime = BotFrameworkJwtDeps["jwt"];
+type JwksClientCtor = BotFrameworkJwtDeps["JwksClient"];
 
 const BOT_FRAMEWORK_GLOBAL_AUDIENCE = "https://api.botframework.com";
 
@@ -713,9 +715,55 @@ function hasExpectedBotIdentity(payload: unknown, expectedAppId: string): boolea
 
 let botFrameworkJwtDepsPromise: Promise<BotFrameworkJwtDeps> | null = null;
 
+function hasDefaultExport(value: unknown): value is { default?: unknown } {
+  return !!value && typeof value === "object" && "default" in value;
+}
+
+function isJsonwebtokenRuntime(value: unknown): value is JsonwebtokenRuntime {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    typeof (value as { decode?: unknown }).decode === "function" &&
+    typeof (value as { verify?: unknown }).verify === "function"
+  );
+}
+
+function loadJsonwebtokenRuntime(jwtModule: unknown): JsonwebtokenRuntime {
+  const jwt = hasDefaultExport(jwtModule) ? (jwtModule.default ?? jwtModule) : jwtModule;
+  if (!isJsonwebtokenRuntime(jwt)) {
+    throw new Error("jsonwebtoken did not export decode/verify");
+  }
+  return jwt;
+}
+
+function isJwksClientRuntime(value: unknown): value is JwksClientCtor {
+  return typeof value === "function";
+}
+
+function loadJwksClientRuntime(jwksModule: unknown): JwksClientCtor {
+  const direct =
+    jwksModule && typeof jwksModule === "object"
+      ? (jwksModule as { JwksClient?: unknown }).JwksClient
+      : undefined;
+  const fallback =
+    hasDefaultExport(jwksModule) && jwksModule.default && typeof jwksModule.default === "object"
+      ? (jwksModule.default as { JwksClient?: unknown }).JwksClient
+      : undefined;
+  const JwksClient = direct ?? fallback;
+  if (!isJwksClientRuntime(JwksClient)) {
+    throw new Error("jwks-rsa did not export JwksClient");
+  }
+  return JwksClient;
+}
+
 async function loadBotFrameworkJwtDeps(): Promise<BotFrameworkJwtDeps> {
   botFrameworkJwtDepsPromise ??= Promise.all([import("jsonwebtoken"), import("jwks-rsa")]).then(
-    ([jwt, { JwksClient }]) => ({ jwt, JwksClient }),
+    ([jwtModule, jwksModule]) => {
+      return {
+        jwt: loadJsonwebtokenRuntime(jwtModule),
+        JwksClient: loadJwksClientRuntime(jwksModule),
+      };
+    },
   );
   return botFrameworkJwtDepsPromise;
 }

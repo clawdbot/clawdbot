@@ -1,14 +1,15 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import * as configRuntimeModule from "openclaw/plugin-sdk/config-runtime";
 import {
   RequestScopedSubagentRuntimeError,
   SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
 } from "openclaw/plugin-sdk/error-runtime";
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import * as memoryCoreHostRuntimeCoreModule from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import * as runtimeConfigSnapshotModule from "openclaw/plugin-sdk/runtime-config-snapshot";
+import * as sessionStoreRuntimeModule from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveGlobalMap } from "../../../src/shared/global-singleton.js";
 import {
   appendNarrativeEntry,
   buildBackfillDiaryEntry,
@@ -20,6 +21,7 @@ import {
   formatBackfillDiaryDate,
   generateAndAppendDreamNarrative,
   removeBackfillDiaryEntries,
+  runDetachedDreamNarrative,
   type NarrativePhaseData,
   writeBackfillDiaryEntries,
 } from "./dreaming-narrative.js";
@@ -596,6 +598,7 @@ describe("generateAndAppendDreamNarrative", () => {
       },
       nowMs,
       timezone: "UTC",
+      model: "anthropic/claude-sonnet-4-6",
       logger,
     });
 
@@ -606,6 +609,7 @@ describe("generateAndAppendDreamNarrative", () => {
       lane: `dreaming-narrative:${expectedSessionKey}`,
       lightContext: true,
       deliver: false,
+      model: "anthropic/claude-sonnet-4-6",
     });
     expect(subagent.waitForRun).toHaveBeenCalledOnce();
     expect(subagent.deleteSession).toHaveBeenCalledOnce();
@@ -613,6 +617,113 @@ describe("generateAndAppendDreamNarrative", () => {
     const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(content).toContain("The repository whispered of forgotten endpoints.");
     expect(logger.info).toHaveBeenCalled();
+  });
+
+  it("retries with the session default when the configured model cannot start", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = createMockSubagent("The default model carried the diary home.");
+    subagent.run.mockRejectedValueOnce(new Error("model unavailable"));
+    const logger = createMockLogger();
+    const nowMs = Date.parse("2026-04-05T03:00:00Z");
+    const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
+    const expectedSessionKey = `dreaming-narrative-light-${workspaceHash}-${nowMs}`;
+    const retrySessionKey = `${expectedSessionKey}-retry-1`;
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: {
+        phase: "light",
+        snippets: ["API endpoints need authentication"],
+      },
+      nowMs,
+      timezone: "UTC",
+      model: "ollama/missing-model",
+      logger,
+    });
+
+    expect(subagent.run).toHaveBeenCalledTimes(2);
+    expect(subagent.run.mock.calls[0]?.[0]).toMatchObject({
+      sessionKey: expectedSessionKey,
+      model: "ollama/missing-model",
+    });
+    expect(subagent.run.mock.calls[1]?.[0]).toMatchObject({
+      sessionKey: retrySessionKey,
+    });
+    expect(subagent.run.mock.calls[1]?.[0]).not.toHaveProperty("model");
+    expect(subagent.getSessionMessages).toHaveBeenCalledWith({
+      sessionKey: retrySessionKey,
+      limit: 5,
+    });
+    expect(subagent.deleteSession).toHaveBeenCalledOnce();
+    expect(subagent.deleteSession).toHaveBeenCalledWith({ sessionKey: retrySessionKey });
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("session default"));
+  });
+
+  it("retries with the session default when the configured model run ends unavailable", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = createMockSubagent("The default model carried the diary home.");
+    subagent.run
+      .mockResolvedValueOnce({ runId: "run-configured" })
+      .mockResolvedValueOnce({ runId: "run-default" });
+    subagent.waitForRun
+      .mockResolvedValueOnce({ status: "error", error: "unknown model: ollama/missing-model" })
+      .mockResolvedValueOnce({ status: "ok" });
+    const logger = createMockLogger();
+    const nowMs = Date.parse("2026-04-05T03:00:00Z");
+    const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
+    const expectedSessionKey = `dreaming-narrative-rem-${workspaceHash}-${nowMs}`;
+    const retrySessionKey = `${expectedSessionKey}-retry-1`;
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: {
+        phase: "rem",
+        snippets: ["The index remembered a missing provider."],
+      },
+      nowMs,
+      timezone: "UTC",
+      model: "ollama/missing-model",
+      logger,
+    });
+
+    expect(subagent.waitForRun).toHaveBeenCalledTimes(2);
+    expect(subagent.getSessionMessages).toHaveBeenCalledWith({
+      sessionKey: retrySessionKey,
+      limit: 5,
+    });
+    expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
+    expect(subagent.deleteSession.mock.calls[0]?.[0]).toEqual({ sessionKey: expectedSessionKey });
+    expect(subagent.deleteSession.mock.calls[1]?.[0]).toEqual({ sessionKey: retrySessionKey });
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("unknown model"));
+  });
+
+  it("does not hide configured model authorization failures by retrying", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = createMockSubagent("");
+    subagent.run.mockRejectedValue(
+      new Error("provider/model override is not authorized for this plugin subagent run."),
+    );
+    const logger = createMockLogger();
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: {
+        phase: "light",
+        snippets: ["API endpoints need authentication"],
+      },
+      model: "ollama/missing-model",
+      logger,
+    });
+
+    expect(subagent.run).toHaveBeenCalledOnce();
+    expect(subagent.waitForRun).not.toHaveBeenCalled();
+    expect(subagent.deleteSession).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("narrative generation failed"),
+    );
   });
 
   it("skips narrative when no snippets are available", async () => {
@@ -672,7 +783,7 @@ describe("generateAndAppendDreamNarrative", () => {
     });
 
     expect(subagent.waitForRun).toHaveBeenCalledOnce();
-    expect(subagent.waitForRun.mock.calls[0][0]).toMatchObject({ timeoutMs: 15_000 });
+    expect(subagent.waitForRun.mock.calls[0][0]).toMatchObject({ timeoutMs: 60_000 });
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("narrative session cleanup failed for rem phase"),
     );
@@ -719,9 +830,13 @@ describe("generateAndAppendDreamNarrative", () => {
 
     const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(content).toContain("API endpoints need authentication");
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
     expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining(workspaceDir));
-    expect(subagent.deleteSession).toHaveBeenCalledOnce();
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("narrative session cleanup failed"),
+    );
+    expect(subagent.deleteSession).not.toHaveBeenCalled();
   });
 
   it("falls back when the request-scoped runtime error is detected by stable code", async () => {
@@ -746,6 +861,9 @@ describe("generateAndAppendDreamNarrative", () => {
 
     const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(content).toContain("A durable candidate surfaced.");
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
+    expect(subagent.deleteSession).not.toHaveBeenCalled();
   });
 
   it("does not fall back for non-Error objects that only spoof the stable code", async () => {
@@ -818,14 +936,16 @@ describe("generateAndAppendDreamNarrative", () => {
     await fs.utimes(orphanPath, oldDate, oldDate);
     await fs.utimes(livePath, oldDate, oldDate);
 
-    vi.spyOn(configRuntimeModule, "loadConfig").mockReturnValue({ session: {} } as never);
-    vi.spyOn(configRuntimeModule, "resolveStorePath").mockImplementation(((
+    vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfig").mockReturnValue({
+      session: {},
+    } as never);
+    vi.spyOn(sessionStoreRuntimeModule, "resolveStorePath").mockImplementation(((
       _store: string | undefined,
       { agentId }: { agentId: string },
     ) => {
       expect(agentId).toBe("main");
       return storePath;
-    }) as typeof configRuntimeModule.resolveStorePath);
+    }) as typeof sessionStoreRuntimeModule.resolveStorePath);
     vi.spyOn(memoryCoreHostRuntimeCoreModule, "resolveStateDir").mockReturnValue(stateDir);
 
     const subagent = createMockSubagent("The repository whispered of forgotten endpoints.");
@@ -882,5 +1002,119 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(secondSessionKey).toContain("dreaming-narrative-light-");
     expect(subagent.deleteSession.mock.calls[0]?.[0]?.sessionKey).toBe(firstSessionKey);
     expect(subagent.deleteSession.mock.calls[1]?.[0]?.sessionKey).toBe(secondSessionKey);
+  });
+});
+
+describe("runDetachedDreamNarrative", () => {
+  type Deferred<T> = { promise: Promise<T>; resolve: (v: T) => void };
+  function deferred<T>(): Deferred<T> {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  function createBlockingSubagent() {
+    const runDeferreds: Array<Deferred<{ runId: string }>> = [];
+    const subagent = {
+      run: vi.fn(() => {
+        const d = deferred<{ runId: string }>();
+        runDeferreds.push(d);
+        return d.promise;
+      }),
+      // Resolve the rest of the pipeline as a no-op so a single resolve()
+      // on a deferred unblocks the slot for the queued task.
+      waitForRun: vi.fn().mockResolvedValue({ status: "timeout" }),
+      getSessionMessages: vi.fn().mockResolvedValue({ messages: [] }),
+      deleteSession: vi.fn().mockResolvedValue(undefined),
+    };
+    return { subagent, runDeferreds };
+  }
+
+  function createMockLogger() {
+    return { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  }
+
+  async function drainMicrotasks(rounds = 30): Promise<void> {
+    for (let i = 0; i < rounds; i += 1) {
+      await Promise.resolve();
+    }
+  }
+
+  it("caps the number of in-flight detached narratives at 3", async () => {
+    const { subagent, runDeferreds } = createBlockingSubagent();
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-detach-");
+    const logger = createMockLogger();
+
+    for (let i = 0; i < 5; i += 1) {
+      runDetachedDreamNarrative({
+        subagent,
+        workspaceDir,
+        data: { phase: "light", snippets: [`fragment-${i}`] },
+        nowMs: Date.parse("2026-04-28T03:00:00Z"),
+        logger,
+      });
+    }
+
+    await drainMicrotasks();
+
+    // Only the first 3 should have reached subagent.run; the rest are queued.
+    expect(subagent.run).toHaveBeenCalledTimes(3);
+
+    // Drain the rest so module-level concurrency state does not leak into
+    // subsequent tests. The mock subagent creates a new deferred every time
+    // queued tasks acquire a slot, so loop until no new deferreds appear.
+    for (let iter = 0; iter < 10; iter += 1) {
+      const before = runDeferreds.length;
+      for (const d of runDeferreds) {
+        d.resolve({ runId: "drain" });
+      }
+      if (before >= 5) {
+        break;
+      }
+      await vi.waitFor(() => {
+        expect(runDeferreds.length).toBeGreaterThan(before);
+      });
+    }
+    for (const d of runDeferreds) {
+      d.resolve({ runId: "drain" });
+    }
+    await vi.waitFor(() => {
+      expect(subagent.deleteSession).toHaveBeenCalledTimes(5);
+    });
+    expect(subagent.run).toHaveBeenCalledTimes(5);
+    expect(subagent.waitForRun).toHaveBeenCalledTimes(5);
+  });
+
+  it("swallows underlying narrative errors instead of leaving an unhandled rejection", async () => {
+    const error = new Error("boom");
+    const subagent = {
+      run: vi.fn().mockRejectedValue(error),
+      waitForRun: vi.fn().mockResolvedValue({ status: "ok" }),
+      getSessionMessages: vi.fn().mockResolvedValue({ messages: [] }),
+      deleteSession: vi.fn().mockResolvedValue(undefined),
+    };
+    const logger = createMockLogger();
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-detach-");
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+
+    try {
+      runDetachedDreamNarrative({
+        subagent,
+        workspaceDir,
+        data: { phase: "light", snippets: ["fragment"] },
+        nowMs: Date.parse("2026-04-28T03:00:00Z"),
+        logger,
+      });
+
+      await drainMicrotasks();
+
+      expect(subagent.run).toHaveBeenCalledOnce();
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
   });
 });

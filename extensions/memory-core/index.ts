@@ -40,21 +40,27 @@ export default definePluginEntry({
     });
 
     api.registerTool(
-      (ctx) =>
-        createMemorySearchTool({
-          config: ctx.config,
+      (ctx) => {
+        const getConfig = () => ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
+        return createMemorySearchTool({
+          config: getConfig(),
+          getConfig,
           agentSessionKey: ctx.sessionKey,
           sandboxed: ctx.sandboxed,
-        }),
+        });
+      },
       { names: ["memory_search"] },
     );
 
     api.registerTool(
-      (ctx) =>
-        createMemoryGetTool({
-          config: ctx.config,
+      (ctx) => {
+        const getConfig = () => ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
+        return createMemoryGetTool({
+          config: getConfig(),
+          getConfig,
           agentSessionKey: ctx.sessionKey,
-        }),
+        });
+      },
       { names: ["memory_get"] },
     );
 

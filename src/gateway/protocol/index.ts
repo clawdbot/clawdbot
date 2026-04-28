@@ -52,6 +52,16 @@ import {
   TalkConfigParamsSchema,
   type TalkConfigResult,
   TalkConfigResultSchema,
+  type TalkRealtimeRelayAudioParams,
+  TalkRealtimeRelayAudioParamsSchema,
+  type TalkRealtimeRelayMarkParams,
+  TalkRealtimeRelayMarkParamsSchema,
+  type TalkRealtimeRelayOkResult,
+  TalkRealtimeRelayOkResultSchema,
+  type TalkRealtimeRelayStopParams,
+  TalkRealtimeRelayStopParamsSchema,
+  type TalkRealtimeRelayToolResultParams,
+  TalkRealtimeRelayToolResultParamsSchema,
   type TalkRealtimeSessionParams,
   TalkRealtimeSessionParamsSchema,
   type TalkRealtimeSessionResult,
@@ -93,6 +103,8 @@ import {
   ConfigSchemaResponseSchema,
   type ConfigSetParams,
   ConfigSetParamsSchema,
+  type UpdateStatusParams,
+  UpdateStatusParamsSchema,
   type ConnectParams,
   ConnectParamsSchema,
   type CronAddParams,
@@ -143,6 +155,8 @@ import {
   PluginApprovalRequestParamsSchema,
   type PluginApprovalResolveParams,
   PluginApprovalResolveParamsSchema,
+  type PluginsUiDescriptorsParams,
+  PluginsUiDescriptorsParamsSchema,
   ErrorCodes,
   type ErrorShape,
   ErrorShapeSchema,
@@ -163,6 +177,8 @@ import {
   NodeDescribeParamsSchema,
   type NodeEventParams,
   NodeEventParamsSchema,
+  type NodeEventResult,
+  NodeEventResultSchema,
   type NodePendingDrainParams,
   NodePendingDrainParamsSchema,
   type NodePendingDrainResult,
@@ -171,6 +187,10 @@ import {
   NodePendingEnqueueParamsSchema,
   type NodePendingEnqueueResult,
   NodePendingEnqueueResultSchema,
+  type NodePresenceAlivePayload,
+  NodePresenceAlivePayloadSchema,
+  type NodePresenceAliveReason,
+  NodePresenceAliveReasonSchema,
   type NodeInvokeParams,
   NodeInvokeParamsSchema,
   type NodeInvokeResultParams,
@@ -185,6 +205,8 @@ import {
   NodePairListParamsSchema,
   type NodePairRejectParams,
   NodePairRejectParamsSchema,
+  type NodePairRemoveParams,
+  NodePairRemoveParamsSchema,
   type NodePairRequestParams,
   NodePairRequestParamsSchema,
   type NodePairVerifyParams,
@@ -241,6 +263,8 @@ import {
   SessionsMessagesUnsubscribeParamsSchema,
   type SessionsPatchParams,
   SessionsPatchParamsSchema,
+  type SessionsPluginPatchParams,
+  SessionsPluginPatchParamsSchema,
   type SessionsPreviewParams,
   SessionsPreviewParamsSchema,
   type SessionsResetParams,
@@ -353,6 +377,9 @@ export const validateNodePairApproveParams = ajv.compile<NodePairApproveParams>(
 export const validateNodePairRejectParams = ajv.compile<NodePairRejectParams>(
   NodePairRejectParamsSchema,
 );
+export const validateNodePairRemoveParams = ajv.compile<NodePairRemoveParams>(
+  NodePairRemoveParamsSchema,
+);
 export const validateNodePairVerifyParams = ajv.compile<NodePairVerifyParams>(
   NodePairVerifyParamsSchema,
 );
@@ -367,6 +394,10 @@ export const validateNodeInvokeResultParams = ajv.compile<NodeInvokeResultParams
   NodeInvokeResultParamsSchema,
 );
 export const validateNodeEventParams = ajv.compile<NodeEventParams>(NodeEventParamsSchema);
+export const validateNodeEventResult = ajv.compile<NodeEventResult>(NodeEventResultSchema);
+export const validateNodePresenceAlivePayload = ajv.compile<NodePresenceAlivePayload>(
+  NodePresenceAlivePayloadSchema,
+);
 export const validateNodePendingDrainParams = ajv.compile<NodePendingDrainParams>(
   NodePendingDrainParamsSchema,
 );
@@ -410,6 +441,9 @@ export const validateSessionsAbortParams =
   ajv.compile<SessionsAbortParams>(SessionsAbortParamsSchema);
 export const validateSessionsPatchParams =
   ajv.compile<SessionsPatchParams>(SessionsPatchParamsSchema);
+export const validateSessionsPluginPatchParams = ajv.compile<SessionsPluginPatchParams>(
+  SessionsPluginPatchParamsSchema,
+);
 export const validateSessionsResetParams =
   ajv.compile<SessionsResetParams>(SessionsResetParamsSchema);
 export const validateSessionsDeleteParams = ajv.compile<SessionsDeleteParams>(
@@ -456,6 +490,17 @@ export const validateTalkRealtimeSessionParams = ajv.compile<TalkRealtimeSession
 export const validateTalkRealtimeSessionResult = ajv.compile<TalkRealtimeSessionResult>(
   TalkRealtimeSessionResultSchema,
 );
+export const validateTalkRealtimeRelayAudioParams = ajv.compile<TalkRealtimeRelayAudioParams>(
+  TalkRealtimeRelayAudioParamsSchema,
+);
+export const validateTalkRealtimeRelayMarkParams = ajv.compile<TalkRealtimeRelayMarkParams>(
+  TalkRealtimeRelayMarkParamsSchema,
+);
+export const validateTalkRealtimeRelayStopParams = ajv.compile<TalkRealtimeRelayStopParams>(
+  TalkRealtimeRelayStopParamsSchema,
+);
+export const validateTalkRealtimeRelayToolResultParams =
+  ajv.compile<TalkRealtimeRelayToolResultParams>(TalkRealtimeRelayToolResultParamsSchema);
 export const validateTalkSpeakParams = ajv.compile<TalkSpeakParams>(TalkSpeakParamsSchema);
 export const validateTalkSpeakResult = ajv.compile<TalkSpeakResult>(TalkSpeakResultSchema);
 export const validateChannelsStatusParams = ajv.compile<ChannelsStatusParams>(
@@ -524,6 +569,9 @@ export const validatePluginApprovalRequestParams = ajv.compile<PluginApprovalReq
 export const validatePluginApprovalResolveParams = ajv.compile<PluginApprovalResolveParams>(
   PluginApprovalResolveParamsSchema,
 );
+export const validatePluginsUiDescriptorsParams = ajv.compile<PluginsUiDescriptorsParams>(
+  PluginsUiDescriptorsParamsSchema,
+);
 export const validateExecApprovalsNodeGetParams = ajv.compile<ExecApprovalsNodeGetParams>(
   ExecApprovalsNodeGetParamsSchema,
 );
@@ -536,6 +584,7 @@ export const validateChatSendParams = ajv.compile(ChatSendParamsSchema);
 export const validateChatAbortParams = ajv.compile<ChatAbortParams>(ChatAbortParamsSchema);
 export const validateChatInjectParams = ajv.compile<ChatInjectParams>(ChatInjectParamsSchema);
 export const validateChatEvent = ajv.compile(ChatEventSchema);
+export const validateUpdateStatusParams = ajv.compile<UpdateStatusParams>(UpdateStatusParamsSchema);
 export const validateUpdateRunParams = ajv.compile<UpdateRunParams>(UpdateRunParamsSchema);
 export const validateWebLoginStartParams =
   ajv.compile<WebLoginStartParams>(WebLoginStartParamsSchema);
@@ -607,10 +656,14 @@ export {
   NodePairListParamsSchema,
   NodePairApproveParamsSchema,
   NodePairRejectParamsSchema,
+  NodePairRemoveParamsSchema,
   NodePairVerifyParamsSchema,
   NodeListParamsSchema,
   NodePendingAckParamsSchema,
   NodeInvokeParamsSchema,
+  NodeEventResultSchema,
+  NodePresenceAlivePayloadSchema,
+  NodePresenceAliveReasonSchema,
   NodePendingDrainParamsSchema,
   NodePendingDrainResultSchema,
   NodePendingEnqueueParamsSchema,
@@ -626,6 +679,7 @@ export {
   SessionsSendParamsSchema,
   SessionsAbortParamsSchema,
   SessionsPatchParamsSchema,
+  SessionsPluginPatchParamsSchema,
   SessionsResetParamsSchema,
   SessionsDeleteParamsSchema,
   SessionsCompactParamsSchema,
@@ -638,6 +692,7 @@ export {
   ConfigSchemaLookupParamsSchema,
   ConfigSchemaResponseSchema,
   ConfigSchemaLookupResultSchema,
+  UpdateStatusParamsSchema,
   WizardStartParamsSchema,
   WizardNextParamsSchema,
   WizardCancelParamsSchema,
@@ -650,6 +705,11 @@ export {
   TalkConfigResultSchema,
   TalkRealtimeSessionParamsSchema,
   TalkRealtimeSessionResultSchema,
+  TalkRealtimeRelayAudioParamsSchema,
+  TalkRealtimeRelayMarkParamsSchema,
+  TalkRealtimeRelayStopParamsSchema,
+  TalkRealtimeRelayToolResultParamsSchema,
+  TalkRealtimeRelayOkResultSchema,
   TalkSpeakParamsSchema,
   TalkSpeakResultSchema,
   ChannelsStatusParamsSchema,
@@ -676,6 +736,7 @@ export {
   AgentsListResultSchema,
   CommandsListParamsSchema,
   CommandsListResultSchema,
+  PluginsUiDescriptorsParamsSchema,
   ModelsListParamsSchema,
   SkillsStatusParamsSchema,
   ToolsCatalogParamsSchema,
@@ -756,6 +817,11 @@ export type {
   TalkConfigResult,
   TalkRealtimeSessionParams,
   TalkRealtimeSessionResult,
+  TalkRealtimeRelayAudioParams,
+  TalkRealtimeRelayMarkParams,
+  TalkRealtimeRelayStopParams,
+  TalkRealtimeRelayToolResultParams,
+  TalkRealtimeRelayOkResult,
   TalkSpeakParams,
   TalkSpeakResult,
   TalkModeParams,
@@ -798,11 +864,15 @@ export type {
   SkillsInstallParams,
   SkillsUpdateParams,
   NodePairRejectParams,
+  NodePairRemoveParams,
   NodePairVerifyParams,
   NodeListParams,
   NodeInvokeParams,
   NodeInvokeResultParams,
   NodeEventParams,
+  NodeEventResult,
+  NodePresenceAlivePayload,
+  NodePresenceAliveReason,
   NodePendingDrainParams,
   NodePendingDrainResult,
   NodePendingEnqueueParams,
@@ -838,6 +908,7 @@ export type {
   WebPushSubscribeParams,
   WebPushUnsubscribeParams,
   WebPushTestParams,
+  UpdateStatusParams,
   UpdateRunParams,
   ChatInjectParams,
 };

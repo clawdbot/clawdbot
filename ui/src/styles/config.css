@@ -616,6 +616,31 @@
   color: var(--muted);
 }
 
+.settings-theme-import__external {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: max-content;
+  max-width: 100%;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.settings-theme-import__external:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+
+.settings-theme-import__external svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  flex: 0 0 auto;
+}
+
 .settings-theme-import__inline-hint {
   margin: 0;
   font-size: 12px;

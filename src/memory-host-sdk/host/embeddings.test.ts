@@ -1,9 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLocalEmbeddingProvider, DEFAULT_LOCAL_MODEL } from "./embeddings.js";
-import * as nodeLlamaModule from "./node-llama.js";
+
+const nodeLlamaMock = vi.hoisted(() => ({
+  importNodeLlamaCpp: vi.fn(),
+}));
+
+vi.mock("../../../packages/memory-host-sdk/src/host/node-llama.js", () => ({
+  importNodeLlamaCpp: nodeLlamaMock.importNodeLlamaCpp,
+}));
+vi.mock("./node-llama.js", () => ({
+  importNodeLlamaCpp: nodeLlamaMock.importNodeLlamaCpp,
+}));
 
 beforeEach(() => {
-  vi.spyOn(nodeLlamaModule, "importNodeLlamaCpp");
+  nodeLlamaMock.importNodeLlamaCpp.mockReset();
 });
 
 afterEach(() => {
@@ -16,7 +26,7 @@ function mockLocalEmbeddingRuntime(vector = new Float32Array([2.35, 3.45, 0.63, 
   const loadModel = vi.fn().mockResolvedValue({ createEmbeddingContext });
   const resolveModelFile = vi.fn(async (modelPath: string) => `/resolved/${modelPath}`);
 
-  vi.mocked(nodeLlamaModule.importNodeLlamaCpp).mockResolvedValue({
+  nodeLlamaMock.importNodeLlamaCpp.mockResolvedValue({
     getLlama: async () => ({ loadModel }),
     resolveModelFile,
     LlamaLogLevel: { error: 0 },

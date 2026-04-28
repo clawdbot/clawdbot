@@ -29,7 +29,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
 
     /// Parse a device-pair setup code (base64url-encoded JSON: `{url, bootstrapToken?, token?, password?}`).
     public static func fromSetupCode(_ code: String) -> GatewayConnectDeepLink? {
-        guard let data = Self.decodeBase64Url(code) else { return nil }
+        guard let data = decodeBase64Url(code) else { return nil }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         guard let urlString = json["url"] as? String,
               let parsed = URLComponents(string: urlString),

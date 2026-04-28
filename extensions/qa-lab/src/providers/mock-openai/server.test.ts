@@ -206,6 +206,21 @@ describe("qa mock openai server", () => {
     expect(quietBody).toContain('"phase":"final_answer"');
     expect(quietBody).toContain("QA_STREAMING_OK");
 
+    const partialResponse = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [makeUserInput("Partial streaming QA check: reply exactly `QA_PARTIAL_OK`.")],
+      }),
+    });
+    expect(partialResponse.status).toBe(200);
+    const partialBody = await partialResponse.text();
+    expect(partialBody).toContain('"type":"response.output_text.delta"');
+    expect(partialBody).toContain("QA_PARTIAL_OK");
+
     const blockResponse = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
       headers: {
@@ -226,6 +241,113 @@ describe("qa mock openai server", () => {
     expect(blockBody).toContain('"item_id":"msg_mock_block_2"');
     expect(blockBody).toContain("BLOCK_ONE_OK");
     expect(blockBody).toContain("BLOCK_TWO_OK");
+  });
+
+  it("plans deterministic tool-progress reads from prompt paths", async () => {
+    const server = await startMockServer();
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          makeUserInput(
+            "Tool progress QA check: read `qa-progress-target.txt` before answering. After the read completes, reply exactly `TOOL_PROGRESS_OK`.",
+          ),
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('"name":"read"');
+    expect(body).toContain("qa-progress-target.txt");
+  });
+
+  it("requires deterministic tool-progress error prompts to observe a failed tool", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Tool progress error QA check: read `missing-tool-progress-target.txt` before answering. After the read fails, reply exactly `TOOL_PROGRESS_ERROR_OK`.";
+
+    const toolPlan = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [makeUserInput(prompt)],
+      }),
+    });
+
+    expect(toolPlan.status).toBe(200);
+    const toolPlanBody = await toolPlan.text();
+    expect(toolPlanBody).toContain('"name":"read"');
+    expect(toolPlanBody).toContain("missing-tool-progress-target.txt");
+
+    const successOutput = await expectResponsesJson<{
+      output: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      input: [
+        makeUserInput(prompt),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_1",
+          output: JSON.stringify({ text: "unexpected success" }),
+        },
+      ],
+    });
+    expect(successOutput.output[0]?.content?.[0]?.text).toBe("BUG-TOOL-DID-NOT-FAIL");
+
+    const errorOutput = await expectResponsesJson<{
+      output: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      input: [
+        makeUserInput(prompt),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_1",
+          output: JSON.stringify({ error: "ENOENT: no such file or directory" }),
+        },
+      ],
+    });
+    expect(errorOutput.output[0]?.content?.[0]?.text).toBe("TOOL_PROGRESS_ERROR_OK");
+  });
+
+  it("uses the latest user prompt path for tool-progress plans", async () => {
+    const server = await startMockServer();
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          makeUserInput(
+            "Tool progress QA check: read `older-progress-target.txt` before answering. After the read completes, reply exactly `OLD_PROGRESS_OK`.",
+          ),
+          makeUserInput(
+            "Tool progress error QA check: read `latest-missing-progress-target.txt` before answering. After the read fails, reply exactly `LATEST_PROGRESS_OK`.",
+          ),
+          makeUserInput(
+            "Continue with the QA scenario plan and report worked, failed, and blocked items.",
+          ),
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('"name":"read"');
+    expect(body).toContain("latest-missing-progress-target.txt");
+    expect(body).not.toContain("older-progress-target.txt");
   });
 
   it("prefers path-like refs over generic quoted keys in prompts", async () => {
@@ -1377,6 +1499,80 @@ describe("qa mock openai server", () => {
     });
   });
 
+  it("does not let fanout completion state hijack child worker replies", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const prompt =
+      "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
+    const spawn = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        tools: [SESSIONS_SPAWN_TOOL],
+        input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
+      }),
+    });
+    expect(spawn.status).toBe(200);
+    expect(await spawn.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+
+    const secondSpawn = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        tools: [SESSIONS_SPAWN_TOOL],
+        input: [
+          { role: "user", content: [{ type: "input_text", text: prompt }] },
+          {
+            type: "function_call_output",
+            output:
+              '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
+          },
+        ],
+      }),
+    });
+    expect(secondSpawn.status).toBe(200);
+    expect(await secondSpawn.text()).toContain('\\"label\\":\\"qa-fanout-beta\\"');
+
+    const childReply = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: false,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Fanout worker alpha: inspect the QA workspace and finish with exactly ALPHA-OK.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(childReply.status).toBe(200);
+    expect(await childReply.json()).toMatchObject({
+      output: [
+        {
+          content: [
+            {
+              text: "ALPHA-OK",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("keeps subagent fanout state isolated per mock server instance", async () => {
     const serverA = await startQaMockOpenAiServer({
       host: "127.0.0.1",
@@ -1600,7 +1796,7 @@ describe("qa mock openai server", () => {
             content: [
               {
                 type: "input_text",
-                text: "@qa-sut:matrix-qa.test reply with only this exact marker: MATRIX_QA_CANARY_TEST",
+                text: "@qa-sut.example.test reply with only this exact marker: QA_CANARY_TEST",
               },
             ],
           },
@@ -1621,7 +1817,7 @@ describe("qa mock openai server", () => {
     expect(await response.json()).toMatchObject({
       output: [
         {
-          content: [{ text: "MATRIX_QA_CANARY_TEST" }],
+          content: [{ text: "QA_CANARY_TEST" }],
         },
       ],
     });
@@ -1636,8 +1832,8 @@ describe("qa mock openai server", () => {
       await server.stop();
     });
 
-    const matrixPrompt =
-      "@qa-sut:matrix-qa.test Image generation check: generate a QA lighthouse image and summarize it in one short sentence.";
+    const channelPrompt =
+      "@qa-sut.example.test Image generation check: generate a QA lighthouse image and summarize it in one short sentence.";
     const genericPrompt =
       "Continue with the QA scenario plan and report worked, failed, and blocked items.";
 
@@ -1648,7 +1844,7 @@ describe("qa mock openai server", () => {
       },
       body: JSON.stringify({
         stream: false,
-        input: [makeUserInput(matrixPrompt), makeUserInput(genericPrompt)],
+        input: [makeUserInput(channelPrompt), makeUserInput(genericPrompt)],
       }),
     });
 
@@ -1671,7 +1867,7 @@ describe("qa mock openai server", () => {
       body: JSON.stringify({
         stream: false,
         input: [
-          makeUserInput(matrixPrompt),
+          makeUserInput(channelPrompt),
           makeUserInput(genericPrompt),
           {
             type: "function_call",

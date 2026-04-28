@@ -70,6 +70,45 @@ describe("agent wait dedupe helper", () => {
     expect(__testing.getWaiterCount(runId)).toBe(0);
   });
 
+  it("preserves structured yield metadata from terminal agent results", () => {
+    const dedupe = new Map();
+    const runId = "run-yielded";
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      payload: {
+        runId,
+        status: "ok",
+        startedAt: 100,
+        endedAt: 200,
+        result: {
+          meta: {
+            stopReason: "end_turn",
+            livenessState: "paused",
+            yielded: true,
+          },
+        },
+      },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "ok",
+      startedAt: 100,
+      endedAt: 200,
+      error: undefined,
+      stopReason: "end_turn",
+      livenessState: "paused",
+      yielded: true,
+    });
+  });
+
   it("keeps stale chat dedupe blocked while agent dedupe is in-flight", async () => {
     const dedupe = new Map();
     const runId = "run-stale-chat";

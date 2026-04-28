@@ -417,6 +417,56 @@ describe("GatewayBrowserClient", () => {
     vi.useRealTimers();
   });
 
+  it("does not send stale connect frames on a replacement socket", async () => {
+    vi.useFakeTimers();
+    let resolveIdentity!: (identity: DeviceIdentity) => void;
+    loadOrCreateDeviceIdentityMock.mockImplementationOnce(
+      () =>
+        new Promise<DeviceIdentity>((resolve) => {
+          resolveIdentity = resolve;
+        }),
+    );
+
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+
+    client.start();
+    const firstWs = getLatestWebSocket();
+    firstWs.emitOpen();
+    firstWs.emitMessage({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "nonce-stale" },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(firstWs.sent).toHaveLength(0);
+
+    firstWs.emitClose(1006, "socket lost");
+    await vi.advanceTimersByTimeAsync(800);
+    const secondWs = getLatestWebSocket();
+    expect(secondWs).not.toBe(firstWs);
+
+    resolveIdentity({
+      deviceId: "device-1",
+      privateKey: "private-key", // pragma: allowlist secret
+      publicKey: "public-key", // pragma: allowlist secret
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.resolve();
+
+    expect(secondWs.sent).toHaveLength(0);
+
+    const { connectFrame } = await continueConnect(secondWs, "nonce-current");
+    expect(connectFrame.method).toBe("connect");
+    const signedPayload = signDevicePayloadMock.mock.calls.at(-1)?.[1];
+    expect(signedPayload).toContain("|shared-auth-token|nonce-current");
+
+    client.stop();
+    vi.useRealTimers();
+  });
+
   it("cancels a scheduled reconnect when stopped before the retry fires", async () => {
     vi.useFakeTimers();
 

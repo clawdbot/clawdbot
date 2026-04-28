@@ -701,6 +701,10 @@ export function createSubagentRegistryLifecycleController(params: {
       entry.endedReason = completeParams.reason;
       mutated = true;
     }
+    if (entry.pauseReason !== undefined) {
+      entry.pauseReason = undefined;
+      mutated = true;
+    }
 
     if (await freezeRunResultAtCompletion(entry, outcome)) {
       mutated = true;

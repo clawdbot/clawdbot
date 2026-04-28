@@ -87,6 +87,10 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   "__pycache__",
 ]);
 
+function qmdUsesVectors(searchMode: ResolvedQmdConfig["searchMode"]): boolean {
+  return searchMode !== "search";
+}
+
 function isDefaultMemoryPath(relPath: string): boolean {
   const normalized = relPath.trim().replace(/^\.\//, "").replace(/\\/g, "/");
   if (!normalized) {
@@ -150,12 +154,16 @@ function normalizeHanBm25Query(query: string): string {
 }
 
 function parseQmdStatusVectorCount(raw: string): number | null {
-  const match = raw.match(/(?:^|\n)\s*Vectors:\s*(\d+)\b/i);
-  if (!match) {
-    return null;
+  for (const line of raw.split(/\r?\n/)) {
+    const match = line.match(/^\s*Vectors(?:\s*[:=]\s*|\s+)(\d+)\b/i);
+    if (match?.[1]) {
+      const count = Number.parseInt(match[1], 10);
+      if (Number.isFinite(count)) {
+        return count;
+      }
+    }
   }
-  const count = Number.parseInt(match[1] ?? "", 10);
-  return Number.isFinite(count) ? count : null;
+  return null;
 }
 
 function resolveStableJitterMs(params: { seed: string; windowMs: number }): number {
@@ -210,7 +218,7 @@ type ManagedCollection = {
   kind: "memory" | "custom" | "sessions";
 };
 
-type QmdManagerMode = "full" | "status";
+type QmdManagerMode = "full" | "status" | "cli";
 type QmdManagerRuntimeConfig = {
   workspaceDir: string;
   syncSettings: ReturnType<typeof resolveMemorySearchSyncConfig>;
@@ -334,6 +342,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private attemptedDuplicateDocumentRepair = false;
   private readonly sessionWarm = new Set<string>();
   private collectionPatternFlag: QmdCollectionPatternFlag | null = "--mask";
+  private multiCollectionFilterSupported: boolean | null = null;
 
   private constructor(params: {
     agentId: string;
@@ -414,6 +423,10 @@ export class QmdMemoryManager implements MemorySearchManager {
     await this.symlinkSharedModels();
 
     await this.ensureCollections();
+    if (mode === "cli") {
+      return;
+    }
+
     this.ensureWatcher();
 
     if (this.qmd.update.onBoot) {
@@ -1142,16 +1155,17 @@ export class QmdMemoryManager implements MemorySearchManager {
             timeoutMs: this.qmd.limits.timeoutMs,
           });
         }
-        if (collectionNames.length > 1) {
-          return await this.runQueryAcrossCollections(
+        const collectionGroups = await this.resolveCollectionSearchGroups(collectionNames);
+        if (collectionGroups.length > 1) {
+          return await this.runQueryAcrossCollectionGroups(
             trimmed,
             limit,
-            collectionNames,
+            collectionGroups,
             qmdSearchCommand,
           );
         }
         const args = this.buildSearchArgs(qmdSearchCommand, trimmed, limit);
-        args.push(...this.buildCollectionFilterArgs(collectionNames));
+        args.push(...this.buildCollectionFilterArgs(collectionGroups[0] ?? collectionNames));
         const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
         return parseQmdQueryJson(result.stdout, result.stderr);
       } catch (err) {
@@ -1169,11 +1183,19 @@ export class QmdMemoryManager implements MemorySearchManager {
             `qmd ${qmdSearchCommand} does not support configured flags; retrying search with qmd query`,
           );
           try {
-            if (collectionNames.length > 1) {
-              return await this.runQueryAcrossCollections(trimmed, limit, collectionNames, "query");
+            const collectionGroups = await this.resolveCollectionSearchGroups(collectionNames);
+            if (collectionGroups.length > 1) {
+              return await this.runQueryAcrossCollectionGroups(
+                trimmed,
+                limit,
+                collectionGroups,
+                "query",
+              );
             }
             const fallbackArgs = this.buildSearchArgs("query", trimmed, limit);
-            fallbackArgs.push(...this.buildCollectionFilterArgs(collectionNames));
+            fallbackArgs.push(
+              ...this.buildCollectionFilterArgs(collectionGroups[0] ?? collectionNames),
+            );
             const fallback = await this.runQmd(fallbackArgs, {
               timeoutMs: this.qmd.limits.timeoutMs,
             });
@@ -1316,13 +1338,13 @@ export class QmdMemoryManager implements MemorySearchManager {
       requestedProvider: "qmd",
       files: counts.totalDocuments,
       chunks: counts.totalDocuments,
-      dirty: false,
+      dirty: this.dirty,
       workspaceDir: this.workspaceDir,
       dbPath: this.indexPath,
       sources: Array.from(this.sources),
       sourceCounts: counts.sourceCounts,
       vector: {
-        enabled: true,
+        enabled: qmdUsesVectors(this.qmd.searchMode),
         available: this.vectorAvailable ?? undefined,
         loadError: this.vectorStatusDetail ?? undefined,
       },
@@ -1353,6 +1375,11 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   async probeVectorAvailability(): Promise<boolean> {
+    if (!qmdUsesVectors(this.qmd.searchMode)) {
+      this.vectorAvailable = false;
+      this.vectorStatusDetail = null;
+      return false;
+    }
     try {
       const result = await this.runQmd(["status"], {
         timeoutMs: Math.min(this.qmd.limits.timeoutMs, 5_000),
@@ -1593,9 +1620,9 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private shouldRunEmbed(force?: boolean): boolean {
-    // Keep embeddings current regardless of the active retrieval mode.
-    // Search-mode indexing still needs vectors so later mode switches and
-    // hybrid flows do not inherit an incomplete QMD index.
+    if (!qmdUsesVectors(this.qmd.searchMode)) {
+      return false;
+    }
     const now = Date.now();
     if (this.embedBackoffUntil !== null && now < this.embedBackoffUntil) {
       return false;
@@ -1609,6 +1636,9 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private shouldScheduleEmbedTimer(): boolean {
+    if (!qmdUsesVectors(this.qmd.searchMode)) {
+      return false;
+    }
     const embedIntervalMs = this.qmd.update.embedIntervalMs;
     if (embedIntervalMs <= 0) {
       return false;
@@ -2868,24 +2898,53 @@ export class QmdMemoryManager implements MemorySearchManager {
     ]);
   }
 
-  private async runQueryAcrossCollections(
+  private async resolveCollectionSearchGroups(collectionNames: string[]): Promise<string[][]> {
+    if (collectionNames.length <= 1) {
+      return [collectionNames];
+    }
+    if (!(await this.supportsQmdMultiCollectionFilters())) {
+      return collectionNames.map((collectionName) => [collectionName]);
+    }
+    return this.groupCollectionNamesBySource(collectionNames);
+  }
+
+  private async supportsQmdMultiCollectionFilters(): Promise<boolean> {
+    if (this.multiCollectionFilterSupported !== null) {
+      return this.multiCollectionFilterSupported;
+    }
+    try {
+      const result = await this.runQmd(["--help"], {
+        timeoutMs: Math.min(this.qmd.limits.timeoutMs, 5_000),
+      });
+      const helpText = `${result.stdout}\n${result.stderr}`;
+      this.multiCollectionFilterSupported =
+        /\b(?:one or more collections|collection\(s\)|multiple -c flags)\b/i.test(helpText);
+    } catch (err) {
+      this.multiCollectionFilterSupported = false;
+      log.debug(`qmd multi-collection filter probe failed: ${String(err)}`);
+    }
+    return this.multiCollectionFilterSupported;
+  }
+
+  private async runQueryAcrossCollectionGroups(
     query: string,
     limit: number,
-    collectionNames: string[],
+    collectionGroups: string[][],
     command: "query" | "search" | "vsearch",
   ): Promise<QmdQueryResult[]> {
     log.debug(
-      `qmd ${command} multi-collection workaround active (${collectionNames.length} collections)`,
+      `qmd ${command} multi-source collection grouping active (${collectionGroups.length} groups)`,
     );
     const bestByResultKey = new Map<string, QmdQueryResult>();
-    for (const collectionName of collectionNames) {
+    for (const collectionNames of collectionGroups) {
       const args = this.buildSearchArgs(command, query, limit);
-      args.push("-c", collectionName);
+      args.push(...this.buildCollectionFilterArgs(collectionNames));
       const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
       const parsed = parseQmdQueryJson(result.stdout, result.stderr);
       for (const entry of parsed) {
+        const defaultCollection = collectionNames.length === 1 ? collectionNames[0] : undefined;
         const normalizedHints = this.normalizeDocHints({
-          preferredCollection: entry.collection ?? collectionName,
+          preferredCollection: entry.collection ?? defaultCollection,
           preferredFile: entry.file,
         });
         const normalizedDocId =
@@ -2895,7 +2954,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         const withCollection = {
           ...entry,
           docid: normalizedDocId,
-          collection: normalizedHints.preferredCollection ?? entry.collection ?? collectionName,
+          collection: normalizedHints.preferredCollection ?? entry.collection ?? defaultCollection,
           file: normalizedHints.preferredFile ?? entry.file,
         } satisfies QmdQueryResult;
         const resultKey = this.buildQmdResultKey(withCollection);
@@ -2914,6 +2973,17 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
     }
     return [...bestByResultKey.values()].toSorted((a, b) => (b.score ?? 0) - (a.score ?? 0));
+  }
+
+  private groupCollectionNamesBySource(collectionNames: string[]): string[][] {
+    const groups = new Map<string, string[]>();
+    for (const collectionName of collectionNames) {
+      const source = this.collectionRoots.get(collectionName)?.kind ?? collectionName;
+      const group = groups.get(source) ?? [];
+      group.push(collectionName);
+      groups.set(source, group);
+    }
+    return [...groups.values()];
   }
 
   private buildQmdResultKey(entry: QmdQueryResult): string | null {

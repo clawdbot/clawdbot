@@ -281,6 +281,23 @@ function Get-OpenClawListenerPids {
   $listenerPids | Sort-Object -Unique
 }
 
+function Invoke-OpenClawStartupLauncher {
+  $launcherPath = Join-Path $env:USERPROFILE ".openclaw\\gateway.cmd"
+  if (-not (Test-Path -LiteralPath $launcherPath)) {
+    Write-RestartLog "openclaw restart startup launcher missing source=update path=$launcherPath"
+    return 1
+  }
+
+  try {
+    Start-Process -FilePath $launcherPath -WindowStyle Hidden | Out-Null
+    Write-RestartLog "openclaw restart launched startup fallback source=update path=$launcherPath"
+    return 0
+  } catch {
+    Write-RestartLog "openclaw restart startup fallback failed source=update error=$($_.Exception.Message)"
+    return 1
+  }
+}
+
 $taskName = ${quotedTaskName}
 $port = ${port}
 Write-RestartLog "openclaw restart attempt source=update target=$taskName"
@@ -317,6 +334,9 @@ for ($attempt = 1; $attempt -le 10; $attempt++) {
 }
 
 $status = Invoke-OpenClawSchtasksWithTimeout -Arguments @("/Run", "/TN", $taskName) -TimeoutSeconds 30
+if ($status -ne 0) {
+  $status = Invoke-OpenClawStartupLauncher
+}
 if ($status -eq 0) {
   Write-RestartLog "openclaw restart done source=update"
 } else {

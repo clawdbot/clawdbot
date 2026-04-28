@@ -113,6 +113,45 @@ describe("custom theme import helpers", () => {
       fetchUrl: "https://tweakcn.com/r/themes/cmlhfpjhw000004l4f4ax3m7z",
       themeId: "cmlhfpjhw000004l4f4ax3m7z",
     });
+    expect(normalizeTweakcnThemeUrl("/r/themes/cmlhfpjhw000004l4f4ax3m7z")).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z",
+      fetchUrl: "https://tweakcn.com/r/themes/cmlhfpjhw000004l4f4ax3m7z",
+      themeId: "cmlhfpjhw000004l4f4ax3m7z",
+    });
+    expect(normalizeTweakcnThemeUrl("cmlhfpjhw000004l4f4ax3m7z")).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z",
+      fetchUrl: "https://tweakcn.com/r/themes/cmlhfpjhw000004l4f4ax3m7z",
+      themeId: "cmlhfpjhw000004l4f4ax3m7z",
+    });
+  });
+
+  it("extracts theme ids from copied tweakcn editor URLs and pasted text", () => {
+    expect(
+      normalizeTweakcnThemeUrl("https://tweakcn.com/editor/theme?theme=cmlhfpjhw000004l4f4ax3m7z"),
+    ).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z",
+      fetchUrl: "https://tweakcn.com/r/themes/cmlhfpjhw000004l4f4ax3m7z",
+      themeId: "cmlhfpjhw000004l4f4ax3m7z",
+    });
+    expect(
+      normalizeTweakcnThemeUrl("Theme link: https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z"),
+    ).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z",
+      fetchUrl: "https://tweakcn.com/r/themes/cmlhfpjhw000004l4f4ax3m7z",
+      themeId: "cmlhfpjhw000004l4f4ax3m7z",
+    });
+    expect(
+      normalizeTweakcnThemeUrl("https://tweakcn.com/editor/theme?theme=amethyst-haze"),
+    ).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/amethyst-haze",
+      fetchUrl: "https://tweakcn.com/r/themes/amethyst-haze",
+      themeId: "amethyst-haze",
+    });
+    expect(normalizeTweakcnThemeUrl("amethyst-haze")).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/amethyst-haze",
+      fetchUrl: "https://tweakcn.com/r/themes/amethyst-haze",
+      themeId: "amethyst-haze",
+    });
   });
 
   it("maps a tweakcn payload into a normalized imported theme record", () => {

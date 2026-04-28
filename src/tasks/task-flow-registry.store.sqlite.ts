@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import {
   resolveTaskFlowRegistryDir,
@@ -42,6 +43,7 @@ type FlowRegistryDatabase = {
   db: DatabaseSync;
   path: string;
   statements: FlowRegistryStatements;
+  walMaintenance: SqliteWalMaintenance;
 };
 
 let cachedDatabase: FlowRegistryDatabase | null = null;
@@ -335,13 +337,14 @@ function openFlowRegistryDatabase(): FlowRegistryDatabase {
     return cachedDatabase;
   }
   if (cachedDatabase) {
+    cachedDatabase.walMaintenance.close();
     cachedDatabase.db.close();
     cachedDatabase = null;
   }
   ensureFlowRegistryPermissions(pathname);
   const { DatabaseSync } = requireNodeSqlite();
   const db = new DatabaseSync(pathname);
-  db.exec(`PRAGMA journal_mode = WAL;`);
+  const walMaintenance = configureSqliteWalMaintenance(db);
   db.exec(`PRAGMA synchronous = NORMAL;`);
   db.exec(`PRAGMA busy_timeout = 5000;`);
   ensureSchema(db);
@@ -350,6 +353,7 @@ function openFlowRegistryDatabase(): FlowRegistryDatabase {
     db,
     path: pathname,
     statements: createStatements(db),
+    walMaintenance,
   };
   return cachedDatabase;
 }
@@ -400,6 +404,7 @@ export function closeTaskFlowRegistrySqliteStore() {
   if (!cachedDatabase) {
     return;
   }
+  cachedDatabase.walMaintenance.close();
   cachedDatabase.db.close();
   cachedDatabase = null;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { splitMediaFromOutput } from "./parse.js";
+import { splitMediaFromOutput, type SplitMediaFromOutputOptions } from "./parse.js";
 
 describe("splitMediaFromOutput", () => {
   function expectParsedMediaOutputCase(
@@ -9,8 +9,9 @@ describe("splitMediaFromOutput", () => {
       text?: string;
       audioAsVoice?: boolean;
     },
+    options?: SplitMediaFromOutputOptions,
   ) {
-    const result = splitMediaFromOutput(input);
+    const result = splitMediaFromOutput(input, options);
     expect(result.text).toBe(expected.text ?? "");
     if ("audioAsVoice" in expected) {
       expect(result.audioAsVoice).toBe(expected.audioAsVoice);
@@ -126,18 +127,36 @@ describe("splitMediaFromOutput", () => {
     ]);
   });
 
-  it("extracts markdown image urls while keeping surrounding caption text", () => {
-    expectParsedMediaOutputCase("Caption\n\n![chart](https://example.com/chart.png)", {
-      text: "Caption",
-      mediaUrls: ["https://example.com/chart.png"],
+  const extractMarkdownImages = { extractMarkdownImages: true } as const;
+
+  it("keeps markdown image urls as text by default", () => {
+    const input = "Caption\n\n![chart](https://example.com/chart.png)";
+    expectParsedMediaOutputCase(input, {
+      text: input,
+      mediaUrls: undefined,
     });
   });
 
-  it("keeps inline caption text around markdown images", () => {
-    expectParsedMediaOutputCase("Look ![chart](https://example.com/chart.png) now", {
-      text: "Look now",
-      mediaUrls: ["https://example.com/chart.png"],
-    });
+  it("extracts markdown image urls while keeping surrounding caption text when enabled", () => {
+    expectParsedMediaOutputCase(
+      "Caption\n\n![chart](https://example.com/chart.png)",
+      {
+        text: "Caption",
+        mediaUrls: ["https://example.com/chart.png"],
+      },
+      extractMarkdownImages,
+    );
+  });
+
+  it("keeps inline caption text around markdown images when enabled", () => {
+    expectParsedMediaOutputCase(
+      "Look ![chart](https://example.com/chart.png) now",
+      {
+        text: "Look now",
+        mediaUrls: ["https://example.com/chart.png"],
+      },
+      extractMarkdownImages,
+    );
   });
 
   it("extracts multiple markdown image urls in order", () => {
@@ -147,6 +166,7 @@ describe("splitMediaFromOutput", () => {
         text: "Before\nMiddle\nAfter",
         mediaUrls: ["https://example.com/one.png", "https://example.com/two.png"],
       },
+      extractMarkdownImages,
     );
   });
 
@@ -157,14 +177,19 @@ describe("splitMediaFromOutput", () => {
         text: "Caption",
         mediaUrls: ["https://example.com/chart.png"],
       },
+      extractMarkdownImages,
     );
   });
 
   it("keeps balanced parentheses inside markdown image urls", () => {
-    expectParsedMediaOutputCase("Chart ![img](https://example.com/a_(1).png) now", {
-      text: "Chart now",
-      mediaUrls: ["https://example.com/a_(1).png"],
-    });
+    expectParsedMediaOutputCase(
+      "Chart ![img](https://example.com/a_(1).png) now",
+      {
+        text: "Chart now",
+        mediaUrls: ["https://example.com/a_(1).png"],
+      },
+      extractMarkdownImages,
+    );
   });
 
   it.each([
@@ -174,27 +199,76 @@ describe("splitMediaFromOutput", () => {
     "![x](http://example.com/a.png)",
     "![x](https://127.0.0.1/a.png)",
   ] as const)("does not lift local markdown image target: %s", (input) => {
-    expectParsedMediaOutputCase(input, {
-      text: input,
-      mediaUrls: undefined,
-    });
+    expectParsedMediaOutputCase(
+      input,
+      {
+        text: input,
+        mediaUrls: undefined,
+      },
+      extractMarkdownImages,
+    );
   });
 
   it("does not lift markdown image urls that fail media validation", () => {
     const longUrl = `![x](https://example.com/${"a".repeat(4097)}.png)`;
 
-    expectParsedMediaOutputCase(longUrl, {
-      text: longUrl,
-      mediaUrls: undefined,
-    });
+    expectParsedMediaOutputCase(
+      longUrl,
+      {
+        text: longUrl,
+        mediaUrls: undefined,
+      },
+      extractMarkdownImages,
+    );
   });
 
   it("leaves very long markdown-image candidate lines as text", () => {
     const input = `${"prefix ".repeat(3000)}![x](https://example.com/image.png)`;
 
+    expectParsedMediaOutputCase(
+      input,
+      {
+        text: input,
+        mediaUrls: undefined,
+      },
+      extractMarkdownImages,
+    );
+  });
+
+  it.each([
+    "![Node.js](https://img.shields.io/badge/Node.js-339933?logo=node.js&logoColor=white)",
+    "![build](https://img.shields.io/github/actions/workflow/status/owner/repo/ci.yml)",
+    "![npm](https://badge.fury.io/js/some-package.svg)",
+    "![badgen](https://badgen.net/npm/v/some-package)",
+    "![CI](https://github.com/owner/repo/actions/workflows/ci.yml/badge.svg)",
+    "![flat-badge](https://flat.badgen.net/npm/v/some-package)",
+  ] as const)("keeps markdown badge image as text by default: %s", (input) => {
     expectParsedMediaOutputCase(input, {
       text: input,
       mediaUrls: undefined,
     });
+  });
+
+  it("keeps surrounding text around inline badge images by default", () => {
+    expectParsedMediaOutputCase(
+      "tech: ![Node.js](https://img.shields.io/badge/Node.js-339933?logo=node.js&logoColor=white) stack",
+      {
+        text: "tech: ![Node.js](https://img.shields.io/badge/Node.js-339933?logo=node.js&logoColor=white) stack",
+        mediaUrls: undefined,
+      },
+    );
+  });
+
+  it("still extracts markdown images when explicitly enabled", () => {
+    expectParsedMediaOutputCase(
+      "![badge](https://img.shields.io/badge/status-passing-green)\n![photo](https://example.com/photo.png)",
+      {
+        mediaUrls: [
+          "https://img.shields.io/badge/status-passing-green",
+          "https://example.com/photo.png",
+        ],
+      },
+      extractMarkdownImages,
+    );
   });
 });

@@ -52,6 +52,17 @@ export type BuildPluginApiParams = {
       | "registerAgentHarness"
       | "registerCodexAppServerExtensionFactory"
       | "registerAgentToolResultMiddleware"
+      | "registerSessionExtension"
+      | "enqueueNextTurnInjection"
+      | "registerTrustedToolPolicy"
+      | "registerToolMetadata"
+      | "registerControlUiDescriptor"
+      | "registerRuntimeLifecycle"
+      | "registerAgentEventSubscription"
+      | "setRunContext"
+      | "getRunContext"
+      | "clearRunContext"
+      | "registerSessionSchedulerJob"
       | "registerDetachedTaskRuntime"
       | "registerMemoryCapability"
       | "registerMemoryPromptSection"
@@ -110,6 +121,21 @@ const noopRegisterCodexAppServerExtensionFactory: OpenClawPluginApi["registerCod
   () => {};
 const noopRegisterAgentToolResultMiddleware: OpenClawPluginApi["registerAgentToolResultMiddleware"] =
   () => {};
+const noopRegisterSessionExtension: OpenClawPluginApi["registerSessionExtension"] = () => {};
+const noopEnqueueNextTurnInjection: OpenClawPluginApi["enqueueNextTurnInjection"] = async (
+  injection,
+) => ({ enqueued: false, id: "", sessionKey: injection.sessionKey });
+const noopRegisterTrustedToolPolicy: OpenClawPluginApi["registerTrustedToolPolicy"] = () => {};
+const noopRegisterToolMetadata: OpenClawPluginApi["registerToolMetadata"] = () => {};
+const noopRegisterControlUiDescriptor: OpenClawPluginApi["registerControlUiDescriptor"] = () => {};
+const noopRegisterRuntimeLifecycle: OpenClawPluginApi["registerRuntimeLifecycle"] = () => {};
+const noopRegisterAgentEventSubscription: OpenClawPluginApi["registerAgentEventSubscription"] =
+  () => {};
+const noopSetRunContext: OpenClawPluginApi["setRunContext"] = () => false;
+const noopGetRunContext: OpenClawPluginApi["getRunContext"] = () => undefined;
+const noopClearRunContext: OpenClawPluginApi["clearRunContext"] = () => {};
+const noopRegisterSessionSchedulerJob: OpenClawPluginApi["registerSessionSchedulerJob"] = () =>
+  undefined;
 const noopRegisterDetachedTaskRuntime: OpenClawPluginApi["registerDetachedTaskRuntime"] = () => {};
 const noopRegisterMemoryCapability: OpenClawPluginApi["registerMemoryCapability"] = () => {};
 const noopRegisterMemoryPromptSection: OpenClawPluginApi["registerMemoryPromptSection"] = () => {};
@@ -184,6 +210,20 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
       handlers.registerCodexAppServerExtensionFactory ?? noopRegisterCodexAppServerExtensionFactory,
     registerAgentToolResultMiddleware:
       handlers.registerAgentToolResultMiddleware ?? noopRegisterAgentToolResultMiddleware,
+    registerSessionExtension: handlers.registerSessionExtension ?? noopRegisterSessionExtension,
+    enqueueNextTurnInjection: handlers.enqueueNextTurnInjection ?? noopEnqueueNextTurnInjection,
+    registerTrustedToolPolicy: handlers.registerTrustedToolPolicy ?? noopRegisterTrustedToolPolicy,
+    registerToolMetadata: handlers.registerToolMetadata ?? noopRegisterToolMetadata,
+    registerControlUiDescriptor:
+      handlers.registerControlUiDescriptor ?? noopRegisterControlUiDescriptor,
+    registerRuntimeLifecycle: handlers.registerRuntimeLifecycle ?? noopRegisterRuntimeLifecycle,
+    registerAgentEventSubscription:
+      handlers.registerAgentEventSubscription ?? noopRegisterAgentEventSubscription,
+    setRunContext: handlers.setRunContext ?? noopSetRunContext,
+    getRunContext: handlers.getRunContext ?? noopGetRunContext,
+    clearRunContext: handlers.clearRunContext ?? noopClearRunContext,
+    registerSessionSchedulerJob:
+      handlers.registerSessionSchedulerJob ?? noopRegisterSessionSchedulerJob,
     registerDetachedTaskRuntime:
       handlers.registerDetachedTaskRuntime ?? noopRegisterDetachedTaskRuntime,
     registerMemoryCapability: handlers.registerMemoryCapability ?? noopRegisterMemoryCapability,

@@ -5,7 +5,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginEnableResult } from "../plugins/enable.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 
-const resolveBundledInstallPlanForCatalogEntry = vi.hoisted(() => vi.fn(() => undefined));
+const resolveBundledInstallPlanForCatalogEntry = vi.hoisted(() =>
+  vi.fn<(...args: unknown[]) => unknown>(() => undefined),
+);
 vi.mock("../cli/plugin-install-plan.js", () => ({
   resolveBundledInstallPlanForCatalogEntry,
 }));
@@ -476,6 +478,51 @@ describe("ensureOnboardingPluginInstalled", () => {
           spec: "@demo/plugin@1.2.3",
         },
       });
+    });
+  });
+
+  it("enables bundled plugins without adding their bundled directory as a local install", async () => {
+    await withTempDir({ prefix: "openclaw-onboarding-install-bundled-record-" }, async (temp) => {
+      const bundledDir = path.join(temp, "dist", "extensions", "discord");
+      await fs.mkdir(bundledDir, { recursive: true });
+      const realBundledDir = await fs.realpath(bundledDir);
+      resolveBundledInstallPlanForCatalogEntry.mockReturnValueOnce({
+        bundledSource: {
+          localPath: realBundledDir,
+        },
+      });
+      enablePluginInConfig.mockReturnValueOnce({
+        config: {
+          plugins: {
+            entries: {
+              discord: { enabled: true },
+            },
+          },
+        },
+        enabled: true,
+      });
+
+      const result = await ensureOnboardingPluginInstalled({
+        cfg: {},
+        entry: {
+          pluginId: "discord",
+          label: "Discord",
+          install: {
+            npmSpec: "@openclaw/discord",
+          },
+        },
+        prompter: {
+          select: vi.fn(async () => "local"),
+        } as never,
+        runtime: {} as never,
+        promptInstall: false,
+      });
+
+      expect(result.installed).toBe(true);
+      expect(result.cfg.plugins?.entries?.discord?.enabled).toBe(true);
+      expect(result.cfg.plugins?.load?.paths).toBeUndefined();
+      expect(result.cfg.plugins?.installs).toBeUndefined();
+      expect(recordPluginInstall).not.toHaveBeenCalled();
     });
   });
 

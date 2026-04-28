@@ -1,4 +1,5 @@
 import { createJiti } from "jiti";
+import { toSafeImportPath } from "../shared/import-specifier.js";
 import { tryNativeRequireJavaScriptModule } from "./native-module-require.js";
 import {
   buildPluginLoaderJitiOptions,
@@ -24,7 +25,7 @@ export function getCachedPluginJitiLoader(params: {
   pluginSdkResolution?: PluginSdkResolutionPreference;
   cacheScopeKey?: string;
 }): PluginJitiLoader {
-  const jitiFilename = params.jitiFilename ?? params.modulePath;
+  const jitiFilename = toSafeImportPath(params.jitiFilename ?? params.modulePath);
   if (params.cacheScopeKey) {
     const scopedCacheKey = `${jitiFilename}::${params.cacheScopeKey}`;
     const cached = params.cache.get(scopedCacheKey);
@@ -79,13 +80,22 @@ export function getCachedPluginJitiLoader(params: {
     ...buildPluginLoaderJitiOptions(aliasMap),
     tryNative,
   });
+  const loadWithJiti = new Proxy(jitiLoader, {
+    apply(target, thisArg, argArray) {
+      const [first, ...rest] = argArray as [unknown, ...unknown[]];
+      if (typeof first === "string") {
+        return Reflect.apply(target, thisArg, [toSafeImportPath(first), ...rest] as never) as never;
+      }
+      return Reflect.apply(target, thisArg, argArray as never) as never;
+    },
+  });
   // When the caller has explicitly opted out of native loading (for example
   // `bundled-capability-runtime` in Vitest+dist mode, which depends on
   // jiti's alias rewriting to surface a narrow SDK slice), route every
   // target through jiti so those alias rewrites still apply.
   if (!tryNative) {
-    params.cache.set(scopedCacheKey, jitiLoader);
-    return jitiLoader;
+    params.cache.set(scopedCacheKey, loadWithJiti);
+    return loadWithJiti;
   }
   // Otherwise prefer native require() for already-compiled JS artifacts
   // (the bundled plugin public surfaces shipped in dist/). jiti's transform
@@ -99,7 +109,7 @@ export function getCachedPluginJitiLoader(params: {
     if (native.ok) {
       return native.moduleExport;
     }
-    return (jitiLoader as (t: string, ...a: unknown[]) => unknown)(target, ...rest);
+    return (loadWithJiti as (t: string, ...a: unknown[]) => unknown)(target, ...rest);
   }) as PluginJitiLoader;
   params.cache.set(scopedCacheKey, loader);
   return loader;

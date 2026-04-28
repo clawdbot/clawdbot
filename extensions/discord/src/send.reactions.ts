@@ -1,5 +1,5 @@
 import { Routes } from "discord-api-types/v10";
-import { requireRuntimeConfig } from "openclaw/plugin-sdk/config-runtime";
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   buildReactionIdentifier,
   createDiscordClient,

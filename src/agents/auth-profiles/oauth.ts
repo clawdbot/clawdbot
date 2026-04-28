@@ -4,7 +4,7 @@ import {
   type OAuthCredentials,
   type OAuthProvider,
 } from "@mariozechner/pi-ai/oauth";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -279,7 +279,7 @@ export async function resolveApiKeyForProfile(
   }
 
   const refResolveCache: SecretRefResolveCache = {};
-  const configForRefResolution = cfg ?? loadConfig();
+  const configForRefResolution = cfg ?? getRuntimeConfig();
   const refDefaults = configForRefResolution.secrets?.defaults;
   assertNoOAuthSecretRefPolicyViolations({
     store,

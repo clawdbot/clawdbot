@@ -159,13 +159,13 @@ describe("subagent registry lifecycle error grace", () => {
     );
     mod.__testing.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
-      loadConfig: loadConfigMock as typeof import("../config/config.js").loadConfig,
+      getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
       onAgentEvent:
         onAgentEventMock as unknown as typeof import("../infra/agent-events.js").onAgentEvent,
     });
     subagentAnnounceTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
-      loadConfig: loadConfigMock as typeof import("../config/config.js").loadConfig,
+      getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
       loadSubagentRegistryRuntime: async () => ({
         countActiveDescendantRuns: mod.countActiveDescendantRuns,
         countPendingDescendantRuns: mod.countPendingDescendantRuns,
@@ -181,7 +181,7 @@ describe("subagent registry lifecycle error grace", () => {
     });
     subagentAnnounceDeliveryTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
-      loadConfig: loadConfigMock as typeof import("../config/config.js").loadConfig,
+      getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
       getRequesterSessionActivity: (requesterSessionKey: string) => {
         const entry = sessionStore[requesterSessionKey];
         return {
@@ -192,7 +192,7 @@ describe("subagent registry lifecycle error grace", () => {
     });
     subagentAnnounceOutputTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
-      loadConfig: loadConfigMock as typeof import("../config/config.js").loadConfig,
+      getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
     });
   });
 

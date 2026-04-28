@@ -26,6 +26,7 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
       - Config only
       - Config + credentials + sessions
       - Full reset (also removes workspace)
+
   </Step>
   <Step title="Model/Auth">
     - **Anthropic API key**: uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.
@@ -76,6 +77,7 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
     - Default `~/.openclaw/workspace` (configurable).
     - Seeds the workspace files needed for the agent bootstrap ritual.
     - Full workspace layout + backup guide: [Agent workspace](/concepts/agent-workspace)
+
   </Step>
   <Step title="Gateway">
     - Port, bind, auth mode, tailscale exposure.
@@ -91,6 +93,7 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
       - Cannot be combined with `--gateway-token`.
     - Disable auth only if you fully trust every local process.
     - Non‑loopback binds still require auth.
+
   </Step>
   <Step title="Channels">
     - [WhatsApp](/channels/whatsapp): optional QR login.
@@ -102,12 +105,14 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
     - [BlueBubbles](/channels/bluebubbles): **recommended for iMessage**; server URL + password + webhook.
     - [iMessage](/channels/imessage): legacy `imsg` CLI path + DB access.
     - DM security: default is pairing. First DM sends a code; approve via `openclaw pairing approve <channel> <code>` or use allowlists.
+
   </Step>
   <Step title="Web search">
     - Pick a supported provider such as Brave, DuckDuckGo, Exa, Firecrawl, Gemini, Grok, Kimi, MiniMax Search, Ollama Web Search, Perplexity, SearXNG, or Tavily (or skip).
     - API-backed providers can use env vars or existing config for quick setup; key-free providers use their provider-specific prerequisites instead.
     - Skip with `--skip-search`.
     - Configure later: `openclaw configure --section web`.
+
   </Step>
   <Step title="Daemon install">
     - macOS: LaunchAgent
@@ -119,18 +124,22 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
     - If token auth requires a token and `gateway.auth.token` is SecretRef-managed, daemon install validates it but does not persist resolved plaintext token values into supervisor service environment metadata.
     - If token auth requires a token and the configured token SecretRef is unresolved, daemon install is blocked with actionable guidance.
     - If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, daemon install is blocked until mode is set explicitly.
+
   </Step>
   <Step title="Health check">
     - Starts the Gateway (if needed) and runs `openclaw health`.
     - Tip: `openclaw status --deep` adds the live gateway health probe to status output, including channel probes when supported (requires a reachable gateway).
+
   </Step>
   <Step title="Skills (recommended)">
     - Reads the available skills and checks requirements.
     - Lets you choose a node manager: **npm / pnpm** (bun not recommended).
     - Installs optional dependencies (some use Homebrew on macOS).
+
   </Step>
   <Step title="Finish">
     - Summary + next steps, including iOS/Android/macOS apps for extra features.
+
   </Step>
 </Steps>
 

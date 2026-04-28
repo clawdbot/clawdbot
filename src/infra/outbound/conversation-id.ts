@@ -1,3 +1,4 @@
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -16,8 +17,7 @@ export function resolveConversationIdFromTargets(params: {
   threadId?: string | number;
   targets: Array<string | undefined | null>;
 }): string | undefined {
-  const threadId =
-    params.threadId != null ? normalizeOptionalString(String(params.threadId)) : undefined;
+  const threadId = stringifyRouteThreadId(params.threadId);
   if (threadId) {
     return threadId;
   }

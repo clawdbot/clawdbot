@@ -13,13 +13,19 @@ describe("Hermes migration file and skill items", () => {
   function configRuntime(config: Record<string, unknown>) {
     return {
       config: {
-        loadConfig: () => config,
-        writeConfigFile: async (next: Record<string, unknown>) => {
+        current: () => config,
+        mutateConfigFile: async ({
+          mutate,
+        }: {
+          mutate: (draft: Record<string, unknown>) => void | Promise<void>;
+        }) => {
+          const next = structuredClone(config);
+          await mutate(next);
           Object.keys(config).forEach((key) => {
             delete config[key];
           });
           Object.assign(config, next);
-          return next;
+          return { nextConfig: next };
         },
       },
     } as never;

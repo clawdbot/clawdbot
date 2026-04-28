@@ -1,5 +1,5 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import {
   __testing,
   buildDeepgramRealtimeTranscriptionProvider,

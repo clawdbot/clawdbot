@@ -6,7 +6,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 
 vi.mock("../../config/config.js", () => {
   return {
-    loadConfig: vi.fn(() => ({
+    getRuntimeConfig: vi.fn(() => ({
       agents: {
         list: [{ id: "main" }, { id: "opus" }],
       },
@@ -82,11 +82,19 @@ import {
 import { loadCombinedSessionStoreForGateway } from "../session-utils.js";
 import { usageHandlers } from "./usage.js";
 
+const TEST_RUNTIME_CONFIG = {
+  agents: {
+    list: [{ id: "main" }, { id: "opus" }],
+  },
+  session: {},
+};
+
 async function runSessionsUsage(params: Record<string, unknown>) {
   const respond = vi.fn();
   await usageHandlers["sessions.usage"]({
     respond,
     params,
+    context: { getRuntimeConfig: () => TEST_RUNTIME_CONFIG },
   } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
   return respond;
 }
@@ -96,6 +104,7 @@ async function runSessionsUsageTimeseries(params: Record<string, unknown>) {
   await usageHandlers["sessions.usage.timeseries"]({
     respond,
     params,
+    context: { getRuntimeConfig: () => TEST_RUNTIME_CONFIG },
   } as unknown as Parameters<(typeof usageHandlers)["sessions.usage.timeseries"]>[0]);
   return respond;
 }
@@ -105,6 +114,7 @@ async function runSessionsUsageLogs(params: Record<string, unknown>) {
   await usageHandlers["sessions.usage.logs"]({
     respond,
     params,
+    context: { getRuntimeConfig: () => TEST_RUNTIME_CONFIG },
   } as unknown as Parameters<(typeof usageHandlers)["sessions.usage.logs"]>[0]);
   return respond;
 }

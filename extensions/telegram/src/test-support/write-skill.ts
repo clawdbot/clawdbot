@@ -1,1 +1,1 @@
-export { writeSkill } from "../../../../src/agents/skills.e2e-test-helpers.js";
+export { writeSkill } from "openclaw/plugin-sdk/test-fixtures";

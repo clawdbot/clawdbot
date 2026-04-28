@@ -28,13 +28,22 @@ if [ "${#files[@]}" -eq 0 ]; then
   exit 0
 fi
 
+restage_files=()
+for file in "${files[@]}"; do
+  if ! git check-ignore --no-index -q -- "$file"; then
+    restage_files+=("$file")
+  fi
+done
+
 format_files=()
 while IFS= read -r -d '' file; do
   format_files+=("$file")
-done < <(node "$FILTER_FILES" format -- "${files[@]}")
+done < <(node "$FILTER_FILES" format -- "${restage_files[@]}")
 
 if [ "${#format_files[@]}" -gt 0 ]; then
   "$RUN_NODE_TOOL" oxfmt --write --no-error-on-unmatched-pattern "${format_files[@]}"
 fi
 
-git add -- "${files[@]}"
+if [ "${#restage_files[@]}" -gt 0 ]; then
+  git add -- "${restage_files[@]}"
+fi

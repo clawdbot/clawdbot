@@ -1,5 +1,5 @@
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, success } from "openclaw/plugin-sdk/runtime-env";
 import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { logInfo } from "openclaw/plugin-sdk/text-runtime";
@@ -14,7 +14,7 @@ export async function loginWeb(
   runtime: RuntimeEnv = defaultRuntime,
   accountId?: string,
 ) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId });
   const restoredFromBackup = await restoreCredsFromBackupIfNeeded(account.authDir);
   let sock = await createWaSocket(true, verbose, {

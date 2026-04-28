@@ -1,9 +1,17 @@
-import { modelKey, normalizeProviderId } from "../../agents/model-selection-normalize.js";
-import {
-  resolveModelRefFromString,
-  type ModelAliasIndex,
-} from "../../agents/model-selection-shared.js";
+import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
+import { normalizeProviderId } from "../../agents/provider-id.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+
+export type ModelAliasIndex = {
+  byAlias: Map<
+    string,
+    {
+      alias: string;
+      ref: { provider: string; model: string };
+    }
+  >;
+  byKey: Map<string, string[]>;
+};
 
 export type ModelDirectiveSelection = {
   provider: string;
@@ -23,6 +31,53 @@ const FUZZY_VARIANT_TOKENS = [
   "small",
   "nano",
 ];
+
+export function modelKey(provider: string, model: string): string {
+  const providerId = provider.trim();
+  const modelId = model.trim();
+  if (!providerId) {
+    return modelId;
+  }
+  if (!modelId) {
+    return providerId;
+  }
+  return normalizeLowercaseStringOrEmpty(modelId).startsWith(
+    `${normalizeLowercaseStringOrEmpty(providerId)}/`,
+  )
+    ? modelId
+    : `${providerId}/${modelId}`;
+}
+
+export function resolveModelRefFromDirectiveString(params: {
+  raw: string;
+  defaultProvider: string;
+  aliasIndex: ModelAliasIndex;
+}): { ref: { provider: string; model: string }; alias?: string } | null {
+  const { model } = splitTrailingAuthProfile(params.raw);
+  if (!model) {
+    return null;
+  }
+  if (!model.includes("/")) {
+    const aliasKey = normalizeLowercaseStringOrEmpty(model);
+    const aliasMatch = params.aliasIndex.byAlias.get(aliasKey);
+    if (aliasMatch) {
+      return { ref: aliasMatch.ref, alias: aliasMatch.alias };
+    }
+  }
+  const trimmed = model.trim();
+  const slash = trimmed.indexOf("/");
+  const providerRaw = slash === -1 ? params.defaultProvider : trimmed.slice(0, slash).trim();
+  const modelRaw = slash === -1 ? trimmed : trimmed.slice(slash + 1).trim();
+  if (!providerRaw || !modelRaw) {
+    return null;
+  }
+  return {
+    ref: {
+      provider: normalizeProviderId(providerRaw),
+      model: modelRaw,
+    },
+  };
+}
 
 function boundedLevenshteinDistance(a: string, b: string, maxDistance: number): number | null {
   if (a === b) {
@@ -299,7 +354,7 @@ export function resolveModelDirectiveSelection(params: {
     return { selection: buildSelection(best.provider, best.model) };
   };
 
-  const resolved = resolveModelRefFromString({
+  const resolved = resolveModelRefFromDirectiveString({
     raw: rawTrimmed,
     defaultProvider,
     aliasIndex,

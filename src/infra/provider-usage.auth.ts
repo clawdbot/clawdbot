@@ -11,7 +11,7 @@ import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { resolveUsableCustomProviderApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
-import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import {
   isActivatedManifestOwner,
@@ -228,7 +228,7 @@ async function resolveOAuthToken(params: {
     try {
       const resolved = await resolveApiKeyForProfile({
         // Reuse the already-resolved config snapshot for token/ref resolution so
-        // usage snapshots don't trigger a second ambient loadConfig() call.
+        // usage snapshots don't trigger a second ambient getRuntimeConfig() call.
         cfg: params.state.cfg,
         store,
         profileId,
@@ -364,7 +364,7 @@ export async function resolveProviderAuths(params: {
   }
 
   const stateBase = {
-    cfg: params.config ?? loadConfig(),
+    cfg: params.config ?? getRuntimeConfig(),
     env: params.env ?? process.env,
     agentDir: params.agentDir,
   };

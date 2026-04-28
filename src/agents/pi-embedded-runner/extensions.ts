@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ExtensionFactory, SessionManager } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { listAgentToolResultMiddlewares } from "../../plugins/agent-tool-result-middleware.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
@@ -35,13 +34,9 @@ function recordFromUnknown(value: unknown): Record<string, unknown> {
 }
 
 function buildAgentToolResultMiddlewareFactory(): ExtensionFactory {
-  const handlers = listAgentToolResultMiddlewares("pi");
-  const runner = createAgentToolResultMiddlewareRunner({ runtime: "pi" }, handlers);
+  const runner = createAgentToolResultMiddlewareRunner({ runtime: "pi" });
   return (pi) => {
     pi.on("tool_result", async (rawEvent: unknown, ctx: { cwd?: string }) => {
-      if (handlers.length === 0) {
-        return undefined;
-      }
       const event = recordFromUnknown(rawEvent) as PiToolResultEvent;
       if (!event.toolName) {
         return undefined;

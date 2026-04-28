@@ -356,6 +356,52 @@ describe("sessions", () => {
     expect(store[sessionKey]?.origin?.chatType).toBe("group");
   });
 
+  it("updateLastRoute skips missing sessions when creation is disabled", async () => {
+    const sessionKey = "agent:main:demo-chat:group:room-123";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateLastRoute-no-create",
+      entries: {},
+    });
+
+    const result = await updateLastRoute({
+      storePath,
+      sessionKey,
+      deliveryContext: {
+        channel: "demo-chat",
+        to: "room-123",
+      },
+      createIfMissing: false,
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(result).toBeNull();
+    expect(store[sessionKey]).toBeUndefined();
+  });
+
+  it("updateLastRoute updates existing sessions when creation is disabled", async () => {
+    const sessionKey = "agent:main:demo-chat:group:room-123";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateLastRoute-existing-no-create",
+      entries: {
+        [sessionKey]: buildMainSessionEntry(),
+      },
+    });
+
+    await updateLastRoute({
+      storePath,
+      sessionKey,
+      deliveryContext: {
+        channel: "demo-chat",
+        to: "room-123",
+      },
+      createIfMissing: false,
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.lastChannel).toBe("demo-chat");
+    expect(store[sessionKey]?.lastTo).toBe("room-123");
+  });
+
   it("updateLastRoute does not bump updatedAt on existing sessions (#49515)", async () => {
     const mainSessionKey = "agent:main:main";
     const frozenUpdatedAt = 1000;

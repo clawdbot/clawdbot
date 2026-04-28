@@ -75,7 +75,7 @@ describe("isTruthyEnvValue", () => {
 });
 
 describe("logAcceptedEnvOption", () => {
-  it("logs accepted env options once with redaction and formatting", () => {
+  it("logs accepted env options once with redaction and formatting", async () => {
     loggerMocks.info.mockClear();
 
     withEnv(
@@ -98,7 +98,9 @@ describe("logAcceptedEnvOption", () => {
       },
     );
 
-    expect(loggerMocks.info).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(loggerMocks.info).toHaveBeenCalledTimes(1);
+    });
     expect(loggerMocks.info).toHaveBeenCalledWith(
       "env: OPENCLAW_TEST_ENV=<redacted> (test option)",
     );

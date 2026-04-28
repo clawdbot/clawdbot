@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sessionBindingContractChannelIds } from "../../../../test/helpers/channels/manifest.js";
+import { sessionBindingContractChannelIds } from "./test-helpers/manifest.js";
 
 const discordSessionBindingAdapterChannels = ["discord"] as const;
 

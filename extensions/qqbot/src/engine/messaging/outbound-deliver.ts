@@ -19,7 +19,7 @@ import { filterInternalMarkers } from "../utils/text-parsing.js";
 import { decodeMediaPath } from "./decode-media-path.js";
 import {
   sendText as senderSendText,
-  sendImage as senderSendImage,
+  sendMedia as senderSendMedia,
   withTokenRetry,
   buildDeliveryTarget,
   accountToCreds,
@@ -659,7 +659,13 @@ async function sendMarkdownReply(
         const creds = accountToCreds(account);
         if (target.type === "c2c" || target.type === "group") {
           await withTokenRetry(creds, async () => {
-            await senderSendImage(target, imageUrl, creds, { msgId: event.messageId });
+            await senderSendMedia({
+              target,
+              creds,
+              kind: "image",
+              source: { url: imageUrl },
+              msgId: event.messageId,
+            });
           });
         } else {
           log?.debug?.(`${target.type} does not support rich media, skipping Base64 image`);

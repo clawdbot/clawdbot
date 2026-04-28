@@ -1,16 +1,92 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../test/helpers/import-fresh.ts";
+import {
+  clearBundledRuntimeDependencyNodePaths,
+  resolveBundledRuntimeDependencyInstallRoot,
+} from "./bundled-runtime-deps.js";
 
 const tempDirs: string[] = [];
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const originalPluginStageDir = process.env.OPENCLAW_PLUGIN_STAGE_DIR;
 
 function createTempDir(): string {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-public-surface-loader-"));
   tempDirs.push(tempDir);
   return tempDir;
+}
+
+function createPackagedPublicArtifactWithStagedRuntimeDep(): {
+  bundledPluginsDir: string;
+  pluginRoot: string;
+  stageRoot: string;
+} {
+  const packageRoot = createTempDir();
+  const pluginRoot = path.join(packageRoot, "dist", "extensions", "demo");
+  const stageRoot = path.join(packageRoot, "stage");
+  fs.mkdirSync(pluginRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(packageRoot, "package.json"),
+    JSON.stringify({ name: "openclaw", version: "0.0.0", type: "module" }, null, 2),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(pluginRoot, "package.json"),
+    JSON.stringify(
+      {
+        name: "@openclaw/plugin-demo",
+        version: "0.0.0",
+        type: "module",
+        dependencies: {
+          "public-artifact-runtime-dep": "1.0.0",
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(pluginRoot, "provider-policy-api.js"),
+    [
+      'import { marker as depMarker } from "public-artifact-runtime-dep";',
+      "export const marker = `artifact:${depMarker}`;",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, {
+    env: {
+      ...process.env,
+      OPENCLAW_PLUGIN_STAGE_DIR: stageRoot,
+    },
+  });
+  const depRoot = path.join(installRoot, "node_modules", "public-artifact-runtime-dep");
+  fs.mkdirSync(depRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(depRoot, "package.json"),
+    JSON.stringify(
+      {
+        name: "public-artifact-runtime-dep",
+        version: "1.0.0",
+        type: "module",
+        exports: "./index.js",
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(depRoot, "index.js"), 'export const marker = "staged";\n', "utf8");
+
+  return {
+    bundledPluginsDir: path.join(packageRoot, "dist", "extensions"),
+    pluginRoot,
+    stageRoot,
+  };
 }
 
 afterEach(() => {
@@ -20,10 +96,17 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.resetModules();
   vi.doUnmock("jiti");
+  vi.doUnmock("node:module");
+  clearBundledRuntimeDependencyNodePaths();
   if (originalBundledPluginsDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   } else {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
+  }
+  if (originalPluginStageDir === undefined) {
+    delete process.env.OPENCLAW_PLUGIN_STAGE_DIR;
+  } else {
+    process.env.OPENCLAW_PLUGIN_STAGE_DIR = originalPluginStageDir;
   }
 });
 
@@ -34,6 +117,7 @@ describe("bundled plugin public surface loader", () => {
       createJiti,
     }));
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.resetModules();
 
     try {
       const publicSurfaceLoader = await importFreshModule<
@@ -83,6 +167,7 @@ describe("bundled plugin public surface loader", () => {
         createRequire: vi.fn(() => requireLoader),
       });
     });
+    vi.resetModules();
 
     const publicSurfaceLoader = await importFreshModule<
       typeof import("./public-surface-loader.js")
@@ -110,6 +195,7 @@ describe("bundled plugin public surface loader", () => {
     vi.doMock("jiti", () => ({
       createJiti,
     }));
+    vi.resetModules();
 
     const publicSurfaceLoader = await importFreshModule<
       typeof import("./public-surface-loader.js")
@@ -137,11 +223,31 @@ describe("bundled plugin public surface loader", () => {
     expect(createJiti).toHaveBeenCalledTimes(1);
   });
 
+  it("loads built public artifacts through staged runtime deps", async () => {
+    const publicSurfaceLoader = await importFreshModule<
+      typeof import("./public-surface-loader.js")
+    >(import.meta.url, "./public-surface-loader.js?scope=runtime-deps");
+    const fixture = createPackagedPublicArtifactWithStagedRuntimeDep();
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = fixture.bundledPluginsDir;
+    process.env.OPENCLAW_PLUGIN_STAGE_DIR = fixture.stageRoot;
+
+    const loaded = publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{
+      marker: string;
+    }>({
+      dirName: "demo",
+      artifactBasename: "provider-policy-api.js",
+    });
+
+    expect(loaded.marker).toBe("artifact:staged");
+    expect(fs.existsSync(path.join(fixture.pluginRoot, "node_modules"))).toBe(false);
+  });
+
   it("rejects public artifacts that change after boundary validation", async () => {
     const createJiti = vi.fn(() => vi.fn(() => ({ marker: "should-not-load" })));
     vi.doMock("jiti", () => ({
       createJiti,
     }));
+    vi.resetModules();
 
     const publicSurfaceLoader = await importFreshModule<
       typeof import("./public-surface-loader.js")

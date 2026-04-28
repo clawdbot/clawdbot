@@ -1,3 +1,3 @@
-import { buildChannelConfigSchema, GoogleChatConfigSchema } from "openclaw/plugin-sdk/googlechat";
+import { buildChannelConfigSchema, GoogleChatConfigSchema } from "../runtime-api.js";
 
 export const GoogleChatChannelConfigSchema = buildChannelConfigSchema(GoogleChatConfigSchema);

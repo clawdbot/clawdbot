@@ -1,14 +1,14 @@
 import { expect, it } from "vitest";
 
-type ResolveTargetMode = "explicit" | "implicit" | "heartbeat";
+export type ResolveTargetMode = "explicit" | "implicit" | "heartbeat";
 
-type ResolveTargetResult = {
+export type ResolveTargetResult = {
   ok: boolean;
   to?: string;
   error?: unknown;
 };
 
-type ResolveTargetFn = (params: {
+export type ResolveTargetFn = (params: {
   to?: string;
   mode: ResolveTargetMode;
   allowFrom: string[];

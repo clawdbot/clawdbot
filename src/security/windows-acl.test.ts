@@ -13,7 +13,7 @@ const userInfoMock = vi.hoisted(() =>
 );
 
 vi.mock("node:os", async () => {
-  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
   return mockNodeBuiltinModule(
     () => vi.importActual<typeof import("node:os")>("node:os"),
     { userInfo: userInfoMock as unknown as typeof import("node:os").userInfo },

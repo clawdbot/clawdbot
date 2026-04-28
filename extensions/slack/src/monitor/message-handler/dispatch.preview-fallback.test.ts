@@ -146,6 +146,22 @@ vi.mock("openclaw/plugin-sdk/channel-reply-pipeline", () => ({
     },
     onModelSelected: undefined,
   }),
+  resolveChannelSourceReplyDeliveryMode: (params: {
+    cfg?: { messages?: { groupChat?: { visibleReplies?: string } } };
+    ctx?: { ChatType?: string };
+    requested?: "automatic" | "message_tool_only";
+  }) => {
+    if (params.requested) {
+      return params.requested;
+    }
+    const chatType = params.ctx?.ChatType;
+    if (chatType === "group" || chatType === "channel") {
+      return params.cfg?.messages?.groupChat?.visibleReplies === "automatic"
+        ? "automatic"
+        : "message_tool_only";
+    }
+    return "automatic";
+  },
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-streaming", () => ({

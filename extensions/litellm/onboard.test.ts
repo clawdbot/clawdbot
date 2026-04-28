@@ -1,5 +1,5 @@
+import { expectProviderOnboardMergedLegacyConfig } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
-import { expectProviderOnboardMergedLegacyConfig } from "../../test/helpers/plugins/provider-onboard.js";
 import { applyLitellmProviderConfig } from "./onboard.js";
 
 describe("litellm onboard", () => {

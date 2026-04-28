@@ -1140,11 +1140,14 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       auth: {
         login: async ({ cfg }) => {
           const { createClackPrompter } = await import("openclaw/plugin-sdk/setup-runtime");
-          const { writeConfigFile } = await import("openclaw/plugin-sdk/config-runtime");
+          const { replaceConfigFile } = await import("openclaw/plugin-sdk/config-mutation");
           const prompter = createClackPrompter();
           const nextCfg = await runFeishuLogin({ cfg, prompter });
           if (nextCfg !== cfg) {
-            await writeConfigFile(nextCfg);
+            await replaceConfigFile({
+              nextConfig: nextCfg,
+              afterWrite: { mode: "auto" },
+            });
           }
         },
       },
@@ -1280,6 +1283,26 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       textChunkLimit: 4000,
+      presentationCapabilities: {
+        supported: true,
+        buttons: true,
+        selects: false,
+        context: true,
+        divider: true,
+      },
+      renderPresentation: async (ctx) => {
+        const runtime = await loadFeishuChannelRuntime();
+        const renderPresentation = runtime.feishuOutbound.renderPresentation;
+        return renderPresentation ? await renderPresentation(ctx) : null;
+      },
+      sendPayload: async (ctx) => {
+        const runtime = await loadFeishuChannelRuntime();
+        const sendPayload = runtime.feishuOutbound.sendPayload;
+        if (!sendPayload) {
+          throw new Error("Feishu payload sending is not available.");
+        }
+        return await sendPayload(ctx);
+      },
       ...createRuntimeOutboundDelegates({
         getRuntime: loadFeishuChannelRuntime,
         sendText: { resolve: (runtime) => runtime.feishuOutbound.sendText },

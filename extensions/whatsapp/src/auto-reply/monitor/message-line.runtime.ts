@@ -1,11 +1,11 @@
-import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 
 export {
   formatInboundEnvelope,
   type EnvelopeFormatOptions,
 } from "openclaw/plugin-sdk/channel-envelope";
 
-type WhatsAppMessagePrefixConfig = ReturnType<typeof loadConfig>;
+type WhatsAppMessagePrefixConfig = OpenClawConfig;
 
 function normalizeAgentId(agentId: string): string {
   return agentId.trim().toLowerCase() || "main";

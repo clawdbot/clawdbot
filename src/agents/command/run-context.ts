@@ -1,3 +1,4 @@
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "../../utils/account-id.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import type { AgentCommandOpts, AgentRunContext } from "./types.js";
@@ -39,7 +40,10 @@ export function resolveAgentRunContext(opts: AgentCommandOpts): AgentRunContext 
     opts.threadId !== "" &&
     opts.threadId !== null
   ) {
-    merged.currentThreadTs = String(opts.threadId);
+    const threadId = stringifyRouteThreadId(opts.threadId);
+    if (threadId) {
+      merged.currentThreadTs = threadId;
+    }
   }
 
   // Populate currentChannelId from the outbound target so channel threading

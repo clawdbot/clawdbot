@@ -8,28 +8,34 @@ const prepareSlackMessageMock =
   >();
 const dispatchPreparedSlackMessageMock = vi.fn<(prepared: unknown) => Promise<void>>();
 
-vi.mock("../../../../src/channels/inbound-debounce-policy.js", () => ({
-  shouldDebounceTextInbound: () => false,
-  createChannelInboundDebouncer: (params: {
-    onFlush: (
-      entries: Array<{
-        message: Record<string, unknown>;
-        opts: { source: "message" | "app_mention"; wasMentioned?: boolean };
-      }>,
-    ) => Promise<void>;
-  }) => ({
-    debounceMs: 0,
-    debouncer: {
-      enqueue: async (entry: {
-        message: Record<string, unknown>;
-        opts: { source: "message" | "app_mention"; wasMentioned?: boolean };
-      }) => {
-        await params.onFlush([entry]);
+vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
+    "openclaw/plugin-sdk/channel-inbound",
+  );
+  return {
+    ...actual,
+    shouldDebounceTextInbound: () => false,
+    createChannelInboundDebouncer: (params: {
+      onFlush: (
+        entries: Array<{
+          message: Record<string, unknown>;
+          opts: { source: "message" | "app_mention"; wasMentioned?: boolean };
+        }>,
+      ) => Promise<void>;
+    }) => ({
+      debounceMs: 0,
+      debouncer: {
+        enqueue: async (entry: {
+          message: Record<string, unknown>;
+          opts: { source: "message" | "app_mention"; wasMentioned?: boolean };
+        }) => {
+          await params.onFlush([entry]);
+        },
+        flushKey: async (_key: string) => {},
       },
-      flushKey: async (_key: string) => {},
-    },
-  }),
-}));
+    }),
+  };
+});
 
 vi.mock("./thread-resolution.js", () => ({
   createSlackThreadTsResolver: () => ({

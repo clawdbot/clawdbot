@@ -41,6 +41,11 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       groups: { "*": { requireMention: true } },
     },
   },
+  messages: {
+    groupChat: {
+      visibleReplies: "message_tool", // default; use "automatic" for legacy room replies
+    },
+  },
 }
 ```
 
@@ -99,13 +104,9 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     responsePrefix: ">",
     ackReaction: "👀",
     ackReactionScope: "group-mentions",
-  },
-
-  // Routing + queue
-  routing: {
     groupChat: {
-      mentionPatterns: ["@openclaw", "openclaw"],
       historyLimit: 50,
+      visibleReplies: "message_tool", // normal final replies stay private in groups/channels
     },
     queue: {
       mode: "collect",
@@ -163,7 +164,6 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       mode: "warn",
       pruneAfter: "30d",
       maxEntries: 500,
-      rotateBytes: "10mb",
       resetArchiveRetention: "30d", // duration or false
       maxDiskBytes: "500mb", // optional
       highWaterBytes: "400mb", // optional (defaults to 80% of maxDiskBytes)
@@ -304,6 +304,9 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
         id: "main",
         default: true,
         // inherits defaults.skills -> github, weather
+        groupChat: {
+          mentionPatterns: ["@openclaw", "openclaw"],
+        },
         thinkingDefault: "high", // per-agent thinking override
         reasoningDefault: "on", // per-agent reasoning visibility
         fastModeDefault: false, // per-agent fast mode

@@ -1,7 +1,22 @@
 {
   "id": "kimi",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["kimi", "kimi-coding"],
+  "providerRequest": {
+    "providers": {
+      "kimi": {
+        "family": "moonshot",
+        "compatibilityFamily": "moonshot"
+      },
+      "kimi-coding": {
+        "family": "moonshot",
+        "compatibilityFamily": "moonshot"
+      }
+    }
+  },
   "modelPricing": {
     "providers": {
       "kimi": {

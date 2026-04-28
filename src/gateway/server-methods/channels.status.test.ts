@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({})),
+  getRuntimeConfig: vi.fn(() => ({})),
   applyPluginAutoEnable: vi.fn(),
   listChannelPlugins: vi.fn(),
   buildChannelUiCatalog: vi.fn(),
@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../config/config.js", () => ({
-  loadConfig: mocks.loadConfig,
+  getRuntimeConfig: mocks.getRuntimeConfig,
   readConfigFileSnapshot: vi.fn(async () => ({
     config: {},
     path: "openclaw.config.json",
@@ -55,6 +55,7 @@ function createOptions(
     isWebchatConnect: () => false,
     respond: vi.fn(),
     context: {
+      getRuntimeConfig: mocks.getRuntimeConfig,
       getRuntimeSnapshot: () => ({
         channels: {},
         channelAccounts: {},
@@ -67,7 +68,7 @@ function createOptions(
 describe("channelsHandlers channels.status", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.loadConfig.mockReturnValue({});
+    mocks.getRuntimeConfig.mockReturnValue({});
     mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
     mocks.buildChannelUiCatalog.mockReturnValue({
       order: ["whatsapp"],

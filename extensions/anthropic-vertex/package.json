@@ -6,8 +6,8 @@
   "type": "module",
   "dependencies": {
     "@anthropic-ai/vertex-sdk": "^0.16.0",
-    "@mariozechner/pi-agent-core": "0.70.2",
-    "@mariozechner/pi-ai": "0.70.2"
+    "@mariozechner/pi-agent-core": "0.70.5",
+    "@mariozechner/pi-ai": "0.70.5"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

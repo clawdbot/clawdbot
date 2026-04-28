@@ -1,3 +1,9 @@
+import { onAgentEvent } from "../infra/agent-events.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  clearPluginHostRuntimeState,
+  dispatchPluginAgentEventSubscriptions,
+} from "./host-hook-runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
@@ -5,6 +11,8 @@ import {
   type RegistryState,
   type RegistrySurfaceState,
 } from "./runtime-state.js";
+
+const log = createSubsystemLogger("plugins/runtime");
 
 function asPluginRegistry(registry: RegistryState["activeRegistry"]): PluginRegistry | null {
   return registry;
@@ -38,6 +46,47 @@ const state: RegistryState = (() => {
   }
   return registryState;
 })();
+
+let pluginAgentEventUnsubscribe: (() => void) | undefined;
+
+function registryHasPluginHostCleanupWork(registry: PluginRegistry | null): boolean {
+  if (!registry) {
+    return false;
+  }
+  return (
+    registry.plugins.some((plugin) => plugin.status === "loaded") ||
+    (registry.sessionExtensions?.length ?? 0) > 0 ||
+    (registry.runtimeLifecycles?.length ?? 0) > 0 ||
+    (registry.agentEventSubscriptions?.length ?? 0) > 0 ||
+    (registry.sessionSchedulerJobs?.length ?? 0) > 0
+  );
+}
+
+async function cleanupPreviousPluginHostRegistry(params: {
+  previousRegistry: PluginRegistry;
+  nextRegistry: PluginRegistry;
+}): Promise<void> {
+  const [{ getRuntimeConfig }, { cleanupReplacedPluginHostRegistry }] = await Promise.all([
+    import("../config/config.js"),
+    import("./host-hook-cleanup.js"),
+  ]);
+  await cleanupReplacedPluginHostRegistry({
+    cfg: getRuntimeConfig(),
+    previousRegistry: params.previousRegistry,
+    nextRegistry: params.nextRegistry,
+  });
+}
+
+function syncPluginAgentEventBridge(registry: PluginRegistry | null): void {
+  pluginAgentEventUnsubscribe?.();
+  pluginAgentEventUnsubscribe = undefined;
+  if (!registry) {
+    return;
+  }
+  pluginAgentEventUnsubscribe = onAgentEvent((event) => {
+    dispatchPluginAgentEventSubscriptions({ registry: state.activeRegistry, event });
+  });
+}
 
 export function recordImportedPluginId(pluginId: string): void {
   state.importedPluginIds.add(pluginId);
@@ -79,6 +128,7 @@ export function setActivePluginRegistry(
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable" = "default",
   workspaceDir?: string,
 ) {
+  const previousRegistry = asPluginRegistry(state.activeRegistry);
   state.activeRegistry = registry;
   state.activeVersion += 1;
   syncTrackedSurface(state.httpRoute, registry, true);
@@ -86,6 +136,20 @@ export function setActivePluginRegistry(
   state.key = cacheKey ?? null;
   state.workspaceDir = workspaceDir ?? null;
   state.runtimeSubagentMode = runtimeSubagentMode;
+  syncPluginAgentEventBridge(registry);
+  if (
+    !previousRegistry ||
+    previousRegistry === registry ||
+    !registryHasPluginHostCleanupWork(previousRegistry)
+  ) {
+    return;
+  }
+  void cleanupPreviousPluginHostRegistry({
+    previousRegistry,
+    nextRegistry: registry,
+  }).catch((error) => {
+    log.warn(`plugin host registry cleanup failed: ${String(error)}`);
+  });
 }
 
 export function getActivePluginRegistry(): PluginRegistry | null {
@@ -238,4 +302,10 @@ export function resetPluginRuntimeStateForTest(): void {
   state.workspaceDir = null;
   state.runtimeSubagentMode = "default";
   state.importedPluginIds.clear();
+  syncPluginAgentEventBridge(null);
+  // Also clear the plugin host-hook runtime singleton (run context map,
+  // scheduler-job records, pending agent-event handlers, closedRunIds set).
+  // Otherwise per-test bleed-over of those globals can cause flaky behavior
+  // since this helper is widely used across plugin/agent tests.
+  clearPluginHostRuntimeState();
 }

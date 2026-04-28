@@ -8,6 +8,7 @@ import {
 } from "../agents/model-picker-visibility.js";
 import {
   buildAllowedModelSet,
+  buildConfiguredModelCatalog,
   buildModelAliasIndex,
   type ModelAliasIndex,
   modelKey,
@@ -113,6 +114,13 @@ function resolveConfiguredModelKeys(cfg: OpenClawConfig): string[] {
   return Object.keys(models)
     .map((key) => key.trim())
     .filter((key) => key.length > 0);
+}
+
+function loadPickerModelCatalog(cfg: OpenClawConfig): ReturnType<typeof loadModelCatalog> {
+  if (cfg.models?.mode === "replace") {
+    return Promise.resolve(buildConfiguredModelCatalog({ cfg }));
+  }
+  return loadModelCatalog({ config: cfg });
 }
 
 function normalizeModelKeys(values: string[]): string[] {
@@ -625,7 +633,7 @@ export async function promptDefaultModel(
   const catalogProgress = params.prompter.progress("Loading available models");
   let catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
   try {
-    catalog = await loadModelCatalog({ config: cfg });
+    catalog = await loadPickerModelCatalog(cfg);
   } finally {
     catalogProgress.stop();
   }
@@ -897,7 +905,7 @@ export async function promptModelAllowlist(params: {
   const allowlistProgress = params.prompter.progress("Loading available models");
   let catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
   try {
-    catalog = await loadModelCatalog({ config: cfg });
+    catalog = await loadPickerModelCatalog(cfg);
   } finally {
     allowlistProgress.stop();
   }

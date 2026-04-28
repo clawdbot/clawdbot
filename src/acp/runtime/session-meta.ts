@@ -1,4 +1,4 @@
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import { loadSessionStore } from "../../config/sessions/store-load.js";
 import { resolveAllAgentSessionStoreTargets } from "../../config/sessions/targets.js";
@@ -54,7 +54,7 @@ export function resolveSessionStorePathForAcp(params: {
   sessionKey: string;
   cfg?: OpenClawConfig;
 }): { cfg: OpenClawConfig; storePath: string } {
-  const cfg = params.cfg ?? loadConfig();
+  const cfg = params.cfg ?? getRuntimeConfig();
   const parsed = parseAgentSessionKey(params.sessionKey);
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: parsed?.agentId,
@@ -99,7 +99,7 @@ export async function listAcpSessionEntries(params: {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<AcpSessionStoreEntry[]> {
-  const cfg = params.cfg ?? loadConfig();
+  const cfg = params.cfg ?? getRuntimeConfig();
   const storeTargets = await resolveAllAgentSessionStoreTargets(
     cfg,
     params.env ? { env: params.env } : undefined,

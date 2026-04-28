@@ -2,27 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-// Mirrored constants in src/commands/doctor-cron-dreaming-payload-migration.ts
-// must match the source-of-truth values in
-// extensions/memory-core/src/dreaming.ts. There is no shared module today
-// because src/ does not import from extensions/, so this drift check stands
-// in for that boundary: rename either side without updating the other and
-// this test fails before the doctor migration silently stops matching jobs.
 const MIRROR_PATH = path.resolve(__dirname, "doctor-cron-dreaming-payload-migration.ts");
-const SOURCE_PATH = path.resolve(
-  __dirname,
-  "..",
-  "..",
-  "extensions",
-  "memory-core",
-  "src",
-  "dreaming.ts",
-);
+const SOURCE_PATH = path.resolve(__dirname, "..", "..", "src", "memory-host-sdk", "dreaming.ts");
 
 const NAMES = [
-  "MANAGED_DREAMING_CRON_NAME",
-  "MANAGED_DREAMING_CRON_TAG",
-  "DREAMING_SYSTEM_EVENT_TEXT",
+  "MANAGED_MEMORY_DREAMING_CRON_NAME",
+  "MANAGED_MEMORY_DREAMING_CRON_TAG",
+  "MEMORY_DREAMING_SYSTEM_EVENT_TEXT",
 ] as const;
 
 function extractStringConst(source: string, name: string): string {
@@ -35,19 +21,17 @@ function extractStringConst(source: string, name: string): string {
 }
 
 describe("dreaming payload-migration constants drift", () => {
-  it("matches the source-of-truth values from extensions/memory-core/src/dreaming.ts", async () => {
+  it("imports the source-of-truth values from the memory host SDK", async () => {
     const [mirror, source] = await Promise.all([
       fs.readFile(MIRROR_PATH, "utf-8"),
       fs.readFile(SOURCE_PATH, "utf-8"),
     ]);
 
     for (const name of NAMES) {
-      const mirrorValue = extractStringConst(mirror, name);
       const sourceValue = extractStringConst(source, name);
-      expect(
-        mirrorValue,
-        `${name} drift: mirror in src/commands does not match extensions/memory-core/src/dreaming.ts`,
-      ).toBe(sourceValue);
+      expect(sourceValue).toBeTruthy();
+      expect(mirror).toContain(name);
+      expect(mirror).not.toMatch(new RegExp(`\\bconst ${name}\\b`));
     }
   });
 });

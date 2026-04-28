@@ -1,10 +1,10 @@
-import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/types.js";
-import { resolveSecretRefValues } from "../../../src/secrets/resolve.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   applyResolvedAssignments,
   createResolverContext,
-} from "../../../src/secrets/runtime-shared.js";
+  resolveSecretRefValues,
+} from "openclaw/plugin-sdk/runtime-secret-resolution";
+import { describe, expect, it } from "vitest";
 import { collectRuntimeConfigAssignments } from "./secret-contract.js";
 
 describe("googlechat secret contract", () => {

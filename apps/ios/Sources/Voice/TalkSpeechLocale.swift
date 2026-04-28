@@ -13,8 +13,8 @@ enum TalkSpeechLocale {
     }
 
     static func supportedOptions(
-        supportedLocales: Set<Locale> = SFSpeechRecognizer.supportedLocales()
-    ) -> [Option] {
+        supportedLocales: Set<Locale> = SFSpeechRecognizer.supportedLocales()) -> [Option]
+    {
         var seen = Set<String>()
         let dynamic: [Option] = supportedLocales
             .compactMap { locale in
@@ -33,8 +33,8 @@ enum TalkSpeechLocale {
         gatewaySelection: String?,
         deviceLocaleID: String = Locale.autoupdatingCurrent.identifier,
         fallbackLocaleID: String = Self.fallbackLocaleID,
-        supportedLocaleIDs: Set<String>
-    ) -> String? {
+        supportedLocaleIDs: Set<String>) -> String?
+    {
         TalkConfigParsing.resolvedSpeechRecognitionLocaleID(
             preferredLocaleIDs: [
                 TalkConfigParsing.normalizedExplicitSpeechLocaleID(localSelection),
@@ -48,8 +48,10 @@ enum TalkSpeechLocale {
     static func makeRecognizer(
         localSelection: String?,
         gatewaySelection: String?,
-        supportedLocales: Set<Locale> = SFSpeechRecognizer.supportedLocales()
-    ) -> (recognizer: SFSpeechRecognizer?, localeID: String?) {
+        supportedLocales: Set<Locale> = SFSpeechRecognizer.supportedLocales()) -> (
+        recognizer: SFSpeechRecognizer?,
+        localeID: String?)
+    {
         let supportedIDs = Set(supportedLocales.map(\.identifier))
         guard let localeID = self.resolvedLocaleID(
             localSelection: localSelection,

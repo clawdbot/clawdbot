@@ -22,6 +22,7 @@ export function registerNodesCli(program: Command) {
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
           ["openclaw nodes status", "List known nodes with live status."],
           ["openclaw nodes pairing pending", "Show pending node pairing requests."],
+          ["openclaw nodes remove --node <id|name|ip>", "Remove a stale paired node entry."],
           [
             'openclaw nodes invoke --node <id> --command system.which --params \'{"name":"uname"}\'',
             "Invoke a node command directly.",

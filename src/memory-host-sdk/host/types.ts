@@ -15,6 +15,10 @@ export type MemorySearchResult = {
 export type MemoryEmbeddingProbeResult = {
   ok: boolean;
   error?: string;
+  checked?: boolean;
+  cached?: boolean;
+  checkedAtMs?: number;
+  cacheExpiresAtMs?: number;
 };
 
 export type MemorySyncProgressUpdate = {
@@ -96,6 +100,7 @@ export interface MemorySearchManager {
     sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void>;
+  getCachedEmbeddingAvailability?(): MemoryEmbeddingProbeResult | null;
   probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult>;
   probeVectorAvailability(): Promise<boolean>;
   close?(): Promise<void>;

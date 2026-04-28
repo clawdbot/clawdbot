@@ -1,4 +1,4 @@
-import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/infra-runtime";
+import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const approvalGatewayRuntimeHoisted = vi.hoisted(() => ({

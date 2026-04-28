@@ -2,7 +2,9 @@ import { vi, type Mock } from "vitest";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
-type SessionsSpawnTestConfig = ReturnType<(typeof import("../config/config.js"))["loadConfig"]>;
+type SessionsSpawnTestConfig = ReturnType<
+  (typeof import("../config/config.js"))["getRuntimeConfig"]
+>;
 type SessionsSpawnHookRunner = SubagentLifecycleHookRunner | null;
 type CaptureSubagentCompletionReply =
   (typeof import("./subagent-announce.js"))["captureSubagentCompletionReply"];
@@ -197,7 +199,7 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
   cachedSubagentSpawnTesting.setDepsForTest({
     callGateway: (optsUnknown) => hoisted.callGatewayMock(optsUnknown),
     getGlobalHookRunner: () => hoisted.state.hookRunnerOverride,
-    loadConfig: () => hoisted.state.configOverride,
+    getRuntimeConfig: () => hoisted.state.configOverride,
     resolveContextEngine: async () => ({
       info: { id: "test", name: "Test" },
       assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
@@ -213,7 +215,7 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
   });
   cachedSubagentRegistryTesting.setDepsForTest({
     callGateway: (optsUnknown) => hoisted.callGatewayMock(optsUnknown),
-    loadConfig: () => hoisted.state.configOverride,
+    getRuntimeConfig: () => hoisted.state.configOverride,
     cleanupBrowserSessionsForLifecycleEnd: async () => {},
     ensureContextEnginesInitialized: () => {},
     ensureRuntimePluginsLoaded: () => {},
@@ -344,7 +346,7 @@ vi.mock("../../gateway/call.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => hoisted.state.configOverride,
+  getRuntimeConfig: () => hoisted.state.configOverride,
   resolveGatewayPort: () => 18789,
 }));
 
@@ -376,6 +378,6 @@ vi.mock("../tasks/detached-task-runtime.js", () => ({
 
 // Same module, different specifier (used by tools under src/agents/tools/*).
 vi.mock("../../config/config.js", () => ({
-  loadConfig: () => hoisted.state.configOverride,
+  getRuntimeConfig: () => hoisted.state.configOverride,
   resolveGatewayPort: () => 18789,
 }));

@@ -118,6 +118,23 @@ describe("mime detection", () => {
     expect(mime).toBe("audio/aac");
   });
 
+  it("detects Apple CAF audio by magic bytes when file-type does not recognize the container", async () => {
+    // CAF files start with the four-byte ASCII tag "caff". `file-type` v22 has
+    // no native CAF detector, so without the manual magic-byte fallback the
+    // host-local-media validator drops `afconvert`-produced voice-memo CAFs as
+    // unknown binary blobs. Regression guard for the BlueBubbles voice-memo
+    // pre-transcode path.
+    const buf = Buffer.concat([Buffer.from("caff", "ascii"), Buffer.alloc(60)]);
+    const mime = await detectMime({ buffer: buf });
+    expect(mime).toBe("audio/x-caf");
+  });
+
+  it("returns audio/x-caf when extension and CAF magic bytes both agree", async () => {
+    const buf = Buffer.concat([Buffer.from("caff", "ascii"), Buffer.alloc(60)]);
+    const mime = await detectMime({ buffer: buf, filePath: "/tmp/voice.caf" });
+    expect(mime).toBe("audio/x-caf");
+  });
+
   it("caps dependency sniffing to a bounded prefix", () => {
     const small = Buffer.alloc(32);
     const large = Buffer.alloc(FILE_TYPE_SNIFF_MAX_BYTES + 16);

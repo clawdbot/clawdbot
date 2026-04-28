@@ -11,7 +11,7 @@ import {
   makeCfg,
   mockRunEmbeddedPiAgentOk,
   requireSessionStorePath,
-  runGreetingPromptForBareNewOrReset,
+  expectBareNewOrResetAcknowledged,
   withTempHome,
 } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
 import { loadSessionStore, resolveSessionKey } from "../config/sessions.js";
@@ -375,7 +375,7 @@ describe("trigger handling", () => {
     });
   });
 
-  it("prepends runtime-loaded daily memory context on bare /new", async () => {
+  it("acknowledges bare /new without invoking the model or loading startup memory", async () => {
     await withTempHome(async (home) => {
       const workspaceDir = join(home, "openclaw");
       const nowMs = Date.now();
@@ -392,18 +392,12 @@ describe("trigger handling", () => {
 
       const res = await runAuthorizedSmsCommand("/new", cfg);
 
-      expect(maybeReplyText(res)).toBe("hello");
-      const prompt = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0]?.prompt ?? "";
-      expect(prompt).toContain("[Startup context loaded by runtime]");
-      expect(prompt).toContain(`[Untrusted daily memory: memory/${todayStamp}.md]`);
-      expect(prompt).toContain("BEGIN_QUOTED_NOTES");
-      expect(prompt).toContain("today startup note");
-      expect(prompt).toContain(`[Untrusted daily memory: memory/${yesterdayStamp}.md]`);
-      expect(prompt).toContain("yesterday startup note");
+      expect(maybeReplyText(res)).toBe("✅ New session started.");
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
 
-  it("treats normalized /RESET as reset for startupContext.applyOn", async () => {
+  it("acknowledges normalized bare /RESET without invoking the model", async () => {
     await withTempHome(async (home) => {
       const workspaceDir = join(home, "openclaw");
       const nowMs = Date.now();
@@ -418,10 +412,8 @@ describe("trigger handling", () => {
 
       const res = await runAuthorizedSmsCommand("/RESET", cfg);
 
-      expect(maybeReplyText(res)).toBe("hello");
-      const prompt = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0]?.prompt ?? "";
-      expect(prompt).toContain(`[Untrusted daily memory: memory/${todayStamp}.md]`);
-      expect(prompt).toContain("reset startup note");
+      expect(maybeReplyText(res)).toBe("✅ Session reset.");
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
 
@@ -824,7 +816,7 @@ describe("trigger handling", () => {
 
   it("handles bare session reset, inline commands, and unauthorized inline status", async () => {
     await withTempHome(async (home) => {
-      await runGreetingPromptForBareNewOrReset({ home, body: "/new", getReplyFromConfig });
+      await expectBareNewOrResetAcknowledged({ home, body: "/new", getReplyFromConfig });
       await expectResetBlockedForNonOwner({ home });
       await expectInlineCommandHandledAndStripped({
         home,

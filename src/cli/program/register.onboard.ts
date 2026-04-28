@@ -144,6 +144,8 @@ export function registerOnboardCommand(program: Command) {
       "--custom-compatibility <mode>",
       "Custom provider API compatibility: openai|anthropic (default: openai)",
     )
+    .option("--custom-image-input", "Mark the custom provider model as image-capable")
+    .option("--custom-text-input", "Mark the custom provider model as text-only")
     .option("--gateway-port <port>", "Gateway port")
     .option("--gateway-bind <mode>", "Gateway bind: loopback|tailnet|lan|auto|custom")
     .option("--gateway-auth <mode>", "Gateway auth: token|password")
@@ -214,6 +216,12 @@ export function registerOnboardCommand(program: Command) {
           customModelId: opts.customModelId as string | undefined,
           customProviderId: opts.customProviderId as string | undefined,
           customCompatibility: opts.customCompatibility as "openai" | "anthropic" | undefined,
+          customImageInput:
+            opts.customTextInput === true
+              ? false
+              : opts.customImageInput === true
+                ? true
+                : undefined,
           gatewayPort:
             typeof gatewayPort === "number" && Number.isFinite(gatewayPort)
               ? gatewayPort

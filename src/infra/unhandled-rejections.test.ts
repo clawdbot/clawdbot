@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isAbortError,
+  isBenignUncaughtExceptionError,
   isTransientNetworkError,
   isTransientSqliteError,
   isTransientUnhandledRejectionError,
@@ -258,6 +259,17 @@ describe("isTransientSqliteError", () => {
 });
 
 describe("isTransientUnhandledRejectionError", () => {
+  it("keeps uncaught exception suppression scoped to broken pipes", () => {
+    const epipe = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+    const sqlite = Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+    const network = Object.assign(new Error("connection reset"), { code: "ECONNRESET" });
+    const generic = new Error("boom");
+
+    expect(isBenignUncaughtExceptionError(epipe)).toBe(true);
+    expect(isBenignUncaughtExceptionError(sqlite)).toBe(false);
+    expect(isBenignUncaughtExceptionError(network)).toBe(false);
+    expect(isBenignUncaughtExceptionError(generic)).toBe(false);
+  });
   it("returns true for transient SQLite errors", () => {
     const error = Object.assign(new Error("unable to open database file"), {
       code: "ERR_SQLITE_ERROR",

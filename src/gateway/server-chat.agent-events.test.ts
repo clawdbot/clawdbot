@@ -8,8 +8,12 @@ vi.mock("./server-chat.persist-session-lifecycle.runtime.js", () => ({
     persistGatewaySessionLifecycleEventMock(...args),
 }));
 
-vi.mock("../config/config.js", () => ({
-  loadConfig: vi.fn(() => ({})),
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: vi.fn(() => ({})),
+}));
+
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: vi.fn(() => ({})),
 }));
 
 vi.mock("../infra/heartbeat-visibility.js", () => ({
@@ -24,7 +28,7 @@ vi.mock("./server-chat.load-gateway-session-row.runtime.js", () => ({
   loadGatewaySessionRow: vi.fn(),
 }));
 
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import {
   createAgentEventHandler,
@@ -36,7 +40,7 @@ import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.ru
 
 describe("agent event handler", () => {
   beforeEach(() => {
-    vi.mocked(loadConfig).mockReturnValue({});
+    vi.mocked(getRuntimeConfig).mockReturnValue({});
     vi.mocked(resolveHeartbeatVisibility).mockReturnValue({
       showOk: false,
       showAlerts: true,
@@ -1500,7 +1504,7 @@ describe("agent event handler", () => {
   });
 
   it("keeps heartbeat alert text in final chat output when remainder exceeds ackMaxChars", () => {
-    vi.mocked(loadConfig).mockReturnValue({
+    vi.mocked(getRuntimeConfig).mockReturnValue({
       agents: { defaults: { heartbeat: { ackMaxChars: 10 } } },
     });
 

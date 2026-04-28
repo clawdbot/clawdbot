@@ -138,8 +138,8 @@ if (record.installPath !== record.sourcePath) {
   throw new Error(`bundled install path should equal source path for ${pluginId}`);
 }
 const paths = config.plugins?.load?.paths || [];
-if (!paths.includes(record.sourcePath)) {
-  throw new Error(`config load paths do not include bundled install path for ${pluginId}`);
+if (paths.some((entry) => String(entry).includes(`/dist/extensions/${pluginDir}`))) {
+  throw new Error(`config load paths should not include bundled install path for ${pluginId}`);
 }
 if (requiresConfig && config.plugins?.entries?.[pluginId]?.enabled === true) {
   throw new Error(`plugin requiring config should not be enabled immediately after install for ${pluginId}`);

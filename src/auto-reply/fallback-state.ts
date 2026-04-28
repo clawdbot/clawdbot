@@ -9,7 +9,14 @@ export {
 } from "../status/fallback-notice-state.js";
 
 const FALLBACK_REASON_PART_MAX = 80;
-const TRANSIENT_FALLBACK_REASONS = new Set(["rate_limit", "overloaded", "timeout"]);
+const TRANSIENT_FALLBACK_REASONS = new Set([
+  "rate_limit",
+  "overloaded",
+  "timeout",
+  "empty_response",
+  "no_error_details",
+  "unclassified",
+]);
 const TRANSIENT_ERROR_DETAIL_HINT_RE =
   /\b(?:429|5\d\d|too many requests|usage limit|quota|try again in|retry[- ]after|seconds?|minutes?|hours?|temporarily unavailable|overloaded|service unavailable|throttl)\b/i;
 

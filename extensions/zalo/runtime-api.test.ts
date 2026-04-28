@@ -1,6 +1,6 @@
 import path from "node:path";
+import { loadRuntimeApiExportTypesViaJiti } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { describe, expect, it } from "vitest";
-import { loadRuntimeApiExportTypesViaJiti } from "../../test/helpers/plugins/jiti-runtime-api.js";
 
 describe("zalo runtime api", () => {
   it("loads the narrow runtime api without reentering setup surfaces", () => {

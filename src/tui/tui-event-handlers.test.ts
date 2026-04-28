@@ -532,6 +532,79 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.updateAssistant).toHaveBeenLastCalledWith("continued", "run-active");
   });
 
+  it("clears stale streaming when an orphan final arrives and no tracked run remains", () => {
+    const { state, setActivityStatus, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-stale", activityStatus: "streaming" },
+    });
+
+    handleChatEvent({
+      runId: "run-orphan",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+  });
+
+  it("flushes deferred history reload after stale streaming clear makes the TUI idle", () => {
+    const { state, loadHistory, noteLocalRunId, setActivityStatus, handleChatEvent } =
+      createHandlersHarness({
+        state: { activeChatRunId: "run-stale", activityStatus: "streaming" },
+      });
+
+    noteLocalRunId("run-local-empty");
+    loadHistory.mockImplementation(() => {
+      expect(state.activeChatRunId).toBeNull();
+      expect(state.activityStatus).toBe("idle");
+    });
+
+    handleChatEvent({
+      runId: "run-local-empty",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    });
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.activityStatus).toBe("idle");
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not surface inactive orphan final failures as the global status", () => {
+    const { state, setActivityStatus, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-stale", activityStatus: "streaming" },
+    });
+
+    handleChatEvent({
+      runId: "run-orphan-error",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "failed" }], stopReason: "error" },
+    });
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+    expect(setActivityStatus).not.toHaveBeenCalledWith("error");
+  });
+
+  it("does not force idle for an inactive final while another tracked run is active", () => {
+    const { state, setActivityStatus, handleChatEvent } = createConcurrentRunHarness("partial");
+    state.activityStatus = "streaming";
+    setActivityStatus.mockClear();
+
+    handleChatEvent({
+      runId: "run-other",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "other final" }] },
+    });
+
+    expect(state.activeChatRunId).toBe("run-active");
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+  });
+
   it("suppresses non-local empty final placeholders during concurrent runs", () => {
     const { state, chatLog, loadHistory, handleChatEvent } =
       createConcurrentRunHarness("local stream");
@@ -715,15 +788,24 @@ describe("tui-event-handlers: streaming watchdog", () => {
     const btw = createMockBtwPresenter();
     const tui = { requestRender: vi.fn() } as unknown as MockTui & HandlerTui;
     const setActivityStatus = vi.fn();
+    const loadHistory = vi.fn();
+    const localRunIds = new Set<string>();
+    const noteLocalRunId = (runId: string) => {
+      localRunIds.add(runId);
+    };
     const handlers = createEventHandlers({
       chatLog,
       btw,
       tui,
       state,
       setActivityStatus,
+      loadHistory,
+      noteLocalRunId,
+      isLocalRunId: localRunIds.has.bind(localRunIds),
+      forgetLocalRunId: localRunIds.delete.bind(localRunIds),
       streamingWatchdogMs: options?.streamingWatchdogMs,
     });
-    return { state, chatLog, tui, setActivityStatus, handlers };
+    return { state, chatLog, tui, setActivityStatus, loadHistory, noteLocalRunId, handlers };
   };
 
   it("resets activityStatus to idle when no stream delta arrives for the watchdog window", () => {
@@ -746,6 +828,37 @@ describe("tui-event-handlers: streaming watchdog", () => {
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
     expect(state.activeChatRunId).toBeNull();
     expect(chatLog.addSystem).toHaveBeenCalledWith(expect.stringContaining("streaming watchdog"));
+
+    handlers.dispose?.();
+  });
+
+  it("flushes a deferred history reload when the watchdog clears the active run", () => {
+    const { state, loadHistory, noteLocalRunId, setActivityStatus, handlers } = createHarness({
+      streamingWatchdogMs: 5_000,
+    });
+
+    handlers.handleChatEvent({
+      runId: "run-stuck",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hello" },
+    } satisfies ChatEvent);
+
+    noteLocalRunId("run-local-empty");
+    handlers.handleChatEvent({
+      runId: "run-local-empty",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    } satisfies ChatEvent);
+
+    expect(loadHistory).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(5_001);
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.activityStatus).toBe("idle");
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+    expect(loadHistory).toHaveBeenCalledTimes(1);
 
     handlers.dispose?.();
   });

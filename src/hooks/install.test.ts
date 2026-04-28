@@ -2,7 +2,6 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { runCommandWithTimeout } from "../process/exec.js";
 import { expectSingleNpmPackIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
 import {
   expectInstallUsesIgnoreScripts,
@@ -11,12 +10,21 @@ import {
   mockNpmPackMetadataResult,
 } from "../test-utils/npm-spec-install-test-helpers.js";
 import { isAddressInUseError } from "./gmail-watcher-errors.js";
-import {
-  installHooksFromArchive,
-  installHooksFromNpmSpec,
-  installHooksFromPath,
-} from "./install.js";
-import * as hookInstallRuntime from "./install.runtime.js";
+
+type InstallHooksFromArchive = typeof import("./install.js").installHooksFromArchive;
+type InstallHooksFromPath = typeof import("./install.js").installHooksFromPath;
+
+const runCommandWithTimeoutMock = vi.fn();
+
+vi.mock("../process/exec.js", () => ({
+  runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
+}));
+
+vi.resetModules();
+
+const { installHooksFromArchive, installHooksFromNpmSpec, installHooksFromPath } =
+  await import("./install.js");
+const hookInstallRuntime = await import("./install.runtime.js");
 
 const fixtureRoot = path.join(process.cwd(), ".tmp", `openclaw-hook-install-${randomUUID()}`);
 const sharedArchiveDir = path.join(fixtureRoot, "_archives");
@@ -31,10 +39,6 @@ const tarTraversalBuffer = fs.readFileSync(path.join(fixturesDir, "tar-traversal
 const tarEvilIdBuffer = fs.readFileSync(path.join(fixturesDir, "tar-evil-id.tar"));
 const tarReservedIdBuffer = fs.readFileSync(path.join(fixturesDir, "tar-reserved-id.tar"));
 const npmPackHooksBuffer = fs.readFileSync(path.join(fixturesDir, "npm-pack-hooks.tgz"));
-
-vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout: vi.fn(),
-}));
 
 function makeTempDir() {
   const dir = path.join(fixtureRoot, `case-${tempDirIndex++}`);
@@ -51,7 +55,7 @@ afterAll(() => {
 });
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  runCommandWithTimeoutMock.mockReset();
 });
 
 beforeAll(() => {
@@ -77,7 +81,7 @@ function writeArchiveFixture(params: { fileName: string; contents: Buffer }) {
 }
 
 function expectInstallFailureContains(
-  result: Awaited<ReturnType<typeof installHooksFromArchive>>,
+  result: Awaited<ReturnType<InstallHooksFromArchive>>,
   snippets: string[],
 ) {
   expect(result.ok).toBe(false);
@@ -116,7 +120,7 @@ async function installArchiveFixture(params: { fileName: string; contents: Buffe
 }
 
 function expectPathInstallFailureContains(
-  result: Awaited<ReturnType<typeof installHooksFromPath>>,
+  result: Awaited<ReturnType<InstallHooksFromPath>>,
   snippet: string,
 ) {
   expect(result.ok).toBe(false);
@@ -229,7 +233,7 @@ describe("installHooksFromPath", () => {
       "utf-8",
     );
 
-    const run = vi.mocked(runCommandWithTimeout);
+    const run = runCommandWithTimeoutMock;
     await expectInstallUsesIgnoreScripts({
       run,
       install: async () =>
@@ -366,7 +370,7 @@ describe("installHooksFromNpmSpec", () => {
   it("uses --ignore-scripts for npm pack and cleans up temp dir", async () => {
     const stateDir = makeTempDir();
 
-    const run = vi.mocked(runCommandWithTimeout);
+    const run = runCommandWithTimeoutMock;
     let packTmpDir = "";
     const packedName = "test-hooks-0.0.1.tgz";
     run.mockImplementation(async (argv, opts) => {
@@ -410,7 +414,7 @@ describe("installHooksFromNpmSpec", () => {
     expect(fs.existsSync(path.join(result.targetDir, "hooks", "one-hook", "HOOK.md"))).toBe(true);
 
     expectSingleNpmPackIgnoreScriptsCall({
-      calls: run.mock.calls,
+      calls: run.mock.calls as Array<[unknown, unknown]>,
       expectedSpec: "@openclaw/test-hooks@0.0.1",
     });
 
@@ -419,7 +423,7 @@ describe("installHooksFromNpmSpec", () => {
   });
 
   it("aborts when integrity drift callback rejects the fetched artifact", async () => {
-    const run = vi.mocked(runCommandWithTimeout);
+    const run = runCommandWithTimeoutMock;
     mockNpmPackMetadataResult(run, {
       id: "@openclaw/test-hooks@0.0.1",
       name: "@openclaw/test-hooks",
@@ -446,7 +450,7 @@ describe("installHooksFromNpmSpec", () => {
   it("rejects invalid npm spec shapes", async () => {
     await expectUnsupportedNpmSpec((spec) => installHooksFromNpmSpec({ spec }));
 
-    const run = vi.mocked(runCommandWithTimeout);
+    const run = runCommandWithTimeoutMock;
     mockNpmPackMetadataResult(run, {
       id: "@openclaw/test-hooks@0.0.2-beta.1",
       name: "@openclaw/test-hooks",

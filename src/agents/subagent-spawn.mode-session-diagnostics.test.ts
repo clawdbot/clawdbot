@@ -17,7 +17,7 @@ describe('spawnSubagentDirect mode="session" diagnostics (#67400)', () => {
     callGatewayMock.mockReset();
     ({ spawnSubagentDirect, resetSubagentRegistryForTests } = await loadSubagentSpawnModuleForTest({
       callGatewayMock,
-      loadConfig: () => createSubagentSpawnTestConfig(os.tmpdir()),
+      getRuntimeConfig: () => createSubagentSpawnTestConfig(os.tmpdir()),
       workspaceDir: os.tmpdir(),
     }));
     resetSubagentRegistryForTests();
@@ -74,7 +74,7 @@ describe('spawnSubagentDirect mode="session" with registered thread hooks (#6740
     callGatewayMock.mockReset();
     ({ spawnSubagentDirect, resetSubagentRegistryForTests } = await loadSubagentSpawnModuleForTest({
       callGatewayMock,
-      loadConfig: () => createSubagentSpawnTestConfig(os.tmpdir()),
+      getRuntimeConfig: () => createSubagentSpawnTestConfig(os.tmpdir()),
       workspaceDir: os.tmpdir(),
       hookRunner: {
         hasHooks: () => true,

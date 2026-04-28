@@ -49,6 +49,7 @@ Imports require a fresh OpenClaw setup. If you already have local OpenClaw state
   <Accordion title="Model configuration">
     - Default model selection from Hermes `config.yaml`.
     - Configured model providers and custom OpenAI-compatible endpoints from `providers` and `custom_providers`.
+
   </Accordion>
   <Accordion title="MCP servers">
     MCP server definitions from `mcp_servers` or `mcp.servers`.
@@ -56,6 +57,7 @@ Imports require a fresh OpenClaw setup. If you already have local OpenClaw state
   <Accordion title="Workspace files">
     - `SOUL.md` and `AGENTS.md` are copied into the OpenClaw agent workspace.
     - `memories/MEMORY.md` and `memories/USER.md` are **appended** to the matching OpenClaw memory files instead of overwriting them.
+
   </Accordion>
   <Accordion title="Memory configuration">
     Memory config defaults for OpenClaw file memory. External memory providers such as Honcho are recorded as archive or manual-review items so you can move them deliberately.

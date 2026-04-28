@@ -4,6 +4,7 @@ export {
   buildExecApprovalPendingReplyPayload,
   getExecApprovalApproverDmNoticeText,
   getExecApprovalReplyMetadata,
+  parseExecApprovalCommandText,
   type ExecApprovalActionDescriptor,
   type ExecApprovalPendingReplyParams,
   type ExecApprovalReplyDecision,

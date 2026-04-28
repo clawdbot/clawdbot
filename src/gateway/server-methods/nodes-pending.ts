@@ -86,7 +86,11 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
         context.logGateway.info(
           `node pending wake start node=${p.nodeId} req=${wakeReqId} type=${queued.item.type}`,
         );
-        const wake = await maybeWakeNodeWithApns(p.nodeId, { wakeReason: "node.pending" });
+        const cfg = context.getRuntimeConfig();
+        const wake = await maybeWakeNodeWithApns(p.nodeId, {
+          wakeReason: "node.pending",
+          cfg,
+        });
         context.logGateway.info(
           `node pending wake stage=wake1 node=${p.nodeId} req=${wakeReqId} ` +
             `available=${wake.available} throttled=${wake.throttled} ` +
@@ -109,6 +113,7 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
           const retryWake = await maybeWakeNodeWithApns(p.nodeId, {
             force: true,
             wakeReason: "node.pending",
+            cfg,
           });
           context.logGateway.info(
             `node pending wake stage=wake2 node=${p.nodeId} req=${wakeReqId} force=true ` +
@@ -129,7 +134,7 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
           }
         }
         if (!context.nodeRegistry.get(p.nodeId)) {
-          const nudge = await maybeSendNodeWakeNudge(p.nodeId);
+          const nudge = await maybeSendNodeWakeNudge(p.nodeId, { cfg });
           context.logGateway.info(
             `node pending wake nudge node=${p.nodeId} req=${wakeReqId} sent=${nudge.sent} ` +
               `throttled=${nudge.throttled} reason=${nudge.reason} durationMs=${nudge.durationMs} ` +

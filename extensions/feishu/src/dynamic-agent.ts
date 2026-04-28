@@ -72,7 +72,10 @@ export async function maybeCreateDynamicAgent(params: {
       ],
     };
 
-    await runtime.config.writeConfigFile(updatedCfg);
+    await runtime.config.replaceConfigFile({
+      nextConfig: updatedCfg,
+      afterWrite: { mode: "auto" },
+    });
     return { created: true, updatedCfg, agentId };
   }
 
@@ -115,7 +118,10 @@ export async function maybeCreateDynamicAgent(params: {
   };
 
   // Write updated config using PluginRuntime API
-  await runtime.config.writeConfigFile(updatedCfg);
+  await runtime.config.replaceConfigFile({
+    nextConfig: updatedCfg,
+    afterWrite: { mode: "auto" },
+  });
 
   return { created: true, updatedCfg, agentId };
 }

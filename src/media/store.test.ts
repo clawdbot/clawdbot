@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../test/helpers/import-fresh.ts";
 import { isPathWithinBase } from "../../test/helpers/paths.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 

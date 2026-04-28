@@ -1,4 +1,4 @@
-import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
+import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
 import { describe, expect, it } from "vitest";
 import {
   resolveIrcGroupAccessGate,

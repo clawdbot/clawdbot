@@ -13,11 +13,19 @@ type MatrixTestRuntimeOptions = {
   stateDir?: string;
 };
 
+type MatrixRuntimeStub = {
+  config: Pick<PluginRuntime["config"], "current" | "mutateConfigFile" | "replaceConfigFile">;
+  channel?: PluginRuntime["channel"];
+  logging?: PluginRuntime["logging"];
+  state: Pick<NonNullable<PluginRuntime["state"]>, "resolveStateDir">;
+};
+
 export function installMatrixTestRuntime(options: MatrixTestRuntimeOptions = {}): void {
   const defaultStateDirResolver: NonNullable<PluginRuntime["state"]>["resolveStateDir"] = (
     _env,
     homeDir,
   ) => options.stateDir ?? (homeDir ?? (() => "/tmp"))();
+  const getRuntimeConfig = () => options.cfg ?? {};
   const logging: PluginRuntime["logging"] | undefined = options.logging
     ? ({
         shouldLogVerbose: () => false,
@@ -30,16 +38,20 @@ export function installMatrixTestRuntime(options: MatrixTestRuntimeOptions = {})
       } as PluginRuntime["logging"])
     : undefined;
 
-  setMatrixRuntime({
+  const runtime: MatrixRuntimeStub = {
     config: {
-      loadConfig: () => options.cfg ?? {},
+      current: getRuntimeConfig,
+      mutateConfigFile: vi.fn(),
+      replaceConfigFile: vi.fn(),
     },
     ...(options.channel ? { channel: options.channel as PluginRuntime["channel"] } : {}),
     ...(logging ? { logging } : {}),
     state: {
       resolveStateDir: defaultStateDirResolver,
     },
-  } as PluginRuntime);
+  };
+
+  setMatrixRuntime(runtime as unknown as PluginRuntime);
 }
 
 type MatrixMonitorTestRuntimeOptions = Pick<MatrixTestRuntimeOptions, "cfg" | "stateDir"> & {

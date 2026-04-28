@@ -4,6 +4,7 @@ import {
   applyConfig,
   ensureAgentConfigEntry,
   findAgentConfigEntryIndex,
+  loadConfig,
   resetConfigPendingChanges,
   runUpdate,
   saveConfig,
@@ -33,10 +34,13 @@ function createState(): ConfigState {
     configSchemaVersion: null,
     configSearchQuery: "",
     configSnapshot: null,
+    configDraftBaseHash: null,
     configUiHints: {},
     configValid: null,
     connected: false,
     lastError: null,
+    pendingUpdateExpectedVersion: null,
+    updateStatusBanner: null,
     updateRunning: false,
   };
 }
@@ -113,6 +117,59 @@ describe("applyConfigSnapshot", () => {
     expect(state.configFormOriginal).toEqual({ original: true });
   });
 
+  it("keeps the draft base hash when preserving dirty edits across refreshes", () => {
+    const state = createState();
+    applyConfigSnapshot(state, {
+      hash: "hash-original",
+      config: { gateway: { mode: "local" } },
+      valid: true,
+      issues: [],
+      raw: '{ "gateway": { "mode": "local" } }',
+    });
+
+    updateConfigFormValue(state, ["gateway", "mode"], "remote");
+    applyConfigSnapshot(state, {
+      hash: "hash-refreshed",
+      config: { gateway: { mode: "external" } },
+      valid: true,
+      issues: [],
+      raw: '{ "gateway": { "mode": "external" } }',
+    });
+
+    expect(state.configSnapshot?.hash).toBe("hash-refreshed");
+    expect(state.configDraftBaseHash).toBe("hash-original");
+    expect(state.configForm).toEqual({ gateway: { mode: "remote" } });
+  });
+
+  it("discards dirty form edits when explicitly requested", () => {
+    const state = createState();
+    state.configFormMode = "form";
+    state.configFormDirty = true;
+    state.configForm = { gateway: { mode: "local", port: 18789 } };
+    state.configFormOriginal = { gateway: { mode: "local", port: 18789 } };
+    state.configRawOriginal =
+      '{\n  "gateway": {\n    "mode": "local",\n    "port": 18789\n  }\n}\n';
+
+    applyConfigSnapshot(
+      state,
+      {
+        hash: "hash-remote",
+        config: { gateway: { mode: "remote", port: 9999 } },
+        valid: true,
+        issues: [],
+        raw: '{\n  "gateway": { "mode": "remote", "port": 9999 }\n}\n',
+      },
+      { discardPendingChanges: true },
+    );
+
+    expect(state.configFormDirty).toBe(false);
+    expect(state.configForm).toEqual({ gateway: { mode: "remote", port: 9999 } });
+    expect(state.configFormOriginal).toEqual({ gateway: { mode: "remote", port: 9999 } });
+    expect(state.configRaw).toBe('{\n  "gateway": { "mode": "remote", "port": 9999 }\n}\n');
+    expect(state.configRawOriginal).toBe('{\n  "gateway": { "mode": "remote", "port": 9999 }\n}\n');
+    expect(state.configDraftBaseHash).toBe("hash-remote");
+  });
+
   it("forces form mode when the snapshot does not include raw text", () => {
     const state = createState();
     state.configFormMode = "raw";
@@ -126,6 +183,28 @@ describe("applyConfigSnapshot", () => {
 
     expect(state.configFormMode).toBe("form");
     expect(state.configRaw).toBe('{\n  "gateway": {\n    "mode": "local"\n  }\n}\n');
+  });
+});
+
+describe("loadConfig", () => {
+  it("passes explicit reload mode through to snapshot application", async () => {
+    const request = vi.fn().mockResolvedValue({
+      config: { gateway: { mode: "remote" } },
+      valid: true,
+      issues: [],
+      raw: '{\n  "gateway": { "mode": "remote" }\n}\n',
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.configFormDirty = true;
+    state.configForm = { gateway: { mode: "local" } };
+
+    await loadConfig(state, { discardPendingChanges: true });
+
+    expect(state.configFormDirty).toBe(false);
+    expect(state.configForm).toEqual({ gateway: { mode: "remote" } });
+    expect(state.configRawOriginal).toBe('{\n  "gateway": { "mode": "remote" }\n}\n');
   });
 });
 
@@ -467,6 +546,35 @@ describe("applyConfig", () => {
 });
 
 describe("saveConfig", () => {
+  it("submits the original draft base hash after a dirty config refresh", async () => {
+    const request = createRequestWithConfigGet();
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.configFormMode = "form";
+    applyConfigSnapshot(state, {
+      hash: "hash-original",
+      config: { gateway: { mode: "local" } },
+      valid: true,
+      issues: [],
+      raw: '{\n  "gateway": { "mode": "local" }\n}\n',
+    });
+    updateConfigFormValue(state, ["gateway", "mode"], "remote");
+    applyConfigSnapshot(state, {
+      hash: "hash-refreshed",
+      config: { gateway: { mode: "external" } },
+      valid: true,
+      issues: [],
+      raw: '{\n  "gateway": { "mode": "external" }\n}\n',
+    });
+
+    await saveConfig(state);
+
+    expect(request.mock.calls[0]?.[0]).toBe("config.set");
+    const params = request.mock.calls[0]?.[1] as { raw: string; baseHash: string };
+    expect(params.baseHash).toBe("hash-original");
+  });
+
   it("coerces schema-typed values before config.set in form mode", async () => {
     const request = createRequestWithConfigGet();
     const state = createState();
@@ -554,6 +662,44 @@ describe("runUpdate", () => {
 
     await runUpdate(state);
 
-    expect(state.lastError).toBe("Update error: network unavailable");
+    expect(state.updateStatusBanner).toEqual({
+      tone: "danger",
+      text: "Update error: network unavailable. See the gateway logs for the exact failure and retry once the cause is fixed.",
+    });
+  });
+
+  it("surfaces skipped updates with actionable guidance", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: false,
+      result: { status: "skipped", reason: "dirty" },
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+
+    await runUpdate(state);
+
+    expect(state.updateStatusBanner).toEqual({
+      tone: "warn",
+      text: "Update skipped: dirty. Commit or stash changes, then retry.",
+    });
+  });
+
+  it("stores the expected post-update version when update.run succeeds", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: true,
+      result: {
+        status: "ok",
+        after: { version: "2.0.0" },
+      },
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+
+    await runUpdate(state);
+
+    expect(state.pendingUpdateExpectedVersion).toBe("2.0.0");
+    expect(state.updateStatusBanner).toBeNull();
   });
 });

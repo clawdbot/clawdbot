@@ -372,6 +372,28 @@ describe("resolveTypingMode", () => {
         expected: "message",
       },
       {
+        name: "message-tool-only group chat starts typing immediately",
+        input: {
+          configured: undefined,
+          isGroupChat: true,
+          wasMentioned: false,
+          isHeartbeat: false,
+          sourceReplyDeliveryMode: "message_tool_only" as const,
+        },
+        expected: "instant",
+      },
+      {
+        name: "configured group typing mode wins over message-tool-only default",
+        input: {
+          configured: "message" as const,
+          isGroupChat: true,
+          wasMentioned: false,
+          isHeartbeat: false,
+          sourceReplyDeliveryMode: "message_tool_only" as const,
+        },
+        expected: "message",
+      },
+      {
         name: "default mentioned group chat",
         input: {
           configured: undefined,

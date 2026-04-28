@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
+import {
+  GATEWAY_CLIENT_IDS,
+  normalizeGatewayClientId,
+} from "../../gateway/protocol/client-info.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   listSpawnedSessionKeys,
@@ -14,6 +18,16 @@ type GatewayCaller = typeof callGateway;
 const defaultSessionsResolutionDeps = {
   callGateway,
 };
+
+const CURRENT_SESSION_CLIENT_ALIAS_IDS = new Set<string>([
+  GATEWAY_CLIENT_IDS.TUI,
+  GATEWAY_CLIENT_IDS.CLI,
+  GATEWAY_CLIENT_IDS.WEBCHAT_UI,
+  GATEWAY_CLIENT_IDS.CONTROL_UI,
+  GATEWAY_CLIENT_IDS.MACOS_APP,
+  GATEWAY_CLIENT_IDS.IOS_APP,
+  GATEWAY_CLIENT_IDS.ANDROID_APP,
+]);
 
 let sessionsResolutionDeps: {
   callGateway: GatewayCaller;
@@ -49,6 +63,23 @@ export function resolveInternalSessionKey(params: {
     return params.alias;
   }
   return params.key;
+}
+
+export function resolveCurrentSessionClientAlias(params: {
+  key: string;
+  requesterInternalKey?: string;
+}): string | undefined {
+  const requesterKey = normalizeOptionalString(params.requesterInternalKey);
+  if (!requesterKey) {
+    return undefined;
+  }
+  const clientId = normalizeGatewayClientId(params.key);
+  if (!clientId || !CURRENT_SESSION_CLIENT_ALIAS_IDS.has(clientId)) {
+    return undefined;
+  }
+  // UI/client labels can appear next to the real session key in status text.
+  // Treat them as the current requester instead of probing them as sessionIds.
+  return requesterKey;
 }
 
 export { listSpawnedSessionKeys };
@@ -361,7 +392,11 @@ export async function resolveSessionReference(params: {
   requesterInternalKey?: string;
   restrictToSpawned: boolean;
 }): Promise<SessionReferenceResolution> {
-  const rawInput = params.sessionKey.trim();
+  const rawInput =
+    resolveCurrentSessionClientAlias({
+      key: params.sessionKey,
+      requesterInternalKey: params.requesterInternalKey,
+    }) ?? params.sessionKey.trim();
   if (rawInput === "current") {
     const resolvedCurrent = await resolveSessionReferenceByKeyOrSessionId({
       raw: rawInput,

@@ -109,6 +109,14 @@ export const uk: TranslationMap = {
       lightningHelp: "Lightning-адреса для чайових (LUD-16)",
     },
   },
+  lazyView: {
+    loadingTitle: "Завантаження панелі",
+    errorTitle: "Не вдалося завантажити панель",
+    errorSubtitle:
+      "Перезавантажте сторінку, щоб завантажити найновіший пакет Control UI, або повторіть спробу, якщо мережевий запит не вдався.",
+    retry: "Повторити",
+    unknownError: "Невідома помилка завантаження модуля.",
+  },
   nodes: {
     binding: {
       loadConfigHint: "Завантажте конфігурацію, щоб редагувати прив’язки.",

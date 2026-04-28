@@ -107,6 +107,17 @@ After the first successful pairing, Android auto-reconnects on launch:
 - Manual endpoint (if enabled), otherwise
 - The last discovered gateway (best-effort).
 
+### Presence alive beacons
+
+After the authenticated node session connects, and when the app moves to the background while the
+foreground service is still connected, Android calls `node.event` with
+`event: "node.presence.alive"`. The gateway records this as `lastSeenAtMs`/`lastSeenReason` on the
+paired node/device metadata only after the authenticated node device identity is known.
+
+The app counts the beacon as successfully recorded only when the gateway response includes
+`handled: true`. Older gateways may acknowledge `node.event` with `{ "ok": true }`; that response is
+compatible but does not count as a durable last-seen update.
+
 ### 4) Approve pairing (CLI)
 
 On the gateway machine:

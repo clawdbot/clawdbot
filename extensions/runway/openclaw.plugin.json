@@ -1,5 +1,8 @@
 {
   "id": "runway",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providerAuthEnvVars": {
     "runway": ["RUNWAYML_API_SECRET", "RUNWAY_API_KEY"]

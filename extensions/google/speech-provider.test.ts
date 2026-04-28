@@ -1,8 +1,8 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
-} from "../../test/helpers/media-generation/provider-http-mocks.js";
+} from "openclaw/plugin-sdk/provider-http-test-mocks";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
 

@@ -53,6 +53,7 @@ export type MediaAttachmentCacheOptions = {
   localPathRoots?: readonly string[];
   includeDefaultLocalPathRoots?: boolean;
   ssrfPolicy?: SsrFPolicy;
+  workspaceDir?: string;
 };
 
 function resolveRequestUrl(input: RequestInfo | URL): string {
@@ -70,6 +71,7 @@ export class MediaAttachmentCache {
   private readonly attachments: MediaAttachment[];
   private readonly localPathRoots: readonly string[];
   private readonly ssrfPolicy: SsrFPolicy | undefined;
+  private readonly workspaceDir?: string;
   private canonicalLocalPathRoots?: Promise<readonly string[]>;
 
   constructor(attachments: MediaAttachment[], options?: MediaAttachmentCacheOptions) {
@@ -79,6 +81,7 @@ export class MediaAttachmentCache {
       options?.includeDefaultLocalPathRoots === false
         ? mergeInboundPathRoots(options.localPathRoots)
         : mergeInboundPathRoots(options?.localPathRoots, getDefaultLocalPathRoots());
+    this.workspaceDir = options?.workspaceDir ? path.resolve(options.workspaceDir) : undefined;
     for (const attachment of attachments) {
       this.entries.set(attachment.index, { attachment });
     }
@@ -293,7 +296,7 @@ export class MediaAttachmentCache {
     if (!rawPath) {
       return undefined;
     }
-    return path.isAbsolute(rawPath) ? rawPath : path.resolve(rawPath);
+    return this.workspaceDir ? path.resolve(this.workspaceDir, rawPath) : path.resolve(rawPath);
   }
 
   private async ensureLocalStat(entry: AttachmentCacheEntry): Promise<number | undefined> {

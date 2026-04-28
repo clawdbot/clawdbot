@@ -1,4 +1,4 @@
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { resolveExecApprovalInitiatingSurfaceState } from "./exec-approval-surface.js";
 
 export function hasApprovalTurnSourceRoute(params: {
@@ -12,7 +12,7 @@ export function hasApprovalTurnSourceRoute(params: {
     resolveExecApprovalInitiatingSurfaceState({
       channel: params.turnSourceChannel,
       accountId: params.turnSourceAccountId,
-      cfg: loadConfig(),
+      cfg: getRuntimeConfig(),
     }).kind === "enabled"
   );
 }

@@ -1,6 +1,6 @@
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-export type { OpenClawConfig, GroupPolicy } from "openclaw/plugin-sdk/config-runtime";
-export type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+export type { OpenClawConfig, GroupPolicy } from "openclaw/plugin-sdk/config-types";
+export type { MarkdownTableMode } from "openclaw/plugin-sdk/config-types";
 export type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
 export type {
   BaseProbeResult,
@@ -52,11 +52,11 @@ export {
 } from "openclaw/plugin-sdk/allow-from";
 export { addWildcardAllowFrom } from "openclaw/plugin-sdk/setup";
 export { evaluateSenderGroupAccess } from "openclaw/plugin-sdk/group-access";
-export { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
+export { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 export {
   warnMissingProviderGroupPolicyFallbackOnce,
   resolveDefaultGroupPolicy,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/runtime-group-policy";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 export { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";

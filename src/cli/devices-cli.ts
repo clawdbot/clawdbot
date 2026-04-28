@@ -25,6 +25,7 @@ import {
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
+import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 import { withProgress } from "./progress.js";
 
 type DevicesRpcOpts = {
@@ -662,4 +663,6 @@ export function registerDevicesCli(program: Command) {
         defaultRuntime.writeJson(result);
       }),
   );
+
+  applyParentDefaultHelpAction(devices);
 }

@@ -4,7 +4,7 @@ import {
   hasNonzeroUsage,
   type NormalizedUsage,
 } from "../../agents/usage.js";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import {
   type SessionSystemPromptReport,
   type SessionEntry,
@@ -96,7 +96,7 @@ export async function persistSessionUsageUpdate(params: {
   }
 
   const label = params.logLabel ? `${params.logLabel} ` : "";
-  const cfg = params.cfg ?? loadConfig();
+  const cfg = params.cfg ?? getRuntimeConfig();
   const hasUsage = hasNonzeroUsage(params.usage);
   const hasPromptTokens =
     typeof params.promptTokens === "number" &&

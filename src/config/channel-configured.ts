@@ -1,6 +1,5 @@
 import { getBootstrapChannelPlugin } from "../channels/plugins/bootstrap-registry.js";
 import { hasBundledChannelConfiguredState } from "../channels/plugins/configured-state.js";
-import { hasBundledChannelPersistedAuthState } from "../channels/plugins/persisted-auth-state.js";
 import {
   hasMeaningfulChannelConfigShallow,
   resolveChannelConfigRecord,
@@ -16,10 +15,6 @@ export function isChannelConfigured(
     return true;
   }
   if (hasBundledChannelConfiguredState({ channelId, cfg, env })) {
-    return true;
-  }
-  const pluginPersistedAuthState = hasBundledChannelPersistedAuthState({ channelId, cfg, env });
-  if (pluginPersistedAuthState) {
     return true;
   }
   const plugin = getBootstrapChannelPlugin(channelId);

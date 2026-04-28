@@ -1,5 +1,5 @@
 import type { App } from "@slack/bolt";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it } from "vitest";
 import { resolveSlackChannelConfig } from "./channel-config.js";
@@ -193,6 +193,18 @@ describe("resolveSlackSystemEventSessionKey", () => {
     const ctx = createSlackMonitorContext(baseParams());
     expect(ctx.resolveSlackSystemEventSessionKey({ channelId: "C123" })).toBe(
       "agent:main:slack:channel:c123",
+    );
+  });
+
+  it("uses the configured default agent for fallback system-event sessions", () => {
+    const ctx = createSlackMonitorContext({
+      ...baseParams(),
+      cfg: {
+        agents: { list: [{ id: "ops", default: true }] },
+      },
+    });
+    expect(ctx.resolveSlackSystemEventSessionKey({ channelId: "C123" })).toBe(
+      "agent:ops:slack:channel:c123",
     );
   });
 

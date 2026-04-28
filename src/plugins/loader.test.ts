@@ -60,6 +60,7 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "./loader.test-fixtures.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import {
   listMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
@@ -148,6 +149,59 @@ function memoryPluginBody(id: string) {
 const RESERVED_ADMIN_PLUGIN_METHOD = "config.plugin.inspect";
 const RESERVED_ADMIN_SCOPE_WARNING =
   "gateway method scope coerced to operator.admin for reserved core namespace";
+
+async function waitForFilesystemTimestampTick(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 50));
+}
+
+function isPathInsideRoot(candidate: string, root: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function isBigIntStatOptions(options: unknown): boolean {
+  return Boolean(
+    options && typeof options === "object" && "bigint" in options && options.bigint === true,
+  );
+}
+
+function snapshotRuntimeMirrorTree(root: string): Record<string, unknown> {
+  const snapshot: Record<string, unknown> = {};
+  const visit = (directory: string) => {
+    for (const entry of fs
+      .readdirSync(directory, { withFileTypes: true })
+      .toSorted((left, right) => left.name.localeCompare(right.name))) {
+      const entryPath = path.join(directory, entry.name);
+      const relativePath = path.relative(root, entryPath).replaceAll(path.sep, "/");
+      const stat = fs.lstatSync(entryPath);
+      if (entry.isDirectory()) {
+        snapshot[relativePath] = {
+          kind: "directory",
+          mtimeMs: stat.mtimeMs,
+        };
+        visit(entryPath);
+        continue;
+      }
+      if (entry.isSymbolicLink()) {
+        snapshot[relativePath] = {
+          kind: "symlink",
+          link: fs.readlinkSync(entryPath),
+          mtimeMs: stat.mtimeMs,
+        };
+        continue;
+      }
+      if (entry.isFile()) {
+        snapshot[relativePath] = {
+          kind: "file",
+          mtimeMs: stat.mtimeMs,
+          size: stat.size,
+        };
+      }
+    }
+  };
+  visit(root);
+  return snapshot;
+}
 
 function writeBundledPlugin(params: {
   id: string;
@@ -448,6 +502,7 @@ function expectPluginSourcePrecedence(
     expectedDisabledOrigin: string;
     label: string;
     expectedDisabledError?: string;
+    expectDuplicateWarning?: boolean;
   },
 ) {
   const entries = registry.plugins.filter((entry) => entry.id === scenario.pluginId);
@@ -458,15 +513,13 @@ function expectPluginSourcePrecedence(
   const expectedWarning =
     scenario.expectedDisabledError ??
     `${scenario.expectedDisabledOrigin} plugin will be overridden by ${scenario.expectedLoadedOrigin} plugin`;
-  expect(
-    registry.diagnostics.some(
-      (diag) =>
-        diag.level === "warn" &&
-        diag.pluginId === scenario.pluginId &&
-        diag.message.includes(expectedWarning),
-    ),
-    scenario.label,
-  ).toBe(true);
+  const hasDuplicateWarning = registry.diagnostics.some(
+    (diag) =>
+      diag.level === "warn" &&
+      diag.pluginId === scenario.pluginId &&
+      diag.message.includes(expectedWarning),
+  );
+  expect(hasDuplicateWarning, scenario.label).toBe(scenario.expectDuplicateWarning ?? true);
 }
 
 function expectPluginOriginAndStatus(params: {
@@ -856,6 +909,31 @@ afterAll(() => {
 });
 
 describe("loadOpenClawPlugins", () => {
+  it("can load scoped plugins from a supplied manifest registry without rereading manifests", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "supplied-manifest",
+      body: `module.exports = { id: "supplied-manifest", register() {} };`,
+    });
+    const config = {
+      plugins: {
+        load: { paths: [plugin.file] },
+        allow: [plugin.id],
+      },
+    };
+    const manifestRegistry = loadPluginManifestRegistry({ config, cache: false });
+    fs.rmSync(path.join(plugin.dir, "openclaw.plugin.json"));
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config,
+      manifestRegistry,
+      onlyPluginIds: [plugin.id],
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === plugin.id)?.status).toBe("loaded");
+  });
+
   it("refreshes bundled plugin-sdk aliases without deleting the shared alias directory", () => {
     const distRoot = makeTempDir();
     const pluginSdkDir = path.join(distRoot, "plugin-sdk");
@@ -1715,7 +1793,7 @@ module.exports = {
     expect(registry?.plugins.find((entry) => entry.id === "alpha")?.status).toBe("loaded");
   });
 
-  it("materializes plugin-owned root chunks in external runtime mirrors", () => {
+  it("materializes root JavaScript chunks in external runtime mirrors", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
     const bundledDir = path.join(packageRoot, "dist", "extensions");
@@ -1735,6 +1813,16 @@ module.exports = {
         `//#endregion`,
         "",
       ].join("\n"),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(packageRoot, "dist", "shared-runtime.js"),
+      "export const shared = 'mirrored-without-region';\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(packageRoot, "dist", "config-runtime.js"),
+      "import JSON5 from 'json5'; export const parse = JSON5.parse;\n",
       "utf-8",
     );
     fs.writeFileSync(
@@ -1830,6 +1918,12 @@ module.exports = {
 
     expect(reloadedRegistry.plugins.find((entry) => entry.id === "browser")?.status).toBe("loaded");
     expect(fs.existsSync(stagedMirrorChunk)).toBe(true);
+    expect(
+      fs.lstatSync(path.join(actualInstallRoot, "dist", "shared-runtime.js")).isSymbolicLink(),
+    ).toBe(false);
+    expect(
+      fs.lstatSync(path.join(actualInstallRoot, "dist", "config-runtime.js")).isSymbolicLink(),
+    ).toBe(true);
   });
 
   it("loads bundled plugins with plugin-sdk imports from an external stage dir", () => {
@@ -2014,7 +2108,7 @@ module.exports = {
     expect(registry.plugins.find((entry) => entry.id === "discord")?.status).toBe("loaded");
   });
 
-  it("loads dist-runtime wrappers from an external stage dir", () => {
+  it("loads dist-runtime wrappers from an external stage dir without rewriting mirrors on reload", async () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
     const bundledDir = path.join(packageRoot, "dist-runtime", "extensions");
@@ -2099,43 +2193,102 @@ module.exports = {
       "utf-8",
     );
 
-    let actualInstallRoot = "";
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          enabled: true,
-        },
-      },
-      bundledRuntimeDepsInstaller: ({ installRoot }) => {
-        actualInstallRoot = installRoot;
-        const depRoot = path.join(installRoot, "node_modules", "external-runtime");
-        fs.mkdirSync(depRoot, { recursive: true });
-        fs.writeFileSync(
-          path.join(depRoot, "package.json"),
-          JSON.stringify({
-            name: "external-runtime",
-            version: "1.0.0",
-            type: "module",
-            exports: "./index.js",
-          }),
-          "utf-8",
-        );
-        fs.writeFileSync(
-          path.join(depRoot, "index.js"),
-          "export default { marker: 'dist-runtime-ok' };\n",
-          "utf-8",
-        );
-      },
+    const installRootPlan = resolveBundledRuntimeDependencyInstallRootPlan(pluginRoot, {
+      env: process.env,
     });
+    const lockPath = path.join(installRootPlan.installRoot, ".openclaw-runtime-mirror.lock");
+    const observedPluginRoot = fs.realpathSync.native(pluginRoot);
+    const observedCanonicalPluginRoot = fs.realpathSync.native(canonicalPluginRoot);
+    const fingerprintLockStates: Array<{ source: "runtime" | "canonical"; locked: boolean }> = [];
+    const realLstatSync = fs.lstatSync.bind(fs) as typeof fs.lstatSync;
+    const lstatSync = vi.spyOn(fs, "lstatSync").mockImplementation(((target, options) => {
+      const targetPath = target.toString();
+      if (isBigIntStatOptions(options)) {
+        if (
+          isPathInsideRoot(targetPath, pluginRoot) ||
+          isPathInsideRoot(targetPath, observedPluginRoot)
+        ) {
+          fingerprintLockStates.push({ source: "runtime", locked: fs.existsSync(lockPath) });
+        } else if (
+          isPathInsideRoot(targetPath, canonicalPluginRoot) ||
+          isPathInsideRoot(targetPath, observedCanonicalPluginRoot)
+        ) {
+          fingerprintLockStates.push({ source: "canonical", locked: fs.existsSync(lockPath) });
+        }
+      }
+      return realLstatSync(target, options as never);
+    }) as typeof fs.lstatSync);
 
-    const record = registry.plugins.find((entry) => entry.id === "acpx");
-    expect(record?.error).toBeUndefined();
-    expect(record?.status).toBe("loaded");
-    expect(fs.lstatSync(path.join(actualInstallRoot, "dist")).isSymbolicLink()).toBe(false);
-    expect(fs.lstatSync(path.join(actualInstallRoot, "dist", "pw-ai.js")).isSymbolicLink()).toBe(
-      false,
-    );
+    try {
+      let actualInstallRoot = "";
+      const registry = loadOpenClawPlugins({
+        cache: false,
+        config: {
+          plugins: {
+            enabled: true,
+          },
+        },
+        bundledRuntimeDepsInstaller: ({ installRoot }) => {
+          actualInstallRoot = installRoot;
+          const depRoot = path.join(installRoot, "node_modules", "external-runtime");
+          fs.mkdirSync(depRoot, { recursive: true });
+          fs.writeFileSync(
+            path.join(depRoot, "package.json"),
+            JSON.stringify({
+              name: "external-runtime",
+              version: "1.0.0",
+              type: "module",
+              exports: "./index.js",
+            }),
+            "utf-8",
+          );
+          fs.writeFileSync(
+            path.join(depRoot, "index.js"),
+            "export default { marker: 'dist-runtime-ok' };\n",
+            "utf-8",
+          );
+        },
+      });
+
+      const record = registry.plugins.find((entry) => entry.id === "acpx");
+      expect(record?.error).toBeUndefined();
+      expect(record?.status).toBe("loaded");
+      expect(fs.lstatSync(path.join(actualInstallRoot, "dist")).isSymbolicLink()).toBe(false);
+      expect(fs.lstatSync(path.join(actualInstallRoot, "dist", "pw-ai.js")).isSymbolicLink()).toBe(
+        false,
+      );
+
+      const runtimeMirrorRoot = path.join(actualInstallRoot, "dist-runtime", "extensions", "acpx");
+      const canonicalMirrorRoot = path.join(actualInstallRoot, "dist", "extensions", "acpx");
+      const mirrorSnapshot = {
+        runtime: snapshotRuntimeMirrorTree(runtimeMirrorRoot),
+        canonical: snapshotRuntimeMirrorTree(canonicalMirrorRoot),
+      };
+
+      await waitForFilesystemTimestampTick();
+
+      const reloadedRegistry = loadOpenClawPlugins({
+        cache: false,
+        config: {
+          plugins: {
+            enabled: true,
+          },
+        },
+      });
+
+      const reloadedRecord = reloadedRegistry.plugins.find((entry) => entry.id === "acpx");
+      expect(reloadedRecord?.error).toBeUndefined();
+      expect(reloadedRecord?.status).toBe("loaded");
+      expect({
+        runtime: snapshotRuntimeMirrorTree(runtimeMirrorRoot),
+        canonical: snapshotRuntimeMirrorTree(canonicalMirrorRoot),
+      }).toEqual(mirrorSnapshot);
+      expect(fingerprintLockStates.some((entry) => entry.source === "runtime")).toBe(true);
+      expect(fingerprintLockStates.some((entry) => entry.source === "canonical")).toBe(true);
+      expect(fingerprintLockStates.filter((entry) => entry.locked)).toEqual([]);
+    } finally {
+      lstatSync.mockRestore();
+    }
   });
 
   it("loads native ESM deps from a layered baseline stage dir", () => {
@@ -3307,6 +3460,66 @@ module.exports = { id: "throws-after-import", register() {} };`,
     const event = createInternalHookEvent("gateway", "startup", "gateway:startup");
     await triggerInternalHook(event);
     expect(event.messages.filter((message) => message === "reload-hook-fired")).toHaveLength(1);
+
+    clearInternalHooks();
+  });
+
+  it("injects plugin config into internal hook event context", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "hook-config-context",
+      filename: "hook-config-context.cjs",
+      body: `module.exports = {
+        id: "hook-config-context",
+        register(api) {
+          api.registerHook(
+            "gateway:startup",
+            (event) => {
+              event.messages.push(event.context.pluginConfig?.marker);
+            },
+            { name: "hook-config-context" },
+          );
+        },
+      };`,
+    });
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "hook-config-context",
+          configSchema: { type: "object" },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    clearInternalHooks();
+
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["hook-config-context"],
+          entries: {
+            "hook-config-context": {
+              config: {
+                marker: "plugin-config-visible",
+              },
+            },
+          },
+        },
+      },
+      onlyPluginIds: ["hook-config-context"],
+    });
+
+    const event = createInternalHookEvent("gateway", "startup", "gateway:startup");
+    await triggerInternalHook(event);
+    expect(event.messages).toEqual(["plugin-config-visible"]);
+    expect(event.context).toEqual({});
 
     clearInternalHooks();
   });
@@ -6219,6 +6432,47 @@ module.exports = {
     expect(constrainedDiagnostics).toHaveLength(1);
   });
 
+  it("blocks next-turn injections when prompt injection is disabled", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "next-turn-policy",
+      filename: "next-turn-policy.cjs",
+      body: `module.exports = { id: "next-turn-policy", register(api) {
+  void api.enqueueNextTurnInjection({
+    sessionKey: "agent:main:main",
+    text: "blocked context",
+  });
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["next-turn-policy"],
+        entries: {
+          "next-turn-policy": {
+            hooks: {
+              allowPromptInjection: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "next-turn-policy")?.status).toBe(
+      "loaded",
+    );
+    expect(registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "next-turn-policy",
+          message:
+            "next-turn injection blocked by plugins.entries.next-turn-policy.hooks.allowPromptInjection=false",
+        }),
+      ]),
+    );
+  });
+
   it("keeps prompt-injection typed hooks enabled by default", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -6757,6 +7011,7 @@ module.exports = {
         expectedLoadedOrigin: "global",
         expectedDisabledOrigin: "bundled",
         expectedDisabledError: "overridden by global plugin",
+        expectDuplicateWarning: false,
         assert: expectPluginSourcePrecedence,
       },
     ] as const;

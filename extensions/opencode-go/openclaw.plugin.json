@@ -1,7 +1,74 @@
 {
   "id": "opencode-go",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["opencode-go"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "opencode-native",
+      "hostSuffixes": ["opencode.ai"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "opencode-go": {
+        "family": "opencode"
+      }
+    }
+  },
+  "modelCatalog": {
+    "providers": {
+      "opencode-go": {
+        "baseUrl": "https://opencode.ai/zen/go/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "deepseek-v4-pro",
+            "name": "DeepSeek V4 Pro",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1000000,
+            "maxTokens": 384000,
+            "cost": {
+              "input": 1.74,
+              "output": 3.48,
+              "cacheRead": 0.145,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "deepseek-v4-flash",
+            "name": "DeepSeek V4 Flash",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1000000,
+            "maxTokens": 384000,
+            "cost": {
+              "input": 0.14,
+              "output": 0.28,
+              "cacheRead": 0.028,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "opencode-go": "refreshable"
+    }
+  },
   "providerAuthEnvVars": {
     "opencode-go": ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"]
   },

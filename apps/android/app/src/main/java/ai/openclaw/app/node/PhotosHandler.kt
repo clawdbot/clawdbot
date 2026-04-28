@@ -1,5 +1,6 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.gateway.GatewaySession
 import android.Manifest
 import android.content.ContentResolver
 import android.content.ContentUris
@@ -12,17 +13,15 @@ import android.os.Bundle
 import android.provider.MediaStore
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.scale
-import ai.openclaw.app.gateway.GatewaySession
-import java.io.ByteArrayOutputStream
-import java.time.Instant
-import kotlin.math.max
-import kotlin.math.roundToInt
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.io.ByteArrayOutputStream
+import java.time.Instant
+import kotlin.math.max
+import kotlin.math.roundToInt
 
 private const val DEFAULT_PHOTOS_LIMIT = 1
 private const val DEFAULT_PHOTOS_MAX_WIDTH = 1600
@@ -47,7 +46,10 @@ internal data class EncodedPhotoPayload(
 internal interface PhotosDataSource {
   fun hasPermission(context: Context): Boolean
 
-  fun latest(context: Context, request: PhotosLatestRequest): List<EncodedPhotoPayload>
+  fun latest(
+    context: Context,
+    request: PhotosLatestRequest,
+  ): List<EncodedPhotoPayload>
 }
 
 private object SystemPhotosDataSource : PhotosDataSource {
@@ -61,7 +63,10 @@ private object SystemPhotosDataSource : PhotosDataSource {
     return ContextCompat.checkSelfPermission(context, permission) == android.content.pm.PackageManager.PERMISSION_GRANTED
   }
 
-  override fun latest(context: Context, request: PhotosLatestRequest): List<EncodedPhotoPayload> {
+  override fun latest(
+    context: Context,
+    request: PhotosLatestRequest,
+  ): List<EncodedPhotoPayload> {
     val resolver = context.contentResolver
     val rows = queryLatestRows(resolver, request.limit)
     if (rows.isEmpty()) return emptyList()
@@ -102,7 +107,10 @@ private object SystemPhotosDataSource : PhotosDataSource {
     val height: Int,
   )
 
-  private fun queryLatestRows(resolver: ContentResolver, limit: Int): List<PhotoRow> {
+  private fun queryLatestRows(
+    resolver: ContentResolver,
+    limit: Int,
+  ): List<PhotoRow> {
     val projection =
       arrayOf(
         MediaStore.Images.Media._ID,
@@ -117,29 +125,30 @@ private object SystemPhotosDataSource : PhotosDataSource {
         putInt(ContentResolver.QUERY_ARG_LIMIT, limit)
       }
 
-    resolver.query(
-      MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-      projection,
-      args,
-      null,
-    ).use { cursor ->
-      if (cursor == null) return emptyList()
-      val idIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-      val takenIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
-      val addedIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
-      val rows = mutableListOf<PhotoRow>()
-      while (cursor.moveToNext()) {
-        val id = cursor.getLong(idIndex)
-        val takenMs = cursor.getLong(takenIndex).takeIf { it > 0L }
-        val addedMs = cursor.getLong(addedIndex).takeIf { it > 0L }?.times(1000L)
-        rows +=
-          PhotoRow(
-            uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id),
-            createdAtMs = takenMs ?: addedMs,
-          )
+    resolver
+      .query(
+        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+        projection,
+        args,
+        null,
+      ).use { cursor ->
+        if (cursor == null) return emptyList()
+        val idIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+        val takenIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
+        val addedIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
+        val rows = mutableListOf<PhotoRow>()
+        while (cursor.moveToNext()) {
+          val id = cursor.getLong(idIndex)
+          val takenMs = cursor.getLong(takenIndex).takeIf { it > 0L }
+          val addedMs = cursor.getLong(addedIndex).takeIf { it > 0L }?.times(1000L)
+          rows +=
+            PhotoRow(
+              uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id),
+              createdAtMs = takenMs ?: addedMs,
+            )
+        }
+        return rows
       }
-      return rows
-    }
   }
 
   private fun decodeScaledBitmap(
@@ -171,7 +180,10 @@ private object SystemPhotosDataSource : PhotosDataSource {
     }
   }
 
-  private fun computeInSampleSize(width: Int, maxWidth: Int): Int {
+  private fun computeInSampleSize(
+    width: Int,
+    maxWidth: Int,
+  ): Int {
     var sample = 1
     var candidate = width
     while (candidate > maxWidth && sample < 64) {

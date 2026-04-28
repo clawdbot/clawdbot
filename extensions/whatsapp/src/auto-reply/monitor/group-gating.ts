@@ -1,4 +1,4 @@
-import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   getPrimaryIdentityId,
   getReplyContext,
@@ -31,7 +31,7 @@ export type GroupHistoryEntry = {
 };
 
 type ApplyGroupGatingParams = {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   msg: WebInboundMsg;
   mentionText?: string;
   deferMissingMention?: boolean;

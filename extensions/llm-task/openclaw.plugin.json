@@ -1,5 +1,8 @@
 {
   "id": "llm-task",
+  "activation": {
+    "onStartup": true
+  },
   "name": "LLM Task",
   "description": "Generic JSON-only LLM tool for structured tasks callable from workflows.",
   "configSchema": {

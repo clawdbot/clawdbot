@@ -120,8 +120,8 @@ async function assertInstallBaseStable(params: {
   installBaseDir: string;
   expectedRealPath: string;
 }): Promise<void> {
-  const baseLstat = await fs.lstat(params.installBaseDir);
-  if (!baseLstat.isDirectory() || baseLstat.isSymbolicLink()) {
+  const baseStat = await fs.stat(params.installBaseDir);
+  if (!baseStat.isDirectory()) {
     throw new Error(INSTALL_BASE_CHANGED_ERROR_MESSAGE);
   }
   const currentRealPath = await fs.realpath(params.installBaseDir);
@@ -170,11 +170,17 @@ export async function installPackageDir(params: {
 }): Promise<{ ok: true } | { ok: false; error: string; code?: string }> {
   params.logger?.info?.(`Installing to ${params.targetDir}…`);
   const installBaseDir = path.dirname(params.targetDir);
-  await fs.mkdir(installBaseDir, { recursive: true });
-  await assertInstallBoundaryPaths({
-    installBaseDir,
-    candidatePaths: [params.targetDir],
-  });
+  let initialInstallBaseRealPath: string;
+  try {
+    await fs.mkdir(installBaseDir, { recursive: true });
+    initialInstallBaseRealPath = await fs.realpath(installBaseDir);
+    await assertInstallBoundaryPaths({
+      installBaseDir,
+      candidatePaths: [params.targetDir],
+    });
+  } catch (err) {
+    return { ok: false, error: `${params.copyErrorPrefix}: ${String(err)}` };
+  }
   let installBaseRealPath: string;
   let canonicalTargetDir: string;
   try {
@@ -182,7 +188,13 @@ export async function installPackageDir(params: {
       installBaseDir,
       targetDir: params.targetDir,
     }));
+    if (installBaseRealPath !== initialInstallBaseRealPath) {
+      throw new Error(INSTALL_BASE_CHANGED_ERROR_MESSAGE);
+    }
   } catch (err) {
+    if (isInstallBaseChangedError(err)) {
+      params.logger?.warn?.(INSTALL_BASE_CHANGED_ABORT_WARNING);
+    }
     return { ok: false, error: `${params.copyErrorPrefix}: ${String(err)}` };
   }
 
@@ -246,7 +258,10 @@ export async function installPackageDir(params: {
           return await runCommandWithTimeout(
             // Plugins install into isolated directories, so omitting peer deps can strip
             // runtime requirements that npm would otherwise materialize for the package.
-            ["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"],
+            // Verified on Blacksmith Ubuntu/Node 24/npm 11: `--silent` can make npm fail
+            // with empty stdout/stderr for bad specs like `workspace:^`; `--loglevel=error`
+            // stays quiet on success while preserving the actionable npm failure text.
+            ["npm", "install", "--omit=dev", "--loglevel=error", "--ignore-scripts"],
             {
               timeoutMs: Math.max(params.timeoutMs, 300_000),
               cwd: stageDir,

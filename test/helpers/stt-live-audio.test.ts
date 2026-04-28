@@ -1,5 +1,5 @@
+import { normalizeTranscriptForMatch } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
-import { normalizeTranscriptForMatch } from "./stt-live-audio.js";
 
 describe("normalizeTranscriptForMatch", () => {
   it("normalizes punctuation and common OpenClaw live transcription variants", () => {

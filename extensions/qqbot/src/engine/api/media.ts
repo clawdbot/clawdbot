@@ -5,8 +5,13 @@
  * - Unified `uploadMedia(scope, ...)` replaces `uploadC2CMedia` + `uploadGroupMedia`.
  * - Upload cache integration via composition (passed in constructor).
  * - Uses `withRetry` from the shared retry engine.
+ *
+ * Chunked upload for files above `LARGE_FILE_THRESHOLD` is tracked by
+ * {@link ./media-chunked.ts}; this module currently handles only the
+ * one-shot path.
  */
 
+import * as fs from "node:fs";
 import {
   MediaFileType,
   type ChatScope,
@@ -16,7 +21,7 @@ import {
 } from "../types.js";
 import { ApiClient } from "./api-client.js";
 import { withRetry, UPLOAD_RETRY_POLICY } from "./retry.js";
-import { mediaUploadPath, getNextMsgSeq } from "./routes.js";
+import { mediaUploadPath, messagePath, getNextMsgSeq } from "./routes.js";
 import { TokenManager } from "./token.js";
 
 /** Upload cache interface — the caller provides the implementation. */
@@ -66,13 +71,19 @@ export class MediaApi {
   }
 
   /**
-   * Upload media via base64 or URL to a C2C or Group target.
+   * Upload media via base64, URL, buffer, or local file path to a C2C or Group target.
+   *
+   * The `localPath` and `buffer` branches are equivalent to `fileData` for the
+   * current one-shot implementation — the file is read and base64-encoded
+   * synchronously. They exist as first-class inputs so that a future chunked
+   * upload implementation can consume them without interface churn.
    *
    * @param scope - `'c2c'` or `'group'`.
    * @param targetId - User openid or group openid.
    * @param fileType - Media file type code.
    * @param creds - Authentication credentials.
-   * @param opts - Upload options.
+   * @param opts - Upload options. Exactly one of `url`/`fileData`/`buffer`/`localPath`
+   *   must be supplied.
    * @returns Upload result containing `file_info` for subsequent message sends.
    */
   async uploadMedia(
@@ -83,17 +94,46 @@ export class MediaApi {
     opts: {
       url?: string;
       fileData?: string;
+      /**
+       * Raw bytes in memory. Currently re-encoded to base64 internally;
+       * reserved as a dedicated input for the future chunked uploader.
+       */
+      buffer?: Buffer;
+      /**
+       * On-disk path. Currently read + base64-encoded internally; reserved
+       * for streaming ingestion by the future chunked uploader.
+       */
+      localPath?: string;
       srvSendMsg?: boolean;
       fileName?: string;
     },
   ): Promise<UploadMediaResponse> {
-    if (!opts.url && !opts.fileData) {
-      throw new Error(`uploadMedia: url or fileData is required`);
+    const sources = [opts.url, opts.fileData, opts.buffer, opts.localPath].filter(
+      (v) => v !== undefined,
+    );
+    if (sources.length === 0) {
+      throw new Error(`uploadMedia: one of url/fileData/buffer/localPath is required`);
+    }
+    if (sources.length > 1) {
+      throw new Error(
+        `uploadMedia: url/fileData/buffer/localPath are mutually exclusive (got ${sources.length})`,
+      );
+    }
+
+    // One-shot path: materialize buffer/localPath into fileData.
+    // Future chunked-upload work will branch here on size and route
+    // buffer/localPath through streaming ingestion instead of base64 encoding.
+    let fileData = opts.fileData;
+    if (opts.buffer) {
+      fileData = opts.buffer.toString("base64");
+    } else if (opts.localPath) {
+      const buf = await fs.promises.readFile(opts.localPath);
+      fileData = buf.toString("base64");
     }
 
     // Check cache for base64 uploads.
-    if (opts.fileData && this.cache) {
-      const hash = this.cache.computeHash(opts.fileData);
+    if (fileData && this.cache) {
+      const hash = this.cache.computeHash(fileData);
       const cached = this.cache.get(hash, scope, targetId, fileType);
       if (cached) {
         return { file_uuid: "", file_info: cached, ttl: 0 };
@@ -106,8 +146,8 @@ export class MediaApi {
     };
     if (opts.url) {
       body.url = opts.url;
-    } else if (opts.fileData) {
-      body.file_data = opts.fileData;
+    } else if (fileData) {
+      body.file_data = fileData;
     }
     if (fileType === MediaFileType.FILE && opts.fileName) {
       body.file_name = this.sanitize(opts.fileName);
@@ -120,6 +160,7 @@ export class MediaApi {
       () =>
         this.client.request<UploadMediaResponse>(token, "POST", path, body, {
           redactBodyKeys: ["file_data"],
+          uploadRequest: true,
         }),
       UPLOAD_RETRY_POLICY,
       undefined,
@@ -127,8 +168,8 @@ export class MediaApi {
     );
 
     // Cache the result for future dedup.
-    if (opts.fileData && result.file_info && result.ttl > 0 && this.cache) {
-      const hash = this.cache.computeHash(opts.fileData);
+    if (fileData && result.file_info && result.ttl > 0 && this.cache) {
+      const hash = this.cache.computeHash(fileData);
       this.cache.set(
         hash,
         scope,
@@ -164,8 +205,7 @@ export class MediaApi {
   ): Promise<MessageResponse> {
     const token = await this.tokenManager.getAccessToken(creds.appId, creds.clientSecret);
     const msgSeq = opts?.msgId ? getNextMsgSeq(opts.msgId) : 1;
-    const path =
-      scope === "c2c" ? `/v2/users/${targetId}/messages` : `/v2/groups/${targetId}/messages`;
+    const path = messagePath(scope, targetId);
 
     return this.client.request<MessageResponse>(token, "POST", path, {
       msg_type: 7,

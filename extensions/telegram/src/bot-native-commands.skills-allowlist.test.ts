@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { listSkillCommandsForAgents as listActualSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
@@ -58,10 +59,9 @@ describe("registerTelegramNativeCommands skill allowlist integration", () => {
         },
       ],
     };
-    const actualSkillCommands = await import("../../../src/auto-reply/skill-commands.js");
     listSkillCommandsForAgents.mockImplementation(
       ({ cfg, agentIds }: { cfg: OpenClawConfig; agentIds?: string[] }) =>
-        actualSkillCommands.listSkillCommandsForAgents({ cfg, agentIds }),
+        listActualSkillCommandsForAgents({ cfg, agentIds }),
     );
 
     registerTelegramNativeCommands({

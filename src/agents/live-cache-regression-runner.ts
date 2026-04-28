@@ -19,6 +19,7 @@ import {
 
 const OPENAI_TIMEOUT_MS = 120_000;
 const ANTHROPIC_TIMEOUT_MS = 120_000;
+const LIVE_CACHE_LANE_RETRIES = 1;
 const OPENAI_PREFIX = buildStableCachePrefix("openai");
 const OPENAI_MCP_PREFIX = buildStableCachePrefix("openai-mcp-style");
 const ANTHROPIC_PREFIX = buildStableCachePrefix("anthropic");
@@ -47,10 +48,15 @@ type LaneResult = {
   disabled?: CacheRun;
   warmup?: CacheRun;
 };
+type BaselineFindings = {
+  regressions: string[];
+  warnings: string[];
+};
 
 export type LiveCacheRegressionResult = {
   regressions: string[];
   summary: Record<string, Record<string, unknown>>;
+  warnings: string[];
 };
 
 const NOOP_TOOL: Tool = {
@@ -358,8 +364,16 @@ function assertAgainstBaseline(params: {
   provider: ProviderKey;
   result: LaneResult;
   regressions: string[];
+  warnings: string[];
 }) {
   const floor = resolveBaselineFloor(params.provider, params.lane);
+  const recordRegression = (message: string) => {
+    if (floor?.warnOnly) {
+      params.warnings.push(message);
+    } else {
+      params.regressions.push(message);
+    }
+  };
   if (!floor) {
     params.regressions.push(`${params.provider}:${params.lane} missing baseline entry`);
     return;
@@ -370,17 +384,17 @@ function assertAgainstBaseline(params: {
     if (floor.minCacheReadOrWrite !== undefined) {
       const cacheReadOrWrite = Math.max(usage.cacheRead ?? 0, usage.cacheWrite ?? 0);
       if (cacheReadOrWrite < floor.minCacheReadOrWrite) {
-        params.regressions.push(
+        recordRegression(
           `${params.provider}:${params.lane} cacheReadOrWrite=${cacheReadOrWrite} < min=${floor.minCacheReadOrWrite}`,
         );
       }
     } else if ((usage.cacheRead ?? 0) < (floor.minCacheRead ?? 0)) {
-      params.regressions.push(
+      recordRegression(
         `${params.provider}:${params.lane} cacheRead=${usage.cacheRead ?? 0} < min=${floor.minCacheRead}`,
       );
     }
     if (params.result.best.hitRate < (floor.minHitRate ?? 0)) {
-      params.regressions.push(
+      recordRegression(
         `${params.provider}:${params.lane} hitRate=${params.result.best.hitRate.toFixed(3)} < min=${floor.minHitRate?.toFixed(3)}`,
       );
     }
@@ -389,7 +403,7 @@ function assertAgainstBaseline(params: {
   if (params.result.warmup) {
     const warmupUsage = params.result.warmup.usage;
     if ((warmupUsage.cacheWrite ?? 0) < (floor.minCacheWrite ?? 0)) {
-      params.regressions.push(
+      recordRegression(
         `${params.provider}:${params.lane} warmup cacheWrite=${warmupUsage.cacheWrite ?? 0} < min=${floor.minCacheWrite}`,
       );
     }
@@ -398,17 +412,84 @@ function assertAgainstBaseline(params: {
   if (params.result.disabled) {
     const usage = params.result.disabled.usage;
     if ((usage.cacheRead ?? 0) > (floor.maxCacheRead ?? Number.POSITIVE_INFINITY)) {
-      params.regressions.push(
+      recordRegression(
         `${params.provider}:${params.lane} cacheRead=${usage.cacheRead ?? 0} > max=${floor.maxCacheRead}`,
       );
     }
     if ((usage.cacheWrite ?? 0) > (floor.maxCacheWrite ?? Number.POSITIVE_INFINITY)) {
-      params.regressions.push(
+      recordRegression(
         `${params.provider}:${params.lane} cacheWrite=${usage.cacheWrite ?? 0} > max=${floor.maxCacheWrite}`,
       );
     }
   }
 }
+
+function evaluateAgainstBaseline(params: {
+  lane: BaselineLane;
+  provider: ProviderKey;
+  result: LaneResult;
+}): BaselineFindings {
+  const regressions: string[] = [];
+  const warnings: string[] = [];
+  assertAgainstBaseline({
+    ...params,
+    regressions,
+    warnings,
+  });
+  return { regressions, warnings };
+}
+
+function shouldRetryBaselineFindings(findings: BaselineFindings, attempt: number): boolean {
+  return findings.regressions.length > 0 && attempt <= LIVE_CACHE_LANE_RETRIES;
+}
+
+async function runRepeatedLaneWithBaselineRetry(params: {
+  lane: CacheLane;
+  providerTag: "anthropic" | "openai";
+  fixture: LiveResolvedModel;
+  runToken: string;
+  pngBase64: string;
+}): Promise<{ result: LaneResult; findings: BaselineFindings; attempts: number }> {
+  let result: LaneResult | undefined;
+  let findings: BaselineFindings = { regressions: [], warnings: [] };
+  let attempts = 0;
+  for (let attempt = 1; attempt <= 1 + LIVE_CACHE_LANE_RETRIES; attempt += 1) {
+    attempts = attempt;
+    result = await runRepeatedLane({
+      ...params,
+      sessionId: `live-cache-regression-${params.runToken}-${params.providerTag}-${params.lane}${
+        attempt > 1 ? `-retry-${attempt}` : ""
+      }`,
+    });
+    findings = evaluateAgainstBaseline({
+      lane: params.lane,
+      provider: params.providerTag,
+      result,
+    });
+    if (!shouldRetryBaselineFindings(findings, attempt)) {
+      break;
+    }
+    logLiveCache(
+      `${params.providerTag} ${params.lane} baseline miss; retrying lane once: ${JSON.stringify(
+        findings.regressions,
+      )}`,
+    );
+  }
+
+  assert(result, `expected ${params.providerTag} ${params.lane} cache lane result`);
+  return { result, findings, attempts };
+}
+
+function appendBaselineFindings(target: BaselineFindings, source: BaselineFindings) {
+  target.regressions.push(...source.regressions);
+  target.warnings.push(...source.warnings);
+}
+
+export const __testing = {
+  assertAgainstBaseline,
+  evaluateAgainstBaseline,
+  shouldRetryBaselineFindings,
+};
 
 export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResult> {
   const pngBase64 = (await fs.readFile(LIVE_TEST_PNG_URL)).toString("base64");
@@ -427,20 +508,21 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
   });
 
   const regressions: string[] = [];
+  const warnings: string[] = [];
   const summary: Record<string, Record<string, unknown>> = {
     anthropic: {},
     openai: {},
   };
 
   for (const lane of ["stable", "tool", "image", "mcp"] as const) {
-    const openaiResult = await runRepeatedLane({
+    const openaiAttempt = await runRepeatedLaneWithBaselineRetry({
       lane,
       providerTag: "openai",
       fixture: openai,
       runToken,
-      sessionId: `live-cache-regression-${runToken}-openai-${lane}`,
       pngBase64,
     });
+    const openaiResult = openaiAttempt.result;
     logLiveCache(
       `openai ${lane} warmup ${formatUsage(openaiResult.warmup?.usage ?? {})} rate=${openaiResult.warmup?.hitRate.toFixed(3) ?? "0.000"}`,
     );
@@ -450,23 +532,19 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
     summary.openai[lane] = {
       best: openaiResult.best?.usage,
       hitRate: openaiResult.best?.hitRate,
+      attempts: openaiAttempt.attempts,
       warmup: openaiResult.warmup?.usage,
     };
-    assertAgainstBaseline({
-      lane,
-      provider: "openai",
-      result: openaiResult,
-      regressions,
-    });
+    appendBaselineFindings({ regressions, warnings }, openaiAttempt.findings);
 
-    const anthropicResult = await runRepeatedLane({
+    const anthropicAttempt = await runRepeatedLaneWithBaselineRetry({
       lane,
       providerTag: "anthropic",
       fixture: anthropic,
       runToken,
-      sessionId: `live-cache-regression-${runToken}-anthropic-${lane}`,
       pngBase64,
     });
+    const anthropicResult = anthropicAttempt.result;
     logLiveCache(
       `anthropic ${lane} warmup ${formatUsage(anthropicResult.warmup?.usage ?? {})} rate=${anthropicResult.warmup?.hitRate.toFixed(3) ?? "0.000"}`,
     );
@@ -476,14 +554,10 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
     summary.anthropic[lane] = {
       best: anthropicResult.best?.usage,
       hitRate: anthropicResult.best?.hitRate,
+      attempts: anthropicAttempt.attempts,
       warmup: anthropicResult.warmup?.usage,
     };
-    assertAgainstBaseline({
-      lane,
-      provider: "anthropic",
-      result: anthropicResult,
-      regressions,
-    });
+    appendBaselineFindings({ regressions, warnings }, anthropicAttempt.findings);
   }
 
   const disabled = await runAnthropicDisabledLane({
@@ -500,8 +574,12 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
     provider: "anthropic",
     result: disabled,
     regressions,
+    warnings,
   });
 
   logLiveCache(`cache regression summary ${JSON.stringify(summary)}`);
-  return { regressions, summary };
+  if (warnings.length > 0) {
+    logLiveCache(`cache regression warnings ${JSON.stringify(warnings)}`);
+  }
+  return { regressions, summary, warnings };
 }

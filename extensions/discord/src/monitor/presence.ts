@@ -1,5 +1,5 @@
 import type { Activity, UpdatePresenceData } from "@buape/carbon/gateway";
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-types";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 const DEFAULT_CUSTOM_ACTIVITY_TYPE = 4;

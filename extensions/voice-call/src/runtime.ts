@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   consultRealtimeVoiceAgent,
@@ -46,6 +46,14 @@ type PlivoProviderModule = typeof import("./providers/plivo.js");
 type MockProviderModule = typeof import("./providers/mock.js");
 type RealtimeVoiceRuntimeModule = typeof import("./realtime-voice.runtime.js");
 type RealtimeHandlerModule = typeof import("./webhook/realtime-handler.js");
+
+const REALTIME_VOICE_CONSULT_SYSTEM_PROMPT = [
+  "You are a behind-the-scenes consultant for a live phone voice agent.",
+  "Prioritize a fast, speakable answer over exhaustive investigation.",
+  "For tool-backed status checks, prefer one or two bounded read-only queries before answering.",
+  "Do not print secret values or dump environment variables; only check whether required configuration is present.",
+  "Be accurate, brief, and speakable.",
+].join(" ");
 
 let telnyxProviderPromise: Promise<TelnyxProviderModule> | undefined;
 let twilioProviderPromise: Promise<TwilioProviderModule> | undefined;
@@ -368,8 +376,7 @@ export async function createVoiceCallRuntime(params: {
             thinkLevel,
             timeoutMs: config.responseTimeoutMs,
             toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(config.realtime.toolPolicy),
-            extraSystemPrompt:
-              "You are a behind-the-scenes consultant for a live phone voice agent. Be accurate, brief, and speakable.",
+            extraSystemPrompt: REALTIME_VOICE_CONSULT_SYSTEM_PROMPT,
           });
         },
       );

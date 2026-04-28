@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import "../../test-support/browser-security-runtime.mock.js";
+import "../test-support/browser-security.mock.js";
 import type { BrowserServerState } from "./server-context.js";
 
 const chromeMcpMock = vi.hoisted(() => ({

@@ -16,7 +16,10 @@ export {
   loadOpenClawProviderIndex,
   normalizeOpenClawProviderIndex,
 } from "./provider-index/index.js";
-export { planManifestModelCatalogRows } from "./manifest-planner.js";
+export {
+  planManifestModelCatalogRows,
+  planManifestModelCatalogSuppressions,
+} from "./manifest-planner.js";
 export { planProviderIndexModelCatalogRows } from "./provider-index-planner.js";
 export type {
   ProviderIndexModelCatalogPlan,
@@ -28,6 +31,8 @@ export type {
   ManifestModelCatalogPlanEntry,
   ManifestModelCatalogPlugin,
   ManifestModelCatalogRegistry,
+  ManifestModelCatalogSuppressionEntry,
+  ManifestModelCatalogSuppressionPlan,
 } from "./manifest-planner.js";
 export type {
   ModelCatalog,

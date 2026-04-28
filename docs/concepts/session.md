@@ -53,6 +53,13 @@ If the same person contacts you from multiple channels, use
 `session.identityLinks` to link their identities so they share one session.
 </Tip>
 
+### Dock linked channels
+
+Dock commands let a user move the current direct-chat session's reply route to
+another linked channel without starting a new session. See
+[Channel docking](/concepts/channel-docking) for examples, config, and
+troubleshooting.
+
 Verify your setup with `openclaw security audit`.
 
 ## Session lifecycle
@@ -117,6 +124,8 @@ to `"enforce"` for automatic cleanup:
   },
 }
 ```
+
+For production-sized `maxEntries` limits, Gateway runtime writes use a small high-water buffer and clean back down to the configured cap in batches. This avoids running full store cleanup on every isolated cron session. `openclaw sessions cleanup --enforce` applies the cap immediately.
 
 Preview with `openclaw sessions cleanup --dry-run`.
 

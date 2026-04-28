@@ -1,14 +1,10 @@
+import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import {
-  buildTogetherModelDefinition,
-  TOGETHER_BASE_URL,
-  TOGETHER_MODEL_CATALOG,
-} from "./models.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export function buildTogetherProvider(): ModelProviderConfig {
-  return {
-    baseUrl: TOGETHER_BASE_URL,
-    api: "openai-completions",
-    models: TOGETHER_MODEL_CATALOG.map(buildTogetherModelDefinition),
-  };
+  return buildManifestModelProviderConfig({
+    providerId: "together",
+    catalog: manifest.modelCatalog.providers.together,
+  });
 }

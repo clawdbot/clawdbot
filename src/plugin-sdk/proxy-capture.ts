@@ -12,6 +12,8 @@ export {
 export {
   captureHttpExchange,
   captureWsEvent,
+  finalizeDebugProxyCapture,
+  initializeDebugProxyCapture,
   isDebugProxyGlobalFetchPatchInstalled,
 } from "../proxy-capture/runtime.js";
 export type {

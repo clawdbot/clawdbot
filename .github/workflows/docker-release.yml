@@ -55,6 +55,7 @@ jobs:
     # WARNING: KEEP MANUAL BACKFILLS GATED BY THE docker-release ENVIRONMENT.
     runs-on: ubuntu-24.04
     environment: docker-release
+    permissions: {}
     steps:
       - name: Approve Docker backfill
         env:

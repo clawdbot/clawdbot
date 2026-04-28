@@ -82,6 +82,14 @@ export function createEventHandlers(context: EventHandlerContext) {
   let streamingWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
   let streamingWatchdogRunId: string | null = null;
 
+  const flushPendingHistoryRefreshIfIdle = () => {
+    if (!pendingHistoryRefresh || state.activeChatRunId) {
+      return;
+    }
+    pendingHistoryRefresh = false;
+    void loadHistory?.();
+  };
+
   const clearStreamingWatchdog = () => {
     if (streamingWatchdogTimer) {
       clearTimeout(streamingWatchdogTimer);
@@ -105,7 +113,9 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
       streamingWatchdogRunId = null;
       state.activeChatRunId = null;
+      state.activityStatus = "idle";
       setActivityStatus("idle");
+      flushPendingHistoryRefreshIfIdle();
       chatLog.addSystem(
         `streaming watchdog: no stream updates for ${Math.round(
           streamingWatchdogMs / 1000,
@@ -158,14 +168,6 @@ export function createEventHandlers(context: EventHandlerContext) {
     clearStreamingWatchdog();
   };
 
-  const flushPendingHistoryRefreshIfIdle = () => {
-    if (!pendingHistoryRefresh || state.activeChatRunId) {
-      return;
-    }
-    pendingHistoryRefresh = false;
-    void loadHistory?.();
-  };
-
   const resolveAuthErrorHint = (errorMessage: string): string | undefined => {
     if (!localMode || !isAuthErrorMessage(errorMessage)) {
       return undefined;
@@ -194,6 +196,23 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
   };
 
+  const clearStaleStreamingRunIfNoTrackedRunRemains = () => {
+    const activeRunId = state.activeChatRunId;
+    if (
+      !activeRunId ||
+      sessionRuns.has(activeRunId) ||
+      sessionRuns.size > 0 ||
+      state.activityStatus !== "streaming"
+    ) {
+      return;
+    }
+    state.activeChatRunId = null;
+    state.activityStatus = "idle";
+    setActivityStatus("idle");
+    clearStreamingWatchdog();
+    flushPendingHistoryRefreshIfIdle();
+  };
+
   const finalizeRun = (params: {
     runId: string;
     wasActiveRun: boolean;
@@ -205,8 +224,11 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
       clearStreamingWatchdog();
-    } else if (streamingWatchdogRunId === params.runId) {
-      clearStreamingWatchdog();
+    } else {
+      if (streamingWatchdogRunId === params.runId) {
+        clearStreamingWatchdog();
+      }
+      clearStaleStreamingRunIfNoTrackedRunRemains();
     }
     void refreshSessionInfo?.();
   };
@@ -223,8 +245,11 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
       clearStreamingWatchdog();
-    } else if (streamingWatchdogRunId === params.runId) {
-      clearStreamingWatchdog();
+    } else {
+      if (streamingWatchdogRunId === params.runId) {
+        clearStreamingWatchdog();
+      }
+      clearStaleStreamingRunIfNoTrackedRunRemains();
     }
     void refreshSessionInfo?.();
   };

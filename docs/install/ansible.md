@@ -177,6 +177,7 @@ This is idempotent and safe to run multiple times.
     - Ensure you can access via Tailscale VPN first
     - SSH access (port 22) is always allowed
     - The gateway is only accessible via Tailscale by design
+
   </Accordion>
   <Accordion title="Service will not start">
     ```bash

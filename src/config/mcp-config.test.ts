@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { withTempHome } from "../../test/helpers/temp-home.js";
 import {
   listConfiguredMcpServers,
   setConfiguredMcpServer,
@@ -151,6 +151,29 @@ describe("config mcp config", () => {
           "X-Retry": 1,
           "X-Debug": true,
         },
+      });
+    });
+  });
+
+  it("canonicalizes CLI-native HTTP type aliases when saving MCP config", async () => {
+    await withMcpConfigHome({}, async () => {
+      const setResult = await setConfiguredMcpServer({
+        name: "remote",
+        server: {
+          type: "http",
+          url: "https://example.com/mcp",
+        },
+      });
+
+      expect(setResult.ok).toBe(true);
+      const loaded = await listConfiguredMcpServers();
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) {
+        throw new Error("expected MCP config to load");
+      }
+      expect(loaded.mcpServers.remote).toEqual({
+        url: "https://example.com/mcp",
+        transport: "streamable-http",
       });
     });
   });

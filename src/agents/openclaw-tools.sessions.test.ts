@@ -12,7 +12,7 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({
+  getRuntimeConfig: () => ({
     session: {
       mainKey: "main",
       scope: "per-sender",

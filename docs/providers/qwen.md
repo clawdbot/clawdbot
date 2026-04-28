@@ -76,7 +76,10 @@ Choose your plan type and follow the setup steps.
     <Note>
     Legacy `modelstudio-*` auth-choice ids and `modelstudio/...` model refs still
     work as compatibility aliases, but new setup flows should prefer the canonical
-    `qwen-*` auth-choice ids and `qwen/...` model refs.
+    `qwen-*` auth-choice ids and `qwen/...` model refs. If you define an exact
+    custom `models.providers.modelstudio` entry with another `api` value, that
+    custom provider owns `modelstudio/...` refs instead of the Qwen compatibility
+    alias.
     </Note>
 
   </Tab>
@@ -122,7 +125,10 @@ Choose your plan type and follow the setup steps.
     <Note>
     Legacy `modelstudio-*` auth-choice ids and `modelstudio/...` model refs still
     work as compatibility aliases, but new setup flows should prefer the canonical
-    `qwen-*` auth-choice ids and `qwen/...` model refs.
+    `qwen-*` auth-choice ids and `qwen/...` model refs. If you define an exact
+    custom `models.providers.modelstudio` entry with another `api` value, that
+    custom provider owns `modelstudio/...` refs instead of the Qwen compatibility
+    alias.
     </Note>
 
   </Tab>
@@ -168,6 +174,13 @@ the Standard endpoint.
 Availability can still vary by endpoint and billing plan even when a model is
 present in the bundled catalog.
 </Note>
+
+## Thinking Controls
+
+For reasoning-enabled Qwen Cloud models, the bundled provider maps OpenClaw
+thinking levels to DashScope's top-level `enable_thinking` request flag. Disabled
+thinking sends `enable_thinking: false`; other thinking levels send
+`enable_thinking: true`.
 
 ## Multimodal add-ons
 

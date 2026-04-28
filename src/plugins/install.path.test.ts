@@ -105,6 +105,32 @@ function setupDualFormatInstallFixture(params: { bundleFormat: "codex" | "claude
   return { pluginDir, extensionsDir: path.join(stateDir, "extensions") };
 }
 
+function setupNativePluginInstallFixture() {
+  const caseDir = suiteTempRootTracker.makeTempDir();
+  const stateDir = path.join(caseDir, "state");
+  const pluginDir = path.join(caseDir, "plugin-src");
+  fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
+  fs.writeFileSync(
+    path.join(pluginDir, "package.json"),
+    JSON.stringify({
+      name: "symlink-plugin",
+      version: "1.0.0",
+      openclaw: { extensions: ["./dist/index.js"] },
+    }),
+    "utf-8",
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: "symlink-plugin",
+      configSchema: { type: "object", properties: {} },
+    }),
+    "utf-8",
+  );
+  fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};\n", "utf-8");
+  return { caseDir, pluginDir, extensionsDir: path.join(stateDir, "extensions") };
+}
+
 async function installFromFileWithWarnings(params: {
   extensionsDir: string;
   filePath: string;
@@ -262,6 +288,31 @@ describe("installPluginFromPath", () => {
     expect(result.error.toLowerCase()).toMatch(/hardlink|path alias escape/);
     expect(fs.readFileSync(victimPath, "utf-8")).toBe("ORIGINAL");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "installs local plugin directories when the managed extensions root is a symlink",
+    async () => {
+      const { caseDir, pluginDir, extensionsDir } = setupNativePluginInstallFixture();
+      const realExtensionsDir = path.join(caseDir, "data", "extensions");
+      fs.mkdirSync(realExtensionsDir, { recursive: true });
+      fs.mkdirSync(path.dirname(extensionsDir), { recursive: true });
+      fs.symlinkSync(realExtensionsDir, extensionsDir, "dir");
+
+      const result = await installPluginFromPath({
+        path: pluginDir,
+        extensionsDir,
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      expect(result.targetDir).toBe(path.join(extensionsDir, "symlink-plugin"));
+      expect(fs.existsSync(path.join(realExtensionsDir, "symlink-plugin", "package.json"))).toBe(
+        true,
+      );
+    },
+  );
 
   it("installs Claude bundles from an archive path", async () => {
     const { pluginDir, extensionsDir } = setupBundleInstallFixture({

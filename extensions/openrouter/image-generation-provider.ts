@@ -3,6 +3,11 @@ import type {
   ImageGenerationProvider,
   ImageGenerationRequest,
 } from "openclaw/plugin-sdk/image-generation";
+import {
+  generatedImageAssetFromBase64,
+  generatedImageAssetFromDataUrl,
+  toImageDataUrl,
+} from "openclaw/plugin-sdk/image-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -14,7 +19,6 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
 
 const DEFAULT_MODEL = "google/gemini-3.1-flash-image-preview";
-const DEFAULT_OUTPUT_MIME = "image/png";
 const DEFAULT_TIMEOUT_MS = 90_000;
 const MAX_IMAGE_RESULTS = 4;
 const SUPPORTED_MODELS = [
@@ -49,56 +53,12 @@ type OpenRouterChatCompletionResponse = {
   }>;
 };
 
-function parseDataUrl(dataUrl: string): { mimeType: string; data: string } | undefined {
-  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/s);
-  if (!match) {
-    return undefined;
-  }
-  const [, mimeType, data] = match;
-  if (!mimeType || !data) {
-    return undefined;
-  }
-  return { mimeType, data };
-}
-
-function fileExtensionForMimeType(mimeType: string): string {
-  if (mimeType.includes("jpeg") || mimeType.includes("jpg")) {
-    return "jpg";
-  }
-  if (mimeType.includes("webp")) {
-    return "webp";
-  }
-  if (mimeType.includes("gif")) {
-    return "gif";
-  }
-  return mimeType.split("/")[1] ?? "png";
-}
-
-function toGeneratedImage(params: {
-  base64: string;
-  index: number;
-  mimeType?: string;
-}): GeneratedImageAsset {
-  const mimeType = params.mimeType ?? DEFAULT_OUTPUT_MIME;
-  return {
-    buffer: Buffer.from(params.base64, "base64"),
-    mimeType,
-    fileName: `image-${params.index + 1}.${fileExtensionForMimeType(mimeType)}`,
-  };
-}
-
 function pushDataUrlImage(images: GeneratedImageAsset[], dataUrl: string): void {
-  const parsed = parseDataUrl(dataUrl);
-  if (!parsed) {
+  const image = generatedImageAssetFromDataUrl({ dataUrl, index: images.length });
+  if (!image) {
     return;
   }
-  images.push(
-    toGeneratedImage({
-      base64: parsed.data,
-      index: images.length,
-      mimeType: parsed.mimeType,
-    }),
-  );
+  images.push(image);
 }
 
 function extractImagesFromPart(images: GeneratedImageAsset[], part: unknown): void {
@@ -117,7 +77,10 @@ function extractImagesFromPart(images: GeneratedImageAsset[], part: unknown): vo
 
   const rawBase64 = typeof value.b64_json === "string" ? value.b64_json : undefined;
   if (rawBase64) {
-    images.push(toGeneratedImage({ base64: rawBase64, index: images.length }));
+    const image = generatedImageAssetFromBase64({ base64: rawBase64, index: images.length });
+    if (image) {
+      images.push(image);
+    }
     return;
   }
 
@@ -129,8 +92,15 @@ function extractImagesFromPart(images: GeneratedImageAsset[], part: unknown): vo
   const mimeType =
     (typeof inlineData?.mimeType === "string" ? inlineData.mimeType : undefined) ??
     (typeof inlineData?.mime_type === "string" ? inlineData.mime_type : undefined) ??
-    DEFAULT_OUTPUT_MIME;
-  images.push(toGeneratedImage({ base64: data, index: images.length, mimeType }));
+    "image/png";
+  const image = generatedImageAssetFromBase64({
+    base64: data,
+    index: images.length,
+    mimeType,
+  });
+  if (image) {
+    images.push(image);
+  }
 }
 
 export function extractOpenRouterImagesFromResponse(
@@ -165,10 +135,6 @@ export function extractOpenRouterImagesFromResponse(
   return images;
 }
 
-function toDataUrl(image: { buffer: Buffer; mimeType: string }): string {
-  return `data:${image.mimeType};base64,${image.buffer.toString("base64")}`;
-}
-
 function resolveImageCount(count: number | undefined): number {
   if (typeof count !== "number" || !Number.isFinite(count)) {
     return 1;
@@ -193,7 +159,7 @@ function buildMessageContent(
     { type: "text", text: req.prompt },
     ...inputImages.map((image) => ({
       type: "image_url" as const,
-      image_url: { url: toDataUrl(image) },
+      image_url: { url: toImageDataUrl(image) },
     })),
   ];
 }

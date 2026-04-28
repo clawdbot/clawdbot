@@ -15,6 +15,12 @@ vi.mock("../agent-scope.js", async () => {
 import { createCronTool } from "./cron-tool.js";
 
 describe("cron tool", () => {
+  type SchemaLike = {
+    anyOf?: Array<{ type?: string }>;
+    description?: string;
+    properties?: Record<string, SchemaLike>;
+  };
+
   type TestDelivery = {
     mode?: string;
     channel?: string;
@@ -143,6 +149,18 @@ describe("cron tool", () => {
     expect(tool.description).toContain(
       "Do not emulate scheduling with exec sleep or process polling.",
     );
+  });
+
+  it("advertises delivery threadId in the tool schema", () => {
+    const tool = createTestCronTool();
+    const parameters = tool.parameters as SchemaLike;
+    const jobThreadId = parameters.properties?.job?.properties?.delivery?.properties?.threadId;
+    const patchThreadId = parameters.properties?.patch?.properties?.delivery?.properties?.threadId;
+
+    for (const threadId of [jobThreadId, patchThreadId]) {
+      expect(threadId?.description).toContain("Thread/topic id");
+      expect(threadId?.anyOf?.map((entry) => entry.type)).toEqual(["string", "number"]);
+    }
   });
 
   it.each([

@@ -55,25 +55,25 @@ struct ExecApprovalsGatewayPrompterTests {
 
     // MARK: - shouldAsk
 
-    @Test func askAlwaysPromptsRegardlessOfSecurity() {
+    @Test func `ask always prompts regardless of security`() {
         #expect(ExecApprovalsGatewayPrompter._testShouldAsk(security: .deny, ask: .always))
         #expect(ExecApprovalsGatewayPrompter._testShouldAsk(security: .allowlist, ask: .always))
         #expect(ExecApprovalsGatewayPrompter._testShouldAsk(security: .full, ask: .always))
     }
 
-    @Test func askOnMissPromptsOnlyForAllowlist() {
+    @Test func `ask on miss prompts only for allowlist`() {
         #expect(ExecApprovalsGatewayPrompter._testShouldAsk(security: .allowlist, ask: .onMiss))
         #expect(!ExecApprovalsGatewayPrompter._testShouldAsk(security: .deny, ask: .onMiss))
         #expect(!ExecApprovalsGatewayPrompter._testShouldAsk(security: .full, ask: .onMiss))
     }
 
-    @Test func askOffNeverPrompts() {
+    @Test func `ask off never prompts`() {
         #expect(!ExecApprovalsGatewayPrompter._testShouldAsk(security: .deny, ask: .off))
         #expect(!ExecApprovalsGatewayPrompter._testShouldAsk(security: .allowlist, ask: .off))
         #expect(!ExecApprovalsGatewayPrompter._testShouldAsk(security: .full, ask: .off))
     }
 
-    @Test func fallbackAllowlistAllowsMatchingResolvedPath() {
+    @Test func `fallback allowlist allows matching resolved path`() {
         let decision = ExecApprovalsGatewayPrompter._testFallbackDecision(
             command: "git status",
             resolvedPath: "/usr/bin/git",
@@ -82,7 +82,7 @@ struct ExecApprovalsGatewayPrompterTests {
         #expect(decision == .allowOnce)
     }
 
-    @Test func fallbackAllowlistDeniesAllowlistMiss() {
+    @Test func `fallback allowlist denies allowlist miss`() {
         let decision = ExecApprovalsGatewayPrompter._testFallbackDecision(
             command: "git status",
             resolvedPath: "/usr/bin/git",
@@ -91,7 +91,7 @@ struct ExecApprovalsGatewayPrompterTests {
         #expect(decision == .deny)
     }
 
-    @Test func fallbackFullAllowsWhenPromptCannotBeShown() {
+    @Test func `fallback full allows when prompt cannot be shown`() {
         let decision = ExecApprovalsGatewayPrompter._testFallbackDecision(
             command: "git status",
             resolvedPath: "/usr/bin/git",

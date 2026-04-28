@@ -523,7 +523,13 @@ function renderSecurityCard(props: QuickSettingsProps) {
 }
 
 function renderAppearanceCard(props: QuickSettingsProps) {
-  const themeOptions: ThemeOption[] = [...BUILTIN_THEME_OPTIONS, { id: "custom", label: "Custom" }];
+  const importedThemeName = props.hasCustomTheme
+    ? (props.customThemeLabel ?? "Imported theme")
+    : "Import";
+  const themeOptions: ThemeOption[] = [
+    ...BUILTIN_THEME_OPTIONS,
+    { id: "custom", label: importedThemeName },
+  ];
   return html`
     <div class="qs-card qs-card--appearance">
       ${renderCardHeader(icons.spark, "Appearance")}

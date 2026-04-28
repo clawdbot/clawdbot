@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
+import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
 import {
   loadInstalledPluginIndexInstallRecordsSync,
   writePersistedInstalledPluginIndexInstallRecords,
@@ -16,6 +17,7 @@ import {
   refreshInstalledPluginIndex,
 } from "./installed-plugin-index.js";
 import { recordPluginInstall } from "./installs.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -259,6 +261,126 @@ describe("installed plugin index", () => {
       enabledByDefault: true,
       startup: {
         sidecar: false,
+      },
+    });
+  });
+
+  it("tags deprecated implicit startup sidecars for legacy plugins", () => {
+    const rootDir = makeTempDir();
+    writeRuntimeEntry(rootDir);
+    writePluginManifest(rootDir, {
+      id: "legacy-sidecar",
+      configSchema: { type: "object" },
+    });
+
+    const index = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+        }),
+      ],
+      env: hermeticEnv(),
+    });
+
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "legacy-sidecar",
+      startup: {
+        sidecar: true,
+      },
+      compat: ["legacy-implicit-startup-sidecar"],
+    });
+  });
+
+  it("tolerates stale manifest records without normalized channels", () => {
+    const rootDir = makeTempDir();
+    writeRuntimeEntry(rootDir);
+    const manifestPath = path.join(rootDir, "openclaw.plugin.json");
+
+    const records = buildInstalledPluginIndexRecords({
+      candidates: [createPluginCandidate({ rootDir })],
+      registry: {
+        plugins: [
+          {
+            id: "stale-record",
+            providers: [],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            origin: "global",
+            rootDir,
+            source: path.join(rootDir, "index.ts"),
+            manifestPath,
+          } as unknown as PluginManifestRecord,
+        ],
+        diagnostics: [],
+      },
+      diagnostics: [],
+      installRecords: {},
+    });
+
+    expect(records[0]).toMatchObject({
+      pluginId: "stale-record",
+      startup: {
+        sidecar: true,
+      },
+      compat: ["legacy-implicit-startup-sidecar"],
+    });
+  });
+
+  it("does not classify or tag explicit startup opt-outs as deprecated implicit sidecars", () => {
+    const rootDir = makeTempDir();
+    writeRuntimeEntry(rootDir);
+    writePluginManifest(rootDir, {
+      id: "modern-inert",
+      activation: {
+        onStartup: false,
+      },
+      configSchema: { type: "object" },
+    });
+
+    const index = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+        }),
+      ],
+      env: hermeticEnv(),
+    });
+
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "modern-inert",
+      startup: {
+        sidecar: false,
+      },
+      compat: [],
+    });
+  });
+
+  it("classifies explicit startup activation as a gateway startup sidecar", () => {
+    const rootDir = makeTempDir();
+    writeRuntimeEntry(rootDir);
+    writePluginManifest(rootDir, {
+      id: "explicit-startup-provider",
+      providers: ["demo"],
+      activation: {
+        onStartup: true,
+      },
+      configSchema: { type: "object" },
+    });
+
+    const index = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+        }),
+      ],
+      env: hermeticEnv(),
+    });
+
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "explicit-startup-provider",
+      startup: {
+        sidecar: true,
       },
     });
   });

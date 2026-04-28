@@ -1,14 +1,17 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import type { MockFn } from "openclaw/plugin-sdk/testing";
 import { beforeEach, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
 
 type AnyMock = ReturnType<typeof vi.fn>;
 type AnyAsyncMock = ReturnType<typeof vi.fn>;
-type LoadConfigFn = typeof import("openclaw/plugin-sdk/config-runtime").loadConfig;
-type LoadSessionStoreFn = typeof import("openclaw/plugin-sdk/config-runtime").loadSessionStore;
-type ResolveStorePathFn = typeof import("openclaw/plugin-sdk/config-runtime").resolveStorePath;
+type GetRuntimeConfigFn =
+  typeof import("openclaw/plugin-sdk/runtime-config-snapshot").getRuntimeConfig;
+type LoadSessionStoreFn =
+  typeof import("openclaw/plugin-sdk/session-store-runtime").loadSessionStore;
+type ResolveStorePathFn =
+  typeof import("openclaw/plugin-sdk/session-store-runtime").resolveStorePath;
 type SessionStore = ReturnType<LoadSessionStoreFn>;
 type TelegramBotRuntimeForTest = NonNullable<
   Parameters<typeof import("./bot.js").setTelegramBotRuntimeForTest>[0]
@@ -42,26 +45,27 @@ vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia,
 }));
 
-const { loadConfig, loadSessionStoreMock, resolveStorePathMock, sessionStoreEntries } = vi.hoisted(
-  (): {
-    loadConfig: MockFn<LoadConfigFn>;
-    loadSessionStoreMock: MockFn<LoadSessionStoreFn>;
-    resolveStorePathMock: MockFn<ResolveStorePathFn>;
-    sessionStoreEntries: { value: SessionStore };
-  } => ({
-    loadConfig: vi.fn<LoadConfigFn>(() => ({})),
-    loadSessionStoreMock: vi.fn<LoadSessionStoreFn>(
-      (_storePath, _opts) => sessionStoreEntries.value,
-    ),
-    resolveStorePathMock: vi.fn<ResolveStorePathFn>(
-      (storePath?: string) => storePath ?? sessionStorePath,
-    ),
-    sessionStoreEntries: { value: {} as SessionStore },
-  }),
-);
+const { getRuntimeConfig, loadSessionStoreMock, resolveStorePathMock, sessionStoreEntries } =
+  vi.hoisted(
+    (): {
+      getRuntimeConfig: MockFn<GetRuntimeConfigFn>;
+      loadSessionStoreMock: MockFn<LoadSessionStoreFn>;
+      resolveStorePathMock: MockFn<ResolveStorePathFn>;
+      sessionStoreEntries: { value: SessionStore };
+    } => ({
+      getRuntimeConfig: vi.fn<GetRuntimeConfigFn>(() => ({})),
+      loadSessionStoreMock: vi.fn<LoadSessionStoreFn>(
+        (_storePath, _opts) => sessionStoreEntries.value,
+      ),
+      resolveStorePathMock: vi.fn<ResolveStorePathFn>(
+        (storePath?: string) => storePath ?? sessionStorePath,
+      ),
+      sessionStoreEntries: { value: {} as SessionStore },
+    }),
+  );
 
 export function getLoadConfigMock(): AnyMock {
-  return loadConfig;
+  return getRuntimeConfig;
 }
 
 export function getLoadSessionStoreMock(): AnyMock {
@@ -362,7 +366,7 @@ export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
     )()) as unknown as TelegramBotRuntimeForTest["apiThrottler"],
 };
 export const telegramBotDepsForTest: TelegramBotDeps = {
-  loadConfig,
+  getRuntimeConfig,
   loadSessionStore: loadSessionStoreMock as TelegramBotDeps["loadSessionStore"],
   resolveStorePath: resolveStorePathMock,
   readChannelAllowFromStore:
@@ -454,8 +458,8 @@ export function makeForumGroupMessageCtx(params?: {
 }
 
 beforeEach(() => {
-  loadConfig.mockReset();
-  loadConfig.mockReturnValue(DEFAULT_TELEGRAM_TEST_CONFIG);
+  getRuntimeConfig.mockReset();
+  getRuntimeConfig.mockReturnValue(DEFAULT_TELEGRAM_TEST_CONFIG);
   sessionStoreEntries.value = {};
   loadSessionStoreMock.mockReset();
   loadSessionStoreMock.mockImplementation(() => sessionStoreEntries.value);

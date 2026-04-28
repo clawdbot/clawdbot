@@ -301,6 +301,9 @@ Shared behavior:
   without a second Slack-local fallback layer
 - Matrix native DM/channel routing and reaction shortcuts handle both exec and plugin approvals;
   plugin authorization still comes from `channels.matrix.dm.allowFrom`
+- Matrix native prompts include `com.openclaw.approval` custom event content on the first prompt
+  event so OpenClaw-aware Matrix clients can read structured approval state while stock clients
+  keep the plain-text `/approve` fallback
 - the requester does not need to be an approver
 - the originating chat can approve directly with `/approve` when that chat already supports commands and replies
 - native Discord approval buttons route by approval id kind: `plugin:` ids go

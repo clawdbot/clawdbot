@@ -35,6 +35,7 @@ type DiscoveredProviderRuntimeModelLike = Omit<ProviderRuntimeModelLike, "api"> 
 
 type DiscoverModelsOptions = {
   providerFilter?: string;
+  normalizeModels?: boolean;
 };
 
 type InMemoryAuthStorageBackendLike = {
@@ -149,17 +150,24 @@ function createOpenClawModelRegistry(
   const providerFilter = options?.providerFilter ? normalizeProviderId(options.providerFilter) : "";
   const matchesProviderFilter = (entry: Model<Api>) =>
     !providerFilter || normalizeProviderId(entry.provider) === providerFilter;
+  const shouldNormalize = options?.normalizeModels !== false;
 
-  registry.getAll = () =>
-    getAll()
-      .filter((entry: Model<Api>) => matchesProviderFilter(entry))
-      .map((entry: Model<Api>) => normalizeDiscoveredPiModel(entry, agentDir));
-  registry.getAvailable = () =>
-    getAvailable()
-      .filter((entry: Model<Api>) => matchesProviderFilter(entry))
-      .map((entry: Model<Api>) => normalizeDiscoveredPiModel(entry, agentDir));
+  registry.getAll = () => {
+    const entries = getAll().filter((entry: Model<Api>) => matchesProviderFilter(entry));
+    return shouldNormalize
+      ? entries.map((entry: Model<Api>) => normalizeDiscoveredPiModel(entry, agentDir))
+      : entries;
+  };
+  registry.getAvailable = () => {
+    const entries = getAvailable().filter((entry: Model<Api>) => matchesProviderFilter(entry));
+    return shouldNormalize
+      ? entries.map((entry: Model<Api>) => normalizeDiscoveredPiModel(entry, agentDir))
+      : entries;
+  };
   registry.find = (provider: string, modelId: string) =>
-    normalizeDiscoveredPiModel(find(provider, modelId), agentDir);
+    shouldNormalize
+      ? normalizeDiscoveredPiModel(find(provider, modelId), agentDir)
+      : find(provider, modelId);
 
   return registry;
 }

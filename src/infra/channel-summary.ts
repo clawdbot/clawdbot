@@ -45,8 +45,8 @@ const accountLine = (label: string, details: string[]) =>
   `  - ${label}${details.length ? ` (${details.join(", ")})` : ""}`;
 
 async function loadChannelSummaryConfig(): Promise<OpenClawConfig> {
-  const { loadConfig } = await import("../config/config.js");
-  return loadConfig();
+  const { getRuntimeConfig } = await import("../config/config.js");
+  return getRuntimeConfig();
 }
 
 async function listChannelSummaryPlugins(params: {

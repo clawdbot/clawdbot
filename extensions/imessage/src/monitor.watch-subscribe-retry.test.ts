@@ -1,4 +1,4 @@
-import type { waitForTransportReady } from "openclaw/plugin-sdk/infra-runtime";
+import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { createIMessageRpcClient, IMessageRpcClient } from "./client.js";
 import { monitorIMessageProvider } from "./monitor.js";
@@ -12,7 +12,7 @@ const attachIMessageMonitorAbortHandlerMock = vi.hoisted(() =>
   vi.fn<typeof attachIMessageMonitorAbortHandler>(() => () => {}),
 );
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/transport-ready-runtime", () => ({
   waitForTransportReady: waitForTransportReadyMock,
 }));
 

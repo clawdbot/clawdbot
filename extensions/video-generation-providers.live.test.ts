@@ -1,46 +1,50 @@
-import { describe, expect, it } from "vitest";
-import { resolveOpenClawAgentDir } from "../src/agents/agent-paths.js";
-import { collectProviderApiKeys } from "../src/agents/live-auth-keys.js";
-import { isModelNotFoundErrorMessage } from "../src/agents/live-model-errors.js";
-import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../src/agents/live-test-helpers.js";
-import { resolveApiKeyForProvider } from "../src/agents/model-auth.js";
 import {
+  resolveApiKeyForProvider,
+  resolveOpenClawAgentDir,
+} from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import {
+  registerProviderPlugin,
+  requireRegisteredProvider,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  DEFAULT_LIVE_VIDEO_MODELS,
+  canRunBufferBackedImageToVideoLiveLane,
+  canRunBufferBackedVideoToVideoLiveLane,
+  collectProviderApiKeys,
+  encodePngRgba,
+  fillPixel,
+  getShellEnvAppliedKeys,
+  isLiveProfileKeyModeEnabled,
+  isLiveTestEnabled,
+  isModelNotFoundErrorMessage,
+  isTruthyEnvValue,
   isAuthErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
-} from "../src/agents/pi-embedded-helpers/failover-matches.js";
-import { loadConfig, type OpenClawConfig } from "../src/config/config.js";
-import { isTruthyEnvValue } from "../src/infra/env.js";
-import { getShellEnvAppliedKeys } from "../src/infra/shell-env.js";
-import { encodePngRgba, fillPixel } from "../src/media/png-encode.js";
-import { normalizeVideoGenerationDuration } from "../src/video-generation/duration-support.js";
-import {
-  canRunBufferBackedImageToVideoLiveLane,
-  canRunBufferBackedVideoToVideoLiveLane,
-  DEFAULT_LIVE_VIDEO_MODELS,
+  normalizeVideoGenerationDuration,
   parseCsvFilter,
   parseProviderModelMap,
+  parseVideoGenerationModelRef,
   redactLiveApiKey,
   resolveConfiguredLiveVideoModels,
   resolveLiveVideoAuthStore,
   resolveLiveVideoResolution,
-} from "../src/video-generation/live-test-helpers.js";
-import { parseVideoGenerationModelRef } from "../src/video-generation/model-ref.js";
+} from "openclaw/plugin-sdk/test-env";
 import type {
   GeneratedVideoAsset,
   VideoGenerationMode,
   VideoGenerationModeCapabilities,
   VideoGenerationProvider,
   VideoGenerationRequest,
-} from "../src/video-generation/types.js";
-import {
-  registerProviderPlugin,
-  requireRegisteredProvider,
-} from "../test/helpers/plugins/provider-registration.js";
+} from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it } from "vitest";
 import alibabaPlugin from "./alibaba/index.js";
 import byteplusPlugin from "./byteplus/index.js";
+import deepinfraPlugin from "./deepinfra/index.js";
 import falPlugin from "./fal/index.js";
 import googlePlugin from "./google/index.js";
 import minimaxPlugin from "./minimax/index.js";
@@ -81,11 +85,10 @@ type LiveProviderCase = {
   providerId: string;
 };
 
-type BufferedGeneratedVideo = Required<Pick<GeneratedVideoAsset, "buffer" | "mimeType">> &
-  Pick<GeneratedVideoAsset, "fileName">;
+type LiveGeneratedVideo = GeneratedVideoAsset;
 
 type LiveVideoAttemptStatus =
-  | { status: "success"; video: BufferedGeneratedVideo }
+  | { status: "success"; video: LiveGeneratedVideo }
   | { status: "skip" }
   | { status: "failure" };
 
@@ -101,6 +104,12 @@ const CASES: LiveProviderCase[] = [
     pluginId: "byteplus",
     pluginName: "BytePlus Provider",
     providerId: "byteplus",
+  },
+  {
+    plugin: deepinfraPlugin,
+    pluginId: "deepinfra",
+    pluginName: "DeepInfra Provider",
+    providerId: "deepinfra",
   },
   { plugin: falPlugin, pluginId: "fal", pluginName: "fal Provider", providerId: "fal" },
   { plugin: googlePlugin, pluginId: "google", pluginName: "Google Provider", providerId: "google" },
@@ -185,17 +194,18 @@ function maybeLoadShellEnvForVideoProviders(providerIds: string[]): void {
   maybeLoadShellEnvForGenerationProviders(providerIds);
 }
 
-function expectBufferedVideo(
-  video: { buffer?: Buffer; mimeType: string; fileName?: string } | undefined,
-): BufferedGeneratedVideo {
+function expectGeneratedVideo(video: GeneratedVideoAsset | undefined): LiveGeneratedVideo {
   expect(video).toBeDefined();
   expect(video?.mimeType.startsWith("video/")).toBe(true);
-  if (!video?.buffer) {
-    throw new Error("expected generated video buffer");
+  if (video?.buffer) {
+    expect(video.buffer.byteLength).toBeGreaterThan(1024);
+    return video;
   }
-  const { buffer, mimeType, fileName } = video;
-  expect(buffer.byteLength).toBeGreaterThan(1024);
-  return { buffer, mimeType, fileName };
+  if (!video?.url) {
+    throw new Error("expected generated video buffer or url");
+  }
+  expect(video.url).toMatch(/^https?:\/\//u);
+  return video;
 }
 
 function buildLiveCapabilityOverrides(params: {
@@ -233,6 +243,13 @@ function resolveLiveVideoSkipReason(message: string): string | null {
   if (isOverloadedErrorMessage(message) || isServerErrorMessage(message)) {
     return "provider outage";
   }
+  if (
+    /HTTP\s+404/i.test(message) &&
+    /Invalid URL/i.test(message) &&
+    /\/platform\/video_gen/i.test(message)
+  ) {
+    return "provider endpoint drift";
+  }
   if (/access denied|not authorized|not enabled|permission denied/i.test(message)) {
     return "provider/model drift";
   }
@@ -256,7 +273,7 @@ async function runLiveVideoAttempt(params: {
   try {
     const result = await params.provider.generateVideo(params.request);
     expect(result.videos.length).toBeGreaterThan(0);
-    const video = expectBufferedVideo(result.videos[0]);
+    const video = expectGeneratedVideo(result.videos[0]);
     params.attempted.push(
       `${params.providerId}:${params.mode}:${params.providerModel} (${params.authLabel})`,
     );
@@ -326,7 +343,7 @@ function resolveLiveSmokeDurationSeconds(params: {
 }
 
 async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<void> {
-  const cfg = withPluginsEnabled(loadConfig());
+  const cfg = withPluginsEnabled(getRuntimeConfig());
   const configuredModels = resolveConfiguredLiveVideoModels(cfg);
   const agentDir = resolveOpenClawAgentDir();
   const attempted: string[] = [];
@@ -386,7 +403,7 @@ async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<voi
   });
   const liveSize = testCase.providerId === "openai" ? "1280x720" : undefined;
   const logPrefix = `[live:video-generation] provider=${testCase.providerId} model=${providerModel}`;
-  let generatedVideo: BufferedGeneratedVideo | null = null;
+  let generatedVideo: LiveGeneratedVideo | null = null;
 
   const generateAttempt = await runLiveVideoAttempt({
     authLabel,
@@ -497,7 +514,7 @@ async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<voi
     return;
   }
   if (!generatedVideo?.buffer) {
-    skipped.push(`${testCase.providerId}:videoToVideo missing generated seed video`);
+    skipped.push(`${testCase.providerId}:videoToVideo missing buffer-backed generated seed video`);
     expectLiveVideoCasePassed(summaryParams);
     return;
   }

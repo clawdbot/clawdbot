@@ -58,7 +58,14 @@ class CalendarHandlerTest : NodeHandlerRobolectricTest() {
     val payload = Json.parseToJsonElement(result.payloadJson ?: error("missing payload")).jsonObject
     val events = payload.getValue("events").jsonArray
     assertEquals(1, events.size)
-    assertEquals("Sprint Planning", events.first().jsonObject.getValue("title").jsonPrimitive.content)
+    assertEquals(
+      "Sprint Planning",
+      events
+        .first()
+        .jsonObject
+        .getValue("title")
+        .jsonPrimitive.content,
+    )
   }
 
   @Test
@@ -101,9 +108,15 @@ private class FakeCalendarDataSource(
 
   override fun hasWritePermission(context: Context): Boolean = canWrite
 
-  override fun events(context: Context, request: CalendarEventsRequest): List<CalendarEventRecord> = events
+  override fun events(
+    context: Context,
+    request: CalendarEventsRequest,
+  ): List<CalendarEventRecord> = events
 
-  override fun add(context: Context, request: CalendarAddRequest): CalendarEventRecord {
+  override fun add(
+    context: Context,
+    request: CalendarAddRequest,
+  ): CalendarEventRecord {
     addError?.let { throw it }
     return addResult
   }

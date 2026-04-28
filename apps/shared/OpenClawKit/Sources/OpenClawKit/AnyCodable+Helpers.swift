@@ -1,11 +1,11 @@
 import Foundation
 
-public extension AnyCodable {
-    var stringValue: String? {
+extension AnyCodable {
+    public var stringValue: String? {
         self.value as? String
     }
 
-    var boolValue: Bool? {
+    public var boolValue: Bool? {
         if let value = self.value as? Bool {
             return value
         }
@@ -15,7 +15,7 @@ public extension AnyCodable {
         return nil
     }
 
-    var intValue: Int? {
+    public var intValue: Int? {
         if let value = self.value as? Int {
             return value
         }
@@ -28,7 +28,7 @@ public extension AnyCodable {
         return nil
     }
 
-    var doubleValue: Double? {
+    public var doubleValue: Double? {
         if let value = self.value as? Double {
             return value
         }
@@ -41,7 +41,7 @@ public extension AnyCodable {
         return nil
     }
 
-    var dictionaryValue: [String: AnyCodable]? {
+    public var dictionaryValue: [String: AnyCodable]? {
         if let value = self.value as? [String: AnyCodable] {
             return value
         }
@@ -58,7 +58,7 @@ public extension AnyCodable {
         return nil
     }
 
-    var arrayValue: [AnyCodable]? {
+    public var arrayValue: [AnyCodable]? {
         if let value = self.value as? [AnyCodable] {
             return value
         }
@@ -71,7 +71,7 @@ public extension AnyCodable {
         return nil
     }
 
-    var foundationValue: Any {
+    public var foundationValue: Any {
         switch self.value {
         case let dict as [String: AnyCodable]:
             dict.mapValues(\.foundationValue)

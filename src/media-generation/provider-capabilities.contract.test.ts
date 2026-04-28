@@ -5,6 +5,7 @@ const EXPECTED_BUNDLED_VIDEO_PROVIDER_PLUGIN_IDS = [
   "alibaba",
   "byteplus",
   "comfy",
+  "deepinfra",
   "fal",
   "google",
   "minimax",

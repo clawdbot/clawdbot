@@ -40,6 +40,12 @@
       - any-glob-to-any-file:
           - "extensions/migrate-hermes/**"
           - "docs/cli/migrate.md"
+"plugin: migrate-claude":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/migrate-claude/**"
+          - "docs/cli/migrate.md"
+          - "docs/install/migrating-claude.md"
 "plugin: bonjour":
   - changed-files:
       - any-glob-to-any-file:
@@ -299,10 +305,20 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/byteplus/**"
+"extensions: cerebras":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/cerebras/**"
+          - "docs/providers/cerebras.md"
 "extensions: deepseek":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/deepseek/**"
+"extensions: deepinfra":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/deepinfra/**"
+          - "docs/providers/deepinfra.md"
 "extensions: tencent":
   - changed-files:
       - any-glob-to-any-file:

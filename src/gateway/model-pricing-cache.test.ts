@@ -1,17 +1,52 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { modelKey } from "../agents/model-selection.js";
+import type { normalizeProviderModelIdWithRuntime } from "../agents/provider-model-normalization.runtime.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
-import type { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 
-const normalizeProviderModelIdWithPluginMock = vi.hoisted(() =>
-  vi.fn<typeof normalizeProviderModelIdWithPlugin>(({ context }) => context.modelId),
+const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() =>
+  vi.fn<typeof normalizeProviderModelIdWithRuntime>(({ context }) => context.modelId),
 );
+const pluginManifestRegistryMocks = vi.hoisted(() => ({
+  manifestRegistry: undefined as PluginManifestRegistry | undefined,
+  loadPluginManifestRegistryForInstalledIndex: vi.fn(),
+  listOpenClawPluginManifestMetadata: vi.fn(),
+}));
 
-vi.mock("../plugins/provider-runtime.js", () => {
-  return { normalizeProviderModelIdWithPlugin: normalizeProviderModelIdWithPluginMock };
+vi.mock("../agents/provider-model-normalization.runtime.js", () => {
+  return { normalizeProviderModelIdWithRuntime: normalizeProviderModelIdWithRuntimeMock };
+});
+
+vi.mock("../plugins/manifest-registry-installed.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/manifest-registry-installed.js")>();
+  return {
+    ...actual,
+    loadPluginManifestRegistryForInstalledIndex: (
+      params: Parameters<typeof actual.loadPluginManifestRegistryForInstalledIndex>[0],
+    ) => {
+      pluginManifestRegistryMocks.loadPluginManifestRegistryForInstalledIndex(params);
+      return (
+        pluginManifestRegistryMocks.manifestRegistry ??
+        actual.loadPluginManifestRegistryForInstalledIndex(params)
+      );
+    },
+  };
+});
+
+vi.mock("../plugins/manifest-metadata-scan.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/manifest-metadata-scan.js")>();
+  return {
+    ...actual,
+    listOpenClawPluginManifestMetadata: (
+      params?: Parameters<typeof actual.listOpenClawPluginManifestMetadata>[0],
+    ) => {
+      pluginManifestRegistryMocks.listOpenClawPluginManifestMetadata(params);
+      return actual.listOpenClawPluginManifestMetadata(params);
+    },
+  };
 });
 
 import {
@@ -25,6 +60,10 @@ import {
 describe("model-pricing-cache", () => {
   beforeEach(() => {
     __resetGatewayModelPricingCacheForTest();
+    pluginManifestRegistryMocks.manifestRegistry = undefined;
+    pluginManifestRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockClear();
+    pluginManifestRegistryMocks.listOpenClawPluginManifestMetadata.mockClear();
+    normalizeProviderModelIdWithRuntimeMock.mockClear();
   });
 
   afterEach(() => {
@@ -119,6 +158,100 @@ describe("model-pricing-cache", () => {
     } as OpenClawConfig).map((ref) => modelKey(ref.provider, ref.model));
 
     expect(refs).toContain("tavily/search-preview");
+  });
+
+  it("uses one installed manifest pass for pricing policies and configured web-search refs", async () => {
+    pluginManifestRegistryMocks.manifestRegistry = {
+      diagnostics: [],
+      plugins: [
+        createManifestRecord({
+          id: "search-plugin",
+          contracts: { webSearchProviders: ["search-plugin"] },
+        }),
+      ],
+    };
+    const config = {
+      plugins: {
+        entries: {
+          "search-plugin": {
+            config: {
+              webSearch: {
+                model: "local-search/search-model",
+              },
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          "local-search": {
+            baseUrl: "http://127.0.0.1:43210/v1",
+            api: "openai-completions",
+            models: [{ id: "search-model" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(
+      pluginManifestRegistryMocks.loadPluginManifestRegistryForInstalledIndex,
+    ).toHaveBeenCalledOnce();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("does not load plugin manifests for pricing when plugins are globally disabled", async () => {
+    const config = {
+      plugins: {
+        enabled: false,
+        entries: {
+          "search-plugin": {
+            config: {
+              webSearch: {
+                model: "local-search/search-model",
+              },
+            },
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "custom/gpt-local" },
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "gpt-local",
+                cost: { input: 0.12, output: 0.48 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(
+      pluginManifestRegistryMocks.loadPluginManifestRegistryForInstalledIndex,
+    ).not.toHaveBeenCalled();
+    expect(pluginManifestRegistryMocks.listOpenClawPluginManifestMetadata).not.toHaveBeenCalled();
+    expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(getCachedGatewayModelPricing({ provider: "custom", model: "gpt-local" })).toEqual({
+      input: 0.12,
+      output: 0.48,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
   });
 
   it("skips remote pricing catalogs for local-only model providers", async () => {
@@ -628,6 +761,40 @@ describe("model-pricing-cache", () => {
     stop();
   });
 
+  it("does not bootstrap remote pricing when pricing is disabled", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "openrouter/moonshotai/kimi-k2.5" },
+        },
+      },
+      models: { pricing: { enabled: false } },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = withFetchPreconnect(vi.fn());
+
+    const stop = startGatewayModelPricingRefresh({ config, fetchImpl });
+
+    await vi.dynamicImportSettled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("does not refresh remote pricing when pricing is disabled", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "openrouter/moonshotai/kimi-k2.5" },
+        },
+      },
+      models: { pricing: { enabled: false } },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = withFetchPreconnect(vi.fn());
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("logs configured timeout seconds when pricing fetches time out", async () => {
     const warnings: string[] = [];
     loggingState.rawConsole = {
@@ -717,3 +884,19 @@ describe("model-pricing-cache", () => {
     });
   });
 });
+
+function createManifestRecord(overrides: Partial<PluginManifestRecord>): PluginManifestRecord {
+  return {
+    id: "plugin",
+    channels: [],
+    providers: [],
+    cliBackends: [],
+    skills: [],
+    hooks: [],
+    origin: "global",
+    rootDir: "/tmp/plugin",
+    source: "/tmp/plugin/index.js",
+    manifestPath: "/tmp/plugin/openclaw.plugin.json",
+    ...overrides,
+  };
+}

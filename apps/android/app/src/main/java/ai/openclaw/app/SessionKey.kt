@@ -15,10 +15,17 @@ internal fun isCanonicalMainSessionKey(raw: String?): Boolean {
 internal fun resolveAgentIdFromMainSessionKey(raw: String?): String? {
   val trimmed = raw?.trim().orEmpty()
   if (!trimmed.startsWith("agent:")) return null
-  return trimmed.removePrefix("agent:").substringBefore(':').trim().ifEmpty { null }
+  return trimmed
+    .removePrefix("agent:")
+    .substringBefore(':')
+    .trim()
+    .ifEmpty { null }
 }
 
-internal fun buildNodeMainSessionKey(deviceId: String, agentId: String?): String {
+internal fun buildNodeMainSessionKey(
+  deviceId: String,
+  agentId: String?,
+): String {
   val resolvedAgentId = agentId?.trim().orEmpty().ifEmpty { "main" }
   return "agent:$resolvedAgentId:node-${deviceId.take(12)}"
 }

@@ -15,6 +15,7 @@ import {
   normalizeEndpointId,
   normalizeOptionalProviderApiKey,
   resolveCustomModelAliasError,
+  resolveCustomModelImageInputInference,
   resolveCustomProviderId,
   type CustomApiCompatibility,
   type CustomApiResult,
@@ -24,11 +25,14 @@ export {
   buildAnthropicVerificationProbeRequest,
   buildOpenAiVerificationProbeRequest,
   CustomApiError,
+  inferCustomModelSupportsImageInput,
   parseNonInteractiveCustomApiFlags,
+  resolveCustomModelImageInputInference,
   resolveCustomProviderId,
   type ApplyCustomApiConfigParams,
   type CustomApiCompatibility,
   type CustomApiErrorCode,
+  type CustomModelImageInputInference,
   type CustomApiResult,
   type ParseNonInteractiveCustomApiFlagsParams,
   type ParsedNonInteractiveCustomApiFlags,
@@ -341,6 +345,14 @@ export async function promptCustomApiConfig(params: {
       return resolveCustomModelAliasError({ raw: value, cfg: config, modelRef });
     },
   });
+  const imageInputInference = resolveCustomModelImageInputInference(modelId);
+  const supportsImageInput =
+    imageInputInference.confidence === "known"
+      ? imageInputInference.supportsImageInput
+      : await prompter.confirm({
+          message: "Does this model support image input?",
+          initialValue: imageInputInference.supportsImageInput,
+        });
   const resolvedCompatibility = compatibility ?? "openai";
   const result = applyCustomApiConfig({
     config,
@@ -350,6 +362,7 @@ export async function promptCustomApiConfig(params: {
     apiKey,
     providerId: providerIdInput,
     alias: aliasInput,
+    supportsImageInput,
   });
 
   if (result.providerIdRenamedFrom && result.providerId) {

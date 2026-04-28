@@ -1,1 +1,1 @@
-export { isNotFoundPathError, isPathInside } from "openclaw/plugin-sdk/browser-security-runtime";
+export { isNotFoundPathError, isPathInside } from "../sdk-security-runtime.js";

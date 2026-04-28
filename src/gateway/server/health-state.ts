@@ -1,21 +1,24 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getHealthSnapshot, type HealthSummary } from "../../commands/health.js";
-import { STATE_DIR, createConfigIO, loadConfig } from "../../config/config.js";
+import { createConfigIO, getRuntimeConfig } from "../../config/io.js";
+import { STATE_DIR } from "../../config/paths.js";
 import { resolveMainSessionKey } from "../../config/sessions.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import { getUpdateAvailable } from "../../infra/update-startup.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveGatewayAuth } from "../auth.js";
 import type { Snapshot } from "../protocol/index.js";
+import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 
 let presenceVersion = 1;
 let healthVersion = 1;
 let healthCache: HealthSummary | null = null;
 let healthRefresh: Promise<HealthSummary> | null = null;
+let sensitiveHealthRefresh: Promise<HealthSummary> | null = null;
 let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
 
 export function buildGatewaySnapshot(opts?: { includeSensitive?: boolean }): Snapshot {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const defaultAgentId = resolveDefaultAgentId(cfg);
   const mainKey = normalizeMainKey(cfg.session?.mainKey);
   const mainSessionKey = resolveMainSessionKey(cfg);
@@ -69,19 +72,46 @@ export function setBroadcastHealthUpdate(fn: ((snap: HealthSummary) => void) | n
   broadcastHealthUpdate = fn;
 }
 
-export async function refreshGatewayHealthSnapshot(opts?: { probe?: boolean }) {
-  if (!healthRefresh) {
-    healthRefresh = (async () => {
-      const snap = await getHealthSnapshot({ probe: opts?.probe });
-      healthCache = snap;
-      healthVersion += 1;
-      if (broadcastHealthUpdate) {
-        broadcastHealthUpdate(snap);
+export async function refreshGatewayHealthSnapshot(opts?: {
+  probe?: boolean;
+  includeSensitive?: boolean;
+  getRuntimeSnapshot?: () => ChannelRuntimeSnapshot;
+}) {
+  const includeSensitive = opts?.includeSensitive === true;
+  let refresh = includeSensitive ? sensitiveHealthRefresh : healthRefresh;
+  if (!refresh) {
+    refresh = (async () => {
+      let runtimeSnapshot: ChannelRuntimeSnapshot | undefined;
+      try {
+        runtimeSnapshot = opts?.getRuntimeSnapshot?.();
+      } catch {
+        runtimeSnapshot = undefined;
+      }
+      const snap = await getHealthSnapshot({
+        probe: opts?.probe,
+        includeSensitive,
+        runtimeSnapshot,
+      });
+      if (!includeSensitive) {
+        healthCache = snap;
+        healthVersion += 1;
+        if (broadcastHealthUpdate) {
+          broadcastHealthUpdate(snap);
+        }
       }
       return snap;
     })().finally(() => {
-      healthRefresh = null;
+      if (includeSensitive) {
+        sensitiveHealthRefresh = null;
+      } else {
+        healthRefresh = null;
+      }
     });
+    if (includeSensitive) {
+      sensitiveHealthRefresh = refresh;
+    } else {
+      healthRefresh = refresh;
+    }
   }
-  return healthRefresh;
+  return refresh;
 }

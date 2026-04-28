@@ -3,6 +3,11 @@ import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { CompactionStatus, FallbackStatus } from "../app-tool-stream.ts";
 import {
+  getChatAttachmentPreviewUrl,
+  registerChatAttachmentPayload,
+  releaseChatAttachmentPayload,
+} from "../chat/attachment-payload-store.ts";
+import {
   CHAT_ATTACHMENT_ACCEPT,
   isSupportedChatAttachmentFile,
 } from "../chat/attachment-support.ts";
@@ -18,7 +23,7 @@ import {
   renderReadingIndicatorGroup,
   renderStreamingGroup,
 } from "../chat/grouped-render.ts";
-import { InputHistory } from "../chat/input-history.ts";
+import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../chat/input-history.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
 import type { RealtimeTalkStatus } from "../chat/realtime-talk.ts";
@@ -34,7 +39,6 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../chat/slash-commands.ts";
-import { isSttSupported, startStt, stopStt } from "../chat/speech.ts";
 import { renderCompactionIndicator, renderFallbackIndicator } from "../chat/status-indicators.ts";
 import { getExpandedToolCards, syncToolCardExpansionState } from "../chat/tool-expansion-state.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
@@ -100,6 +104,7 @@ export type ChatProps = {
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
   onRequestUpdate?: () => void;
+  onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSend: () => void;
   onCompact?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
@@ -124,14 +129,8 @@ export type ChatProps = {
   basePath?: string;
 };
 
-// Persistent instances keyed by session
-const inputHistories = new Map<string, InputHistory>();
 const pinnedMessagesMap = new Map<string, PinnedMessages>();
 const deletedMessagesMap = new Map<string, DeletedMessages>();
-
-function getInputHistory(sessionKey: string): InputHistory {
-  return getOrCreateSessionCacheValue(inputHistories, sessionKey, () => new InputHistory());
-}
 
 function getPinnedMessages(sessionKey: string): PinnedMessages {
   return getOrCreateSessionCacheValue(
@@ -150,8 +149,6 @@ function getDeletedMessages(sessionKey: string): DeletedMessages {
 }
 
 interface ChatEphemeralState {
-  sttRecording: boolean;
-  sttInterimText: string;
   slashMenuOpen: boolean;
   slashMenuItems: SlashCommandDef[];
   slashMenuIndex: number;
@@ -166,8 +163,6 @@ interface ChatEphemeralState {
 
 function createChatEphemeralState(): ChatEphemeralState {
   return {
-    sttRecording: false,
-    sttInterimText: "",
     slashMenuOpen: false,
     slashMenuItems: [],
     slashMenuIndex: 0,
@@ -185,12 +180,9 @@ const vs = createChatEphemeralState();
 
 /**
  * Reset chat view ephemeral state when navigating away.
- * Stops STT recording and clears search/slash UI that should not survive navigation.
+ * Clears search/slash UI that should not survive navigation.
  */
 export function resetChatViewState() {
-  if (vs.sttRecording) {
-    stopStt();
-  }
   Object.assign(vs, createChatEphemeralState());
 }
 
@@ -201,17 +193,30 @@ function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
 }
 
+function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up" | "down") {
+  requestAnimationFrame(() => {
+    if (document.activeElement !== target) {
+      return;
+    }
+    adjustTextareaHeight(target);
+    const caret = direction === "up" ? 0 : target.value.length;
+    target.selectionStart = caret;
+    target.selectionEnd = caret;
+  });
+}
+
 function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
 function chatAttachmentFromFile(file: File, dataUrl: string): ChatAttachment {
-  return {
+  const attachment = {
     id: generateAttachmentId(),
-    dataUrl,
     mimeType: file.type || "application/octet-stream",
     fileName: file.name || undefined,
+    sizeBytes: file.size,
   };
+  return registerChatAttachmentPayload({ attachment, dataUrl, file });
 }
 
 function isImageAttachment(att: ChatAttachment): boolean {
@@ -319,8 +324,8 @@ function renderAttachmentPreview(props: ChatProps): TemplateResult | typeof noth
               .filter(Boolean)
               .join(" ")}
           >
-            ${isImageAttachment(att)
-              ? html`<img src=${att.dataUrl} alt="Attachment preview" />`
+            ${isImageAttachment(att) && getChatAttachmentPreviewUrl(att)
+              ? html`<img src=${getChatAttachmentPreviewUrl(att)!} alt="Attachment preview" />`
               : html`
                   <div class="chat-attachment-file" title=${att.fileName ?? "Attached file"}>
                     <span class="chat-attachment-file__icon">${icons.paperclip}</span>
@@ -335,6 +340,7 @@ function renderAttachmentPreview(props: ChatProps): TemplateResult | typeof noth
               aria-label="Remove attachment"
               @click=${() => {
                 const next = (props.attachments ?? []).filter((a) => a.id !== att.id);
+                releaseChatAttachmentPayload(att.id);
                 props.onAttachmentsChange?.(next);
               }}
             >
@@ -726,7 +732,6 @@ export function renderChat(props: ChatProps) {
   };
   const pinned = getPinnedMessages(props.sessionKey);
   const deleted = getDeletedMessages(props.sessionKey);
-  const inputHistory = getInputHistory(props.sessionKey);
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
   const tokens = tokenEstimate(props.draft);
 
@@ -737,8 +742,6 @@ export function renderChat(props: ChatProps) {
     : "Connect to the gateway to start chatting...";
 
   const requestUpdate = props.onRequestUpdate ?? (() => {});
-  const getDraft = props.getDraft ?? (() => props.draft);
-
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
 
@@ -971,20 +974,27 @@ export function renderChat(props: ChatProps) {
       return;
     }
 
-    // Input history (only when input is empty)
-    if (!props.draft.trim()) {
-      if (e.key === "ArrowUp") {
-        const prev = inputHistory.up();
-        if (prev !== null) {
+    if ((e.key === "ArrowUp" || e.key === "ArrowDown") && props.onHistoryKeydown) {
+      const target = e.target as HTMLTextAreaElement;
+      const result = props.onHistoryKeydown({
+        key: e.key,
+        selectionStart: target.selectionStart,
+        selectionEnd: target.selectionEnd,
+        valueLength: target.value.length,
+        altKey: e.altKey,
+        ctrlKey: e.ctrlKey,
+        metaKey: e.metaKey,
+        shiftKey: e.shiftKey,
+        isComposing: e.isComposing,
+        keyCode: e.keyCode,
+      });
+      if (result.handled) {
+        if (result.preventDefault) {
           e.preventDefault();
-          props.onDraftChange(prev);
         }
-        return;
-      }
-      if (e.key === "ArrowDown") {
-        const next = inputHistory.down();
-        e.preventDefault();
-        props.onDraftChange(next ?? "");
+        if (result.restoreCaret) {
+          restoreHistoryCaret(target, result.restoreCaret);
+        }
         return;
       }
     }
@@ -1010,9 +1020,6 @@ export function renderChat(props: ChatProps) {
       }
       e.preventDefault();
       if (canCompose) {
-        if (props.draft.trim()) {
-          inputHistory.push(props.draft);
-        }
         props.onSend();
       }
     }
@@ -1022,7 +1029,6 @@ export function renderChat(props: ChatProps) {
     const target = e.target as HTMLTextAreaElement;
     adjustTextareaHeight(target);
     updateSlashMenu(target.value, requestUpdate);
-    inputHistory.reset();
     props.onDraftChange(target.value);
   };
 
@@ -1120,9 +1126,6 @@ export function renderChat(props: ChatProps) {
           @change=${(e: Event) => handleFileSelect(e, props)}
         />
 
-        ${vs.sttRecording && vs.sttInterimText
-          ? html`<div class="agent-chat__stt-interim">${vs.sttInterimText}</div>`
-          : nothing}
         ${props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
           ? html`
               <div class="agent-chat__stt-interim agent-chat__talk-status">
@@ -1145,7 +1148,7 @@ export function renderChat(props: ChatProps) {
           @keydown=${handleKeyDown}
           @input=${handleInput}
           @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
-          placeholder=${vs.sttRecording ? "Listening..." : placeholder}
+          placeholder=${placeholder}
           rows="1"
         ></textarea>
 
@@ -1163,60 +1166,6 @@ export function renderChat(props: ChatProps) {
               ${icons.paperclip}
             </button>
 
-            ${isSttSupported()
-              ? html`
-                  <button
-                    class="agent-chat__input-btn ${vs.sttRecording
-                      ? "agent-chat__input-btn--recording"
-                      : ""}"
-                    @click=${() => {
-                      if (vs.sttRecording) {
-                        stopStt();
-                        vs.sttRecording = false;
-                        vs.sttInterimText = "";
-                        requestUpdate();
-                      } else {
-                        const started = startStt({
-                          onTranscript: (text, isFinal) => {
-                            if (isFinal) {
-                              const current = getDraft();
-                              const sep = current && !current.endsWith(" ") ? " " : "";
-                              props.onDraftChange(current + sep + text);
-                              vs.sttInterimText = "";
-                            } else {
-                              vs.sttInterimText = text;
-                            }
-                            requestUpdate();
-                          },
-                          onStart: () => {
-                            vs.sttRecording = true;
-                            requestUpdate();
-                          },
-                          onEnd: () => {
-                            vs.sttRecording = false;
-                            vs.sttInterimText = "";
-                            requestUpdate();
-                          },
-                          onError: () => {
-                            vs.sttRecording = false;
-                            vs.sttInterimText = "";
-                            requestUpdate();
-                          },
-                        });
-                        if (started) {
-                          vs.sttRecording = true;
-                          requestUpdate();
-                        }
-                      }
-                    }}
-                    title=${vs.sttRecording ? "Stop recording" : "Voice input"}
-                    aria-label=${vs.sttRecording ? "Stop recording" : "Voice input"}
-                    ?disabled=${!props.connected}
-                  >
-                    ${vs.sttRecording ? icons.micOff : icons.mic}
-                  </button>
-                `
-              : nothing}
             ${props.onToggleRealtimeTalk
               ? html`
                   <button
@@ -1246,7 +1195,7 @@ export function renderChat(props: ChatProps) {
             onExport: () => exportMarkdown(props),
             onNewSession: props.onNewSession,
             onSend: props.onSend,
-            onStoreDraft: (draft) => inputHistory.push(draft),
+            onStoreDraft: () => {},
           })}
         </div>
       </div>

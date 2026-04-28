@@ -3,6 +3,8 @@ import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
+  INTERNAL_NON_DELIVERY_CHANNELS,
+  isInternalNonDeliveryChannel,
   isMarkdownCapableMessageChannel,
   resolveGatewayMessageChannel,
 } from "./message-channel.js";
@@ -56,6 +58,16 @@ describe("message-channel", () => {
       ]),
     );
     expect(resolveGatewayMessageChannel("workspace-chat")).toBe("demo-alias-channel");
+  });
+
+  it("recognises internal non-delivery channel sources", () => {
+    for (const channel of INTERNAL_NON_DELIVERY_CHANNELS) {
+      expect(isInternalNonDeliveryChannel(channel)).toBe(true);
+    }
+    expect(isInternalNonDeliveryChannel("telegram")).toBe(false);
+    expect(isInternalNonDeliveryChannel("webchat")).toBe(false);
+    expect(isInternalNonDeliveryChannel("")).toBe(false);
+    expect(isInternalNonDeliveryChannel("HEARTBEAT")).toBe(false);
   });
 
   it("reads markdown capability from channel metadata", () => {

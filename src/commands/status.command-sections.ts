@@ -144,6 +144,7 @@ export function buildStatusMemoryValue(
     ok: (value: string) => string;
     warn: (value: string) => string;
     muted: (value: string) => string;
+    memoryUnavailableLabel?: string;
   } & StatusMemoryStateResolvers,
 ) {
   if (!params.memoryPlugin.enabled) {
@@ -152,7 +153,7 @@ export function buildStatusMemoryValue(
   }
   if (!params.memory) {
     const slot = params.memoryPlugin.slot ? `plugin ${params.memoryPlugin.slot}` : "plugin";
-    return params.muted(`enabled (${slot}) · unavailable`);
+    return params.muted(`enabled (${slot}) · ${params.memoryUnavailableLabel ?? "unavailable"}`);
   }
   const parts: string[] = [];
   const dirtySuffix = params.memory.dirty ? ` · ${params.warn("dirty")}` : "";

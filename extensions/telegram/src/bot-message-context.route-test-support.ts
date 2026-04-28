@@ -1,3 +1,7 @@
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { vi, type Mock } from "vitest";
 import { finalizeTelegramInboundContextForTest } from "./bot-message-context.session-runtime-test-support.js";
 
@@ -34,13 +38,8 @@ export const telegramRouteTestSessionRuntime = {
 } satisfies TelegramTestSessionRuntime;
 
 export async function loadTelegramMessageContextRouteHarness() {
-  const [
-    { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot },
-    { buildTelegramMessageContextForTest },
-  ] = await Promise.all([
-    import("../../../src/config/config.js"),
-    import("./bot-message-context.test-harness.js"),
-  ]);
+  const { buildTelegramMessageContextForTest } =
+    await import("./bot-message-context.test-harness.js");
   const buildTelegramMessageContextForRouteTest = (
     params: BuildTelegramMessageContextForTestParams,
   ) =>

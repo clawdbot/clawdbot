@@ -5,7 +5,7 @@ const configState = vi.hoisted(() => ({
   value: {} as Record<string, unknown>,
 }));
 vi.mock("../../config/config.js", () => ({
-  loadConfig: () => configState.value,
+  getRuntimeConfig: () => configState.value,
   resolveGatewayPort: () => 18789,
 }));
 vi.mock("../../gateway/call.js", () => ({

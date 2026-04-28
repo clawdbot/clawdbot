@@ -101,6 +101,18 @@ export async function applySessionsPatchToStore(params: {
   const subagentModelHint = isSubagentSessionKey(storeKey)
     ? resolveSubagentConfiguredModelSelection({ cfg, agentId: sessionAgentId })
     : undefined;
+  let loadedModelCatalog: ModelCatalogEntry[] | undefined;
+  const loadModelCatalogForPatch = async () => {
+    if (loadedModelCatalog) {
+      return loadedModelCatalog;
+    }
+    if (!params.loadGatewayModelCatalog) {
+      return undefined;
+    }
+    const catalog = await params.loadGatewayModelCatalog();
+    loadedModelCatalog = Array.isArray(catalog) ? catalog : [];
+    return loadedModelCatalog;
+  };
 
   const existing = store[storeKey];
   const next: SessionEntry = existing
@@ -248,8 +260,9 @@ export async function applySessionsPatchToStore(params: {
         const hintProvider =
           normalizeOptionalString(existing?.providerOverride) || resolvedDefault.provider;
         const hintModel = normalizeOptionalString(existing?.modelOverride) || resolvedDefault.model;
+        const thinkingCatalog = await loadModelCatalogForPatch();
         return invalid(
-          `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|")})`,
+          `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|", thinkingCatalog)})`,
         );
       }
       next.thinkingLevel = normalized;
@@ -408,7 +421,13 @@ export async function applySessionsPatchToStore(params: {
           error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
         };
       }
-      const catalog = await params.loadGatewayModelCatalog();
+      const catalog = await loadModelCatalogForPatch();
+      if (!catalog) {
+        return {
+          ok: false,
+          error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
+        };
+      }
       const resolved = resolveAllowedModelRef({
         cfg,
         catalog,
@@ -438,6 +457,7 @@ export async function applySessionsPatchToStore(params: {
     const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
     const effectiveModel = next.modelOverride ?? resolvedDefault.model;
     const thinkingLevel = normalizeThinkLevel(next.thinkingLevel);
+    const thinkingCatalog = await loadModelCatalogForPatch();
     if (!thinkingLevel) {
       delete next.thinkingLevel;
     } else if (
@@ -445,17 +465,19 @@ export async function applySessionsPatchToStore(params: {
         provider: effectiveProvider,
         model: effectiveModel,
         level: thinkingLevel,
+        catalog: thinkingCatalog,
       })
     ) {
       if ("thinkingLevel" in patch) {
         return invalid(
-          `thinkingLevel "${thinkingLevel}" is not supported for ${effectiveProvider}/${effectiveModel} (use ${formatThinkingLevels(effectiveProvider, effectiveModel, "|")})`,
+          `thinkingLevel "${thinkingLevel}" is not supported for ${effectiveProvider}/${effectiveModel} (use ${formatThinkingLevels(effectiveProvider, effectiveModel, "|", thinkingCatalog)})`,
         );
       }
       next.thinkingLevel = resolveSupportedThinkingLevel({
         provider: effectiveProvider,
         model: effectiveModel,
         level: thinkingLevel,
+        catalog: thinkingCatalog,
       });
     }
   }

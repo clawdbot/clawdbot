@@ -2,12 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Message, Usage } from "@mariozechner/pi-ai";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
 import { resolveTrajectoryPointerFilePath } from "./paths.js";
 import type { TrajectoryEvent } from "./types.js";
 
-let tempRoot = "";
+const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trajectory-"));
 let tempDirId = 0;
 
 function makeTempDir(): string {
@@ -180,14 +180,8 @@ function writeToolCallSessionFile(sessionFile: string): void {
   );
 }
 
-beforeAll(() => {
-  tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trajectory-"));
-});
-
 afterAll(() => {
-  if (tempRoot) {
-    fs.rmSync(tempRoot, { recursive: true, force: true });
-  }
+  fs.rmSync(tempRoot, { recursive: true, force: true });
 });
 
 describe("exportTrajectoryBundle", () => {

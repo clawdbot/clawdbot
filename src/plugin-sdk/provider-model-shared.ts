@@ -20,6 +20,7 @@ import type {
   ProviderReasoningOutputModeContext,
   ProviderReplayPolicyContext,
   ProviderSanitizeReplayHistoryContext,
+  ProviderThinkingProfile,
 } from "./plugin-entry.js";
 import {
   normalizeAntigravityPreviewModelId,
@@ -82,6 +83,21 @@ export {
 } from "../plugins/provider-model-helpers.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
+const CLAUDE_OPUS_47_MODEL_PREFIXES = ["claude-opus-4-7", "claude-opus-4.7"] as const;
+const CLAUDE_ADAPTIVE_THINKING_DEFAULT_MODEL_PREFIXES = [
+  "claude-opus-4-6",
+  "claude-opus-4.6",
+  "claude-sonnet-4-6",
+  "claude-sonnet-4.6",
+] as const;
+const BASE_CLAUDE_THINKING_LEVELS = [
+  { id: "off" },
+  { id: "minimal" },
+  { id: "low" },
+  { id: "medium" },
+  { id: "high" },
+] as const satisfies ProviderThinkingProfile["levels"];
+
 export function getModelProviderHint(modelId: string): string | null {
   const trimmed = normalizeOptionalLowercaseString(modelId);
   if (!trimmed) {
@@ -96,6 +112,35 @@ export function getModelProviderHint(modelId: string): string | null {
 
 export function isProxyReasoningUnsupportedModelHint(modelId: string): boolean {
   return getModelProviderHint(modelId) === "x-ai";
+}
+
+function matchesClaudeModelPrefix(modelId: string, prefixes: readonly string[]): boolean {
+  const lower = normalizeOptionalLowercaseString(modelId);
+  return Boolean(lower && prefixes.some((prefix) => lower.startsWith(prefix)));
+}
+
+export function isClaudeOpus47ModelId(modelId: string): boolean {
+  return matchesClaudeModelPrefix(modelId, CLAUDE_OPUS_47_MODEL_PREFIXES);
+}
+
+export function isClaudeAdaptiveThinkingDefaultModelId(modelId: string): boolean {
+  return matchesClaudeModelPrefix(modelId, CLAUDE_ADAPTIVE_THINKING_DEFAULT_MODEL_PREFIXES);
+}
+
+export function resolveClaudeThinkingProfile(modelId: string): ProviderThinkingProfile {
+  if (isClaudeOpus47ModelId(modelId)) {
+    return {
+      levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "xhigh" }, { id: "adaptive" }, { id: "max" }],
+      defaultLevel: "off",
+    };
+  }
+  if (isClaudeAdaptiveThinkingDefaultModelId(modelId)) {
+    return {
+      levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "adaptive" }],
+      defaultLevel: "adaptive",
+    };
+  }
+  return { levels: BASE_CLAUDE_THINKING_LEVELS };
 }
 
 export {

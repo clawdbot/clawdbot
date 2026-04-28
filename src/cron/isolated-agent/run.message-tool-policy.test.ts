@@ -10,6 +10,7 @@ import {
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
   mockRunCronFallbackPassthrough,
+  resolveCronPayloadOutcomeMock,
   resetRunCronIsolatedAgentTurnHarness,
   resolveCronDeliveryPlanMock,
   resolveDeliveryTargetMock,
@@ -90,6 +91,20 @@ function makeMessageToolRunResult(messagingToolSentTargets: Array<Record<string,
     messagingToolSentTargets,
     meta: { agentMeta: { usage: { input: 10, output: 20 } } },
   };
+}
+
+function mockPendingMessagePresentationWarningOutcome() {
+  resolveCronPayloadOutcomeMock.mockReturnValue({
+    summary: "Final cron report",
+    outputText: "Final cron report",
+    synthesizedText: "Final cron report",
+    deliveryPayload: { text: "Final cron report" },
+    deliveryPayloads: [{ text: "Final cron report" }],
+    deliveryPayloadHasStructuredContent: false,
+    hasFatalErrorPayload: false,
+    embeddedRunError: undefined,
+    pendingPresentationWarningError: "⚠️ ✉️ Message failed",
+  });
 }
 
 describe("runCronIsolatedAgentTurn message tool policy", () => {
@@ -752,6 +767,57 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       }),
     );
     expect(result.delivery).not.toHaveProperty("resolved");
+  });
+
+  it("clears pending message presentation warnings only after cron delivery succeeds", async () => {
+    mockRunCronFallbackPassthrough();
+    mockPendingMessagePresentationWarningOutcome();
+    resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "Final cron report" }, { text: "⚠️ ✉️ Message failed", isError: true }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+
+    const result = await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeAnnounceMessageToolJob({
+        id: "pending-message-warning-delivered",
+        name: "Pending Message Warning Delivered",
+      }),
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.error).toBeUndefined();
+    expect(dispatchCronDeliveryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliveryPayloads: [{ text: "Final cron report" }],
+      }),
+    );
+  });
+
+  it("keeps pending message presentation warnings fatal when cron delivery does not succeed", async () => {
+    mockRunCronFallbackPassthrough();
+    mockPendingMessagePresentationWarningOutcome();
+    resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "Final cron report" }, { text: "⚠️ ✉️ Message failed", isError: true }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+
+    const result = await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeMessageToolPolicyJob({ mode: "none" }),
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.error).toBe("⚠️ ✉️ Message failed");
+    expect(result.summary).toBe("Final cron report");
+    expect(dispatchCronDeliveryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliveryRequested: false,
+        deliveryPayloads: [{ text: "Final cron report" }],
+      }),
+    );
   });
 });
 

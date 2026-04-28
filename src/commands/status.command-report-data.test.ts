@@ -48,4 +48,17 @@ describe("buildStatusCommandReportData", () => {
     });
     expect(result.footerLines.at(-1)).toBe("  Need to test channels? cmd:openclaw status --deep");
   });
+
+  it("shows skipped audit text when fast status omits the security audit", async () => {
+    const result = await buildStatusCommandReportData(
+      createStatusCommandReportDataParams({
+        securityAudit: undefined,
+      }),
+    );
+
+    expect(result.securityAuditLines).toEqual([
+      "muted(Skipped in fast status. Full report: cmd:openclaw security audit)",
+      "muted(Deep probe: cmd:openclaw status --deep)",
+    ]);
+  });
 });

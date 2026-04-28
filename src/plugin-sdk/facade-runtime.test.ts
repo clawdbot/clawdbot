@@ -25,6 +25,7 @@ import {
 
 const { createTempDirSync } = createPluginSdkTestHarness();
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const originalDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 
 function createBundledPluginDir(prefix: string, marker: string): string {
@@ -47,6 +48,11 @@ afterEach(() => {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   } else {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
+  }
+  if (originalDisableBundledPlugins === undefined) {
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+  } else {
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = originalDisableBundledPlugins;
   }
   if (originalStateDir === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
@@ -79,6 +85,32 @@ describe("plugin-sdk facade runtime", () => {
       modulePath: path.join(overrideB, "demo", "api.js"),
       boundaryRoot: overrideB,
     });
+  });
+
+  it("falls back to package source surfaces when an override dir is partial", () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = createTempDirSync("openclaw-facade-runtime-empty-");
+
+    expect(
+      __testing.resolveFacadeModuleLocation({
+        dirName: "browser",
+        artifactBasename: "browser-maintenance.js",
+      }),
+    ).toEqual({
+      modulePath: path.resolve("extensions/browser/browser-maintenance.ts"),
+      boundaryRoot: path.resolve("."),
+    });
+  });
+
+  it("does not fall back to package source surfaces when bundled plugins are disabled", () => {
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+
+    expect(
+      __testing.resolveFacadeModuleLocation({
+        dirName: "browser",
+        artifactBasename: "browser-maintenance.js",
+      }),
+    ).toBeNull();
   });
 
   it("returns the same object identity on repeated calls (sentinel consistency)", () => {

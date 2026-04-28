@@ -24,4 +24,45 @@ describe("OpenAI reasoning effort support", () => {
 
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "xhigh" })).toBe("xhigh");
   });
+
+  it("allows provider-native compat values when explicitly declared", () => {
+    const model = {
+      provider: "groq",
+      id: "qwen/qwen3-32b",
+      compat: {
+        supportedReasoningEfforts: ["none", "default"],
+        reasoningEffortMap: {
+          off: "none",
+          low: "default",
+          medium: "default",
+          high: "default",
+        },
+      },
+    };
+
+    expect(resolveOpenAISupportedReasoningEfforts(model)).toEqual(["none", "default"]);
+    expect(
+      resolveOpenAIReasoningEffortForModel({
+        model,
+        effort: "medium",
+        fallbackMap: model.compat.reasoningEffortMap,
+      }),
+    ).toBe("default");
+    expect(
+      resolveOpenAIReasoningEffortForModel({
+        model,
+        effort: "off",
+        fallbackMap: model.compat.reasoningEffortMap,
+      }),
+    ).toBe("none");
+  });
+
+  it("omits unsupported disabled reasoning instead of falling back to enabled effort", () => {
+    expect(
+      resolveOpenAIReasoningEffortForModel({
+        model: { provider: "groq", id: "openai/gpt-oss-120b" },
+        effort: "off",
+      }),
+    ).toBeUndefined();
+  });
 });

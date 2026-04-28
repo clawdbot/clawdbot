@@ -324,6 +324,25 @@ export function resolveAgentEmoji(
   return "";
 }
 
+function resolveAgentTextAvatar(
+  agent: { identity?: { emoji?: string; avatar?: string } },
+  agentIdentity?: AgentIdentityResult | null,
+): string | null {
+  const candidates = [
+    normalizeOptionalString(agent.identity?.emoji),
+    normalizeOptionalString(agent.identity?.avatar),
+    normalizeOptionalString(agentIdentity?.emoji),
+    normalizeOptionalString(agentIdentity?.avatar),
+  ];
+  for (const candidate of candidates) {
+    const textAvatar = resolveAssistantTextAvatar(candidate);
+    if (textAvatar) {
+      return textAvatar;
+    }
+  }
+  return null;
+}
+
 export function agentBadgeText(agentId: string, defaultId: string | null) {
   return defaultId && agentId === defaultId ? "default" : null;
 }
@@ -395,12 +414,14 @@ export function buildAgentContext(
       ? resolveModelLabel(config.defaults?.model)
       : resolveModelLabel(agent.model);
   const identityName =
-    normalizeOptionalString(agentIdentity?.name) ||
     normalizeOptionalString(agent.identity?.name) ||
     normalizeOptionalString(agent.name) ||
+    normalizeOptionalString(agentIdentity?.name) ||
     config.entry?.name ||
     agent.id;
-  const identityAvatar = resolveAgentAvatarUrl(agent, agentIdentity) ? "custom" : "—";
+  const identityAvatar = resolveAgentAvatarUrl(agent, agentIdentity)
+    ? "custom"
+    : (resolveAgentTextAvatar(agent, agentIdentity) ?? "—");
   const skillFilter = Array.isArray(config.entry?.skills) ? config.entry?.skills : null;
   const skillCount = skillFilter?.length ?? null;
   return {

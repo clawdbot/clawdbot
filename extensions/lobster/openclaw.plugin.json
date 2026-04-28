@@ -1,5 +1,8 @@
 {
   "id": "lobster",
+  "activation": {
+    "onStartup": true
+  },
   "name": "Lobster",
   "description": "Typed workflow tool with resumable approvals.",
   "configSchema": {

@@ -5,25 +5,110 @@ export {
   handleDiscordSubagentEnded,
   handleDiscordSubagentSpawning,
 } from "./src/subagent-hooks.js";
-export * from "./src/account-inspect.js";
-export * from "./src/accounts.js";
-export * from "./src/actions/handle-action.guild-admin.js";
-export * from "./src/actions/handle-action.js";
-export * from "./src/components.js";
-export * from "./src/directory-config.js";
-export * from "./src/exec-approvals.js";
-export * from "./src/group-policy.js";
+export {
+  type DiscordCredentialStatus,
+  inspectDiscordAccount,
+  type InspectedDiscordAccount,
+} from "./src/account-inspect.js";
+export {
+  createDiscordActionGate,
+  listDiscordAccountIds,
+  listEnabledDiscordAccounts,
+  mergeDiscordAccountConfig,
+  type ResolvedDiscordAccount,
+  resolveDefaultDiscordAccountId,
+  resolveDiscordAccount,
+  resolveDiscordAccountConfig,
+  resolveDiscordMaxLinesPerMessage,
+} from "./src/accounts.js";
+export { tryHandleDiscordMessageActionGuildAdmin } from "./src/actions/handle-action.guild-admin.js";
+export { handleDiscordMessageAction } from "./src/actions/handle-action.js";
+export {
+  buildDiscordComponentCustomId,
+  buildDiscordComponentMessage,
+  buildDiscordComponentMessageFlags,
+  buildDiscordInteractiveComponents,
+  buildDiscordModalCustomId,
+  createDiscordFormModal,
+  DISCORD_COMPONENT_ATTACHMENT_PREFIX,
+  DISCORD_COMPONENT_CUSTOM_ID_KEY,
+  DISCORD_MODAL_CUSTOM_ID_KEY,
+  type DiscordComponentBlock,
+  type DiscordComponentBuildResult,
+  type DiscordComponentButtonSpec,
+  type DiscordComponentButtonStyle,
+  type DiscordComponentEntry,
+  type DiscordComponentMessageSpec,
+  type DiscordComponentModalFieldType,
+  type DiscordComponentSectionAccessory,
+  type DiscordComponentSelectOption,
+  type DiscordComponentSelectSpec,
+  type DiscordComponentSelectType,
+  DiscordFormModal,
+  type DiscordModalEntry,
+  type DiscordModalFieldDefinition,
+  type DiscordModalFieldSpec,
+  type DiscordModalSpec,
+  formatDiscordComponentEventText,
+  parseDiscordComponentCustomId,
+  parseDiscordComponentCustomIdForCarbon,
+  parseDiscordModalCustomId,
+  parseDiscordModalCustomIdForCarbon,
+  readDiscordComponentSpec,
+  resolveDiscordComponentAttachmentName,
+} from "./src/components.js";
+export {
+  listDiscordDirectoryGroupsFromConfig,
+  listDiscordDirectoryPeersFromConfig,
+} from "./src/directory-config.js";
+export {
+  getDiscordExecApprovalApprovers,
+  isDiscordExecApprovalApprover,
+  isDiscordExecApprovalClientEnabled,
+  shouldSuppressLocalDiscordExecApprovalPrompt,
+} from "./src/exec-approvals.js";
+export {
+  resolveDiscordGroupRequireMention,
+  resolveDiscordGroupToolPolicy,
+} from "./src/group-policy.js";
 export type {
   DiscordInteractiveHandlerContext,
   DiscordInteractiveHandlerRegistration,
 } from "./src/interactive-dispatch.js";
-export * from "./src/normalize.js";
-export * from "./src/pluralkit.js";
-export * from "./src/probe.js";
-export * from "./src/session-key-normalization.js";
-export * from "./src/status-issues.js";
-export * from "./src/targets.js";
-export * from "./src/security-audit.js";
+export {
+  looksLikeDiscordTargetId,
+  normalizeDiscordMessagingTarget,
+  normalizeDiscordOutboundTarget,
+} from "./src/normalize.js";
+export {
+  type DiscordPluralKitConfig,
+  fetchPluralKitMessageInfo,
+  type PluralKitMemberInfo,
+  type PluralKitMessageInfo,
+  type PluralKitSystemInfo,
+} from "./src/pluralkit.js";
+export {
+  type DiscordApplicationSummary,
+  type DiscordPrivilegedIntentsSummary,
+  type DiscordPrivilegedIntentStatus,
+  type DiscordProbe,
+  fetchDiscordApplicationId,
+  fetchDiscordApplicationSummary,
+  parseApplicationIdFromToken,
+  probeDiscord,
+  resolveDiscordPrivilegedIntentsFromFlags,
+} from "./src/probe.js";
+export { normalizeExplicitDiscordSessionKey } from "./src/session-key-normalization.js";
+export { collectDiscordStatusIssues } from "./src/status-issues.js";
+export {
+  type DiscordTarget,
+  type DiscordTargetKind,
+  type DiscordTargetParseOptions,
+  parseDiscordTarget,
+  resolveDiscordChannelId,
+  resolveDiscordTarget,
+} from "./src/targets.js";
+export { collectDiscordSecurityAuditFindings } from "./src/security-audit.js";
 export { resolveDiscordRuntimeGroupPolicy } from "./src/runtime-group-policy.js";
 export {
   DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,

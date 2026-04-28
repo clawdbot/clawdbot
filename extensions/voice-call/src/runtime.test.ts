@@ -326,6 +326,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
         provider: "openai",
         model: "gpt-5.4",
         toolsAllow: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
+        extraSystemPrompt: expect.stringContaining("one or two bounded read-only queries"),
         prompt: expect.stringContaining("Caller: Can you check shipment status?"),
       }),
     );

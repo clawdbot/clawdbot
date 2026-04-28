@@ -46,6 +46,19 @@ function mockEmbeddingFetch(embedding: number[]) {
   return fetchMock;
 }
 
+function readEmbeddingRequestBody(init: RequestInit | undefined): { input?: unknown } {
+  if (typeof init?.body !== "string") {
+    throw new Error("expected JSON string request body");
+  }
+  return JSON.parse(init.body) as { input?: unknown };
+}
+
+function readFirstEmbeddingInput(fetchMock: ReturnType<typeof mockEmbeddingFetch>): unknown {
+  const [, init] = (fetchMock.mock.calls[0] ?? []) as unknown as [string, RequestInit | undefined];
+  const body = readEmbeddingRequestBody(init);
+  return body.input;
+}
+
 describe("ollama embedding provider", () => {
   it("calls /api/embed and returns normalized vectors", async () => {
     const fetchMock = mockEmbeddingFetch([3, 4]);
@@ -53,7 +66,7 @@ describe("ollama embedding provider", () => {
     const { provider } = await createOllamaEmbeddingProvider({
       config: {} as OpenClawConfig,
       provider: "ollama",
-      model: "nomic-embed-text",
+      model: "unknown-embedder",
       fallback: "none",
       remote: { baseUrl: "http://127.0.0.1:11434" },
     });
@@ -65,7 +78,7 @@ describe("ollama embedding provider", () => {
       "http://127.0.0.1:11434/api/embed",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ model: "nomic-embed-text", input: "hi" }),
+        body: JSON.stringify({ model: "unknown-embedder", input: "hi" }),
       }),
     );
     expect(vector[0]).toBeCloseTo(0.6, 5);
@@ -222,6 +235,90 @@ describe("ollama embedding provider", () => {
     await expect(provider.embedBatch(["a", "bb", "ccc"])).resolves.toHaveLength(3);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(inputs).toEqual([["a", "bb", "ccc"]]);
+  });
+
+  it("uses a retrieval query prefix for qwen3 embedding queries", async () => {
+    const fetchMock = mockEmbeddingFetch([1, 0]);
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "qwen3-embedding:0.6b",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+    });
+
+    await provider.embedQuery("怀孕");
+
+    expect(readFirstEmbeddingInput(fetchMock)).toBe(
+      "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:怀孕",
+    );
+  });
+
+  it("uses the nomic search_query prefix for query embeddings", async () => {
+    const fetchMock = mockEmbeddingFetch([1, 0]);
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+    });
+
+    await provider.embedQuery("What does $& mean?");
+
+    expect(readFirstEmbeddingInput(fetchMock)).toBe("search_query: What does $& mean?");
+  });
+
+  it("uses the mixedbread retrieval prompt for query embeddings", async () => {
+    const fetchMock = mockEmbeddingFetch([1, 0]);
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "mxbai-embed-large:latest",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+    });
+
+    await provider.embedQuery("capital of Australia");
+
+    expect(readFirstEmbeddingInput(fetchMock)).toBe(
+      "Represent this sentence for searching relevant passages: capital of Australia",
+    );
+  });
+
+  it("keeps document batch embeddings raw", async () => {
+    const inputs: unknown[] = [];
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = readEmbeddingRequestBody(init);
+      inputs.push(body.input);
+      return new Response(
+        JSON.stringify({
+          embeddings: [
+            [1, 0],
+            [1, 0],
+          ],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "qwen3-embedding:0.6b",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+    });
+
+    await expect(provider.embedBatch(["doc one", "doc two"])).resolves.toHaveLength(2);
+    expect(inputs).toEqual([["doc one", "doc two"]]);
   });
 
   it("uses custom Ollama provider config and strips that provider prefix", async () => {

@@ -237,11 +237,13 @@ Bindings are **deterministic** and **most-specific wins**:
   <Accordion title="Tie-breaking and AND semantics">
     - If multiple bindings match in the same tier, the first one in config order wins.
     - If a binding sets multiple match fields (for example `peer` + `guildId`), all specified fields are required (`AND` semantics).
+
   </Accordion>
   <Accordion title="Account-scope detail">
     - A binding that omits `accountId` matches the default account only.
     - Use `accountId: "*"` for a channel-wide fallback across all accounts.
     - If you later add the same binding for the same agent with an explicit account id, OpenClaw upgrades the existing channel-only binding to account-scoped instead of duplicating it.
+
   </Accordion>
 </AccordionGroup>
 

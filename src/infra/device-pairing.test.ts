@@ -554,6 +554,33 @@ describe("device pairing tokens", () => {
     expect(paired?.tokens?.operator).toBeUndefined();
   });
 
+  test("metadata refresh persists last-seen fields and reports missing devices", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedNodeDevice(baseDir);
+
+    await expect(
+      updatePairedDeviceMetadata(
+        "node-1",
+        {
+          lastSeenAtMs: 4321,
+          lastSeenReason: "bg_app_refresh",
+        },
+        baseDir,
+      ),
+    ).resolves.toBe(true);
+    await expect(updatePairedDeviceMetadata("missing", { lastSeenAtMs: 1 }, baseDir)).resolves.toBe(
+      false,
+    );
+
+    const paired = await getPairedDevice("node-1", baseDir);
+    expect(paired).toEqual(
+      expect.objectContaining({
+        lastSeenAtMs: 4321,
+        lastSeenReason: "bg_app_refresh",
+      }),
+    );
+  });
+
   test("generates base64url device tokens with 256-bit entropy output length", async () => {
     const baseDir = await makeDevicePairingDir();
     await setupPairedOperatorDevice(baseDir, ["operator.admin"]);

@@ -155,6 +155,10 @@ if (updated !== original) {
 EOF_NODE
 }
 
+validate_changelog_attribution_policy() {
+  node scripts/check-changelog-attributions.mjs CHANGELOG.md
+}
+
 validate_changelog_entry_for_pr() {
   local pr="$1"
   local contrib="$2"

@@ -41,7 +41,7 @@ vi.mock("./peer.js", () => ({
 }));
 
 vi.mock("../config.runtime.js", () => ({
-  loadConfig: () => ({
+  getRuntimeConfig: () => ({
     channels: {
       whatsapp: {
         ackReaction: { enabled: true },

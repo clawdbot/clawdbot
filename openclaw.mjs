@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { access } from "node:fs/promises";
 import module from "node:module";
 import { fileURLToPath } from "node:url";
@@ -38,8 +39,48 @@ const ensureSupportedNodeVersion = () => {
 
 ensureSupportedNodeVersion();
 
+const isSourceCheckoutLauncher = () =>
+  existsSync(new URL("./.git", import.meta.url)) ||
+  existsSync(new URL("./src/entry.ts", import.meta.url));
+
+const isNodeCompileCacheDisabled = () => process.env.NODE_DISABLE_COMPILE_CACHE !== undefined;
+const isNodeCompileCacheRequested = () =>
+  process.env.NODE_COMPILE_CACHE !== undefined && !isNodeCompileCacheDisabled();
+
+const respawnWithoutCompileCacheIfNeeded = () => {
+  if (!isSourceCheckoutLauncher()) {
+    return false;
+  }
+  if (process.env.OPENCLAW_SOURCE_COMPILE_CACHE_RESPAWNED === "1") {
+    return false;
+  }
+  if (!module.getCompileCacheDir?.() && !isNodeCompileCacheRequested()) {
+    return false;
+  }
+  const env = {
+    ...process.env,
+    NODE_DISABLE_COMPILE_CACHE: "1",
+    OPENCLAW_SOURCE_COMPILE_CACHE_RESPAWNED: "1",
+  };
+  delete env.NODE_COMPILE_CACHE;
+  const result = spawnSync(
+    process.execPath,
+    [...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)],
+    {
+      stdio: "inherit",
+      env,
+    },
+  );
+  if (result.error) {
+    throw result.error;
+  }
+  process.exit(result.status ?? 1);
+};
+
+respawnWithoutCompileCacheIfNeeded();
+
 // https://nodejs.org/api/module.html#module-compile-cache
-if (module.enableCompileCache && !process.env.NODE_DISABLE_COMPILE_CACHE) {
+if (module.enableCompileCache && !isNodeCompileCacheDisabled() && !isSourceCheckoutLauncher()) {
   try {
     module.enableCompileCache();
   } catch {

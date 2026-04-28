@@ -37,7 +37,7 @@ export async function monitorNextcloudTalkProvider(
   opts: NextcloudTalkMonitorOptions,
 ): Promise<{ stop: () => void }> {
   const core = getNextcloudTalkRuntime();
-  const cfg = opts.config ?? (core.config.loadConfig() as CoreConfig);
+  const cfg = opts.config ?? (core.config.current() as CoreConfig);
   const account = resolveNextcloudTalkAccount({
     cfg,
     accountId: opts.accountId,

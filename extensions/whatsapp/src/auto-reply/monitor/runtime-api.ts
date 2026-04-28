@@ -12,7 +12,7 @@ export {
   resolveChannelContextVisibilityMode,
 } from "../config.runtime.js";
 export { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
-export type LoadConfigFn = typeof import("../config.runtime.js").loadConfig;
+export type LoadConfigFn = typeof import("../config.runtime.js").getRuntimeConfig;
 export {
   buildHistoryContextFromEntries,
   type HistoryEntry,

@@ -33,6 +33,8 @@ vi.mock("../tools/web-tools.js", () => ({
 }));
 
 vi.mock("../../plugins/tools.js", () => ({
+  buildPluginToolMetadataKey: (pluginId: string, toolName: string) =>
+    JSON.stringify([pluginId, toolName]),
   copyPluginToolMeta: (_from: unknown, to: unknown) => to,
   getPluginToolMeta: () => undefined,
   resolvePluginTools: () => [],

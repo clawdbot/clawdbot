@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { createEmptyUninstallActions } from "../plugins/uninstall.js";
@@ -117,6 +118,7 @@ vi.mock("../runtime.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: () => loadConfig(),
   loadConfig: () => loadConfig(),
   readConfigFileSnapshot: ((
     ...args: Parameters<(typeof import("../config/config.js"))["readConfigFileSnapshot"]>
@@ -479,8 +481,6 @@ vi.mock("../plugins/clawhub.js", () => ({
       installPluginFromClawHub,
       ...args,
     )) as (typeof import("../plugins/clawhub.js"))["installPluginFromClawHub"],
-  formatClawHubSpecifier: ({ name, version }: { name: string; version?: string }) =>
-    `clawhub:${name}${version ? `@${version}` : ""}`,
 }));
 
 vi.mock("../infra/clawhub.js", () => ({
@@ -551,7 +551,7 @@ export function resetPluginsCliTestState() {
 
   loadConfig.mockReturnValue({} as OpenClawConfig);
   readConfigFileSnapshot.mockImplementation(async () => {
-    const config = loadConfig();
+    const config = getRuntimeConfig();
     return {
       path: "/tmp/openclaw-config.json5",
       exists: true,

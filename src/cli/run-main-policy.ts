@@ -9,7 +9,10 @@ import {
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
-import { resolveCliCommandPathPolicy } from "./command-path-policy.js";
+import {
+  resolveCliCommandPathPolicy,
+  resolveCliNetworkProxyPolicy,
+} from "./command-path-policy.js";
 
 export function rewriteUpdateFlagArgv(argv: string[]): string[] {
   const index = argv.indexOf("--update");
@@ -71,6 +74,16 @@ export function shouldStartCrestodianForModernOnboard(argv: string[]): boolean {
     argv.includes("--modern") &&
     !invocation.hasHelpOrVersion
   );
+}
+
+export function shouldStartProxyForCli(argv: string[]): boolean {
+  const policyArgv = rewriteUpdateFlagArgv(argv);
+  const invocation = resolveCliArgvInvocation(policyArgv);
+  const [primary] = invocation.commandPath;
+  if (invocation.hasHelpOrVersion || !primary) {
+    return false;
+  }
+  return resolveCliNetworkProxyPolicy(policyArgv) === "default";
 }
 
 export function resolveMissingPluginCommandMessage(

@@ -13,7 +13,7 @@ let package = Package(
         .executable(name: "swabble", targets: ["SwabbleCLI"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/steipete/Commander.git", exact: "0.2.1"),
+        .package(url: "https://github.com/steipete/Commander.git", exact: "0.2.2"),
         .package(url: "https://github.com/apple/swift-testing", from: "0.99.0"),
     ],
     targets: [
@@ -43,7 +43,6 @@ let package = Package(
             ],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
-                .enableExperimentalFeature("SwiftTesting"),
             ]),
         .testTarget(
             name: "swabbleTests",

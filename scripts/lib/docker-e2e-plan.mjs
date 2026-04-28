@@ -2,6 +2,7 @@
 // This module turns the scenario catalog plus env-driven inputs into a concrete
 // lane plan. It intentionally does not define scenario commands.
 import {
+  BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS,
   DEFAULT_LIVE_RETRIES,
   allReleasePathLanes,
   mainLanes,
@@ -34,14 +35,24 @@ export function parseLaneSelection(raw) {
   if (!raw) {
     return [];
   }
-  const laneAliases = new Map([["bundled-channel-deps", "bundled-channel-deps-compat"]]);
+  const laneAliases = new Map([
+    ["bundled-channel-deps", ["bundled-channel-deps-compat"]],
+    ["install-e2e", ["install-e2e-openai", "install-e2e-anthropic"]],
+    [
+      "bundled-plugin-install-uninstall",
+      Array.from(
+        { length: BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS },
+        (_, index) => `bundled-plugin-install-uninstall-${index}`,
+      ),
+    ],
+  ]);
   return [
     ...new Set(
       String(raw)
         .split(/[,\s]+/u)
         .map((token) => token.trim())
         .filter(Boolean)
-        .map((token) => laneAliases.get(token) ?? token),
+        .flatMap((token) => laneAliases.get(token) ?? [token]),
     ),
   ];
 }
@@ -111,10 +122,13 @@ export function laneResources(poolLane) {
 export function laneSummary(poolLane) {
   const resources = laneResources(poolLane).join(",");
   const timeout = poolLane.timeoutMs ? ` timeout=${Math.round(poolLane.timeoutMs / 1000)}s` : "";
+  const noOutputTimeout = poolLane.noOutputTimeoutMs
+    ? ` no-output=${Math.round(poolLane.noOutputTimeoutMs / 1000)}s`
+    : "";
   const retries = poolLane.retries > 0 ? ` retries=${poolLane.retries}` : "";
   const cache = poolLane.cacheKey ? ` cache=${poolLane.cacheKey}` : "";
   const image = poolLane.e2eImageKind ? ` image=${poolLane.e2eImageKind}` : "";
-  return `${poolLane.name}(w=${laneWeight(poolLane)} r=${resources}${timeout}${retries}${cache}${image})`;
+  return `${poolLane.name}(w=${laneWeight(poolLane)} r=${resources}${timeout}${noOutputTimeout}${retries}${cache}${image})`;
 }
 
 export function lanesNeedE2eImageKind(poolLanes, kind) {
@@ -135,8 +149,11 @@ export function findLaneByName(name) {
 
 export function laneCredentialRequirements(poolLane) {
   const credentials = [];
-  if (poolLane.name === "install-e2e") {
-    credentials.push("openai", "anthropic");
+  if (poolLane.name === "install-e2e-openai") {
+    credentials.push("openai");
+  }
+  if (poolLane.name === "install-e2e-anthropic") {
+    credentials.push("anthropic");
   }
   if (poolLane.name === "openwebui" || poolLane.name === "openai-web-search-minimal") {
     credentials.push("openai");
@@ -165,6 +182,7 @@ export function buildPlanJson(params) {
       imageKind: poolLane.e2eImageKind,
       live: poolLane.live,
       name: poolLane.name,
+      noOutputTimeoutMs: poolLane.noOutputTimeoutMs,
       resources: laneResources(poolLane),
       timeoutMs: poolLane.timeoutMs,
       weight: laneWeight(poolLane),

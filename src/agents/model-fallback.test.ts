@@ -686,6 +686,7 @@ describe("runWithModelFallback", () => {
     // Should NOT be a LiveSessionModelSwitchError — the outer retry loop must
     // not restart with the conflicting model.
     expect(err).not.toBeInstanceOf(LiveSessionModelSwitchError);
+    expect((err as { reason?: string }).reason).toBe("unknown");
     expect(run).toHaveBeenCalledTimes(1);
   });
 
@@ -774,6 +775,7 @@ describe("runWithModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(result.provider).toBe("anthropic");
     expect(result.model).toBe("claude-haiku-3-5");
+    expect(result.attempts[0]?.reason).toBe("unknown");
     expect(run.mock.calls).toEqual([
       ["openai", "gpt-4.1-mini"],
       ["anthropic", "claude-haiku-3-5"],

@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
-import { clearConfigCache, clearRuntimeConfigSnapshot, loadConfig } from "../config/config.js";
+import {
+  getRuntimeConfig,
+  clearConfigCache,
+  clearRuntimeConfigSnapshot,
+} from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
@@ -277,7 +281,7 @@ describe("secrets runtime snapshot core lanes", () => {
     const prepared = await prepareOpenAiRuntimeSnapshot({ includeAuthStoreRefs: false });
     activateSecretsRuntimeSnapshot(prepared);
 
-    expect(loadConfig().models?.providers?.openai?.apiKey).toBe("sk-runtime");
+    expect(getRuntimeConfig().models?.providers?.openai?.apiKey).toBe("sk-runtime");
   });
 
   it("activates runtime snapshots for ensureAuthProfileStore", async () => {

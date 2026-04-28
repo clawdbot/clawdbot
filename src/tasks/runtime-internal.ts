@@ -23,6 +23,7 @@ export {
   markTaskTerminalByRunId,
   maybeDeliverTaskTerminalUpdate,
   recordTaskProgressByRunId,
+  reloadTaskRegistryFromStore,
   resetTaskRegistryDeliveryRuntimeForTests,
   resolveTaskForLookupToken,
   resetTaskRegistryForTests,

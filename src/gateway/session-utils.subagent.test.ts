@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -31,6 +31,68 @@ describe("listSessionsFromStore subagent metadata", () => {
     session: { mainKey: "main" },
     agents: { list: [{ id: "main", default: true }] },
   } as OpenClawConfig;
+
+  test("searches channel-derived display names before row enrichment", () => {
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:slack:group:general": {
+          sessionId: "slack-general-session",
+          updatedAt: 2,
+          channel: "slack",
+        } as SessionEntry,
+        "agent:main:discord:group:random": {
+          sessionId: "discord-random-session",
+          updatedAt: 1,
+          channel: "discord",
+        } as SessionEntry,
+      },
+      opts: { search: "slack:g-general" },
+    });
+
+    expect(result.sessions.map((session) => session.key)).toEqual([
+      "agent:main:slack:group:general",
+    ]);
+    expect(result.sessions[0]?.displayName).toBe("slack:g-general");
+  });
+
+  test("applies limit before transcript enrichment", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:newest": {
+        sessionId: "newest-session",
+        sessionFile: "/tmp/newest-session.jsonl",
+        updatedAt: 300,
+      } as SessionEntry,
+      "agent:main:middle": {
+        sessionId: "middle-session",
+        sessionFile: "/tmp/middle-session.jsonl",
+        updatedAt: 200,
+      } as SessionEntry,
+      "agent:main:oldest": {
+        sessionId: "old-session",
+        sessionFile: "/tmp/old-session.jsonl",
+        updatedAt: 100,
+      } as SessionEntry,
+    };
+    const existsSpy = vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    try {
+      const result = listSessionsFromStore({
+        cfg,
+        storePath: "/tmp/sessions.json",
+        store,
+        opts: { limit: 2 },
+      });
+
+      expect(result.sessions.map((session) => session.sessionId)).toEqual([
+        "newest-session",
+        "middle-session",
+      ]);
+      expect(existsSpy.mock.calls.flat().join("\n")).not.toContain("old-session");
+    } finally {
+      existsSpy.mockRestore();
+    }
+  });
 
   test("includes subagent status timing and direct child session keys", () => {
     const now = Date.now();

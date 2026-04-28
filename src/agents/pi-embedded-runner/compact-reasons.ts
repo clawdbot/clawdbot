@@ -1,4 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { sanitizeForLog } from "../../terminal/ansi.js";
+
+const MAX_COMPACTION_REASON_DETAIL_CHARS = 100;
 
 function isGenericCompactionCancelledReason(reason: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(reason);
@@ -58,4 +61,16 @@ export function classifyCompactionReason(reason?: string): string {
     return "provider_error_5xx";
   }
   return "unknown";
+}
+
+export function formatUnknownCompactionReasonDetail(reason?: string): string | undefined {
+  const sanitized = sanitizeForLog((reason ?? "").replace(/\s+/g, " "))
+    .trim()
+    .replace(/[^A-Za-z0-9._:@/+~-]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  if (!sanitized) {
+    return undefined;
+  }
+  return sanitized.slice(0, MAX_COMPACTION_REASON_DETAIL_CHARS);
 }

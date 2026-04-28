@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { formatErrorMessage } from "../infra/errors.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isRecord } from "../utils.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
@@ -14,6 +15,18 @@ import {
   type ConfigWriteOptions,
 } from "./io.js";
 import { applyUnsetPathsForWrite, resolveManagedUnsetPathsForWrite } from "./io.write-prepare.js";
+import {
+  createRuntimeConfigWriteNotification,
+  finalizeRuntimeSnapshotWrite,
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshotRefreshHandler,
+  getRuntimeConfigSourceSnapshot,
+  notifyRuntimeConfigWriteListeners,
+  resolveConfigWriteAfterWrite,
+  resolveConfigWriteFollowUp,
+  type ConfigWriteAfterWrite,
+  type ConfigWriteFollowUp,
+} from "./runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
@@ -34,6 +47,13 @@ export type ConfigReplaceResult = {
   previousHash: string | null;
   snapshot: ConfigFileSnapshot;
   nextConfig: OpenClawConfig;
+  afterWrite: ConfigWriteAfterWrite;
+  followUp: ConfigWriteFollowUp;
+};
+
+type ConfigMutationIO = {
+  readConfigFileSnapshotForWrite: typeof readConfigFileSnapshotForWrite;
+  writeConfigFile: (cfg: OpenClawConfig, options?: ConfigWriteOptions) => Promise<unknown>;
 };
 
 function assertBaseHashMatches(snapshot: ConfigFileSnapshot, expectedHash?: string): string | null {
@@ -112,7 +132,9 @@ async function writeJsonFileAtomic(filePath: string, value: unknown): Promise<vo
 async function tryWriteSingleTopLevelIncludeMutation(params: {
   snapshot: ConfigFileSnapshot;
   nextConfig: OpenClawConfig;
+  afterWrite?: ConfigWriteOptions["afterWrite"];
   writeOptions?: ConfigWriteOptions;
+  io?: ConfigMutationIO;
 }): Promise<boolean> {
   const nextConfig = applyUnsetPathsForWrite(
     params.nextConfig,
@@ -138,7 +160,64 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
     );
   }
 
+  const runtimeConfigSnapshot = getRuntimeConfigSnapshot();
+  const runtimeConfigSourceSnapshot = getRuntimeConfigSourceSnapshot();
+  const hadRuntimeSnapshot = Boolean(runtimeConfigSnapshot);
+  const hadBothSnapshots = Boolean(runtimeConfigSnapshot && runtimeConfigSourceSnapshot);
   await writeJsonFileAtomic(includePath, nextConfigRecord[key]);
+  if (
+    params.writeOptions?.skipRuntimeSnapshotRefresh &&
+    !hadRuntimeSnapshot &&
+    !getRuntimeConfigSnapshotRefreshHandler()
+  ) {
+    return true;
+  }
+
+  const refreshed = await (
+    params.io?.readConfigFileSnapshotForWrite ?? readConfigFileSnapshotForWrite
+  )();
+  const refreshedSnapshot = refreshed.snapshot;
+  const persistedHash = resolveConfigSnapshotHash(refreshedSnapshot);
+  if (!refreshedSnapshot.valid) {
+    throw createInvalidConfigError(
+      params.snapshot.path,
+      formatInvalidConfigDetails(refreshedSnapshot.issues),
+    );
+  }
+  if (!persistedHash) {
+    throw new Error(
+      `Config was written to ${params.snapshot.path}, but no persisted hash was available.`,
+    );
+  }
+
+  const notifyCommittedWrite = () => {
+    const currentRuntimeConfig = getRuntimeConfigSnapshot();
+    if (!currentRuntimeConfig) {
+      return;
+    }
+    notifyRuntimeConfigWriteListeners(
+      createRuntimeConfigWriteNotification({
+        configPath: params.snapshot.path,
+        sourceConfig: refreshedSnapshot.sourceConfig,
+        runtimeConfig: currentRuntimeConfig,
+        persistedHash,
+        afterWrite: params.afterWrite ?? params.writeOptions?.afterWrite,
+      }),
+    );
+  };
+  await finalizeRuntimeSnapshotWrite({
+    nextSourceConfig: refreshedSnapshot.sourceConfig,
+    hadRuntimeSnapshot,
+    hadBothSnapshots,
+    loadFreshConfig: () => refreshedSnapshot.runtimeConfig,
+    notifyCommittedWrite,
+    formatRefreshError: (error) => formatErrorMessage(error),
+    createRefreshError: (detail, cause) =>
+      new Error(
+        `Config was written to ${params.snapshot.path}, but runtime snapshot refresh failed: ${detail}`,
+        { cause },
+      ),
+  });
   return true;
 }
 
@@ -146,24 +225,32 @@ export async function replaceConfigFile(params: {
   nextConfig: OpenClawConfig;
   baseHash?: string;
   snapshot?: ConfigFileSnapshot;
+  afterWrite?: ConfigWriteOptions["afterWrite"];
   writeOptions?: ConfigWriteOptions;
+  io?: ConfigMutationIO;
 }): Promise<ConfigReplaceResult> {
   const prepared =
     params.snapshot && params.writeOptions
       ? { snapshot: params.snapshot, writeOptions: params.writeOptions }
-      : await readConfigFileSnapshotForWrite();
+      : await (params.io?.readConfigFileSnapshotForWrite ?? readConfigFileSnapshotForWrite)();
   const { snapshot, writeOptions } = prepared;
   const previousHash = assertBaseHashMatches(snapshot, params.baseHash);
+  const afterWrite = resolveConfigWriteAfterWrite(
+    params.afterWrite ?? params.writeOptions?.afterWrite,
+  );
   const wroteInclude = await tryWriteSingleTopLevelIncludeMutation({
     snapshot,
     nextConfig: params.nextConfig,
+    afterWrite,
     writeOptions: params.writeOptions ?? writeOptions,
+    io: params.io,
   });
   if (!wroteInclude) {
-    await writeConfigFile(params.nextConfig, {
+    await (params.io?.writeConfigFile ?? writeConfigFile)(params.nextConfig, {
       baseSnapshot: snapshot,
       ...writeOptions,
       ...params.writeOptions,
+      afterWrite,
     });
   }
   return {
@@ -171,35 +258,47 @@ export async function replaceConfigFile(params: {
     previousHash,
     snapshot,
     nextConfig: params.nextConfig,
+    afterWrite,
+    followUp: resolveConfigWriteFollowUp(afterWrite),
   };
 }
 
 export async function mutateConfigFile<T = void>(params: {
   base?: ConfigMutationBase;
   baseHash?: string;
+  afterWrite?: ConfigWriteOptions["afterWrite"];
   writeOptions?: ConfigWriteOptions;
+  io?: ConfigMutationIO;
   mutate: (
     draft: OpenClawConfig,
     context: { snapshot: ConfigFileSnapshot; previousHash: string | null },
   ) => Promise<T | void> | T | void;
 }): Promise<ConfigReplaceResult & { result: T | undefined }> {
-  const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
+  const { snapshot, writeOptions } = await (
+    params.io?.readConfigFileSnapshotForWrite ?? readConfigFileSnapshotForWrite
+  )();
   const previousHash = assertBaseHashMatches(snapshot, params.baseHash);
   const baseConfig = params.base === "runtime" ? snapshot.runtimeConfig : snapshot.sourceConfig;
   const draft = structuredClone(baseConfig) as OpenClawConfig;
   const result = (await params.mutate(draft, { snapshot, previousHash })) as T | undefined;
+  const afterWrite = resolveConfigWriteAfterWrite(
+    params.afterWrite ?? params.writeOptions?.afterWrite,
+  );
   const wroteInclude = await tryWriteSingleTopLevelIncludeMutation({
     snapshot,
     nextConfig: draft,
+    afterWrite,
     writeOptions: {
       ...writeOptions,
       ...params.writeOptions,
     },
+    io: params.io,
   });
   if (!wroteInclude) {
-    await writeConfigFile(draft, {
+    await (params.io?.writeConfigFile ?? writeConfigFile)(draft, {
       ...writeOptions,
       ...params.writeOptions,
+      afterWrite,
     });
   }
   return {
@@ -208,5 +307,7 @@ export async function mutateConfigFile<T = void>(params: {
     snapshot,
     nextConfig: draft,
     result,
+    afterWrite,
+    followUp: resolveConfigWriteFollowUp(afterWrite),
   };
 }

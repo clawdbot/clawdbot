@@ -147,7 +147,6 @@ const providerRuntimeMocks = vi.hoisted(() => ({
     refreshProviderOAuthCredentialWithPlugin: vi.fn(async () => undefined),
     resetProviderRuntimeHookCacheForTest: vi.fn(() => {}),
     resolveProviderBinaryThinking: vi.fn(() => undefined),
-    resolveProviderBuiltInModelSuppression: vi.fn(() => undefined),
     resolveProviderCacheTtlEligibility: vi.fn(() => undefined),
     resolveProviderCapabilitiesWithPlugin: vi.fn(() => undefined),
     resolveProviderDefaultThinkingLevel: vi.fn(() => undefined),

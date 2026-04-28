@@ -46,7 +46,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      ref_sha: ${{ steps.ref.outputs.sha }}
+      ref_revision: ${{ steps.ref.outputs.sha }}
       has_candidates: ${{ steps.plan.outputs.has_candidates }}
       candidate_count: ${{ steps.plan.outputs.candidate_count }}
       matrix: ${{ steps.plan.outputs.matrix }}
@@ -54,6 +54,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
           fetch-depth: 0
 
@@ -151,7 +152,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.preview_plugins_npm.outputs.ref_sha }}
+          persist-credentials: false
+          ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
           fetch-depth: 1
 
       - name: Setup Node environment
@@ -185,7 +187,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.preview_plugins_npm.outputs.ref_sha }}
+          persist-credentials: false
+          ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
           fetch-depth: 1
 
       - name: Setup Node environment

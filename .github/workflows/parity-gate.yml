@@ -57,9 +57,11 @@ jobs:
     steps:
       - name: Checkout PR
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
 
       - name: Setup Node
         uses: actions/setup-node@v6

@@ -7,7 +7,11 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { writeBuildStamp } from "./build-stamp.mjs";
+import {
+  BUILD_STAMP_FILE,
+  writeBuildStamp,
+  writeRuntimePostBuildStamp,
+} from "./lib/local-build-metadata.mjs";
 import { resolveBuildRequirement } from "./run-node.mjs";
 
 const DEFAULTS = {
@@ -352,10 +356,14 @@ function readProcessTreeCpuMs(rootPid) {
   return totalCpuMs;
 }
 
+export function hasGatewayReadyLog(text) {
+  return /\[gateway\] (?:http server listening|ready \()/.test(text);
+}
+
 async function waitForGatewayReady(readText, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (/\[gateway\] ready \(/.test(readText())) {
+    if (hasGatewayReadyLog(readText())) {
       return true;
     }
     await sleep(100);
@@ -590,7 +598,7 @@ function buildRunNodeDeps(env) {
     spawnSync,
     distRoot: path.join(cwd, "dist"),
     distEntry: path.join(cwd, "dist", "/entry.js"),
-    buildStampPath: path.join(cwd, "dist", ".buildstamp"),
+    buildStampPath: path.join(cwd, "dist", BUILD_STAMP_FILE),
     sourceRoots: ["src", "extensions"].map((sourceRoot) => ({
       name: sourceRoot,
       path: path.join(cwd, sourceRoot),
@@ -609,19 +617,25 @@ export function shouldRefreshBuildStampForRestoredArtifacts(params) {
   );
 }
 
+export function writeBuildAndRuntimePostBuildStamps(params = {}) {
+  const cwd = params.cwd ?? process.cwd();
+  writeBuildStamp({ cwd });
+  writeRuntimePostBuildStamp({ cwd });
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   ensureDir(options.outputDir);
   if (!options.skipBuild) {
     runCheckedCommand("node", ["scripts/build-all.mjs", "gatewayWatch"]);
     // The watch harness must start from a completed dist/runtime baseline.
-    // Refresh the build stamp after the gateway build finishes so run-node
-    // does not spuriously rebuild inside the bounded watch window.
-    writeBuildStamp({ cwd: process.cwd() });
+    // Refresh both stamps after the gateway build finishes so run-node does not
+    // leave stale local artifact metadata after the bounded watch window.
+    writeBuildAndRuntimePostBuildStamps();
   } else {
     // Restored CI artifacts can be older than the fresh checkout mtimes.
-    // Refresh only the stamp so run-node trusts the already-built dist.
-    writeBuildStamp({ cwd: process.cwd() });
+    // Refresh the local artifact stamps so run-node trusts the already-built dist.
+    writeBuildAndRuntimePostBuildStamps();
   }
 
   let preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps(process.env));
@@ -632,9 +646,9 @@ async function main() {
     })
   ) {
     // CI's skip-build path restores a built dist artifact after checkout.
-    // Refresh the stamp so checkout mtimes for package/config files do not
+    // Refresh the stamps so checkout mtimes for package/config files do not
     // force a duplicate build during the bounded gateway:watch window.
-    writeBuildStamp({ cwd: process.cwd() });
+    writeBuildAndRuntimePostBuildStamps();
     preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps(process.env));
   }
   if (

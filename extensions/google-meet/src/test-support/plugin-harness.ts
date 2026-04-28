@@ -1,6 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { vi } from "vitest";
-import { createTestPluginApi } from "../../../../test/helpers/plugins/plugin-api.ts";
 
 type GoogleMeetTestPluginEntry = {
   register(api: OpenClawPluginApi): void;

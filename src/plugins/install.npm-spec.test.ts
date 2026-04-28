@@ -6,7 +6,6 @@ import {
   expectIntegrityDriftRejected,
   mockNpmPackMetadataResult,
 } from "../test-utils/npm-spec-install-test-helpers.js";
-import { installPluginFromNpmSpec, PLUGIN_INSTALL_ERROR_CODE } from "./install.js";
 import { packToArchive } from "./test-helpers/archive-fixtures.js";
 import { createSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
 
@@ -15,6 +14,10 @@ const runCommandWithTimeoutMock = vi.fn();
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
+
+vi.resetModules();
+
+const { installPluginFromNpmSpec, PLUGIN_INSTALL_ERROR_CODE } = await import("./install.js");
 
 const dynamicArchiveTemplatePathCache = new Map<string, string>();
 const suiteTempRootTracker = createSuiteTempRootTracker("openclaw-plugin-install-npm-spec");

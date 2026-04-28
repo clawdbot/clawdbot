@@ -16,7 +16,7 @@ private final class NameserverQueryLog: @unchecked Sendable {
     func count(matching nameserver: String) -> Int {
         self.lock.lock()
         defer { self.lock.unlock() }
-        return self.nameservers.filter { $0 == nameserver }.count
+        return self.nameservers.count(where: { $0 == nameserver })
     }
 }
 

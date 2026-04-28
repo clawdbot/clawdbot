@@ -622,6 +622,50 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.originatingThreadId).toBe("1706000000.000001");
   });
 
+  it("collects messages when numeric and string thread ids share the route key", async () => {
+    const key = `test-collect-thread-normalized-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "one",
+        originatingChannel: "telegram",
+        originatingTo: "-100123",
+        originatingThreadId: 42.9,
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "two",
+        originatingChannel: "telegram",
+        originatingTo: "-100123",
+        originatingThreadId: "42",
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+    expect(calls[0]?.prompt).toContain("one");
+    expect(calls[0]?.prompt).toContain("two");
+  });
+
   it("does not collect Slack messages when thread ids differ", async () => {
     const key = `test-collect-slack-thread-diff-${Date.now()}`;
     const calls: FollowupRun[] = [];

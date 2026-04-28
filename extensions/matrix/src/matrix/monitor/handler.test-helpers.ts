@@ -35,6 +35,7 @@ type MatrixHandlerTestHarnessOptions = {
   dmThreadReplies?: "off" | "inbound" | "always";
   dmSessionScope?: "per-user" | "per-room";
   streaming?: MatrixStreamingMode;
+  previewToolProgressEnabled?: boolean;
   blockStreamingEnabled?: boolean;
   dmEnabled?: boolean;
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
@@ -128,7 +129,7 @@ export function createMatrixHandlerTestHarness(
     } as never,
     core: {
       config: {
-        loadConfig: () => cfgForHandler,
+        current: () => cfgForHandler,
       },
       channel: {
         pairing: {
@@ -228,6 +229,7 @@ export function createMatrixHandlerTestHarness(
     dmThreadReplies: options.dmThreadReplies,
     dmSessionScope: options.dmSessionScope,
     streaming: options.streaming ?? "off",
+    previewToolProgressEnabled: options.previewToolProgressEnabled ?? false,
     blockStreamingEnabled: options.blockStreamingEnabled ?? false,
     dmEnabled: options.dmEnabled ?? true,
     dmPolicy: options.dmPolicy ?? "open",

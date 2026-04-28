@@ -4,10 +4,11 @@ import { packageNameMatchesId } from "../infra/install-safe-path.js";
 import { type NpmIntegrityDrift, type NpmSpecResolution } from "../infra/install-source-utils.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { CONFIG_DIR, resolveUserPath } from "../utils.js";
+import { resolveUserPath } from "../utils.js";
 import {
   encodePluginInstallDirName,
   matchesExpectedPluginId,
+  resolveDefaultPluginExtensionsDir,
   safePluginInstallFileName,
   validatePluginId,
 } from "./install-paths.js";
@@ -389,7 +390,7 @@ async function resolvePluginInstallTarget(params: {
 }): Promise<{ ok: true; targetDir: string } | { ok: false; error: string }> {
   const extensionsDir = params.extensionsDir
     ? resolveUserPath(params.extensionsDir)
-    : path.join(CONFIG_DIR, "extensions");
+    : resolveDefaultPluginExtensionsDir();
   return await params.runtime.resolveCanonicalInstallTarget({
     baseDir: extensionsDir,
     id: params.pluginId,
@@ -874,7 +875,7 @@ export async function installPluginFromFile(params: {
 
   const extensionsDir = params.extensionsDir
     ? resolveUserPath(params.extensionsDir)
-    : path.join(CONFIG_DIR, "extensions");
+    : resolveDefaultPluginExtensionsDir();
   await fs.mkdir(extensionsDir, { recursive: true });
 
   const base = path.basename(filePath, path.extname(filePath));

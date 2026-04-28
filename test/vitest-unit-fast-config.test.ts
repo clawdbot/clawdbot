@@ -23,9 +23,39 @@ describe("unit-fast vitest lane", () => {
     expect(config.test?.include).toContain(
       "src/agents/pi-tools.deferred-followup-guidance.test.ts",
     );
+    expect(config.test?.include).toContain("src/acp/control-plane/runtime-cache.test.ts");
+    expect(config.test?.include).toContain("src/acp/runtime/registry.test.ts");
     expect(config.test?.include).toContain("src/commands/status-overview-values.test.ts");
+    expect(config.test?.include).toContain("src/entry.respawn.test.ts");
+    expect(config.test?.include).toContain("src/entry.version-fast-path.test.ts");
+    expect(config.test?.include).toContain("src/flows/doctor-startup-channel-maintenance.test.ts");
+    expect(config.test?.include).toContain("src/crestodian/rescue-policy.test.ts");
+    expect(config.test?.include).toContain("src/crestodian/assistant.configured.test.ts");
+    expect(config.test?.include).toContain("src/flows/search-setup.test.ts");
+    expect(config.test?.include).toContain("src/memory-host-sdk/host/mirror.test.ts");
     expect(config.test?.include).toContain("src/plugins/config-policy.test.ts");
+    expect(config.test?.include).toContain("src/proxy-capture/proxy-server.test.ts");
+    expect(config.test?.include).toContain("src/realtime-voice/agent-consult-tool.test.ts");
+    expect(config.test?.include).toContain("src/sessions/session-lifecycle-events.test.ts");
+    expect(config.test?.include).toContain("src/sessions/transcript-events.test.ts");
+    expect(config.test?.include).toContain(
+      "src/security/audit-channel-source-config-slack.test.ts",
+    );
+    expect(config.test?.include).toContain("src/security/audit-config-symlink.test.ts");
+    expect(config.test?.include).toContain("src/security/audit-exec-sandbox-host.test.ts");
+    expect(config.test?.include).toContain("src/security/audit-gateway.test.ts");
+    expect(config.test?.include).toContain("src/security/audit-gateway-auth-selection.test.ts");
+    expect(config.test?.include).toContain("src/security/audit-gateway-http-auth.test.ts");
+    expect(config.test?.include).toContain("src/security/audit-gateway-tools-http.test.ts");
+    expect(config.test?.include).toContain("src/security/audit-plugin-readonly-scope.test.ts");
+    expect(config.test?.include).toContain("src/security/audit-loopback-logging.test.ts");
+    expect(config.test?.include).toContain("src/security/audit-sandbox-browser.test.ts");
+    expect(config.test?.include).toContain("src/ui-app-settings.agents-files-refresh.test.ts");
+    expect(config.test?.include).toContain("src/video-generation/provider-registry.test.ts");
     expect(config.test?.include).toContain("src/plugin-sdk/provider-entry.test.ts");
+    expect(config.test?.include).toContain("src/security/dangerous-config-flags.test.ts");
+    expect(config.test?.include).toContain("src/security/context-visibility.test.ts");
+    expect(config.test?.include).toContain("src/security/safe-regex.test.ts");
   });
 
   it("does not treat moved config paths as CLI include filters", () => {
@@ -43,6 +73,9 @@ describe("unit-fast vitest lane", () => {
   it("keeps obvious stateful files out of the unit-fast lane", () => {
     expect(isUnitFastTestFile("src/plugin-sdk/temp-path.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/agents/sandbox.resolveSandboxContext.test.ts")).toBe(false);
+    expect(isUnitFastTestFile("src/crestodian/assistant.test.ts")).toBe(false);
+    expect(isUnitFastTestFile("src/proxy-capture/coverage.test.ts")).toBe(false);
+    expect(isUnitFastTestFile("src/secrets/runtime.test.ts")).toBe(false);
     expect(resolveUnitFastTestIncludePattern("src/plugin-sdk/temp-path.ts")).toBeNull();
     expect(classifyUnitFastTestFileContent("vi.resetModules(); await import('./x.js')")).toEqual([
       "module-mocking",

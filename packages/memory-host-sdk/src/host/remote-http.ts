@@ -1,40 +1,34 @@
-import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../../../../src/infra/net/fetch-guard.js";
-import { shouldUseEnvHttpProxyForUrl } from "../../../../src/infra/net/proxy-env.js";
-import type { SsrFPolicy } from "../../../../src/infra/net/ssrf.js";
+import {
+  fetchWithSsrFGuard,
+  shouldUseEnvHttpProxyForUrl,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "./openclaw-runtime-network.js";
+import type { SsrFPolicy } from "./ssrf-policy.js";
 
-export function buildRemoteBaseUrlPolicy(baseUrl: string): SsrFPolicy | undefined {
-  const trimmed = baseUrl.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    // Keep policy tied to the configured host so private operator endpoints
-    // continue to work, while cross-host redirects stay blocked.
-    return { allowedHostnames: [parsed.hostname] };
-  } catch {
-    return undefined;
-  }
-}
+export const MEMORY_REMOTE_TRUSTED_ENV_PROXY_MODE = "trusted_env_proxy";
+
+export const buildRemoteBaseUrlPolicy: (baseUrl: string) => SsrFPolicy | undefined =
+  ssrfPolicyFromHttpBaseUrlAllowedHostname;
 
 export async function withRemoteHttpResponse<T>(params: {
   url: string;
   init?: RequestInit;
   ssrfPolicy?: SsrFPolicy;
+  fetchImpl?: typeof fetch;
+  fetchWithSsrFGuardImpl?: typeof fetchWithSsrFGuard;
+  shouldUseEnvHttpProxyForUrlImpl?: typeof shouldUseEnvHttpProxyForUrl;
   auditContext?: string;
   onResponse: (response: Response) => Promise<T>;
 }): Promise<T> {
-  const { response, release } = await fetchWithSsrFGuard({
+  const guardedFetch = params.fetchWithSsrFGuardImpl ?? fetchWithSsrFGuard;
+  const shouldUseEnvProxy = params.shouldUseEnvHttpProxyForUrlImpl ?? shouldUseEnvHttpProxyForUrl;
+  const { response, release } = await guardedFetch({
     url: params.url,
+    fetchImpl: params.fetchImpl,
     init: params.init,
     policy: params.ssrfPolicy,
     auditContext: params.auditContext ?? "memory-remote",
-    ...(shouldUseEnvHttpProxyForUrl(params.url)
-      ? { mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY }
-      : {}),
+    ...(shouldUseEnvProxy(params.url) ? { mode: MEMORY_REMOTE_TRUSTED_ENV_PROXY_MODE } : {}),
   });
   try {
     return await params.onResponse(response);

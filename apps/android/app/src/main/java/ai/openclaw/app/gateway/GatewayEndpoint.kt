@@ -13,7 +13,10 @@ data class GatewayEndpoint(
   val tlsFingerprintSha256: String? = null,
 ) {
   companion object {
-    fun manual(host: String, port: Int): GatewayEndpoint =
+    fun manual(
+      host: String,
+      port: Int,
+    ): GatewayEndpoint =
       GatewayEndpoint(
         stableId = "manual|${host.lowercase()}|$port",
         name = "$host:$port",

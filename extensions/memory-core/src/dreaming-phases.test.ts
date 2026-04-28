@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { RequestScopedSubagentRuntimeError } from "openclaw/plugin-sdk/error-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core";
-import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core";
+import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   resolveMemoryCorePluginConfig,
   resolveMemoryLightDreamingConfig,
@@ -118,7 +118,7 @@ function createHarness(
 }
 
 function createMockNarrativeSubagent(response = "The archive hummed softly.") {
-  const run = vi.fn(async (_params: { sessionKey: string; message: string }) => ({
+  const run = vi.fn(async (_params: { sessionKey: string; message: string; model?: string }) => ({
     runId: "dream-run-1",
   }));
   const waitForRun = vi.fn(async () => ({ status: "ok" }));
@@ -249,12 +249,11 @@ describe("memory-core dreaming phases", () => {
       nowMs,
     });
 
-    expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
-    expect(subagent.deleteSession).toHaveBeenNthCalledWith(1, { sessionKey: expectedSessionKey });
-    expect(subagent.deleteSession).toHaveBeenNthCalledWith(2, { sessionKey: expectedSessionKey });
+    expect(subagent.deleteSession).toHaveBeenCalledOnce();
+    expect(subagent.deleteSession).toHaveBeenCalledWith({ sessionKey: expectedSessionKey });
   });
 
-  it("swallows synchronous request-scoped cleanup failures after narrative fallback", async () => {
+  it("skips session cleanup after request-scoped narrative fallback", async () => {
     const workspaceDir = await createDreamingWorkspace();
     await writeDailyNote(workspaceDir, [
       `# ${DREAMING_TEST_DAY}`,
@@ -320,6 +319,12 @@ describe("memory-core dreaming phases", () => {
     const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(dreams).toContain("Move backups to S3 Glacier.");
     expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("narrative session cleanup failed"),
+    );
+    expect(subagent.deleteSession).not.toHaveBeenCalled();
   });
 
   it("does not re-ingest managed light dreaming blocks from daily notes", async () => {
@@ -2316,7 +2321,33 @@ describe("memory-core dreaming phases", () => {
   it("passes staged light-dreaming snippets into the narrative pipeline", async () => {
     const workspaceDir = await createDreamingWorkspace();
     const subagent = createMockNarrativeSubagent("The backup plan glowed like cold storage.");
-    const { beforeAgentReply } = createHarness(LIGHT_DREAMING_TEST_CONFIG, workspaceDir, subagent);
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  timezone: "UTC",
+                  model: "anthropic/claude-sonnet-4-6",
+                  storage: { mode: "inline", separateReports: false },
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 2,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+      subagent,
+    );
 
     await withDreamingTestClock(async () => {
       await writeDailyNote(workspaceDir, [
@@ -2333,6 +2364,7 @@ describe("memory-core dreaming phases", () => {
     const firstRun = subagent.run.mock.calls[0]?.[0];
     expect(firstRun?.message).toContain("Move backups to S3 Glacier.");
     expect(firstRun?.message).toContain("Keep retention at 365 days.");
+    expect(firstRun?.model).toBe("anthropic/claude-sonnet-4-6");
     await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
       "The backup plan glowed like cold storage.",
     );
@@ -2349,12 +2381,20 @@ describe("memory-core dreaming phases", () => {
               config: {
                 dreaming: {
                   enabled: true,
+                  execution: {
+                    defaults: {
+                      model: "openai/gpt-5.4",
+                    },
+                  },
                   phases: {
                     rem: {
                       enabled: true,
                       limit: 10,
                       lookbackDays: 7,
                       minPatternStrength: 0,
+                      execution: {
+                        model: "xai/grok-4.1-fast",
+                      },
                     },
                   },
                 },
@@ -2387,6 +2427,7 @@ describe("memory-core dreaming phases", () => {
     const firstRun = subagent.run.mock.calls[0]?.[0];
     expect(firstRun?.message).toContain("Move backups to S3 Glacier.");
     expect(firstRun?.message).toContain("Keep retention at 365 days.");
+    expect(firstRun?.model).toBe("xai/grok-4.1-fast");
     await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
       "The traces braided themselves into a map.",
     );

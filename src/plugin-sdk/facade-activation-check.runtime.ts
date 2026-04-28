@@ -19,6 +19,7 @@ import {
   loadPluginManifestRegistry,
   type PluginManifestRecord,
 } from "../plugins/manifest-registry.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { resolveRegistryPluginModuleLocationFromRecords } from "./facade-resolution-shared.js";
 
 const ALWAYS_ALLOWED_RUNTIME_DIR_NAMES = new Set([
@@ -195,7 +196,7 @@ function readBundledPluginManifestRecordFromDir(params: {
     return null;
   }
   try {
-    const raw = JSON5.parse(fs.readFileSync(manifestPath, "utf8")) as {
+    const raw = parseJsonWithJson5Fallback(fs.readFileSync(manifestPath, "utf8")) as {
       id?: unknown;
       enabledByDefault?: unknown;
       channels?: unknown;
