@@ -145,13 +145,18 @@ export const googlechatThreadingAdapter = {
     hasRepliedRef?: { value: boolean };
   }): ChannelThreadingToolContext => {
     const currentChannelId = normalizeGoogleChatTarget(context.To);
-    const replyToId =
-      normalizeOptionalString(context.ReplyToIdFull) ?? normalizeOptionalString(context.ReplyToId);
+    const threadCandidate = context.MessageThreadId;
+    const currentThreadTs =
+      typeof threadCandidate === "string"
+        ? normalizeOptionalString(threadCandidate)
+        : typeof threadCandidate === "number"
+          ? String(threadCandidate)
+          : undefined;
 
     return {
       currentChannelId,
-      currentMessageId: replyToId,
-      currentThreadTs: replyToId,
+      currentMessageId: currentThreadTs,
+      currentThreadTs,
       replyToMode: resolveGoogleChatAccount({ cfg, accountId }).config.replyToMode,
       hasRepliedRef,
     };

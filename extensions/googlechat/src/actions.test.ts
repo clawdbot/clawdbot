@@ -247,6 +247,71 @@ describe("googlechat message actions", () => {
     });
   });
 
+  it("falls back to the inbound thread id when the agent omits threadId/replyTo", async () => {
+    resolveGoogleChatAccount.mockReturnValue({
+      credentialSource: "service-account",
+      config: {},
+    });
+    resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/AAA");
+    sendGoogleChatMessage.mockResolvedValue({
+      messageName: "spaces/AAA/messages/msg-3",
+    });
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await googlechatMessageActions.handleAction({
+      action: "send",
+      params: {
+        to: "spaces/AAA",
+        message: "follow up",
+      },
+      cfg: {},
+      accountId: "default",
+      toolContext: { currentThreadTs: "spaces/AAA/threads/xyz" },
+    } as never);
+
+    expect(sendGoogleChatMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        space: "spaces/AAA",
+        text: "follow up",
+        thread: "spaces/AAA/threads/xyz",
+      }),
+    );
+  });
+
+  it("prefers an explicit threadId over the inbound thread id", async () => {
+    resolveGoogleChatAccount.mockReturnValue({
+      credentialSource: "service-account",
+      config: {},
+    });
+    resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/AAA");
+    sendGoogleChatMessage.mockResolvedValue({
+      messageName: "spaces/AAA/messages/msg-4",
+    });
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await googlechatMessageActions.handleAction({
+      action: "send",
+      params: {
+        to: "spaces/AAA",
+        message: "explicit",
+        threadId: "spaces/AAA/threads/explicit",
+      },
+      cfg: {},
+      accountId: "default",
+      toolContext: { currentThreadTs: "spaces/AAA/threads/inbound" },
+    } as never);
+
+    expect(sendGoogleChatMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        thread: "spaces/AAA/threads/explicit",
+      }),
+    );
+  });
+
   it("removes only matching app reactions on react remove", async () => {
     const account = buildAccount({
       config: { botUser: "users/app-bot" },

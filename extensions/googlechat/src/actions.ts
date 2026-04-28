@@ -100,6 +100,7 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
     mediaAccess,
     mediaLocalRoots,
     mediaReadFile,
+    toolContext,
   }) => {
     const account = resolveGoogleChatAccount({
       cfg,
@@ -124,7 +125,12 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
         readStringParam(params, "media", { trim: false }) ??
         readStringParam(params, "filePath", { trim: false }) ??
         readStringParam(params, "path", { trim: false });
-      const threadId = readStringParam(params, "threadId") ?? readStringParam(params, "replyTo");
+      const inboundThreadId =
+        typeof toolContext?.currentThreadTs === "string" ? toolContext.currentThreadTs : undefined;
+      const threadId =
+        readStringParam(params, "threadId") ??
+        readStringParam(params, "replyTo") ??
+        inboundThreadId;
       const space = await resolveGoogleChatOutboundSpace({ account, target: to });
 
       if (mediaUrl) {

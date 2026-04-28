@@ -457,7 +457,7 @@ describe("googlechatPlugin threading", () => {
       context: {
         To: "googlechat:spaces/AAA",
         CurrentMessageId: "spaces/AAA/messages/msg-1",
-        ReplyToId: "spaces/AAA/threads/thread-1",
+        MessageThreadId: "spaces/AAA/threads/thread-1",
       },
       hasRepliedRef,
     });
@@ -495,6 +495,15 @@ describe("googlechatPlugin threading", () => {
     });
     expect(context.currentMessageId).toBeUndefined();
     expect(context.currentThreadTs).toBeUndefined();
+  });
+
+  it("coerces numeric MessageThreadId values to strings", () => {
+    const cfg = createGoogleChatCfg();
+    const result = googlechatThreadingAdapter.buildToolContext({
+      cfg,
+      context: { MessageThreadId: 12345 },
+    });
+    expect(result.currentThreadTs).toBe("12345");
   });
 });
 
