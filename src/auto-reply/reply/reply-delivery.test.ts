@@ -224,6 +224,38 @@ describe("createBlockReplyDeliveryHandler", () => {
     });
   });
 
+  it("uses an alternate implicit reply target for block-streamed replies", async () => {
+    const blockReplyPipeline = {
+      enqueue: vi.fn(),
+    } as unknown as BlockReplyPipelineLike;
+
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply: vi.fn(async () => {}),
+      currentMessageId: "spaces/AAA/messages/123",
+      implicitReplyToId: "spaces/AAA/threads/xyz",
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: true,
+      blockReplyPipeline,
+      directlySentBlockKeys: new Set(),
+    });
+
+    await handler({ text: "threaded stream" });
+
+    expect(blockReplyPipeline.enqueue).toHaveBeenCalledWith({
+      text: "threaded stream",
+      mediaUrl: undefined,
+      replyToId: "spaces/AAA/threads/xyz",
+      replyToCurrent: undefined,
+      replyToTag: undefined,
+      audioAsVoice: false,
+      mediaUrls: undefined,
+    });
+  });
+
   it("suppresses implicit current-message threading for block replies when reply threading denies it", async () => {
     const blockReplyPipeline = {
       enqueue: vi.fn(),

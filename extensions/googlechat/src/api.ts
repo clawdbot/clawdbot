@@ -160,6 +160,9 @@ export async function sendGoogleChatMessage(params: {
     body.cardsV2 = cardsV2;
   }
   if (thread) {
+    if (!/^spaces\/[^/]+\/threads\/[^/]+$/.test(thread)) {
+      throw new Error(`Google Chat thread must be a thread resource name, got ${thread}`);
+    }
     body.thread = { name: thread };
   }
   if (attachments && attachments.length > 0) {

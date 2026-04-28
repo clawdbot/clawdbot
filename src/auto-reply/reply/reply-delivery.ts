@@ -91,6 +91,7 @@ async function sendDirectBlockReply(params: {
 export function createBlockReplyDeliveryHandler(params: {
   onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   currentMessageId?: string;
+  implicitReplyToId?: string;
   replyThreading?: ReplyThreadingPolicy;
   normalizeStreamingText: (payload: ReplyPayload) => { text?: string; skip: boolean };
   applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
@@ -122,9 +123,12 @@ export function createBlockReplyDeliveryHandler(params: {
         mediaUrl: payload.mediaUrl ?? payload.mediaUrls?.[0],
         replyToId:
           payload.replyToId ??
-          (implicitCurrentMessageAllowed ? params.currentMessageId : undefined),
+          (implicitCurrentMessageAllowed
+            ? (params.implicitReplyToId ?? params.currentMessageId)
+            : undefined),
       },
       params.currentMessageId,
+      params.implicitReplyToId,
     );
 
     // Let through payloads with audioAsVoice flag even if empty (need to track it).

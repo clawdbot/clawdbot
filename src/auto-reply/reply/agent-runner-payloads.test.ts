@@ -898,6 +898,19 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("uses an alternate implicit reply target for final payload threading", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "hello" }],
+      replyToMode: "first",
+      currentMessageId: "spaces/AAA/messages/123",
+      implicitReplyToId: "spaces/AAA/threads/xyz",
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0].replyToId).toBe("spaces/AAA/threads/xyz");
+  });
+
   it("preserves unsent text-only final payloads after block pipeline streamed partial content", async () => {
     const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
       didStream: () => true,

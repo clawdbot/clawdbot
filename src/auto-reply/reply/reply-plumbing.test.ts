@@ -278,6 +278,21 @@ describe("applyReplyThreading auto-threading", () => {
     expect(result[1].replyToId).toBeUndefined();
   });
 
+  it("uses a supplied implicit reply target only for auto-threading", () => {
+    const result = applyReplyThreading({
+      payloads: [{ text: "Hello" }, { text: "[[reply_to_current]]Explicit" }],
+      replyToMode: "all",
+      currentMessageId: "spaces/AAA/messages/123",
+      implicitReplyToId: "spaces/AAA/threads/xyz",
+    });
+
+    expect(result).toHaveLength(2);
+    expect(result[0].replyToId).toBe("spaces/AAA/threads/xyz");
+    expect(result[0].replyToTag).toBeUndefined();
+    expect(result[1].replyToId).toBe("spaces/AAA/messages/123");
+    expect(result[1].replyToTag).toBe(true);
+  });
+
   it("threads only first payload when mode is 'batched' and the turn is batched", () => {
     const result = applyReplyThreading({
       payloads: [{ text: "A" }, { text: "B" }],

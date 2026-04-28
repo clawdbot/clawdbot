@@ -84,8 +84,9 @@ function resolveReplyThreadingForPayload(params: {
 export function applyReplyTagsToPayload(
   payload: ReplyPayload,
   currentMessageId?: string,
+  implicitReplyToId?: string,
 ): ReplyPayload {
-  return resolveReplyThreadingForPayload({ payload, currentMessageId });
+  return resolveReplyThreadingForPayload({ payload, currentMessageId, implicitReplyToId });
 }
 
 /** True when a payload has visible or playable content for delivery. */
@@ -104,11 +105,19 @@ export function applyReplyThreading(params: {
   replyToMode: ReplyToMode;
   replyToChannel?: OriginatingChannelType;
   currentMessageId?: string;
+  implicitReplyToId?: string;
   replyThreading?: ReplyThreadingPolicy;
 }): ReplyPayload[] {
-  const { payloads, replyToMode, replyToChannel, currentMessageId, replyThreading } = params;
+  const {
+    payloads,
+    replyToMode,
+    replyToChannel,
+    currentMessageId,
+    implicitReplyToId: requestedImplicitReplyToId,
+    replyThreading,
+  } = params;
   const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
-  const implicitReplyToId = normalizeOptionalString(currentMessageId);
+  const implicitReplyToId = normalizeOptionalString(requestedImplicitReplyToId ?? currentMessageId);
   return payloads
     .map((payload) =>
       resolveReplyThreadingForPayload({

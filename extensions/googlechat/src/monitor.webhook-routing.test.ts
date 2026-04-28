@@ -256,3 +256,119 @@ describe("Google Chat webhook routing", () => {
     }
   });
 });
+
+vi.mock("./api.js", () => ({
+  sendGoogleChatMessage: vi.fn().mockResolvedValue({ messageName: "spaces/AAA/messages/typing" }),
+  downloadGoogleChatMedia: vi.fn(),
+}));
+
+describe("Google Chat monitor inbound context", () => {
+  afterEach(() => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  });
+
+  it("preserves the Google Chat thread resource separately from the message id", async () => {
+    vi.mocked(verifyGoogleChatRequest).mockResolvedValue({ ok: true });
+    await import("./monitor.js");
+
+    const finalizeInboundContext = vi.fn((ctx) => ctx);
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async () => {});
+    const core = {
+      logging: { shouldLogVerbose: () => false },
+      channel: {
+        commands: {
+          shouldComputeCommandAuthorized: () => false,
+          resolveCommandAuthorizedFromAuthorizers: () => false,
+          shouldHandleTextCommands: () => false,
+          isControlCommandMessage: () => false,
+        },
+        text: { hasControlCommand: () => false },
+        routing: {
+          resolveAgentRoute: () => ({
+            agentId: "finn",
+            accountId: "default",
+            sessionKey: "agent:finn:googlechat:group:spaces/AAA",
+          }),
+        },
+        session: {
+          resolveStorePath: () => "/tmp/openclaw-test-store",
+          readSessionUpdatedAt: () => undefined,
+          recordSessionMetaFromInbound: vi.fn(async () => {}),
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: () => ({}),
+          formatAgentEnvelope: ({ body }: { body: string }) => body,
+          finalizeInboundContext,
+          dispatchReplyWithBufferedBlockDispatcher,
+        },
+        media: {
+          saveMediaBuffer: vi.fn(),
+        },
+      },
+    } as unknown as PluginRuntime;
+
+    const unregister = registerGoogleChatWebhookTarget({
+      account: {
+        accountId: "default",
+        enabled: true,
+        credentialSource: "none",
+        config: {
+          allowBots: true,
+          typingIndicator: "none",
+          groups: {
+            "spaces/AAA": { users: ["users/alice"], requireMention: false },
+          },
+        },
+      } as ResolvedGoogleChatAccount,
+      config: {
+        agents: { list: [{ id: "finn", name: "Cosmo" }] },
+        channels: { googlechat: {} },
+      } as OpenClawConfig,
+      runtime: {},
+      core,
+      path: "/googlechat-context",
+      mediaMaxMb: 5,
+    });
+
+    try {
+      const res = await dispatchWebhookRequest(
+        createWebhookRequest({
+          authorization: "Bearer test-token",
+          path: "/googlechat-context",
+          payload: {
+            type: "MESSAGE",
+            eventTime: "2026-04-28T00:00:00.000Z",
+            space: { name: "spaces/AAA", displayName: "Team Room", type: "ROOM" },
+            message: {
+              name: "spaces/AAA/messages/123",
+              text: "hello thread",
+              sender: { name: "users/alice", displayName: "Alice" },
+              thread: { name: "spaces/AAA/threads/xyz" },
+              annotations: [],
+            },
+          },
+        }),
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(finalizeInboundContext).toHaveBeenCalledWith(
+        expect.objectContaining({
+          MessageSid: "spaces/AAA/messages/123",
+          MessageSidFull: "spaces/AAA/messages/123",
+          MessageThreadId: "spaces/AAA/threads/xyz",
+          ReplyToId: "spaces/AAA/threads/xyz",
+          ReplyToIdFull: "spaces/AAA/threads/xyz",
+        }),
+      );
+      expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ctx: expect.objectContaining({
+            MessageThreadId: "spaces/AAA/threads/xyz",
+          }),
+        }),
+      );
+    } finally {
+      unregister();
+    }
+  });
+});
