@@ -41,6 +41,7 @@ import {
   type OpenClawConfig,
 } from "./channel.deps.runtime.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
+import { isGoogleChatThreadResourceName } from "./thread-resource.js";
 
 const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
@@ -71,12 +72,8 @@ function createGoogleChatSendReceipt(params: {
 
 export const formatAllowFromEntry = formatGoogleChatAllowFromEntry;
 
-const GOOGLE_CHAT_THREAD_RESOURCE_RE = /^spaces\/[^/]+\/threads\/[^/]+$/;
-
 function normalizeGoogleChatThreadResourceName(value?: string | number | null): string | undefined {
-  return typeof value === "string" && GOOGLE_CHAT_THREAD_RESOURCE_RE.test(value)
-    ? value
-    : undefined;
+  return typeof value === "string" && isGoogleChatThreadResourceName(value) ? value : undefined;
 }
 
 function resolveGoogleChatOutboundThread(params: {
