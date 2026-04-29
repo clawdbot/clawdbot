@@ -20,6 +20,10 @@ async function readGoogleChatJsonResponse<T>(response: Response, label: string):
   return readProviderJsonResponse<T>(response, label);
 }
 
+export function isGoogleChatThreadResourceName(value: string | undefined): boolean {
+  return typeof value === "string" && /^spaces\/[^/]+\/threads\/[^/]+$/.test(value);
+}
+
 const headersToObject = (headers?: HeadersInit): Record<string, string> =>
   headers instanceof Headers
     ? Object.fromEntries(headers.entries())
@@ -160,7 +164,7 @@ export async function sendGoogleChatMessage(params: {
     body.cardsV2 = cardsV2;
   }
   if (thread) {
-    if (!/^spaces\/[^/]+\/threads\/[^/]+$/.test(thread)) {
+    if (!isGoogleChatThreadResourceName(thread)) {
       throw new Error(`Google Chat thread must be a thread resource name, got ${thread}`);
     }
     body.thread = { name: thread };

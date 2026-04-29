@@ -20,6 +20,8 @@ vi.mock("./accounts.js", () => ({
 vi.mock("./api.js", () => ({
   createGoogleChatReaction,
   deleteGoogleChatReaction,
+  isGoogleChatThreadResourceName: (value: string | undefined) =>
+    typeof value === "string" && /^spaces\/[^/]+\/threads\/[^/]+$/.test(value),
   listGoogleChatReactions,
   sendGoogleChatMessage,
   uploadGoogleChatAttachment,
@@ -308,6 +310,39 @@ describe("googlechat message actions", () => {
     expect(sendGoogleChatMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         thread: "spaces/AAA/threads/explicit",
+      }),
+    );
+  });
+
+  it("ignores malformed inbound thread context when threadId/replyTo are omitted", async () => {
+    resolveGoogleChatAccount.mockReturnValue({
+      credentialSource: "service-account",
+      config: {},
+    });
+    resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/AAA");
+    sendGoogleChatMessage.mockResolvedValue({
+      messageName: "spaces/AAA/messages/msg-5",
+    });
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await googlechatMessageActions.handleAction({
+      action: "send",
+      params: {
+        to: "spaces/AAA",
+        message: "root fallback",
+      },
+      cfg: {},
+      accountId: "default",
+      toolContext: { currentThreadTs: "spaces/AAA/messages/not-a-thread" },
+    } as never);
+
+    expect(sendGoogleChatMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        space: "spaces/AAA",
+        text: "root fallback",
+        thread: undefined,
       }),
     );
   });

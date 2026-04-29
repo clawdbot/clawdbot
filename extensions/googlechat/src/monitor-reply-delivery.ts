@@ -7,22 +7,21 @@ import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import {
   deleteGoogleChatMessage,
+  isGoogleChatThreadResourceName,
   sendGoogleChatMessage,
   updateGoogleChatMessage,
   uploadGoogleChatAttachment,
 } from "./api.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
 
-const GOOGLE_CHAT_THREAD_RE = /^spaces\/[^/]+\/threads\/[^/]+$/;
-
 function resolveOutboundThread(
   payloadReplyToId: string | undefined,
   inboundThreadId: string | undefined,
 ): string | undefined {
-  if (payloadReplyToId && GOOGLE_CHAT_THREAD_RE.test(payloadReplyToId)) {
+  if (isGoogleChatThreadResourceName(payloadReplyToId)) {
     return payloadReplyToId;
   }
-  return inboundThreadId;
+  return isGoogleChatThreadResourceName(inboundThreadId) ? inboundThreadId : undefined;
 }
 
 export async function deliverGoogleChatReply(params: {
@@ -39,7 +38,7 @@ export async function deliverGoogleChatReply(params: {
   config: OpenClawConfig;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   typingMessageName?: string;
-  inboundThreadId?: string;
+  inboundThreadId: string | undefined;
 }): Promise<void> {
   const { payload, account, spaceId, runtime, core, config, statusSink } = params;
   const outboundThread = resolveOutboundThread(payload.replyToId, params.inboundThreadId);

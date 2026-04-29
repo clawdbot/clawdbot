@@ -257,8 +257,16 @@ describe("Google Chat webhook routing", () => {
   });
 });
 
+const sendGoogleChatMessageMock = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({ messageName: "spaces/AAA/messages/typing" }),
+);
+const updateGoogleChatMessageMock = vi.hoisted(() => vi.fn().mockResolvedValue({}));
+
 vi.mock("./api.js", () => ({
-  sendGoogleChatMessage: vi.fn().mockResolvedValue({ messageName: "spaces/AAA/messages/typing" }),
+  sendGoogleChatMessage: sendGoogleChatMessageMock,
+  isGoogleChatThreadResourceName: (value: string | undefined) =>
+    typeof value === "string" && /^spaces\/[^/]+\/threads\/[^/]+$/.test(value),
+  updateGoogleChatMessage: updateGoogleChatMessageMock,
   downloadGoogleChatMedia: vi.fn(),
 }));
 
@@ -282,7 +290,11 @@ describe("Google Chat monitor inbound context", () => {
           shouldHandleTextCommands: () => false,
           isControlCommandMessage: () => false,
         },
-        text: { hasControlCommand: () => false },
+        text: {
+          hasControlCommand: () => false,
+          resolveChunkMode: () => "markdown",
+          chunkMarkdownTextWithMode: (text: string) => [text],
+        },
         routing: {
           resolveAgentRoute: () => ({
             agentId: "finn",
@@ -387,7 +399,11 @@ describe("Google Chat monitor inbound context", () => {
           shouldHandleTextCommands: () => false,
           isControlCommandMessage: () => false,
         },
-        text: { hasControlCommand: () => false },
+        text: {
+          hasControlCommand: () => false,
+          resolveChunkMode: () => "markdown",
+          chunkMarkdownTextWithMode: (text: string) => [text],
+        },
         routing: {
           resolveAgentRoute: () => ({
             agentId: "finn",
@@ -460,6 +476,146 @@ describe("Google Chat monitor inbound context", () => {
           MessageThreadId: undefined,
           ReplyToId: undefined,
           ReplyToIdFull: undefined,
+        }),
+      );
+    } finally {
+      unregister();
+    }
+  });
+});
+
+describe("Google Chat delivery thread routing", () => {
+  afterEach(() => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    sendGoogleChatMessageMock.mockClear();
+    updateGoogleChatMessageMock.mockClear();
+  });
+
+  function createPluginRuntime(
+    dispatchReplyWithBufferedBlockDispatcher: ReturnType<typeof vi.fn>,
+  ): PluginRuntime {
+    return {
+      logging: { shouldLogVerbose: () => false },
+      channel: {
+        commands: {
+          shouldComputeCommandAuthorized: () => false,
+          resolveCommandAuthorizedFromAuthorizers: () => false,
+          shouldHandleTextCommands: () => false,
+          isControlCommandMessage: () => false,
+        },
+        text: {
+          hasControlCommand: () => false,
+          resolveChunkMode: () => "markdown",
+          chunkMarkdownTextWithMode: (text: string) => [text],
+        },
+        routing: {
+          resolveAgentRoute: () => ({
+            agentId: "finn",
+            accountId: "default",
+            sessionKey: "agent:finn:googlechat:group:spaces/AAA",
+          }),
+        },
+        session: {
+          resolveStorePath: () => "/tmp/openclaw-test-store",
+          readSessionUpdatedAt: () => undefined,
+          recordSessionMetaFromInbound: vi.fn(async () => {}),
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: () => ({}),
+          formatAgentEnvelope: ({ body }: { body: string }) => body,
+          finalizeInboundContext: vi.fn((ctx) => ctx),
+          dispatchReplyWithBufferedBlockDispatcher,
+        },
+        media: {
+          saveMediaBuffer: vi.fn(),
+        },
+      },
+    } as unknown as PluginRuntime;
+  }
+
+  const inboundPayload = {
+    type: "MESSAGE",
+    eventTime: "2026-04-28T00:00:00.000Z",
+    space: { name: "spaces/AAA", displayName: "Team Room", type: "ROOM" },
+    message: {
+      name: "spaces/AAA/messages/123",
+      text: "hello",
+      sender: { name: "users/alice", displayName: "Alice" },
+      thread: { name: "spaces/AAA/threads/xyz" },
+      annotations: [],
+    },
+  };
+
+  const accountConfig = {
+    accountId: "default",
+    enabled: true,
+    credentialSource: "none",
+    config: {
+      allowBots: true,
+      groups: {
+        "spaces/AAA": { users: ["users/alice"], requireMention: false },
+      },
+    },
+  } as ResolvedGoogleChatAccount;
+
+  it("threads delivered replies through the inbound thread when replyToId is a message resource", async () => {
+    vi.mocked(verifyGoogleChatRequest).mockResolvedValue({ ok: true });
+    await import("./monitor.js");
+
+    updateGoogleChatMessageMock.mockRejectedValueOnce(new Error("typing message disappeared"));
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(
+      async (params: {
+        dispatcherOptions: {
+          deliver: (payload: { text: string; replyToId: string }) => Promise<void>;
+        };
+      }) => {
+        await params.dispatcherOptions.deliver({
+          text: "threaded reply",
+          replyToId: "spaces/AAA/messages/123",
+        });
+      },
+    );
+    const core = createPluginRuntime(dispatchReplyWithBufferedBlockDispatcher);
+
+    const unregister = registerGoogleChatWebhookTarget({
+      account: accountConfig,
+      config: {
+        agents: { list: [{ id: "finn", name: "Cosmo" }] },
+        channels: { googlechat: {} },
+      } as OpenClawConfig,
+      runtime: {},
+      core,
+      path: "/googlechat-delivery-thread",
+      mediaMaxMb: 5,
+    });
+
+    try {
+      const res = await dispatchWebhookRequest(
+        createWebhookRequest({
+          authorization: "Bearer test-token",
+          path: "/googlechat-delivery-thread",
+          payload: inboundPayload,
+        }),
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(updateGoogleChatMessageMock).toHaveBeenCalledWith({
+        account: expect.objectContaining({ accountId: "default" }),
+        messageName: "spaces/AAA/messages/typing",
+        text: "threaded reply",
+      });
+      expect(sendGoogleChatMessageMock).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          text: expect.stringContaining("is typing"),
+          thread: "spaces/AAA/threads/xyz",
+        }),
+      );
+      expect(sendGoogleChatMessageMock).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          text: "threaded reply",
+          thread: "spaces/AAA/threads/xyz",
         }),
       );
     } finally {
