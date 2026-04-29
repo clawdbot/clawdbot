@@ -13,6 +13,18 @@ import {
 } from "./api.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
 
+const GOOGLE_CHAT_THREAD_RE = /^spaces\/[^/]+\/threads\/[^/]+$/;
+
+function resolveOutboundThread(
+  payloadReplyToId: string | undefined,
+  inboundThreadId: string | undefined,
+): string | undefined {
+  if (payloadReplyToId && GOOGLE_CHAT_THREAD_RE.test(payloadReplyToId)) {
+    return payloadReplyToId;
+  }
+  return inboundThreadId;
+}
+
 export async function deliverGoogleChatReply(params: {
   payload: {
     text?: string;
@@ -27,8 +39,10 @@ export async function deliverGoogleChatReply(params: {
   config: OpenClawConfig;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   typingMessageName?: string;
+  inboundThreadId?: string;
 }): Promise<void> {
   const { payload, account, spaceId, runtime, core, config, statusSink } = params;
+  const outboundThread = resolveOutboundThread(payload.replyToId, params.inboundThreadId);
   // Clear this whenever the typing message is deleted or unavailable; otherwise
   // text delivery can keep retrying a dead message and drop content.
   let typingMessageName = params.typingMessageName;
@@ -76,7 +90,7 @@ export async function deliverGoogleChatReply(params: {
       account,
       space: spaceId,
       text: chunk,
-      thread: payload.replyToId,
+      thread: outboundThread,
     });
   };
   await deliverTextOrMediaReply({
@@ -131,7 +145,7 @@ export async function deliverGoogleChatReply(params: {
           account,
           space: spaceId,
           text: caption,
-          thread: payload.replyToId,
+          thread: outboundThread,
           attachments: [
             { attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.fileName },
           ],

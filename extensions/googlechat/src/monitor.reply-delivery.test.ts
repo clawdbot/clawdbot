@@ -106,6 +106,69 @@ describe("Google Chat reply delivery", () => {
     );
   });
 
+  it("uses the inbound thread when replyToId resolves to a Google Chat message resource", async () => {
+    const core = createCore({ chunks: ["only chunk"] });
+    const runtime = createRuntime();
+    mocks.sendGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/sent" });
+
+    await deliverGoogleChatReply({
+      payload: { text: "only chunk", replyToId: "spaces/AAA/messages/inbound" },
+      account,
+      spaceId: "spaces/AAA",
+      runtime,
+      core,
+      config,
+      inboundThreadId: "spaces/AAA/threads/inbound-thread",
+    });
+
+    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      space: "spaces/AAA",
+      text: "only chunk",
+      thread: "spaces/AAA/threads/inbound-thread",
+    });
+  });
+
+  it("falls back to the inbound thread when no reply target is supplied", async () => {
+    const core = createCore({ chunks: ["only chunk"] });
+    const runtime = createRuntime();
+    mocks.sendGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/sent" });
+
+    await deliverGoogleChatReply({
+      payload: { text: "only chunk" },
+      account,
+      spaceId: "spaces/AAA",
+      runtime,
+      core,
+      config,
+      inboundThreadId: "spaces/AAA/threads/inbound-thread",
+    });
+
+    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ thread: "spaces/AAA/threads/inbound-thread" }),
+    );
+  });
+
+  it("preserves an explicit thread-shaped replyToId over the inbound thread", async () => {
+    const core = createCore({ chunks: ["only chunk"] });
+    const runtime = createRuntime();
+    mocks.sendGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/sent" });
+
+    await deliverGoogleChatReply({
+      payload: { text: "only chunk", replyToId: "spaces/AAA/threads/explicit" },
+      account,
+      spaceId: "spaces/AAA",
+      runtime,
+      core,
+      config,
+      inboundThreadId: "spaces/AAA/threads/inbound-thread",
+    });
+
+    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ thread: "spaces/AAA/threads/explicit" }),
+    );
+  });
+
   it("does not update a deleted typing message before sending media with a caption", async () => {
     const core = createCore({
       media: { buffer: Buffer.from("image"), contentType: "image/png", fileName: "reply.png" },
