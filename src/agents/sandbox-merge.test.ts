@@ -36,6 +36,29 @@ describe("sandbox config merges", () => {
     });
   });
 
+  it("resolves sandbox docker GPU passthrough with agent precedence", () => {
+    const inherited = resolveSandboxDockerConfig({
+      scope: "agent",
+      globalDocker: { gpus: "all" },
+      agentDocker: {},
+    });
+    expect(inherited.gpus).toBe("all");
+
+    const overridden = resolveSandboxDockerConfig({
+      scope: "agent",
+      globalDocker: { gpus: "all" },
+      agentDocker: { gpus: "device=GPU-123" },
+    });
+    expect(overridden.gpus).toBe("device=GPU-123");
+
+    const sharedScope = resolveSandboxDockerConfig({
+      scope: "shared",
+      globalDocker: { gpus: "all" },
+      agentDocker: { gpus: "device=GPU-123" },
+    });
+    expect(sharedScope.gpus).toBe("all");
+  });
+
   it("resolves docker binds and shared-scope override behavior", () => {
     for (const scenario of [
       {

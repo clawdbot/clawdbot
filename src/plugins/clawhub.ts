@@ -167,7 +167,7 @@ function resolveRequestedVersion(params: {
   requestedVersion?: string;
 }): string | null {
   if (params.requestedVersion) {
-    return params.requestedVersion;
+    return params.detail.package?.tags?.[params.requestedVersion] ?? params.requestedVersion;
   }
   return resolveLatestVersionFromPackage(params.detail);
 }

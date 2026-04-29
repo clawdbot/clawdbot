@@ -133,6 +133,44 @@ describe("doctor-contract-registry getJiti", () => {
     }
   });
 
+  it("reads doctor contracts from the current manifest registry on each call", () => {
+    const firstRoot = makeTempDir();
+    const secondRoot = makeTempDir();
+    fs.writeFileSync(
+      path.join(firstRoot, "doctor-contract-api.cjs"),
+      "module.exports = { legacyConfigRules: [{ path: ['plugins', 'entries', 'first'], message: 'first contract' }] };\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(secondRoot, "doctor-contract-api.cjs"),
+      "module.exports = { legacyConfigRules: [{ path: ['plugins', 'entries', 'second'], message: 'second contract' }] };\n",
+      "utf-8",
+    );
+    mocks.loadPluginManifestRegistry
+      .mockReturnValueOnce({
+        plugins: [{ id: "first-plugin", rootDir: firstRoot }],
+        diagnostics: [],
+      })
+      .mockReturnValueOnce({
+        plugins: [{ id: "second-plugin", rootDir: secondRoot }],
+        diagnostics: [],
+      });
+
+    expect(listPluginDoctorLegacyConfigRules({ workspaceDir: "/workspace", env: {} })).toEqual([
+      {
+        path: ["plugins", "entries", "first"],
+        message: "first contract",
+      },
+    ]);
+    expect(listPluginDoctorLegacyConfigRules({ workspaceDir: "/workspace", env: {} })).toEqual([
+      {
+        path: ["plugins", "entries", "second"],
+        message: "second contract",
+      },
+    ]);
+    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(2);
+  });
+
   it("narrows touched-path doctor ids for scoped dry-run validation", () => {
     expect(
       collectRelevantDoctorPluginIdsForTouchedPaths({

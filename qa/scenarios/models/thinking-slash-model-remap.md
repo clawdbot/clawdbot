@@ -40,6 +40,8 @@ execution:
   summary: Select Anthropic, set adaptive, switch to OpenAI and verify medium fallback, then set xhigh and verify high fallback on a non-xhigh model.
   config:
     requiredProviderMode: live-frontier
+    requiredProvider: openai
+    requiredModel: gpt-5.5
     anthropicModelRef: anthropic/claude-sonnet-4-6
     openAiXhighModelRef: openai/gpt-5.5
     noXhighModelRef: anthropic/claude-sonnet-4-6

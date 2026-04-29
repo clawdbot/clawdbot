@@ -7,6 +7,7 @@ import { resolveWhatsAppAccount } from "./accounts.js";
 import { restoreCredsFromBackupIfNeeded } from "./auth-store.js";
 import { closeWaSocketSoon, waitForWhatsAppLoginResult } from "./connection-controller.js";
 import { createWaSocket, waitForWaConnection } from "./session.js";
+import { resolveWhatsAppSocketTiming } from "./socket-timing.js";
 
 export async function loginWeb(
   verbose: boolean,
@@ -16,9 +17,11 @@ export async function loginWeb(
 ) {
   const cfg = getRuntimeConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId });
+  const socketTiming = resolveWhatsAppSocketTiming(cfg);
   const restoredFromBackup = await restoreCredsFromBackupIfNeeded(account.authDir);
   let sock = await createWaSocket(true, verbose, {
     authDir: account.authDir,
+    ...socketTiming,
   });
   logInfo("Waiting for WhatsApp connection...", runtime);
   try {
@@ -29,6 +32,7 @@ export async function loginWeb(
       verbose,
       runtime,
       waitForConnection,
+      socketTiming,
       onSocketReplaced: (replacementSock) => {
         sock = replacementSock;
       },

@@ -26,9 +26,11 @@ let enqueueCommand: CommandQueueModule["enqueueCommand"];
 let enqueueCommandInLane: CommandQueueModule["enqueueCommandInLane"];
 let GatewayDrainingError: CommandQueueModule["GatewayDrainingError"];
 let getActiveTaskCount: CommandQueueModule["getActiveTaskCount"];
+let getCommandLaneSnapshot: CommandQueueModule["getCommandLaneSnapshot"];
 let getQueueSize: CommandQueueModule["getQueueSize"];
 let markGatewayDraining: CommandQueueModule["markGatewayDraining"];
 let resetAllLanes: CommandQueueModule["resetAllLanes"];
+let resetCommandLane: CommandQueueModule["resetCommandLane"];
 let resetCommandQueueStateForTest: CommandQueueModule["resetCommandQueueStateForTest"];
 let setCommandLaneConcurrency: CommandQueueModule["setCommandLaneConcurrency"];
 let waitForActiveTasks: CommandQueueModule["waitForActiveTasks"];
@@ -64,9 +66,11 @@ describe("command queue", () => {
       enqueueCommandInLane,
       GatewayDrainingError,
       getActiveTaskCount,
+      getCommandLaneSnapshot,
       getQueueSize,
       markGatewayDraining,
       resetAllLanes,
+      resetCommandLane,
       resetCommandQueueStateForTest,
       setCommandLaneConcurrency,
       waitForActiveTasks,
@@ -280,6 +284,69 @@ describe("command queue", () => {
     // task2 should have been pumped by resetAllLanes's drain pass.
     await task2;
     expect(task2Ran).toBe(true);
+  });
+
+  it("resetCommandLane releases one stuck lane and drains its queued work", async () => {
+    const lane = `reset-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const otherLane = `reset-lane-other-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+    setCommandLaneConcurrency(otherLane, 1);
+
+    const blocker = createDeferred();
+    const otherBlocker = createDeferred();
+    const first = enqueueCommandInLane(lane, async () => {
+      await blocker.promise;
+      return "first";
+    });
+    const other = enqueueCommandInLane(otherLane, async () => {
+      await otherBlocker.promise;
+      return "other";
+    });
+
+    let secondRan = false;
+    const second = enqueueCommandInLane(lane, async () => {
+      secondRan = true;
+      return "second";
+    });
+
+    expect(secondRan).toBe(false);
+    expect(getActiveTaskCount()).toBe(2);
+    expect(resetCommandLane(lane)).toBe(1);
+
+    await expect(second).resolves.toBe("second");
+    expect(secondRan).toBe(true);
+    expect(getQueueSize(lane)).toBe(0);
+    expect(getQueueSize(otherLane)).toBe(1);
+
+    blocker.resolve();
+    otherBlocker.resolve();
+    await expect(first).resolves.toBe("first");
+    await expect(other).resolves.toBe("other");
+  });
+
+  it("getCommandLaneSnapshot reports active and queued work for one lane", async () => {
+    const lane = `snapshot-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    const blocker = createDeferred();
+    const first = enqueueCommandInLane(lane, async () => {
+      await blocker.promise;
+      return "first";
+    });
+    const second = enqueueCommandInLane(lane, async () => "second");
+
+    expect(getCommandLaneSnapshot(lane)).toMatchObject({
+      lane,
+      activeCount: 1,
+      queuedCount: 1,
+      maxConcurrent: 1,
+      draining: false,
+      generation: 0,
+    });
+
+    blocker.resolve();
+    await expect(first).resolves.toBe("first");
+    await expect(second).resolves.toBe("second");
   });
 
   it("waitForActiveTasks ignores tasks that start after the call", async () => {

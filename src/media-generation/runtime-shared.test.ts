@@ -95,6 +95,40 @@ describe("media-generation runtime shared candidates", () => {
     ]);
   });
 
+  it("orders auto-detected provider defaults by canonical aliases", () => {
+    const candidates = resolveCapabilityModelCandidates({
+      cfg: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai-codex/gpt-5.5",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      modelConfig: undefined,
+      parseModelRef,
+      listProviders: () => [
+        {
+          id: "fal",
+          defaultModel: "fal-ai/flux/dev",
+          isConfigured: () => true,
+        },
+        {
+          id: "openai",
+          aliases: ["openai-codex"],
+          defaultModel: "gpt-image-2",
+          isConfigured: () => true,
+        },
+      ],
+    });
+
+    expect(candidates).toEqual([
+      { provider: "openai", model: "gpt-image-2" },
+      { provider: "fal", model: "fal-ai/flux/dev" },
+    ]);
+  });
+
   it("disables implicit provider expansion when mediaGenerationAutoProviderFallback=false", () => {
     const candidates = resolveCapabilityModelCandidates({
       cfg: {

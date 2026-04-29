@@ -94,6 +94,7 @@ export type ExecApprovalRequestPayload = {
   host?: string | null;
   security?: string | null;
   ask?: string | null;
+  warningText?: string | null;
   allowedDecisions?: readonly ExecApprovalDecision[];
   agentId?: string | null;
   resolvedPath?: string | null;

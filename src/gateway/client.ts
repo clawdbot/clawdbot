@@ -127,6 +127,11 @@ export type GatewayClientOptions = {
   connectChallengeTimeoutMs?: number;
   /** @deprecated Use connectChallengeTimeoutMs. */
   connectDelayMs?: number;
+  /**
+   * Server-side pre-auth handshake budget. Config-derived local clients use
+   * this to keep the connect-challenge watchdog aligned with the gateway.
+   */
+  preauthHandshakeTimeoutMs?: number;
   tickWatchMinIntervalMs?: number;
   requestTimeoutMs?: number;
   token?: string;
@@ -190,9 +195,14 @@ function isGatewayClientStoppedError(err: unknown): boolean {
 }
 
 export function resolveGatewayClientConnectChallengeTimeoutMs(
-  opts: Pick<GatewayClientOptions, "connectChallengeTimeoutMs" | "connectDelayMs">,
+  opts: Pick<
+    GatewayClientOptions,
+    "connectChallengeTimeoutMs" | "connectDelayMs" | "preauthHandshakeTimeoutMs"
+  >,
 ): number {
-  return resolveConnectChallengeTimeoutMs(readConnectChallengeTimeoutOverride(opts));
+  return resolveConnectChallengeTimeoutMs(readConnectChallengeTimeoutOverride(opts), {
+    configuredTimeoutMs: opts.preauthHandshakeTimeoutMs,
+  });
 }
 
 const FORCE_STOP_TERMINATE_GRACE_MS = 250;
@@ -594,6 +604,23 @@ export class GatewayClient {
           resolvedDeviceToken,
           storedToken: storedToken ?? undefined,
         });
+        if (
+          this.opts.deviceIdentity &&
+          usingStoredDeviceToken &&
+          err instanceof GatewayClientRequestError &&
+          readConnectErrorDetailCode(err.details) ===
+            ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH
+        ) {
+          const deviceId = this.opts.deviceIdentity.deviceId;
+          try {
+            clearDeviceAuthToken({ deviceId, role });
+            logDebug(`cleared stale device-auth token for device ${deviceId}`);
+          } catch (clearErr) {
+            logDebug(
+              `failed clearing stale device-auth token for device ${deviceId}: ${String(clearErr)}`,
+            );
+          }
+        }
         if (shouldRetryWithDeviceToken) {
           this.pendingDeviceTokenRetry = true;
           this.deviceTokenRetryBudgetUsed = true;
@@ -653,6 +680,7 @@ export class GatewayClient {
       detailCode === ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING ||
       detailCode === ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH ||
       detailCode === ConnectErrorDetailCodes.AUTH_RATE_LIMITED ||
+      detailCode === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH ||
       detailCode === ConnectErrorDetailCodes.PAIRING_REQUIRED ||
       detailCode === ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED ||
       detailCode === ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED

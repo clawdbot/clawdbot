@@ -127,7 +127,6 @@ export default defineBundledChannelEntry({
     exportName: "setTlonRuntime",
   },
   registerFull(api) {
-    api.logger.debug?.("[tlon] Registering tlon tool");
     api.registerTool({
       name: "tlon",
       label: "Tlon CLI",

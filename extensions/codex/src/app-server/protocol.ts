@@ -102,6 +102,7 @@ type CodexAppServerRequestResultMap = {
   initialize: CodexInitializeResponse;
   "account/rateLimits/read": v2.GetAccountRateLimitsResponse;
   "account/read": v2.GetAccountResponse;
+  "feedback/upload": v2.FeedbackUploadResponse;
   "mcpServerStatus/list": v2.ListMcpServerStatusResponse;
   "model/list": v2.ModelListResponse;
   "review/start": v2.ReviewStartResponse;

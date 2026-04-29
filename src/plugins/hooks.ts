@@ -45,6 +45,10 @@ import type {
   PluginAgentTurnPrepareResult,
   PluginHeartbeatPromptContributionEvent,
   PluginHeartbeatPromptContributionResult,
+  PluginHookCronChangedEvent,
+  PluginHookGatewayCronDeliveryStatus,
+  PluginHookGatewayCronJobState,
+  PluginHookGatewayCronRunStatus,
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
@@ -130,6 +134,10 @@ export type {
   PluginHookSubagentSpawningResult,
   PluginHookSubagentSpawnedEvent,
   PluginHookSubagentEndedEvent,
+  PluginHookCronChangedEvent,
+  PluginHookGatewayCronDeliveryStatus,
+  PluginHookGatewayCronJobState,
+  PluginHookGatewayCronRunStatus,
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
@@ -160,10 +168,18 @@ export type HookRunnerOptions = {
    * the runner continues, but the plugin's underlying work is not cancelled.
    */
   voidHookTimeoutMsByHook?: Partial<Record<PluginHookName, number>>;
+  /**
+   * Optional timeout for modifying hooks. A timed-out hook is logged and skipped,
+   * but the plugin's underlying work is not cancelled.
+   */
+  modifyingHookTimeoutMsByHook?: Partial<Record<PluginHookName, number>>;
 };
 
 const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
   agent_end: 30_000,
+};
+const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
+  before_prompt_build: 15_000,
 };
 
 type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
@@ -235,6 +251,10 @@ export function createHookRunner(
   const voidHookTimeoutMsByHook = {
     ...DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK,
     ...options.voidHookTimeoutMsByHook,
+  };
+  const modifyingHookTimeoutMsByHook = {
+    ...DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK,
+    ...options.modifyingHookTimeoutMsByHook,
   };
 
   const shouldCatchHookErrors = (hookName: PluginHookName): boolean =>
@@ -377,21 +397,47 @@ export function createHookRunner(
     return typeof (value as { then?: unknown }).then === "function";
   };
 
-  const getVoidHookTimeoutMs = (hookName: PluginHookName): number | undefined => {
-    const timeoutMs = voidHookTimeoutMsByHook[hookName];
+  const normalizePositiveTimeoutMs = (timeoutMs: number | undefined): number | undefined => {
     if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
       return undefined;
     }
     return Math.floor(timeoutMs);
   };
 
-  const withVoidHookTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
+  const getVoidHookTimeoutMs = (
+    hookName: PluginHookName,
+    hook: PluginHookRegistration,
+  ): number | undefined =>
+    normalizePositiveTimeoutMs(hook.timeoutMs) ??
+    normalizePositiveTimeoutMs(voidHookTimeoutMsByHook[hookName]);
+
+  const getModifyingHookTimeoutMs = (
+    hookName: PluginHookName,
+    hook: PluginHookRegistration,
+  ): number | undefined =>
+    normalizePositiveTimeoutMs(hook.timeoutMs) ??
+    normalizePositiveTimeoutMs(modifyingHookTimeoutMsByHook[hookName]);
+
+  const getClaimingHookTimeoutMs = (
+    hookName: PluginHookName,
+    hook: PluginHookRegistration,
+  ): number | undefined =>
+    normalizePositiveTimeoutMs(hook.timeoutMs) ??
+    normalizePositiveTimeoutMs(modifyingHookTimeoutMsByHook[hookName]);
+
+  const withHookTimeout = async <T>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    options: { unref?: boolean } = {},
+  ): Promise<T> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
         reject(new Error(`timed out after ${timeoutMs}ms`));
       }, timeoutMs);
-      timer.unref?.();
+      if (options.unref) {
+        timer.unref?.();
+      }
     });
 
     try {
@@ -433,9 +479,9 @@ export function createHookRunner(
         const promise = Promise.resolve(
           (hook.handler as (event: unknown, ctx: unknown) => Promise<void> | void)(event, ctx),
         );
-        const timeoutMs = getVoidHookTimeoutMs(hookName);
+        const timeoutMs = getVoidHookTimeoutMs(hookName, hook);
         if (timeoutMs) {
-          await withVoidHookTimeout(promise, timeoutMs);
+          await withHookTimeout(promise, timeoutMs, { unref: true });
         } else {
           await promise;
         }
@@ -468,9 +514,10 @@ export function createHookRunner(
 
     for (const hook of hooks) {
       try {
-        const handlerResult = await (
-          hook.handler as (event: unknown, ctx: unknown) => Promise<TResult>
-        )(event, ctx);
+        const handler = hook.handler as (event: unknown, ctx: unknown) => Promise<TResult>;
+        const promise = Promise.resolve(handler(event, ctx));
+        const timeoutMs = getModifyingHookTimeoutMs(hookName, hook);
+        const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
 
         if (handlerResult !== undefined && handlerResult !== null) {
           if (policy.mergeResults) {
@@ -546,9 +593,11 @@ export function createHookRunner(
   ): Promise<TResult | undefined> {
     for (const hook of hooks) {
       try {
-        const handlerResult = await (
-          hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>
-        )(event, ctx);
+        const promise = Promise.resolve(
+          (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
+        );
+        const timeoutMs = getClaimingHookTimeoutMs(hookName, hook);
+        const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
         if (handlerResult?.handled) {
           return handlerResult;
         }
@@ -595,9 +644,11 @@ export function createHookRunner(
     let firstError: string | null = null;
     for (const hook of hooks) {
       try {
-        const handlerResult = await (
-          hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>
-        )(event, ctx);
+        const promise = Promise.resolve(
+          (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
+        );
+        const timeoutMs = getClaimingHookTimeoutMs(hookName, hook);
+        const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
         if (handlerResult?.handled) {
           return { status: "handled", result: handlerResult };
         }
@@ -672,6 +723,8 @@ export function createHookRunner(
   }
 
   /**
+   * @deprecated Use runBeforeModelResolve and runBeforePromptBuild.
+   *
    * Run before_agent_start hook.
    * Legacy compatibility hook that combines model resolve + prompt build phases.
    */
@@ -1236,6 +1289,16 @@ export function createHookRunner(
     >("heartbeat_prompt_contribution", event, ctx, { mergeResults: mergeAgentTurnPrepare });
   }
 
+  /**
+   * Run cron_changed hook for gateway-owned cron lifecycle changes.
+   */
+  async function runCronChanged(
+    event: PluginHookCronChangedEvent,
+    ctx: PluginHookGatewayContext,
+  ): Promise<void> {
+    return runVoidHook("cron_changed", event, ctx);
+  }
+
   // =========================================================================
   // Skill Install Hooks
   // =========================================================================
@@ -1331,6 +1394,7 @@ export function createHookRunner(
     runGatewayStart,
     runGatewayStop,
     runHeartbeatPromptContribution,
+    runCronChanged,
     // Install hooks
     runBeforeInstall,
     // Utility

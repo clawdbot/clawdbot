@@ -1,10 +1,4 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withActivatedPluginIds } from "./activation-context.js";
-import {
-  buildPluginSnapshotCacheEnvKey,
-  resolvePluginSnapshotCacheTtlMs,
-  shouldUsePluginSnapshotCache,
-} from "./cache-controls.js";
 import {
   isPluginRegistryLoadInFlight,
   loadOpenClawPlugins,
@@ -20,17 +14,6 @@ import {
   buildPluginRuntimeLoadOptionsFromValues,
   createPluginRuntimeLoaderLogger,
 } from "./runtime/load-context.js";
-import { buildWebProviderSnapshotCacheKey } from "./web-provider-resolution-shared.js";
-
-type WebProviderSnapshotCacheEntry<TEntry> = {
-  expiresAt: number;
-  providers: TEntry[];
-};
-
-export type WebProviderSnapshotCache<TEntry> = WeakMap<
-  OpenClawConfig,
-  WeakMap<NodeJS.ProcessEnv, Map<string, WebProviderSnapshotCacheEntry<TEntry>>>
->;
 
 export type ResolvePluginWebProvidersParams = {
   config?: PluginLoadOptions["config"];
@@ -45,7 +28,6 @@ export type ResolvePluginWebProvidersParams = {
 };
 
 type ResolveWebProviderRuntimeDeps<TEntry> = {
-  snapshotCache: WebProviderSnapshotCache<TEntry>;
   resolveBundledResolutionConfig: (params: {
     config?: PluginLoadOptions["config"];
     workspaceDir?: string;
@@ -75,13 +57,6 @@ type ResolveWebProviderRuntimeDeps<TEntry> = {
     onlyPluginIds?: readonly string[];
   }) => TEntry[] | null;
 };
-
-export function createWebProviderSnapshotCache<TEntry>(): WebProviderSnapshotCache<TEntry> {
-  return new WeakMap<
-    OpenClawConfig,
-    WeakMap<NodeJS.ProcessEnv, Map<string, WebProviderSnapshotCacheEntry<TEntry>>>
-  >();
-}
 
 function resolveWebProviderLoadOptions<TEntry>(
   params: ResolvePluginWebProvidersParams,
@@ -174,68 +149,21 @@ export function resolvePluginWebProviders<TEntry>(
     return deps.mapRegistryProviders({ registry, onlyPluginIds: pluginIds });
   }
 
-  const cacheOwnerConfig = params.config;
-  const shouldMemoizeSnapshot =
-    params.activate !== true && params.cache !== true && shouldUsePluginSnapshotCache(env);
-  const cacheKey = buildWebProviderSnapshotCacheKey({
-    config: cacheOwnerConfig,
-    workspaceDir,
-    bundledAllowlistCompat: params.bundledAllowlistCompat,
-    onlyPluginIds: params.onlyPluginIds,
-    origin: params.origin,
-    envKey: buildPluginSnapshotCacheEnvKey(env),
-  });
-  if (cacheOwnerConfig && shouldMemoizeSnapshot) {
-    const configCache = deps.snapshotCache.get(cacheOwnerConfig);
-    const envCache = configCache?.get(env);
-    const cached = envCache?.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.providers;
-    }
-  }
-  const memoizeSnapshot = (providers: TEntry[]) => {
-    if (!cacheOwnerConfig || !shouldMemoizeSnapshot) {
-      return;
-    }
-    const ttlMs = resolvePluginSnapshotCacheTtlMs(env);
-    let configCache = deps.snapshotCache.get(cacheOwnerConfig);
-    if (!configCache) {
-      configCache = new WeakMap<
-        NodeJS.ProcessEnv,
-        Map<string, WebProviderSnapshotCacheEntry<TEntry>>
-      >();
-      deps.snapshotCache.set(cacheOwnerConfig, configCache);
-    }
-    let envCache = configCache.get(env);
-    if (!envCache) {
-      envCache = new Map<string, WebProviderSnapshotCacheEntry<TEntry>>();
-      configCache.set(env, envCache);
-    }
-    envCache.set(cacheKey, {
-      expiresAt: Date.now() + ttlMs,
-      providers,
-    });
-  };
-
   const loadOptions = resolveWebProviderLoadOptions(params, deps);
   const compatible = resolveCompatibleRuntimePluginRegistry(loadOptions);
   if (compatible) {
-    const resolved = deps.mapRegistryProviders({
+    return deps.mapRegistryProviders({
       registry: compatible,
       onlyPluginIds: params.onlyPluginIds,
     });
-    memoizeSnapshot(resolved);
-    return resolved;
   }
   if (isPluginRegistryLoadInFlight(loadOptions)) {
     return [];
   }
-  const resolved = deps.mapRegistryProviders({
+  return deps.mapRegistryProviders({
     registry: loadOpenClawPlugins(loadOptions),
     onlyPluginIds: params.onlyPluginIds,
   });
-  memoizeSnapshot(resolved);
-  return resolved;
 }
 
 export function resolveRuntimeWebProviders<TEntry>(

@@ -36,6 +36,14 @@ Prove the touched surface first. Do not reflexively run the whole suite.
 - Prefer GitHub Actions for release/Docker proof when the workflow already has the prepared image and secrets.
 - Use `scripts/committer "<msg>" <paths...>` when committing; stage only your files.
 - If deps are missing, run `pnpm install`, retry once, then report the first actionable error.
+- For Blacksmith Testbox proof, reuse only an id warmed and claimed in this
+  operator session. `blacksmith testbox list` is diagnostics only; a listed id
+  can have a local key and still carry stale rsync state from another lane.
+  After warmup, run `pnpm testbox:claim --id <id>`, then prefer
+  `pnpm testbox:run --id <id> -- "<command>"` for OpenClaw gates so stale
+  org-visible ids fail fast before syncing. Claims older than 12 hours are
+  stale unless `OPENCLAW_TESTBOX_CLAIM_TTL_MINUTES` is explicitly set for long
+  work.
 
 ## Local Test Shortcuts
 
@@ -111,7 +119,10 @@ rerun after a focused patch.
 the manual "everything before release" umbrella. It resolves a target ref, then
 dispatches:
 
-- manual `CI` for the full normal CI graph
+- manual `CI` for the full normal CI graph, with Android enabled via
+  `include_android=true`
+- `Plugin Prerelease` for release-only plugin static checks, extension shards,
+  the release-only `agentic-plugins` shard, and plugin product Docker lanes
 - `OpenClaw Release Checks` for install smoke, cross-OS release checks, live and
   E2E checks, Docker release-path suites, OpenWebUI, QA Lab, fast Matrix, and
   Telegram release lanes
@@ -142,6 +153,12 @@ artifact reuse, and sharding instead. The parent verifier job appends
 slowest-job tables for child runs; rerun only that verifier after a child rerun
 turns green.
 
+Standalone manual `CI` dispatches do not run the plugin prerelease suite, the
+extension batch sweep, or the release-only `agentic-plugins` Vitest shard. Those
+lanes are intentionally reserved for the separate `Plugin Prerelease` child so
+PRs, main pushes, and ad hoc broad CI checks do not spend Docker/package time or
+all-plugin runtime time on release-only product coverage.
+
 If a full run is already active on a newer `origin/main`, prefer watching that
 run over dispatching a duplicate. If you accidentally dispatch a stale duplicate,
 cancel it and monitor the current run.
@@ -153,9 +170,10 @@ only the failed parent verifier job; do not dispatch a new full umbrella unless
 the release evidence is stale.
 
 For bounded recovery after a focused fix, pass `-f rerun_group=<group>`.
-Supported umbrella groups are `all`, `ci`, `release-checks`, `install-smoke`,
-`cross-os`, `live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, and
-`npm-telegram`. Use the narrowest group that covers the failed box.
+Supported umbrella groups are `all`, `ci`, `plugin-prerelease`,
+`release-checks`, `install-smoke`, `cross-os`, `live-e2e`, `package`, `qa`,
+`qa-parity`, `qa-live`, and `npm-telegram`. Use the narrowest group that covers
+the failed box.
 
 ### Release Evidence
 
@@ -221,6 +239,13 @@ release checks, release-path Docker live/E2E checks, and Package Acceptance.
 When `Full Release Validation` dispatches release checks, it passes the requested
 branch/tag plus an `expected_sha` so branch/tag refs resolve through the fast
 remote-ref path while the package and QA jobs still validate the exact SHA.
+
+The full-profile native live media shards use the prebuilt
+`ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04` container so
+`ffmpeg`/`ffprobe` are already present. If those jobs suddenly spend minutes in
+dependency setup again, first check the `Live Media Runner Image` workflow and
+the `Verify preinstalled live media dependencies` step before assuming the media
+tests themselves slowed down.
 
 The release Docker path intentionally shards the plugin/runtime tail. The
 workflow uses `plugins-runtime-plugins`, `plugins-runtime-services`, and

@@ -890,6 +890,36 @@ describe("GatewayClient connect auth payload", () => {
     });
   });
 
+  it("clears stale stored device tokens and does not reconnect on AUTH_DEVICE_TOKEN_MISMATCH", async () => {
+    loadDeviceAuthTokenMock.mockReturnValue({
+      token: "stored-device-token",
+      scopes: ["operator.read"],
+    });
+    const onReconnectPaused = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onReconnectPaused,
+    });
+
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+    expect(firstConnect.params?.auth?.token).toBe("stored-device-token");
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
+    });
+    expect(clearDeviceAuthTokenMock).toHaveBeenCalledWith({
+      deviceId: expect.any(String),
+      role: "operator",
+    });
+    expect(onReconnectPaused).toHaveBeenCalledWith({
+      code: 1008,
+      reason: "connect failed",
+      detailCode: "AUTH_DEVICE_TOKEN_MISMATCH",
+    });
+  });
+
   it("does not auto-reconnect on token mismatch when retry is not trusted", async () => {
     loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
     const client = new GatewayClient({

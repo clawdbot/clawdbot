@@ -95,6 +95,7 @@ const ERROR_PATTERNS = {
     // provider-overload (#32828).
     /service[_ ]unavailable.*(?:overload|capacity|high[_ ]demand)|(?:overload|capacity|high[_ ]demand).*service[_ ]unavailable/i,
     "high demand",
+    "high load",
     // Chinese provider overloaded messages
     "服务过载",
     "当前负载过高",

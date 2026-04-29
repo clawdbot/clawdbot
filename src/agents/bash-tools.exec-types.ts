@@ -19,6 +19,10 @@ export type ExecToolDefaults = {
   agentId?: string;
   backgroundMs?: number;
   timeoutSec?: number;
+  approvalWarningText?: string;
+  approvalFollowupText?: string;
+  approvalFollowup?: ExecApprovalFollowupFactory;
+  approvalFollowupMode?: "agent" | "direct";
   approvalRunningNoticeMs?: number;
   sandbox?: BashSandboxConfig;
   elevated?: ExecElevatedDefaults;
@@ -33,6 +37,25 @@ export type ExecToolDefaults = {
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;
 };
+
+export type ExecApprovalFollowupOutcome = {
+  status: "completed" | "failed";
+  exitCode: number | null;
+  timedOut: boolean;
+  aggregated: string;
+  reason?: string;
+};
+
+export type ExecApprovalFollowupContext = {
+  approvalId: string;
+  sessionId: string;
+  trigger?: string;
+  outcome: ExecApprovalFollowupOutcome;
+};
+
+export type ExecApprovalFollowupFactory = (
+  context: ExecApprovalFollowupContext,
+) => string | undefined | Promise<string | undefined>;
 
 export type ExecElevatedDefaults = {
   enabled: boolean;

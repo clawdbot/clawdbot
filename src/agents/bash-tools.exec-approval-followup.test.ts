@@ -132,7 +132,31 @@ describe("exec approval followup", () => {
     expect(callGatewayTool).not.toHaveBeenCalled();
   });
 
-  it("falls back to sanitized direct delivery when session resume fails", async () => {
+  it("can force direct delivery even when a session key exists", async () => {
+    await sendExecApprovalFollowup({
+      approvalId: "req-direct",
+      sessionKey: "agent:main:telegram:direct:123",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "123",
+      turnSourceAccountId: "default",
+      resultText:
+        "Exec finished (gateway id=req-direct, session=sess_1, code 0)\npasteable diagnostics report",
+      direct: true,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "123",
+        accountId: "default",
+        content: "pasteable diagnostics report",
+        idempotencyKey: "exec-approval-followup:req-direct",
+      }),
+    );
+    expect(callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("falls back to sanitized direct delivery without alarming prefix for successful completions", async () => {
     vi.mocked(callGatewayTool).mockRejectedValueOnce(new Error("session missing"));
 
     await sendExecApprovalFollowup({
@@ -148,7 +172,7 @@ describe("exec approval followup", () => {
 
     expect(sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: "Automatic session resume failed, so sending the status directly.\n\nall good",
+        content: "all good",
         idempotencyKey: "exec-approval-followup:req-session-resume-failed",
       }),
     );

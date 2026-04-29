@@ -74,7 +74,7 @@ describe("resolveBootstrapMode", () => {
     ).toBe("none");
   });
 
-  it("returns none when the run cannot access bootstrap files normally", () => {
+  it("returns limited when the run cannot access bootstrap files normally", () => {
     expect(
       resolveBootstrapMode({
         bootstrapPending: true,
@@ -84,6 +84,6 @@ describe("resolveBootstrapMode", () => {
         isCanonicalWorkspace: true,
         hasBootstrapFileAccess: false,
       }),
-    ).toBe("none");
+    ).toBe("limited");
   });
 });

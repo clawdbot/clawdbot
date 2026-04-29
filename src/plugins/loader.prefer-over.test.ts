@@ -3,9 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
-import { clearPluginDiscoveryCache } from "./discovery.js";
 import { clearPluginLoaderCache, loadOpenClawPlugins } from "./loader.js";
-import { clearPluginManifestRegistryCache } from "./manifest-registry.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 
 const tempDirs: string[] = [];
@@ -89,8 +87,6 @@ function writeChannelToolPlugin(params: {
 
 afterEach(() => {
   clearPluginLoaderCache();
-  clearPluginDiscoveryCache();
-  clearPluginManifestRegistryCache();
   resetPluginRuntimeStateForTest();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });

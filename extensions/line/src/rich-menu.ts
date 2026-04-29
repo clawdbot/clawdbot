@@ -1,8 +1,9 @@
-import { readFile } from "node:fs/promises";
 import { messagingApi } from "@line/bot-sdk";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/agent-media-payload";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { resolveLineAccount } from "./accounts.js";
 import { datetimePickerAction, messageAction, postbackAction, uriAction } from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
@@ -41,6 +42,7 @@ interface RichMenuOpts {
   channelAccessToken?: string;
   accountId?: string;
   verbose?: boolean;
+  mediaLocalRoots?: readonly string[];
 }
 
 function getClient(opts: RichMenuOpts): messagingApi.MessagingApiClient {
@@ -105,12 +107,19 @@ export async function uploadRichMenuImage(
 ): Promise<void> {
   const blobClient = getBlobClient(opts);
 
-  const imageData = await readFile(imagePath);
-  const contentType = normalizeLowercaseStringOrEmpty(imagePath).endsWith(".png")
-    ? "image/png"
-    : "image/jpeg";
+  const media = await loadWebMediaRaw(imagePath, {
+    localRoots: opts.mediaLocalRoots ?? getAgentScopedMediaLocalRoots(opts.cfg),
+  });
+  const contentType =
+    media.contentType === "image/png" || media.contentType === "image/jpeg"
+      ? media.contentType
+      : normalizeLowercaseStringOrEmpty(imagePath).endsWith(".png")
+        ? "image/png"
+        : "image/jpeg";
 
-  await blobClient.setRichMenuImage(richMenuId, new Blob([imageData], { type: contentType }));
+  const imageBytes = new ArrayBuffer(media.buffer.byteLength);
+  new Uint8Array(imageBytes).set(media.buffer);
+  await blobClient.setRichMenuImage(richMenuId, new Blob([imageBytes], { type: contentType }));
 
   if (opts.verbose) {
     logVerbose(`line: uploaded image to rich menu ${richMenuId}`);

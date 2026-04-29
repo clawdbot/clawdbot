@@ -23,6 +23,7 @@ const {
   loadConfig,
   loadWebMedia,
   maybePersistResolvedTelegramTarget,
+  probeVideoDimensions,
 } = getTelegramSendTestMocks();
 const {
   buildInlineKeyboard,
@@ -978,6 +979,73 @@ describe("sendMessageTelegram", () => {
     }
   });
 
+  it("passes probed dimensions to regular video sends", async () => {
+    const chatId = "123";
+    const videoBuffer = Buffer.from("fake-video");
+    const sendVideo = vi.fn().mockResolvedValue({
+      message_id: 201,
+      chat: { id: chatId },
+    });
+    const api = { sendVideo } as unknown as {
+      sendVideo: typeof sendVideo;
+    };
+    probeVideoDimensions.mockResolvedValueOnce({ width: 720, height: 1280 });
+
+    mockLoadedMedia({
+      buffer: videoBuffer,
+      contentType: "video/mp4",
+      fileName: "video.mp4",
+    });
+
+    await sendMessageTelegram(chatId, "my caption", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/video.mp4",
+    });
+
+    expect(probeVideoDimensions).toHaveBeenCalledWith(videoBuffer);
+    expect(sendVideo).toHaveBeenCalledWith(chatId, expect.anything(), {
+      caption: "my caption",
+      parse_mode: "HTML",
+      width: 720,
+      height: 1280,
+    });
+  });
+
+  it("does not probe video dimensions for video notes", async () => {
+    const chatId = "123";
+    const sendVideoNote = vi.fn().mockResolvedValue({
+      message_id: 101,
+      chat: { id: chatId },
+    });
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 102,
+      chat: { id: chatId },
+    });
+    const api = { sendVideoNote, sendMessage } as unknown as {
+      sendVideoNote: typeof sendVideoNote;
+      sendMessage: typeof sendMessage;
+    };
+
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-video"),
+      contentType: "video/mp4",
+      fileName: "video.mp4",
+    });
+
+    await sendMessageTelegram(chatId, "ignored caption context", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/video.mp4",
+      asVideoNote: true,
+    });
+
+    expect(probeVideoDimensions).not.toHaveBeenCalled();
+    expect(sendVideoNote).toHaveBeenCalledWith(chatId, expect.anything(), {});
+  });
+
   it("applies reply markup and thread options to split video-note sends", async () => {
     const chatId = "123";
     const cases: Array<{
@@ -1195,6 +1263,7 @@ describe("sendMessageTelegram", () => {
       caption: "caption",
       parse_mode: "HTML",
     });
+    expect(probeVideoDimensions).not.toHaveBeenCalled();
     expect(res.messageId).toBe("9");
   });
 

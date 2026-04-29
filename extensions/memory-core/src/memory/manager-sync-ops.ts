@@ -19,7 +19,6 @@ import {
   buildSessionEntry,
   listSessionFilesForAgent,
   sessionPathForFile,
-  type SessionFileEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
   buildFileEntry,
@@ -29,7 +28,6 @@ import {
   loadSqliteVecExtension,
   normalizeExtraMemoryPaths,
   runWithConcurrency,
-  type MemoryFileEntry,
   type MemorySource,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -65,6 +63,15 @@ type MemorySyncProgressState = {
   total: number;
   label?: string;
   report: (update: MemorySyncProgressUpdate) => void;
+};
+
+type MemoryIndexEntry = {
+  path: string;
+  absPath: string;
+  mtimeMs: number;
+  size: number;
+  hash: string;
+  content?: string;
 };
 
 const META_KEY = "memory_index_meta_v1";
@@ -197,7 +204,7 @@ export abstract class MemoryManagerSyncOps {
   protected abstract getIndexConcurrency(): number;
   protected abstract pruneEmbeddingCacheIfNeeded(): void;
   protected abstract indexFile(
-    entry: MemoryFileEntry | SessionFileEntry,
+    entry: MemoryIndexEntry,
     options: { source: MemorySource; content?: string },
   ): Promise<void>;
 
@@ -712,7 +719,7 @@ export abstract class MemoryManagerSyncOps {
         ),
         this.getIndexConcurrency(),
       )
-    ).filter((entry): entry is MemoryFileEntry => entry !== null);
+    ).filter((entry): entry is MemoryIndexEntry => entry !== null);
     log.debug("memory sync: indexing memory files", {
       files: fileEntries.length,
       needsFullReindex: params.needsFullReindex,

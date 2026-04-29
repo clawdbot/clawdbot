@@ -179,7 +179,6 @@ export function loadEnabledClaudeBundleCommands(params: {
   const registry = loadPluginManifestRegistryForPluginRegistry({
     workspaceDir: params.workspaceDir,
     config: params.cfg,
-    cache: false,
     includeDisabled: true,
   });
   const normalizedPlugins = normalizePluginsConfig(params.cfg?.plugins);

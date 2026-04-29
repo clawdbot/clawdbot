@@ -834,6 +834,60 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
+  it("defers prepared backend cleanup to the Claude live session lifecycle", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const stdin = {
+      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+        stdoutListener?.(
+          [
+            JSON.stringify({ type: "system", subtype: "init", session_id: "live-session-cleanup" }),
+            JSON.stringify({
+              type: "result",
+              session_id: "live-session-cleanup",
+              result: "ok",
+            }),
+          ].join("\n") + "\n",
+        );
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-cleanup-run",
+        pid: 2346,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+    const preparedBackendCleanup = vi.fn(async () => {});
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "sonnet",
+      runId: "run-live-cleanup",
+      prompt: "first",
+      backend: {
+        args: ["-p", "--strict-mcp-config", "--mcp-config", "/tmp/mcp-cleanup.json"],
+        liveSession: "claude-stdio",
+      },
+      mcpConfigHash: "cleanup-mcp-config",
+    });
+    context.preparedBackend.cleanup = preparedBackendCleanup;
+
+    const result = await executePreparedCliRun(context);
+
+    expect(result.text).toBe("ok");
+    expect(context.preparedBackend.cleanup).toBeUndefined();
+    expect(preparedBackendCleanup).not.toHaveBeenCalled();
+
+    resetClaudeLiveSessionsForTest();
+    await vi.waitFor(() => expect(preparedBackendCleanup).toHaveBeenCalledOnce());
+  });
+
   it("accepts Claude live stream-json lines larger than 256 KiB", async () => {
     const largeText = "x".repeat(270 * 1024);
     let stdoutListener: ((chunk: string) => void) | undefined;

@@ -40,7 +40,7 @@ function createConfig(params?: { requireMention?: boolean }): OpenClawConfig {
     },
     channels: {
       discord: {
-        dm: { enabled: true, policy: "open" },
+        dm: { enabled: true, policy: "open", allowFrom: ["*"] },
         guilds: {
           guild1: {
             requireMention: true,

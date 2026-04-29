@@ -1447,37 +1447,34 @@ async function buildResponsesPayload(
     /silent snack recall check/i.test(allInputText)
   ) {
     if (!toolOutput) {
-      return buildToolCallEventsWithArgs("memory_search", {
+      return buildToolCallEventsWithArgs("memory_recall", {
         query: "QA movie night snack lemon pepper wings blue cheese",
-        maxResults: 3,
+        limit: 3,
       });
     }
-    const results = Array.isArray(toolJson?.results)
-      ? (toolJson.results as Array<Record<string, unknown>>)
-      : [];
-    const first = results[0];
-    if (
-      typeof first?.path === "string" &&
-      (typeof first.startLine === "number" || typeof first.endLine === "number")
-    ) {
-      const from =
-        typeof first.startLine === "number"
-          ? Math.max(1, first.startLine)
-          : typeof first.endLine === "number"
-            ? Math.max(1, first.endLine)
-            : 1;
-      return buildToolCallEventsWithArgs("memory_get", {
-        path: first.path,
-        from,
-        lines: 4,
-      });
-    }
-    const memorySnippet =
+    const memoryText =
       typeof toolJson?.text === "string"
         ? toolJson.text
-        : Array.isArray(toolJson?.results)
-          ? JSON.stringify(toolJson.results)
-          : toolOutput;
+        : Array.isArray(toolJson?.content)
+          ? toolJson.content
+              .map((item) =>
+                typeof item === "object" && item && "text" in item && typeof item.text === "string"
+                  ? item.text
+                  : "",
+              )
+              .filter(Boolean)
+              .join("\n")
+          : undefined;
+    if (memoryText) {
+      const snackPreference = extractSnackPreference(memoryText);
+      if (snackPreference) {
+        return buildAssistantEvents(`User usually wants ${snackPreference} for QA movie night.`);
+      }
+      return buildAssistantEvents("NONE");
+    }
+    const memorySnippet = Array.isArray(toolJson?.results)
+      ? JSON.stringify(toolJson.results)
+      : toolOutput;
     const snackPreference = extractSnackPreference(memorySnippet);
     if (snackPreference) {
       return buildAssistantEvents(`User usually wants ${snackPreference} for QA movie night.`);

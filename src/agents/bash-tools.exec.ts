@@ -1464,6 +1464,10 @@ export function createExecTool(
       const maxOutput = DEFAULT_MAX_OUTPUT;
       const pendingMaxOutput = DEFAULT_PENDING_MAX_OUTPUT;
       const warnings: string[] = [];
+      const approvalWarningText = normalizeOptionalString(defaults?.approvalWarningText);
+      if (approvalWarningText) {
+        warnings.push(approvalWarningText);
+      }
       let execCommandOverride: string | undefined;
       const backgroundRequested = params.background === true;
       const yieldRequested = typeof params.yieldMs === "number";
@@ -1729,6 +1733,9 @@ export function createExecTool(
           turnSourceAccountId: defaults?.accountId,
           turnSourceThreadId: defaults?.currentThreadTs,
           scopeKey: defaults?.scopeKey,
+          approvalFollowupText: defaults?.approvalFollowupText,
+          approvalFollowup: defaults?.approvalFollowup,
+          approvalFollowupMode: defaults?.approvalFollowupMode,
           warnings,
           notifySessionKey,
           approvalRunningNoticeMs,

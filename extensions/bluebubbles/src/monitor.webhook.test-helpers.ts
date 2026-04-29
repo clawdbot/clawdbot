@@ -34,7 +34,7 @@ export function createMockAccount(
       password: "test-password",
       dmPolicy: "open",
       groupPolicy: "open",
-      allowFrom: [],
+      allowFrom: ["*"],
       groupAllowFrom: [],
       ...overrides,
     },

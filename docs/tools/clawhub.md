@@ -128,15 +128,19 @@ shared, and gated, see [Skills](/tools/skills).
 
 ## Service features
 
-| Feature            | Notes                                                      |
-| ------------------ | ---------------------------------------------------------- |
-| Public browsing    | Skills and their `SKILL.md` content are publicly viewable. |
-| Search             | Embedding-powered (vector search), not just keywords.      |
-| Versioning         | Semver, changelogs, and tags (including `latest`).         |
-| Downloads          | Zip per version.                                           |
-| Stars and comments | Community feedback.                                        |
-| Moderation         | Approvals and audits.                                      |
-| CLI-friendly API   | Suitable for automation and scripting.                     |
+| Feature                  | Notes                                                               |
+| ------------------------ | ------------------------------------------------------------------- |
+| Public browsing          | Skills and their `SKILL.md` content are publicly viewable.          |
+| Search                   | Embedding-powered (vector search), not just keywords.               |
+| Versioning               | Semver, changelogs, and tags (including `latest`).                  |
+| Downloads                | Zip per version.                                                    |
+| Stars and comments       | Community feedback.                                                 |
+| Security scan summaries  | Detail pages show the latest scan state before install or download. |
+| Scanner detail pages     | VirusTotal, ClawScan, and static-analysis results have deep links.  |
+| Owner recovery dashboard | Publishers can see scan-held owned content from `/dashboard`.       |
+| Owner-requested rescans  | Owners can request limited rescans for false-positive recovery.     |
+| Moderation               | Approvals and audits.                                               |
+| CLI-friendly API         | Suitable for automation and scripting.                              |
 
 ## Security and moderation
 
@@ -145,6 +149,16 @@ account must be **at least one week old** to publish. This slows down
 abuse without blocking legitimate contributors.
 
 <AccordionGroup>
+  <Accordion title="Security scans">
+    ClawHub runs automated security checks on published skills and plugin
+    releases. Public detail pages summarize the current result, and scanner
+    rows link to dedicated detail pages for VirusTotal, ClawScan, and static
+    analysis.
+
+    Scan-held or blocked releases may be unavailable on public catalog and
+    install surfaces while still visible to their owner in `/dashboard`.
+
+  </Accordion>
   <Accordion title="Reporting">
     - Any signed-in user can report a skill.
     - Report reasons are required and recorded.
@@ -275,6 +289,23 @@ publish/sync.
     - `--dry-run` — build the exact publish plan without uploading anything.
     - `--json` — emit machine-readable output for CI.
     - `--source-repo`, `--source-commit`, `--source-ref` — optional overrides when auto-detection is not enough.
+
+  </Accordion>
+  <Accordion title="Request rescans">
+    ```bash
+    clawhub skill rescan <slug>
+    clawhub skill rescan <slug> --yes --json
+
+    clawhub package rescan <name>
+    clawhub package rescan <name> --yes --json
+    ```
+
+    Rescan commands require a logged-in owner token and target the latest
+    published skill version or plugin release. In non-interactive runs, pass
+    `--yes`.
+
+    JSON responses include the target kind, name, version, rescan status, and
+    remaining/max request counts for that version or release.
 
   </Accordion>
   <Accordion title="Delete / undelete (owner or admin)">

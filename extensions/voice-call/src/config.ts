@@ -351,7 +351,7 @@ export const VoiceCallConfigSchema = z
     /** Webhook server configuration */
     serve: VoiceCallServeConfigSchema,
 
-    /** Tailscale exposure configuration (legacy, prefer tunnel config) */
+    /** @deprecated Prefer tunnel config. */
     tailscale: VoiceCallTailscaleConfigSchema,
 
     /** Tunnel configuration (unified ngrok/tailscale) */

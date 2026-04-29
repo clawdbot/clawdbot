@@ -20,6 +20,11 @@ const HTTP_CLOSE_FORCE_WAIT_MS = 5_000;
 const MCP_RUNTIME_CLOSE_GRACE_MS = 5_000;
 const LSP_RUNTIME_CLOSE_GRACE_MS = 5_000;
 
+export type ShutdownResult = {
+  durationMs: number;
+  warnings: string[];
+};
+
 function createTimeoutRace<T>(timeoutMs: number, onTimeout: () => T) {
   let timer: ReturnType<typeof setTimeout> | null = null;
   timer = setTimeout(() => {
@@ -47,11 +52,33 @@ function createTimeoutRace<T>(timeoutMs: number, onTimeout: () => T) {
   };
 }
 
+async function shutdownStep(
+  name: string,
+  fn: () => Promise<void> | void,
+  warnings: string[],
+): Promise<boolean> {
+  try {
+    await fn();
+    return true;
+  } catch (err: unknown) {
+    const detail = err instanceof Error ? err.message : String(err);
+    shutdownLog.warn(`${name}: ${detail}`);
+    recordShutdownWarning(warnings, name);
+    return false;
+  }
+}
+
+function recordShutdownWarning(warnings: string[], name: string): void {
+  if (!warnings.includes(name)) {
+    warnings.push(name);
+  }
+}
+
 async function triggerGatewayLifecycleHookWithTimeout(params: {
   event: ReturnType<typeof createInternalHookEvent>;
   hookName: "gateway:shutdown" | "gateway:pre-restart";
   timeoutMs: number;
-}): Promise<void> {
+}): Promise<"completed" | "timeout"> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const hookPromise = triggerInternalHook(params.event);
   void hookPromise.catch(() => undefined);
@@ -68,6 +95,7 @@ async function triggerGatewayLifecycleHookWithTimeout(params: {
         `${params.hookName} hook timed out after ${params.timeoutMs}ms; continuing shutdown`,
       );
     }
+    return result;
   } finally {
     if (timeout) {
       clearTimeout(timeout);
@@ -79,16 +107,19 @@ async function disposeRuntimeWithShutdownGrace(params: {
   label: "bundle-mcp" | "bundle-lsp";
   dispose: () => Promise<void>;
   graceMs: number;
+  warnings: string[];
 }): Promise<void> {
   const disposePromise = Promise.resolve()
     .then(params.dispose)
     .catch((err: unknown) => {
       shutdownLog.warn(`${params.label} runtime disposal failed during shutdown: ${String(err)}`);
+      recordShutdownWarning(params.warnings, params.label);
     });
   const disposeTimeout = createTimeoutRace(params.graceMs, () => {
     shutdownLog.warn(
       `${params.label} runtime disposal exceeded ${params.graceMs}ms; continuing shutdown`,
     );
+    recordShutdownWarning(params.warnings, params.label);
   });
   await Promise.race([disposePromise, disposeTimeout.promise]);
   disposeTimeout.clear();
@@ -112,6 +143,7 @@ export async function runGatewayClosePrelude(params: {
   disposeBrowserAuthRateLimiter: () => void;
   stopModelPricingRefresh?: () => void;
   stopChannelHealthMonitor?: () => void;
+  stopReadinessEventLoopHealth?: () => void;
   clearSecretsRuntimeSnapshot?: () => void;
   closeMcpServer?: () => Promise<void>;
 }): Promise<void> {
@@ -122,6 +154,7 @@ export async function runGatewayClosePrelude(params: {
   params.disposeBrowserAuthRateLimiter();
   params.stopModelPricingRefresh?.();
   params.stopChannelHealthMonitor?.();
+  params.stopReadinessEventLoopHealth?.();
   params.clearSecretsRuntimeSnapshot?.();
   await params.closeMcpServer?.().catch(() => {});
 }
@@ -166,7 +199,12 @@ export function createGatewayCloseHandler(params: {
   httpServer: HttpServer;
   httpServers?: HttpServer[];
 }) {
-  return async (opts?: { reason?: string; restartExpectedMs?: number | null }) => {
+  return async (opts?: {
+    reason?: string;
+    restartExpectedMs?: number | null;
+  }): Promise<ShutdownResult> => {
+    const start = Date.now();
+    const warnings: string[] = [];
     try {
       const reasonRaw = normalizeOptionalString(opts?.reason) ?? "";
       const reason = reasonRaw || "gateway stopping";
@@ -174,91 +212,93 @@ export function createGatewayCloseHandler(params: {
         typeof opts?.restartExpectedMs === "number" && Number.isFinite(opts.restartExpectedMs)
           ? Math.max(0, Math.floor(opts.restartExpectedMs))
           : null;
-      try {
-        const shutdownEvent = createInternalHookEvent("gateway", "shutdown", "gateway:shutdown", {
-          reason,
-          restartExpectedMs,
-        });
-        await triggerGatewayLifecycleHookWithTimeout({
-          event: shutdownEvent,
-          hookName: "gateway:shutdown",
-          timeoutMs: GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS,
-        });
-        if (restartExpectedMs !== null) {
-          const preRestartEvent = createInternalHookEvent(
-            "gateway",
-            "pre-restart",
-            "gateway:pre-restart",
-            {
-              reason,
-              restartExpectedMs,
-            },
-          );
-          await triggerGatewayLifecycleHookWithTimeout({
-            event: preRestartEvent,
-            hookName: "gateway:pre-restart",
-            timeoutMs: GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS,
+      shutdownLog.info(`shutdown started: ${reason}`);
+
+      await shutdownStep(
+        "gateway:shutdown",
+        async () => {
+          const shutdownEvent = createInternalHookEvent("gateway", "shutdown", "gateway:shutdown", {
+            reason,
+            restartExpectedMs,
           });
-        }
-      } catch {
-        // Best-effort only; shutdown should proceed even if hooks fail.
+          const result = await triggerGatewayLifecycleHookWithTimeout({
+            event: shutdownEvent,
+            hookName: "gateway:shutdown",
+            timeoutMs: GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS,
+          });
+          if (result === "timeout") {
+            recordShutdownWarning(warnings, "gateway:shutdown");
+          }
+        },
+        warnings,
+      );
+      if (restartExpectedMs !== null) {
+        await shutdownStep(
+          "gateway:pre-restart",
+          async () => {
+            const preRestartEvent = createInternalHookEvent(
+              "gateway",
+              "pre-restart",
+              "gateway:pre-restart",
+              {
+                reason,
+                restartExpectedMs,
+              },
+            );
+            const result = await triggerGatewayLifecycleHookWithTimeout({
+              event: preRestartEvent,
+              hookName: "gateway:pre-restart",
+              timeoutMs: GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS,
+            });
+            if (result === "timeout") {
+              recordShutdownWarning(warnings, "gateway:pre-restart");
+            }
+          },
+          warnings,
+        );
       }
       if (params.bonjourStop) {
-        try {
-          await params.bonjourStop();
-        } catch {
-          /* ignore */
-        }
+        await shutdownStep("bonjour", () => params.bonjourStop!(), warnings);
       }
       if (params.tailscaleCleanup) {
-        await params.tailscaleCleanup();
+        await shutdownStep("tailscale", () => params.tailscaleCleanup!(), warnings);
       }
       if (params.canvasHost) {
-        try {
-          await params.canvasHost.close();
-        } catch {
-          /* ignore */
-        }
+        await shutdownStep("canvas-host", () => params.canvasHost!.close(), warnings);
       }
       if (params.canvasHostServer) {
-        try {
-          await params.canvasHostServer.close();
-        } catch {
-          /* ignore */
-        }
+        await shutdownStep("canvas-host-server", () => params.canvasHostServer!.close(), warnings);
       }
       for (const plugin of listChannelPlugins()) {
-        await params.stopChannel(plugin.id);
+        await shutdownStep(`channel/${plugin.id}`, () => params.stopChannel(plugin.id), warnings);
       }
-      await disposeRegisteredAgentHarnesses();
+      await shutdownStep("agent-harnesses", () => disposeRegisteredAgentHarnesses(), warnings);
       await Promise.all([
         disposeRuntimeWithShutdownGrace({
           label: "bundle-mcp",
           dispose: params.disposeSessionMcpRuntimes ?? disposeAllSessionMcpRuntimes,
           graceMs: MCP_RUNTIME_CLOSE_GRACE_MS,
+          warnings,
         }),
         disposeRuntimeWithShutdownGrace({
           label: "bundle-lsp",
           dispose: params.disposeBundleLspRuntimes ?? disposeAllBundleLspRuntimesOnDemand,
           graceMs: LSP_RUNTIME_CLOSE_GRACE_MS,
+          warnings,
         }),
       ]);
       if (params.pluginServices) {
-        await params.pluginServices.stop().catch(() => {});
+        await shutdownStep("plugin-services", () => params.pluginServices!.stop(), warnings);
       }
-      await stopGmailWatcherOnDemand();
+      await shutdownStep("gmail-watcher", () => stopGmailWatcherOnDemand(), warnings);
       params.cron.stop();
       params.heartbeatRunner.stop();
-      try {
-        params.stopTaskRegistryMaintenance?.();
-      } catch {
-        /* ignore */
-      }
-      try {
-        params.updateCheckStop?.();
-      } catch {
-        /* ignore */
-      }
+      await shutdownStep(
+        "task-registry-maintenance",
+        () => params.stopTaskRegistryMaintenance?.(),
+        warnings,
+      );
+      await shutdownStep("update-check", () => params.updateCheckStop?.(), warnings);
       for (const timer of params.nodePresenceTimers.values()) {
         clearInterval(timer);
       }
@@ -274,43 +314,32 @@ export function createGatewayCloseHandler(params: {
         clearInterval(params.mediaCleanup);
       }
       if (params.agentUnsub) {
-        try {
-          params.agentUnsub();
-        } catch {
-          /* ignore */
-        }
+        await shutdownStep("agent-unsub", () => params.agentUnsub!(), warnings);
       }
       if (params.heartbeatUnsub) {
-        try {
-          params.heartbeatUnsub();
-        } catch {
-          /* ignore */
-        }
+        await shutdownStep("heartbeat-unsub", () => params.heartbeatUnsub!(), warnings);
       }
       if (params.transcriptUnsub) {
-        try {
-          params.transcriptUnsub();
-        } catch {
-          /* ignore */
-        }
+        await shutdownStep("transcript-unsub", () => params.transcriptUnsub!(), warnings);
       }
       if (params.lifecycleUnsub) {
-        try {
-          params.lifecycleUnsub();
-        } catch {
-          /* ignore */
-        }
+        await shutdownStep("lifecycle-unsub", () => params.lifecycleUnsub!(), warnings);
       }
       params.chatRunState.clear();
+      let clientCloseFailures = 0;
       for (const c of params.clients) {
         try {
           c.socket.close(1012, "service restart");
         } catch {
-          /* ignore */
+          clientCloseFailures++;
         }
       }
+      if (clientCloseFailures > 0) {
+        shutdownLog.warn(`failed to close ${clientCloseFailures} WebSocket client(s)`);
+        recordShutdownWarning(warnings, "ws-clients");
+      }
       params.clients.clear();
-      await params.configReloader.stop().catch(() => {});
+      await shutdownStep("config-reloader", () => params.configReloader.stop(), warnings);
       const wsClients = params.wss.clients ?? new Set();
       const closePromise = new Promise<void>((resolve) => params.wss.close(() => resolve()));
       const websocketGraceTimeout = createTimeoutRace(
@@ -326,6 +355,7 @@ export function createGatewayCloseHandler(params: {
         shutdownLog.warn(
           `websocket server close exceeded ${WEBSOCKET_CLOSE_GRACE_MS}ms; forcing shutdown continuation with ${wsClients.size} tracked client(s)`,
         );
+        recordShutdownWarning(warnings, "websocket-server");
         for (const client of wsClients) {
           try {
             client.terminate();
@@ -345,11 +375,12 @@ export function createGatewayCloseHandler(params: {
         params.httpServers && params.httpServers.length > 0
           ? params.httpServers
           : [params.httpServer];
-      for (const server of servers) {
-        const httpServer = server as HttpServer & {
+      for (let i = 0; i < servers.length; i++) {
+        const httpServer = servers[i] as HttpServer & {
           closeAllConnections?: () => void;
           closeIdleConnections?: () => void;
         };
+        const label = servers.length > 1 ? `http-server[${i}]` : "http-server";
         if (typeof httpServer.closeIdleConnections === "function") {
           httpServer.closeIdleConnections();
         }
@@ -362,29 +393,51 @@ export function createGatewayCloseHandler(params: {
             reject(err);
           }),
         );
+        void closePromise.catch(() => undefined);
         const httpGraceTimeout = createTimeoutRace(HTTP_CLOSE_GRACE_MS, () => false as const);
         const closedWithinGrace = await Promise.race([
-          closePromise.then(() => true),
+          closePromise.then(
+            () => true,
+            (err: unknown) => {
+              throw err;
+            },
+          ),
           httpGraceTimeout.promise,
-        ]);
+        ]).catch((err: unknown) => {
+          const detail = err instanceof Error ? err.message : String(err);
+          shutdownLog.warn(`${label}: ${detail}`);
+          recordShutdownWarning(warnings, label);
+          return true;
+        });
         httpGraceTimeout.clear();
         if (!closedWithinGrace) {
           shutdownLog.warn(
-            `http server close exceeded ${HTTP_CLOSE_GRACE_MS}ms; forcing connection shutdown and waiting for close`,
+            `${label} close exceeded ${HTTP_CLOSE_GRACE_MS}ms; forcing connection shutdown and waiting for close`,
           );
+          recordShutdownWarning(warnings, label);
           httpServer.closeAllConnections?.();
           const httpForceTimeout = createTimeoutRace(
             HTTP_CLOSE_FORCE_WAIT_MS,
             () => false as const,
           );
           const closedAfterForce = await Promise.race([
-            closePromise.then(() => true),
+            closePromise.then(
+              () => true,
+              (err: unknown) => {
+                throw err;
+              },
+            ),
             httpForceTimeout.promise,
-          ]);
+          ]).catch((err: unknown) => {
+            const detail = err instanceof Error ? err.message : String(err);
+            shutdownLog.warn(`${label}: ${detail}`);
+            recordShutdownWarning(warnings, label);
+            return true;
+          });
           httpForceTimeout.clear();
           if (!closedAfterForce) {
             throw new Error(
-              `http server close still pending after forced connection shutdown (${HTTP_CLOSE_FORCE_WAIT_MS}ms)`,
+              `${label} close still pending after forced connection shutdown (${HTTP_CLOSE_FORCE_WAIT_MS}ms)`,
             );
           }
         }
@@ -396,5 +449,16 @@ export function createGatewayCloseHandler(params: {
         /* ignore */
       }
     }
+
+    const durationMs = Date.now() - start;
+    if (warnings.length > 0) {
+      shutdownLog.warn(
+        `shutdown completed in ${durationMs}ms with warnings: ${warnings.join(", ")}`,
+      );
+    } else {
+      shutdownLog.info(`shutdown completed cleanly in ${durationMs}ms`);
+    }
+
+    return { durationMs, warnings };
   };
 }

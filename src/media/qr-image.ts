@@ -1,6 +1,6 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { loadQrCodeTuiRuntime } from "./qr-runtime.ts";
+import { loadQrCodeRuntime, normalizeQrText } from "./qr-runtime.ts";
 
 const DEFAULT_QR_PNG_SCALE = 6;
 const DEFAULT_QR_PNG_MARGIN_MODULES = 4;
@@ -72,11 +72,16 @@ export async function renderQrPngBase64(
     min: MIN_QR_PNG_MARGIN_MODULES,
     max: MAX_QR_PNG_MARGIN_MODULES,
   });
-  const { renderPngBase64 } = await loadQrCodeTuiRuntime();
-  return await renderPngBase64(input, {
+  const qrCode = await loadQrCodeRuntime();
+  const dataUrl = await qrCode.toDataURL(normalizeQrText(input), {
     margin: marginModules,
     scale,
+    type: "image/png",
   });
+  if (!dataUrl.startsWith(QR_PNG_DATA_URL_PREFIX)) {
+    throw new Error("Expected qrcode to return a PNG data URL.");
+  }
+  return dataUrl.slice(QR_PNG_DATA_URL_PREFIX.length);
 }
 
 export function formatQrPngDataUrl(base64: string): string {

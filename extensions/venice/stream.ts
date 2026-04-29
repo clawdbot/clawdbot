@@ -18,7 +18,7 @@ function ensureVeniceDeepSeekV4Replay(payload: Record<string, unknown>): void {
       continue;
     }
     const record = message as Record<string, unknown>;
-    if (record.role === "assistant" && Array.isArray(record.tool_calls)) {
+    if (record.role === "assistant") {
       record.reasoning_content ??= "";
     }
   }

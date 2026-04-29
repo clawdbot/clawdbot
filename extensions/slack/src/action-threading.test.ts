@@ -41,6 +41,21 @@ describe("resolveSlackAutoThreadId", () => {
     ).toBeUndefined();
   });
 
+  it("threads first matching prefixed channel target with bare current channel", () => {
+    const hasRepliedRef = { value: false };
+
+    expect(
+      resolveSlackAutoThreadId({
+        to: "channel:C123",
+        toolContext: createToolContext({
+          replyToMode: "first",
+          hasRepliedRef,
+        }),
+      }),
+    ).toBe("thread-1");
+    expect(hasRepliedRef.value).toBe(false);
+  });
+
   it("skips auto-threading when reply mode or thread context blocks it", () => {
     expect(
       resolveSlackAutoThreadId({

@@ -43,6 +43,7 @@ on:
         options:
           - all
           - ci
+          - plugin-prerelease
           - release-checks
           - install-smoke
           - cross-os
@@ -82,7 +83,7 @@ permissions:
 
 concurrency:
   group: full-release-validation-${{ inputs.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ inputs.ref == 'main' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -135,7 +136,12 @@ jobs:
             else
               echo "- Normal CI: skipped by rerun group"
             fi
-            if [[ "$RERUN_GROUP" != "ci" && "$RERUN_GROUP" != "npm-telegram" ]]; then
+            if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "plugin-prerelease" ]]; then
+              echo "- Plugin prerelease: \`Plugin Prerelease\` with \`target_ref=${TARGET_SHA}\`"
+            else
+              echo "- Plugin prerelease: skipped by rerun group"
+            fi
+            if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "release-checks" || "$RERUN_GROUP" == "install-smoke" || "$RERUN_GROUP" == "cross-os" || "$RERUN_GROUP" == "live-e2e" || "$RERUN_GROUP" == "package" || "$RERUN_GROUP" == "qa" || "$RERUN_GROUP" == "qa-parity" || "$RERUN_GROUP" == "qa-live" ]]; then
               echo "- Release/live/Docker/package/QA: \`OpenClaw Release Checks\`"
             else
               echo "- Release/live/Docker/package/QA: skipped by rerun group"
@@ -207,6 +213,19 @@ jobs:
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
+            cleanup_child_run() {
+              local exit_code=$?
+              trap - EXIT INT TERM
+              local child_status
+              child_status="$(gh run view "$run_id" --json status --jq '.status' 2>/dev/null || true)"
+              if [[ "$child_status" != "completed" ]]; then
+                echo "Cancelling child ${workflow} run ${run_id} after parent exit (${exit_code})."
+                gh run cancel "$run_id" || gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/force-cancel" || true
+              fi
+              return "$exit_code"
+            }
+            trap cleanup_child_run EXIT INT TERM
+
             while true; do
               status="$(gh run view "$run_id" --json status --jq '.status')"
               if [[ "$status" == "completed" ]]; then
@@ -214,6 +233,7 @@ jobs:
               fi
               sleep 30
             done
+            trap - EXIT INT TERM
 
             conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
             url="$(gh run view "$run_id" --json url --jq '.url')"
@@ -232,7 +252,122 @@ jobs:
             echo "- Target SHA: \`${TARGET_SHA}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          dispatch_and_wait ci.yml -f target_ref="$TARGET_SHA"
+          cancel_same_sha_push_ci() {
+            local run_ids run_id
+            run_ids="$(
+              gh run list --workflow ci.yml --limit 100 --json databaseId,event,headSha,status \
+                --jq 'map(select(.event == "push" and .headSha == env.TARGET_SHA and (.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending"))) | .[].databaseId'
+            )"
+            if [[ -z "${run_ids// }" ]]; then
+              return 0
+            fi
+            while IFS= read -r run_id; do
+              [[ -n "${run_id// }" ]] || continue
+              echo "Cancelling same-SHA push CI run ${run_id}; Full Release Validation dispatches the full manual CI child for ${TARGET_SHA}."
+              gh run cancel "$run_id" || gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/force-cancel" || true
+            done <<< "$run_ids"
+          }
+
+          cancel_same_sha_push_ci
+          dispatch_and_wait ci.yml -f target_ref="$TARGET_SHA" -f include_android=true
+
+  plugin_prerelease:
+    name: Run plugin prerelease validation
+    needs: [resolve_target]
+    if: contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    outputs:
+      run_id: ${{ steps.dispatch.outputs.run_id }}
+      url: ${{ steps.dispatch.outputs.url }}
+      conclusion: ${{ steps.dispatch.outputs.conclusion }}
+    steps:
+      - name: Dispatch and monitor plugin prerelease
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REF: ${{ inputs.ref }}
+          TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+          CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          dispatch_and_wait() {
+            local workflow="$1"
+            shift
+
+            local before_json dispatch_output run_id status conclusion url
+            before_json="$(gh run list --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
+
+            dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
+            printf '%s\n' "$dispatch_output"
+            run_id="$(
+              printf '%s\n' "$dispatch_output" |
+                sed -nE 's#.*actions/runs/([0-9]+).*#\1#p' |
+                tail -n 1
+            )"
+
+            if [[ -z "$run_id" ]]; then
+              for _ in $(seq 1 60); do
+                run_id="$(
+                  BEFORE_IDS="$before_json" gh run list --workflow "$workflow" --event workflow_dispatch --limit 50 --json databaseId,createdAt \
+                    --jq 'map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
+                )"
+                if [[ -n "$run_id" ]]; then
+                  break
+                fi
+                sleep 5
+              done
+            fi
+
+            if [[ -z "${run_id:-}" ]]; then
+              echo "Could not find dispatched run for ${workflow}." >&2
+              exit 1
+            fi
+
+            echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+            echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
+
+            cleanup_child_run() {
+              local exit_code=$?
+              trap - EXIT INT TERM
+              local child_status
+              child_status="$(gh run view "$run_id" --json status --jq '.status' 2>/dev/null || true)"
+              if [[ "$child_status" != "completed" ]]; then
+                echo "Cancelling child ${workflow} run ${run_id} after parent exit (${exit_code})."
+                gh run cancel "$run_id" || gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/force-cancel" || true
+              fi
+              return "$exit_code"
+            }
+            trap cleanup_child_run EXIT INT TERM
+
+            while true; do
+              status="$(gh run view "$run_id" --json status --jq '.status')"
+              if [[ "$status" == "completed" ]]; then
+                break
+              fi
+              sleep 30
+            done
+            trap - EXIT INT TERM
+
+            conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
+            url="$(gh run view "$run_id" --json url --jq '.url')"
+            echo "${workflow} finished with ${conclusion}: ${url}"
+            echo "url=${url}" >> "$GITHUB_OUTPUT"
+            echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
+            if [[ "$conclusion" != "success" ]]; then
+              gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
+            fi
+          }
+
+          {
+            echo "### Plugin prerelease"
+            echo
+            echo "- Target ref: \`${TARGET_REF}\`"
+            echo "- Target SHA: \`${TARGET_SHA}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          dispatch_and_wait plugin-prerelease.yml -f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true
 
   release_checks:
     name: Run release/live/Docker/QA validation
@@ -295,6 +430,19 @@ jobs:
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
+            cleanup_child_run() {
+              local exit_code=$?
+              trap - EXIT INT TERM
+              local child_status
+              child_status="$(gh run view "$run_id" --json status --jq '.status' 2>/dev/null || true)"
+              if [[ "$child_status" != "completed" ]]; then
+                echo "Cancelling child ${workflow} run ${run_id} after parent exit (${exit_code})."
+                gh run cancel "$run_id" || gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/force-cancel" || true
+              fi
+              return "$exit_code"
+            }
+            trap cleanup_child_run EXIT INT TERM
+
             while true; do
               status="$(gh run view "$run_id" --json status --jq '.status')"
               if [[ "$status" == "completed" ]]; then
@@ -302,6 +450,7 @@ jobs:
               fi
               sleep 30
             done
+            trap - EXIT INT TERM
 
             conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
             url="$(gh run view "$run_id" --json url --jq '.url')"
@@ -389,6 +538,19 @@ jobs:
           echo "Dispatched npm-telegram-beta-e2e.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
           echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
+          cleanup_child_run() {
+            local exit_code=$?
+            trap - EXIT INT TERM
+            local child_status
+            child_status="$(gh run view "$run_id" --json status --jq '.status' 2>/dev/null || true)"
+            if [[ "$child_status" != "completed" ]]; then
+              echo "Cancelling npm-telegram-beta-e2e.yml child run ${run_id} after parent exit (${exit_code})."
+              gh run cancel "$run_id" || gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/force-cancel" || true
+            fi
+            return "$exit_code"
+          }
+          trap cleanup_child_run EXIT INT TERM
+
           while true; do
             status="$(gh run view "$run_id" --json status --jq '.status')"
             if [[ "$status" == "completed" ]]; then
@@ -396,6 +558,7 @@ jobs:
             fi
             sleep 30
           done
+          trap - EXIT INT TERM
 
           conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
           url="$(gh run view "$run_id" --json url --jq '.url')"
@@ -408,7 +571,7 @@ jobs:
 
   summary:
     name: Verify full validation
-    needs: [normal_ci, release_checks, npm_telegram]
+    needs: [normal_ci, plugin_prerelease, release_checks, npm_telegram]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -473,9 +636,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           NORMAL_CI_RUN_ID: ${{ needs.normal_ci.outputs.run_id }}
+          PLUGIN_PRERELEASE_RUN_ID: ${{ needs.plugin_prerelease.outputs.run_id }}
           RELEASE_CHECKS_RUN_ID: ${{ needs.release_checks.outputs.run_id }}
           NPM_TELEGRAM_RUN_ID: ${{ needs.npm_telegram.outputs.run_id }}
           NORMAL_CI_RESULT: ${{ needs.normal_ci.result }}
+          PLUGIN_PRERELEASE_RESULT: ${{ needs.plugin_prerelease.result }}
           RELEASE_CHECKS_RESULT: ${{ needs.release_checks.result }}
           NPM_TELEGRAM_RESULT: ${{ needs.npm_telegram.result }}
         run: |
@@ -545,6 +710,12 @@ jobs:
             check_child "normal_ci" "$NORMAL_CI_RUN_ID" 1 || failed=1
           fi
 
+          if [[ "$PLUGIN_PRERELEASE_RESULT" == "skipped" && -z "${PLUGIN_PRERELEASE_RUN_ID// }" ]]; then
+            check_child "plugin_prerelease" "" 0 || failed=1
+          else
+            check_child "plugin_prerelease" "$PLUGIN_PRERELEASE_RUN_ID" 1 || failed=1
+          fi
+
           if [[ "$RELEASE_CHECKS_RESULT" == "skipped" && -z "${RELEASE_CHECKS_RUN_ID// }" ]]; then
             check_child "release_checks" "" 0 || failed=1
           else
@@ -558,6 +729,7 @@ jobs:
           fi
 
           summarize_child_timing "normal_ci" "$NORMAL_CI_RUN_ID"
+          summarize_child_timing "plugin_prerelease" "$PLUGIN_PRERELEASE_RUN_ID"
           summarize_child_timing "release_checks" "$RELEASE_CHECKS_RUN_ID"
           summarize_child_timing "npm_telegram" "$NPM_TELEGRAM_RUN_ID"
 

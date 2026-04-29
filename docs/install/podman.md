@@ -63,6 +63,7 @@ Optional build/setup env vars:
 - `OPENCLAW_IMAGE` or `OPENCLAW_PODMAN_IMAGE` -- use an existing/pulled image instead of building `openclaw:local`
 - `OPENCLAW_DOCKER_APT_PACKAGES` -- install extra apt packages during image build
 - `OPENCLAW_EXTENSIONS` -- pre-install plugin dependencies at build time
+- `OPENCLAW_INSTALL_BROWSER` -- pre-install Chromium and Xvfb for browser automation (set to `1` to enable)
 
 Container start:
 

@@ -409,6 +409,27 @@ describe("gateway.tools config", () => {
 });
 
 describe("gateway.channelHealthCheckMinutes", () => {
+  it("accepts preauth handshake timeout tuning", () => {
+    const res = validateConfigObject({
+      gateway: {
+        handshakeTimeoutMs: 30_000,
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects non-positive preauth handshake timeouts", () => {
+    const res = validateConfigObject({
+      gateway: {
+        handshakeTimeoutMs: 0,
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.handshakeTimeoutMs");
+    }
+  });
+
   it("accepts zero to disable monitor", () => {
     const res = validateConfigObject({
       gateway: {

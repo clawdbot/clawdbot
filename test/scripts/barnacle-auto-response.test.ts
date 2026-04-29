@@ -290,6 +290,41 @@ describe("barnacle-auto-response", () => {
     );
   });
 
+  it("does not close clownfish PRs for the active PR limit", async () => {
+    for (const headRef of [
+      { head: { ref: "clownfish/clawsweeper-openclaw-openclaw-73880" } },
+      { headRefName: "clownfish/clawsweeper-openclaw-openclaw-73880" },
+    ]) {
+      const { calls, github } = barnacleGithub([]);
+
+      await runBarnacleAutoResponse({
+        github,
+        context: barnacleContext(
+          {
+            ...headRef,
+            user: {
+              login: "app/openclaw-clownfish",
+            },
+          },
+          ["r: too-many-prs"],
+        ),
+        core: {
+          info: () => undefined,
+        },
+      });
+
+      expect(calls.removeLabel).toContainEqual(
+        expect.objectContaining({ name: "r: too-many-prs" }),
+      );
+      expect(calls.createComment).not.toContainEqual(
+        expect.objectContaining({
+          body: expect.stringContaining("more than 10 active PRs"),
+        }),
+      );
+      expect(calls.update).not.toContainEqual(expect.objectContaining({ state: "closed" }));
+    }
+  });
+
   it("still adds candidate labels to broad contributor PRs", async () => {
     const { calls, github } = barnacleGithub([
       file("ui/src/app.ts"),

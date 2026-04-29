@@ -7,6 +7,7 @@ import {
 import {
   coerceImageModelConfig,
   type ImageModelConfig,
+  resolveConfiguredImageModelRefs,
   resolveProviderVisionModelFromConfig,
 } from "./image-tool.helpers.js";
 import { hasAuthForProvider, resolveDefaultModelRef } from "./model-config.helpers.js";
@@ -42,12 +43,18 @@ export function resolvePdfModelConfigForTool(params: {
 }): ImageModelConfig | null {
   const explicitPdf = coercePdfModelConfig(params.cfg);
   if (explicitPdf.primary?.trim() || (explicitPdf.fallbacks?.length ?? 0) > 0) {
-    return explicitPdf;
+    return resolveConfiguredImageModelRefs({
+      cfg: params.cfg,
+      imageModelConfig: explicitPdf,
+    });
   }
 
   const explicitImage = coerceImageModelConfig(params.cfg);
   if (explicitImage.primary?.trim() || (explicitImage.fallbacks?.length ?? 0) > 0) {
-    return explicitImage;
+    return resolveConfiguredImageModelRefs({
+      cfg: params.cfg,
+      imageModelConfig: explicitImage,
+    });
   }
 
   const primary = resolveDefaultModelRef(params.cfg);

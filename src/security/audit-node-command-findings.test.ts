@@ -56,6 +56,18 @@ describe("security audit node command findings", () => {
         detailIncludes: ["zzzzzzzzzzzzzz"],
         detailExcludes: ["did you mean"],
       },
+      {
+        name: "keeps valid dangerous denyCommands entries out of unknown warnings",
+        cfg: {
+          gateway: {
+            nodes: {
+              denyCommands: ["camera.snap", "screen.record", "camera.snapp", "system.*"],
+            },
+          },
+        } satisfies OpenClawConfig,
+        detailIncludes: ["camera.snapp", "system.*", "did you mean", "camera.snap"],
+        detailExcludes: ["screen.record"],
+      },
     ] as const;
 
     for (const testCase of cases) {
@@ -71,6 +83,18 @@ describe("security audit node command findings", () => {
         excludes: "detailExcludes" in testCase ? testCase.detailExcludes : [],
       });
     }
+  });
+
+  it("does not flag valid dangerous gateway.nodes.denyCommands entries as ineffective", () => {
+    const findings = collectNodeDenyCommandPatternFindings({
+      gateway: {
+        nodes: {
+          denyCommands: ["camera.snap", "camera.clip", "screen.record", "sms.send"],
+        },
+      },
+    } satisfies OpenClawConfig);
+
+    expect(findings).toEqual([]);
   });
 
   it("evaluates dangerous gateway.nodes.allowCommands findings", () => {

@@ -158,6 +158,7 @@ describe("createSlackBoltApp", () => {
     expect((receiver as unknown as FakeSocketModeReceiver).args).toEqual({
       appToken: "xapp-test",
       autoReconnectEnabled: false,
+      clientPingTimeout: 15_000,
       installerOptions: {
         clientOptions,
       },
@@ -171,6 +172,38 @@ describe("createSlackBoltApp", () => {
       tokenVerificationEnabled: false,
     });
     expect((app as unknown as FakeApp).middleware).toHaveLength(1);
+  });
+
+  it("passes Socket Mode ping/pong options through Slack's public receiver API", () => {
+    const clientOptions = { teamId: "T1" };
+    const { receiver } = createSlackBoltApp({
+      interop: {
+        App: FakeApp as never,
+        HTTPReceiver: FakeHTTPReceiver as never,
+        SocketModeReceiver: FakeSocketModeReceiver as never,
+      },
+      slackMode: "socket",
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+      slackWebhookPath: "/slack/events",
+      clientOptions,
+      socketMode: {
+        clientPingTimeout: 20_000,
+        serverPingTimeout: 45_000,
+        pingPongLoggingEnabled: true,
+      },
+    });
+
+    expect((receiver as unknown as FakeSocketModeReceiver).args).toEqual({
+      appToken: "xapp-test",
+      autoReconnectEnabled: false,
+      clientPingTimeout: 20_000,
+      serverPingTimeout: 45_000,
+      pingPongLoggingEnabled: true,
+      installerOptions: {
+        clientOptions,
+      },
+    });
   });
 
   it("uses HTTPReceiver for webhook mode", () => {

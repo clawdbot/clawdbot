@@ -813,6 +813,18 @@ function mergeExistingTaskForCreate(
   return updateTask(existing.taskId, patch) ?? cloneTaskRecord(existing);
 }
 
+function resolveTaskAgentId(params: {
+  explicitAgentId?: string;
+  ownerKey: string;
+  requesterSessionKey: string;
+}): string | undefined {
+  return (
+    normalizeOptionalString(params.explicitAgentId) ??
+    parseAgentSessionKey(params.ownerKey)?.agentId ??
+    parseAgentSessionKey(params.requesterSessionKey)?.agentId
+  );
+}
+
 function taskTerminalDeliveryIdempotencyKey(task: TaskRecord): string {
   const outcome = task.status === "succeeded" ? (task.terminalOutcome ?? "default") : "default";
   return `task-terminal:${task.taskId}:${task.status}:${outcome}`;
@@ -1493,6 +1505,11 @@ export function createTaskRecord(params: {
     requesterSessionKey,
     ownerKey: params.ownerKey,
   });
+  const agentId = resolveTaskAgentId({
+    explicitAgentId: params.agentId,
+    ownerKey,
+    requesterSessionKey,
+  });
   assertTaskOwner({
     ownerKey,
     scopeKind,
@@ -1513,7 +1530,7 @@ export function createTaskRecord(params: {
     task: params.task,
   });
   if (existing) {
-    return mergeExistingTaskForCreate(existing, params);
+    return mergeExistingTaskForCreate(existing, { ...params, agentId });
   }
   const now = Date.now();
   const taskId = crypto.randomUUID();
@@ -1542,7 +1559,7 @@ export function createTaskRecord(params: {
     childSessionKey: params.childSessionKey,
     parentFlowId: normalizeOptionalString(params.parentFlowId),
     parentTaskId: normalizeOptionalString(params.parentTaskId),
-    agentId: normalizeOptionalString(params.agentId),
+    agentId,
     runId: normalizeOptionalString(params.runId),
     label: normalizeOptionalString(params.label),
     task: params.task,

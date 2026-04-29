@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../../config/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withProgress } from "../progress.js";
 
@@ -27,8 +28,10 @@ export async function probeGatewayStatus(opts: {
   url: string;
   token?: string;
   password?: string;
+  config?: OpenClawConfig;
   tlsFingerprint?: string;
   timeoutMs: number;
+  preauthHandshakeTimeoutMs?: number;
   json?: boolean;
   requireRpc?: boolean;
   configPath?: string;
@@ -50,6 +53,9 @@ export async function probeGatewayStatus(opts: {
             password: opts.password,
           },
           tlsFingerprint: opts.tlsFingerprint,
+          ...(opts.preauthHandshakeTimeoutMs !== undefined
+            ? { preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs }
+            : {}),
           timeoutMs: opts.timeoutMs,
           includeDetails: false,
         };
@@ -60,6 +66,7 @@ export async function probeGatewayStatus(opts: {
             token: opts.token,
             password: opts.password,
             tlsFingerprint: opts.tlsFingerprint,
+            ...(opts.config ? { config: opts.config } : {}),
             method: "status",
             timeoutMs: opts.timeoutMs,
             ...(opts.configPath ? { configPath: opts.configPath } : {}),

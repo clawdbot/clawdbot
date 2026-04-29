@@ -5,6 +5,10 @@ import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import {
+  tracePluginLifecyclePhase,
+  tracePluginLifecyclePhaseAsync,
+} from "../plugins/plugin-lifecycle-trace.js";
 import { formatPluginSourceForTable, resolvePluginSourceRoots } from "../plugins/source-display.js";
 import type { PluginLogger } from "../plugins/types.js";
 import { defaultRuntime } from "../runtime.js";
@@ -38,6 +42,7 @@ export type PluginMarketplaceListOptions = {
 
 export type PluginUninstallOptions = {
   keepFiles?: boolean;
+  /** @deprecated Use keepFiles. */
   keepConfig?: boolean;
   force?: boolean;
   dryRun?: boolean;
@@ -259,24 +264,37 @@ export function registerPluginsCli(program: Command) {
         buildAllPluginInspectReports,
         buildPluginDiagnosticsReport,
         buildPluginInspectReport,
+        buildPluginSnapshotReport,
         formatPluginCompatibilityNotice,
       } = await import("../plugins/status.js");
       const { loadInstalledPluginIndexInstallRecords } =
         await import("../plugins/installed-plugin-index-records.js");
-      const cfg = getRuntimeConfig();
-      const installRecords = await loadInstalledPluginIndexInstallRecords();
-      const report = buildPluginDiagnosticsReport({
-        config: cfg,
-        ...(opts.json ? { logger: quietPluginJsonLogger } : {}),
+      const cfg = tracePluginLifecyclePhase("config read", () => getRuntimeConfig(), {
+        command: "inspect",
       });
+      const installRecords = await tracePluginLifecyclePhaseAsync(
+        "install records load",
+        () => loadInstalledPluginIndexInstallRecords(),
+        { command: "inspect" },
+      );
+      const loggerParams = opts.json ? { logger: quietPluginJsonLogger } : {};
       if (opts.all) {
         if (id) {
           defaultRuntime.error("Pass either a plugin id or --all, not both.");
           return defaultRuntime.exit(1);
         }
+        const report = tracePluginLifecyclePhase(
+          "runtime plugin registry load",
+          () =>
+            buildPluginDiagnosticsReport({
+              config: cfg,
+              ...loggerParams,
+            }),
+          { command: "inspect", all: true },
+        );
         const inspectAll = buildAllPluginInspectReports({
           config: cfg,
-          ...(opts.json ? { logger: quietPluginJsonLogger } : {}),
+          ...loggerParams,
           report,
         });
         const inspectAllWithInstall = inspectAll.map((inspect) => ({
@@ -342,10 +360,36 @@ export function registerPluginsCli(program: Command) {
         return defaultRuntime.exit(1);
       }
 
+      const snapshotReport = tracePluginLifecyclePhase(
+        "plugin registry snapshot",
+        () =>
+          buildPluginSnapshotReport({
+            config: cfg,
+            ...loggerParams,
+          }),
+        { command: "inspect" },
+      );
+      const targetPlugin = snapshotReport.plugins.find(
+        (entry) => entry.id === id || entry.name === id,
+      );
+      if (!targetPlugin) {
+        defaultRuntime.error(`Plugin not found: ${id}`);
+        return defaultRuntime.exit(1);
+      }
+      const report = tracePluginLifecyclePhase(
+        "runtime plugin registry load",
+        () =>
+          buildPluginDiagnosticsReport({
+            config: cfg,
+            ...loggerParams,
+            onlyPluginIds: [targetPlugin.id],
+          }),
+        { command: "inspect", pluginId: targetPlugin.id },
+      );
       const inspect = buildPluginInspectReport({
-        id,
+        id: targetPlugin.id,
         config: cfg,
-        ...(opts.json ? { logger: quietPluginJsonLogger } : {}),
+        ...loggerParams,
         report,
       });
       if (!inspect) {
@@ -570,7 +614,7 @@ export function registerPluginsCli(program: Command) {
         withoutPluginInstallRecords,
         withPluginInstallRecords,
       } = await import("../plugins/installed-plugin-index-records.js");
-      const { buildPluginDiagnosticsReport } = await import("../plugins/status.js");
+      const { buildPluginSnapshotReport } = await import("../plugins/status.js");
       const {
         applyPluginUninstallDirectoryRemoval,
         formatUninstallActionLabels,
@@ -585,11 +629,23 @@ export function registerPluginsCli(program: Command) {
         await import("./plugins-registry-refresh.js");
       const { resolvePluginUninstallId } = await import("./plugins-uninstall-selection.js");
       const { promptYesNo } = await import("./prompt.js");
-      const snapshot = await readConfigFileSnapshot();
+      const snapshot = await tracePluginLifecyclePhaseAsync(
+        "config read",
+        () => readConfigFileSnapshot(),
+        { command: "uninstall" },
+      );
       const sourceConfig = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
-      const installRecords = await loadInstalledPluginIndexInstallRecords();
+      const installRecords = await tracePluginLifecyclePhaseAsync(
+        "install records load",
+        () => loadInstalledPluginIndexInstallRecords(),
+        { command: "uninstall" },
+      );
       const cfg = withPluginInstallRecords(sourceConfig, installRecords);
-      const report = buildPluginDiagnosticsReport({ config: cfg });
+      const report = tracePluginLifecyclePhase(
+        "plugin registry snapshot",
+        () => buildPluginSnapshotReport({ config: cfg }),
+        { command: "uninstall" },
+      );
       const extensionsDir = path.join(resolveStateDir(process.env, os.homedir), "extensions");
       const keepFiles = Boolean(opts.keepFiles || opts.keepConfig);
 
@@ -684,12 +740,17 @@ export function registerPluginsCli(program: Command) {
 
       const nextInstallRecords = removePluginInstallRecordFromRecords(installRecords, pluginId);
       const nextConfig = withoutPluginInstallRecords(plan.config);
-      await commitPluginInstallRecordsWithConfig({
-        previousInstallRecords: installRecords,
-        nextInstallRecords,
-        nextConfig,
-        ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-      });
+      await tracePluginLifecyclePhaseAsync(
+        "config mutation",
+        () =>
+          commitPluginInstallRecordsWithConfig({
+            previousInstallRecords: installRecords,
+            nextInstallRecords,
+            nextConfig,
+            ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+          }),
+        { command: "uninstall" },
+      );
       const directoryResult = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
       for (const warning of directoryResult.warnings) {
         defaultRuntime.log(theme.warn(warning));
@@ -698,6 +759,7 @@ export function registerPluginsCli(program: Command) {
         config: nextConfig,
         reason: "source-changed",
         installRecords: nextInstallRecords,
+        traceCommand: "uninstall",
         logger: {
           warn: (message) => defaultRuntime.log(theme.warn(message)),
         },
@@ -746,8 +808,14 @@ export function registerPluginsCli(program: Command) {
           marketplace?: string;
         },
       ) => {
-        const { runPluginInstallCommand } = await import("./plugins-install-command.js");
-        await runPluginInstallCommand({ raw, opts });
+        await tracePluginLifecyclePhaseAsync(
+          "install command",
+          async () => {
+            const { runPluginInstallCommand } = await import("./plugins-install-command.js");
+            await runPluginInstallCommand({ raw, opts });
+          },
+          { command: "install" },
+        );
       },
     );
 

@@ -49,7 +49,6 @@ export function collectPluginConfigAssignments(params: {
         config: params.config,
         workspaceDir,
         env: params.context.env,
-        cache: true,
         fallbackToBundledMetadata: true,
         fallbackToBundledMetadataForResolvedBundled: true,
         fallbackBundledPluginIds: bundledLoadablePluginIds,

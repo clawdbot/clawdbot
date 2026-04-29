@@ -28,6 +28,7 @@ import {
   resolveSessionFilePathOptions,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
+  resolveFreshSessionTotalTokens,
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
@@ -571,7 +572,13 @@ export function buildStatusMessage(args: StatusArgs): string {
   let outputTokens = entry?.outputTokens;
   let cacheRead = entry?.cacheRead;
   let cacheWrite = entry?.cacheWrite;
-  let totalTokens = entry?.totalTokens ?? (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0);
+  const freshTotalTokens = resolveFreshSessionTotalTokens(entry);
+  const allowTranscriptContextUsage = entry?.totalTokensFresh !== false;
+  let totalTokens =
+    freshTotalTokens ??
+    (entry?.totalTokensFresh === false
+      ? undefined
+      : (entry?.totalTokens ?? (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0)));
 
   // Prefer prompt-size tokens from the session transcript when it looks larger
   // (cached prompt tokens are often missing from agent meta/store).
@@ -585,7 +592,10 @@ export function buildStatusMessage(args: StatusArgs): string {
     );
     if (logUsage) {
       const candidate = logUsage.promptTokens || logUsage.total;
-      if (!totalTokens || totalTokens === 0 || candidate > totalTokens) {
+      if (
+        allowTranscriptContextUsage &&
+        (!totalTokens || totalTokens === 0 || candidate > totalTokens)
+      ) {
         totalTokens = candidate;
       }
       if (!entry?.model && logUsage.model) {

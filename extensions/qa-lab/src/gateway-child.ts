@@ -22,6 +22,7 @@ import { formatQaGatewayLogsForError, redactQaGatewayDebugText } from "./gateway
 import { startQaGatewayRpcClient } from "./gateway-rpc-client.js";
 import { splitQaModelRef, type QaProviderMode } from "./model-selection.js";
 import { resolveQaNodeExecPath } from "./node-exec.js";
+import { readProcessTreeCpuMs } from "./process-tree-cpu.js";
 import {
   normalizeQaProviderModeEnv,
   QA_LIVE_PROVIDER_CONFIG_PATH_ENV,
@@ -211,6 +212,7 @@ export function buildQaRuntimeEnv(params: {
     OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
     OPENCLAW_SKIP_GMAIL_WATCHER: "1",
     OPENCLAW_SKIP_CANVAS_HOST: "1",
+    OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
     OPENCLAW_NO_RESPAWN: "1",
     OPENCLAW_TEST_FAST: "1",
     OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER: "1",
@@ -825,6 +827,7 @@ export async function startQaGatewayChild(params: {
       baseUrl,
       wsUrl,
       pid: child.pid ?? null,
+      getProcessCpuMs: () => readProcessTreeCpuMs(activeChild.pid ?? null),
       token: gatewayToken,
       workspaceDir,
       tempRoot,

@@ -587,49 +587,17 @@ function buildMessageToolDescription(options?: {
       }
     : undefined;
 
-  // If we have a current channel, show its actions and list other configured channels
-  if (currentChannel && messageToolDiscoveryParams) {
-    const channelActions = listChannelSupportedActions(
-      buildMessageActionDiscoveryInput(messageToolDiscoveryParams, currentChannel),
-    );
-    if (channelActions.length > 0) {
-      // Always include "send" as a base action
-      const allActions = new Set<ChannelMessageActionName | "send">(["send", ...channelActions]);
-      const actionList = Array.from(allActions).toSorted().join(", ");
-      let desc = `${baseDescription} Current channel (${currentChannel}) supports: ${actionList}.`;
-
-      // Include other configured channels so cron/isolated agents can discover them
-      const otherChannels: string[] = [];
-      for (const plugin of listChannelPlugins()) {
-        if (plugin.id === currentChannel) {
-          continue;
-        }
-        const actions = listCrossChannelSchemaSupportedMessageActions(
-          buildMessageActionDiscoveryInput(messageToolDiscoveryParams, plugin.id),
-        );
-        if (actions.length > 0) {
-          const all = new Set<ChannelMessageActionName | "send">(["send", ...actions]);
-          otherChannels.push(`${plugin.id} (${Array.from(all).toSorted().join(", ")})`);
-        }
-      }
-      if (otherChannels.length > 0) {
-        desc += ` Other configured channels: ${otherChannels.join(", ")}.`;
-      }
-
-      return appendMessageToolReadHint(
-        desc,
-        Array.from(allActions) as Iterable<ChannelMessageActionName | "send">,
-      );
-    }
-  }
-
-  // Fallback to generic description with all configured actions
   if (messageToolDiscoveryParams) {
-    const actions = listAllMessageToolActions(messageToolDiscoveryParams);
+    const actions = currentChannel
+      ? resolveMessageToolSchemaActions(messageToolDiscoveryParams)
+      : listAllMessageToolActions(messageToolDiscoveryParams);
     if (actions.length > 0) {
+      const sortedActions = Array.from(new Set(actions)).toSorted() as Array<
+        ChannelMessageActionName | "send"
+      >;
       return appendMessageToolReadHint(
-        `${baseDescription} Supports actions: ${actions.join(", ")}.`,
-        actions,
+        `${baseDescription} Supports actions: ${sortedActions.join(", ")}.`,
+        sortedActions,
       );
     }
   }

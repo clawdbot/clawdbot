@@ -6,6 +6,7 @@ import {
   resolveDiscordBoundConversationRoute,
   resolveDiscordConversationRoute,
   resolveDiscordEffectiveRoute,
+  shouldIgnoreStaleDiscordRouteBinding,
 } from "./route-resolution.js";
 
 function buildWorkerBindingConfig(peer: {
@@ -135,5 +136,69 @@ describe("discord route resolution helpers", () => {
       sessionKey: "agent:worker:discord:direct:user-1",
       matchedBy: "binding.channel",
     });
+  });
+
+  it("ignores stale route-shaped bindings after the configured agent changes", () => {
+    const route: ResolvedAgentRoute = {
+      agentId: "newagent",
+      channel: "discord",
+      accountId: "default",
+      sessionKey: "agent:newagent:discord:channel:c1",
+      mainSessionKey: "agent:newagent:main",
+      lastRoutePolicy: "session",
+      matchedBy: "binding.peer",
+    };
+
+    expect(
+      shouldIgnoreStaleDiscordRouteBinding({
+        route,
+        bindingRecord: {
+          bindingId: "binding-1",
+          targetSessionKey: "agent:oldagent:discord:channel:c1",
+          targetKind: "session",
+          conversation: {
+            channel: "discord",
+            accountId: "default",
+            conversationId: "c1",
+          },
+          status: "active",
+          boundAt: 1,
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps explicit focus bindings even when their agent differs from routing", () => {
+    const route: ResolvedAgentRoute = {
+      agentId: "newagent",
+      channel: "discord",
+      accountId: "default",
+      sessionKey: "agent:newagent:discord:channel:c1",
+      mainSessionKey: "agent:newagent:main",
+      lastRoutePolicy: "session",
+      matchedBy: "binding.peer",
+    };
+
+    expect(
+      shouldIgnoreStaleDiscordRouteBinding({
+        route,
+        bindingRecord: {
+          bindingId: "focus-binding",
+          targetSessionKey: "agent:oldagent:discord:channel:c1",
+          targetKind: "session",
+          conversation: {
+            channel: "discord",
+            accountId: "default",
+            conversationId: "c1",
+          },
+          status: "active",
+          boundAt: 1,
+          metadata: {
+            boundBy: "user-1",
+            label: "oldagent",
+          },
+        },
+      }),
+    ).toBe(false);
   });
 });

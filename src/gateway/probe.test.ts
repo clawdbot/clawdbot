@@ -203,7 +203,18 @@ describe("probeGateway", () => {
     expect(gatewayClientState.options?.scopes).toEqual(["operator.read"]);
   });
 
-  it("keeps device identity disabled for unauthenticated loopback probes", async () => {
+  it("reuses cached device identity for unauthenticated loopback probes", async () => {
+    await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      timeoutMs: 1_000,
+    });
+
+    expect(gatewayClientState.options?.deviceIdentity).toEqual(deviceIdentityState.value);
+  });
+
+  it("keeps device identity disabled for first-time unauthenticated loopback probes", async () => {
+    deviceIdentityState.cachedToken = null;
+
     await probeGateway({
       url: "ws://127.0.0.1:18789",
       timeoutMs: 1_000,
@@ -220,7 +231,7 @@ describe("probeGateway", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(gatewayClientState.options?.deviceIdentity).toBeNull();
+    expect(gatewayClientState.options?.deviceIdentity).toEqual(deviceIdentityState.value);
     expect(gatewayClientState.requests).toEqual([]);
   });
 

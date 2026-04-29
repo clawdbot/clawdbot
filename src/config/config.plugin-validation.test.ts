@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
 vi.unmock("../version.js");
@@ -108,7 +107,6 @@ describe("config plugin validation", () => {
       HOME: suiteHome,
       OPENCLAW_HOME: undefined,
       OPENCLAW_STATE_DIR: path.join(suiteHome, ".openclaw"),
-      OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: "10000",
       OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
       OPENCLAW_VERSION: undefined,
       VITEST: "true",
@@ -208,28 +206,10 @@ describe("config plugin validation", () => {
       id: "voice-call-schema-fixture",
       schema: voiceCallManifest.configSchema,
     });
-    clearPluginManifestRegistryCache();
-    // Warm the plugin manifest cache once so path-based validations can reuse
-    // parsed manifests across test cases.
-    validateInSuite({
-      plugins: {
-        enabled: false,
-        load: {
-          paths: [
-            badPluginDir,
-            bluebubblesPluginDir,
-            bundlePluginDir,
-            manifestlessClaudeBundleDir,
-            voiceCallSchemaPluginDir,
-          ],
-        },
-      },
-    });
   });
 
   afterAll(async () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
-    clearPluginManifestRegistryCache();
   });
 
   it("reports missing plugin refs across entries and allowlist surfaces", async () => {

@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { VERSION } from "../version.js";
 import { OpenClawChannelBridge } from "./channel-bridge.js";
 import { ClaudePermissionRequestSchema, type ClaudeChannelMode } from "./channel-shared.js";
@@ -17,13 +17,21 @@ export type OpenClawMcpServeOptions = {
   verbose?: boolean;
 };
 
+async function resolveMcpConfig(config: OpenClawConfig | undefined): Promise<OpenClawConfig> {
+  if (config) {
+    return config;
+  }
+  const { getRuntimeConfig } = await import("../config/config.js");
+  return getRuntimeConfig();
+}
+
 export async function createOpenClawChannelMcpServer(opts: OpenClawMcpServeOptions = {}): Promise<{
   server: McpServer;
   bridge: OpenClawChannelBridge;
   start: () => Promise<void>;
   close: () => Promise<void>;
 }> {
-  const cfg = opts.config ?? getRuntimeConfig();
+  const cfg = await resolveMcpConfig(opts.config);
   const claudeChannelMode = opts.claudeChannelMode ?? "auto";
   const capabilities = getChannelMcpCapabilities(claudeChannelMode);
   const server = new McpServer(

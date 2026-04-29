@@ -205,7 +205,7 @@ describe("cli credentials", () => {
   it.each([
     {
       name: "caches Claude Code CLI credentials within the TTL window",
-      allowKeychainPromptSecondRead: false,
+      allowKeychainPromptSecondRead: true,
       advanceMs: 0,
       expectedCalls: 1,
       expectSameObject: true,
@@ -239,6 +239,62 @@ describe("cli credentials", () => {
       expect(execSyncMock).toHaveBeenCalledTimes(expectedCalls);
     },
   );
+
+  it("does not let no-keychain Claude cache misses poison keychain reads", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-cache-"));
+    vi.setSystemTime(new Date("2025-01-01T00:00:00Z"));
+
+    const withoutKeychain = readClaudeCliCredentialsCached({
+      allowKeychainPrompt: false,
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "darwin",
+      homeDir: tempDir,
+      execSync: execSyncMock,
+    });
+
+    expect(withoutKeychain).toBeNull();
+    expect(execSyncMock).not.toHaveBeenCalled();
+
+    mockClaudeCliCredentialRead();
+    const withKeychain = readClaudeCliCredentialsCached({
+      allowKeychainPrompt: true,
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "darwin",
+      homeDir: tempDir,
+      execSync: execSyncMock,
+    });
+
+    expect(withKeychain).toMatchObject({
+      type: "oauth",
+      provider: "anthropic",
+      refresh: "cached-refresh",
+    });
+    expect(execSyncMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses cached Claude keychain credentials for no-prompt reads", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-cache-"));
+    vi.setSystemTime(new Date("2025-01-01T00:00:00Z"));
+    mockClaudeCliCredentialRead();
+
+    const withKeychain = readClaudeCliCredentialsCached({
+      allowKeychainPrompt: true,
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "darwin",
+      homeDir: tempDir,
+      execSync: execSyncMock,
+    });
+    const withoutPrompt = readClaudeCliCredentialsCached({
+      allowKeychainPrompt: false,
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "darwin",
+      homeDir: tempDir,
+      execSync: execSyncMock,
+    });
+
+    expect(withoutPrompt).toEqual(withKeychain);
+    expect(execSyncMock).toHaveBeenCalledTimes(1);
+  });
 
   it("reads Codex credentials from keychain when available", async () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-"));

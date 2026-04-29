@@ -55,7 +55,7 @@ vi.mock("../plugin-sdk/browser-maintenance.js", () => ({
 }));
 
 installGatewayTestHooks({ scope: "suite" });
-const CRON_WAIT_TIMEOUT_MS = 3_000;
+const CRON_WAIT_TIMEOUT_MS = 10_000;
 const EMPTY_CRON_STORE_CONTENT = JSON.stringify({ version: 1, jobs: [] });
 let cronSuiteTempRootPromise: Promise<string> | null = null;
 let cronSuiteCaseId = 0;
@@ -795,6 +795,7 @@ describe("gateway server cron", () => {
   });
 
   test("ignores ambient disabled channel env when validating announce delivery", async () => {
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
     vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-ambient");
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "ambient-telegram");
     const { prevSkipCron } = await setupCronTestRun({

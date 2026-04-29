@@ -138,6 +138,29 @@ async function waitForPath(filePath: string, timeoutMs = 60_000): Promise<void> 
   throw new Error(`timed out waiting for ${filePath}`);
 }
 
+async function approveTrajectoryExport(client: GatewayClient): Promise<string> {
+  const approvals = (await client.request(
+    "exec.approval.list",
+    {},
+    { timeoutMs: 10_000 },
+  )) as Array<{
+    id?: string;
+    request?: {
+      command?: string;
+    };
+  }>;
+  const approval = approvals.find((entry) =>
+    entry.request?.command?.includes("sessions export-trajectory"),
+  );
+  expect(approval?.id).toBeTruthy();
+  await client.request(
+    "exec.approval.resolve",
+    { id: approval!.id, decision: "allow-once" },
+    { timeoutMs: 10_000 },
+  );
+  return approval!.id!;
+}
+
 describeLive("gateway live trajectory export", () => {
   let cleanup: Array<() => Promise<void>> = [];
 
@@ -244,14 +267,18 @@ describeLive("gateway live trajectory export", () => {
           exportResponse?.status === "ok" ||
           exportResponse?.status === "started",
       ).toBe(true);
-      await waitForPath(path.join(bundleDir, "events.jsonl"), 60_000);
       const finalText =
         typeof exportResponse?.message === "object"
           ? extractFirstTextBlock(exportResponse.message)
           : undefined;
+      expect(finalText).toContain("Trajectory exports can include");
+      expect(finalText).toContain("through exec approval");
+      const approvalId = await approveTrajectoryExport(client);
+      logLiveStep("export:approved", { approvalId });
+      await waitForPath(path.join(bundleDir, "events.jsonl"), 60_000);
       logLiveStep("export:done", { finalText });
       if (finalText) {
-        expect(finalText).toContain("Trajectory exported!");
+        expect(finalText).toContain("Approve once");
       }
       expect(await listDirectoryNames(bundleDir)).toEqual(
         expect.arrayContaining([

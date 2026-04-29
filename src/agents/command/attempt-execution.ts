@@ -7,6 +7,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
@@ -254,7 +255,11 @@ export function runAgentAttempt(params: {
   skillsSnapshot: ReturnType<typeof buildWorkspaceSkillSnapshot> | undefined;
   resolvedVerboseLevel: VerboseLevel | undefined;
   agentDir: string;
-  onAgentEvent: (evt: { stream: string; data?: Record<string, unknown> }) => void;
+  onAgentEvent: (evt: {
+    stream: string;
+    data?: Record<string, unknown>;
+    sessionKey?: string;
+  }) => void;
   authProfileProvider: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
@@ -271,12 +276,15 @@ export function runAgentAttempt(params: {
           cliSessionId: getCliSessionBinding(params.sessionEntry, "claude-cli")?.sessionId,
         })
       : "";
-  const effectivePrompt = resolveFallbackRetryPrompt({
+  const resolvedPrompt = resolveFallbackRetryPrompt({
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
     sessionHasHistory: params.sessionHasHistory,
     priorContextPrelude: claudeCliFallbackPrelude,
   });
+  const effectivePrompt = isRawModelRun
+    ? resolvedPrompt
+    : annotateInterSessionPromptText(resolvedPrompt, params.opts.inputProvenance);
   const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.sessionEntry?.systemPromptReport,
   );
@@ -369,6 +377,7 @@ export function runAgentAttempt(params: {
         timeoutMs: params.timeoutMs,
         runId: params.runId,
         extraSystemPrompt: params.opts.extraSystemPrompt,
+        inputProvenance: params.opts.inputProvenance,
         cliSessionId: nextCliSessionId,
         cliSessionBinding:
           nextCliSessionId === activeCliSessionBinding?.sessionId

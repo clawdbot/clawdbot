@@ -483,7 +483,7 @@ describe("infra runtime", () => {
       }
     });
 
-    it("keeps SIGUSR1 deferred by default while work is still pending", async () => {
+    it("emits SIGUSR1 after the default deferral timeout while work is still pending", async () => {
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
       process.on("SIGUSR1", handler);
@@ -495,8 +495,25 @@ describe("infra runtime", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
 
-        // No default max deferral wait; active turns should not be killed just
-        // because a config-triggered restart has been pending for 5 minutes.
+        await vi.advanceTimersByTimeAsync(300_000);
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("keeps SIGUSR1 deferred when deferral timeout is explicitly disabled", async () => {
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        setRuntimeConfigSnapshot({ gateway: { reload: { deferralTimeoutMs: 0 } } });
+        setPreRestartDeferralCheck(() => 5); // always pending
+        scheduleGatewaySigusr1Restart({ delayMs: 0 });
+
+        await vi.advanceTimersByTimeAsync(0);
+        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
+
         await vi.advanceTimersByTimeAsync(300_000);
         expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
       } finally {

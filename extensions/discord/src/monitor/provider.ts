@@ -958,7 +958,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       gateway,
       gatewaySupervisor: createdGatewaySupervisor,
       autoPresenceController: createdAutoPresenceController,
-      eventQueueOpts,
     } = await createDiscordMonitorClient({
       accountId: account.accountId,
       applicationId,
@@ -1079,7 +1078,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       runtime,
       setStatus: opts.setStatus,
       abortSignal: opts.abortSignal,
-      workerRunTimeoutMs: discordCfg.inboundWorker?.runTimeoutMs,
       botUserId,
       guildHistories,
       historyLimit,
@@ -1120,7 +1118,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       logger,
       messageHandler,
       trackInboundEvent,
-      eventQueueListenerTimeoutMs: eventQueueOpts.listenerTimeout,
     });
 
     logDiscordStartupPhase({

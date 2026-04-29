@@ -116,8 +116,6 @@ export function createColdPluginHermeticEnv(
     OPENCLAW_BUNDLED_PLUGINS_DIR: options.bundledPluginsDir,
     OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY:
       options.disablePersistedRegistry === false ? undefined : "1",
-    OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-    OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
     OPENCLAW_VERSION: "2026.4.25",
     VITEST: "true",
   };

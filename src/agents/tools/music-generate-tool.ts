@@ -28,6 +28,7 @@ import type { DeliveryContext } from "../../utils/delivery-context.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
+import { withMediaGenerationTaskKeepalive } from "./media-generate-background-shared.js";
 import {
   applyMusicGenerationModelConfigDefaults,
   buildMediaReferenceDetails,
@@ -586,19 +587,24 @@ export function createMusicGenerateTool(options?: {
       if (shouldDetach) {
         scheduleBackgroundWork(async () => {
           try {
-            const executed = await executeMusicGenerationJob({
-              effectiveCfg,
-              prompt,
-              agentDir: options?.agentDir,
-              model,
-              lyrics,
-              instrumental,
-              durationSeconds,
-              format,
-              filename,
-              loadedReferenceImages,
-              taskHandle,
-              timeoutMs,
+            const executed = await withMediaGenerationTaskKeepalive({
+              handle: taskHandle,
+              progressSummary: "Generating music",
+              run: () =>
+                executeMusicGenerationJob({
+                  effectiveCfg,
+                  prompt,
+                  agentDir: options?.agentDir,
+                  model,
+                  lyrics,
+                  instrumental,
+                  durationSeconds,
+                  format,
+                  filename,
+                  loadedReferenceImages,
+                  taskHandle,
+                  timeoutMs,
+                }),
             });
             completeMusicGenerationTaskRun({
               handle: taskHandle,

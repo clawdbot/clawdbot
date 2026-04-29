@@ -458,6 +458,51 @@ describe("normalizeCronJobCreate", () => {
     expect(validateCronAddParams(normalized)).toBe(true);
   });
 
+  it("promotes implicit text payloads with agentTurn hints for create jobs", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "nested text model",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: {
+        text: " summarize issue status ",
+        model: " anthropic/claude-sonnet-4-6 ",
+        thinking: " high ",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload).toEqual({
+      kind: "agentTurn",
+      message: "summarize issue status",
+      model: "anthropic/claude-sonnet-4-6",
+      thinking: "high",
+    });
+    expect(normalized.sessionTarget).toBe("isolated");
+    expect(validateCronAddParams(normalized)).toBe(true);
+  });
+
+  it("promotes legacy top-level text with agentTurn hints for create jobs", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "legacy text model",
+      schedule: { kind: "every", everyMs: 60_000 },
+      text: " summarize issue status ",
+      model: " openrouter/deepseek/deepseek-r1 ",
+      fallbacks: [],
+      toolsAllow: [" read "],
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload).toEqual({
+      kind: "agentTurn",
+      message: "summarize issue status",
+      model: "openrouter/deepseek/deepseek-r1",
+      fallbacks: [],
+      toolsAllow: ["read"],
+    });
+    expect(normalized.text).toBeUndefined();
+    expect(normalized.model).toBeUndefined();
+    expect(validateCronAddParams(normalized)).toBe(true);
+  });
+
   it("preserves timeoutSeconds=0 for no-timeout agentTurn payloads", () => {
     const normalized = normalizeCronJobCreate({
       name: "legacy no-timeout",
@@ -676,6 +721,40 @@ describe("normalizeCronJobPatch", () => {
     const payload = normalized.payload as Record<string, unknown>;
     expect(payload.kind).toBe("agentTurn");
     expect(payload.model).toBe("anthropic/claude-sonnet-4-6");
+  });
+
+  it("promotes implicit text payloads with agentTurn hints for patches", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        text: " summarize issue status ",
+        model: "anthropic/claude-sonnet-4-6",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload).toEqual({
+      kind: "agentTurn",
+      message: "summarize issue status",
+      model: "anthropic/claude-sonnet-4-6",
+    });
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
+  });
+
+  it("promotes legacy top-level text with agentTurn hints for patches", () => {
+    const normalized = normalizeCronJobPatch({
+      text: " summarize issue status ",
+      model: "openrouter/deepseek/deepseek-r1",
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload).toEqual({
+      kind: "agentTurn",
+      message: "summarize issue status",
+      model: "openrouter/deepseek/deepseek-r1",
+    });
+    expect(normalized.text).toBeUndefined();
+    expect(normalized.model).toBeUndefined();
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
   });
 
   it("infers agentTurn kind for lightContext-only payload patches", () => {

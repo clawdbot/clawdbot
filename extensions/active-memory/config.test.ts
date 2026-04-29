@@ -36,6 +36,20 @@ describe("active-memory manifest config schema", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts explicit in allowedChatTypes", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "active-memory.manifest.allowed-chat-types.explicit",
+      value: {
+        enabled: true,
+        agents: ["main"],
+        allowedChatTypes: ["direct", "explicit"],
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("rejects timeoutMs values above the runtime ceiling", () => {
     const result = validateJsonSchemaValue({
       schema: manifest.configSchema,
@@ -44,6 +58,20 @@ describe("active-memory manifest config schema", () => {
         enabled: true,
         agents: ["main"],
         timeoutMs: 120_001,
+      },
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects unknown allowedChatTypes values", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "active-memory.manifest.allowed-chat-types.invalid",
+      value: {
+        enabled: true,
+        agents: ["main"],
+        allowedChatTypes: ["direct", "portal"],
       },
     });
 

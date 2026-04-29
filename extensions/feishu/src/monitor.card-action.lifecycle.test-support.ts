@@ -43,9 +43,11 @@ const lifecycleConfig = createFeishuLifecycleConfig({
   appSecret: "secret_test",
   channelConfig: {
     dmPolicy: "open",
+    allowFrom: ["ou_user1"],
   },
   accountConfig: {
     dmPolicy: "open",
+    allowFrom: ["ou_user1"],
   },
 });
 
@@ -55,6 +57,7 @@ const lifecycleAccount = createResolvedFeishuLifecycleAccount({
   appSecret: "secret_test",
   config: {
     dmPolicy: "open",
+    allowFrom: ["ou_user1"],
   },
 });
 

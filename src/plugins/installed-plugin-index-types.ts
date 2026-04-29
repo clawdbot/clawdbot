@@ -115,7 +115,6 @@ export type LoadInstalledPluginIndexParams = {
   stateDir?: string;
   pluginIndexFilePath?: string;
   installRecords?: Record<string, PluginInstallRecord>;
-  cache?: boolean;
   candidates?: PluginCandidate[];
   diagnostics?: PluginDiagnostic[];
   now?: () => Date;

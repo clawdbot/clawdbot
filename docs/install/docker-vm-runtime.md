@@ -17,7 +17,7 @@ All external binaries required by skills must be installed at image build time.
 
 The examples below show three common binaries only:
 
-- `gog` for Gmail access
+- `gog` (from `gogcli`) for Gmail access
 - `goplaces` for Google Places
 - `wacli` for WhatsApp
 
@@ -37,17 +37,23 @@ FROM node:24-bookworm
 
 RUN apt-get update && apt-get install -y socat && rm -rf /var/lib/apt/lists/*
 
-# Example binary 1: Gmail CLI
-RUN curl -L https://github.com/steipete/gog/releases/latest/download/gog_Linux_x86_64.tar.gz \
-  | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/gog
+# Example binary 1: Gmail CLI (gogcli — installs as `gog`)
+# Copy the current Linux asset URL from https://github.com/steipete/gogcli/releases
+RUN curl -L https://github.com/steipete/gogcli/releases/latest/download/gogcli_linux_amd64.tar.gz \
+  | tar -xzO gog > /usr/local/bin/gog; \
+  chmod +x /usr/local/bin/gog
 
 # Example binary 2: Google Places CLI
-RUN curl -L https://github.com/steipete/goplaces/releases/latest/download/goplaces_Linux_x86_64.tar.gz \
-  | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/goplaces
+# Copy the current Linux asset URL from https://github.com/steipete/goplaces/releases
+RUN curl -L https://github.com/steipete/goplaces/releases/latest/download/goplaces_linux_amd64.tar.gz \
+  | tar -xzO goplaces > /usr/local/bin/goplaces; \
+  chmod +x /usr/local/bin/goplaces
 
 # Example binary 3: WhatsApp CLI
-RUN curl -L https://github.com/steipete/wacli/releases/latest/download/wacli_Linux_x86_64.tar.gz \
-  | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/wacli
+# Copy the current Linux asset URL from https://github.com/steipete/wacli/releases
+RUN curl -L https://github.com/steipete/wacli/releases/latest/download/wacli-linux-amd64.tar.gz \
+  | tar -xzO wacli > /usr/local/bin/wacli; \
+  chmod +x /usr/local/bin/wacli
 
 # Add more binaries below using the same pattern
 
@@ -70,7 +76,7 @@ CMD ["node","dist/index.js"]
 ```
 
 <Note>
-The download URLs above are for x86_64 (amd64). For ARM-based VMs (e.g. Hetzner ARM, GCP Tau T2A), replace the download URLs with the appropriate ARM64 variants from each tool's release page.
+The URLs above are examples. For ARM-based VMs, choose the `arm64` assets. For reproducible builds, pin versioned release URLs.
 </Note>
 
 ## Build and launch

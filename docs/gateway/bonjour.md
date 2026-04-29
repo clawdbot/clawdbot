@@ -137,6 +137,7 @@ The Gateway writes a rolling log file (printed on startup as
 `gateway log file: ...`). Look for `bonjour:` lines, especially:
 
 - `bonjour: advertise failed ...`
+- `bonjour: suppressing ciao cancellation ...`
 - `bonjour: ... name conflict resolved` / `hostname conflict resolved`
 - `bonjour: watchdog detected non-announced service ...`
 - `bonjour: disabling advertiser after ... failed restarts ...`

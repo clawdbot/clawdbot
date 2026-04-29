@@ -160,6 +160,8 @@ function describeDiscordMessageTool({
 }
 
 export const discordMessageActions: ChannelMessageActionAdapter = {
+  resolveExecutionMode: ({ action }) =>
+    action === "read" || action === "search" ? "gateway" : "local",
   describeMessageTool: describeDiscordMessageTool,
   extractToolSend: ({ args }) => {
     const action = normalizeOptionalString(args.action) ?? "";

@@ -53,11 +53,18 @@ describe("test-install-sh-docker", () => {
 
   it("can reuse dist from the already-built root Docker smoke image", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
+    const dockerfile = readFileSync("Dockerfile", "utf8");
 
     expect(script).toContain('UPDATE_DIST_IMAGE="${OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE:-}"');
     expect(script).toContain("restore_local_dist_from_image");
     expect(script).toContain('docker cp "${container_id}:/app/dist" "$ROOT_DIR/dist"');
     expect(script).toContain('echo "==> Reuse local dist/ from Docker image: $image"');
+    expect(script).toContain("ensure_local_update_dist_import_closure");
+    expect(script).toContain('node scripts/check-package-dist-imports.mjs "$ROOT_DIR"');
+    expect(script).toContain("WARN: reused Docker image dist failed import-closure check");
+    expect(script).toContain("pnpm build");
+    expect(script).toContain("pnpm ui:build");
+    expect(dockerfile).toContain("node scripts/check-package-dist-imports.mjs /app");
   });
 
   it("allows repository branch history and release tags for secret-backed Docker release checks", () => {
@@ -92,7 +99,9 @@ describe("test-install-sh-docker", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
     expect(script).toContain("node --import tsx scripts/write-package-dist-inventory.ts");
+    expect(script).toContain('node scripts/check-package-dist-imports.mjs "$ROOT_DIR"');
     expect(script).toContain("quiet_npm pack --ignore-scripts");
+    expect(script).toContain("node scripts/check-openclaw-package-tarball.mjs");
   });
 });
 
@@ -113,6 +122,8 @@ describe("install-sh smoke runner", () => {
     expect(script).toContain("print_install_audit");
     expect(script).toContain('install -g "$@"');
     expect(script).toContain("openclaw update --tag");
+    expect(script).toContain("is_self_swapped_package_process_exit");
+    expect(script).toContain("legacy updater process exited after self-swap");
     expect(script).toContain("parseFirstJsonObject");
     expect(script).toContain("unterminated update JSON object");
   });

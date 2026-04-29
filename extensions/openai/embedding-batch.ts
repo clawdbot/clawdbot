@@ -11,7 +11,6 @@ import {
   resolveCompletedBatchResult,
   runEmbeddingBatchGroups,
   throwIfBatchTerminalFailure,
-  type EmbeddingBatchExecutionParams,
   type EmbeddingBatchStatus,
   type BatchCompletionResult,
   type ProviderBatchOutputLine,
@@ -19,6 +18,14 @@ import {
   withRemoteHttpResponse,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import type { OpenAiEmbeddingClient } from "./embedding-provider.js";
+
+type EmbeddingBatchExecutionParams = {
+  wait: boolean;
+  pollIntervalMs: number;
+  timeoutMs: number;
+  concurrency: number;
+  debug?: (message: string, data?: Record<string, unknown>) => void;
+};
 
 export type OpenAiBatchRequest = {
   custom_id: string;

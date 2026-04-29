@@ -8,6 +8,7 @@ import {
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { loadWebMedia } from "../media.js";
 import {
+  type DeliverableWhatsAppOutboundPayload,
   normalizeWhatsAppOutboundPayload,
   normalizeWhatsAppPayloadTextPreservingIndentation,
   prepareWhatsAppOutboundMedia,
@@ -24,6 +25,7 @@ import { elide } from "./util.js";
 
 export async function deliverWebReply(params: {
   replyResult: ReplyPayload;
+  normalizedReplyResult?: DeliverableWhatsAppOutboundPayload<ReplyPayload>;
   msg: WebInboundMsg;
   mediaLocalRoots?: readonly string[];
   maxMediaBytes: number;
@@ -45,10 +47,14 @@ export async function deliverWebReply(params: {
   }
   const tableMode = params.tableMode ?? "code";
   const chunkMode = params.chunkMode ?? "length";
-  const normalizedReply = normalizeWhatsAppOutboundPayload(replyResult, {
-    normalizeText: normalizeWhatsAppPayloadTextPreservingIndentation,
-  });
-  const convertedText = markdownToWhatsApp(convertMarkdownTables(normalizedReply.text, tableMode));
+  const normalizedReply =
+    params.normalizedReplyResult ??
+    normalizeWhatsAppOutboundPayload(replyResult, {
+      normalizeText: normalizeWhatsAppPayloadTextPreservingIndentation,
+    });
+  const convertedText = markdownToWhatsApp(
+    convertMarkdownTables(normalizedReply.text ?? "", tableMode),
+  );
   const textChunks = chunkMarkdownTextWithMode(convertedText, textLimit, chunkMode);
   const mediaList = normalizedReply.mediaUrls ?? [];
 

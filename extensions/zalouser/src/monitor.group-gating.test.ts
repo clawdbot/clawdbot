@@ -21,6 +21,8 @@ function createAccount(): ResolvedZalouserAccount {
     profile: "default",
     authenticated: true,
     config: {
+      dmPolicy: "open",
+      allowFrom: ["*"],
       groupPolicy: "open",
       groups: {
         "*": { requireMention: true },
@@ -34,6 +36,8 @@ function createConfig(): OpenClawConfig {
     channels: {
       zalouser: {
         enabled: true,
+        dmPolicy: "open",
+        allowFrom: ["*"],
         groups: {
           "*": { requireMention: true },
         },
@@ -619,7 +623,7 @@ describe("zalouser monitor group mention gating", () => {
     expect(callArg?.ctx?.SessionKey).toBe("agent:main:zalouser:group:321");
   });
 
-  it("reads pairing store for open DM control commands", async () => {
+  it("skips pairing store read for open DM control commands", async () => {
     const { readAllowFromStore } = installRuntime({
       commandAuthorized: false,
     });
@@ -637,7 +641,7 @@ describe("zalouser monitor group mention gating", () => {
       runtime: createRuntimeEnv(),
     });
 
-    expect(readAllowFromStore).toHaveBeenCalledTimes(1);
+    expect(readAllowFromStore).not.toHaveBeenCalled();
   });
 
   it("skips pairing store read for open DM non-command messages", async () => {

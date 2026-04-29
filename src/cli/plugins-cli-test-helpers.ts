@@ -52,7 +52,6 @@ export const writePersistedInstalledPluginIndexInstallRecords: AsyncUnknownMock 
     );
   },
 );
-export const clearPluginManifestRegistryCache: UnknownMock = vi.fn();
 export const loadPluginManifestRegistry: UnknownMock = vi.fn();
 export const buildPluginSnapshotReport: UnknownMock = vi.fn();
 export const buildPluginRegistrySnapshotReport: UnknownMock = vi.fn();
@@ -211,7 +210,6 @@ vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) =
 });
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  clearPluginManifestRegistryCache: () => clearPluginManifestRegistryCache(),
   loadPluginManifestRegistry: ((...args: unknown[]) =>
     invokeMock<unknown[], unknown>(loadPluginManifestRegistry, ...args)) as (
     ...args: unknown[]
@@ -525,7 +523,6 @@ export function resetPluginsCliTestState() {
   mockInstalledPluginIndexInstallRecords = {};
   loadInstalledPluginIndexInstallRecords.mockReset();
   writePersistedInstalledPluginIndexInstallRecords.mockReset();
-  clearPluginManifestRegistryCache.mockReset();
   loadPluginManifestRegistry.mockReset();
   buildPluginSnapshotReport.mockReset();
   buildPluginRegistrySnapshotReport.mockReset();

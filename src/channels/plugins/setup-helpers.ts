@@ -153,8 +153,6 @@ export function prepareScopedSetupConfig(params: {
   });
 }
 
-export function clearSetupPromotionRuntimeModuleCache(): void {}
-
 export function applySetupAccountConfigPatch(params: {
   cfg: OpenClawConfig;
   channelKey: string;

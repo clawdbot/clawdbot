@@ -87,35 +87,58 @@ discovery order. When setup runtime does execute, registry diagnostics report
 drift between `setup.providers` / `setup.cliBackends` and the providers or CLI
 backends registered by setup-api without blocking legacy plugins.
 
-### What the loader caches
+### Plugin cache boundary
 
-OpenClaw keeps short in-process caches for:
+OpenClaw does not cache plugin discovery results or direct manifest registry
+data behind wall-clock windows. Installs, manifest edits, and load-path changes
+must become visible on the next explicit metadata read or snapshot rebuild.
+The manifest file parser may keep a bounded file-signature cache keyed by the
+opened manifest path, inode, size, and timestamps; that cache only avoids
+re-parsing unchanged bytes and must not cache discovery, registry, owner, or
+policy answers.
+
+The safe metadata fast path is explicit object ownership, not a hidden cache.
+Gateway startup hot paths should pass the current `PluginMetadataSnapshot`, the
+derived `PluginLookUpTable`, or an explicit manifest registry through the call
+chain. Config validation, startup auto-enable, plugin bootstrap, and provider
+selection can reuse those objects while they represent the current config and
+plugin inventory. Setup lookup still reconstructs manifest metadata on demand
+unless the specific setup path receives an explicit manifest registry; keep that
+as a cold-path fallback rather than adding hidden lookup caches. When the input
+changes, rebuild and replace the snapshot instead of mutating it or keeping
+historical copies.
+Views over the active plugin registry and bundled channel bootstrap helpers
+should be recomputed from the current registry/root. Short-lived maps are fine
+inside one call to dedupe work or guard reentry; they must not become process
+metadata caches.
+
+For plugin loading, the persistent cache layer is runtime loading. It may reuse
+loader state when code or installed artifacts are actually loaded, such as:
+
+- `PluginLoaderCacheState` and compatible active runtime registries
+- jiti/module caches and public-surface loader caches used to avoid importing
+  the same runtime surface repeatedly
+- runtime dependency mirrors and filesystem caches for installed plugin
+  artifacts
+- short-lived per-call maps for path normalization or duplicate resolution
+
+Those caches are data-plane implementation details. They must not answer
+control-plane questions such as "which plugin owns this provider?" unless the
+caller deliberately asked for runtime loading.
+
+Do not add persistent or wall-clock caches for:
 
 - discovery results
-- manifest registry data
-- loaded plugin registries
+- direct manifest registries
+- manifest registries reconstructed from the installed plugin index
+- provider owner lookup, model suppression, provider policy, or public-artifact
+  metadata
+- any other manifest-derived answer where a changed manifest, installed index,
+  or load path should be visible on the next metadata read
 
-These caches reduce bursty startup and repeated command overhead. They are safe
-to think of as short-lived performance caches, not persistence.
-
-Gateway startup hot paths should prefer the current `PluginMetadataSnapshot`,
-the derived `PluginLookUpTable`, or an explicit manifest registry passed through
-the call chain. Config validation, startup auto-enable, and plugin bootstrap use
-the same snapshot when available. For callers that still rebuild manifest
-metadata from the persisted installed plugin index, OpenClaw also keeps a small
-bounded fallback cache keyed by the installed index, request shape, config
-policy, runtime roots, and manifest/package file signatures. That cache is only a
-fallback for repeated installed-index reconstruction; it is not a mutable runtime
-plugin registry.
-
-Performance note:
-
-- Set `OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE=1` or
-  `OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE=1` to disable these caches.
-- Set `OPENCLAW_DISABLE_INSTALLED_PLUGIN_MANIFEST_REGISTRY_CACHE=1` to disable
-  only the installed-index manifest-registry fallback cache.
-- Tune cache windows with `OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS` and
-  `OPENCLAW_PLUGIN_MANIFEST_CACHE_MS`.
+Callers that rebuild manifest metadata from the persisted installed plugin
+index reconstruct that registry on demand. The installed index is durable
+source-plane state; it is not a hidden in-process metadata cache.
 
 ## Registry model
 
@@ -219,6 +242,9 @@ without loading channel runtime.
 
 For model/provider plugins, OpenClaw calls hooks in this rough order.
 The "When to use" column is the quick decision guide.
+Compatibility-only provider fields that OpenClaw no longer calls, such as
+`ProviderPlugin.capabilities` and `suppressBuiltInModel`, are intentionally not
+listed here.
 
 | #   | Hook                              | What it does                                                                                                   | When to use                                                                                                                                   |
 | --- | --------------------------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -237,37 +263,35 @@ The "When to use" column is the quick decision guide.
 | 12  | `prepareDynamicModel`             | Async warm-up, then `resolveDynamicModel` runs again                                                           | Provider needs network metadata before resolving unknown ids                                                                                  |
 | 13  | `normalizeResolvedModel`          | Final rewrite before the embedded runner uses the resolved model                                               | Provider needs transport rewrites but still uses a core transport                                                                             |
 | 14  | `contributeResolvedModelCompat`   | Contribute compat flags for vendor models behind another compatible transport                                  | Provider recognizes its own models on proxy transports without taking over the provider                                                       |
-| 15  | `capabilities`                    | Provider-owned transcript/tooling metadata used by shared core logic                                           | Provider needs transcript/provider-family quirks                                                                                              |
-| 16  | `normalizeToolSchemas`            | Normalize tool schemas before the embedded runner sees them                                                    | Provider needs transport-family schema cleanup                                                                                                |
-| 17  | `inspectToolSchemas`              | Surface provider-owned schema diagnostics after normalization                                                  | Provider wants keyword warnings without teaching core provider-specific rules                                                                 |
-| 18  | `resolveReasoningOutputMode`      | Select native vs tagged reasoning-output contract                                                              | Provider needs tagged reasoning/final output instead of native fields                                                                         |
-| 19  | `prepareExtraParams`              | Request-param normalization before generic stream option wrappers                                              | Provider needs default request params or per-provider param cleanup                                                                           |
-| 20  | `createStreamFn`                  | Fully replace the normal stream path with a custom transport                                                   | Provider needs a custom wire protocol, not just a wrapper                                                                                     |
-| 21  | `wrapStreamFn`                    | Stream wrapper after generic wrappers are applied                                                              | Provider needs request headers/body/model compat wrappers without a custom transport                                                          |
-| 22  | `resolveTransportTurnState`       | Attach native per-turn transport headers or metadata                                                           | Provider wants generic transports to send provider-native turn identity                                                                       |
-| 23  | `resolveWebSocketSessionPolicy`   | Attach native WebSocket headers or session cool-down policy                                                    | Provider wants generic WS transports to tune session headers or fallback policy                                                               |
-| 24  | `formatApiKey`                    | Auth-profile formatter: stored profile becomes the runtime `apiKey` string                                     | Provider stores extra auth metadata and needs a custom runtime token shape                                                                    |
-| 25  | `refreshOAuth`                    | OAuth refresh override for custom refresh endpoints or refresh-failure policy                                  | Provider does not fit the shared `pi-ai` refreshers                                                                                           |
-| 26  | `buildAuthDoctorHint`             | Repair hint appended when OAuth refresh fails                                                                  | Provider needs provider-owned auth repair guidance after refresh failure                                                                      |
-| 27  | `matchesContextOverflowError`     | Provider-owned context-window overflow matcher                                                                 | Provider has raw overflow errors generic heuristics would miss                                                                                |
-| 28  | `classifyFailoverReason`          | Provider-owned failover reason classification                                                                  | Provider can map raw API/transport errors to rate-limit/overload/etc                                                                          |
-| 29  | `isCacheTtlEligible`              | Prompt-cache policy for proxy/backhaul providers                                                               | Provider needs proxy-specific cache TTL gating                                                                                                |
-| 30  | `buildMissingAuthMessage`         | Replacement for the generic missing-auth recovery message                                                      | Provider needs a provider-specific missing-auth recovery hint                                                                                 |
-| 31  | `suppressBuiltInModel`            | Deprecated. Runtime hook is no longer called; use manifest `modelCatalog.suppressions`                         | Historical hook for hiding stale upstream rows; keep new suppression data in the plugin manifest                                              |
-| 32  | `augmentModelCatalog`             | Synthetic/final catalog rows appended after discovery                                                          | Provider needs synthetic forward-compat rows in `models list` and pickers                                                                     |
-| 33  | `resolveThinkingProfile`          | Model-specific `/think` level set, display labels, and default                                                 | Provider exposes a custom thinking ladder or binary label for selected models                                                                 |
-| 34  | `isBinaryThinking`                | On/off reasoning toggle compatibility hook                                                                     | Provider exposes only binary thinking on/off                                                                                                  |
-| 35  | `supportsXHighThinking`           | `xhigh` reasoning support compatibility hook                                                                   | Provider wants `xhigh` on only a subset of models                                                                                             |
-| 36  | `resolveDefaultThinkingLevel`     | Default `/think` level compatibility hook                                                                      | Provider owns default `/think` policy for a model family                                                                                      |
-| 37  | `isModernModelRef`                | Modern-model matcher for live profile filters and smoke selection                                              | Provider owns live/smoke preferred-model matching                                                                                             |
-| 38  | `prepareRuntimeAuth`              | Exchange a configured credential into the actual runtime token/key just before inference                       | Provider needs a token exchange or short-lived request credential                                                                             |
-| 39  | `resolveUsageAuth`                | Resolve usage/billing credentials for `/usage` and related status surfaces                                     | Provider needs custom usage/quota token parsing or a different usage credential                                                               |
-| 40  | `fetchUsageSnapshot`              | Fetch and normalize provider-specific usage/quota snapshots after auth is resolved                             | Provider needs a provider-specific usage endpoint or payload parser                                                                           |
-| 41  | `createEmbeddingProvider`         | Build a provider-owned embedding adapter for memory/search                                                     | Memory embedding behavior belongs with the provider plugin                                                                                    |
-| 42  | `buildReplayPolicy`               | Return a replay policy controlling transcript handling for the provider                                        | Provider needs custom transcript policy (for example, thinking-block stripping)                                                               |
-| 43  | `sanitizeReplayHistory`           | Rewrite replay history after generic transcript cleanup                                                        | Provider needs provider-specific replay rewrites beyond shared compaction helpers                                                             |
-| 44  | `validateReplayTurns`             | Final replay-turn validation or reshaping before the embedded runner                                           | Provider transport needs stricter turn validation after generic sanitation                                                                    |
-| 45  | `onModelSelected`                 | Run provider-owned post-selection side effects                                                                 | Provider needs telemetry or provider-owned state when a model becomes active                                                                  |
+| 15  | `normalizeToolSchemas`            | Normalize tool schemas before the embedded runner sees them                                                    | Provider needs transport-family schema cleanup                                                                                                |
+| 16  | `inspectToolSchemas`              | Surface provider-owned schema diagnostics after normalization                                                  | Provider wants keyword warnings without teaching core provider-specific rules                                                                 |
+| 17  | `resolveReasoningOutputMode`      | Select native vs tagged reasoning-output contract                                                              | Provider needs tagged reasoning/final output instead of native fields                                                                         |
+| 18  | `prepareExtraParams`              | Request-param normalization before generic stream option wrappers                                              | Provider needs default request params or per-provider param cleanup                                                                           |
+| 19  | `createStreamFn`                  | Fully replace the normal stream path with a custom transport                                                   | Provider needs a custom wire protocol, not just a wrapper                                                                                     |
+| 20  | `wrapStreamFn`                    | Stream wrapper after generic wrappers are applied                                                              | Provider needs request headers/body/model compat wrappers without a custom transport                                                          |
+| 21  | `resolveTransportTurnState`       | Attach native per-turn transport headers or metadata                                                           | Provider wants generic transports to send provider-native turn identity                                                                       |
+| 22  | `resolveWebSocketSessionPolicy`   | Attach native WebSocket headers or session cool-down policy                                                    | Provider wants generic WS transports to tune session headers or fallback policy                                                               |
+| 23  | `formatApiKey`                    | Auth-profile formatter: stored profile becomes the runtime `apiKey` string                                     | Provider stores extra auth metadata and needs a custom runtime token shape                                                                    |
+| 24  | `refreshOAuth`                    | OAuth refresh override for custom refresh endpoints or refresh-failure policy                                  | Provider does not fit the shared `pi-ai` refreshers                                                                                           |
+| 25  | `buildAuthDoctorHint`             | Repair hint appended when OAuth refresh fails                                                                  | Provider needs provider-owned auth repair guidance after refresh failure                                                                      |
+| 26  | `matchesContextOverflowError`     | Provider-owned context-window overflow matcher                                                                 | Provider has raw overflow errors generic heuristics would miss                                                                                |
+| 27  | `classifyFailoverReason`          | Provider-owned failover reason classification                                                                  | Provider can map raw API/transport errors to rate-limit/overload/etc                                                                          |
+| 28  | `isCacheTtlEligible`              | Prompt-cache policy for proxy/backhaul providers                                                               | Provider needs proxy-specific cache TTL gating                                                                                                |
+| 29  | `buildMissingAuthMessage`         | Replacement for the generic missing-auth recovery message                                                      | Provider needs a provider-specific missing-auth recovery hint                                                                                 |
+| 30  | `augmentModelCatalog`             | Synthetic/final catalog rows appended after discovery                                                          | Provider needs synthetic forward-compat rows in `models list` and pickers                                                                     |
+| 31  | `resolveThinkingProfile`          | Model-specific `/think` level set, display labels, and default                                                 | Provider exposes a custom thinking ladder or binary label for selected models                                                                 |
+| 32  | `isBinaryThinking`                | On/off reasoning toggle compatibility hook                                                                     | Provider exposes only binary thinking on/off                                                                                                  |
+| 33  | `supportsXHighThinking`           | `xhigh` reasoning support compatibility hook                                                                   | Provider wants `xhigh` on only a subset of models                                                                                             |
+| 34  | `resolveDefaultThinkingLevel`     | Default `/think` level compatibility hook                                                                      | Provider owns default `/think` policy for a model family                                                                                      |
+| 35  | `isModernModelRef`                | Modern-model matcher for live profile filters and smoke selection                                              | Provider owns live/smoke preferred-model matching                                                                                             |
+| 36  | `prepareRuntimeAuth`              | Exchange a configured credential into the actual runtime token/key just before inference                       | Provider needs a token exchange or short-lived request credential                                                                             |
+| 37  | `resolveUsageAuth`                | Resolve usage/billing credentials for `/usage` and related status surfaces                                     | Provider needs custom usage/quota token parsing or a different usage credential                                                               |
+| 38  | `fetchUsageSnapshot`              | Fetch and normalize provider-specific usage/quota snapshots after auth is resolved                             | Provider needs a provider-specific usage endpoint or payload parser                                                                           |
+| 39  | `createEmbeddingProvider`         | Build a provider-owned embedding adapter for memory/search                                                     | Memory embedding behavior belongs with the provider plugin                                                                                    |
+| 40  | `buildReplayPolicy`               | Return a replay policy controlling transcript handling for the provider                                        | Provider needs custom transcript policy (for example, thinking-block stripping)                                                               |
+| 41  | `sanitizeReplayHistory`           | Rewrite replay history after generic transcript cleanup                                                        | Provider needs provider-specific replay rewrites beyond shared compaction helpers                                                             |
+| 42  | `validateReplayTurns`             | Final replay-turn validation or reshaping before the embedded runner                                           | Provider transport needs stricter turn validation after generic sanitation                                                                    |
+| 43  | `onModelSelected`                 | Run provider-owned post-selection side effects                                                                 | Provider needs telemetry or provider-owned state when a model becomes active                                                                  |
 
 `normalizeModelId`, `normalizeTransport`, and `normalizeConfig` first check the
 matched provider plugin, then fall through other hook-capable provider plugins
@@ -944,7 +968,7 @@ source-plane diagnostics without adding a second raw filesystem-path disclosure
 surface. The persisted `plugins/installs.json` plugin index is the install
 source of truth and can be refreshed without loading plugin runtime modules.
 Its `installRecords` map is durable even when a plugin manifest is missing or
-invalid; its `plugins` array is a rebuildable manifest/cache view.
+invalid; its `plugins` array is a rebuildable manifest view.
 
 ## Context engine plugins
 
@@ -960,7 +984,7 @@ pipeline rather than just add memory search or hooks.
 import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
 
 export default function (api) {
-  api.registerContextEngine("lossless-claw", () => ({
+  api.registerContextEngine("lossless-claw", (ctx) => ({
     info: { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: true },
     async ingest() {
       return { ingested: true };
@@ -982,6 +1006,9 @@ export default function (api) {
 }
 ```
 
+The factory `ctx` exposes optional `config`, `agentDir`, and `workspaceDir`
+values for construction-time initialization.
+
 If your engine does **not** own the compaction algorithm, keep `compact()`
 implemented and delegate it explicitly:
 
@@ -992,7 +1019,7 @@ import {
 } from "openclaw/plugin-sdk/core";
 
 export default function (api) {
-  api.registerContextEngine("my-memory-engine", () => ({
+  api.registerContextEngine("my-memory-engine", (ctx) => ({
     info: {
       id: "my-memory-engine",
       name: "My Memory Engine",

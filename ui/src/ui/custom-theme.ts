@@ -27,7 +27,7 @@ const SAFE_COLOR_KEYWORDS = new Set(["black", "white", "transparent", "currentco
 const SAFE_COLOR_FUNCTION_PATTERN =
   /^(?:rgb|rgba|hsl|hsla|hwb|lab|lch|oklab|oklch)\([a-z0-9+\-.,/%\s]+\)$/i;
 const SAFE_HEX_COLOR_PATTERN = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
-const SAFE_FONT_FAMILY_PATTERN = /^[a-z0-9\s,'"._-]+(?:,\s*[a-z0-9\s'"._-]+)*$/i;
+const SAFE_FONT_FAMILY_PUNCTUATION = new Set([",", "'", '"', ".", "_", "-"]);
 
 const MODE_TOKEN_ORDER = [
   "bg",
@@ -261,12 +261,23 @@ function requireSafeExternalColorValue(value: unknown, label: string) {
   throw new Error(`Unsupported tweakcn token: ${label}`);
 }
 
+function isSafeFontFamilyCharacter(char: string) {
+  const code = char.charCodeAt(0);
+  return (
+    (code >= 0x30 && code <= 0x39) ||
+    (code >= 0x41 && code <= 0x5a) ||
+    (code >= 0x61 && code <= 0x7a) ||
+    char === " " ||
+    SAFE_FONT_FAMILY_PUNCTUATION.has(char)
+  );
+}
+
 function requireSafeFontFamilyValue(value: unknown, label: string) {
   const normalized = requireSafeCssValue(value, label);
   if (
     normalized.includes("(") ||
     normalized.includes(")") ||
-    !SAFE_FONT_FAMILY_PATTERN.test(normalized)
+    !Array.from(normalized).every(isSafeFontFamilyCharacter)
   ) {
     throw new Error(`Unsupported tweakcn token: ${label}`);
   }

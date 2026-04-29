@@ -1,6 +1,40 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GatewayTransportError } from "../gateway/call.js";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { formatLogTimestamp, registerLogsCli } from "./logs-cli.js";
+
+const { MockGatewayTransportError } = vi.hoisted(() => ({
+  MockGatewayTransportError: class extends Error {
+    readonly kind: string;
+    readonly connectionDetails: unknown;
+    readonly code?: number;
+    readonly reason?: string;
+    readonly timeoutMs?: number;
+
+    constructor(params: {
+      kind: string;
+      message: string;
+      connectionDetails: unknown;
+      code?: number;
+      reason?: string;
+      timeoutMs?: number;
+    }) {
+      super(params.message);
+      this.name = "GatewayTransportError";
+      this.kind = params.kind;
+      this.connectionDetails = params.connectionDetails;
+      if (params.code !== undefined) {
+        this.code = params.code;
+      }
+      if (params.reason !== undefined) {
+        this.reason = params.reason;
+      }
+      if (params.timeoutMs !== undefined) {
+        this.timeoutMs = params.timeoutMs;
+      }
+    }
+  },
+}));
 
 const callGatewayFromCli = vi.fn();
 const readConfiguredLogTail = vi.fn();
@@ -18,9 +52,11 @@ const buildGatewayConnectionDetails = vi.fn(
 );
 
 vi.mock("../gateway/call.js", () => ({
+  GatewayTransportError: MockGatewayTransportError,
   buildGatewayConnectionDetails: (
     ...args: Parameters<typeof import("../gateway/call.js").buildGatewayConnectionDetails>
   ) => buildGatewayConnectionDetails(...args),
+  isGatewayTransportError: (value: unknown) => value instanceof MockGatewayTransportError,
 }));
 
 vi.mock("../logging/log-tail.js", () => ({
@@ -155,7 +191,7 @@ describe("logs cli", () => {
       maxBytes: 250_000,
     });
     expect(stdoutWrites.join("")).toContain("local fallback line");
-    expect(stderrWrites.join("")).toContain("reading local log file instead");
+    expect(stderrWrites.join("")).toContain("Local Gateway RPC unavailable");
   });
 
   it("falls back to the local log file on loopback scope-upgrade errors", async () => {
@@ -178,7 +214,88 @@ describe("logs cli", () => {
 
     expect(readConfiguredLogTail).toHaveBeenCalledTimes(1);
     expect(stdoutWrites.join("")).toContain("local fallback line");
-    expect(stderrWrites.join("")).toContain("reading local log file instead");
+    expect(stderrWrites.join("")).toContain("Local Gateway RPC unavailable");
+  });
+
+  it("falls back to the configured Gateway file log on loopback gateway close errors", async () => {
+    callGatewayFromCli.mockRejectedValueOnce(
+      new GatewayTransportError({
+        kind: "closed",
+        code: 1000,
+        reason: "no close reason",
+        connectionDetails: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+          message: "",
+        },
+        message: "gateway closed (1000 normal closure): no close reason",
+      }),
+    );
+    readConfiguredLogTail.mockResolvedValueOnce({
+      file: "/tmp/openclaw.log",
+      cursor: 5,
+      size: 5,
+      lines: ["local fallback line"],
+      truncated: false,
+      reset: false,
+    });
+
+    const stdoutWrites = captureStdoutWrites();
+    const stderrWrites = captureStderrWrites();
+
+    await runLogsCli(["logs"]);
+
+    expect(readConfiguredLogTail).toHaveBeenCalledTimes(1);
+    expect(stdoutWrites.join("")).toContain("local fallback line");
+    expect(stderrWrites.join("")).toContain("Local Gateway RPC unavailable");
+  });
+
+  it("falls back to the configured Gateway file log on post-handshake plain close errors", async () => {
+    callGatewayFromCli.mockRejectedValueOnce(new Error("gateway closed (1006): abnormal closure"));
+    readConfiguredLogTail.mockResolvedValueOnce({
+      file: "/tmp/openclaw.log",
+      cursor: 5,
+      size: 5,
+      lines: ["local fallback line"],
+      truncated: false,
+      reset: false,
+    });
+
+    const stdoutWrites = captureStdoutWrites();
+    const stderrWrites = captureStderrWrites();
+
+    await runLogsCli(["logs"]);
+
+    expect(readConfiguredLogTail).toHaveBeenCalledTimes(1);
+    expect(stdoutWrites.join("")).toContain("local fallback line");
+    expect(stderrWrites.join("")).toContain("Local Gateway RPC unavailable");
+  });
+
+  it("does not use local fallback for explicit Gateway URLs", async () => {
+    callGatewayFromCli.mockRejectedValueOnce(
+      new GatewayTransportError({
+        kind: "closed",
+        code: 1000,
+        reason: "no close reason",
+        connectionDetails: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+          message: "",
+        },
+        message: "gateway closed (1000 normal closure): no close reason",
+      }),
+    );
+
+    const stdoutWrites = captureStdoutWrites();
+    const stderrWrites = captureStderrWrites();
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+
+    await runLogsCli(["logs", "--url", "ws://127.0.0.1:18789"]);
+
+    expect(readConfiguredLogTail).not.toHaveBeenCalled();
+    expect(stdoutWrites.join("")).not.toContain("local fallback line");
+    expect(stderrWrites.join("")).toContain("Gateway not reachable");
+    expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
   describe("formatLogTimestamp", () => {

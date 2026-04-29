@@ -1,3 +1,4 @@
+import { resolveAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { loadSessionStore, resolveSessionTotalTokens } from "../config/sessions.js";
@@ -7,6 +8,7 @@ import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 import {
+  resolveSessionDisplayModelRef,
   resolveSessionDisplayDefaults,
   resolveSessionDisplayModel,
 } from "./sessions-display-model.js";
@@ -25,6 +27,7 @@ import {
 type SessionRow = SessionDisplayRow & {
   agentId: string;
   kind: "direct" | "group" | "global" | "unknown";
+  agentRuntime: ReturnType<typeof resolveAgentRuntimeMetadata>;
 };
 
 const AGENT_PAD = 10;
@@ -146,12 +149,14 @@ export async function sessionsCommand(
   const rows = targets
     .flatMap((target) => {
       const store = loadSessionStore(target.storePath);
-      return toSessionDisplayRows(store).map((row) =>
-        Object.assign({}, row, {
-          agentId: parseAgentSessionKey(row.key)?.agentId ?? target.agentId,
+      return toSessionDisplayRows(store).map((row) => {
+        const agentId = parseAgentSessionKey(row.key)?.agentId ?? target.agentId;
+        return Object.assign({}, row, {
+          agentId,
+          agentRuntime: resolveAgentRuntimeMetadata(cfg, agentId),
           kind: classifySessionKey(row.key, store[row.key]),
-        }),
-      );
+        });
+      });
     })
     .filter((row) => {
       if (activeMinutes === undefined) {
@@ -180,7 +185,7 @@ export async function sessionsCommand(
       activeMinutes: activeMinutes ?? null,
       sessions: await Promise.all(
         rows.map(async (r) => {
-          const model = resolveSessionDisplayModel(cfg, r);
+          const modelRef = resolveSessionDisplayModelRef(cfg, r);
           return {
             ...r,
             totalTokens: resolveSessionTotalTokens(r) ?? null,
@@ -189,10 +194,11 @@ export async function sessionsCommand(
             contextTokens:
               r.contextTokens ??
               configuredContextTokens ??
-              (await lookupContextTokensForDisplay(model)) ??
+              (await lookupContextTokensForDisplay(modelRef.model)) ??
               configContextTokens ??
               null,
-            model,
+            modelProvider: modelRef.provider,
+            model: modelRef.model,
           };
         }),
       ),

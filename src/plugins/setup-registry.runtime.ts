@@ -19,12 +19,10 @@ const require = createRequire(import.meta.url);
 const SETUP_REGISTRY_RUNTIME_CANDIDATES = ["./setup-registry.js", "./setup-registry.ts"] as const;
 
 let setupRegistryRuntimeModule: SetupRegistryRuntimeModule | null | undefined;
-let bundledSetupCliBackendsCache: SetupCliBackendRuntimeEntry[] | undefined;
 
 export const __testing = {
   resetRuntimeState(): void {
     setupRegistryRuntimeModule = undefined;
-    bundledSetupCliBackendsCache = undefined;
   },
   setRuntimeModuleForTest(module: SetupRegistryRuntimeModule | null | undefined): void {
     setupRegistryRuntimeModule = module;
@@ -32,11 +30,8 @@ export const __testing = {
 };
 
 function resolveBundledSetupCliBackends(): SetupCliBackendRuntimeEntry[] {
-  if (bundledSetupCliBackendsCache) {
-    return bundledSetupCliBackendsCache;
-  }
-  const index = loadPluginRegistrySnapshot({ cache: true });
-  bundledSetupCliBackendsCache = loadPluginManifestRegistryForInstalledIndex({
+  const index = loadPluginRegistrySnapshot({});
+  return loadPluginManifestRegistryForInstalledIndex({
     index,
   }).plugins.flatMap((plugin) => {
     if (plugin.origin !== "bundled") {
@@ -50,7 +45,6 @@ function resolveBundledSetupCliBackends(): SetupCliBackendRuntimeEntry[] {
         }) satisfies SetupCliBackendRuntimeEntry,
     );
   });
-  return bundledSetupCliBackendsCache;
 }
 
 function loadSetupRegistryRuntime(): SetupRegistryRuntimeModule | null {

@@ -172,6 +172,7 @@ If `tools.media.<capability>.enabled` is **not** set to `false` and you haven't 
   </Step>
   <Step title="agents.defaults.imageModel">
     `agents.defaults.imageModel` primary/fallback refs (image only).
+    Prefer `provider/model` refs. Bare refs are qualified from configured image-capable provider model entries only when the match is unique.
   </Step>
   <Step title="Local CLIs (audio only)">
     Local CLIs (if installed):

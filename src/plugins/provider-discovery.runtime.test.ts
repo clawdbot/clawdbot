@@ -226,4 +226,15 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     ]);
     expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
   });
+
+  it("does not fall back to full plugin loading when discovery entries are requested only", () => {
+    mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+      plugins: [createManifestPluginWithoutDiscovery({ id: "deepseek" })],
+      diagnostics: [],
+    });
+
+    expect(resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true })).toEqual([]);
+    expect(resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true })).toEqual([]);
+    expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
+  });
 });

@@ -1,4 +1,6 @@
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.core.js";
+import { createRunStateMachine, type RunStateStatusSink } from "../channels/run-state-machine.js";
+import { KeyedAsyncQueue } from "./keyed-async-queue.js";
 
 type CloseAwareServer = {
   once: (event: "close", listener: () => void) => unknown;
@@ -11,6 +13,21 @@ type PassiveAccountLifecycleParams<Handle> = {
   onStop?: () => void | Promise<void>;
 };
 
+export type ChannelRunQueueTaskContext = {
+  lifecycleSignal?: AbortSignal;
+};
+
+export type ChannelRunQueue = {
+  enqueue: (key: string, task: (context: ChannelRunQueueTaskContext) => Promise<void>) => void;
+  deactivate: () => void;
+};
+
+export type ChannelRunQueueParams = {
+  setStatus?: RunStateStatusSink;
+  abortSignal?: AbortSignal;
+  onError?: (error: unknown) => void;
+};
+
 /** Bind a fixed account id into a status writer so lifecycle code can emit partial snapshots. */
 export function createAccountStatusSink(params: {
   accountId: string;
@@ -18,6 +35,49 @@ export function createAccountStatusSink(params: {
 }): (patch: Omit<ChannelAccountSnapshot, "accountId">) => void {
   return (patch) => {
     params.setStatus({ accountId: params.accountId, ...patch });
+  };
+}
+
+/**
+ * Serialize channel work per key while keeping lifecycle/busy accounting out of
+ * channel-specific message handlers. The queue does not impose run timeouts;
+ * callers should rely on session/tool/runtime lifecycle for long-running work.
+ */
+export function createChannelRunQueue(params: ChannelRunQueueParams): ChannelRunQueue {
+  const queue = new KeyedAsyncQueue();
+  const runState = createRunStateMachine({
+    setStatus: params.setStatus,
+    abortSignal: params.abortSignal,
+  });
+  const reportError = (error: unknown) => {
+    try {
+      params.onError?.(error);
+    } catch {
+      // Keep queue error handling best-effort; callers should not create a
+      // secondary unhandled rejection from their reporting hook.
+    }
+  };
+
+  return {
+    enqueue(key, task) {
+      void queue
+        .enqueue(key, async () => {
+          if (!runState.isActive()) {
+            return;
+          }
+          runState.onRunStart();
+          try {
+            if (!runState.isActive()) {
+              return;
+            }
+            await task({ lifecycleSignal: params.abortSignal });
+          } finally {
+            runState.onRunEnd();
+          }
+        })
+        .catch(reportError);
+    },
+    deactivate: runState.deactivate,
   };
 }
 

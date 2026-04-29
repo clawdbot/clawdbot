@@ -543,13 +543,11 @@ const UpdateRecordSchema = Type.Object({
 
 export function registerFeishuBitableTools(api: OpenClawPluginApi) {
   if (!api.config) {
-    api.logger.debug?.("feishu_bitable: No config available, skipping bitable tools");
     return;
   }
 
   const accounts = listEnabledFeishuAccounts(api.config);
   if (accounts.length === 0) {
-    api.logger.debug?.("feishu_bitable: No Feishu accounts configured, skipping bitable tools");
     return;
   }
 
@@ -732,6 +730,4 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
       );
     },
   });
-
-  api.logger.debug?.("feishu_bitable: Registered bitable tools");
 }

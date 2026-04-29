@@ -4,9 +4,6 @@
   "private": true,
   "description": "OpenClaw ElevenLabs speech plugin",
   "type": "module",
-  "dependencies": {
-    "ws": "^8.20.0"
-  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },

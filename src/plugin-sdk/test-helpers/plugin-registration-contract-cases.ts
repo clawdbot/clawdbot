@@ -115,8 +115,10 @@ export const pluginRegistrationContractCases = {
     providerIds: ["openrouter"],
     mediaUnderstandingProviderIds: ["openrouter"],
     imageGenerationProviderIds: ["openrouter"],
+    videoGenerationProviderIds: ["openrouter"],
     requireDescribeImages: true,
     requireGenerateImage: true,
+    requireGenerateVideo: true,
   },
   perplexity: {
     pluginId: "perplexity",

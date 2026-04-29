@@ -190,6 +190,12 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
       }
     }
   }
+  for (const cmd of DEFAULT_DANGEROUS_NODE_COMMANDS) {
+    const normalized = normalizeNodeCommand(cmd);
+    if (normalized) {
+      out.add(normalized);
+    }
+  }
   return out;
 }
 

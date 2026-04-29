@@ -460,7 +460,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         agents: {
           defaults: {
             cliBackends: {
-              "claude-cli": {},
+              "claude-cli": { command: "claude" },
             },
           },
         },
@@ -561,6 +561,63 @@ describe("updateSessionStoreAfterAgentRun", () => {
       const persisted = loadSessionStore(storePath);
       expect(persisted[sessionKey]?.totalTokens).toBe(21225);
       expect(persisted[sessionKey]?.totalTokensFresh).toBe(false);
+    });
+  });
+
+  it("does not treat CLI cumulative usage as a fresh context snapshot", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": { command: "claude" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-cli-cumulative-usage";
+      const sessionId = "test-cli-cumulative-usage-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          totalTokens: 95_000,
+          totalTokensFresh: true,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        contextTokensOverride: 1_000_000,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "claude-cli",
+        defaultModel: "claude-opus-4-7",
+        result: {
+          meta: {
+            durationMs: 1,
+            executionTrace: { runner: "cli" },
+            agentMeta: {
+              sessionId,
+              provider: "claude-cli",
+              model: "claude-opus-4-7",
+              usage: {
+                input: 3_800_000,
+                output: 20_000,
+                total: 3_820_000,
+              },
+            },
+          },
+        },
+      });
+
+      expect(sessionStore[sessionKey]?.inputTokens).toBe(3_800_000);
+      expect(sessionStore[sessionKey]?.outputTokens).toBe(20_000);
+      expect(sessionStore[sessionKey]?.totalTokens).toBeUndefined();
+      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(false);
     });
   });
 

@@ -2,6 +2,11 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  createStubSessionHarness,
+  emitAssistantTextDelta,
+} from "../agents/pi-embedded-subscribe.e2e-harness.js";
+import { subscribeEmbeddedPiSession } from "../agents/pi-embedded-subscribe.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -653,6 +658,40 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const msg = (choice0.message as Record<string, unknown> | undefined) ?? {};
         expect(msg.role).toBe("assistant");
         expect(msg.content).toBe("hello");
+      }
+
+      {
+        agentCommand.mockClear();
+        agentCommand.mockImplementationOnce((async (opts: unknown) => {
+          const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+          const { session, emit } = createStubSessionHarness();
+          subscribeEmbeddedPiSession({ session, runId });
+          emit({ type: "message_start", message: { role: "assistant" } });
+          for (const delta of ["<", "final>Title\n", "Line one\nLine two</", "final>"]) {
+            emitAssistantTextDelta({ emit, delta });
+          }
+          return { payloads: [{ text: "Title\nLine one\nLine two" }] };
+        }) as never);
+
+        const splitFinalRes = await postChatCompletions(port, {
+          stream: true,
+          model: "openclaw",
+          messages: [{ role: "user", content: "hi" }],
+        });
+        expect(splitFinalRes.status).toBe(200);
+        const splitFinalText = await splitFinalRes.text();
+        const splitFinalData = parseSseDataLines(splitFinalText);
+        const splitFinalChunks = splitFinalData
+          .filter((d) => d !== "[DONE]")
+          .map((d) => JSON.parse(d) as Record<string, unknown>);
+        const splitFinalContent = splitFinalChunks
+          .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
+          .map((choice) => (choice.delta as Record<string, unknown> | undefined)?.content)
+          .filter((v): v is string => typeof v === "string")
+          .join("");
+        expect(splitFinalContent).toBe("Title\nLine one\nLine two");
+        expect(splitFinalContent).not.toContain("<");
+        expect(splitFinalContent).not.toContain("final>");
       }
 
       {

@@ -11,6 +11,28 @@
  * @see https://github.com/openclaw/openclaw/issues/18558
  */
 
+const INTERNAL_RUNTIME_SCAFFOLDING_TAGS = ["system-reminder", "previous_response"] as const;
+const INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN = INTERNAL_RUNTIME_SCAFFOLDING_TAGS.join("|");
+const INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE = new RegExp(
+  `<\\s*(${INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN})\\b[^>]*>[\\s\\S]*?<\\s*\\/\\s*\\1\\s*>`,
+  "gi",
+);
+const INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE = new RegExp(
+  `<\\s*(?:${INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN})\\b[^>]*\\/\\s*>`,
+  "gi",
+);
+const INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE = new RegExp(
+  `<\\s*\\/?\\s*(?:${INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN})\\b[^>]*>`,
+  "gi",
+);
+
+export function stripInternalRuntimeScaffolding(text: string): string {
+  return text
+    .replace(INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE, "")
+    .replace(INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE, "")
+    .replace(INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE, "");
+}
+
 /**
  * Convert common HTML tags to their plain-text/lightweight-markup equivalents
  * and strip anything that remains.
@@ -21,7 +43,7 @@
  */
 export function sanitizeForPlainText(text: string): string {
   return (
-    text
+    stripInternalRuntimeScaffolding(text)
       // Preserve angle-bracket autolinks as plain URLs before tag stripping.
       .replace(/<((?:https?:\/\/|mailto:)[^<>\s]+)>/gi, "$1")
       // Line breaks
@@ -41,7 +63,7 @@ export function sanitizeForPlainText(text: string): string {
       // List items → bullet points
       .replace(/<li[^>]*>(.*?)<\/li>/gi, "• $1\n")
       // Strip remaining HTML tags (require tag-like structure: <word...>)
-      .replace(/<\/?[a-z][a-z0-9]*\b[^>]*>/gi, "")
+      .replace(/<\/?[a-z][a-z0-9_-]*\b[^>]*>/gi, "")
       // Collapse 3+ consecutive newlines into 2
       .replace(/\n{3,}/g, "\n\n")
   );

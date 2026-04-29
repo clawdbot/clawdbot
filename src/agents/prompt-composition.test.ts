@@ -63,10 +63,12 @@ describe("prompt composition invariants", () => {
     const eventTurn = getTurn(groupScenario!, "t3");
 
     expect(first.systemPrompt).toContain("You are in a Slack group chat.");
+    expect(first.systemPrompt).toContain("prefer delegating bounded side investigations early");
     expect(first.systemPrompt).toContain("Activation: trigger-only");
     expect(first.systemPrompt).toContain('reply with exactly "NO_REPLY"');
     expect(first.systemPrompt).not.toContain("## Silent Replies");
     expect(steady.systemPrompt).toContain("You are in a Slack group chat.");
+    expect(steady.systemPrompt).toContain("prefer delegating bounded side investigations early");
     expect(steady.systemPrompt).toContain('reply with exactly "NO_REPLY"');
     expect(steady.systemPrompt).not.toContain("## Silent Replies");
     expect(steady.systemPrompt).not.toContain("Activation: trigger-only");

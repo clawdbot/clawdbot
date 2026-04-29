@@ -24,14 +24,7 @@ type ChannelPackageStateMetadata = {
 
 export type ChannelPackageStateMetadataKey = "configuredState" | "persistedAuthState";
 
-type ChannelPackageStateRegistry = {
-  catalog: PluginChannelCatalogEntry[];
-  entriesById: Map<string, PluginChannelCatalogEntry>;
-  checkerCache: Map<string, ChannelPackageStateChecker | null>;
-};
-
 const log = createSubsystemLogger("channels");
-const registryCache = new Map<ChannelPackageStateMetadataKey, ChannelPackageStateRegistry>();
 
 function resolveChannelPackageStateMetadata(
   entry: PluginChannelCatalogEntry,
@@ -49,38 +42,20 @@ function resolveChannelPackageStateMetadata(
   return { specifier, exportName };
 }
 
-function getChannelPackageStateRegistry(
+function listChannelPackageStateCatalog(
   metadataKey: ChannelPackageStateMetadataKey,
-): ChannelPackageStateRegistry {
-  const cached = registryCache.get(metadataKey);
-  if (cached) {
-    return cached;
-  }
-  const catalog = listChannelCatalogEntries({ origin: "bundled" }).filter((entry) =>
+): PluginChannelCatalogEntry[] {
+  return listChannelCatalogEntries({ origin: "bundled" }).filter((entry) =>
     Boolean(resolveChannelPackageStateMetadata(entry, metadataKey)),
   );
-  const registry = {
-    catalog,
-    entriesById: new Map(catalog.map((entry) => [entry.pluginId, entry] as const)),
-    checkerCache: new Map(),
-  } satisfies ChannelPackageStateRegistry;
-  registryCache.set(metadataKey, registry);
-  return registry;
 }
 
 function resolveChannelPackageStateChecker(params: {
   entry: PluginChannelCatalogEntry;
   metadataKey: ChannelPackageStateMetadataKey;
 }): ChannelPackageStateChecker | null {
-  const registry = getChannelPackageStateRegistry(params.metadataKey);
-  const cached = registry.checkerCache.get(params.entry.pluginId);
-  if (cached !== undefined) {
-    return cached;
-  }
-
   const metadata = resolveChannelPackageStateMetadata(params.entry, params.metadataKey);
   if (!metadata) {
-    registry.checkerCache.set(params.entry.pluginId, null);
     return null;
   }
 
@@ -94,14 +69,12 @@ function resolveChannelPackageStateChecker(params: {
     if (typeof checker !== "function") {
       throw new Error(`missing ${params.metadataKey} export ${metadata.exportName}`);
     }
-    registry.checkerCache.set(params.entry.pluginId, checker);
     return checker;
   } catch (error) {
     const detail = formatErrorMessage(error);
     log.warn(
       `[channels] failed to load ${params.metadataKey} checker for ${params.entry.pluginId}: ${detail}`,
     );
-    registry.checkerCache.set(params.entry.pluginId, null);
     return null;
   }
 }
@@ -109,7 +82,7 @@ function resolveChannelPackageStateChecker(params: {
 export function listBundledChannelIdsForPackageState(
   metadataKey: ChannelPackageStateMetadataKey,
 ): string[] {
-  return getChannelPackageStateRegistry(metadataKey).catalog.map((entry) => entry.pluginId);
+  return listChannelPackageStateCatalog(metadataKey).map((entry) => entry.pluginId);
 }
 
 export function hasBundledChannelPackageState(params: {
@@ -118,8 +91,9 @@ export function hasBundledChannelPackageState(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): boolean {
-  const registry = getChannelPackageStateRegistry(params.metadataKey);
-  const entry = registry.entriesById.get(params.channelId);
+  const entry = listChannelPackageStateCatalog(params.metadataKey).find(
+    (candidate) => candidate.pluginId === params.channelId,
+  );
   if (!entry) {
     return false;
   }

@@ -1,1 +1,1 @@
-export * from "../memory-host-sdk/runtime-files.js";
+export * from "../../packages/memory-host-sdk/src/runtime-files.js";

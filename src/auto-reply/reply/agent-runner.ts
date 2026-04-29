@@ -15,6 +15,7 @@ import {
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.fs.js";
+import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
@@ -60,6 +61,7 @@ import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-repl
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
+import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import {
@@ -1230,7 +1232,10 @@ export async function runReplyAgent(params: {
       blockReplyPipeline.stop();
     }
     if (pendingToolTasks.size > 0) {
-      await Promise.allSettled(pendingToolTasks);
+      await drainPendingToolTasks({
+        tasks: pendingToolTasks,
+        onTimeout: logVerbose,
+      });
     }
 
     const usage = runResult.meta?.agentMeta?.usage;
@@ -1311,7 +1316,6 @@ export async function runReplyAgent(params: {
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
       cliSessionBinding,
-      usageIsContextSnapshot: isCliProvider(providerUsed, cfg),
     });
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".

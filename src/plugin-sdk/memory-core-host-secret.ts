@@ -1,1 +1,1 @@
-export * from "../memory-host-sdk/secret.js";
+export * from "../../packages/memory-host-sdk/src/secret.js";

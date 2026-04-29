@@ -4,10 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { collectChannelSchemaMetadata } from "../config/channel-config-metadata.js";
 import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
 import type { PluginCandidate } from "./discovery.js";
-import {
-  clearPluginManifestRegistryCache,
-  loadPluginManifestRegistry,
-} from "./manifest-registry.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -87,14 +84,12 @@ function createPluginCandidate(params: {
 function loadRegistry(candidates: PluginCandidate[]) {
   return loadPluginManifestRegistry({
     candidates,
-    cache: false,
   });
 }
 
 function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-    OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
     OPENCLAW_VERSION: undefined,
     VITEST: "true",
     ...overrides,
@@ -176,7 +171,6 @@ function loadRegistryForMinHostVersionCase(params: {
   env?: NodeJS.ProcessEnv;
 }) {
   return loadPluginManifestRegistry({
-    cache: false,
     ...(params.env ? { env: params.env } : {}),
     candidates: [
       createPluginCandidate({
@@ -227,7 +221,6 @@ function createDuplicateCandidateRegistry(params: {
   writeManifest(duplicateDir, manifest);
 
   return loadPluginManifestRegistry({
-    cache: false,
     candidates: [
       createPluginCandidate({
         idHint: params.pluginId,
@@ -307,11 +300,48 @@ function expectCachedPluginRoot(params: {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  clearPluginManifestRegistryCache();
   cleanupTrackedTempDirs(tempDirs);
 });
 
 describe("loadPluginManifestRegistry", () => {
+  it("reflects plugin manifest changes on the next registry load", () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "cached-manifest");
+    mkdirSafe(pluginDir);
+    fs.writeFileSync(path.join(pluginDir, "index.ts"), "export default function () {}", "utf-8");
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/cached-manifest",
+        openclaw: { extensions: ["./index.ts"] },
+      }),
+      "utf-8",
+    );
+    const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
+    writeManifest(pluginDir, {
+      id: "cached-manifest",
+      name: "Before",
+      configSchema: { type: "object" },
+    });
+    const env = hermeticEnv({
+      OPENCLAW_STATE_DIR: stateDir,
+    });
+
+    const first = loadPluginManifestRegistry({ env });
+    expect(first.plugins.find((plugin) => plugin.id === "cached-manifest")?.name).toBe("Before");
+
+    writeManifest(pluginDir, {
+      id: "cached-manifest",
+      name: "After",
+      configSchema: { type: "object" },
+    });
+    const updatedAt = new Date(Date.now() + 5000);
+    fs.utimesSync(manifestPath, updatedAt, updatedAt);
+
+    const second = loadPluginManifestRegistry({ env });
+    expect(second.plugins.find((plugin) => plugin.id === "cached-manifest")?.name).toBe("After");
+  });
+
   it("keeps only the higher-precedence plugin for truly distinct duplicates", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();
@@ -378,7 +408,6 @@ describe("loadPluginManifestRegistry", () => {
     writeManifest(globalDir, manifest);
 
     const registry = loadPluginManifestRegistry({
-      cache: false,
       installRecords: {
         zalouser: {
           source: "npm",
@@ -412,7 +441,6 @@ describe("loadPluginManifestRegistry", () => {
     writeManifest(globalDir, manifest);
 
     const registry = loadPluginManifestRegistry({
-      cache: false,
       installRecords: {
         zalouser: {
           source: "npm",
@@ -824,7 +852,6 @@ describe("loadPluginManifestRegistry", () => {
     });
 
     const registry = loadPluginManifestRegistry({
-      cache: false,
       bundledChannelConfigCollector: collectBundledChannelConfigs,
       candidates: [candidate],
     });
@@ -1752,45 +1779,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(hasUnsafeManifestDiagnostic(registry)).toBe(false);
   });
 
-  it("does not reuse cached bundled plugin roots across env changes", () => {
-    const bundledA = makeTempDir();
-    const bundledB = makeTempDir();
-    const matrixA = createManifestPluginRoot({
-      baseDir: bundledA,
-      pluginId: "matrix",
-      name: "Matrix A",
-      relativePath: "matrix",
-    });
-    const matrixB = createManifestPluginRoot({
-      baseDir: bundledB,
-      pluginId: "matrix",
-      name: "Matrix B",
-      relativePath: "matrix",
-    });
-
-    const first = loadPluginManifestRegistry({
-      cache: true,
-      env: hermeticEnv({
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledA,
-      }),
-    });
-    const second = loadPluginManifestRegistry({
-      cache: true,
-      env: hermeticEnv({
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledB,
-      }),
-    });
-
-    expectCachedPluginRoot({
-      first,
-      second,
-      pluginId: "matrix",
-      firstRoot: matrixA,
-      secondRoot: matrixB,
-    });
-  });
-
-  it("does not reuse cached load-path manifests across env home changes", () => {
+  it("resolves load-path manifests from the current env home", () => {
     const homeA = makeTempDir();
     const homeB = makeTempDir();
     const demoA = createManifestPluginRoot({
@@ -1815,7 +1804,6 @@ describe("loadPluginManifestRegistry", () => {
     };
 
     const first = loadPluginManifestRegistry({
-      cache: true,
       config,
       env: hermeticEnv({
         HOME: homeA,
@@ -1824,7 +1812,6 @@ describe("loadPluginManifestRegistry", () => {
       }),
     });
     const second = loadPluginManifestRegistry({
-      cache: true,
       config,
       env: hermeticEnv({
         HOME: homeB,
@@ -1842,7 +1829,7 @@ describe("loadPluginManifestRegistry", () => {
     });
   });
 
-  it("does not reuse cached manifests across host version changes", () => {
+  it("resolves manifests against the current host version", () => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "synology-chat", configSchema: { type: "object" } });
     fs.writeFileSync(path.join(dir, "index.ts"), "export default {}", "utf-8");
@@ -1862,14 +1849,12 @@ describe("loadPluginManifestRegistry", () => {
     ];
 
     const olderHost = loadPluginManifestRegistry({
-      cache: true,
       candidates,
       env: hermeticEnv({
         OPENCLAW_VERSION: "2026.3.21",
       }),
     });
     const newerHost = loadPluginManifestRegistry({
-      cache: true,
       candidates,
       env: hermeticEnv({
         OPENCLAW_VERSION: "2026.3.22",

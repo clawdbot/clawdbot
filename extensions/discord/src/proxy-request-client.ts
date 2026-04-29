@@ -3,6 +3,8 @@ import { FormData as UndiciFormData } from "undici";
 
 export type ProxyRequestClientOptions = RequestClientOptions;
 
+export const DISCORD_REST_TIMEOUT_MS = 15_000;
+
 function toUndiciFormData(body: FormData): UndiciFormData {
   const converted = new UndiciFormData();
   for (const [key, value] of body.entries()) {
@@ -22,15 +24,17 @@ function toUndiciFormData(body: FormData): UndiciFormData {
 
 function wrapDiscordFetch(fetchImpl: NonNullable<RequestClientOptions["fetch"]>) {
   return (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const signal = AbortSignal.timeout(DISCORD_REST_TIMEOUT_MS);
     if (init?.body instanceof FormData) {
       // Carbon builds global FormData; undici-backed proxy fetch needs undici's
       // FormData class to preserve multipart boundaries.
       return fetchImpl(input, {
         ...init,
+        signal,
         body: toUndiciFormData(init.body) as unknown as BodyInit,
       });
     }
-    return fetchImpl(input, init);
+    return fetchImpl(input, { ...init, signal });
   };
 }
 

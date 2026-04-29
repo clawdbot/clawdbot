@@ -131,6 +131,7 @@ export async function runGatewayStatusProbePass(params: {
             target.kind === "localLoopback" && target.url.startsWith("wss://")
               ? params.localTlsFingerprint
               : undefined,
+          preauthHandshakeTimeoutMs: params.cfg.gateway?.handshakeTimeoutMs,
           timeoutMs: resolveProbeBudgetMs(params.overallTimeoutMs, target),
         });
         return {

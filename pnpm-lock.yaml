@@ -66,9 +66,6 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
         version: 1.29.0(zod@4.3.6)
-      '@vincentkoc/qrcode-tui':
-        specifier: 0.2.1
-        version: 0.2.1
       ajv:
         specifier: ^8.20.0
         version: 8.20.0
@@ -114,12 +111,12 @@ importers:
       openai:
         specifier: ^6.34.0
         version: 6.34.0(ws@8.20.0)(zod@4.3.6)
-      osc-progress:
-        specifier: ^0.3.0
-        version: 0.3.0
       proxy-agent:
         specifier: ^8.0.1
         version: 8.0.1
+      qrcode:
+        specifier: 1.5.4
+        version: 1.5.4
       semver:
         specifier: 7.7.4
         version: 7.7.4
@@ -356,9 +353,6 @@ importers:
       typebox:
         specifier: 1.1.33
         version: 1.1.33
-      undici:
-        specifier: 8.1.0
-        version: 8.1.0
       ws:
         specifier: ^8.20.0
         version: 8.20.0
@@ -366,6 +360,9 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      undici:
+        specifier: 8.1.0
+        version: 8.1.0
 
   extensions/byteplus:
     devDependencies:
@@ -426,10 +423,6 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/deepgram:
-    dependencies:
-      ws:
-        specifier: ^8.20.0
-        version: 8.20.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -529,9 +522,6 @@ importers:
       opusscript:
         specifier: ^0.1.1
         version: 0.1.1
-      typebox:
-        specifier: 1.1.33
-        version: 1.1.33
       undici:
         specifier: 8.1.0
         version: 8.1.0
@@ -566,10 +556,6 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/elevenlabs:
-    dependencies:
-      ws:
-        specifier: ^8.20.0
-        version: 8.20.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -946,10 +932,6 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/mistral:
-    dependencies:
-      ws:
-        specifier: ^8.20.0
-        version: 8.20.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1117,9 +1099,6 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
         version: 1.29.0(zod@4.3.6)
-      '@openclaw/qa-channel':
-        specifier: workspace:*
-        version: link:../qa-channel
       playwright-core:
         specifier: 1.59.1
         version: 1.59.1
@@ -1244,9 +1223,6 @@ importers:
       https-proxy-agent:
         specifier: ^9.0.0
         version: 9.0.0
-      typebox:
-        specifier: 1.1.33
-        version: 1.1.33
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1495,13 +1471,13 @@ importers:
       typebox:
         specifier: 1.1.33
         version: 1.1.33
-      ws:
-        specifier: ^8.20.0
-        version: 8.20.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      ws:
+        specifier: ^8.20.0
+        version: 8.20.0
 
   extensions/xiaomi:
     devDependencies:
@@ -4288,11 +4264,6 @@ packages:
     resolution: {integrity: sha512-N8/FHc/lmlMDCumMuTXyRHCxlov5KZY6unmJ9QR2GOw+OpROZMBsXYGwE+ZMtvN21ql9+Xb8KhGNBj08IrG3Wg==}
     engines: {node: '>=16', npm: '>=8'}
 
-  '@vincentkoc/qrcode-tui@0.2.1':
-    resolution: {integrity: sha512-F2XVHMfasJ0q8G93gtcyU9Px0wMH6o6nIZLrZYSHc6dm9Pq3oCbHuVYYG/UQvJD0rhrGH3P9B6qgpCAqSDUw5w==}
-    engines: {node: '>=20'}
-    hasBin: true
-
   '@vitest/browser-playwright@4.1.5':
     resolution: {integrity: sha512-CWy0lBQJq97nionyJJdnaU4961IXTl43a7UCu5nHy51IoKxAt6PVIJLo+76rVl7KOOgcWHNkG4kbJu/pW7knvA==}
     peerDependencies:
@@ -6403,10 +6374,6 @@ packages:
 
   opusscript@0.1.1:
     resolution: {integrity: sha512-mL0fZZOUnXdZ78woRXp18lApwpp0lF5tozJOD1Wut0dgrA9WuQTgSels/CSmFleaAZrJi/nci5KOVtbuxeWoQA==}
-
-  osc-progress@0.3.0:
-    resolution: {integrity: sha512-4/8JfsetakdeEa4vAYV45FW20aY+B/+K8NEXp5Eiar3wR8726whgHrbSg5Ar/ZY1FLJ/AGtUqV7W2IVF+Gvp9A==}
-    engines: {node: '>=20'}
 
   oxfmt@0.46.0:
     resolution: {integrity: sha512-CopwJOwPAjZ9p76fCvz+mSOJTw9/NY3cSksZK3VO/bUQ8UoEcketNgUuYS0UB3p+R9XnXe7wGGXUmyFxc7QxJA==}
@@ -11064,10 +11031,6 @@ snapshots:
 
   '@urbit/aura@3.0.0': {}
 
-  '@vincentkoc/qrcode-tui@0.2.1':
-    dependencies:
-      qrcode: 1.5.4
-
   '@vitest/browser-playwright@4.1.5(playwright@1.59.1)(vite@8.0.10(@types/node@25.6.0)(esbuild@0.27.7)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.5)':
     dependencies:
       '@vitest/browser': 4.1.5(vite@8.0.10(@types/node@25.6.0)(esbuild@0.27.7)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.5)
@@ -13573,8 +13536,6 @@ snapshots:
     optional: true
 
   opusscript@0.1.1: {}
-
-  osc-progress@0.3.0: {}
 
   oxfmt@0.46.0:
     dependencies:

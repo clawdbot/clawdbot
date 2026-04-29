@@ -23,6 +23,7 @@ type GuardedFetchCall = {
   url: string;
   init?: RequestInit;
   policy?: unknown;
+  signal?: AbortSignal;
   timeoutMs?: number;
   auditContext?: string;
 };
@@ -329,6 +330,29 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
         await collectStreamEvents(stream);
 
         expect(getGuardedFetchCall(fetchMock).timeoutMs).toBe(450_000);
+      },
+    );
+  });
+
+  it("passes caller abort signals at guard level when a timeout is present", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const signal = new AbortController().signal;
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          options: { signal, timeoutMs: 123_456 },
+        });
+
+        await collectStreamEvents(stream);
+
+        const request = getGuardedFetchCall(fetchMock);
+        expect(request.timeoutMs).toBe(123_456);
+        expect(request.signal).toBe(signal);
+        expect(request.init?.signal).toBeUndefined();
       },
     );
   });
@@ -1018,6 +1042,7 @@ async function createOllamaTestStream(params: {
     maxTokens?: number;
     temperature?: number;
     signal?: AbortSignal;
+    timeoutMs?: number;
     headers?: Record<string, string>;
   };
 }) {
@@ -1297,6 +1322,69 @@ describe("createOllamaStreamFn streaming events", () => {
     );
   });
 
+  it("emits an error instead of accepting garbled Kimi visible text", async () => {
+    const garbled =
+      '$$"##"%#"##"####""$""""##""$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$' +
+      '#"$"$"""$""""#$"""$"""%"%###"""#%""""&"#"""$"""#"#""""%#""""&"#"""$"""$"""#%"""';
+    await withMockNdjsonFetch(
+      [
+        JSON.stringify({
+          model: "kimi-k2.5:cloud",
+          created_at: "t",
+          message: { role: "assistant", content: garbled },
+          done: false,
+        }),
+        '{"model":"kimi-k2.5:cloud","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":20,"eval_count":40}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          model: { id: "kimi-k2.5:cloud", provider: "ollama" },
+        });
+        const events = await collectStreamEvents(stream);
+
+        const types = events.map((e) => e.type);
+        expect(types).toEqual(["start", "text_start", "text_delta", "error"]);
+        const errorEvent = events.at(-1);
+        expect(errorEvent).toMatchObject({
+          type: "error",
+          error: expect.objectContaining({
+            errorMessage: expect.stringContaining("garbled visible text"),
+          }),
+        });
+      },
+    );
+  });
+
+  it("does not reject punctuation-heavy text from unrelated Ollama models", async () => {
+    const punctuationHeavy =
+      '$$"##"%#"##"####""$""""##""$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$' +
+      '#"$"$"""$""""#$"""$"""%"%###"""#%""""&"#"""$"""#"#""""%#""""&"#"""$"""$"""#%"""';
+    await withMockNdjsonFetch(
+      [
+        JSON.stringify({
+          model: "qwen3:32b",
+          created_at: "t",
+          message: { role: "assistant", content: punctuationHeavy },
+          done: false,
+        }),
+        '{"model":"qwen3:32b","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":20,"eval_count":40}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+        const events = await collectStreamEvents(stream);
+
+        expect(events.map((e) => e.type)).toEqual([
+          "start",
+          "text_start",
+          "text_delta",
+          "text_end",
+          "done",
+        ]);
+      },
+    );
+  });
+
   it("emits a single text_delta for single-chunk responses", async () => {
     await withMockNdjsonFetch(
       [
@@ -1338,8 +1426,9 @@ describe("createOllamaStreamFn", () => {
         const request = getGuardedFetchCall(fetchMock);
         expect(request.url).toBe("http://ollama-host:11434/api/chat");
         expect(request.auditContext).toBe("ollama-stream.chat");
+        expect(request.signal).toBe(signal);
         const requestInit = request.init ?? {};
-        expect(requestInit.signal).toBe(signal);
+        expect(requestInit.signal).toBeUndefined();
         if (typeof requestInit.body !== "string") {
           throw new Error("Expected string request body");
         }

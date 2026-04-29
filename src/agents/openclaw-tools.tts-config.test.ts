@@ -302,4 +302,26 @@ describe("createOpenClawTools cron context wiring", () => {
       },
     });
   });
+
+  it("passes self-remove scope into the cron tool", async () => {
+    const { createOpenClawTools } = await import("./openclaw-tools.js");
+
+    createOpenClawTools({
+      agentSessionKey: "agent:main:cron:job-current",
+      cronSelfRemoveOnlyJobId: "job-current",
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(mocks.createCronToolOptions).toHaveBeenCalledWith({
+      agentSessionKey: "agent:main:cron:job-current",
+      currentDeliveryContext: {
+        channel: undefined,
+        to: undefined,
+        accountId: undefined,
+        threadId: undefined,
+      },
+      selfRemoveOnlyJobId: "job-current",
+    });
+  });
 });

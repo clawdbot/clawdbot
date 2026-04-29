@@ -23,15 +23,24 @@ describe("CronService restart catch-up", () => {
     enqueueSystemEvent: ReturnType<typeof vi.fn>;
     requestHeartbeatNow: ReturnType<typeof vi.fn>;
     onEvent?: ReturnType<typeof vi.fn>;
+    nowMs?: () => number;
+    runIsolatedAgentJob?: ReturnType<typeof vi.fn>;
+    startupDeferredMissedAgentJobDelayMs?: number;
   }) {
     return new CronService({
       storePath: params.storePath,
       cronEnabled: true,
       log: noopLogger,
+      ...(params.nowMs ? { nowMs: params.nowMs } : {}),
       enqueueSystemEvent: params.enqueueSystemEvent as never,
       requestHeartbeatNow: params.requestHeartbeatNow as never,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })) as never,
+      runIsolatedAgentJob:
+        (params.runIsolatedAgentJob as never) ??
+        (vi.fn(async () => ({ status: "ok" as const })) as never),
       onEvent: params.onEvent as ((evt: CronEvent) => void) | undefined,
+      ...(params.startupDeferredMissedAgentJobDelayMs !== undefined
+        ? { startupDeferredMissedAgentJobDelayMs: params.startupDeferredMissedAgentJobDelayMs }
+        : {}),
     });
   }
 
@@ -119,6 +128,55 @@ describe("CronService restart catch-up", () => {
         expect(updated?.state.nextRunAtMs).toBeGreaterThan(Date.parse("2025-12-13T17:00:00.000Z"));
       },
     );
+  });
+
+  it("defers overdue isolated agent-turn jobs during gateway startup", async () => {
+    const store = await makeStorePath();
+    const startNow = Date.parse("2025-12-13T17:00:00.000Z");
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+
+    await writeStoreJobs(store.storePath, [
+      {
+        id: "startup-isolated-agent",
+        name: "startup isolated agent",
+        enabled: true,
+        createdAtMs: startNow - 120_000,
+        updatedAtMs: startNow - 120_000,
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: startNow - 120_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "do work" },
+        state: { nextRunAtMs: startNow - 60_000 },
+      },
+    ]);
+
+    const cron = createRestartCronService({
+      storePath: store.storePath,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob,
+      nowMs: () => startNow,
+      startupDeferredMissedAgentJobDelayMs: 120_000,
+    });
+
+    try {
+      await cron.start();
+
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(requestHeartbeatNow).not.toHaveBeenCalled();
+
+      const listedJobs = await cron.list({ includeDisabled: true });
+      const updated = listedJobs.find((job) => job.id === "startup-isolated-agent");
+      expect(updated?.state.lastStatus).toBeUndefined();
+      expect(updated?.state.runningAtMs).toBeUndefined();
+      expect(updated?.state.nextRunAtMs).toBe(startNow + 120_000);
+    } finally {
+      cron.stop();
+      await store.cleanup();
+    }
   });
 
   it("marks interrupted recurring jobs failed instead of replaying them on startup", async () => {

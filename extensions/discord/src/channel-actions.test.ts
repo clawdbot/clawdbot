@@ -113,6 +113,21 @@ describe("discordMessageActions", () => {
     expect(discovery?.schema).toBeUndefined();
   });
 
+  it.each(["read", "search"])("routes %s actions through gateway execution mode", (action) => {
+    expect(discordMessageActions.resolveExecutionMode?.({ action: action as never })).toBe(
+      "gateway",
+    );
+  });
+
+  it.each(["send", "edit", "delete", "react", "pin", "poll"])(
+    "routes %s actions through local execution mode",
+    (action) => {
+      expect(discordMessageActions.resolveExecutionMode?.({ action: action as never })).toBe(
+        "local",
+      );
+    },
+  );
+
   it("extracts send targets for message and thread reply actions", () => {
     expect(
       discordMessageActions.extractToolSend?.({

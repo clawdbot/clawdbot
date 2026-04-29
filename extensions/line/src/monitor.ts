@@ -12,8 +12,11 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
 import {
+  isRequestBodyLimitError,
   normalizePluginHttpPath,
-  registerPluginHttpRoute,
+  registerWebhookTargetWithPluginRoute,
+  requestBodyErrorToText,
+  resolveSingleWebhookTarget,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import {
   beginWebhookRequestPipelineOrReject,
@@ -39,7 +42,8 @@ import {
 } from "./send.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
 import type { LineChannelData, ResolvedLineAccount } from "./types.js";
-import { createLineNodeWebhookHandler } from "./webhook-node.js";
+import { createLineNodeWebhookHandler, readLineWebhookRequestBody } from "./webhook-node.js";
+import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 
 export interface MonitorLineProviderOptions {
   channelAccessToken: string;
@@ -70,6 +74,18 @@ const runtimeState = new Map<
   }
 >();
 const lineWebhookInFlightLimiter = createWebhookInFlightLimiter();
+const LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES = 64 * 1024;
+const LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS = 5_000;
+
+type LineWebhookTarget = {
+  accountId: string;
+  bot: ReturnType<typeof createLineBot>;
+  channelSecret: string;
+  path: string;
+  runtime: RuntimeEnv;
+};
+
+const lineWebhookTargets = new Map<string, LineWebhookTarget[]>();
 
 function recordChannelRuntimeState(params: {
   channel: string;
@@ -303,41 +319,130 @@ export async function monitorLineProvider(
   });
 
   const normalizedPath = normalizePluginHttpPath(webhookPath, "/line/webhook") ?? "/line/webhook";
-  const createScopedLineWebhookHandler = (onRequestAuthenticated?: () => void) =>
+  const createScopedLineWebhookHandler = (target: LineWebhookTarget) =>
     createLineNodeWebhookHandler({
-      channelSecret: secret,
-      bot,
-      runtime,
-      onRequestAuthenticated,
+      channelSecret: target.channelSecret,
+      bot: target.bot,
+      runtime: target.runtime,
     });
-  const unregisterHttp = registerPluginHttpRoute({
-    path: normalizedPath,
-    auth: "plugin",
-    replaceExisting: true,
-    pluginId: "line",
-    accountId: resolvedAccountId,
-    log: (msg) => logVerbose(msg),
-    handler: async (req, res) => {
-      if (req.method !== "POST") {
-        await createScopedLineWebhookHandler()(req, res);
-        return;
-      }
+  const { unregister: unregisterHttp } = registerWebhookTargetWithPluginRoute({
+    targetsByPath: lineWebhookTargets,
+    target: {
+      accountId: resolvedAccountId,
+      bot,
+      channelSecret: secret,
+      path: normalizedPath,
+      runtime,
+    },
+    route: {
+      auth: "plugin",
+      pluginId: "line",
+      accountId: resolvedAccountId,
+      log: (msg) => logVerbose(msg),
+      handler: async (req, res) => {
+        const targets = lineWebhookTargets.get(normalizedPath) ?? [];
+        const firstTarget = targets[0];
+        if (req.method !== "POST") {
+          if (!firstTarget) {
+            res.statusCode = 404;
+            res.end("Not Found");
+            return;
+          }
+          await createScopedLineWebhookHandler(firstTarget)(req, res);
+          return;
+        }
 
-      const requestLifecycle = beginWebhookRequestPipelineOrReject({
-        req,
-        res,
-        inFlightLimiter: lineWebhookInFlightLimiter,
-        inFlightKey: `line:${resolvedAccountId}`,
-      });
-      if (!requestLifecycle.ok) {
-        return;
-      }
+        const requestLifecycle = beginWebhookRequestPipelineOrReject({
+          req,
+          res,
+          inFlightLimiter: lineWebhookInFlightLimiter,
+          inFlightKey: `line:${normalizedPath}`,
+        });
+        if (!requestLifecycle.ok) {
+          return;
+        }
 
-      try {
-        await createScopedLineWebhookHandler(requestLifecycle.release)(req, res);
-      } finally {
-        requestLifecycle.release();
-      }
+        try {
+          const signatureHeader = req.headers["x-line-signature"];
+          const signature =
+            typeof signatureHeader === "string"
+              ? signatureHeader.trim()
+              : Array.isArray(signatureHeader)
+                ? (signatureHeader[0] ?? "").trim()
+                : "";
+
+          if (!signature) {
+            logVerbose("line: webhook missing X-Line-Signature header");
+            res.statusCode = 400;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ error: "Missing X-Line-Signature header" }));
+            return;
+          }
+
+          const rawBody = await readLineWebhookRequestBody(
+            req,
+            LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES,
+            LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS,
+          );
+          const match = resolveSingleWebhookTarget(targets, (target) =>
+            validateLineSignature(rawBody, signature, target.channelSecret),
+          );
+          if (match.kind === "none") {
+            logVerbose("line: webhook signature validation failed");
+            res.statusCode = 401;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ error: "Invalid signature" }));
+            return;
+          }
+          if (match.kind === "ambiguous") {
+            logVerbose("line: webhook signature matched multiple accounts");
+            res.statusCode = 401;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ error: "Ambiguous webhook target" }));
+            return;
+          }
+
+          const body = parseLineWebhookBody(rawBody);
+          if (!body) {
+            res.statusCode = 400;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ error: "Invalid webhook payload" }));
+            return;
+          }
+
+          requestLifecycle.release();
+
+          if (body.events && body.events.length > 0) {
+            logVerbose(`line: received ${body.events.length} webhook events`);
+            await match.target.bot.handleWebhook(body);
+          }
+
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ status: "ok" }));
+        } catch (err) {
+          if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
+            res.statusCode = 413;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ error: "Payload too large" }));
+            return;
+          }
+          if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
+            res.statusCode = 408;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ error: requestBodyErrorToText("REQUEST_BODY_TIMEOUT") }));
+            return;
+          }
+          runtime.error?.(danger(`line webhook error: ${String(err)}`));
+          if (!res.headersSent) {
+            res.statusCode = 500;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ error: "Internal server error" }));
+          }
+        } finally {
+          requestLifecycle.release();
+        }
+      },
     },
   });
 

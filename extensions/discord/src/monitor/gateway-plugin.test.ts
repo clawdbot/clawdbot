@@ -14,6 +14,7 @@ const { baseConnectSpy, GatewayIntents, GatewayPlugin } = vi.hoisted(() => {
     DirectMessageReactions: 1 << 5,
     GuildPresences: 1 << 6,
     GuildMembers: 1 << 7,
+    GuildVoiceStates: 1 << 8,
   } as const;
 
   class TestEmitter {
@@ -75,20 +76,70 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 
 describe("SafeGatewayPlugin.connect()", () => {
   let createDiscordGatewayPlugin: typeof import("./gateway-plugin.js").createDiscordGatewayPlugin;
+  let resolveDiscordGatewayIntents: typeof import("./gateway-plugin.js").resolveDiscordGatewayIntents;
+  let resolveDiscordGatewayInfoTimeoutMs: typeof import("./gateway-plugin.js").resolveDiscordGatewayInfoTimeoutMs;
 
   beforeAll(async () => {
-    ({ createDiscordGatewayPlugin } = await import("./gateway-plugin.js"));
+    ({
+      createDiscordGatewayPlugin,
+      resolveDiscordGatewayIntents,
+      resolveDiscordGatewayInfoTimeoutMs,
+    } = await import("./gateway-plugin.js"));
   });
 
   beforeEach(() => {
     baseConnectSpy.mockClear();
   });
 
+  it("includes GuildVoiceStates when voice is enabled by default", () => {
+    expect(resolveDiscordGatewayIntents() & GatewayIntents.GuildVoiceStates).toBe(
+      GatewayIntents.GuildVoiceStates,
+    );
+  });
+
+  it("omits GuildVoiceStates when voice is disabled", () => {
+    const intents = resolveDiscordGatewayIntents({ voiceEnabled: false });
+
+    expect(intents & GatewayIntents.GuildVoiceStates).toBe(0);
+  });
+
+  it("lets intents.voiceStates override voice enablement", () => {
+    const enabled = resolveDiscordGatewayIntents({
+      intentsConfig: { voiceStates: true },
+      voiceEnabled: false,
+    });
+    const disabled = resolveDiscordGatewayIntents({
+      intentsConfig: { voiceStates: false },
+      voiceEnabled: true,
+    });
+
+    expect(enabled & GatewayIntents.GuildVoiceStates).toBe(GatewayIntents.GuildVoiceStates);
+    expect(disabled & GatewayIntents.GuildVoiceStates).toBe(0);
+  });
+
+  it("keeps the legacy intents-config argument shape working", () => {
+    const intents = resolveDiscordGatewayIntents({ presence: true, guildMembers: true });
+
+    expect(intents & GatewayIntents.GuildPresences).toBe(GatewayIntents.GuildPresences);
+    expect(intents & GatewayIntents.GuildMembers).toBe(GatewayIntents.GuildMembers);
+  });
+
+  it("resolves gateway metadata timeout from config, env, then default", () => {
+    expect(resolveDiscordGatewayInfoTimeoutMs({ configuredTimeoutMs: 45_000 })).toBe(45_000);
+    expect(
+      resolveDiscordGatewayInfoTimeoutMs({
+        env: { OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS: "25000" },
+      }),
+    ).toBe(25_000);
+    expect(resolveDiscordGatewayInfoTimeoutMs({ env: {} })).toBe(30_000);
+  });
+
   function createPlugin(
     testing?: NonNullable<Parameters<typeof createDiscordGatewayPlugin>[0]["__testing"]>,
+    discordConfig: Parameters<typeof createDiscordGatewayPlugin>[0]["discordConfig"] = {},
   ) {
     return createDiscordGatewayPlugin({
-      discordConfig: {},
+      discordConfig,
       runtime: {
         log: vi.fn(),
         error: vi.fn(),
@@ -97,6 +148,56 @@ describe("SafeGatewayPlugin.connect()", () => {
       ...(testing ? { __testing: testing } : {}),
     });
   }
+
+  it("includes GuildVoiceStates when voice is enabled by default", () => {
+    expect(resolveDiscordGatewayIntents() & GatewayIntents.GuildVoiceStates).toBe(
+      GatewayIntents.GuildVoiceStates,
+    );
+  });
+
+  it("omits GuildVoiceStates when voice is disabled", () => {
+    const intents = resolveDiscordGatewayIntents({ voiceEnabled: false });
+
+    expect(intents & GatewayIntents.GuildVoiceStates).toBe(0);
+  });
+
+  it("lets intents.voiceStates override voice enablement", () => {
+    const enabled = resolveDiscordGatewayIntents({
+      intentsConfig: { voiceStates: true },
+      voiceEnabled: false,
+    });
+    const disabled = resolveDiscordGatewayIntents({
+      intentsConfig: { voiceStates: false },
+      voiceEnabled: true,
+    });
+
+    expect(enabled & GatewayIntents.GuildVoiceStates).toBe(GatewayIntents.GuildVoiceStates);
+    expect(disabled & GatewayIntents.GuildVoiceStates).toBe(0);
+  });
+
+  it("keeps the legacy intents-config argument shape working", () => {
+    const intents = resolveDiscordGatewayIntents({ presence: true, guildMembers: true });
+
+    expect(intents & GatewayIntents.GuildPresences).toBe(GatewayIntents.GuildPresences);
+    expect(intents & GatewayIntents.GuildMembers).toBe(GatewayIntents.GuildMembers);
+  });
+
+  it("resolves gateway metadata timeout from config, env, then default", () => {
+    expect(resolveDiscordGatewayInfoTimeoutMs({ configuredTimeoutMs: 45_000 })).toBe(45_000);
+    expect(
+      resolveDiscordGatewayInfoTimeoutMs({
+        env: { OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS: "25000" },
+      }),
+    ).toBe(25_000);
+    expect(resolveDiscordGatewayInfoTimeoutMs({ env: {} })).toBe(30_000);
+  });
+
+  it("omits voice states when Discord voice is disabled in account config", () => {
+    const plugin = createPlugin(undefined, { voice: { enabled: false } });
+    const options = (plugin as unknown as { options?: { intents?: number } }).options;
+
+    expect((options?.intents ?? 0) & GatewayIntents.GuildVoiceStates).toBe(0);
+  });
 
   it("clears stale heartbeatInterval before delegating to super when isConnecting=true", () => {
     const plugin = createPlugin();
@@ -123,6 +224,22 @@ describe("SafeGatewayPlugin.connect()", () => {
     expect((plugin as unknown as { options?: { autoInteractions?: boolean } }).options).toEqual(
       expect.objectContaining({ autoInteractions: false }),
     );
+  });
+
+  it("keeps OpenClaw metadata timeout out of Carbon gateway options", () => {
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: { gatewayInfoTimeoutMs: 5_000 },
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+    });
+
+    expect(
+      (plugin as unknown as { options?: { gatewayInfoTimeoutMs?: number } }).options
+        ?.gatewayInfoTimeoutMs,
+    ).toBeUndefined();
   });
 
   it("clears stale firstHeartbeatTimeout before delegating to super when isConnecting=true", () => {

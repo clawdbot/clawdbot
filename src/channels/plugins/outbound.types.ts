@@ -54,7 +54,11 @@ export type ChannelDeliveryCapabilities = {
 };
 
 export type ChannelOutboundPayloadHint =
-  | { kind: "approval-pending"; approvalKind: "exec" | "plugin" }
+  | {
+      kind: "approval-pending";
+      approvalKind: "exec" | "plugin";
+      nativeRouteActive?: boolean;
+    }
   | { kind: "approval-resolved"; approvalKind: "exec" | "plugin" };
 
 export type ChannelOutboundTargetRef = {
@@ -84,6 +88,7 @@ export type ChannelOutboundAdapter = {
   supportsPollDurationSeconds?: boolean;
   supportsAnonymousPolls?: boolean;
   normalizePayload?: (params: { payload: ReplyPayload }) => ReplyPayload | null;
+  sendTextOnlyErrorPayloads?: boolean;
   shouldSkipPlainTextSanitization?: (params: { payload: ReplyPayload }) => boolean;
   resolveEffectiveTextChunkLimit?: (params: {
     cfg: OpenClawConfig;

@@ -727,6 +727,50 @@ describe("gateway hot reload", () => {
     });
   });
 
+  it("uses the default restart deferral timeout when config omits deferralTimeoutMs", async () => {
+    await withNonMinimalGatewayServer(async () => {
+      const onRestart = hoisted.getOnRestart();
+      expect(onRestart).toBeTypeOf("function");
+
+      const restartTesting = (await import("../infra/restart.js")).__testing;
+      restartTesting.resetSigusr1State();
+      hoisted.activeTaskCount.value = 1;
+      const signalSpy = vi.fn();
+      process.once("SIGUSR1", signalSpy);
+      vi.useFakeTimers();
+
+      try {
+        onRestart?.(
+          {
+            changedPaths: ["gateway.port"],
+            restartGateway: true,
+            restartReasons: ["gateway.port"],
+            hotReasons: [],
+            reloadHooks: false,
+            restartGmailWatcher: false,
+            restartCron: false,
+            restartHeartbeat: false,
+            restartChannels: new Set(),
+            noopPaths: [],
+          },
+          {},
+        );
+
+        await vi.advanceTimersByTimeAsync(299_500);
+        expect(signalSpy).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(500);
+        await Promise.resolve();
+        expect(signalSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        hoisted.activeTaskCount.value = 0;
+        vi.useRealTimers();
+        process.removeListener("SIGUSR1", signalSpy);
+        restartTesting.resetSigusr1State();
+      }
+    });
+  });
+
   it("emits one-shot degraded and recovered system events during secret reload transitions", async () => {
     await writeEnvRefConfig();
     process.env.OPENAI_API_KEY = "sk-startup"; // pragma: allowlist secret

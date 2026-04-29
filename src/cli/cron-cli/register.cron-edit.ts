@@ -81,7 +81,10 @@ export function registerCronEditCommand(cron: Command) {
       .option("--at <when>", "Set one-shot time (ISO) or duration like 20m")
       .option("--every <duration>", "Set interval duration like 10m")
       .option("--cron <expr>", "Set cron expression")
-      .option("--tz <iana>", "Timezone for cron expressions (IANA)")
+      .option(
+        "--tz <iana>",
+        "Timezone for cron expressions (IANA; cron default: Gateway host local timezone)",
+      )
       .option("--stagger <duration>", "Cron stagger window (e.g. 30s, 5m)")
       .option("--exact", "Disable cron staggering (set stagger to 0)")
       .option("--system-event <text>", "Set systemEvent payload")

@@ -170,8 +170,10 @@ Currently supported events:
 - **command:stop**: `/stop` command
 - **agent:bootstrap**: Before workspace bootstrap files are injected
 - **gateway:startup**: Gateway startup (after channels start)
-
-More event types coming soon (session lifecycle, agent errors, etc.).
+- **session:compact:before**: Pre-compaction snapshot before the embedded runner rewrites session context
+- **session:compact:after**: Post-compaction snapshot after the runner replaces session context
+- **message:received**: Inbound channel message accepted for dispatch
+- **message:sent**: Outbound channel message delivered (canonical payload only)
 
 ## Handler API
 
@@ -179,8 +181,8 @@ Hook handlers receive an `InternalHookEvent` object:
 
 ```typescript
 interface InternalHookEvent {
-  type: "command" | "session" | "agent" | "gateway";
-  action: string; // e.g., 'new', 'reset', 'stop'
+  type: "command" | "session" | "agent" | "gateway" | "message";
+  action: string; // e.g., 'new', 'reset', 'stop', 'compact:before', 'received', 'sent'
   sessionKey: string;
   context: Record<string, unknown>;
   timestamp: Date;

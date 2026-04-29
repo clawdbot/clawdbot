@@ -3,34 +3,50 @@ name: ClawSweeper Dispatch
 on:
   issues:
     types: [opened, reopened, edited, labeled, unlabeled]
+  push:
+    branches: [main]
   pull_request_target: # zizmor: ignore[dangerous-triggers] maintainer-owned external dispatch; no checkout or untrusted PR code execution
     types: [opened, reopened, synchronize, ready_for_review, edited, labeled, unlabeled]
 
 permissions:
   contents: read
 
+concurrency:
+  group: clawsweeper-dispatch-${{ github.repository }}-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event.action == 'edited' || github.event.action == 'synchronize' || github.event.action == 'ready_for_review' }}
+
 jobs:
   dispatch:
     runs-on: ubuntu-latest
+    if: ${{ !(endsWith(github.actor, '[bot]') && (github.event.action == 'labeled' || github.event.action == 'unlabeled')) }}
     env:
       HAS_CLAWSWEEPER_APP_PRIVATE_KEY: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY != '' }}
+      CLAWSWEEPER_APP_CLIENT_ID: Iv23liOECG0slfuhz093
+      SUPERSEDES_IN_PROGRESS: ${{ (github.event.action == 'edited' || github.event.action == 'synchronize' || github.event.action == 'ready_for_review') && 'true' || 'false' }}
     steps:
+      - name: Debounce bursty metadata events
+        if: ${{ github.event.action == 'labeled' || github.event.action == 'unlabeled' }}
+        run: sleep 20
+
       - name: Create ClawSweeper dispatch token
         id: token
         if: ${{ env.HAS_CLAWSWEEPER_APP_PRIVATE_KEY == 'true' }}
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
         with:
-          app-id: 3306130
+          client-id: ${{ env.CLAWSWEEPER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
           owner: openclaw
           repositories: clawsweeper
 
       - name: Dispatch exact ClawSweeper review
+        if: ${{ github.event_name != 'push' }}
         env:
           GH_TOKEN: ${{ steps.token.outputs.token || secrets.OPENCLAW_GH_TOKEN }}
           TARGET_REPO: ${{ github.repository }}
           ITEM_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
           ITEM_KIND: ${{ github.event_name == 'pull_request_target' && 'pull_request' || 'issue' }}
+          SOURCE_EVENT: ${{ github.event_name }}
+          SOURCE_ACTION: ${{ github.event.action }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
             echo "::notice::Skipping ClawSweeper dispatch because no dispatch credential is configured."
@@ -40,11 +56,47 @@ jobs:
             --arg target_repo "$TARGET_REPO" \
             --argjson item_number "$ITEM_NUMBER" \
             --arg item_kind "$ITEM_KIND" \
-            '{event_type:"clawsweeper_item",client_payload:{target_repo:$target_repo,item_number:$item_number,item_kind:$item_kind}}')"
+            --arg source_event "$SOURCE_EVENT" \
+            --arg source_action "$SOURCE_ACTION" \
+            --argjson supersedes_in_progress "$SUPERSEDES_IN_PROGRESS" \
+            '{event_type:"clawsweeper_item",client_payload:{target_repo:$target_repo,item_number:$item_number,item_kind:$item_kind,source_event:$source_event,source_action:$source_action,supersedes_in_progress:$supersedes_in_progress}}')"
           if gh api repos/openclaw/clawsweeper/dispatches \
             --method POST \
             --input - <<< "$payload"; then
             echo "Dispatched ClawSweeper review."
           else
             echo "::warning::Skipping ClawSweeper dispatch because the configured credential could not dispatch to openclaw/clawsweeper."
+          fi
+
+      - name: Dispatch ClawSweeper commit review
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.event.deleted != true }}
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token || secrets.OPENCLAW_GH_TOKEN }}
+          TARGET_REPO: ${{ github.repository }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+          SOURCE_REF: ${{ github.ref }}
+          CREATE_CHECKS: ${{ vars.CLAWSWEEPER_COMMIT_REVIEW_CREATE_CHECKS || 'false' }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::Skipping ClawSweeper commit dispatch because no dispatch credential is configured."
+            exit 0
+          fi
+          case "$CREATE_CHECKS" in
+            true|TRUE|1|yes|YES|on|ON) create_checks=true ;;
+            *) create_checks=false ;;
+          esac
+          payload="$(jq -nc \
+            --arg target_repo "$TARGET_REPO" \
+            --arg before_sha "$BEFORE_SHA" \
+            --arg after_sha "$AFTER_SHA" \
+            --arg ref "$SOURCE_REF" \
+            --argjson create_checks "$create_checks" \
+            '{event_type:"clawsweeper_commit_review",client_payload:{target_repo:$target_repo,before_sha:$before_sha,after_sha:$after_sha,ref:$ref,enabled:true,create_checks:$create_checks}}')"
+          if gh api repos/openclaw/clawsweeper/dispatches \
+            --method POST \
+            --input - <<< "$payload"; then
+            echo "Dispatched ClawSweeper commit review."
+          else
+            echo "::warning::Skipping ClawSweeper commit dispatch because the configured credential could not dispatch to openclaw/clawsweeper."
           fi

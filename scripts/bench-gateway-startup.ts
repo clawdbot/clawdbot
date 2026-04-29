@@ -21,6 +21,8 @@ type ProbeResult = {
 };
 
 type GatewaySample = {
+  cpuCoreRatio: number | null;
+  cpuMs: number | null;
   exitCode: number | null;
   firstOutputMs: number | null;
   healthz: ProbeResult;
@@ -46,6 +48,8 @@ type CaseResult = {
   samples: GatewaySample[];
   summary: {
     firstOutputMs: SummaryStats | null;
+    cpuCoreRatio: SummaryStats | null;
+    cpuMs: SummaryStats | null;
     healthzMs: SummaryStats | null;
     maxRssMb: SummaryStats | null;
     readyLogMs: SummaryStats | null;
@@ -269,6 +273,16 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]): C
           .map((sample) => sample.firstOutputMs)
           .filter((value): value is number => typeof value === "number"),
       ),
+      cpuCoreRatio: summarizeNumbers(
+        samples
+          .map((sample) => sample.cpuCoreRatio)
+          .filter((value): value is number => typeof value === "number"),
+      ),
+      cpuMs: summarizeNumbers(
+        samples
+          .map((sample) => sample.cpuMs)
+          .filter((value): value is number => typeof value === "number"),
+      ),
       healthzMs: summarizeNumbers(
         samples
           .map((sample) => sample.healthz.ms)
@@ -308,6 +322,13 @@ function formatMb(value: number | null): string {
   return `${value.toFixed(1)}MB`;
 }
 
+function formatRatio(value: number | null): string {
+  if (value == null) {
+    return "n/a";
+  }
+  return value.toFixed(3);
+}
+
 function formatStats(stats: SummaryStats | null): string {
   if (!stats) {
     return "n/a";
@@ -320,6 +341,13 @@ function formatMemoryStats(stats: SummaryStats | null): string {
     return "n/a";
   }
   return `p50=${formatMb(stats.p50)} avg=${formatMb(stats.avg)} min=${formatMb(stats.min)} max=${formatMb(stats.max)}`;
+}
+
+function formatRatioStats(stats: SummaryStats | null): string {
+  if (!stats) {
+    return "n/a";
+  }
+  return `p50=${formatRatio(stats.p50)} avg=${formatRatio(stats.avg)} min=${formatRatio(stats.min)} max=${formatRatio(stats.max)}`;
 }
 
 async function getFreePort(): Promise<number> {
@@ -547,6 +575,71 @@ function readProcessRssMb(pid: number | undefined): number | null {
   return Number.isFinite(rssKb) && rssKb > 0 ? rssKb / 1024 : null;
 }
 
+function parsePsCpuTimeMs(raw: string): number | null {
+  const parts = raw.trim().split(":").map(Number);
+  if (parts.some((part) => !Number.isFinite(part) || part < 0)) {
+    return null;
+  }
+  if (parts.length === 2) {
+    return Math.round((parts[0] * 60 + parts[1]) * 1000);
+  }
+  if (parts.length === 3) {
+    return Math.round((parts[0] * 60 * 60 + parts[1] * 60 + parts[2]) * 1000);
+  }
+  return null;
+}
+
+function readProcessTreeCpuMs(rootPid: number | undefined): number | null {
+  if (!rootPid || process.platform === "win32") {
+    return null;
+  }
+  const result = spawnSync("ps", ["-eo", "pid=,ppid=,time="], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+
+  const childrenByParent = new Map<number, number[]>();
+  const cpuByPid = new Map<number, number>();
+  for (const line of result.stdout.split("\n")) {
+    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)$/u);
+    if (!match) {
+      continue;
+    }
+    const pid = Number(match[1]);
+    const ppid = Number(match[2]);
+    const cpuMs = parsePsCpuTimeMs(match[3]);
+    if (!Number.isInteger(pid) || !Number.isInteger(ppid) || cpuMs === null) {
+      continue;
+    }
+    cpuByPid.set(pid, cpuMs);
+    const children = childrenByParent.get(ppid) ?? [];
+    children.push(pid);
+    childrenByParent.set(ppid, children);
+  }
+  if (!cpuByPid.has(rootPid)) {
+    return null;
+  }
+
+  let totalCpuMs = 0;
+  const seen = new Set<number>();
+  const stack = [rootPid];
+  while (stack.length > 0) {
+    const pid = stack.pop();
+    if (!pid || seen.has(pid)) {
+      continue;
+    }
+    seen.add(pid);
+    totalCpuMs += cpuByPid.get(pid) ?? 0;
+    for (const childPid of childrenByParent.get(pid) ?? []) {
+      stack.push(childPid);
+    }
+  }
+  return totalCpuMs;
+}
+
 async function runGatewaySample(options: {
   benchCase: GatewayBenchCase;
   entry: string;
@@ -583,6 +676,7 @@ async function runGatewaySample(options: {
     ],
     { cwd: process.cwd(), detached: process.platform !== "win32", env },
   );
+  const cpuStartMs = readProcessTreeCpuMs(child.pid);
   const sampleRss = () => {
     const rssMb = readProcessRssMb(child.pid);
     if (rssMb != null) {
@@ -636,6 +730,10 @@ async function runGatewaySample(options: {
       startAt,
     }),
   ]);
+  const readyAt = performance.now();
+  const cpuEndMs = readProcessTreeCpuMs(child.pid);
+  const cpuMs = cpuStartMs == null || cpuEndMs == null ? null : Math.max(0, cpuEndMs - cpuStartMs);
+  const cpuCoreRatio = cpuMs == null ? null : cpuMs / Math.max(1, readyAt - startAt);
   const exit = await stopChild(child);
   clearInterval(rssTimer);
   sampleRss();
@@ -643,6 +741,8 @@ async function runGatewaySample(options: {
   rmSync(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
 
   return {
+    cpuCoreRatio,
+    cpuMs,
     exitCode: exit.exitCode,
     firstOutputMs,
     healthz,
@@ -673,11 +773,11 @@ async function runCase(options: {
     if (index >= options.warmup) {
       samples.push(sample);
       console.log(
-        `[gateway-startup-bench] ${options.benchCase.id} run ${samples.length}/${options.runs}: healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)} readyLog=${formatMs(sample.readyLogMs)} rss=${formatMb(sample.maxRssMb)}`,
+        `[gateway-startup-bench] ${options.benchCase.id} run ${samples.length}/${options.runs}: healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)} readyLog=${formatMs(sample.readyLogMs)} cpu=${formatMs(sample.cpuMs)} cpuCore=${formatRatio(sample.cpuCoreRatio)} rss=${formatMb(sample.maxRssMb)}`,
       );
     } else {
       console.log(
-        `[gateway-startup-bench] ${options.benchCase.id} warmup ${index + 1}/${options.warmup}: healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)} rss=${formatMb(sample.maxRssMb)}`,
+        `[gateway-startup-bench] ${options.benchCase.id} warmup ${index + 1}/${options.warmup}: healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)} cpu=${formatMs(sample.cpuMs)} cpuCore=${formatRatio(sample.cpuCoreRatio)} rss=${formatMb(sample.maxRssMb)}`,
       );
     }
   }
@@ -687,6 +787,8 @@ async function runCase(options: {
 function printResult(result: CaseResult): void {
   console.log(`\n${result.name} (${result.id})`);
   console.log(`  first output: ${formatStats(result.summary.firstOutputMs)}`);
+  console.log(`  CPU:          ${formatStats(result.summary.cpuMs)}`);
+  console.log(`  CPU core:     ${formatRatioStats(result.summary.cpuCoreRatio)}`);
   console.log(`  /healthz:     ${formatStats(result.summary.healthzMs)}`);
   console.log(`  ready log:    ${formatStats(result.summary.readyLogMs)}`);
   console.log(`  /readyz:      ${formatStats(result.summary.readyzMs)}`);

@@ -6,6 +6,7 @@ type CapturedReplyPayload = {
   text?: string;
   isReasoning?: boolean;
   isCompactionNotice?: boolean;
+  isError?: boolean;
   mediaUrl?: string;
   mediaUrls?: string[];
 };
@@ -434,6 +435,39 @@ describe("whatsapp inbound dispatch", () => {
     expect(rememberSentText).toHaveBeenCalledTimes(4);
   });
 
+  it("normalizes WhatsApp payload text before delivery and echo bookkeeping", async () => {
+    const deliverReply = vi.fn(async () => undefined);
+    const rememberSentText = vi.fn();
+
+    await dispatchBufferedReply({
+      deliverReply,
+      rememberSentText,
+    });
+
+    const deliver = getCapturedDeliver();
+    expect(deliver).toBeTypeOf("function");
+
+    await deliver?.(
+      {
+        text: 'Before\n<function_calls><invoke name="web_search"><parameter name="query">x</parameter></invoke></function_calls>\nAfter',
+      },
+      { kind: "final" },
+    );
+
+    expect(deliverReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyResult: expect.objectContaining({ text: "Before\n\nAfter" }),
+      }),
+    );
+    expect(rememberSentText).toHaveBeenCalledWith(
+      "Before\n\nAfter",
+      expect.objectContaining({
+        combinedBody: "hi",
+        combinedBodySessionKey: "agent:main:whatsapp:direct:+1000",
+      }),
+    );
+  });
+
   it("suppresses reasoning and compaction payloads before WhatsApp delivery", async () => {
     const deliverReply = vi.fn(async () => undefined);
     const rememberSentText = vi.fn();
@@ -451,6 +485,76 @@ describe("whatsapp inbound dispatch", () => {
       { text: "🧹 Compacting context...", isCompactionNotice: true },
       { kind: "block" },
     );
+    expect(deliverReply).not.toHaveBeenCalled();
+    expect(rememberSentText).not.toHaveBeenCalled();
+  });
+
+  it("suppresses payloads that normalize to no visible WhatsApp content", async () => {
+    const deliverReply = vi.fn(async () => undefined);
+    const rememberSentText = vi.fn();
+
+    await dispatchBufferedReply({
+      deliverReply,
+      rememberSentText,
+    });
+
+    const deliver = getCapturedDeliver();
+    expect(deliver).toBeTypeOf("function");
+
+    await deliver?.(
+      {
+        text: '<function_calls><invoke name="web_search"><parameter name="query">x</parameter></invoke></function_calls>',
+      },
+      { kind: "final" },
+    );
+
+    expect(deliverReply).not.toHaveBeenCalled();
+    expect(rememberSentText).not.toHaveBeenCalled();
+  });
+
+  it("suppresses error payload text when exposeErrorText is false", async () => {
+    const deliverReply = vi.fn(async () => undefined);
+    const rememberSentText = vi.fn();
+
+    await dispatchBufferedReply({
+      cfg: { channels: { whatsapp: { exposeErrorText: false } } } as never,
+      deliverReply,
+      rememberSentText,
+    });
+
+    const deliver = getCapturedDeliver();
+    expect(deliver).toBeTypeOf("function");
+
+    await deliver?.({ text: "provider exploded", isError: true }, { kind: "final" });
+
+    expect(deliverReply).not.toHaveBeenCalled();
+    expect(rememberSentText).not.toHaveBeenCalled();
+  });
+
+  it("honors account-level exposeErrorText overrides for error payloads", async () => {
+    const deliverReply = vi.fn(async () => undefined);
+    const rememberSentText = vi.fn();
+
+    await dispatchBufferedReply({
+      cfg: {
+        channels: {
+          whatsapp: {
+            accounts: {
+              work: { exposeErrorText: false },
+            },
+          },
+        },
+      } as never,
+      deliverReply,
+      rememberSentText,
+      route: makeRoute({ accountId: "work" }),
+    });
+
+    const deliver = getCapturedDeliver();
+    expect(deliver).toBeTypeOf("function");
+
+    await deliver?.({ text: "provider exploded", isError: true }, { kind: "final" });
+
     expect(deliverReply).not.toHaveBeenCalled();
     expect(rememberSentText).not.toHaveBeenCalled();
   });

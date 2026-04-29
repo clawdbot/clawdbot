@@ -635,6 +635,35 @@ describe("doctor bundled plugin runtime deps", () => {
     ]);
   });
 
+  it("does not repair configured channel deps when the owner plugin is disabled", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeBundledChannelPlugin(root, "discord", { "discord-api-types": "0.38.47" });
+    const installed = createInstalledRuntimeDeps();
+
+    await maybeRepairBundledPluginRuntimeDeps({
+      runtime: createRuntime(),
+      prompter: createNonInteractivePrompter(),
+      packageRoot: root,
+      config: {
+        plugins: {
+          enabled: true,
+          entries: {
+            discord: { enabled: false },
+          },
+        },
+        channels: {
+          discord: { enabled: true, token: "disabled-plugin-entry-token" },
+        },
+      },
+      installDeps: (params) => {
+        installed.push(params);
+      },
+    });
+
+    expect(installed).toEqual([]);
+  });
+
   it("throws when bundled runtime dependency repair fails", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
     const errors: string[] = [];
@@ -775,7 +804,7 @@ describe("doctor bundled plugin runtime deps", () => {
     expect(readRetainedRuntimeDepsManifest(installRoot)).toEqual(["grammy@1.37.0"]);
   });
 
-  it("retains already staged bundled deps when repairing a subset", async () => {
+  it("drops stale retained bundled deps when repairing a subset", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
     writeJson(path.join(root, "package.json"), { name: "openclaw" });
     writeBundledChannelPlugin(root, "telegram", { grammy: "1.37.0" });
@@ -807,13 +836,10 @@ describe("doctor bundled plugin runtime deps", () => {
       {
         installRoot,
         missingSpecs: ["grammy@1.37.0"],
-        installSpecs: ["@slack/web-api@7.15.1", "grammy@1.37.0"],
+        installSpecs: ["grammy@1.37.0"],
       },
     ]);
     expect(installRoot).not.toBe(root);
-    expect(readRetainedRuntimeDepsManifest(installRoot)).toEqual([
-      "@slack/web-api@7.15.1",
-      "grammy@1.37.0",
-    ]);
+    expect(readRetainedRuntimeDepsManifest(installRoot)).toEqual(["grammy@1.37.0"]);
   });
 });

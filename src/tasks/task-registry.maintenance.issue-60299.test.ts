@@ -68,6 +68,7 @@ function createTaskRegistryMaintenanceHarness(params: {
   const currentTasks = new Map(params.tasks.map((task) => [task.taskId, { ...task }]));
 
   const runtime: TaskRegistryMaintenanceRuntime = {
+    listAcpSessionEntries: async () => [],
     readAcpSessionEntry: () =>
       acpEntry !== undefined
         ? ({
@@ -335,6 +336,53 @@ describe("task-registry maintenance issue #60299", () => {
       tasks: [task],
       sessionStore: { [channelKey]: { sessionId: channelKey, updatedAt: Date.now() } },
       activeRunIds: ["run-chat-cli-live"],
+    });
+
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
+  });
+
+  it("keeps detached media cli tasks live while their tool run context is active", async () => {
+    const channelKey = "agent:main:discord:channel:1456744319972282449";
+    const runId = "tool:video_generate:ac88dfc5-c2a9-4630-ab48-384e6450a12b";
+    const task = makeStaleTask({
+      runtime: "cli",
+      taskKind: "video_generation",
+      sourceId: "video_generate:fal",
+      runId,
+      ownerKey: channelKey,
+      requesterSessionKey: channelKey,
+      childSessionKey: channelKey,
+      progressSummary: "Generating video",
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      sessionStore: { [channelKey]: { sessionId: channelKey, updatedAt: Date.now() } },
+      activeRunIds: [runId],
+    });
+
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
+  });
+
+  it("keeps recently refreshed media cli tasks live without a chat run context", async () => {
+    const channelKey = "agent:main:discord:channel:1456744319972282449";
+    const task = makeStaleTask({
+      runtime: "cli",
+      taskKind: "video_generation",
+      sourceId: "video_generate:fal",
+      runId: "tool:video_generate:3a948fb2-79e8-470c-a6bc-46f37732cd3d",
+      ownerKey: channelKey,
+      requesterSessionKey: channelKey,
+      childSessionKey: channelKey,
+      lastEventAt: Date.now() - 60_000,
+      progressSummary: "Generating video",
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      sessionStore: { [channelKey]: { sessionId: channelKey, updatedAt: Date.now() } },
     });
 
     expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });

@@ -170,9 +170,19 @@ function createAppServerHarness(
     request,
     requests,
     async waitForMethod(method: string) {
-      await vi.waitFor(() => expect(requests.some((entry) => entry.method === method)).toBe(true), {
-        interval: 1,
-      });
+      await vi.waitFor(
+        () => {
+          if (!requests.some((entry) => entry.method === method)) {
+            const mockMethods = request.mock.calls.map((call) => call[0]);
+            throw new Error(
+              `expected app-server method ${method}; saw ${requests
+                .map((entry) => entry.method)
+                .join(", ")}; mock saw ${mockMethods.join(", ")}`,
+            );
+          }
+        },
+        { interval: 1, timeout: 30_000 },
+      );
     },
     async notify(notification: CodexServerNotification) {
       await notify(notification);

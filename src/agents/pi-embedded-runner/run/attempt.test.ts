@@ -72,6 +72,14 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
       applyEmbeddedAttemptToolsAllow(tools, ["exec", "read"]).map((tool) => tool.name),
     ).toEqual(["exec", "read"]);
   });
+
+  it("normalizes explicit toolsAllow entries before filtering", () => {
+    const tools = [{ name: "cron" }, { name: "read" }, { name: "message" }];
+
+    expect(
+      applyEmbeddedAttemptToolsAllow(tools, [" cron ", "READ"]).map((tool) => tool.name),
+    ).toEqual(["cron", "read"]);
+  });
 });
 
 describe("normalizeMessagesForLlmBoundary", () => {

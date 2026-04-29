@@ -5,7 +5,6 @@ import type { SystemPresence } from "../infra/system-presence.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { GatewayClient, GatewayClientRequestError } from "./client.js";
 import { READ_SCOPE } from "./method-scopes.js";
-import { isLoopbackHost } from "./net.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "./protocol/client-info.js";
 
 export type GatewayProbeAuth = {
@@ -145,6 +144,7 @@ export async function probeGateway(opts: {
   url: string;
   auth?: GatewayProbeAuth;
   timeoutMs: number;
+  preauthHandshakeTimeoutMs?: number;
   includeDetails?: boolean;
   detailLevel?: "none" | "presence" | "full";
   tlsFingerprint?: string;
@@ -162,24 +162,18 @@ export async function probeGateway(opts: {
   const detailLevel = opts.includeDetails === false ? "none" : (opts.detailLevel ?? "full");
 
   const deviceIdentity = await (async () => {
-    let hostname: string;
     try {
-      hostname = new URL(opts.url).hostname;
-    } catch {
-      return null;
-    }
-    // Keep probes non-mutating: only attach a device identity when this CLI
-    // already has a cached operator device token. Fresh diagnostics should not
-    // create a read-only pairing baseline that later blocks admin commands.
-    if (isLoopbackHost(hostname) && !(opts.auth?.token || opts.auth?.password)) {
-      return null;
-    }
-    try {
+      if (!URL.canParse(opts.url)) {
+        return null;
+      }
       const { loadDeviceIdentityIfPresent } = await import("../infra/device-identity.js");
       const identity = loadDeviceIdentityIfPresent();
       if (!identity) {
         return null;
       }
+      // Keep probes non-mutating: only attach a device identity when this CLI
+      // already has a cached operator device token. Fresh diagnostics should not
+      // create a read-only pairing baseline that later blocks admin commands.
       const cachedOperatorToken = loadDeviceAuthToken({
         deviceId: identity.deviceId,
         role: "operator",
@@ -262,6 +256,7 @@ export async function probeGateway(opts: {
       token: opts.auth?.token,
       password: opts.auth?.password,
       tlsFingerprint: opts.tlsFingerprint,
+      preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
       scopes: [READ_SCOPE],
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       clientVersion: "dev",

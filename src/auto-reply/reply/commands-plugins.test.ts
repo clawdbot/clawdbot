@@ -61,10 +61,6 @@ vi.mock("../../plugins/installed-plugin-index-records.js", () => ({
   ),
 }));
 
-vi.mock("../../plugins/manifest-registry.js", () => ({
-  clearPluginManifestRegistryCache: vi.fn(),
-}));
-
 vi.mock("../../plugins/status.js", () => ({
   buildAllPluginInspectReports: buildAllPluginInspectReportsMock,
   buildPluginDiagnosticsReport: buildPluginDiagnosticsReportMock,

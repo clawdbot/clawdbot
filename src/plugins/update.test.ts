@@ -641,6 +641,151 @@ describe("updateNpmInstalledPlugins", () => {
     expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    {
+      source: "npm",
+      config: {
+        plugins: {
+          entries: {
+            demo: {
+              enabled: false,
+              config: { preserved: true },
+            },
+          },
+          installs: {
+            demo: {
+              source: "npm" as const,
+              spec: "@acme/demo",
+              installPath: "/tmp/demo",
+              resolvedName: "@acme/demo",
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+    },
+    {
+      source: "ClawHub",
+      config: {
+        plugins: {
+          entries: {
+            demo: {
+              enabled: false,
+              config: { preserved: true },
+            },
+          },
+          installs: {
+            demo: {
+              source: "clawhub" as const,
+              spec: "clawhub:demo",
+              installPath: "/tmp/demo",
+              clawhubUrl: "https://clawhub.ai",
+              clawhubPackage: "demo",
+              clawhubFamily: "code-plugin",
+              clawhubChannel: "official",
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+    },
+    {
+      source: "marketplace",
+      config: {
+        plugins: {
+          entries: {
+            demo: {
+              enabled: false,
+              config: { preserved: true },
+            },
+          },
+          installs: {
+            demo: {
+              source: "marketplace" as const,
+              installPath: "/tmp/demo",
+              marketplaceSource: "acme/plugins",
+              marketplacePlugin: "demo",
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+    },
+  ])("skips disabled $source installs before update network calls", async ({ config }) => {
+    installPluginFromNpmSpecMock.mockRejectedValue(new Error("npm installer should not run"));
+    installPluginFromClawHubMock.mockRejectedValue(new Error("ClawHub installer should not run"));
+    installPluginFromMarketplaceMock.mockRejectedValue(
+      new Error("marketplace installer should not run"),
+    );
+
+    const result = await updateNpmInstalledPlugins({
+      config,
+      skipDisabledPlugins: true,
+    });
+
+    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
+    expect(installPluginFromMarketplaceMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.config).toBe(config);
+    expect(result.config.plugins?.installs?.demo).toEqual(config.plugins.installs.demo);
+    expect(result.config.plugins?.entries?.demo).toEqual({
+      enabled: false,
+      config: { preserved: true },
+    });
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "demo",
+        status: "skipped",
+        message: 'Skipping "demo" (disabled in config).',
+      },
+    ]);
+  });
+
+  it("keeps enabled tracked plugin update failures fatal when disabled skipping is enabled", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: false,
+      error: "registry timeout",
+    });
+    const config = {
+      plugins: {
+        entries: {
+          demo: {
+            enabled: true,
+          },
+        },
+        installs: {
+          demo: {
+            source: "npm" as const,
+            spec: "@acme/demo",
+            installPath: "/tmp/demo",
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await updateNpmInstalledPlugins({
+      config,
+      skipDisabledPlugins: true,
+      dryRun: true,
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@acme/demo",
+        expectedPluginId: "demo",
+        dryRun: true,
+      }),
+    );
+    expect(result.changed).toBe(false);
+    expect(result.config).toBe(config);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "demo",
+        status: "error",
+        message: "Failed to check demo: registry timeout",
+      },
+    ]);
+  });
+
   it("aborts exact pinned npm plugin updates on integrity drift by default", async () => {
     const warn = vi.fn();
     installPluginFromNpmSpecMock.mockImplementation(

@@ -327,6 +327,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `usage.status` returns provider usage windows/remaining quota summaries.
     - `usage.cost` returns aggregated cost usage summaries for a date range.
     - `doctor.memory.status` returns vector-memory / cached embedding readiness for the active default agent workspace. Pass `{ "probe": true }` or `{ "deep": true }` only when the caller explicitly wants a live embedding provider ping.
+    - `doctor.memory.remHarness` returns a bounded, read-only REM harness preview for remote control-plane clients. It can include workspace paths, memory snippets, rendered grounded markdown, and deep promotion candidates, so callers need `operator.read`.
     - `sessions.usage` returns per-session usage summaries.
     - `sessions.usage.timeseries` returns timeseries usage for one session.
     - `sessions.usage.logs` returns usage log entries for one session.
@@ -378,7 +379,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
   </Accordion>
 
   <Accordion title="Agent and workspace helpers">
-    - `agents.list` returns configured agent entries.
+    - `agents.list` returns configured agent entries, including effective model and runtime metadata.
     - `agents.create`, `agents.update`, and `agents.delete` manage agent records and workspace wiring.
     - `agents.files.list`, `agents.files.get`, and `agents.files.set` manage the bootstrap workspace files exposed for an agent.
     - `agent.identity.get` returns the effective assistant identity for an agent or session.
@@ -387,7 +388,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
   </Accordion>
 
   <Accordion title="Session control">
-    - `sessions.list` returns the current session index.
+    - `sessions.list` returns the current session index, including per-row `agentRuntime` metadata when an agent runtime backend is configured.
     - `sessions.subscribe` and `sessions.unsubscribe` toggle session change event subscriptions for the current WS client.
     - `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle transcript/message event subscriptions for one session.
     - `sessions.preview` returns bounded transcript previews for specific session keys.
@@ -396,7 +397,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `sessions.send` sends a message into an existing session.
     - `sessions.steer` is the interrupt-and-steer variant for an active session.
     - `sessions.abort` aborts active work for a session.
-    - `sessions.patch` updates session metadata/overrides.
+    - `sessions.patch` updates session metadata/overrides and reports the resolved canonical model plus effective `agentRuntime`.
     - `sessions.reset`, `sessions.delete`, and `sessions.compact` perform session maintenance.
     - `sessions.get` returns the full stored session row.
     - Chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and `chat.inject`. `chat.history` is display-normalized for UI clients: inline directive tags are stripped from visible text, plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks) and leaked ASCII/full-width model control tokens are stripped, pure silent-token assistant rows such as exact `NO_REPLY` / `no_reply` are omitted, and oversized rows can be replaced with placeholders.
@@ -550,19 +551,19 @@ enumeration of `src/gateway/server-methods/*.ts`.
 The reference client in `src/gateway/client.ts` uses these defaults. Values are
 stable across protocol v3 and are the expected baseline for third-party clients.
 
-| Constant                                  | Default                                               | Source                                                     |
-| ----------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------- |
-| `PROTOCOL_VERSION`                        | `3`                                                   | `src/gateway/protocol/schema/protocol-schemas.ts`          |
-| Request timeout (per RPC)                 | `30_000` ms                                           | `src/gateway/client.ts` (`requestTimeoutMs`)               |
-| Preauth / connect-challenge timeout       | `10_000` ms                                           | `src/gateway/handshake-timeouts.ts` (clamp `250`–`10_000`) |
-| Initial reconnect backoff                 | `1_000` ms                                            | `src/gateway/client.ts` (`backoffMs`)                      |
-| Max reconnect backoff                     | `30_000` ms                                           | `src/gateway/client.ts` (`scheduleReconnect`)              |
-| Fast-retry clamp after device-token close | `250` ms                                              | `src/gateway/client.ts`                                    |
-| Force-stop grace before `terminate()`     | `250` ms                                              | `FORCE_STOP_TERMINATE_GRACE_MS`                            |
-| `stopAndWait()` default timeout           | `1_000` ms                                            | `STOP_AND_WAIT_TIMEOUT_MS`                                 |
-| Default tick interval (pre `hello-ok`)    | `30_000` ms                                           | `src/gateway/client.ts`                                    |
-| Tick-timeout close                        | code `4000` when silence exceeds `tickIntervalMs * 2` | `src/gateway/client.ts`                                    |
-| `MAX_PAYLOAD_BYTES`                       | `25 * 1024 * 1024` (25 MB)                            | `src/gateway/server-constants.ts`                          |
+| Constant                                  | Default                                               | Source                                                                                     |
+| ----------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `PROTOCOL_VERSION`                        | `3`                                                   | `src/gateway/protocol/schema/protocol-schemas.ts`                                          |
+| Request timeout (per RPC)                 | `30_000` ms                                           | `src/gateway/client.ts` (`requestTimeoutMs`)                                               |
+| Preauth / connect-challenge timeout       | `15_000` ms                                           | `src/gateway/handshake-timeouts.ts` (config/env can raise the paired server/client budget) |
+| Initial reconnect backoff                 | `1_000` ms                                            | `src/gateway/client.ts` (`backoffMs`)                                                      |
+| Max reconnect backoff                     | `30_000` ms                                           | `src/gateway/client.ts` (`scheduleReconnect`)                                              |
+| Fast-retry clamp after device-token close | `250` ms                                              | `src/gateway/client.ts`                                                                    |
+| Force-stop grace before `terminate()`     | `250` ms                                              | `FORCE_STOP_TERMINATE_GRACE_MS`                                                            |
+| `stopAndWait()` default timeout           | `1_000` ms                                            | `STOP_AND_WAIT_TIMEOUT_MS`                                                                 |
+| Default tick interval (pre `hello-ok`)    | `30_000` ms                                           | `src/gateway/client.ts`                                                                    |
+| Tick-timeout close                        | code `4000` when silence exceeds `tickIntervalMs * 2` | `src/gateway/client.ts`                                                                    |
+| `MAX_PAYLOAD_BYTES`                       | `25 * 1024 * 1024` (25 MB)                            | `src/gateway/server-constants.ts`                                                          |
 
 The server advertises the effective `policy.tickIntervalMs`, `policy.maxPayload`,
 and `policy.maxBufferedBytes` in `hello-ok`; clients should honor those values

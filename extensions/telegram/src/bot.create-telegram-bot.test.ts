@@ -1672,10 +1672,12 @@ describe("createTelegramBot", () => {
             work: {
               botToken: "tok-work",
               dmPolicy: "open",
+              allowFrom: ["*"],
             },
             opie: {
               botToken: "tok-opie",
               dmPolicy: "open",
+              allowFrom: ["*"],
             },
           },
         },
@@ -1781,10 +1783,12 @@ describe("createTelegramBot", () => {
             work: {
               botToken: "tok-work",
               dmPolicy: "open",
+              allowFrom: ["*"],
             },
             opie: {
               botToken: "tok-opie",
               dmPolicy: "open",
+              allowFrom: ["*"],
             },
           },
         },
@@ -3129,7 +3133,7 @@ describe("createTelegramBot", () => {
   it("retries reaction updates after a bubbled enqueue failure", async () => {
     loadConfig.mockReturnValue({
       channels: {
-        telegram: { dmPolicy: "open", reactionNotifications: "all" },
+        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
       },
     });
 

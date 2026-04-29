@@ -537,6 +537,7 @@ function createOpenAIImageGenerationProviderBase(params: {
 }): ImageGenerationProvider {
   return {
     id: params.id,
+    aliases: ["openai-codex"],
     label: params.label,
     defaultModel: DEFAULT_OPENAI_IMAGE_MODEL,
     models: [...OPENAI_IMAGE_MODELS],

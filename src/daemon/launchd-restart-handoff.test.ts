@@ -72,6 +72,35 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).not.toContain('basename "$service_target"');
   });
 
+  it("sanitizes restart helper environment overrides before spawning", () => {
+    spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
+
+    scheduleDetachedLaunchdRestartHandoff({
+      env: {
+        HOME: "/Users/test",
+        OPENCLAW_PROFILE: "default",
+        PATH: "/tmp/evil-bin",
+        DYLD_INSERT_LIBRARIES: "/tmp/evil.dylib",
+        NPM_CONFIG_GLOBALCONFIG: "/tmp/evil-npmrc",
+      },
+      mode: "kickstart",
+    });
+
+    const [, args, options] = spawnMock.mock.calls[0] as [
+      string,
+      string[],
+      { env: Record<string, string | undefined> },
+    ];
+    expect(args[1]).toContain("exec >>'/Users/test/.openclaw/logs/gateway-restart.log' 2>&1");
+    expect(args[1]).not.toContain("/tmp/evil-bin");
+    expect(args[1]).not.toContain("/tmp/evil.dylib");
+    expect(args[1]).not.toContain("/tmp/evil-npmrc");
+    expect(options.env.OPENCLAW_PROFILE).toBe("default");
+    expect(options.env.PATH).not.toBe("/tmp/evil-bin");
+    expect(options.env.DYLD_INSERT_LIBRARIES).toBeUndefined();
+    expect(options.env.NPM_CONFIG_GLOBALCONFIG).toBeUndefined();
+  });
+
   it("rejects invalid launchd labels before spawning the helper", () => {
     expect(() => {
       scheduleDetachedLaunchdRestartHandoff({

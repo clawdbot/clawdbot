@@ -49,7 +49,7 @@ Most provider-specific logic lives in provider plugins (`registerProvider(...)`)
 The full list of provider-SDK hooks and bundled-plugin examples lives in [Provider plugins](/plugins/sdk-provider-plugins). A provider that needs a totally custom request executor is a separate, deeper extension surface.
 
 <Note>
-Provider runtime `capabilities` is shared runner metadata (provider family, transcript/tooling quirks, transport/cache hints). It is not the same as the [public capability model](/plugins/architecture#public-capability-model), which describes what a plugin registers (text inference, speech, etc.).
+Provider-owned runner behavior lives on explicit provider hooks such as replay policy, tool-schema normalization, stream wrapping, and transport/request helpers. The legacy `ProviderPlugin.capabilities` static bag is compatibility-only and is no longer read by shared runner logic.
 </Note>
 
 ## API key rotation

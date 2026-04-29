@@ -11,9 +11,7 @@ vi.mock("./live-provider-owner.js", () => {
 });
 
 describe("createLiveTargetMatcher", () => {
-  const env = {
-    OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
-  } as NodeJS.ProcessEnv;
+  const env = {} as NodeJS.ProcessEnv;
 
   it("matches Anthropic-owned models for the claude-cli provider filter", () => {
     const matcher = createLiveTargetMatcher({

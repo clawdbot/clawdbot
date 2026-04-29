@@ -188,7 +188,6 @@ describe("readBestEffortRuntimeConfigSchema", () => {
     expect(mockLoadPluginManifestRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
         config: { plugins: { entries: { demo: { enabled: true } } } },
-        cache: true,
       }),
     );
     expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty("cache", false);
@@ -208,7 +207,6 @@ describe("readBestEffortRuntimeConfigSchema", () => {
     expect(mockLoadPluginManifestRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
         config: { plugins: { enabled: true } },
-        cache: true,
       }),
     );
     expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty("cache", false);
@@ -237,7 +235,6 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     expect(mockLoadPluginManifestRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
         config: { plugins: { entries: { demo: { enabled: true } } } },
-        cache: true,
       }),
     );
     expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty(
@@ -312,7 +309,7 @@ describe("loadGatewayRuntimeConfigSchema", () => {
 
     expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(3);
     for (const call of mockLoadPluginManifestRegistry.mock.calls) {
-      expect(call[0]).toMatchObject({ cache: true });
+      expect(call[0]).toMatchObject({ includeDisabled: true });
       expect(call[0]).not.toHaveProperty("bundledChannelConfigCollector");
     }
     expect(getActivePluginRegistry()).toBe(activeRegistry);

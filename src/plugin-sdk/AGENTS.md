@@ -45,6 +45,9 @@ can affect bundled plugins and third-party plugins.
   `api.ts` or `runtime-api.ts` plus generic SDK capabilities. Do not add a
   provider-named `src/plugin-sdk/<id>.ts` seam just to make core aware of a
   bundled channel's private helpers.
+- Resolver/facade loader tests are the exception to broad source API coverage:
+  use generated tiny plugin fixtures for `api.js` / `runtime-api.js` fallback
+  behavior. Do not point those tests at real bundled plugin source APIs.
 - For provider work, prefer family-level seams over provider-specific seams.
   Shared helpers should describe a reusable behavior such as replay policy,
   tool-schema compat, payload normalization, stream-wrapper composition, or

@@ -10,6 +10,7 @@ const EXPECTED_BUNDLED_VIDEO_PROVIDER_PLUGIN_IDS = [
   "google",
   "minimax",
   "openai",
+  "openrouter",
   "qwen",
   "runway",
   "together",

@@ -98,4 +98,20 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       }),
     );
   });
+
+  it("can keep startup discovery on provider discovery entries only", async () => {
+    await resolveImplicitProviders({
+      agentDir: "/tmp/openclaw-agent",
+      config: {},
+      env: {} as NodeJS.ProcessEnv,
+      explicitProviders: {},
+      providerDiscoveryEntriesOnly: true,
+    });
+
+    expect(mocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledWith(
+      expect.objectContaining({
+        discoveryEntriesOnly: true,
+      }),
+    );
+  });
 });

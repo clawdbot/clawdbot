@@ -19,7 +19,7 @@ import {
   setBrowserControlServerReachable,
   startBrowserControlServerFromConfig,
 } from "./server.control-server.test-harness.js";
-import { getBrowserTestFetch } from "./test-fetch.js";
+import { getBrowserTestFetch } from "./test-support/fetch.js";
 
 type ActErrorResponse = {
   error?: string;

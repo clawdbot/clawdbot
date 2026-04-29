@@ -205,103 +205,69 @@ async function connectGatewayOnce(params: {
     pending.clear();
   });
 
-  const connectId = randomUUID();
-  ws.send(
-    JSON.stringify({
+  const sendGatewayRequest = <T = unknown>(
+    method: string,
+    requestParams: unknown,
+    timeoutMs: number,
+  ): Promise<T> => {
+    const id = randomUUID();
+    const frame = JSON.stringify({
       type: "req",
-      id: connectId,
-      method: "connect",
-      params: {
-        minProtocol: PROTOCOL_VERSION,
-        maxProtocol: PROTOCOL_VERSION,
-        client: {
-          id: "openclaw-tui",
-          displayName: "docker-mcp-channels",
-          version: "1.0.0",
-          platform: process.platform,
-          mode: "ui",
+      id,
+      method,
+      params: requestParams ?? {},
+    });
+    return new Promise<T>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`gateway request timeout: ${method}`));
+      }, timeoutMs);
+      timeout.unref?.();
+      pending.set(id, {
+        resolve: (value) => {
+          clearTimeout(timeout);
+          resolve(value as T);
         },
-        role: "operator",
-        scopes: requestedScopes,
-        caps: [],
-        auth: { token: params.token },
+        reject: (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        },
+      });
+      try {
+        ws.send(frame);
+      } catch (error) {
+        clearTimeout(timeout);
+        pending.delete(id);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  };
+
+  await sendGatewayRequest(
+    "connect",
+    {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "openclaw-tui",
+        displayName: "docker-mcp-channels",
+        version: "1.0.0",
+        platform: process.platform,
+        mode: "ui",
       },
-    }),
+      role: "operator",
+      scopes: requestedScopes,
+      caps: [],
+      auth: { token: params.token },
+    },
+    GATEWAY_RPC_TIMEOUT_MS,
   );
 
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      pending.delete(connectId);
-      reject(new Error("gateway connect timeout"));
-    }, GATEWAY_RPC_TIMEOUT_MS);
-    timeout.unref?.();
-    pending.set(connectId, {
-      resolve: () => {
-        clearTimeout(timeout);
-        resolve();
-      },
-      reject: (error) => {
-        clearTimeout(timeout);
-        reject(error);
-      },
-    });
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    const id = randomUUID();
-    const timeout = setTimeout(() => {
-      pending.delete(id);
-      reject(new Error("gateway sessions.subscribe timeout"));
-    }, GATEWAY_RPC_TIMEOUT_MS);
-    timeout.unref?.();
-    pending.set(id, {
-      resolve: () => {
-        clearTimeout(timeout);
-        resolve();
-      },
-      reject: (error) => {
-        clearTimeout(timeout);
-        reject(error);
-      },
-    });
-    ws.send(
-      JSON.stringify({
-        type: "req",
-        id,
-        method: "sessions.subscribe",
-        params: {},
-      }),
-    );
-  });
+  await sendGatewayRequest("sessions.subscribe", {}, GATEWAY_RPC_TIMEOUT_MS);
 
   return {
     request(method, requestParams) {
-      const id = randomUUID();
-      ws.send(
-        JSON.stringify({
-          type: "req",
-          id,
-          method,
-          params: requestParams ?? {},
-        }),
-      );
-      return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          pending.delete(id);
-          reject(new Error(`gateway request timeout: ${method}`));
-        }, GATEWAY_REQUEST_TIMEOUT_MS);
-        timeout.unref?.();
-        pending.set(id, {
-          resolve: (value) => {
-            clearTimeout(timeout);
-            resolve(value as T);
-          },
-          reject: (error) => {
-            clearTimeout(timeout);
-            reject(error);
-          },
-        });
-      });
+      return sendGatewayRequest(method, requestParams, GATEWAY_REQUEST_TIMEOUT_MS);
     },
     events,
     async close() {

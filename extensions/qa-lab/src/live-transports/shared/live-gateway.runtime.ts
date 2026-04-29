@@ -34,6 +34,52 @@ async function stopQaLiveLaneResources(
   }
 }
 
+function omitMemoryCoreEntry<T extends Record<string, unknown> | undefined>(entries: T): T {
+  if (!entries || !Object.prototype.hasOwnProperty.call(entries, "memory-core")) {
+    return entries;
+  }
+  const { "memory-core": _memoryCore, ...rest } = entries;
+  return rest as T;
+}
+
+function prepareLiveTransportGatewayConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const defaults = cfg.agents?.defaults ?? {};
+  return {
+    ...cfg,
+    plugins: cfg.plugins
+      ? {
+          ...cfg.plugins,
+          allow: cfg.plugins.allow?.filter((pluginId) => pluginId !== "memory-core"),
+          entries: omitMemoryCoreEntry(cfg.plugins.entries),
+          slots: {
+            ...cfg.plugins.slots,
+            memory: "none",
+          },
+        }
+      : {
+          slots: {
+            memory: "none",
+          },
+        },
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...defaults,
+        memorySearch: {
+          ...defaults.memorySearch,
+          enabled: false,
+          sync: {
+            ...defaults.memorySearch?.sync,
+            onSearch: false,
+            onSessionStart: false,
+            watch: false,
+          },
+        },
+      },
+    },
+  };
+}
+
 export async function startQaLiveLaneGateway(params: {
   repoRoot: string;
   command?: QaGatewayChildCommand;
@@ -70,7 +116,8 @@ export async function startQaLiveLaneGateway(params: {
       thinkingDefault: params.thinkingDefault,
       claudeCliAuthMode: params.claudeCliAuthMode,
       controlUiEnabled: params.controlUiEnabled,
-      mutateConfig: params.mutateConfig,
+      mutateConfig: (cfg) =>
+        prepareLiveTransportGatewayConfig(params.mutateConfig ? params.mutateConfig(cfg) : cfg),
     });
     return {
       gateway,

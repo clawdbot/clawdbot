@@ -169,8 +169,6 @@ describe("installed plugin index persistence", () => {
     const candidate = createCandidate(pluginDir);
     const env = {
       OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-      OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-      OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
       OPENCLAW_VERSION: "2026.4.25",
       VITEST: "true",
     };
@@ -267,8 +265,6 @@ describe("installed plugin index persistence", () => {
       candidates: [candidate],
       env: {
         OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-        OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-        OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
         OPENCLAW_VERSION: "2026.4.25",
         VITEST: "true",
       },
@@ -304,8 +300,6 @@ describe("installed plugin index persistence", () => {
       candidates: [],
       env: {
         OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-        OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-        OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
         OPENCLAW_VERSION: "2026.4.25",
         VITEST: "true",
       },

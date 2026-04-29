@@ -335,7 +335,7 @@ async function shouldProcessLineEvent(
     return denied;
   }
 
-  const dmAllowed = dmPolicy === "open" || isSenderAllowed({ allow: effectiveDmAllow, senderId });
+  const dmAllowed = isSenderAllowed({ allow: effectiveDmAllow, senderId });
   if (!dmAllowed) {
     if (dmPolicy === "pairing") {
       if (!senderId) {

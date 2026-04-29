@@ -151,10 +151,24 @@ export type ModelsConfig = {
   mode?: "merge" | "replace";
   providers?: Record<string, ModelProviderConfig>;
   pricing?: ModelPricingConfig;
-  // Deprecated legacy compat aliases. Kept in the runtime type surface so
-  // doctor/runtime fallbacks can read older configs until migration completes.
+  /**
+   * @deprecated Legacy compat alias. Kept so doctor/runtime fallbacks can read
+   * older configs until migration completes.
+   */
   bedrockDiscovery?: BedrockDiscoveryConfig;
+  /**
+   * @deprecated Legacy compat alias. Kept so doctor/runtime fallbacks can read
+   * older configs until migration completes.
+   */
   copilotDiscovery?: DiscoveryToggleConfig;
+  /**
+   * @deprecated Legacy compat alias. Kept so doctor/runtime fallbacks can read
+   * older configs until migration completes.
+   */
   huggingfaceDiscovery?: DiscoveryToggleConfig;
+  /**
+   * @deprecated Legacy compat alias. Kept so doctor/runtime fallbacks can read
+   * older configs until migration completes.
+   */
   ollamaDiscovery?: DiscoveryToggleConfig;
 };

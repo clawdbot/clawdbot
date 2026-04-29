@@ -131,6 +131,12 @@ Native `openclaw skills install` installs into the active workspace
 configured OpenClaw workspace). OpenClaw picks that up as
 `<workspace>/skills` on the next session.
 
+ClawHub skill pages expose the latest security scan state before install,
+with scanner detail pages for VirusTotal, ClawScan, and static analysis.
+`openclaw skills install <slug>` remains only the install path; publishers
+recover false positives through the ClawHub dashboard or
+`clawhub skill rescan <slug>`.
+
 ## Security
 
 <Warning>

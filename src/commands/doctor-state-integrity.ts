@@ -560,14 +560,12 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
     listConfiguredChannelIdsForReadOnlyScope({
       config: cfg,
       env,
-      cache: true,
     }),
   );
   const withoutPersistedAuth = new Set(
     listConfiguredChannelIdsForReadOnlyScope({
       config: cfg,
       env,
-      cache: true,
       includePersistedAuthState: false,
     }),
   );

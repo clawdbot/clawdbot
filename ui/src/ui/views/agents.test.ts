@@ -123,6 +123,68 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
 }
 
 describe("renderAgents", () => {
+  it("selects the configured primary model on initial render", async () => {
+    const container = document.createElement("div");
+    const configForm = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {
+            "anthropic/claude-sonnet-4-6": {},
+            "openai/gpt-5.4": {},
+          },
+        },
+        list: [{ id: "alpha" }, { id: "beta" }],
+      },
+    };
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "alpha",
+          config: {
+            form: configForm,
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+        }),
+      ),
+      container,
+    );
+
+    const defaultSelect = await vi.waitFor(() => {
+      const select = container.querySelector<HTMLSelectElement>(".agent-model-fields select");
+      expect(select?.value).toBe("openai/gpt-5.4");
+      return select;
+    });
+    expect(defaultSelect?.selectedOptions[0]?.value).toBe("openai/gpt-5.4");
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "beta",
+          config: {
+            form: configForm,
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+        }),
+      ),
+      container,
+    );
+
+    const inheritedSelect = await vi.waitFor(() => {
+      const select = container.querySelector<HTMLSelectElement>(".agent-model-fields select");
+      expect(select?.value).toBe("");
+      return select;
+    });
+    expect(inheritedSelect?.selectedOptions[0]?.textContent?.trim()).toBe(
+      "Inherit default (openai/gpt-5.4)",
+    );
+  });
+
   it("remounts overview model controls when switching selected agents", async () => {
     const container = document.createElement("div");
     const configForm = {

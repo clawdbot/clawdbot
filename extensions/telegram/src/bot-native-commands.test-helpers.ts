@@ -128,6 +128,7 @@ export function createNativeCommandsHarness(params?: {
   telegramCfg?: TelegramAccountConfig;
   allowFrom?: string[];
   groupAllowFrom?: string[];
+  storeAllowFrom?: string[];
   useAccessGroups?: boolean;
   nativeEnabled?: boolean;
   groupConfig?: Record<string, unknown>;
@@ -139,7 +140,7 @@ export function createNativeCommandsHarness(params?: {
   const log: AnyMock = vi.fn();
   const telegramDeps = {
     getRuntimeConfig: vi.fn(() => params?.cfg ?? ({} as OpenClawConfig)),
-    readChannelAllowFromStore: vi.fn(async () => []),
+    readChannelAllowFromStore: vi.fn(async () => params?.storeAllowFrom ?? []),
     dispatchReplyWithBufferedBlockDispatcher:
       replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher,
     getPluginCommandSpecs: pluginCommandMocks.getPluginCommandSpecs,

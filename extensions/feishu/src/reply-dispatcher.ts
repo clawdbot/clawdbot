@@ -228,6 +228,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const deliveredFinalTexts = new Set<string>();
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
+  let streamingClosedForReply = false;
+  let streamingCloseErroredForReply = false;
   type StreamTextUpdateMode = "snapshot" | "delta";
 
   const formatReasoningPrefix = (thinking: string): string => {
@@ -359,7 +361,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     })();
   };
 
-  const closeStreaming = async () => {
+  const closeStreaming = async (options?: { markClosedForReply?: boolean }) => {
     try {
       if (streamingStartPromise) {
         await streamingStartPromise;
@@ -378,6 +380,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         // the streaming card.
         if (streamText) {
           deliveredFinalTexts.add(streamText);
+          if (options?.markClosedForReply !== false && !streamingCloseErroredForReply) {
+            streamingClosedForReply = true;
+          }
         }
       }
     } finally {
@@ -451,6 +456,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, agentId),
       onReplyStart: async () => {
         deliveredFinalTexts.clear();
+        streamingClosedForReply = false;
+        streamingCloseErroredForReply = false;
         if (streamingEnabled && renderMode === "card") {
           startStreaming();
         }
@@ -461,17 +468,25 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         const text = reply.text;
         const hasText = reply.hasText;
         const hasMedia = reply.hasMedia;
+        const useCard =
+          hasText && (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text)));
         const skipTextForDuplicateFinal =
           info?.kind === "final" && hasText && deliveredFinalTexts.has(text);
-        const shouldDeliverText = hasText && !skipTextForDuplicateFinal;
+        const skipTextForClosedStreamingFinal =
+          info?.kind === "final" &&
+          hasText &&
+          streamingClosedForReply &&
+          !streamingCloseErroredForReply &&
+          streamingEnabled &&
+          useCard;
+        const shouldDeliverText =
+          hasText && !skipTextForDuplicateFinal && !skipTextForClosedStreamingFinal;
 
         if (!shouldDeliverText && !hasMedia) {
           return;
         }
 
         if (shouldDeliverText) {
-          const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
-
           if (info?.kind === "block") {
             // Drop internal block chunks unless we can safely consume them as
             // streaming-card fallback content.
@@ -556,10 +571,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
       },
       onError: async (error, info) => {
+        streamingCloseErroredForReply = true;
+        streamingClosedForReply = false;
         params.runtime.error?.(
           `feishu[${account.accountId}] ${info.kind} reply failed: ${String(error)}`,
         );
-        await closeStreaming();
+        await closeStreaming({ markClosedForReply: false });
         typingCallbacks?.onIdle?.();
       },
       onIdle: async () => {

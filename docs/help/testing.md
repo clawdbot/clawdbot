@@ -110,7 +110,17 @@ parallel jobs. Scheduled QA and release checks pass Matrix `--profile fast`
 explicitly, while the Matrix CLI and manual workflow input default remain
 `all`; manual dispatch can shard `all` into `transport`, `media`, `e2ee-smoke`,
 `e2ee-deep`, and `e2ee-cli` jobs. `OpenClaw Release Checks` runs parity plus
-the fast Matrix and Telegram lanes before release approval.
+the fast Matrix and Telegram lanes before release approval, using
+`mock-openai/gpt-5.5` for release transport checks so they stay deterministic
+and avoid normal provider-plugin startup. These live transport gateways disable
+memory search; memory behavior stays covered by the QA parity suites.
+
+Full release live media shards use
+`ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04`, which already has
+`ffmpeg` and `ffprobe`. Docker live model/backend shards use the shared
+`ghcr.io/openclaw/openclaw-live-test:<sha>` image built once per selected
+commit, then pull it with `OPENCLAW_SKIP_DOCKER_BUILD=1` instead of rebuilding
+inside every shard.
 
 - `pnpm openclaw qa suite`
   - Runs repo-backed QA scenarios directly on the host.
@@ -124,6 +134,16 @@ the fast Matrix and Telegram lanes before release approval.
     `aimock` starts a local AIMock-backed provider server for experimental
     fixture and protocol-mock coverage without replacing the scenario-aware
     `mock-openai` lane.
+- `pnpm test:gateway:cpu-scenarios`
+  - Runs the gateway startup bench plus a small mock QA Lab scenario pack
+    (`channel-chat-baseline`, `memory-failure-fallback`,
+    `gateway-restart-inflight-run`) and writes a combined CPU observation
+    summary under `.artifacts/gateway-cpu-scenarios/`.
+  - Flags only sustained hot CPU observations by default (`--cpu-core-warn`
+    plus `--hot-wall-warn-ms`), so short startup bursts are recorded as metrics
+    without looking like the minutes-long gateway peg regression.
+  - Uses built `dist` artifacts; run a build first when the checkout does not
+    already have fresh runtime output.
 - `pnpm openclaw qa suite --runner multipass`
   - Runs the same QA suite inside a disposable Multipass Linux VM.
   - Keeps the same scenario-selection behavior as `qa suite` on the host.
@@ -371,6 +391,10 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Runs in CI
   - No real keys required
   - Should be fast and stable
+  - Resolver and public-surface loader tests must prove broad `api.js` and
+    `runtime-api.js` fallback behavior with generated tiny plugin fixtures, not
+    real bundled plugin source APIs. Real plugin API loads belong in
+    plugin-owned contract/integration suites.
 
 <AccordionGroup>
   <Accordion title="Projects, shards, and scoped lanes">
@@ -384,6 +408,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
     - Import-light unit tests from agents, commands, plugins, auto-reply helpers, `plugin-sdk`, and similar pure utility areas route through the `unit-fast` lane, which skips `test/setup-openclaw-runtime.ts`; stateful/runtime-heavy files stay on the existing lanes.
     - Selected `plugin-sdk` and `commands` helper source files also map changed-mode runs to explicit sibling tests in those light lanes, so helper edits avoid rerunning the full heavy suite for that directory.
     - `auto-reply` has dedicated buckets for top-level core helpers, top-level `reply.*` integration tests, and the `src/auto-reply/reply/**` subtree. CI further splits the reply subtree into agent-runner, dispatch, and commands/state-routing shards so one import-heavy bucket does not own the full Node tail.
+    - Normal PR/main CI intentionally skips the extension batch sweep and release-only `agentic-plugins` shard. Full Release Validation dispatches the separate `Plugin Prerelease` child workflow for those plugin/extension-heavy suites on release candidates.
 
   </Accordion>
 
@@ -603,11 +628,11 @@ The live-model Docker runners also bind-mount only the needed CLI auth homes (or
 - MCP channel bridge (seeded Gateway + stdio bridge + raw Claude notification-frame smoke): `pnpm test:docker:mcp-channels` (script: `scripts/e2e/mcp-channels-docker.sh`)
 - Pi bundle MCP tools (real stdio MCP server + embedded Pi profile allow/deny smoke): `pnpm test:docker:pi-bundle-mcp-tools` (script: `scripts/e2e/pi-bundle-mcp-tools-docker.sh`)
 - Cron/subagent MCP cleanup (real Gateway + stdio MCP child teardown after isolated cron and one-shot subagent runs): `pnpm test:docker:cron-mcp-cleanup` (script: `scripts/e2e/cron-mcp-cleanup-docker.sh`)
-- Plugins (install smoke, ClawHub install/uninstall, marketplace updates, and Claude-bundle enable/inspect): `pnpm test:docker:plugins` (script: `scripts/e2e/plugins-docker.sh`)
-  Set `OPENCLAW_PLUGINS_E2E_CLAWHUB=0` to skip the live ClawHub block, or override the default package with `OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC` and `OPENCLAW_PLUGINS_E2E_CLAWHUB_ID`.
+- Plugins (install smoke, ClawHub kitchen-sink install/uninstall, marketplace updates, and Claude-bundle enable/inspect): `pnpm test:docker:plugins` (script: `scripts/e2e/plugins-docker.sh`)
+  Set `OPENCLAW_PLUGINS_E2E_CLAWHUB=0` to skip the ClawHub block, or override the default kitchen-sink package/runtime pair with `OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC` and `OPENCLAW_PLUGINS_E2E_CLAWHUB_ID`. Without `OPENCLAW_CLAWHUB_URL`/`CLAWHUB_URL`, the test uses a hermetic local ClawHub fixture server.
 - Plugin update unchanged smoke: `pnpm test:docker:plugin-update` (script: `scripts/e2e/plugin-update-unchanged-docker.sh`)
 - Config reload metadata smoke: `pnpm test:docker:config-reload` (script: `scripts/e2e/config-reload-source-docker.sh`)
-- Bundled plugin runtime deps: `pnpm test:docker:bundled-channel-deps` builds a small Docker runner image by default, builds and packs OpenClaw once on the host, then mounts that tarball into each Linux install scenario. Reuse the image with `OPENCLAW_SKIP_DOCKER_BUILD=1`, skip the host rebuild after a fresh local build with `OPENCLAW_BUNDLED_CHANNEL_HOST_BUILD=0`, or point at an existing tarball with `OPENCLAW_CURRENT_PACKAGE_TGZ=/path/to/openclaw-*.tgz`. The full Docker aggregate and release-path bundled-channel chunks pre-pack this tarball once, then shard bundled channel checks into independent lanes, including separate update lanes for Telegram, Discord, Slack, Feishu, memory-lancedb, and ACPX. Release chunks split channel smokes, update targets, and setup/runtime contracts into `bundled-channels-core`, `bundled-channels-update-a`, `bundled-channels-update-b`, and `bundled-channels-contracts`; the aggregate `bundled-channels` chunk remains available for manual reruns. The release workflow also splits provider installer chunks and bundled plugin install/uninstall chunks; legacy `package-update`, `plugins-runtime`, and `plugins-integrations` chunks remain aggregate aliases for manual reruns. Use `OPENCLAW_BUNDLED_CHANNELS=telegram,slack` to narrow the channel matrix when running the bundled lane directly, or `OPENCLAW_BUNDLED_CHANNEL_UPDATE_TARGETS=telegram,acpx` to narrow the update scenario. The lane also verifies that `channels.<id>.enabled=false` and `plugins.entries.<id>.enabled=false` suppress doctor/runtime-dependency repair.
+- Bundled plugin runtime deps: `pnpm test:docker:bundled-channel-deps` builds a small Docker runner image by default, builds and packs OpenClaw once on the host, then mounts that tarball into each Linux install scenario. Reuse the image with `OPENCLAW_SKIP_DOCKER_BUILD=1`, skip the host rebuild after a fresh local build with `OPENCLAW_BUNDLED_CHANNEL_HOST_BUILD=0`, or point at an existing tarball with `OPENCLAW_CURRENT_PACKAGE_TGZ=/path/to/openclaw-*.tgz`. The full Docker aggregate and release-path bundled-channel chunks pre-pack this tarball once, then shard bundled channel checks into independent lanes, including separate update lanes for Telegram, Discord, Slack, Feishu, memory-lancedb, and ACPX. Release chunks split channel smokes, update targets, and setup/runtime contracts into `bundled-channels-core`, `bundled-channels-update-a`, `bundled-channels-update-b`, and `bundled-channels-contracts`; the aggregate `bundled-channels` chunk remains available for manual reruns. The release workflow also splits provider installer chunks and bundled plugin install/uninstall chunks; legacy `package-update`, `plugins-runtime`, and `plugins-integrations` chunks remain aggregate aliases for manual reruns. Use `OPENCLAW_BUNDLED_CHANNELS=telegram,slack` to narrow the channel matrix when running the bundled lane directly, or `OPENCLAW_BUNDLED_CHANNEL_UPDATE_TARGETS=telegram,acpx` to narrow the update scenario. Per-scenario Docker runs default to `OPENCLAW_BUNDLED_CHANNEL_DOCKER_RUN_TIMEOUT=900s`; the multi-target update scenario defaults to `OPENCLAW_BUNDLED_CHANNEL_UPDATE_DOCKER_RUN_TIMEOUT=2400s`. The lane also verifies that `channels.<id>.enabled=false` and `plugins.entries.<id>.enabled=false` suppress doctor/runtime-dependency repair.
 - Narrow bundled plugin runtime deps while iterating by disabling unrelated scenarios, for example:
   `OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=0 pnpm test:docker:bundled-channel-deps`.
 

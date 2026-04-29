@@ -1,5 +1,5 @@
-import { uniqueSortedStrings } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { describe, expect, it } from "vitest";
+import { uniqueSortedStrings } from "../../plugin-sdk/test-helpers/string-utils.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
 import { resolveManifestContractPluginIds } from "../plugin-registry.js";
 import {

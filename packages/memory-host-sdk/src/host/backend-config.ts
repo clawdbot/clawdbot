@@ -8,6 +8,7 @@ import {
   type MemoryQmdIndexPath,
   type MemoryQmdMcporterConfig,
   type MemoryQmdSearchMode,
+  type MemoryQmdStartupMode,
   type OpenClawConfig,
   parseDurationMs,
   resolveAgentWorkspaceDir,
@@ -35,6 +36,8 @@ export type ResolvedQmdUpdateConfig = {
   intervalMs: number;
   debounceMs: number;
   onBoot: boolean;
+  startup: MemoryQmdStartupMode;
+  startupDelayMs: number;
   waitForBootSync: boolean;
   embedIntervalMs: number;
   commandTimeoutMs: number;
@@ -82,6 +85,8 @@ const DEFAULT_QMD_TIMEOUT_MS = 4_000;
 // Defaulting to `query` can be extremely slow on CPU-only systems (query expansion + rerank).
 // Prefer a faster mode for interactive use; users can opt into `query` for best recall.
 const DEFAULT_QMD_SEARCH_MODE: MemoryQmdSearchMode = "search";
+const DEFAULT_QMD_STARTUP: MemoryQmdStartupMode = "off";
+const DEFAULT_QMD_STARTUP_DELAY_MS = 120_000;
 const DEFAULT_QMD_EMBED_INTERVAL = "60m";
 const DEFAULT_QMD_COMMAND_TIMEOUT_MS = 30_000;
 const DEFAULT_QMD_UPDATE_TIMEOUT_MS = 120_000;
@@ -207,6 +212,21 @@ function resolveTimeoutMs(raw: number | undefined, fallback: number): number {
     return Math.floor(raw);
   }
   return fallback;
+}
+
+function resolveStartupMode(raw: MemoryQmdConfig["update"]): MemoryQmdStartupMode {
+  const value = raw?.startup;
+  if (value === "idle" || value === "immediate" || value === "off") {
+    return value;
+  }
+  return DEFAULT_QMD_STARTUP;
+}
+
+function resolveStartupDelayMs(raw: number | undefined): number {
+  if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
+    return Math.floor(raw);
+  }
+  return DEFAULT_QMD_STARTUP_DELAY_MS;
 }
 
 function resolveLimits(raw?: MemoryQmdConfig["limits"]): ResolvedQmdLimitsConfig {
@@ -404,6 +424,8 @@ export function resolveMemoryBackendConfig(params: {
       intervalMs: resolveIntervalMs(qmdCfg?.update?.interval),
       debounceMs: resolveDebounceMs(qmdCfg?.update?.debounceMs),
       onBoot: qmdCfg?.update?.onBoot !== false,
+      startup: resolveStartupMode(qmdCfg?.update),
+      startupDelayMs: resolveStartupDelayMs(qmdCfg?.update?.startupDelayMs),
       waitForBootSync: qmdCfg?.update?.waitForBootSync === true,
       embedIntervalMs: resolveEmbedIntervalMs(qmdCfg?.update?.embedInterval),
       commandTimeoutMs: resolveTimeoutMs(

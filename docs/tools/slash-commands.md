@@ -92,7 +92,7 @@ There are two related systems:
   Enables `/restart` plus gateway restart tool actions.
 </ParamField>
 <ParamField path="commands.ownerAllowFrom" type="string[]">
-  Sets the explicit owner allowlist for owner-only command/tool surfaces. Separate from `commands.allowFrom`.
+  Sets the explicit owner allowlist for owner-only command/tool surfaces. This is the human operator account that can approve dangerous actions and run commands such as `/diagnostics`, `/export-trajectory`, and `/config`. It is separate from `commands.allowFrom` and from DM pairing access.
 </ParamField>
 <ParamField path="channels.<channel>.commands.enforceOwnerForCommands" type="boolean" default="false">
   Per-channel: makes owner-only commands require **owner identity** to run on that surface. When `true`, the sender must either match a resolved owner candidate (for example an entry in `commands.ownerAllowFrom` or provider-native owner metadata) or hold internal `operator.admin` scope on an internal message channel. A wildcard entry in channel `allowFrom`, or an empty/unresolved owner-candidate list, is **not** sufficient — owner-only commands fail closed on that channel. Leave this off if you want owner-only commands gated only by `ownerAllowFrom` and the standard command allowlists.
@@ -129,7 +129,7 @@ Current source-of-truth:
     - `/stop` aborts the current run.
     - `/session idle <duration|off>` and `/session max-age <duration|off>` manage thread-binding expiry.
     - `/export-session [path]` exports the current session to HTML. Alias: `/export`.
-    - `/export-trajectory [path]` exports a JSONL [trajectory bundle](/tools/trajectory) for the current session. Alias: `/trajectory`.
+    - `/export-trajectory [path]` asks for exec approval, then exports a JSONL [trajectory bundle](/tools/trajectory) for the current session. Use it when you need the prompt, tool, and transcript timeline for one OpenClaw session. In group chats, the approval prompt and export result go to the owner privately. Alias: `/trajectory`.
 
   </Accordion>
   <Accordion title="Model and run controls">
@@ -150,6 +150,7 @@ Current source-of-truth:
     - `/commands` shows the generated command catalog.
     - `/tools [compact|verbose]` shows what the current agent can use right now.
     - `/status` shows execution/runtime status, including `Execution`/`Runtime` labels and provider usage/quota when available.
+    - `/diagnostics [note]` is the owner-only support-report flow for Gateway bugs and Codex harness runs. It asks for explicit exec approval every time before running `openclaw gateway diagnostics export --json`; do not approve diagnostics with an allow-all rule. After approval, it sends a pasteable report with the local bundle path, manifest summary, privacy notes, and relevant session ids. In group chats, the approval prompt and report go to the owner privately. When the active session uses the OpenAI Codex harness, the same approval also sends relevant Codex feedback to OpenAI servers and the completed reply lists the OpenClaw session ids, Codex thread ids, and `codex resume <thread-id>` commands. See [Diagnostics Export](/gateway/diagnostics).
     - `/crestodian <request>` runs the Crestodian setup and repair helper from an owner DM.
     - `/tasks` lists active/recent background tasks for the current session.
     - `/context [list|detail|json]` explains how context is assembled.
@@ -221,7 +222,7 @@ Bundled plugins can add more slash commands. Current bundled commands in this re
 - `/phone status|arm <camera|screen|writes|all> [duration]|disarm` temporarily arms high-risk phone node commands.
 - `/voice status|list [limit]|set <voiceId|name>` manages Talk voice config. On Discord, the native command name is `/talkvoice`.
 - `/card ...` sends LINE rich card presets. See [LINE](/channels/line).
-- `/codex status|models|threads|resume|compact|review|account|mcp|skills` inspects and controls the bundled Codex app-server harness. See [Codex harness](/plugins/codex-harness).
+- `/codex status|models|threads|resume|compact|review|diagnostics|account|mcp|skills` inspects and controls the bundled Codex app-server harness. See [Codex harness](/plugins/codex-harness).
 - QQBot-only commands:
   - `/bot-ping`
   - `/bot-version`

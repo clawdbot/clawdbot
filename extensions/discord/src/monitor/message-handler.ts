@@ -14,13 +14,13 @@ import {
   releaseDiscordInboundReplay,
 } from "./inbound-dedupe.js";
 import { buildDiscordInboundJob } from "./inbound-job.js";
-import {
-  createDiscordInboundWorker,
-  type DiscordInboundWorkerTestingHooks,
-} from "./inbound-worker.js";
 import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
 import { applyImplicitReplyBatchGate } from "./message-handler.batch-gate.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
+import {
+  createDiscordMessageRunQueue,
+  type DiscordMessageRunQueueTestingHooks,
+} from "./message-run-queue.js";
 import {
   hasDiscordMessageStickers,
   resolveDiscordMessageChannelId,
@@ -37,11 +37,10 @@ type DiscordMessageHandlerParams = Omit<
 > & {
   setStatus?: DiscordMonitorStatusSink;
   abortSignal?: AbortSignal;
-  workerRunTimeoutMs?: number;
   __testing?: DiscordMessageHandlerTestingHooks;
 };
 
-type DiscordMessageHandlerTestingHooks = DiscordInboundWorkerTestingHooks & {
+type DiscordMessageHandlerTestingHooks = DiscordMessageRunQueueTestingHooks & {
   preflightDiscordMessage?: PreflightDiscordMessage;
 };
 
@@ -76,11 +75,10 @@ export function createDiscordMessageHandler(
     "group-mentions";
   const preflightDiscordMessageImpl = params.__testing?.preflightDiscordMessage;
   const replayGuard = createDiscordInboundReplayGuard();
-  const inboundWorker = createDiscordInboundWorker({
+  const messageRunQueue = createDiscordMessageRunQueue({
     runtime: params.runtime,
     setStatus: params.setStatus,
     abortSignal: params.abortSignal,
-    runTimeoutMs: params.workerRunTimeoutMs,
     replayGuard,
     __testing: params.__testing,
   });
@@ -156,7 +154,7 @@ export function createDiscordMessageHandler(
             return;
           }
           applyImplicitReplyBatchGate(ctx, params.replyToMode, false);
-          inboundWorker.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
+          messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
           return;
         }
         const combinedBaseText = entries
@@ -209,7 +207,7 @@ export function createDiscordMessageHandler(
             ctxBatch.MessageSidLast = ids[ids.length - 1];
           }
         }
-        inboundWorker.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
+        messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
       } catch (error) {
         if (error instanceof DiscordRetryableInboundError) {
           releaseDiscordInboundReplay({ replayKeys, error, replayGuard });
@@ -262,7 +260,7 @@ export function createDiscordMessageHandler(
     }
   };
 
-  handler.deactivate = inboundWorker.deactivate;
+  handler.deactivate = messageRunQueue.deactivate;
 
   return handler;
 }

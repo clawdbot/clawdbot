@@ -49,6 +49,18 @@ describe("runEmbeddedAttempt memory flush tool forwarding", () => {
     }
   });
 
+  it("forwards cron job id into tool creation so self-removal can be scoped", () => {
+    expect(
+      buildEmbeddedAttemptToolRunContext({
+        trigger: "cron",
+        jobId: "job-current",
+      }),
+    ).toMatchObject({
+      trigger: "cron",
+      jobId: "job-current",
+    });
+  });
+
   it("activates the memory flush append-only write wrapper", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-memory-flush-"));
     const memoryFile = path.join(workspaceDir, MEMORY_RELATIVE_PATH);

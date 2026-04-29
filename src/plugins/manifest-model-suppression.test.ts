@@ -70,7 +70,7 @@ describe("manifest model suppression", () => {
     ).toBeUndefined();
   });
 
-  it("caches planned manifest suppressions per config and environment", () => {
+  it("reads planned manifest suppressions fresh per lookup", () => {
     const config = { plugins: { entries: { openai: { enabled: true } } } };
 
     resolveManifestBuiltInModelSuppression({
@@ -86,7 +86,7 @@ describe("manifest model suppression", () => {
       env: process.env,
     });
 
-    expect(mocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledTimes(1);
+    expect(mocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledTimes(2);
   });
 
   it("matches conditional suppressions by base URL host", () => {
@@ -121,6 +121,14 @@ describe("manifest model suppression", () => {
         provider: "qwen",
         id: "qwen3.6-plus",
         baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
+        env: process.env,
+      })?.suppress,
+    ).toBe(true);
+    expect(
+      resolveManifestBuiltInModelSuppression({
+        provider: "qwen",
+        id: "qwen3.6-plus",
+        baseUrl: " https://coding-intl.dashscope.aliyuncs.com./v1 ",
         env: process.env,
       })?.suppress,
     ).toBe(true);

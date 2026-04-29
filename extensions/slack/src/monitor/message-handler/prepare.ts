@@ -416,9 +416,7 @@ export async function prepareSlackMessage(params: {
       ? normalizeAllowListLower(channelConfig?.users)
       : []
     : isDirectMessage
-      ? ctx.dmPolicy === "open"
-        ? []
-        : allowFromLower
+      ? allowFromLower
       : [];
   const contextVisibilityMode = resolveChannelContextVisibilityMode({
     cfg: ctx.cfg,

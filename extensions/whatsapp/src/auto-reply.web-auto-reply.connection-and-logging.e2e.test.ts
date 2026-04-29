@@ -1,12 +1,15 @@
 import "./test-helpers.js";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { WhatsAppAuthUnstableError } from "./auth-store.js";
+import { getActiveWebListener } from "./active-listener.js";
+import { WhatsAppAuthUnstableError, resolveWebCredsPath } from "./auth-store.js";
+import { resolveOAuthDir } from "./auth-store.runtime.js";
 import {
   createWebInboundDeliverySpies,
   createMockWebListener,
@@ -178,6 +181,89 @@ describe("web auto-reply connection", () => {
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Stopping web monitoring"));
   });
 
+  it.each([
+    {
+      status: 440,
+      isLoggedOut: false,
+      healthState: "conflict",
+      error: "Unknown Stream Errored (conflict)",
+    },
+    {
+      status: 401,
+      isLoggedOut: true,
+      healthState: "logged-out",
+      error: "Stream Errored (logged out)",
+    },
+  ] as const)(
+    "clears stale auth and active listener after terminal status $status",
+    async ({ status, isLoggedOut, healthState, error }) => {
+      const accountId = `terminal-${status}`;
+      const authDir = path.join(resolveOAuthDir(), "whatsapp", accountId);
+      await fs.mkdir(authDir, { recursive: true });
+      await fs.writeFile(
+        resolveWebCredsPath(authDir),
+        JSON.stringify({ me: { id: "123@s.whatsapp.net" } }),
+      );
+      setLoadConfigMock({
+        channels: {
+          whatsapp: {
+            allowFrom: ["*"],
+            accounts: {
+              [accountId]: {
+                authDir,
+              },
+            },
+          },
+        },
+        messages: {
+          messagePrefix: undefined,
+          responsePrefix: undefined,
+        },
+      });
+
+      const sleep = vi.fn(async () => {});
+      const statuses: Array<{ healthState?: string; running?: boolean; connected?: boolean }> = [];
+      const scripted = createScriptedWebListenerFactory();
+      const { run } = startWebAutoReplyMonitor({
+        monitorWebChannelFn: monitorWebChannel as never,
+        listenerFactory: scripted.listenerFactory,
+        sleep,
+        accountId,
+        statusSink: (next) => statuses.push(next),
+        reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(scripted.getListenerCount()).toBe(1);
+          expect(getActiveWebListener(accountId)).not.toBeNull();
+        },
+        { timeout: 250, interval: 2 },
+      );
+
+      scripted.resolveClose(0, { status, isLoggedOut, error });
+      await run;
+
+      expect(scripted.getListenerCount()).toBe(1);
+      expect(sleep).not.toHaveBeenCalled();
+      expect(getActiveWebListener(accountId)).toBeNull();
+      await expect(fs.stat(authDir)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(statuses).toContainEqual(
+        expect.objectContaining({
+          connected: false,
+          healthState,
+        }),
+      );
+      expect(statuses.at(-1)).toEqual(
+        expect.objectContaining({
+          running: false,
+          connected: false,
+          healthState,
+        }),
+      );
+    },
+  );
+
   it("retries inbox attach when auth state is still stabilizing", async () => {
     const sleep = vi.fn(async () => {});
     const listenerFactory = vi.fn(async () => {
@@ -321,7 +407,92 @@ describe("web auto-reply connection", () => {
         socket.ws.emit("frame");
         await vi.advanceTimersByTimeAsync(20);
       }
+      await vi.waitFor(
+        () => {
+          expect(scripted.getListenerCount()).toBeGreaterThanOrEqual(2);
+        },
+        { timeout: 250, interval: 2 },
+      );
 
+      controller.abort();
+      scripted.resolveClose(scripted.getListenerCount() - 1, {
+        status: 499,
+        isLoggedOut: false,
+        error: "aborted",
+      });
+      await Promise.resolve();
+      await run;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("publishes frame-driven transport activity for quiet sessions", async () => {
+    vi.useFakeTimers();
+    try {
+      const sleep = vi.fn(async () => {});
+      const statuses: Array<Record<string, unknown>> = [];
+      const scripted = createScriptedWebListenerFactory();
+      const { controller, run } = startWebAutoReplyMonitor({
+        monitorWebChannelFn: monitorWebChannel as never,
+        listenerFactory: scripted.listenerFactory,
+        sleep,
+        heartbeatSeconds: 1,
+        transportTimeoutMs: 60_000,
+        messageTimeoutMs: 60_000,
+        watchdogCheckMs: 5,
+        statusSink: (next) => statuses.push({ ...next }),
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(scripted.getListenerCount()).toBe(1);
+        },
+        { timeout: 250, interval: 2 },
+      );
+
+      const initialTransportAt = Number(statuses.at(-1)?.lastTransportActivityAt ?? 0);
+      const socket = getLastWebAutoReplySessionSocket();
+      await vi.advanceTimersByTimeAsync(250);
+      socket.ws.emit("frame");
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      const lastTransportAt = Number(statuses.at(-1)?.lastTransportActivityAt ?? 0);
+      expect(lastTransportAt).toBeGreaterThan(initialTransportAt);
+
+      controller.abort();
+      scripted.resolveClose(0, { status: 499, isLoggedOut: false, error: "aborted" });
+      await Promise.resolve();
+      await run;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reconnects on transport stall before the long app-silence window", async () => {
+    vi.useFakeTimers();
+    try {
+      const sleep = vi.fn(async () => {});
+      const scripted = createScriptedWebListenerFactory();
+      const { controller, run } = startWebAutoReplyMonitor({
+        monitorWebChannelFn: monitorWebChannel as never,
+        listenerFactory: scripted.listenerFactory,
+        sleep,
+        heartbeatSeconds: 1,
+        transportTimeoutMs: 30,
+        messageTimeoutMs: 3_000,
+        watchdogCheckMs: 5,
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(scripted.getListenerCount()).toBe(1);
+        },
+        { timeout: 250, interval: 2 },
+      );
+
+      await vi.advanceTimersByTimeAsync(36);
+      await Promise.resolve();
       await vi.waitFor(
         () => {
           expect(scripted.getListenerCount()).toBeGreaterThanOrEqual(2);

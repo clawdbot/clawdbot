@@ -436,6 +436,7 @@ async function resolveCandidate(options) {
   }
   await appendGithubOutputs(options.githubOutput, {
     package_name: pkg.name,
+    package_source_sha: packageSourceSha,
     package_version: pkg.version,
     sha256: digest,
     tarball: metadata.tarball,

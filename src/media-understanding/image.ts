@@ -311,16 +311,55 @@ async function resolveMinimaxVlmFallbackRuntime(params: {
   };
 }
 
+function resolveImageDescriptionTimeoutMs(timeoutMs: number | undefined, startedAtMs: number) {
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return undefined;
+  }
+  return Math.max(1, Math.floor(timeoutMs - (Date.now() - startedAtMs)));
+}
+
+async function withImageDescriptionTimeout<T>(params: {
+  task: Promise<T>;
+  timeoutMs: number | undefined;
+  controller: AbortController;
+}): Promise<T> {
+  if (params.timeoutMs === undefined) {
+    return await params.task;
+  }
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      params.task,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          params.controller.abort();
+          reject(new Error(`image description timed out after ${params.timeoutMs}ms`));
+        }, params.timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 async function describeImagesWithModelInternal(
   params: ImagesDescriptionRequest,
   options: { onPayload?: ProviderStreamOptions["onPayload"] } = {},
 ): Promise<ImagesDescriptionResult> {
   const prompt = params.prompt ?? "Describe the image.";
+  const startedAtMs = Date.now();
+  const controller = new AbortController();
   let apiKey: string;
   let model: Model<Api> | undefined;
 
   try {
-    const resolved = await resolveImageRuntime(params);
+    const resolved = await withImageDescriptionTimeout({
+      controller,
+      timeoutMs: resolveImageDescriptionTimeoutMs(params.timeoutMs, startedAtMs),
+      task: resolveImageRuntime(params),
+    });
     apiKey = resolved.apiKey;
     model = resolved.model;
   } catch (err) {
@@ -358,50 +397,45 @@ async function describeImagesWithModelInternal(
   const context = buildImageContext(prompt, params.images, {
     promptInUserContent: shouldPlaceImagePromptInUserContent(model),
   });
-  const controller = new AbortController();
-  const timeout =
-    typeof params.timeoutMs === "number" &&
-    Number.isFinite(params.timeoutMs) &&
-    params.timeoutMs > 0
-      ? setTimeout(() => controller.abort(), params.timeoutMs)
-      : undefined;
 
   const maxTokens = resolveImageToolMaxTokens(model.maxTokens, params.maxTokens ?? 512);
   const completeImage = async (onPayload?: ProviderStreamOptions["onPayload"]) => {
     const payloadHandler = composeImageDescriptionPayloadHandlers(onPayload, options.onPayload);
-    return await complete(model, context, {
-      apiKey,
-      maxTokens,
-      signal: controller.signal,
-      ...(payloadHandler ? { onPayload: payloadHandler } : {}),
+    const timeoutMs = resolveImageDescriptionTimeoutMs(params.timeoutMs, startedAtMs);
+    return await withImageDescriptionTimeout({
+      controller,
+      timeoutMs,
+      task: complete(model, context, {
+        apiKey,
+        maxTokens,
+        signal: controller.signal,
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        ...(payloadHandler ? { onPayload: payloadHandler } : {}),
+      }),
     });
   };
 
+  const message = await completeImage();
   try {
-    const message = await completeImage();
-    try {
-      const text = coerceImageAssistantText({
-        message,
-        provider: model.provider,
-        model: model.id,
-      });
-      return { text, model: model.id };
-    } catch (err) {
-      if (!isImageModelNoTextError(err) || !hasImageReasoningOnlyResponse(message)) {
-        throw err;
-      }
-    }
-
-    const retryMessage = await completeImage(disableReasoningForImageRetryPayload);
     const text = coerceImageAssistantText({
-      message: retryMessage,
+      message,
       provider: model.provider,
       model: model.id,
     });
     return { text, model: model.id };
-  } finally {
-    clearTimeout(timeout);
+  } catch (err) {
+    if (!isImageModelNoTextError(err) || !hasImageReasoningOnlyResponse(message)) {
+      throw err;
+    }
   }
+
+  const retryMessage = await completeImage(disableReasoningForImageRetryPayload);
+  const text = coerceImageAssistantText({
+    message: retryMessage,
+    provider: model.provider,
+    model: model.id,
+  });
+  return { text, model: model.id };
 }
 
 export async function describeImagesWithModel(

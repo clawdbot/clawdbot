@@ -640,6 +640,13 @@ export function buildMatrixQaConfig(
         matrix: { enabled: true },
       },
     },
+    messages: {
+      ...baseCfg.messages,
+      groupChat: {
+        ...baseCfg.messages?.groupChat,
+        visibleReplies: "automatic",
+      },
+    },
     channels: {
       ...baseCfg.channels,
       matrix: {

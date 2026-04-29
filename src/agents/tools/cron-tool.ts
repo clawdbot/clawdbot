@@ -163,8 +163,18 @@ const CronScheduleSchema = Type.Optional(
       anchorMs: Type.Optional(
         Type.Number({ description: "Optional start anchor in milliseconds (kind=every)" }),
       ),
-      expr: Type.Optional(Type.String({ description: "Cron expression (kind=cron)" })),
-      tz: Type.Optional(Type.String({ description: "IANA timezone (kind=cron)" })),
+      expr: Type.Optional(
+        Type.String({
+          description:
+            'Cron expression (kind=cron) written in the supplied tz\'s local wall-clock time, or the Gateway host local timezone when tz is omitted; do not convert the requested local time to UTC first. Example: 6pm Shanghai daily is "0 18 * * *" with tz "Asia/Shanghai".',
+        }),
+      ),
+      tz: Type.Optional(
+        Type.String({
+          description:
+            'IANA timezone for interpreting cron wall-clock fields (kind=cron), e.g. "Asia/Shanghai"; if omitted, cron uses the Gateway host local timezone.',
+        }),
+      ),
       staggerMs: Type.Optional(Type.Number({ description: "Random jitter in ms (kind=cron)" })),
     },
     { additionalProperties: true },
@@ -304,6 +314,8 @@ export const CronToolSchema = Type.Object(
 type CronToolOptions = {
   agentSessionKey?: string;
   currentDeliveryContext?: DeliveryContext;
+  /** Restrict this cron tool instance to removing only this active cron job. */
+  selfRemoveOnlyJobId?: string;
 };
 
 type GatewayToolCaller = typeof callGatewayTool;
@@ -331,6 +343,29 @@ function truncateText(input: string, maxLen: number) {
   }
   const truncated = truncateUtf16Safe(input, Math.max(0, maxLen - 3)).trimEnd();
   return `${truncated}...`;
+}
+
+function readCronJobIdParam(params: Record<string, unknown>) {
+  return readStringParam(params, "jobId") ?? readStringParam(params, "id");
+}
+
+function assertCronSelfRemoveScope(
+  opts: CronToolOptions | undefined,
+  action: string,
+  params: Record<string, unknown>,
+) {
+  const selfRemoveOnlyJobId = opts?.selfRemoveOnlyJobId?.trim();
+  if (!selfRemoveOnlyJobId) {
+    return;
+  }
+  if (action !== "remove") {
+    throw new Error("Cron tool is restricted to removing the current cron job.");
+  }
+  const id = readCronJobIdParam(params);
+  if (id && id === selfRemoveOnlyJobId) {
+    return;
+  }
+  throw new Error("Cron tool is restricted to removing the current cron job.");
 }
 
 function extractMessageText(message: ChatMessage): { role: string; text: string } | null {
@@ -569,10 +604,13 @@ SCHEDULE TYPES (schedule.kind):
   { "kind": "at", "at": "<ISO-8601 timestamp>" }
 - "every": Recurring interval
   { "kind": "every", "everyMs": <interval-ms>, "anchorMs": <optional-start-ms> }
-- "cron": Cron expression
-  { "kind": "cron", "expr": "<cron-expression>", "tz": "<optional-timezone>" }
+- "cron": Cron expression evaluated in the supplied timezone, or the Gateway host local timezone when tz is omitted
+  { "kind": "cron", "expr": "<cron-expression>", "tz": "<optional-IANA-timezone>" }
+  Write expr in the selected timezone's local wall-clock time; do not convert the requested local time to UTC first.
+  If tz is omitted, do not assume UTC; the Gateway host local timezone is used.
+  Example: "Remind me every day at 6pm Shanghai time" -> { "kind": "cron", "expr": "0 18 * * *", "tz": "Asia/Shanghai" }
 
-ISO timestamps without an explicit timezone are treated as UTC.
+For schedule.kind="at", ISO timestamps without an explicit timezone are treated as UTC.
 
 PAYLOAD TYPES (payload.kind):
 - "systemEvent": Injects text as system event into session
@@ -603,6 +641,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
+      assertCronSelfRemoveScope(opts, action, params);
       const gatewayOpts: GatewayCallOptions = {
         ...readGatewayCallOptions(params),
         timeoutMs:
@@ -649,7 +688,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             const resolvedSessionKey = opts?.agentSessionKey
               ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
               : undefined;
-            if (!("agentId" in job)) {
+            if (!("agentId" in job) || (job as { agentId?: unknown }).agentId === undefined) {
               const agentId = opts?.agentSessionKey
                 ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
                 : undefined;
@@ -732,7 +771,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           return jsonResult(await callGateway("cron.add", gatewayOpts, job));
         }
         case "update": {
-          const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
+          const id = readCronJobIdParam(params);
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
@@ -767,14 +806,14 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           );
         }
         case "remove": {
-          const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
+          const id = readCronJobIdParam(params);
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
           return jsonResult(await callGateway("cron.remove", gatewayOpts, { id }));
         }
         case "run": {
-          const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
+          const id = readCronJobIdParam(params);
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
@@ -783,7 +822,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           return jsonResult(await callGateway("cron.run", gatewayOpts, { id, mode: runMode }));
         }
         case "runs": {
-          const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
+          const id = readCronJobIdParam(params);
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }

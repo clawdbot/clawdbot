@@ -1,3 +1,4 @@
+import { parseExplicitTargetForLoadedChannel } from "../../channels/plugins/target-parsing-loaded.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
@@ -5,6 +6,7 @@ import { loadSessionStore } from "../../config/sessions/store-load.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-id-resolution.js";
+import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { tryResolveLoadedOutboundTarget } from "../../infra/outbound/targets-loaded.js";
 import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-session.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
@@ -41,12 +43,56 @@ async function loadTargetsRuntime() {
 async function resolveOutboundTargetWithRuntime(
   params: Parameters<typeof tryResolveLoadedOutboundTarget>[0],
 ) {
-  const loaded = tryResolveLoadedOutboundTarget(params);
-  if (loaded) {
-    return loaded;
+  try {
+    const loaded = tryResolveLoadedOutboundTarget(params);
+    if (loaded) {
+      return loaded;
+    }
+    const { resolveOutboundTarget } = await loadTargetsRuntime();
+    return resolveOutboundTarget(params);
+  } catch (err) {
+    return {
+      ok: false as const,
+      error: new Error(`Invalid delivery target: ${formatErrorMessage(err)}`),
+    };
   }
-  const { resolveOutboundTarget } = await loadTargetsRuntime();
-  return resolveOutboundTarget(params);
+}
+
+function normalizeTargetForThreadCarry(
+  channel: Exclude<OutboundChannel, "none"> | undefined,
+  to: string | undefined,
+): string | undefined {
+  if (!channel || !to) {
+    return undefined;
+  }
+  try {
+    const normalized = normalizeTargetForProvider(channel, to);
+    const comparable = normalized ?? to.trim();
+    if (!comparable) {
+      return undefined;
+    }
+    const parsed = parseExplicitTargetForLoadedChannel(channel, comparable);
+    const base = parsed?.to ?? comparable;
+    return normalizeTargetForProvider(channel, base) ?? base;
+  } catch {
+    return undefined;
+  }
+}
+
+function deliveryTargetsShareThreadRoute(params: {
+  channel: Exclude<OutboundChannel, "none"> | undefined;
+  to: string | undefined;
+  lastTo: string | undefined;
+}): boolean {
+  if (!params.to || !params.lastTo) {
+    return false;
+  }
+  if (params.to === params.lastTo) {
+    return true;
+  }
+  const normalizedTo = normalizeTargetForThreadCarry(params.channel, params.to);
+  const normalizedLastTo = normalizeTargetForThreadCarry(params.channel, params.lastTo);
+  return Boolean(normalizedTo && normalizedLastTo && normalizedTo === normalizedLastTo);
 }
 
 let channelSelectionRuntimePromise:
@@ -160,7 +206,12 @@ export async function resolveDeliveryTarget(
   // stale thread IDs from leaking to a different chat.
   let threadId =
     resolved.threadId &&
-    (resolved.threadIdExplicit || (resolved.to && resolved.to === resolved.lastTo))
+    (resolved.threadIdExplicit ||
+      deliveryTargetsShareThreadRoute({
+        channel,
+        to: resolved.to,
+        lastTo: resolved.lastTo,
+      }))
       ? resolved.threadId
       : undefined;
 

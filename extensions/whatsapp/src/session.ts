@@ -34,6 +34,10 @@ import {
   makeWASocket,
   useMultiFileAuthState,
 } from "./session.runtime.js";
+import {
+  DEFAULT_WHATSAPP_SOCKET_TIMING,
+  type WhatsAppSocketTimingOptions,
+} from "./socket-timing.js";
 export { formatError, getStatusCode } from "./session-errors.js";
 
 export {
@@ -126,7 +130,7 @@ async function printTerminalQr(qr: string): Promise<void> {
 export async function createWaSocket(
   printQr: boolean,
   verbose: boolean,
-  opts: { authDir?: string; onQr?: (qr: string) => void } = {},
+  opts: { authDir?: string; onQr?: (qr: string) => void } & WhatsAppSocketTimingOptions = {},
 ): Promise<ReturnType<typeof makeWASocket>> {
   const baseLogger = getChildLogger(
     { module: "baileys" },
@@ -151,6 +155,13 @@ export async function createWaSocket(
   const { version } = await fetchLatestBaileysVersion();
   const agent = await resolveEnvProxyAgent(sessionLogger);
   const fetchAgent = await resolveEnvFetchDispatcher(sessionLogger, agent);
+  const socketTiming = {
+    keepAliveIntervalMs:
+      opts.keepAliveIntervalMs ?? DEFAULT_WHATSAPP_SOCKET_TIMING.keepAliveIntervalMs,
+    connectTimeoutMs: opts.connectTimeoutMs ?? DEFAULT_WHATSAPP_SOCKET_TIMING.connectTimeoutMs,
+    defaultQueryTimeoutMs:
+      opts.defaultQueryTimeoutMs ?? DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
+  };
   const sock = makeWASocket({
     auth: {
       creds: state.creds,
@@ -162,6 +173,7 @@ export async function createWaSocket(
     browser: ["openclaw", "cli", VERSION],
     syncFullHistory: false,
     markOnlineOnConnect: false,
+    ...socketTiming,
     agent,
     // Baileys types still model `fetchAgent` as a Node agent even though the
     // runtime path accepts an undici dispatcher for upload fetches.

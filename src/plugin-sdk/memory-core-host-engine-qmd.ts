@@ -1,1 +1,1 @@
-export * from "../memory-host-sdk/engine-qmd.js";
+export * from "../../packages/memory-host-sdk/src/engine-qmd.js";

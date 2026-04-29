@@ -591,6 +591,7 @@ describe("update-cli", () => {
       expect.objectContaining({
         stdio: "inherit",
         env: expect.objectContaining({
+          NODE_DISABLE_COMPILE_CACHE: "1",
           OPENCLAW_UPDATE_POST_CORE: "1",
           OPENCLAW_UPDATE_POST_CORE_CHANNEL: "dev",
         }),
@@ -599,6 +600,36 @@ describe("update-cli", () => {
     expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
     expect(runDaemonInstall).not.toHaveBeenCalled();
     expect(runDaemonRestart).not.toHaveBeenCalled();
+  });
+
+  it("respawns into the updated git root before requested channel persistence", async () => {
+    const { entrypoints } = setupUpdatedRootRefresh({
+      gatewayUpdateImpl: async (root) =>
+        makeOkUpdateResult({
+          mode: "git",
+          root,
+          before: { sha: "old-sha", version: "2026.4.26" },
+          after: { sha: "new-sha", version: "2026.4.27" },
+        }),
+    });
+
+    await updateCommand({ channel: "dev", yes: true, restart: false });
+
+    expect(spawn).toHaveBeenCalledWith(
+      expect.stringMatching(/node/),
+      [entrypoints[0], "update", "--no-restart", "--yes"],
+      expect.objectContaining({
+        stdio: "inherit",
+        env: expect.objectContaining({
+          OPENCLAW_UPDATE_POST_CORE: "1",
+          OPENCLAW_UPDATE_POST_CORE_CHANNEL: "dev",
+          OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL: "dev",
+        }),
+      }),
+    );
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(syncPluginsForUpdateChannel).not.toHaveBeenCalled();
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
   });
 
   it("keeps downgrade post-update work in the current process", async () => {
@@ -683,6 +714,47 @@ describe("update-cli", () => {
     expect(syncPluginsForUpdateChannel).toHaveBeenCalledTimes(1);
     expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("post-core resume mode persists the requested update channel with the updated process", async () => {
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      parsed: { update: { channel: "stable" } },
+      resolved: { update: { channel: "stable" } } as OpenClawConfig,
+      sourceConfig: { update: { channel: "stable" } } as OpenClawConfig,
+      runtimeConfig: { update: { channel: "stable" } } as OpenClawConfig,
+      config: { update: { channel: "stable" } } as OpenClawConfig,
+      hash: "stable-hash",
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "dev",
+        OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL: "dev",
+      },
+      async () => {
+        await updateCommand({ restart: false });
+      },
+    );
+
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: {
+        update: {
+          channel: "dev",
+        },
+      },
+      baseHash: "stable-hash",
+    });
+    expect(syncPluginsForUpdateChannel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "dev",
+        config: expect.objectContaining({
+          update: expect.objectContaining({ channel: "dev" }),
+        }),
+      }),
+    );
   });
 
   it("passes the update timeout budget into post-core plugin updates", async () => {
@@ -1537,7 +1609,18 @@ describe("update-cli", () => {
       [expect.stringMatching(/node/), entryPath, "doctor", "--non-interactive", "--fix"],
       expect.any(Object),
     );
-    expect(updateNpmInstalledPlugins).toHaveBeenCalled();
+    expect(spawn).toHaveBeenCalledWith(
+      expect.stringMatching(/node/),
+      [entryPath, "update", "--no-restart", "--yes"],
+      expect.objectContaining({
+        stdio: "inherit",
+        env: expect.objectContaining({
+          OPENCLAW_UPDATE_POST_CORE: "1",
+          OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+        }),
+      }),
+    );
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
     expect(
       vi
         .mocked(defaultRuntime.log)
@@ -1934,10 +2017,14 @@ describe("update-cli", () => {
     const syncConfig = vi.mocked(syncPluginsForUpdateChannel).mock.calls[0]?.[0]?.config as
       | OpenClawConfig
       | undefined;
+    const updateCall = vi.mocked(updateNpmInstalledPlugins).mock.calls[0]?.[0] as
+      | { skipDisabledPlugins?: boolean }
+      | undefined;
     expect(syncConfig?.plugins?.installs).toEqual(pluginInstallRecords);
     expect(syncConfig?.update?.channel).toBe("beta");
     expect(syncConfig?.gateway?.auth).toBeUndefined();
     expect(syncConfig?.plugins?.entries).toBeUndefined();
+    expect(updateCall?.skipDisabledPlugins).toBe(true);
   });
 
   it("persists channel and runs post-update work after switching from package to git", async () => {

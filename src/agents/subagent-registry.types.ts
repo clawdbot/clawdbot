@@ -14,6 +14,7 @@ export type SubagentRunRecord = {
   cleanup: "delete" | "keep";
   label?: string;
   model?: string;
+  agentDir?: string;
   workspaceDir?: string;
   runTimeoutSeconds?: number;
   spawnMode?: SpawnSubagentMode;

@@ -124,7 +124,7 @@ function listPersistedIndexPluginDirs(env: NodeJS.ProcessEnv, startOrder: number
     }
     dirs.push({
       pluginDir: resolveUserPath(rootDir, env),
-      rank: rawPlugin.origin === "bundled" ? 2 : 1,
+      rank: rawPlugin.origin === "bundled" ? 3 : 1,
       order: order++,
       origin: normalizeTrimmedString(rawPlugin.origin),
     });

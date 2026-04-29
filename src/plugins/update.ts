@@ -469,6 +469,7 @@ export async function updateNpmInstalledPlugins(params: {
   logger?: PluginUpdateLogger;
   pluginIds?: string[];
   skipIds?: Set<string>;
+  skipDisabledPlugins?: boolean;
   timeoutMs?: number;
   dryRun?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
@@ -478,6 +479,9 @@ export async function updateNpmInstalledPlugins(params: {
   const logger = params.logger ?? {};
   const installs = params.config.plugins?.installs ?? {};
   const targets = params.pluginIds?.length ? params.pluginIds : Object.keys(installs);
+  const normalizedPluginConfig = params.skipDisabledPlugins
+    ? normalizePluginsConfig(params.config.plugins)
+    : undefined;
   const outcomes: PluginUpdateOutcome[] = [];
   let next = params.config;
   let changed = false;
@@ -500,6 +504,23 @@ export async function updateNpmInstalledPlugins(params: {
         message: `No install record for "${pluginId}".`,
       });
       continue;
+    }
+
+    if (normalizedPluginConfig) {
+      const enableState = resolveEffectiveEnableState({
+        id: pluginId,
+        origin: "global",
+        config: normalizedPluginConfig,
+        rootConfig: params.config,
+      });
+      if (!enableState.enabled) {
+        outcomes.push({
+          pluginId,
+          status: "skipped",
+          message: `Skipping "${pluginId}" (${enableState.reason ?? "disabled by plugin config"}).`,
+        });
+        continue;
+      }
     }
 
     if (record.source !== "npm" && record.source !== "marketplace" && record.source !== "clawhub") {

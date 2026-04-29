@@ -306,6 +306,5 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
       auth: "plugin",
       handler: routeHandler,
     });
-    api.logger.info?.(`mattermost: registered slash command callback at ${callbackPath}`);
   }
 }

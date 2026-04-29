@@ -83,7 +83,6 @@ type ReadOnlyChannelPluginOptions = {
   activationSourceConfig?: OpenClawConfig;
   includePersistedAuthState?: boolean;
   includeSetupRuntimeFallback?: boolean;
-  cache?: boolean;
 };
 
 type ReadOnlyChannelPluginResolution = {
@@ -578,7 +577,6 @@ function resolveExternalReadOnlyChannelPluginIds(params: {
   records: readonly PluginManifestRecord[];
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
-  cache?: boolean;
 }): string[] {
   if (params.channelIds.length === 0) {
     return [];
@@ -589,7 +587,6 @@ function resolveExternalReadOnlyChannelPluginIds(params: {
     channelIds: params.channelIds,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    cache: params.cache,
     manifestRecords: params.records,
   });
   if (candidatePluginIds.length === 0) {
@@ -626,7 +623,6 @@ export function resolveReadOnlyChannelPluginsForConfig(
     stateDir: options.stateDir,
     workspaceDir,
     env,
-    cache: options.cache,
     includeDisabled: true,
   }).plugins;
   const bundledManifestRecords = listBundledChannelManifestRecords(manifestRecords);
@@ -638,7 +634,6 @@ export function resolveReadOnlyChannelPluginsForConfig(
         activationSourceConfig: options.activationSourceConfig ?? cfg,
         workspaceDir,
         env,
-        cache: options.cache,
         includePersistedAuthState: options.includePersistedAuthState,
         manifestRecords,
       }),
@@ -677,7 +672,6 @@ export function resolveReadOnlyChannelPluginsForConfig(
     records: externalManifestRecords,
     workspaceDir,
     env,
-    cache: options.cache,
   });
   if (externalPluginIds.length > 0) {
     const externalPluginIdSet = new Set(externalPluginIds);

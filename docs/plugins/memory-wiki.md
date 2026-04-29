@@ -65,6 +65,12 @@ If bridge mode reports zero exported artifacts, the active memory plugin is not
 currently exposing public bridge inputs yet. Run `openclaw wiki doctor` first,
 then confirm the active memory plugin supports public artifacts.
 
+When bridge mode is active and `bridge.readMemoryArtifacts` is enabled,
+`openclaw wiki status`, `openclaw wiki doctor`, and `openclaw wiki bridge
+import` read through the running Gateway. That keeps CLI bridge checks aligned
+with the runtime memory plugin context. If bridge is disabled or artifact reads
+are turned off, those commands keep their local/offline behavior.
+
 ## Vault modes
 
 `memory-wiki` supports three vault modes:

@@ -7,7 +7,6 @@
   "dependencies": {
     "@copilotkit/aimock": "1.15.1",
     "@modelcontextprotocol/sdk": "1.29.0",
-    "@openclaw/qa-channel": "workspace:*",
     "playwright-core": "1.59.1",
     "yaml": "^2.8.3",
     "zod": "^4.3.6"

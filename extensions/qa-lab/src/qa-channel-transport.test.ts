@@ -24,6 +24,7 @@ describe("qa channel transport", () => {
       messages: {
         groupChat: {
           mentionPatterns: ["\\b@?openclaw\\b"],
+          visibleReplies: "automatic",
         },
       },
     });

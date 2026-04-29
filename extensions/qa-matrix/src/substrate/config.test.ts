@@ -76,6 +76,7 @@ describe("matrix qa config", () => {
       replyToMode: "off",
       threadReplies: "inbound",
     });
+    expect(next.messages?.groupChat?.visibleReplies).toBe("automatic");
   });
 
   it("applies room-keyed Matrix QA config overrides", () => {

@@ -147,9 +147,11 @@ const expectedSortedCatalog = (): ModelCatalogRpcEntry[] => [
 
 describe("gateway server models + voicewake", () => {
   const listModels = async (params?: { view?: "default" | "configured" | "all" }) =>
-    params
-      ? rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", params)
-      : rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list");
+    withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () =>
+      params
+        ? await rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", params)
+        : await rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list"),
+    );
 
   const seedPiCatalog = () => {
     piSdkMock.enabled = true;
@@ -815,11 +817,18 @@ describe("gateway server misc", () => {
       "utf-8",
     );
 
-    await withEnvAsync({ OPENCLAW_TEST_MINIMAL_GATEWAY: undefined }, async () => {
-      const autoPort = await getFreePort();
-      const autoServer = await startGatewayServer(autoPort);
-      await autoServer.close();
-    });
+    await withEnvAsync(
+      {
+        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
+      },
+      async () => {
+        const autoPort = await getFreePort();
+        const autoServer = await startGatewayServer(autoPort);
+        await autoServer.close();
+      },
+    );
 
     const updated = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
     const channels = updated.channels as Record<string, unknown> | undefined;

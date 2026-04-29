@@ -128,7 +128,8 @@ export function laneSummary(poolLane) {
   const retries = poolLane.retries > 0 ? ` retries=${poolLane.retries}` : "";
   const cache = poolLane.cacheKey ? ` cache=${poolLane.cacheKey}` : "";
   const image = poolLane.e2eImageKind ? ` image=${poolLane.e2eImageKind}` : "";
-  return `${poolLane.name}(w=${laneWeight(poolLane)} r=${resources}${timeout}${noOutputTimeout}${retries}${cache}${image})`;
+  const state = poolLane.stateScenario ? ` state=${poolLane.stateScenario}` : "";
+  return `${poolLane.name}(w=${laneWeight(poolLane)} r=${resources}${timeout}${noOutputTimeout}${retries}${cache}${image}${state})`;
 }
 
 export function lanesNeedE2eImageKind(poolLanes, kind) {
@@ -184,6 +185,7 @@ export function buildPlanJson(params) {
       name: poolLane.name,
       noOutputTimeoutMs: poolLane.noOutputTimeoutMs,
       resources: laneResources(poolLane),
+      stateScenario: poolLane.stateScenario,
       timeoutMs: poolLane.timeoutMs,
       weight: laneWeight(poolLane),
     })),

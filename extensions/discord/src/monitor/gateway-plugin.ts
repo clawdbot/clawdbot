@@ -21,7 +21,11 @@ import { DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT } from "./gateway-handle.js";
 const DISCORD_GATEWAY_BOT_URL = "https://discord.com/api/v10/gateway/bot";
 const DISCORD_API_HOST = "discord.com";
 const DEFAULT_DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/";
-const DISCORD_GATEWAY_INFO_TIMEOUT_MS = 10_000;
+const DEFAULT_DISCORD_GATEWAY_INFO_TIMEOUT_MS = 30_000;
+const MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS = 120_000;
+const DISCORD_GATEWAY_INFO_TIMEOUT_ENV = "OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS";
+const DISCORD_GATEWAY_METADATA_FALLBACK_LOG_INTERVAL_MS = 60_000;
+const DISCORD_GATEWAY_HANDSHAKE_TIMEOUT_MS = 30_000;
 
 type DiscordGatewayMetadataResponse = Pick<Response, "ok" | "status" | "text">;
 type DiscordGatewayFetchInit = Record<string, unknown> & {
@@ -33,8 +37,12 @@ type DiscordGatewayFetch = (
 ) => Promise<DiscordGatewayMetadataResponse>;
 
 type DiscordGatewayMetadataError = Error & { transient?: boolean };
-type DiscordGatewayWebSocketCtor = new (url: string, options?: { agent?: unknown }) => ws.WebSocket;
+type DiscordGatewayWebSocketCtor = new (
+  url: string,
+  options?: { agent?: unknown; handshakeTimeout?: number },
+) => ws.WebSocket;
 const registrationPromises = new WeakMap<carbonGateway.GatewayPlugin, Promise<void>>();
+const gatewayMetadataFallbackLogLastAt = new WeakMap<RuntimeEnv, number>();
 type CarbonGatewayRegistrationState = {
   client?: Parameters<carbonGateway.GatewayPlugin["registerClient"]>[0];
   ws?: unknown;
@@ -72,17 +80,36 @@ function hasCarbonGatewaySocketStarted(plugin: carbonGateway.GatewayPlugin): boo
   return state.ws != null || state.isConnecting === true;
 }
 
-export function resolveDiscordGatewayIntents(
-  intentsConfig?: import("openclaw/plugin-sdk/config-types").DiscordIntentsConfig,
-): number {
+type ResolveDiscordGatewayIntentsParams =
+  | import("openclaw/plugin-sdk/config-types").DiscordIntentsConfig
+  | {
+      intentsConfig?: import("openclaw/plugin-sdk/config-types").DiscordIntentsConfig;
+      voiceEnabled?: boolean;
+    };
+
+function isGatewayIntentsResolverOptions(
+  value: ResolveDiscordGatewayIntentsParams | undefined,
+): value is Exclude<ResolveDiscordGatewayIntentsParams, undefined> & {
+  intentsConfig?: import("openclaw/plugin-sdk/config-types").DiscordIntentsConfig;
+  voiceEnabled?: boolean;
+} {
+  return Boolean(value && ("intentsConfig" in value || "voiceEnabled" in value));
+}
+
+export function resolveDiscordGatewayIntents(params?: ResolveDiscordGatewayIntentsParams): number {
+  const intentsConfig = isGatewayIntentsResolverOptions(params) ? params.intentsConfig : params;
+  const voiceEnabled = isGatewayIntentsResolverOptions(params) ? params.voiceEnabled : undefined;
+  const voiceStatesEnabled = intentsConfig?.voiceStates ?? voiceEnabled ?? true;
   let intents =
     carbonGateway.GatewayIntents.Guilds |
     carbonGateway.GatewayIntents.GuildMessages |
     carbonGateway.GatewayIntents.MessageContent |
     carbonGateway.GatewayIntents.DirectMessages |
     carbonGateway.GatewayIntents.GuildMessageReactions |
-    carbonGateway.GatewayIntents.DirectMessageReactions |
-    carbonGateway.GatewayIntents.GuildVoiceStates;
+    carbonGateway.GatewayIntents.DirectMessageReactions;
+  if (voiceStatesEnabled) {
+    intents |= carbonGateway.GatewayIntents.GuildVoiceStates;
+  }
   if (intentsConfig?.presence) {
     intents |= carbonGateway.GatewayIntents.GuildPresences;
   }
@@ -90,6 +117,26 @@ export function resolveDiscordGatewayIntents(
     intents |= carbonGateway.GatewayIntents.GuildMembers;
   }
   return intents;
+}
+
+function normalizeGatewayInfoTimeoutMs(value: unknown): number | undefined {
+  const numeric =
+    typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return undefined;
+  }
+  return Math.min(Math.floor(numeric), MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS);
+}
+
+export function resolveDiscordGatewayInfoTimeoutMs(params?: {
+  configuredTimeoutMs?: number;
+  env?: NodeJS.ProcessEnv;
+}): number {
+  return (
+    normalizeGatewayInfoTimeoutMs(params?.configuredTimeoutMs) ??
+    normalizeGatewayInfoTimeoutMs(params?.env?.[DISCORD_GATEWAY_INFO_TIMEOUT_ENV]) ??
+    DEFAULT_DISCORD_GATEWAY_INFO_TIMEOUT_MS
+  );
 }
 
 function summarizeGatewayResponseBody(body: string): string {
@@ -215,7 +262,7 @@ async function fetchDiscordGatewayInfoWithTimeout(params: {
   fetchInit?: DiscordGatewayFetchInit;
   timeoutMs?: number;
 }): Promise<APIGatewayBotInfo> {
-  const timeoutMs = Math.max(1, params.timeoutMs ?? DISCORD_GATEWAY_INFO_TIMEOUT_MS);
+  const timeoutMs = Math.max(1, params.timeoutMs ?? DEFAULT_DISCORD_GATEWAY_INFO_TIMEOUT_MS);
   const abortController = new AbortController();
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
@@ -259,9 +306,19 @@ function resolveGatewayInfoWithFallback(params: { runtime?: RuntimeEnv; error: u
     throw params.error;
   }
   const message = formatErrorMessage(params.error);
-  params.runtime?.log?.(
-    `discord: gateway metadata lookup failed transiently; using default gateway url (${message})`,
-  );
+  const now = Date.now();
+  if (params.runtime) {
+    const previous = gatewayMetadataFallbackLogLastAt.get(params.runtime);
+    if (
+      previous === undefined ||
+      now - previous >= DISCORD_GATEWAY_METADATA_FALLBACK_LOG_INTERVAL_MS
+    ) {
+      params.runtime.log?.(
+        `discord: gateway metadata lookup failed transiently; using default gateway url (${message})`,
+      );
+      gatewayMetadataFallbackLogLastAt.set(params.runtime, now);
+    }
+  }
   return {
     info: createDefaultGatewayInfo(),
     usedFallback: true,
@@ -274,6 +331,7 @@ function createGatewayPlugin(params: {
     intents: number;
     autoInteractions: boolean;
   };
+  gatewayInfoTimeoutMs: number;
   fetchImpl: DiscordGatewayFetch;
   fetchInit?: DiscordGatewayFetchInit;
   wsAgent?: InstanceType<typeof httpsProxyAgent.HttpsProxyAgent<string>>;
@@ -334,6 +392,7 @@ function createGatewayPlugin(params: {
           token: client.options.token,
           fetchImpl: params.fetchImpl,
           fetchInit: params.fetchInit,
+          timeoutMs: params.gatewayInfoTimeoutMs,
         })
           .then((info) => ({
             info,
@@ -366,7 +425,10 @@ function createGatewayPlugin(params: {
       // close-path crashes during Discord gateway teardown; the ws transport is
       // already our proxy path and behaves predictably for lifecycle cleanup.
       const WebSocketCtor = params.testing?.webSocketCtor ?? ws.default;
-      const socket = new WebSocketCtor(url, params.wsAgent ? { agent: params.wsAgent } : undefined);
+      const socket = new WebSocketCtor(url, {
+        handshakeTimeout: DISCORD_GATEWAY_HANDSHAKE_TIMEOUT_MS,
+        ...(params.wsAgent ? { agent: params.wsAgent } : {}),
+      });
       const emitTransportActivity = () => {
         if ((this as unknown as { ws?: unknown }).ws !== socket) {
           return;
@@ -479,9 +541,16 @@ export function createDiscordGatewayPlugin(params: {
     ) => Promise<void>;
   };
 }): carbonGateway.GatewayPlugin {
-  const intents = resolveDiscordGatewayIntents(params.discordConfig?.intents);
+  const intents = resolveDiscordGatewayIntents({
+    intentsConfig: params.discordConfig?.intents,
+    voiceEnabled: params.discordConfig?.voice?.enabled !== false,
+  });
   const proxy = resolveEffectiveDebugProxyUrl(params.discordConfig?.proxy);
   const debugProxySettings = resolveDebugProxySettings();
+  const gatewayInfoTimeoutMs = resolveDiscordGatewayInfoTimeoutMs({
+    configuredTimeoutMs: params.discordConfig?.gatewayInfoTimeoutMs,
+    env: process.env,
+  });
   const options = {
     reconnect: { maxAttempts: 50 },
     intents,
@@ -493,6 +562,7 @@ export function createDiscordGatewayPlugin(params: {
   if (!proxy) {
     return createGatewayPlugin({
       options,
+      gatewayInfoTimeoutMs,
       fetchImpl: async (input, init) => {
         return await fetchDiscordGatewayMetadataDirect(
           input,
@@ -525,6 +595,7 @@ export function createDiscordGatewayPlugin(params: {
 
     return createGatewayPlugin({
       options,
+      gatewayInfoTimeoutMs,
       fetchImpl: async (input, init) => {
         return await fetchDiscordGatewayMetadataDirect(
           input,
@@ -550,6 +621,7 @@ export function createDiscordGatewayPlugin(params: {
     params.runtime.error?.(danger(`discord: invalid gateway proxy: ${String(err)}`));
     return createGatewayPlugin({
       options,
+      gatewayInfoTimeoutMs,
       fetchImpl: (input, init) => fetchDiscordGatewayMetadataDirect(input, init, false),
       runtime: params.runtime,
       testing: params.__testing

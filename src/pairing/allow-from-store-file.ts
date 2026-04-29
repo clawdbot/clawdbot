@@ -34,29 +34,68 @@ export function resolvePairingCredentialsDir(env: NodeJS.ProcessEnv = process.en
   return resolveOAuthDir(env, stateDir);
 }
 
-/** Sanitize channel ID for use in filenames (prevent path traversal). */
-export function safeChannelKey(channel: PairingChannel): string {
-  const raw = normalizeLowercaseStringOrEmpty(String(channel));
+type PairingFilenameKeyKind = "channel" | "account id";
+
+function describePairingFilenameKeyInput(value: unknown): string {
+  if (value === null) {
+    return "null";
+  }
+  if (Array.isArray(value)) {
+    return "array";
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? `string length ${trimmed.length}` : "empty string";
+  }
+  if (typeof value === "number" && !Number.isFinite(value)) {
+    return "non-finite number";
+  }
+  return typeof value;
+}
+
+function invalidPairingFilenameKeyError(
+  kind: PairingFilenameKeyKind,
+  reason: string,
+  value: unknown,
+): Error {
+  return new Error(
+    `invalid pairing ${kind}: ${reason}; got ${describePairingFilenameKeyInput(value)}`,
+  );
+}
+
+function normalizePairingFilenameKey(value: unknown, kind: PairingFilenameKeyKind): string {
+  if (typeof value !== "string") {
+    throw invalidPairingFilenameKeyError(kind, "expected non-empty string", value);
+  }
+  const raw = normalizeLowercaseStringOrEmpty(value);
   if (!raw) {
-    throw new Error("invalid pairing channel");
+    throw invalidPairingFilenameKeyError(kind, "expected non-empty string", value);
   }
   const safe = raw.replace(/[\\/:*?"<>|]/g, "_").replace(/\.\./g, "_");
   if (!safe || safe === "_") {
-    throw new Error("invalid pairing channel");
+    throw invalidPairingFilenameKeyError(kind, "sanitized filename key is empty", value);
   }
   return safe;
 }
 
+/** Sanitize channel ID for use in filenames (prevent path traversal). */
+export function safeChannelKey(channel: PairingChannel): string {
+  return normalizePairingFilenameKey(channel, "channel");
+}
+
 function safeAccountKey(accountId: string): string {
-  const raw = normalizeLowercaseStringOrEmpty(accountId);
-  if (!raw) {
-    throw new Error("invalid pairing account id");
+  return normalizePairingFilenameKey(accountId, "account id");
+}
+
+function resolveOptionalAccountFilenameKey(accountId: unknown): string | null {
+  if (accountId == null) {
+    return null;
   }
-  const safe = raw.replace(/[\\/:*?"<>|]/g, "_").replace(/\.\./g, "_");
-  if (!safe || safe === "_") {
-    throw new Error("invalid pairing account id");
+  if (typeof accountId !== "string") {
+    throw invalidPairingFilenameKeyError("account id", "expected non-empty string", accountId);
   }
-  return safe;
+  const normalizedAccountId = normalizeOptionalString(accountId) ?? "";
+  return normalizedAccountId ? safeAccountKey(normalizedAccountId) : null;
 }
 
 export function resolveAllowFromFilePath(
@@ -65,14 +104,11 @@ export function resolveAllowFromFilePath(
   accountId?: string,
 ): string {
   const base = safeChannelKey(channel);
-  const normalizedAccountId = normalizeOptionalString(accountId) ?? "";
-  if (!normalizedAccountId) {
+  const accountKey = resolveOptionalAccountFilenameKey(accountId);
+  if (!accountKey) {
     return path.join(resolvePairingCredentialsDir(env), `${base}-allowFrom.json`);
   }
-  return path.join(
-    resolvePairingCredentialsDir(env),
-    `${base}-${safeAccountKey(normalizedAccountId)}-allowFrom.json`,
-  );
+  return path.join(resolvePairingCredentialsDir(env), `${base}-${accountKey}-allowFrom.json`);
 }
 
 export function dedupePreserveOrder(entries: string[]): string[] {
@@ -94,6 +130,9 @@ export function shouldIncludeLegacyAllowFromEntries(normalizedAccountId: string)
 }
 
 export function resolveAllowFromAccountId(accountId?: string): string {
+  if (accountId != null && typeof accountId !== "string") {
+    throw invalidPairingFilenameKeyError("account id", "expected non-empty string", accountId);
+  }
   return normalizeLowercaseStringOrEmpty(accountId) || DEFAULT_ACCOUNT_ID;
 }
 

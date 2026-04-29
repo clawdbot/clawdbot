@@ -5,6 +5,7 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
@@ -268,110 +269,75 @@ async function resolveDemoLocalApiKey(params: {
 
 describe("getApiKeyForModel", () => {
   it("reads oauth auth-profiles entries from auth-profiles.json via explicit profile", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-"));
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-oauth-",
+        agentEnv: "main",
+      },
+      async (state) => {
+        await state.writeAuthProfiles({
+          version: 1,
+          profiles: {
+            "openai-codex:default": {
+              type: "oauth",
+              provider: "openai-codex",
+              ...oauthFixture,
+            },
+          },
+        });
 
-    try {
-      const agentDir = path.join(tempDir, "agent");
-      await withEnvAsync(
-        {
-          OPENCLAW_STATE_DIR: tempDir,
-          OPENCLAW_AGENT_DIR: agentDir,
-          PI_CODING_AGENT_DIR: agentDir,
-        },
-        async () => {
-          const authProfilesPath = path.join(agentDir, "auth-profiles.json");
-          await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
-          await fs.writeFile(
-            authProfilesPath,
-            `${JSON.stringify(
-              {
-                version: 1,
-                profiles: {
-                  "openai-codex:default": {
-                    type: "oauth",
-                    provider: "openai-codex",
-                    ...oauthFixture,
-                  },
-                },
-              },
-              null,
-              2,
-            )}\n`,
-            "utf8",
-          );
+        const model = {
+          id: "codex-mini-latest",
+          provider: "openai-codex",
+          api: "openai-codex-responses",
+        } as Model<Api>;
 
-          const model = {
-            id: "codex-mini-latest",
-            provider: "openai-codex",
-            api: "openai-codex-responses",
-          } as Model<Api>;
-
-          const store = ensureAuthProfileStore(process.env.OPENCLAW_AGENT_DIR, {
-            allowKeychainPrompt: false,
-          });
-          const apiKey = await getApiKeyForModel({
-            model,
-            profileId: "openai-codex:default",
-            store,
-            agentDir: process.env.OPENCLAW_AGENT_DIR,
-          });
-          expect(apiKey.apiKey).toBe(oauthFixture.access);
-        },
-      );
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+        const store = ensureAuthProfileStore(process.env.OPENCLAW_AGENT_DIR, {
+          allowKeychainPrompt: false,
+        });
+        const apiKey = await getApiKeyForModel({
+          model,
+          profileId: "openai-codex:default",
+          store,
+          agentDir: process.env.OPENCLAW_AGENT_DIR,
+        });
+        expect(apiKey.apiKey).toBe(oauthFixture.access);
+      },
+    );
   });
 
   it("suggests openai-codex when only Codex OAuth is configured", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
-
-    try {
-      const agentDir = path.join(tempDir, "agent");
-      await withEnvAsync(
-        {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-auth-",
+        agentEnv: "main",
+        env: {
           OPENAI_API_KEY: undefined,
-          OPENCLAW_STATE_DIR: tempDir,
-          OPENCLAW_AGENT_DIR: agentDir,
-          PI_CODING_AGENT_DIR: agentDir,
         },
-        async () => {
-          const authProfilesPath = path.join(tempDir, "agent", "auth-profiles.json");
-          await fs.mkdir(path.dirname(authProfilesPath), {
-            recursive: true,
-            mode: 0o700,
-          });
-          await fs.writeFile(
-            authProfilesPath,
-            `${JSON.stringify(
-              {
-                version: 1,
-                profiles: {
-                  "openai-codex:default": {
-                    type: "oauth",
-                    provider: "openai-codex",
-                    ...oauthFixture,
-                  },
-                },
-              },
-              null,
-              2,
-            )}\n`,
-            "utf8",
-          );
+      },
+      async (state) => {
+        await state.writeAuthProfiles({
+          version: 1,
+          profiles: {
+            "openai-codex:default": {
+              type: "oauth",
+              provider: "openai-codex",
+              ...oauthFixture,
+            },
+          },
+        });
 
-          let error: unknown = null;
-          try {
-            await resolveApiKeyForProvider({ provider: "openai" });
-          } catch (err) {
-            error = err;
-          }
-          expect(String(error)).toContain("openai/gpt-5.5");
-        },
-      );
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+        let error: unknown = null;
+        try {
+          await resolveApiKeyForProvider({ provider: "openai" });
+        } catch (err) {
+          error = err;
+        }
+        expect(String(error)).toContain("openai/gpt-5.5");
+      },
+    );
   });
 
   it("throws when ZAI API key is missing", async () => {

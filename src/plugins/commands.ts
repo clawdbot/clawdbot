@@ -13,12 +13,14 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
+  isReservedCommandName,
   listPluginInvocationKeys,
   registerPluginCommand,
   validateCommandName,
   validatePluginCommandDefinition,
 } from "./command-registration.js";
 import {
+  isTrustedReservedCommandOwner,
   pluginCommands,
   setPluginCommandRegistryLocked,
   type RegisteredPluginCommand,
@@ -175,6 +177,7 @@ export async function executePluginCommand(params: {
   channel: string;
   channelId?: PluginCommandContext["channelId"];
   isAuthorizedSender: boolean;
+  senderIsOwner?: boolean;
   gatewayClientScopes?: PluginCommandContext["gatewayClientScopes"];
   sessionKey?: PluginCommandContext["sessionKey"];
   sessionId?: PluginCommandContext["sessionId"];
@@ -186,6 +189,10 @@ export async function executePluginCommand(params: {
   accountId?: PluginCommandContext["accountId"];
   messageThreadId?: PluginCommandContext["messageThreadId"];
   threadParentId?: PluginCommandContext["threadParentId"];
+  diagnosticsSessions?: PluginCommandContext["diagnosticsSessions"];
+  diagnosticsUploadApproved?: PluginCommandContext["diagnosticsUploadApproved"];
+  diagnosticsPreviewOnly?: PluginCommandContext["diagnosticsPreviewOnly"];
+  diagnosticsPrivateRouted?: PluginCommandContext["diagnosticsPrivateRouted"];
 }): Promise<PluginCommandResult> {
   const { command, args, senderId, channel, isAuthorizedSender, commandBody, config } = params;
 
@@ -232,12 +239,41 @@ export async function executePluginCommand(params: {
     threadParentId: params.threadParentId,
   });
   const effectiveAccountId = bindingConversation?.accountId ?? params.accountId;
+  const senderIsOwnerForCommand =
+    isTrustedReservedCommandOwner(command) &&
+    command.ownership === "reserved" &&
+    isReservedCommandName(command.name) &&
+    command.pluginId === normalizeLowercaseStringOrEmpty(command.name)
+      ? params.senderIsOwner
+      : undefined;
+  const diagnosticsPrivateRoutedForCommand =
+    isTrustedReservedCommandOwner(command) &&
+    command.ownership === "reserved" &&
+    isReservedCommandName(command.name) &&
+    command.pluginId === normalizeLowercaseStringOrEmpty(command.name)
+      ? params.diagnosticsPrivateRouted
+      : undefined;
+  const diagnosticsUploadApprovedForCommand =
+    isTrustedReservedCommandOwner(command) &&
+    command.ownership === "reserved" &&
+    isReservedCommandName(command.name) &&
+    command.pluginId === normalizeLowercaseStringOrEmpty(command.name)
+      ? params.diagnosticsUploadApproved
+      : undefined;
+  const diagnosticsPreviewOnlyForCommand =
+    isTrustedReservedCommandOwner(command) &&
+    command.ownership === "reserved" &&
+    isReservedCommandName(command.name) &&
+    command.pluginId === normalizeLowercaseStringOrEmpty(command.name)
+      ? params.diagnosticsPreviewOnly
+      : undefined;
 
   const ctx: PluginCommandContext = {
     senderId,
     channel,
     channelId: params.channelId,
     isAuthorizedSender,
+    ...(senderIsOwnerForCommand === undefined ? {} : { senderIsOwner: senderIsOwnerForCommand }),
     gatewayClientScopes: params.gatewayClientScopes,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
@@ -250,6 +286,16 @@ export async function executePluginCommand(params: {
     accountId: effectiveAccountId,
     messageThreadId: params.messageThreadId,
     threadParentId: params.threadParentId,
+    diagnosticsSessions: params.diagnosticsSessions,
+    ...(diagnosticsUploadApprovedForCommand === undefined
+      ? {}
+      : { diagnosticsUploadApproved: diagnosticsUploadApprovedForCommand }),
+    ...(diagnosticsPreviewOnlyForCommand === undefined
+      ? {}
+      : { diagnosticsPreviewOnly: diagnosticsPreviewOnlyForCommand }),
+    ...(diagnosticsPrivateRoutedForCommand === undefined
+      ? {}
+      : { diagnosticsPrivateRouted: diagnosticsPrivateRoutedForCommand }),
     requestConversationBinding: async (bindingParams) => {
       if (!command.pluginRoot || !bindingConversation) {
         return {

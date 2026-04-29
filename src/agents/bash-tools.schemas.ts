@@ -64,7 +64,8 @@ export const processSchema = Type.Object({
   limit: Type.Optional(Type.Number({ description: "Log length" })),
   timeout: Type.Optional(
     Type.Number({
-      description: "For poll: wait up to this many milliseconds before returning",
+      description:
+        "For poll: wait up to this many milliseconds before returning; max 30000 ms, higher values are clamped to 30000",
       minimum: 0,
     }),
   ),

@@ -21,7 +21,6 @@ import { parseClawHubPluginSpec } from "../../infra/clawhub.js";
 import { installPluginFromClawHub } from "../../plugins/clawhub.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../../plugins/install.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
-import { clearPluginManifestRegistryCache } from "../../plugins/manifest-registry.js";
 import type { PluginRecord } from "../../plugins/registry.js";
 import {
   buildAllPluginInspectReports,
@@ -180,7 +179,6 @@ async function installPluginFromPluginsCommand(params: {
     if (!result.ok) {
       return { ok: false, error: result.error };
     }
-    clearPluginManifestRegistryCache();
     const source: "archive" | "path" = resolveArchiveKind(resolved) ? "archive" : "path";
     await persistPluginInstall({
       snapshot: params.snapshot,
@@ -208,7 +206,6 @@ async function installPluginFromPluginsCommand(params: {
     if (!result.ok) {
       return { ok: false, error: result.error };
     }
-    clearPluginManifestRegistryCache();
     await persistPluginInstall({
       snapshot: params.snapshot,
       pluginId: result.pluginId,
@@ -235,7 +232,6 @@ async function installPluginFromPluginsCommand(params: {
       logger: createPluginInstallLogger(),
     });
     if (clawhubResult.ok) {
-      clearPluginManifestRegistryCache();
       await persistPluginInstall({
         snapshot: params.snapshot,
         pluginId: clawhubResult.pluginId,
@@ -266,7 +262,6 @@ async function installPluginFromPluginsCommand(params: {
   if (!result.ok) {
     return { ok: false, error: result.error };
   }
-  clearPluginManifestRegistryCache();
   const installRecord = buildNpmInstallRecordFields({
     spec: params.raw,
     installPath: result.targetDir,

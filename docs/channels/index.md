@@ -44,6 +44,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [WebChat](/web/webchat) — Gateway WebChat UI over WebSocket.
 - [WeChat](/channels/wechat) — Tencent iLink Bot plugin via QR login; private chats only (external plugin).
 - [WhatsApp](/channels/whatsapp) — Most popular; uses Baileys and requires QR pairing.
+- [Yuanbao](/channels/yuanbao) — Tencent Yuanbao bot (external plugin).
 - [Zalo](/channels/zalo) — Zalo Bot API; Vietnam's popular messenger (bundled plugin).
 - [Zalo Personal](/channels/zalouser) — Zalo personal account via QR login (bundled plugin).
 

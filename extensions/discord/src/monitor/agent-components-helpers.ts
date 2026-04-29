@@ -491,10 +491,6 @@ async function ensureDmComponentAuthorized(params: {
     } catch {}
     return false;
   }
-  if (dmPolicy === "open") {
-    return true;
-  }
-
   if (dmPolicy === "allowlist") {
     const allowMatch = resolveAllowMatch(ctx.allowFrom ?? []);
     if (allowMatch.allowed) {
@@ -510,11 +506,14 @@ async function ensureDmComponentAuthorized(params: {
     return false;
   }
 
-  const storeAllowFrom = await readStoreAllowFromForDmPolicy({
-    provider: "discord",
-    accountId: ctx.accountId,
-    dmPolicy,
-  });
+  const storeAllowFrom =
+    dmPolicy === "open"
+      ? []
+      : await readStoreAllowFromForDmPolicy({
+          provider: "discord",
+          accountId: ctx.accountId,
+          dmPolicy,
+        });
   const allowMatch = resolveAllowMatch([...(ctx.allowFrom ?? []), ...storeAllowFrom]);
   if (allowMatch.allowed) {
     return true;

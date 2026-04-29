@@ -431,7 +431,9 @@ describe("ollama setup", () => {
       "qwen3-coder:480b-cloud",
       "gpt-oss:120b-cloud",
     ]);
-    expect(models?.find((m) => m.id === "qwen3-coder:480b-cloud")?.contextWindow).toBe(262144);
+    expect(fetchMock.mock.calls.some((call) => requestUrl(call[0]).endsWith("/api/show"))).toBe(
+      false,
+    );
     expect(
       fetchMock.mock.calls.some((call) => requestUrl(call[0]) === "https://ollama.com/api/tags"),
     ).toBe(true);

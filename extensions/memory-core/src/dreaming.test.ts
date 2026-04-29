@@ -59,7 +59,11 @@ async function writeDailyMemoryNote(
 
 function createCronHarness(
   initialJobs: CronJobLike[] = [],
-  opts?: { removeResult?: "boolean" | "unknown"; removeThrowsForIds?: string[] },
+  opts?: {
+    listThrowsForFirstCalls?: number;
+    removeResult?: "boolean" | "unknown";
+    removeThrowsForIds?: string[];
+  },
 ) {
   const jobs: CronJobLike[] = [...initialJobs];
   let listCalls = 0;
@@ -70,6 +74,9 @@ function createCronHarness(
   const cron: CronParam = {
     async list() {
       listCalls += 1;
+      if (opts?.listThrowsForFirstCalls && listCalls <= opts.listThrowsForFirstCalls) {
+        throw new Error(`list failed on call ${listCalls}`);
+      }
       return jobs.map((job) => ({
         ...job,
         ...(job.schedule ? { schedule: { ...job.schedule } } : {}),
@@ -173,11 +180,34 @@ function getGatewayStartHandler(
   ) => Promise<unknown>;
 }
 
+function getGatewayStopHandler(
+  onMock: ReturnType<typeof vi.fn>,
+): (
+  event: { reason?: string },
+  ctx: { config?: OpenClawConfig; workspaceDir?: string; getCron?: () => unknown },
+) => Promise<unknown> | void {
+  const call = onMock.mock.calls.find(([eventName]) => eventName === "gateway_stop");
+  if (!call) {
+    throw new Error("gateway_stop hook was not registered");
+  }
+  return call[1] as (
+    event: { reason?: string },
+    ctx: { config?: OpenClawConfig; workspaceDir?: string; getCron?: () => unknown },
+  ) => Promise<unknown> | void;
+}
+
 async function triggerGatewayStart(
   onMock: ReturnType<typeof vi.fn>,
   ctx: { config?: OpenClawConfig; workspaceDir?: string; getCron?: () => unknown },
 ): Promise<void> {
   await getGatewayStartHandler(onMock)({ port: 18789 }, ctx);
+}
+
+async function triggerGatewayStop(
+  onMock: ReturnType<typeof vi.fn>,
+  ctx: { config?: OpenClawConfig; workspaceDir?: string; getCron?: () => unknown } = {},
+): Promise<void> {
+  await getGatewayStopHandler(onMock)({ reason: "test" }, ctx);
 }
 
 function registerShortTermPromotionDreamingForTest(api: DreamingPluginApiTestDouble): void {
@@ -1328,6 +1358,191 @@ describe("gateway startup reconciliation", () => {
 
       expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("cron service unavailable"));
     } finally {
+      clearInternalHooks();
+    }
+  });
+
+  it("retries startup cron reconciliation until cron is available without a heartbeat (regression #72841)", async () => {
+    vi.useFakeTimers();
+    clearInternalHooks();
+    const logger = createLogger();
+    const harness = createCronHarness();
+    const onMock = vi.fn();
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "15 4 * * *",
+                  timezone: "UTC",
+                },
+              },
+            },
+          },
+        },
+      },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      let cronAvailable = false;
+      await triggerGatewayStart(onMock, {
+        config: api.config,
+        getCron: () => (cronAvailable ? harness.cron : undefined),
+      });
+
+      expect(harness.addCalls).toHaveLength(0);
+      expect(logger.debug).toHaveBeenCalledWith(
+        expect.stringContaining("cron service not yet available at gateway_start"),
+      );
+
+      await vi.advanceTimersByTimeAsync(constants.STARTUP_CRON_RETRY_DELAY_MS);
+      expect(harness.addCalls).toHaveLength(0);
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("cron service unavailable"));
+
+      cronAvailable = true;
+      await vi.advanceTimersByTimeAsync(constants.STARTUP_CRON_RETRY_DELAY_MS);
+
+      expect(harness.addCalls).toHaveLength(1);
+      expect(harness.addCalls[0]).toMatchObject({
+        name: "Memory Dreaming Promotion",
+        schedule: {
+          kind: "cron",
+          expr: "15 4 * * *",
+          tz: "UTC",
+        },
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          message: constants.DREAMING_SYSTEM_EVENT_TEXT,
+          lightContext: true,
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+      clearInternalHooks();
+    }
+  });
+
+  it("does not reschedule startup cron retry from stale enabled config after runtime config disables dreaming", async () => {
+    vi.useFakeTimers();
+    clearInternalHooks();
+    const logger = createLogger();
+    const harness = createCronHarness([], { listThrowsForFirstCalls: 1 });
+    const onMock = vi.fn();
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "15 4 * * *",
+                  timezone: "UTC",
+                },
+              },
+            },
+          },
+        },
+      },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      let cronAvailable = false;
+      await triggerGatewayStart(onMock, {
+        config: api.config,
+        getCron: () => (cronAvailable ? harness.cron : undefined),
+      });
+
+      api.config = {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: false,
+                  frequency: "15 4 * * *",
+                  timezone: "UTC",
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      cronAvailable = true;
+
+      await vi.advanceTimersByTimeAsync(constants.STARTUP_CRON_RETRY_DELAY_MS);
+      await vi.advanceTimersByTimeAsync(constants.STARTUP_CRON_RETRY_DELAY_MS);
+
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("deferred dreaming cron retry failed"),
+      );
+      expect(harness.listCalls).toBe(1);
+      expect(harness.addCalls).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+      clearInternalHooks();
+    }
+  });
+
+  it("clears pending startup cron retry on gateway stop", async () => {
+    vi.useFakeTimers();
+    clearInternalHooks();
+    const logger = createLogger();
+    const harness = createCronHarness();
+    const onMock = vi.fn();
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "15 4 * * *",
+                  timezone: "UTC",
+                },
+              },
+            },
+          },
+        },
+      },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      let cronAvailable = false;
+      await triggerGatewayStart(onMock, {
+        config: api.config,
+        getCron: () => (cronAvailable ? harness.cron : undefined),
+      });
+
+      await triggerGatewayStop(onMock);
+      cronAvailable = true;
+      await vi.advanceTimersByTimeAsync(
+        constants.STARTUP_CRON_RETRY_DELAY_MS * constants.STARTUP_CRON_RETRY_MAX_ATTEMPTS,
+      );
+
+      expect(harness.addCalls).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
       clearInternalHooks();
     }
   });

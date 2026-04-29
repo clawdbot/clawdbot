@@ -35,6 +35,7 @@ import {
 } from "../../../plugins/provider-runtime.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
+import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import {
@@ -156,6 +157,7 @@ import {
   collectExplicitToolAllowlistSources,
 } from "../../tool-allowlist-guard.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
+import { normalizeToolName } from "../../tool-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
@@ -230,6 +232,7 @@ import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import {
+  appendBootstrapFileToUserPromptPrefix,
   resolveAttemptWorkspaceBootstrapRouting,
   shouldStripBootstrapFromEmbeddedContext,
 } from "./attempt-bootstrap-routing.js";
@@ -478,8 +481,8 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   if (!toolsAllow || toolsAllow.length === 0) {
     return tools;
   }
-  const allowSet = new Set(toolsAllow);
-  return tools.filter((tool) => allowSet.has(tool.name));
+  const allowSet = new Set(toolsAllow.map((name) => normalizeToolName(name)));
+  return tools.filter((tool) => allowSet.has(normalizeToolName(tool.name)));
 }
 
 export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
@@ -716,6 +719,7 @@ export async function runEmbeddedAttempt(
               senderUsername: params.senderUsername,
               senderE164: params.senderE164,
               senderIsOwner: params.senderIsOwner,
+              ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
               allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
               sessionKey: sandboxSessionKey,
               sessionId: params.sessionId,
@@ -730,7 +734,7 @@ export async function runEmbeddedAttempt(
               }),
               config: params.config,
               abortSignal: runAbortController.signal,
-              modelProvider: params.model.provider,
+              modelProvider: params.provider,
               modelId: params.modelId,
               modelCompat: extractModelCompat(params.model),
               modelApi: params.model.api,
@@ -927,6 +931,7 @@ export async function runEmbeddedAttempt(
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
       senderIsOwner: params.senderIsOwner,
+      ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
       warn: (message) => log.warn(message),
     });
     const effectiveTools = [...tools, ...filteredBundledTools];
@@ -1211,7 +1216,11 @@ export async function runEmbeddedAttempt(
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
     let systemPromptText = systemPromptOverride();
-    const userPromptPrefixText = bootstrapRouting.userPromptPrefixText;
+    const userPromptPrefixText = appendBootstrapFileToUserPromptPrefix({
+      prefixText: bootstrapRouting.userPromptPrefixText,
+      bootstrapMode,
+      contextFiles: remappedContextFiles,
+    });
 
     // Keep the session lock scoped to transcript/session mutations. Cold plugin
     // and tool setup can be slow, and holding the lock there blocks CLI fallback
@@ -2436,6 +2445,15 @@ export async function runEmbeddedAttempt(
             log.debug(orphanRepairMessage);
           }
         }
+        if (!isRawModelRun) {
+          effectivePrompt = annotateInterSessionPromptText(effectivePrompt, params.inputProvenance);
+        }
+        const effectiveTranscriptPrompt =
+          params.transcriptPrompt === undefined
+            ? undefined
+            : isRawModelRun
+              ? params.transcriptPrompt
+              : annotateInterSessionPromptText(params.transcriptPrompt, params.inputProvenance);
         const transcriptLeafId =
           (sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
         const heartbeatSummary =
@@ -2456,7 +2474,7 @@ export async function runEmbeddedAttempt(
 
           const promptSubmission = resolveRuntimeContextPromptParts({
             effectivePrompt,
-            transcriptPrompt: params.transcriptPrompt,
+            transcriptPrompt: effectiveTranscriptPrompt,
           });
           const runtimeSystemContext = promptSubmission.runtimeSystemContext?.trim();
           if (promptSubmission.runtimeOnly && runtimeSystemContext) {

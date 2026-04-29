@@ -412,6 +412,8 @@ export class ChunkedMediaApi {
 // ============ Legacy functional facade ============
 
 /**
+ * @deprecated The chunked uploader is always implemented.
+ *
  * Legacy feature flag. The chunked uploader is fully implemented, so this
  * returns `true`. Retained so that older call sites can be converted
  * progressively.

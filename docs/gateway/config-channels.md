@@ -96,6 +96,13 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 
 ```json5
 {
+  web: {
+    whatsapp: {
+      keepAliveIntervalMs: 25000,
+      connectTimeoutMs: 60000,
+      defaultQueryTimeoutMs: 60000,
+    },
+  },
   channels: {
     whatsapp: {
       dmPolicy: "pairing", // pairing | allowlist | open | disabled
@@ -390,6 +397,11 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       enabled: true,
       botToken: "xoxb-...",
       appToken: "xapp-...",
+      socketMode: {
+        clientPingTimeout: 15000,
+        serverPingTimeout: 30000,
+        pingPongLoggingEnabled: false,
+      },
       dmPolicy: "pairing",
       allowFrom: ["U123", "U456", "*"],
       dm: { enabled: true, groupEnabled: false, groupChannels: ["G123"] },
@@ -448,6 +460,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 
 - **Socket mode** requires both `botToken` and `appToken` (`SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` for default account env fallback).
 - **HTTP mode** requires `botToken` plus `signingSecret` (at root or per-account).
+- `socketMode` passes Slack SDK Socket Mode transport tuning through to the public Bolt receiver API. Use it only when investigating ping/pong timeout or stale websocket behavior.
 - `botToken`, `appToken`, `signingSecret`, and `userToken` accept plaintext
   strings or SecretRef objects.
 - Slack account snapshots expose per-credential source/status fields such as
@@ -478,7 +491,11 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 
 ### Mattermost
 
-Mattermost ships as a plugin: `openclaw plugins install @openclaw/mattermost`.
+Mattermost ships as a bundled plugin in current OpenClaw releases. Older or
+custom builds can install a current npm package with
+`openclaw plugins install @openclaw/mattermost`; if npm reports the
+OpenClaw-owned package as deprecated, use the bundled plugin or a local checkout
+until a newer npm package is published.
 
 ```json5
 {

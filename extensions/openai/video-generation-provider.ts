@@ -180,6 +180,7 @@ async function downloadOpenAIVideo(params: {
 export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
   return {
     id: "openai",
+    aliases: ["openai-codex"],
     label: "OpenAI",
     defaultModel: DEFAULT_OPENAI_VIDEO_MODEL,
     models: [DEFAULT_OPENAI_VIDEO_MODEL, "sora-2-pro"],

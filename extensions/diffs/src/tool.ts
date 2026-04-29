@@ -34,11 +34,16 @@ const MAX_TITLE_BYTES = 1_024;
 const MAX_PATH_BYTES = 2_048;
 const MAX_LANG_BYTES = 128;
 
-function stringEnum<T extends readonly string[]>(values: T, description: string) {
+function stringEnum<T extends readonly string[]>(
+  values: T,
+  description: string,
+  options: { deprecated?: boolean } = {},
+) {
   return Type.Unsafe<T[number]>({
     type: "string",
     enum: [...values],
     description,
+    ...options,
   });
 }
 
@@ -96,20 +101,32 @@ const DiffsToolSchema = Type.Object(
         maximum: 2400,
       }),
     ),
+    /** @deprecated Use fileQuality. */
     imageQuality: Type.Optional(
-      stringEnum(DIFF_IMAGE_QUALITY_PRESETS, "Deprecated alias for fileQuality."),
+      stringEnum(DIFF_IMAGE_QUALITY_PRESETS, "Deprecated alias for fileQuality.", {
+        deprecated: true,
+      }),
     ),
-    imageFormat: Type.Optional(stringEnum(DIFF_OUTPUT_FORMATS, "Deprecated alias for fileFormat.")),
+    /** @deprecated Use fileFormat. */
+    imageFormat: Type.Optional(
+      stringEnum(DIFF_OUTPUT_FORMATS, "Deprecated alias for fileFormat.", {
+        deprecated: true,
+      }),
+    ),
+    /** @deprecated Use fileScale. */
     imageScale: Type.Optional(
       Type.Number({
         description: "Deprecated alias for fileScale.",
+        deprecated: true,
         minimum: 1,
         maximum: 4,
       }),
     ),
+    /** @deprecated Use fileMaxWidth. */
     imageMaxWidth: Type.Optional(
       Type.Number({
         description: "Deprecated alias for fileMaxWidth.",
+        deprecated: true,
         minimum: 640,
         maximum: 2400,
       }),
@@ -136,7 +153,7 @@ const DiffsToolSchema = Type.Object(
 
 type DiffsToolParams = Static<typeof DiffsToolSchema>;
 type DiffsToolRawParams = DiffsToolParams & {
-  // Keep backward compatibility for direct calls that still pass `format`.
+  /** @deprecated Use fileFormat. */
   format?: DiffOutputFormat;
 };
 

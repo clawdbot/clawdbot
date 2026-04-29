@@ -192,7 +192,7 @@ export function resolveCapabilityModelCandidatesForTool(params: {
   agentDir?: string;
   providers: CapabilityProvider[];
 }): string[] {
-  const providerDefaults = new Map<string, string>();
+  const providerDefaults = new Map<string, { ref: string; aliases: string[] }>();
   for (const provider of params.providers) {
     const providerId = provider.id.trim();
     const modelId = provider.defaultModel?.trim();
@@ -209,25 +209,36 @@ export function resolveCapabilityModelCandidatesForTool(params: {
     ) {
       continue;
     }
-    providerDefaults.set(providerId, `${providerId}/${modelId}`);
+    const aliases = (provider.aliases ?? []).flatMap((alias) => {
+      const normalized = normalizeProviderId(alias);
+      return normalized ? [normalized] : [];
+    });
+    providerDefaults.set(providerId, { ref: `${providerId}/${modelId}`, aliases });
   }
 
   const primaryProvider = resolveDefaultModelRef(params.cfg).provider;
+  const normalizedPrimaryProvider = normalizeProviderId(primaryProvider);
+  const providerIds = [...providerDefaults.keys()].toSorted();
+  const matchesPrimaryProvider = (providerId: string): boolean => {
+    const entry = providerDefaults.get(providerId);
+    return (
+      normalizeProviderId(providerId) === normalizedPrimaryProvider ||
+      (entry?.aliases ?? []).includes(normalizedPrimaryProvider)
+    );
+  };
   const orderedProviders = [
-    primaryProvider,
-    ...[...providerDefaults.keys()]
-      .filter((providerId) => providerId !== primaryProvider)
-      .toSorted(),
+    ...providerIds.filter(matchesPrimaryProvider),
+    ...providerIds.filter((providerId) => !matchesPrimaryProvider(providerId)),
   ];
   const orderedRefs: string[] = [];
   const seen = new Set<string>();
   for (const providerId of orderedProviders) {
-    const ref = providerDefaults.get(providerId);
-    if (!ref || seen.has(ref)) {
+    const entry = providerDefaults.get(providerId);
+    if (!entry || seen.has(entry.ref)) {
       continue;
     }
-    seen.add(ref);
-    orderedRefs.push(ref);
+    seen.add(entry.ref);
+    orderedRefs.push(entry.ref);
   }
   return orderedRefs;
 }

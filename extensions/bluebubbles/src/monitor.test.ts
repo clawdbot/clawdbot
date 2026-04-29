@@ -408,11 +408,11 @@ describe("BlueBubbles webhook monitor", () => {
       expect(sendMessageBlueBubbles).not.toHaveBeenCalled();
     });
 
-    it("allows all DMs when dmPolicy=open", async () => {
+    it("allows wildcard DMs when dmPolicy=open", async () => {
       setupWebhookTarget({
         account: createMockAccount({
           dmPolicy: "open",
-          allowFrom: [],
+          allowFrom: ["*"],
         }),
       });
 
@@ -483,6 +483,7 @@ describe("BlueBubbles webhook monitor", () => {
         account: createMockAccount({
           groupPolicy: "allowlist",
           dmPolicy: "open",
+          allowFrom: [],
         }),
       });
 
@@ -1876,7 +1877,7 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     });
 
-    it("does not auto-authorize DM control commands in open mode without allowlists", async () => {
+    it("drops DM control commands in open mode without allowlists", async () => {
       mockHasControlCommand.mockReturnValue(true);
 
       setupWebhookTarget({
@@ -1894,12 +1895,7 @@ describe("BlueBubbles webhook monitor", () => {
 
       await dispatchWebhookPayload(payload);
 
-      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
-      const latestDispatch =
-        mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[
-          mockDispatchReplyWithBufferedBlockDispatcher.mock.calls.length - 1
-        ]?.[0];
-      expect(latestDispatch?.ctx?.CommandAuthorized).toBe(false);
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     });
   });
 
@@ -2231,6 +2227,56 @@ describe("BlueBubbles webhook monitor", () => {
       await dispatchWebhookPayload(payload);
 
       expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
+    });
+
+    it("drops group reactions that arrive with no chat identifiers", async () => {
+      // Real-world failure mode: BlueBubbles fires a reaction webhook with
+      // isGroup=true but omits chatGuid AND chatId AND chatIdentifier. The
+      // legacy code falls peerId back to the literal string "group" and
+      // resolves a session key unrelated to any real binding; if isGroup
+      // had been misclassified as false the same payload would have been
+      // routed to the sender's DM session instead — surfacing a group
+      // tapback inside an unrelated 1:1 transcript. Either way the event
+      // cannot be routed correctly, so drop it.
+      mockEnqueueSystemEvent.mockClear();
+      mockResolveRequireMention.mockReturnValue(false);
+
+      setupWebhookTarget({
+        account: createMockAccount({ groupPolicy: "open" }),
+      });
+
+      const payload = createTimestampedMessageReactionPayloadForTest({
+        isGroup: true,
+        // chatGuid / chatId / chatIdentifier intentionally omitted
+        associatedMessageType: 2000,
+        handle: { address: "+15559999999" },
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
+    });
+
+    it("still enqueues group reactions when at least one chat identifier is present", async () => {
+      // Sanity check: the drop guard must not fire when the webhook does
+      // include a chatGuid.
+      mockEnqueueSystemEvent.mockClear();
+      mockResolveRequireMention.mockReturnValue(false);
+
+      setupWebhookTarget({
+        account: createMockAccount({ groupPolicy: "open" }),
+      });
+
+      const payload = createTimestampedMessageReactionPayloadForTest({
+        isGroup: true,
+        chatGuid: "iMessage;+;chat-known-123",
+        associatedMessageType: 2000,
+        handle: { address: "+15559999999" },
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(mockEnqueueSystemEvent).toHaveBeenCalled();
     });
 
     it("maps reaction types to correct emojis", async () => {

@@ -3,7 +3,7 @@ import { finalizeTelegramInboundContextForTest } from "./bot-message-context.ses
 
 export const baseTelegramMessageContextConfig = {
   agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
-  channels: { telegram: {} },
+  channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
   messages: { groupChat: { mentionPatterns: [] } },
 } as never;
 
@@ -80,7 +80,7 @@ export async function buildTelegramMessageContextForTest(
     historyLimit: 0,
     groupHistories: new Map(),
     dmPolicy: "open",
-    allowFrom: [],
+    allowFrom: ["*"],
     groupAllowFrom: [],
     ackReactionScope: "off",
     logger: { info: vi.fn() },

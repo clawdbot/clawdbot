@@ -57,6 +57,7 @@
     "skills/",
     "scripts/npm-runner.mjs",
     "scripts/preinstall-package-manager-warning.mjs",
+    "scripts/lib/package-dist-imports.mjs",
     "scripts/postinstall-bundled-plugins.mjs",
     "scripts/windows-cmd-helpers.mjs"
   ],
@@ -664,6 +665,10 @@
       "types": "./dist/plugin-sdk/direct-dm-guard-policy.d.ts",
       "default": "./dist/plugin-sdk/direct-dm-guard-policy.js"
     },
+    "./plugin-sdk/discord": {
+      "types": "./dist/plugin-sdk/discord.d.ts",
+      "default": "./dist/plugin-sdk/discord.js"
+    },
     "./plugin-sdk/device-bootstrap": {
       "types": "./dist/plugin-sdk/device-bootstrap.d.ts",
       "default": "./dist/plugin-sdk/device-bootstrap.js"
@@ -1188,6 +1193,10 @@
       "types": "./dist/plugin-sdk/target-resolver-runtime.d.ts",
       "default": "./dist/plugin-sdk/target-resolver-runtime.js"
     },
+    "./plugin-sdk/telegram-account": {
+      "types": "./dist/plugin-sdk/telegram-account.d.ts",
+      "default": "./dist/plugin-sdk/telegram-account.js"
+    },
     "./plugin-sdk/telegram-command-config": {
       "types": "./dist/plugin-sdk/telegram-command-config.d.ts",
       "default": "./dist/plugin-sdk/telegram-command-config.js"
@@ -1258,12 +1267,13 @@
     "canvas:a2ui:bundle": "node scripts/bundle-a2ui.mjs",
     "changed:lanes": "node scripts/changed-lanes.mjs",
     "check": "node scripts/check.mjs",
-    "check:architecture": "pnpm check:import-cycles && pnpm check:madge-import-cycles && pnpm check:deprecated-internal-config-api",
+    "check:architecture": "pnpm check:import-cycles && pnpm check:madge-import-cycles && pnpm check:deprecated-internal-config-api && pnpm check:deprecated-jsdoc",
     "check:base-config-schema": "node --import tsx scripts/generate-base-config-schema.ts --check",
     "check:bundled-channel-config-metadata": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --check",
     "check:changed": "node scripts/check-changed.mjs",
     "check:changelog-attributions": "node scripts/check-changelog-attributions.mjs",
     "check:deprecated-internal-config-api": "node scripts/check-deprecated-internal-config-api.mjs",
+    "check:deprecated-jsdoc": "node scripts/check-deprecated-jsdoc.mjs",
     "check:docs": "pnpm format:docs:check && pnpm lint:docs && pnpm docs:check-mdx && pnpm docs:check-i18n-glossary && pnpm docs:check-links",
     "check:host-env-policy:swift": "node scripts/generate-host-env-security-policy-swift.mjs --check",
     "check:import-cycles": "node --import tsx scripts/check-import-cycles.ts",
@@ -1290,6 +1300,7 @@
     "config:schema:check": "node --import tsx scripts/generate-base-config-schema.ts --check",
     "config:schema:gen": "node --import tsx scripts/generate-base-config-schema.ts --write",
     "deadcode:ci": "pnpm deadcode:report:ci:knip",
+    "deadcode:dependencies": "pnpm --config.minimum-release-age=0 dlx knip@6.8.0 --config knip.config.ts --production --no-progress --reporter compact --dependencies --no-config-hints",
     "deadcode:knip": "pnpm dlx knip --config knip.config.ts --production --no-progress --reporter compact --files --dependencies",
     "deadcode:report": "pnpm deadcode:knip; pnpm deadcode:ts-prune; pnpm deadcode:ts-unused",
     "deadcode:report:ci:knip": "mkdir -p .artifacts/deadcode && pnpm deadcode:knip > .artifacts/deadcode/knip.txt 2>&1 || true",
@@ -1323,7 +1334,8 @@
     "format:swift": "swiftformat --lint --config .swiftformat apps/macos/Sources apps/ios/Sources apps/shared/OpenClawKit/Sources",
     "gateway:dev": "OPENCLAW_SKIP_CHANNELS=1 node scripts/run-node.mjs --dev gateway",
     "gateway:dev:reset": "OPENCLAW_SKIP_CHANNELS=1 node scripts/run-node.mjs --dev gateway --reset",
-    "gateway:watch": "node scripts/watch-node.mjs gateway --force",
+    "gateway:watch": "node scripts/gateway-watch-tmux.mjs gateway --force",
+    "gateway:watch:raw": "node scripts/watch-node.mjs gateway --force",
     "gen:host-env-policy:swift": "node scripts/generate-host-env-security-policy-swift.mjs --write",
     "ghsa:patch": "node scripts/ghsa-patch.mjs",
     "ios:beta": "bash scripts/ios-beta-release.sh",
@@ -1452,6 +1464,7 @@
     "test:docker:doctor-switch": "bash scripts/e2e/doctor-install-switch-docker.sh",
     "test:docker:e2e-build": "bash scripts/e2e/build-image.sh",
     "test:docker:gateway-network": "bash scripts/e2e/gateway-network-docker.sh",
+    "test:docker:kitchen-sink-plugin": "bash scripts/e2e/kitchen-sink-plugin-docker.sh",
     "test:docker:live-acp-bind": "bash scripts/test-live-acp-bind-docker.sh",
     "test:docker:live-acp-bind:claude": "OPENCLAW_LIVE_ACP_BIND_AGENT=claude bash scripts/test-live-acp-bind-docker.sh",
     "test:docker:live-acp-bind:codex": "OPENCLAW_LIVE_ACP_BIND_AGENT=codex bash scripts/test-live-acp-bind-docker.sh",
@@ -1509,6 +1522,7 @@
     "test:fast": "node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts",
     "test:force": "node --import tsx scripts/test-force.ts",
     "test:gateway": "OPENCLAW_GATEWAY_PROJECT_SHARDS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts",
+    "test:gateway:cpu-scenarios": "node scripts/check-gateway-cpu-scenarios.mjs",
     "test:gateway:watch-regression": "node scripts/check-gateway-watch-regression.mjs",
     "test:install:e2e": "bash scripts/test-install-sh-e2e-docker.sh",
     "test:install:e2e:anthropic": "OPENCLAW_E2E_MODELS=anthropic bash scripts/test-install-sh-e2e-docker.sh",
@@ -1539,6 +1553,7 @@
     "test:perf:imports:changed": "OPENCLAW_VITEST_IMPORT_DURATIONS=1 OPENCLAW_VITEST_PRINT_IMPORT_BREAKDOWN=1 node scripts/test-projects.mjs --changed origin/main",
     "test:perf:profile:main": "node scripts/run-vitest-profile.mjs main",
     "test:perf:profile:runner": "node scripts/run-vitest-profile.mjs runner",
+    "test:plugins:gateway-gauntlet": "node scripts/check-plugin-gateway-gauntlet.mjs",
     "test:sectriage": "OPENCLAW_GATEWAY_PROJECT_SHARDS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts && node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts --exclude src/daemon/launchd.integration.test.ts --exclude src/process/exec.test.ts",
     "test:serial": "OPENCLAW_TEST_PROJECTS_SERIAL=1 OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/test-projects.mjs",
     "test:stability:gateway": "OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/gateway-stability.test.ts && OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.logging.config.ts src/logging/diagnostic-stability-bundle.test.ts && OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.infra.config.ts src/infra/fatal-error-hooks.test.ts",
@@ -1556,6 +1571,8 @@
     "test:voicecall:closedloop": "node scripts/test-voicecall-closedloop.mjs",
     "test:watch": "node scripts/test-projects.mjs --watch",
     "test:windows:ci": "node scripts/test-projects.mjs src/shared/runtime-import.test.ts src/plugins/import-specifier.test.ts src/process/exec.windows.test.ts src/process/windows-command.test.ts src/infra/windows-install-roots.test.ts extensions/lobster/src/lobster-runner.test.ts test/scripts/npm-runner.test.ts test/scripts/pnpm-runner.test.ts test/scripts/ui.test.ts test/scripts/vitest-process-group.test.ts",
+    "testbox:claim": "node scripts/blacksmith-testbox-runner.mjs --claim",
+    "testbox:run": "node scripts/blacksmith-testbox-runner.mjs",
     "testbox:sanity": "node scripts/testbox-sync-sanity.mjs",
     "tool-display:check": "node --import tsx scripts/tool-display.ts --check",
     "tool-display:write": "node --import tsx scripts/tool-display.ts --write",
@@ -1592,7 +1609,6 @@
     "@mariozechner/pi-coding-agent": "0.70.5",
     "@mariozechner/pi-tui": "0.70.5",
     "@modelcontextprotocol/sdk": "1.29.0",
-    "@vincentkoc/qrcode-tui": "0.2.1",
     "ajv": "^8.20.0",
     "chalk": "^5.6.2",
     "chokidar": "^5.0.0",
@@ -1608,8 +1624,8 @@
     "jszip": "^3.10.1",
     "markdown-it": "14.1.1",
     "openai": "^6.34.0",
-    "osc-progress": "^0.3.0",
     "proxy-agent": "^8.0.1",
+    "qrcode": "1.5.4",
     "semver": "7.7.4",
     "sqlite-vec": "0.1.9",
     "tar": "7.5.13",

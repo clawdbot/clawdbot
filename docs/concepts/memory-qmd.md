@@ -51,11 +51,21 @@ present.
 ## How the sidecar works
 
 - OpenClaw creates collections from your workspace memory files and any
-  configured `memory.qmd.paths`, then runs `qmd update` on boot and
-  periodically (default every 5 minutes). Semantic modes also run `qmd embed`.
+  configured `memory.qmd.paths`, then runs `qmd update` when the QMD manager is
+  opened and periodically afterward (default every 5 minutes). These refreshes
+  run through QMD subprocesses, not an in-process filesystem crawl. Semantic
+  modes also run `qmd embed`.
 - The default workspace collection tracks `MEMORY.md` plus the `memory/`
   tree. Lowercase `memory.md` is not indexed as a root memory file.
-- Boot refresh runs in the background so chat startup is not blocked.
+- QMD's own scanner ignores hidden paths and common dependency/build
+  directories such as `.git`, `.cache`, `node_modules`, `vendor`, `dist`, and
+  `build`. Gateway startup does not initialize QMD by default, so cold boot
+  avoids importing the memory runtime or creating the long-lived watcher before
+  memory is first used.
+- If you want a gateway-start refresh anyway, set
+  `memory.qmd.update.startup` to `idle` or `immediate`. The opt-in startup
+  refresh uses a one-shot QMD subprocess path instead of creating the full
+  long-lived in-process watcher.
 - Searches use the configured `searchMode` (default: `search`; also supports
   `vsearch` and `query`). `search` is BM25-only, so OpenClaw skips semantic
   vector readiness probes and embedding maintenance in that mode. If a mode

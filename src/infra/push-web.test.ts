@@ -23,10 +23,10 @@ vi.mock("../config/paths.js", () => ({
 // Stub web-push so we don't make real HTTP requests.
 vi.mock("web-push", () => ({
   default: {
-    generateVAPIDKeys: () => ({
+    generateVAPIDKeys: vi.fn(() => ({
       publicKey: "test-public-key-base64url",
       privateKey: "test-private-key-base64url",
-    }),
+    })),
     setVapidDetails: vi.fn(),
     sendNotification: vi.fn().mockResolvedValue({ statusCode: 201 }),
   },
@@ -52,6 +52,7 @@ describe("resolveVapidKeys", () => {
     const keys2 = await resolveVapidKeys(tmpDir);
     expect(keys2.publicKey).toBe(keys.publicKey);
     expect(keys2.privateKey).toBe(keys.privateKey);
+    expect(vi.mocked(webPush.generateVAPIDKeys)).toHaveBeenCalledTimes(1);
   });
 
   it("prefers env vars over persisted keys", async () => {
@@ -67,6 +68,7 @@ describe("resolveVapidKeys", () => {
       expect(keys.publicKey).toBe("env-public");
       expect(keys.privateKey).toBe("env-private");
       expect(keys.subject).toBe("mailto:env@test.com");
+      expect(vi.mocked(webPush.generateVAPIDKeys)).toHaveBeenCalledTimes(1);
     } finally {
       delete process.env.OPENCLAW_VAPID_PUBLIC_KEY;
       delete process.env.OPENCLAW_VAPID_PRIVATE_KEY;

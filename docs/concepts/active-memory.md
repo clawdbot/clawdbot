@@ -80,7 +80,7 @@ because it follows your existing provider, auth, and model preferences.
 If you want Active Memory to feel faster, use a dedicated inference model
 instead of borrowing the main chat model. Recall quality matters, but latency
 matters more than for the main answer path, and Active Memory's tool surface
-is narrow (it only calls `memory_search` and `memory_get`).
+is narrow (it only calls available memory recall tools).
 
 Good fast-model options:
 
@@ -256,6 +256,34 @@ allowedChatTypes: ["direct", "group"]
 allowedChatTypes: ["direct", "group", "channel"]
 ```
 
+For narrower rollout, use `config.allowedChatIds` and
+`config.deniedChatIds` after choosing the allowed session types.
+
+`allowedChatIds` is an explicit allowlist of resolved conversation ids. When it
+is non-empty, Active Memory only runs when the session's conversation id is in
+that list. This narrows every allowed chat type at once, including direct
+messages. If you want all direct messages plus only specific groups, include
+the direct peer ids in `allowedChatIds` or keep `allowedChatTypes` focused on
+the group/channel rollout you are testing.
+
+`deniedChatIds` is an explicit denylist. It always wins over
+`allowedChatTypes` and `allowedChatIds`, so a matching conversation is skipped
+even when its session type is otherwise allowed.
+
+The ids come from the persistent channel session key: for example Feishu
+`chat_id` / `open_id`, Telegram chat id, or Slack channel id. Matching is
+case-insensitive. If `allowedChatIds` is non-empty and OpenClaw cannot resolve a
+conversation id for the session, Active Memory skips the turn instead of
+guessing.
+
+Example:
+
+```json5
+allowedChatTypes: ["direct", "group"],
+allowedChatIds: ["ou_operator_open_id", "oc_small_ops_group"],
+deniedChatIds: ["oc_large_public_group"]
+```
+
 ## Where it runs
 
 Active memory is a conversational enrichment feature, not a platform-wide
@@ -304,8 +332,9 @@ flowchart LR
   I --> M["Main Reply"]
 ```
 
-The blocking memory sub-agent can use only:
+The blocking memory sub-agent can use only the available memory recall tools:
 
+- `memory_recall`
 - `memory_search`
 - `memory_get`
 
@@ -534,6 +563,9 @@ The most important fields are:
 | `enabled`                   | `boolean`                                                                                            | Enables the plugin itself                                                                              |
 | `config.agents`             | `string[]`                                                                                           | Agent ids that may use active memory                                                                   |
 | `config.model`              | `string`                                                                                             | Optional blocking memory sub-agent model ref; when unset, active memory uses the current session model |
+| `config.allowedChatTypes`   | `("direct" \| "group" \| "channel")[]`                                                               | Session types that may run Active Memory; defaults to direct-message style sessions                    |
+| `config.allowedChatIds`     | `string[]`                                                                                           | Optional per-conversation allowlist applied after `allowedChatTypes`; non-empty lists fail closed      |
+| `config.deniedChatIds`      | `string[]`                                                                                           | Optional per-conversation denylist that overrides allowed session types and allowed ids                |
 | `config.queryMode`          | `"message" \| "recent" \| "full"`                                                                    | Controls how much conversation the blocking memory sub-agent sees                                      |
 | `config.promptStyle`        | `"balanced" \| "strict" \| "contextual" \| "recall-heavy" \| "precision-heavy" \| "preference-only"` | Controls how eager or strict the blocking memory sub-agent is when deciding whether to return memory   |
 | `config.thinking`           | `"off" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "adaptive" \| "max"`                | Advanced thinking override for the blocking memory sub-agent; default `off` for speed                  |
@@ -547,14 +579,14 @@ The most important fields are:
 
 Useful tuning fields:
 
-| Key                           | Type     | Meaning                                                       |
-| ----------------------------- | -------- | ------------------------------------------------------------- |
-| `config.maxSummaryChars`      | `number` | Maximum total characters allowed in the active-memory summary |
-| `config.recentUserTurns`      | `number` | Prior user turns to include when `queryMode` is `recent`      |
-| `config.recentAssistantTurns` | `number` | Prior assistant turns to include when `queryMode` is `recent` |
-| `config.recentUserChars`      | `number` | Max chars per recent user turn                                |
-| `config.recentAssistantChars` | `number` | Max chars per recent assistant turn                           |
-| `config.cacheTtlMs`           | `number` | Cache reuse for repeated identical queries                    |
+| Key                           | Type     | Meaning                                                                            |
+| ----------------------------- | -------- | ---------------------------------------------------------------------------------- |
+| `config.maxSummaryChars`      | `number` | Maximum total characters allowed in the active-memory summary                      |
+| `config.recentUserTurns`      | `number` | Prior user turns to include when `queryMode` is `recent`                           |
+| `config.recentAssistantTurns` | `number` | Prior assistant turns to include when `queryMode` is `recent`                      |
+| `config.recentUserChars`      | `number` | Max chars per recent user turn                                                     |
+| `config.recentAssistantChars` | `number` | Max chars per recent assistant turn                                                |
+| `config.cacheTtlMs`           | `number` | Cache reuse for repeated identical queries (range: 1000-120000 ms; default: 15000) |
 
 ## Recommended setup
 
@@ -613,9 +645,10 @@ If active memory is too slow:
 
 ## Common issues
 
-Active Memory rides on the normal `memory_search` pipeline under
-`agents.defaults.memorySearch`, so most recall surprises are embedding-provider
-problems, not Active Memory bugs.
+Active Memory rides on the configured memory plugin's recall pipeline, so most
+recall surprises are embedding-provider problems, not Active Memory bugs. The
+default `memory-core` path uses `memory_search`; `memory-lancedb` uses
+`memory_recall`.
 
 <AccordionGroup>
   <Accordion title="Embedding provider switched or stopped working">

@@ -158,7 +158,7 @@ permissions: read-all
 
 concurrency:
   group: openclaw-cross-os-release-checks-${{ inputs.ref }}-${{ inputs.provider }}-${{ inputs.mode }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ inputs.ref == 'main' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -169,7 +169,7 @@ env:
 
 jobs:
   prepare:
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       baseline_file_name: ${{ steps.baseline_metadata.outputs.file_name }}
       baseline_spec: ${{ steps.baseline.outputs.value }}
@@ -332,6 +332,9 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
           cache-dependency-path: ${{ inputs.candidate_artifact_name == '' && 'source/pnpm-lock.yaml' || 'workflow/pnpm-lock.yaml' }}
+
+      - name: Ensure pnpm store cache directory exists
+        run: mkdir -p "$(pnpm store path --silent)"
 
       - name: Build candidate artifact once
         if: inputs.candidate_artifact_name == ''

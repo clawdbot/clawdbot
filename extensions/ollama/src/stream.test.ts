@@ -105,6 +105,7 @@ describe("createOllamaStreamFn thinking events", () => {
 
   async function streamOllamaEvents(
     chunks: Array<Record<string, unknown>>,
+    options: Parameters<ReturnType<typeof createOllamaStreamFn>>[2] = {},
   ): Promise<Array<{ type: string; [key: string]: unknown }>> {
     const body = makeNdjsonBody(chunks);
     fetchWithSsrFGuardMock.mockResolvedValue({
@@ -116,7 +117,7 @@ describe("createOllamaStreamFn thinking events", () => {
     const stream = streamFn(
       { api: "ollama", provider: "ollama", id: "qwen3.5", contextWindow: 65536 } as never,
       { messages: [{ role: "user", content: "test" }] } as never,
-      {},
+      options,
     );
 
     const events: Array<{ type: string; [key: string]: unknown }> = [];
@@ -223,5 +224,15 @@ describe("createOllamaStreamFn thinking events", () => {
 
     const textStart = events.find((e) => e.type === "text_start") as { contentIndex?: number };
     expect(textStart?.contentIndex).toBe(0);
+  });
+
+  it("uses generic stream timeout for Ollama request timeout", async () => {
+    await streamOllamaEvents([makeOllamaResponse({ content: "ok" })], { timeoutMs: 2500 });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 2500,
+      }),
+    );
   });
 });

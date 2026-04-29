@@ -7,8 +7,6 @@ const resolveAgentConfigMock = vi.hoisted(() => vi.fn());
 const resolveDefaultAgentIdMock = vi.hoisted(() => vi.fn());
 const resolveAgentWorkspaceDirMock = vi.hoisted(() => vi.fn());
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
-const getActivePluginChannelRegistryVersionMock = vi.hoisted(() => vi.fn());
-const requireActivePluginChannelRegistryMock = vi.hoisted(() => vi.fn(() => ({})));
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentConfig: resolveAgentConfigMock,
@@ -18,11 +16,6 @@ vi.mock("../../agents/agent-scope.js", () => ({
 
 vi.mock("./index.js", () => ({
   getChannelPlugin: getChannelPluginMock,
-}));
-
-vi.mock("../../plugins/runtime.js", () => ({
-  getActivePluginChannelRegistryVersion: getActivePluginChannelRegistryVersionMock,
-  requireActivePluginChannelRegistry: requireActivePluginChannelRegistryMock,
 }));
 
 function createConfig(options?: { bindingAgentId?: string; accountId?: string }) {
@@ -95,8 +88,6 @@ describe("configured binding registry", () => {
     resolveDefaultAgentIdMock.mockReset().mockReturnValue("main");
     resolveAgentWorkspaceDirMock.mockReset().mockReturnValue("/tmp/workspace");
     getChannelPluginMock.mockReset();
-    getActivePluginChannelRegistryVersionMock.mockReset().mockReturnValue(1);
-    requireActivePluginChannelRegistryMock.mockReset().mockReturnValue({});
     ensureConfiguredBindingBuiltinsRegistered();
   });
 
@@ -144,7 +135,7 @@ describe("configured binding registry", () => {
     });
   });
 
-  it("primes compiled ACP bindings from the already loaded channel registry once", async () => {
+  it("primes compiled ACP bindings from the already loaded channel registry", async () => {
     const plugin = createDiscordAcpPlugin();
     const cfg = createConfig({ bindingAgentId: "codex" });
     getChannelPluginMock.mockReturnValue(plugin);
@@ -161,7 +152,6 @@ describe("configured binding registry", () => {
 
     expect(primed).toEqual({ bindingCount: 1, channelCount: 1 });
     expect(resolved?.statefulTarget.agentId).toBe("codex");
-    expect(plugin.bindings?.compileConfiguredBinding).toHaveBeenCalledTimes(1);
 
     const second = bindingRegistry.resolveConfiguredBindingRecord({
       cfg: cfg as never,
@@ -205,10 +195,10 @@ describe("configured binding registry", () => {
     expect(resolved).toBeNull();
   });
 
-  it("rebuilds the compiled registry when the active plugin registry version changes", async () => {
-    const plugin = createDiscordAcpPlugin();
-    getChannelPluginMock.mockReturnValue(plugin);
-    getActivePluginChannelRegistryVersionMock.mockReturnValue(10);
+  it("uses the current loaded channel plugin on each resolve", async () => {
+    const firstPlugin = createDiscordAcpPlugin();
+    const secondPlugin = createDiscordAcpPlugin();
+    getChannelPluginMock.mockReturnValueOnce(firstPlugin).mockReturnValueOnce(secondPlugin);
     const cfg = createConfig();
 
     bindingRegistry.resolveConfiguredBindingRecord({
@@ -217,6 +207,7 @@ describe("configured binding registry", () => {
       accountId: "default",
       conversationId: "1479098716916023408",
     });
+
     bindingRegistry.resolveConfiguredBindingRecord({
       cfg: cfg as never,
       channel: "discord",
@@ -224,14 +215,7 @@ describe("configured binding registry", () => {
       conversationId: "1479098716916023408",
     });
 
-    getActivePluginChannelRegistryVersionMock.mockReturnValue(11);
-    bindingRegistry.resolveConfiguredBindingRecord({
-      cfg: cfg as never,
-      channel: "discord",
-      accountId: "default",
-      conversationId: "1479098716916023408",
-    });
-
-    expect(plugin.bindings?.compileConfiguredBinding).toHaveBeenCalledTimes(2);
+    expect(firstPlugin.bindings?.compileConfiguredBinding).toHaveBeenCalledTimes(1);
+    expect(secondPlugin.bindings?.compileConfiguredBinding).toHaveBeenCalledTimes(1);
   });
 });

@@ -16,7 +16,6 @@ import {
 import {
   createFacadeResolutionKey as createFacadeResolutionKeyShared,
   resolveBundledFacadeModuleLocation,
-  resolveCachedFacadeModuleLocation,
   resolveRegistryPluginModuleLocationFromRecords,
 } from "./facade-resolution-shared.js";
 export {
@@ -45,13 +44,6 @@ const OPENCLAW_PACKAGE_ROOT =
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 const OPENCLAW_SOURCE_EXTENSIONS_ROOT = path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions");
-const cachedFacadeModuleLocationsByKey = new Map<
-  string,
-  {
-    modulePath: string;
-    boundaryRoot: string;
-  } | null
->();
 
 function createFacadeResolutionKey(params: {
   dirName: string;
@@ -100,11 +92,7 @@ function resolveFacadeModuleLocation(params: {
   artifactBasename: string;
   env?: NodeJS.ProcessEnv;
 }): { modulePath: string; boundaryRoot: string } | null {
-  return resolveCachedFacadeModuleLocation({
-    cache: cachedFacadeModuleLocationsByKey,
-    key: createFacadeResolutionKey(params),
-    resolve: () => resolveFacadeModuleLocationUncached(params),
-  });
+  return resolveFacadeModuleLocationUncached(params);
 }
 
 type BundledPluginPublicSurfaceParams = {
@@ -260,7 +248,6 @@ export function resetFacadeRuntimeStateForTest(): void {
   facadeActivationCheckRuntimeModule?.resetFacadeActivationCheckRuntimeStateForTest();
   facadeActivationCheckRuntimeModule = undefined;
   facadeActivationCheckRuntimeJitiLoaders.clear();
-  cachedFacadeModuleLocationsByKey.clear();
 }
 
 export const __testing = {

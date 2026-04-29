@@ -20,6 +20,7 @@ const SPAWN_TIMEOUT_MS = 2000;
 const SIGUSR1_AUTH_GRACE_MS = 5000;
 const DEFAULT_DEFERRAL_POLL_MS = 500;
 const DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS = 30_000;
+export const DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS = 300_000;
 const RESTART_COOLDOWN_MS = 30_000;
 const LAUNCHCTL_ALREADY_LOADED_EXIT_CODE = 37;
 const GATEWAY_RESTART_INTENT_FILENAME = "gateway-restart-intent.json";
@@ -367,6 +368,16 @@ export type RestartEmitHooks = {
   beforeEmit?: () => Promise<void>;
   afterEmitRejected?: () => Promise<void>;
 };
+
+export function resolveGatewayRestartDeferralTimeoutMs(timeoutMs: unknown): number | undefined {
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
+    return DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS;
+  }
+  if (timeoutMs <= 0) {
+    return undefined;
+  }
+  return Math.floor(timeoutMs);
+}
 
 function updatePendingRestartEmitHooks(hooks?: RestartEmitHooks): void {
   if (hooks) {
@@ -729,7 +740,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       const cfg = getRuntimeConfig();
       deferGatewayRestartUntilIdle({
         getPendingCount: pendingCheck,
-        maxWaitMs: cfg.gateway?.reload?.deferralTimeoutMs,
+        maxWaitMs: resolveGatewayRestartDeferralTimeoutMs(cfg.gateway?.reload?.deferralTimeoutMs),
         reason: scheduledReason,
       });
     },

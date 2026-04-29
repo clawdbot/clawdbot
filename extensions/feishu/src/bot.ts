@@ -17,6 +17,7 @@ import {
   resolveOpenProviderRuntimeGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
+import { resolveOpenDmAllowlistAccess } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import {
@@ -641,9 +642,7 @@ export async function handleFeishuMessage(params: {
       cfg,
     );
     const storeAllowFrom =
-      !isGroup &&
-      dmPolicy !== "allowlist" &&
-      (dmPolicy !== "open" || shouldComputeCommandAuthorized)
+      !isGroup && dmPolicy !== "allowlist" && dmPolicy !== "open"
         ? await pairing.readAllowFromStore().catch(() => [])
         : [];
     const effectiveDmAllowFrom = [...configAllowFrom, ...storeAllowFrom];
@@ -654,7 +653,21 @@ export async function handleFeishuMessage(params: {
       senderName: ctx.senderName,
     }).allowed;
 
-    if (isDirect && dmPolicy !== "open" && !dmAllowed) {
+    const dmAccessAllowed =
+      dmPolicy === "open"
+        ? resolveOpenDmAllowlistAccess({
+            effectiveAllowFrom: effectiveDmAllowFrom,
+            isSenderAllowed: (allowFrom) =>
+              resolveFeishuAllowlistMatch({
+                allowFrom,
+                senderId: ctx.senderOpenId,
+                senderIds: [senderUserId],
+                senderName: ctx.senderName,
+              }).allowed,
+          }).decision === "allow"
+        : dmAllowed;
+
+    if (isDirect && !dmAccessAllowed) {
       if (dmPolicy === "pairing") {
         await pairing.issueChallenge({
           senderId: ctx.senderOpenId,

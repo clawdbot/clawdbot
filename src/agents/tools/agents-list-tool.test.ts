@@ -83,12 +83,14 @@ describe("agents_list tool", () => {
     });
   });
 
-  it("marks OPENCLAW_AGENT_RUNTIME as the effective runtime source", async () => {
+  it("marks OPENCLAW_AGENT_RUNTIME and fallback env overrides as effective", async () => {
     vi.stubEnv("OPENCLAW_AGENT_RUNTIME", "codex");
+    vi.stubEnv("OPENCLAW_AGENT_HARNESS_FALLBACK", "pi");
     loadConfigMock.mockReturnValue({
       agents: {
         defaults: {
           model: "openai/gpt-5.5",
+          agentRuntime: { fallback: "none" },
         },
         list: [{ id: "main", default: true }],
       },
@@ -104,7 +106,37 @@ describe("agents_list tool", () => {
       agents: [
         {
           id: "main",
-          agentRuntime: { id: "codex", source: "env" },
+          agentRuntime: { id: "codex", fallback: "pi", source: "env" },
+        },
+      ],
+    });
+  });
+
+  it("preserves agent fallback-only overrides while inheriting default runtime id", async () => {
+    loadConfigMock.mockReturnValue({
+      agents: {
+        defaults: {
+          agentRuntime: { id: "auto", fallback: "pi" },
+          subagents: { allowAgents: ["strict"] },
+        },
+        list: [
+          { id: "main", default: true },
+          { id: "strict", agentRuntime: { fallback: "none" } },
+        ],
+      },
+    } satisfies OpenClawConfig);
+
+    const { createAgentsListTool } = await import("./agents-list-tool.js");
+    const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
+      "call",
+      {},
+    );
+
+    expect(result.details).toMatchObject({
+      agents: [
+        {
+          id: "strict",
+          agentRuntime: { id: "auto", fallback: "none", source: "agent" },
         },
       ],
     });

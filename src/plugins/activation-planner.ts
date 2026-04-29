@@ -54,7 +54,6 @@ type ResolveManifestActivationPlanParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  cache?: boolean;
   origin?: PluginOrigin;
   onlyPluginIds?: readonly string[];
   manifestRecords?: readonly PluginManifestRecord[];
@@ -70,7 +69,6 @@ export function resolveManifestActivationPlan(
         config: params.config,
         workspaceDir: params.workspaceDir,
         env: params.env,
-        cache: params.cache,
         includeDisabled: true,
       });
   const entries = registry.plugins

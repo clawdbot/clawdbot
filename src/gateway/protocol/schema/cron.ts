@@ -25,11 +25,15 @@ const CronSessionTargetSchema = Type.Union([
   Type.String({ pattern: "^session:.+" }),
 ]);
 const CronWakeModeSchema = Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]);
-const CronRunStatusSchema = Type.Union([
-  Type.Literal("ok"),
-  Type.Literal("error"),
-  Type.Literal("skipped"),
-]);
+function cronRunStatusSchema(options: Record<string, unknown> = {}) {
+  return Type.Union([Type.Literal("ok"), Type.Literal("error"), Type.Literal("skipped")], options);
+}
+
+const CronRunStatusSchema = cronRunStatusSchema();
+const DeprecatedCronRunStatusSchema = cronRunStatusSchema({
+  deprecated: true,
+  description: "Deprecated alias for lastRunStatus.",
+});
 const CronSortDirSchema = Type.Union([Type.Literal("asc"), Type.Literal("desc")]);
 const CronJobsEnabledFilterSchema = Type.Union([
   Type.Literal("all"),
@@ -239,7 +243,7 @@ export const CronJobStateSchema = Type.Object(
     runningAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     lastRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     lastRunStatus: Type.Optional(CronRunStatusSchema),
-    lastStatus: Type.Optional(CronRunStatusSchema),
+    lastStatus: Type.Optional(DeprecatedCronRunStatusSchema),
     lastError: Type.Optional(Type.String()),
     lastErrorReason: Type.Optional(CronFailoverReasonSchema),
     lastDurationMs: Type.Optional(Type.Integer({ minimum: 0 })),

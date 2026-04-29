@@ -32,7 +32,6 @@ function listConfiguredAnnounceChannelIds(cfg: OpenClawConfig): string[] {
   return listConfiguredAnnounceChannelIdsForConfig({
     config: cfg,
     env: process.env,
-    cache: true,
   });
 }
 

@@ -18,5 +18,6 @@ describe("scripts/test-live-cli-backend-docker.sh", () => {
 
     expect(forwardedVars).toContain("OPENCLAW_LIVE_CLI_BACKEND_ARGS");
     expect(forwardedVars).toContain("OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS");
+    expect(forwardedVars).toContain("OPENCLAW_TEST_CONSOLE");
   });
 });

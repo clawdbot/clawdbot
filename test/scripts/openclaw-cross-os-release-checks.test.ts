@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +15,7 @@ import { describe, expect, it } from "vitest";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
 import {
   agentOutputHasExpectedOkMarker,
+  buildCrossOsReleaseSmokePluginAllowlist,
   buildReleaseOnboardArgs,
   buildWindowsDevUpdateToolchainCheckScript,
   buildWindowsFreshShellVersionCheckScript,
@@ -31,6 +40,7 @@ import {
   readInstalledVersion,
   readRunnerOverrideEnv,
   resolveExplicitBaselineVersion,
+  resolveInstalledPackageRootFromCliPath,
   resolveDevUpdateVerificationRef,
   resolveInstalledPrefixDirFromCliPath,
   resolvePublishedInstallerUrl,
@@ -46,6 +56,7 @@ import {
   shouldUseManagedGatewayForInstallerRuntime,
   shouldUseManagedGatewayService,
   verifyDevUpdateStatus,
+  verifyPackagedUpgradeUpdateResult,
   writePackageDistInventoryForCandidate,
 } from "../../scripts/openclaw-cross-os-release-checks.ts";
 
@@ -99,6 +110,22 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(shouldRetryCrossOsAgentTurnError(new Error("Agent output did not contain OK."))).toBe(
       false,
     );
+  });
+
+  it("keeps release smoke plugin allowlists focused on agent-turn essentials", () => {
+    const allowlist = buildCrossOsReleaseSmokePluginAllowlist({ extensionId: "openai" });
+
+    expect(allowlist).toEqual(expect.arrayContaining(["openai", "acpx"]));
+    expect(allowlist).not.toContain("memory-core");
+    expect(allowlist).not.toContain("document-extract");
+    expect(allowlist).not.toContain("microsoft");
+    expect(allowlist).not.toContain("web-readability");
+  });
+
+  it("keeps cross-OS live smoke agent turns on minimal thinking", () => {
+    const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
+
+    expect(source.match(/"--thinking",\s+"minimal"/g)?.length).toBeGreaterThanOrEqual(2);
   });
 
   it("treats explicit empty-string args as values instead of boolean flags", () => {
@@ -398,6 +425,36 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     ).toBe("/Users/runner/.npm-global");
   });
 
+  it("resolves Linux npm package roots when the CLI is a user-local shim", () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-linux-home-"));
+    try {
+      const packageRoot = join(homeDir, ".npm-global", "lib", "node_modules", "openclaw");
+      const distDir = join(packageRoot, "dist");
+      const cliDir = join(homeDir, ".local", "bin");
+      mkdirSync(distDir, { recursive: true });
+      mkdirSync(cliDir, { recursive: true });
+      writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "openclaw" }));
+      writeFileSync(join(distDir, "entry.js"), "#!/usr/bin/env node\n");
+
+      expect(
+        resolveInstalledPackageRootFromCliPath(join(cliDir, "openclaw"), "linux", {
+          HOME: homeDir,
+        }),
+      ).toBe(packageRoot);
+
+      rmSync(join(cliDir, "openclaw"), { force: true });
+      symlinkSync(join(distDir, "entry.js"), join(cliDir, "openclaw"));
+
+      expect(
+        resolveInstalledPackageRootFromCliPath(join(cliDir, "openclaw"), "linux", {
+          HOME: homeDir,
+        }),
+      ).toBe(realpathSync(packageRoot));
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("detects whether a managed gateway listener is still reachable on loopback", async () => {
     const server = createNetServer();
     await new Promise((resolvePromise) => {
@@ -460,11 +517,67 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(
       buildRealUpdateEnv({
         FOO: "bar",
+        NODE_COMPILE_CACHE: "/tmp/stale-openclaw-cache",
         OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: "1",
       }),
     ).toEqual({
       FOO: "bar",
+      NODE_DISABLE_COMPILE_CACHE: "1",
     });
+  });
+
+  it("accepts a successful packaged update followed by the old self-swapped process import miss", () => {
+    expect(() =>
+      verifyPackagedUpgradeUpdateResult(
+        {
+          exitCode: 1,
+          stdout: JSON.stringify({
+            status: "ok",
+            after: { version: "2026.4.27" },
+            steps: [{ name: "global update", exitCode: 0 }],
+          }),
+          stderr:
+            "[openclaw] Failed to start CLI: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/tmp/prefix/lib/node_modules/openclaw/dist/memory-state-old.js'",
+        },
+        { candidateVersion: "2026.4.27" },
+      ),
+    ).not.toThrow();
+  });
+
+  it("rejects packaged update failures before the candidate package lands", () => {
+    expect(() =>
+      verifyPackagedUpgradeUpdateResult(
+        {
+          exitCode: 1,
+          stdout: JSON.stringify({
+            status: "ok",
+            after: { version: "2026.4.26" },
+            steps: [{ name: "global update", exitCode: 0 }],
+          }),
+          stderr:
+            "[openclaw] Failed to start CLI: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/tmp/prefix/lib/node_modules/openclaw/dist/memory-state-old.js'",
+        },
+        { candidateVersion: "2026.4.27" },
+      ),
+    ).toThrow(/Packaged upgrade failed/u);
+  });
+
+  it("rejects packaged update failures with unsuccessful update steps", () => {
+    expect(() =>
+      verifyPackagedUpgradeUpdateResult(
+        {
+          exitCode: 1,
+          stdout: JSON.stringify({
+            status: "ok",
+            after: { version: "2026.4.27" },
+            steps: [{ name: "global update", exitCode: 1 }],
+          }),
+          stderr:
+            "[openclaw] Failed to start CLI: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/tmp/prefix/lib/node_modules/openclaw/dist/memory-state-old.js'",
+        },
+        { candidateVersion: "2026.4.27" },
+      ),
+    ).toThrow(/Packaged upgrade failed/u);
   });
 
   it("only treats pinned baseline specs as exact installer version assertions", () => {

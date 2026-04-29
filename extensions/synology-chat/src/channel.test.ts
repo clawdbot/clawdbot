@@ -284,9 +284,16 @@ describe("createSynologyChatPlugin", () => {
 
     it("warns when dmPolicy is open", () => {
       const plugin = createSynologyChatPlugin();
-      const account = makeSecurityAccount({ dmPolicy: "open" });
+      const account = makeSecurityAccount({ dmPolicy: "open", allowedUserIds: ["*"] });
       const warnings = plugin.security.collectWarnings({ cfg: {}, account });
       expect(warnings.some((w: string) => w.includes("open"))).toBe(true);
+    });
+
+    it("warns when dmPolicy is open and allowedUserIds is empty", () => {
+      const plugin = createSynologyChatPlugin();
+      const account = makeSecurityAccount({ dmPolicy: "open", allowedUserIds: [] });
+      const warnings = plugin.security.collectWarnings({ cfg: {}, account });
+      expect(warnings.some((w: string) => w.includes("empty allowedUserIds"))).toBe(true);
     });
 
     it("warns when dmPolicy is allowlist and allowedUserIds is empty", () => {
@@ -531,6 +538,26 @@ describe("createSynologyChatPlugin", () => {
       expect(registerMock).not.toHaveBeenCalled();
     });
 
+    it("startAccount refuses open accounts with empty allowedUserIds", async () => {
+      const registerMock = registerSynologyWebhookRouteMock;
+      registerMock.mockClear();
+      const plugin = createSynologyChatPlugin();
+      const { ctx, abortController } = makeStartAccountCtx({
+        enabled: true,
+        token: "t",
+        incomingUrl: "https://nas/incoming",
+        dmPolicy: "open",
+        allowedUserIds: [],
+      });
+
+      const result = plugin.gateway.startAccount(ctx);
+      await expectPendingStartAccountPromise(result, abortController);
+      expect(ctx.log.warn).toHaveBeenCalledWith(
+        expect.stringContaining("dmPolicy=open but empty allowedUserIds"),
+      );
+      expect(registerMock).not.toHaveBeenCalled();
+    });
+
     it("startAccount refuses named accounts without explicit webhookPath in multi-account setups", async () => {
       const registerMock = registerSynologyWebhookRouteMock;
       const plugin = createSynologyChatPlugin();
@@ -553,6 +580,7 @@ describe("createSynologyChatPlugin", () => {
       const { ctx, abortController } = makeNamedStartAccountCtx({
         webhookPath: "/webhook/synology-shared",
         dmPolicy: "open",
+        allowedUserIds: ["*"],
       });
 
       const result = plugin.gateway.startAccount(ctx);

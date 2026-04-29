@@ -18,6 +18,9 @@ function resolveCachedCron(expr: string, timezone: string): Cron {
   const key = `${timezone}\u0000${expr}`;
   const cached = cronEvalCache.get(key);
   if (cached) {
+    // Move to end of Map iteration order for LRU eviction
+    cronEvalCache.delete(key);
+    cronEvalCache.set(key, cached);
     return cached;
   }
   if (cronEvalCache.size >= CRON_EVAL_CACHE_MAX) {
@@ -168,4 +171,12 @@ export function clearCronScheduleCacheForTest(): void {
 
 export function getCronScheduleCacheSizeForTest(): number {
   return cronEvalCache.size;
+}
+
+export function getCronScheduleCacheMaxForTest(): number {
+  return CRON_EVAL_CACHE_MAX;
+}
+
+export function hasCronInCacheForTest(expr: string, tz: string): boolean {
+  return cronEvalCache.has(`${tz}\u0000${expr}`);
 }

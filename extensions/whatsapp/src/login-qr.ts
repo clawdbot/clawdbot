@@ -16,6 +16,7 @@ import {
   readWebSelfId,
   WHATSAPP_AUTH_UNSTABLE_CODE,
 } from "./session.js";
+import { resolveWhatsAppSocketTiming, type WhatsAppSocketTimingOptions } from "./socket-timing.js";
 
 type WaSocket = Awaited<ReturnType<typeof createWaSocket>>;
 export type StartWebLoginWithQrResult = {
@@ -45,6 +46,7 @@ type ActiveLogin = {
   qrRenderPromise: Promise<string> | null;
   verbose: boolean;
   runtime: RuntimeEnv;
+  socketTiming: WhatsAppSocketTimingOptions;
 };
 
 type LoginQrRaceResult =
@@ -178,6 +180,7 @@ function attachLoginWaiter(accountId: string, login: ActiveLogin) {
     isLegacyAuthDir: login.isLegacyAuthDir,
     verbose: login.verbose,
     runtime: login.runtime,
+    socketTiming: login.socketTiming,
     onQr: (qr) => {
       const current = activeLogins.get(accountId);
       if (!current || current.id !== login.id) {
@@ -282,6 +285,7 @@ export async function startWebLoginWithQr(
   const runtime = opts.runtime ?? defaultRuntime;
   const cfg = getRuntimeConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId: opts.accountId });
+  const socketTiming = resolveWhatsAppSocketTiming(cfg);
   const authState = await readWebAuthExistsForDecision(account.authDir);
   if (authState.outcome === "unstable") {
     return {
@@ -327,6 +331,7 @@ export async function startWebLoginWithQr(
   try {
     sock = await createWaSocket(false, Boolean(opts.verbose), {
       authDir: account.authDir,
+      ...socketTiming,
       onQr: (qr: string) => {
         pendingQr = qr;
         const current = activeLogins.get(account.accountId);
@@ -370,6 +375,7 @@ export async function startWebLoginWithQr(
     qrRenderPromise: null,
     verbose: Boolean(opts.verbose),
     runtime,
+    socketTiming,
   };
   resetQrUpdateSignal(login);
   activeLogins.set(account.accountId, login);

@@ -1,0 +1,15 @@
+export const providerAliasCases = [
+  ["bedrock", "amazon-bedrock"],
+  ["aws-bedrock", "amazon-bedrock"],
+  ["modelstudio", "qwen"],
+  ["qwencloud", "qwen"],
+  ["z.ai", "zai"],
+  ["z-ai", "zai"],
+  ["kimi", "kimi"],
+  ["kimi-code", "kimi"],
+  ["kimi-coding", "kimi"],
+  ["bytedance", "volcengine"],
+  ["doubao", "volcengine"],
+  ["opencode-zen", "opencode"],
+  ["opencode-go-auth", "opencode-go"],
+] as const;

@@ -3,7 +3,7 @@ import {
   installBrowserControlServerHooks,
   startBrowserControlServerFromConfig,
 } from "./server.control-server.test-harness.js";
-import { getBrowserTestFetch } from "./test-fetch.js";
+import { getBrowserTestFetch } from "./test-support/fetch.js";
 
 export function installAgentContractHooks() {
   installBrowserControlServerHooks();

@@ -5,7 +5,10 @@ import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
 import * as videoGenerationRuntime from "../../video-generation/runtime.js";
 import * as videoGenerateBackground from "./video-generate-background.js";
-import { createVideoGenerateTool } from "./video-generate-tool.js";
+import {
+  createVideoGenerateTool,
+  resolveVideoGenerationModelConfigForTool,
+} from "./video-generate-tool.js";
 
 const taskRuntimeInternalMocks = vi.hoisted(() => ({
   listTasksForOwnerKey: vi.fn(),
@@ -108,6 +111,45 @@ describe("createVideoGenerateTool", () => {
         }),
       }),
     ).not.toBeNull();
+  });
+
+  it("orders auto-detected provider defaults by canonical aliases", () => {
+    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
+      {
+        id: "fal",
+        defaultModel: "fal-ai/minimax/video-01-live",
+        models: ["fal-ai/minimax/video-01-live"],
+        capabilities: {},
+        isConfigured: () => true,
+        generateVideo: vi.fn(async () => ({ videos: [] })),
+      },
+      {
+        id: "openai",
+        aliases: ["openai-codex"],
+        defaultModel: "sora-2",
+        models: ["sora-2"],
+        capabilities: {},
+        isConfigured: () => true,
+        generateVideo: vi.fn(async () => ({ videos: [] })),
+      },
+    ]);
+
+    expect(
+      resolveVideoGenerationModelConfigForTool({
+        cfg: asConfig({
+          agents: {
+            defaults: {
+              model: {
+                primary: "openai-codex/gpt-5.5",
+              },
+            },
+          },
+        }),
+      }),
+    ).toEqual({
+      primary: "openai/sora-2",
+      fallbacks: ["fal/fal-ai/minimax/video-01-live"],
+    });
   });
 
   it("generates videos, saves them, and emits MEDIA paths without a session-backed detach", async () => {

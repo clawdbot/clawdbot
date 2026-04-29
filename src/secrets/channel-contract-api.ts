@@ -30,6 +30,7 @@ function loadBundledChannelPublicArtifact(
       return loadBundledPluginPublicArtifactModuleSync<BundledChannelContractApi>({
         dirName: channelId,
         artifactBasename,
+        installRuntimeDeps: false,
       });
     } catch (error) {
       if (

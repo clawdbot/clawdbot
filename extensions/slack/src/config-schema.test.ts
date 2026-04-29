@@ -63,6 +63,35 @@ describe("slack config schema", () => {
     });
   });
 
+  it("accepts Socket Mode ping/pong transport tuning", () => {
+    expectSlackConfigValid({
+      mode: "socket",
+      socketMode: {
+        clientPingTimeout: 15_000,
+        serverPingTimeout: 45_000,
+        pingPongLoggingEnabled: true,
+      },
+      accounts: {
+        ops: {
+          socketMode: {
+            clientPingTimeout: 20_000,
+          },
+        },
+      },
+    });
+  });
+
+  it("rejects invalid Socket Mode ping/pong transport tuning", () => {
+    expectSlackConfigIssue(
+      {
+        socketMode: {
+          clientPingTimeout: 0,
+        },
+      },
+      "socketMode.clientPingTimeout",
+    );
+  });
+
   it("accepts account-level user token config", () => {
     expectSlackConfigValid({
       accounts: {

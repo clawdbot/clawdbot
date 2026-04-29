@@ -146,7 +146,7 @@ export function setAgentEffectiveModelPrimary(
   return "defaults";
 }
 
-// Backward-compatible alias. Prefer explicit/effective helpers at new call sites.
+/** @deprecated Prefer explicit/effective helpers at new call sites. */
 export function resolveAgentModelPrimary(cfg: OpenClawConfig, agentId: string): string | undefined {
   return resolveAgentExplicitModelPrimary(cfg, agentId);
 }

@@ -7,9 +7,7 @@ import { buildPluginApi } from "./api-builder.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
 import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { PluginLruCache, type PluginLruCacheResult } from "./plugin-lru-cache.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
-import { resolvePluginCacheInputs } from "./roots.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { listSetupCliBackendIds, listSetupProviderIds } from "./setup-descriptors.js";
 import type {
@@ -84,40 +82,24 @@ const NOOP_LOGGER: PluginLogger = {
   error() {},
 };
 
-const MAX_SETUP_LOOKUP_CACHE_ENTRIES = 128;
-
 const jitiLoaders: PluginJitiLoaderCache = new Map();
-const setupRegistryCache = new PluginLruCache<PluginSetupRegistry>(MAX_SETUP_LOOKUP_CACHE_ENTRIES);
-const setupProviderCache = new PluginLruCache<ProviderPlugin | null>(
-  MAX_SETUP_LOOKUP_CACHE_ENTRIES,
-);
-const setupCliBackendCache = new PluginLruCache<SetupCliBackendEntry | null>(
-  MAX_SETUP_LOOKUP_CACHE_ENTRIES,
-);
 
 export const __testing = {
   get maxSetupLookupCacheEntries() {
-    return setupRegistryCache.maxEntries;
+    return 0;
   },
-  setMaxSetupLookupCacheEntriesForTest(value?: number) {
-    setupRegistryCache.setMaxEntriesForTest(value);
-    setupProviderCache.setMaxEntriesForTest(value);
-    setupCliBackendCache.setMaxEntriesForTest(value);
-  },
+  setMaxSetupLookupCacheEntriesForTest(_value?: number) {},
   getCacheSizes() {
     return {
-      setupRegistry: setupRegistryCache.size,
-      setupProvider: setupProviderCache.size,
-      setupCliBackend: setupCliBackendCache.size,
+      setupRegistry: 0,
+      setupProvider: 0,
+      setupCliBackend: 0,
     };
   },
 } as const;
 
 export function clearPluginSetupRegistryCache(): void {
   jitiLoaders.clear();
-  setupRegistryCache.clear();
-  setupProviderCache.clear();
-  setupCliBackendCache.clear();
 }
 
 function getJiti(modulePath: string) {
@@ -125,58 +107,6 @@ function getJiti(modulePath: string) {
     cache: jitiLoaders,
     modulePath,
     importerUrl: import.meta.url,
-  });
-}
-
-function getCachedSetupValue<T>(cache: PluginLruCache<T>, key: string): PluginLruCacheResult<T> {
-  return cache.getResult(key);
-}
-
-function setCachedSetupValue<T>(cache: PluginLruCache<T>, key: string, value: T): void {
-  cache.set(key, value);
-}
-
-function buildSetupRegistryCacheKey(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  pluginIds?: readonly string[];
-}): string {
-  const { roots, loadPaths } = resolvePluginCacheInputs({
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    loadPaths: params.config?.plugins?.load?.paths,
-  });
-  return JSON.stringify({
-    roots,
-    loadPaths,
-    hasConfig: Boolean(params.config),
-    pluginIds: params.pluginIds ? [...new Set(params.pluginIds)].toSorted() : null,
-  });
-}
-
-function buildSetupProviderCacheKey(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  pluginIds?: readonly string[];
-}): string {
-  return JSON.stringify({
-    provider: normalizeProviderId(params.provider),
-    registry: buildSetupRegistryCacheKey(params),
-  });
-}
-
-function buildSetupCliBackendCacheKey(params: {
-  backend: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): string {
-  return JSON.stringify({
-    backend: normalizeProviderId(params.backend),
-    registry: buildSetupRegistryCacheKey(params),
   });
 }
 
@@ -489,17 +419,6 @@ export function resolvePluginSetupRegistry(params?: {
   pluginIds?: readonly string[];
 }): PluginSetupRegistry {
   const env = params?.env ?? process.env;
-  const cacheKey = buildSetupRegistryCacheKey({
-    config: params?.config,
-    workspaceDir: params?.workspaceDir,
-    env,
-    pluginIds: params?.pluginIds,
-  });
-  const cached = getCachedSetupValue(setupRegistryCache, cacheKey);
-  if (cached.hit) {
-    return cached.value;
-  }
-
   const selectedPluginIds = params?.pluginIds
     ? new Set(params.pluginIds.map((pluginId) => pluginId.trim()).filter(Boolean))
     : null;
@@ -511,7 +430,6 @@ export function resolvePluginSetupRegistry(params?: {
       autoEnableProbes: [],
       diagnostics: [],
     } satisfies PluginSetupRegistry;
-    setCachedSetupValue(setupRegistryCache, cacheKey, empty);
     return empty;
   }
 
@@ -615,7 +533,6 @@ export function resolvePluginSetupRegistry(params?: {
     autoEnableProbes,
     diagnostics,
   } satisfies PluginSetupRegistry;
-  setCachedSetupValue(setupRegistryCache, cacheKey, registry);
   return registry;
 }
 
@@ -626,12 +543,6 @@ export function resolvePluginSetupProvider(params: {
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
 }): ProviderPlugin | undefined {
-  const cacheKey = buildSetupProviderCacheKey(params);
-  const cached = getCachedSetupValue(setupProviderCache, cacheKey);
-  if (cached.hit) {
-    return cached.value ?? undefined;
-  }
-
   const env = params.env ?? process.env;
   const normalizedProvider = normalizeProviderId(params.provider);
   const manifestRegistry = loadSetupManifestRegistry({
@@ -646,13 +557,11 @@ export function resolvePluginSetupProvider(params: {
     listIds: listSetupProviderIds,
   });
   if (!record) {
-    setCachedSetupValue(setupProviderCache, cacheKey, null);
     return undefined;
   }
 
   const setupRegistration = resolveSetupRegistration(record);
   if (!setupRegistration) {
-    setCachedSetupValue(setupProviderCache, cacheKey, null);
     return undefined;
   }
 
@@ -684,11 +593,9 @@ export function resolvePluginSetupProvider(params: {
       ignoreAsyncSetupRegisterResult(result);
     }
   } catch {
-    setCachedSetupValue(setupProviderCache, cacheKey, null);
     return undefined;
   }
 
-  setCachedSetupValue(setupProviderCache, cacheKey, matchedProvider ?? null);
   return matchedProvider;
 }
 
@@ -698,12 +605,6 @@ export function resolvePluginSetupCliBackend(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): SetupCliBackendEntry | undefined {
-  const cacheKey = buildSetupCliBackendCacheKey(params);
-  const cached = getCachedSetupValue(setupCliBackendCache, cacheKey);
-  if (cached.hit) {
-    return cached.value ?? undefined;
-  }
-
   const normalized = normalizeProviderId(params.backend);
 
   const env = params.env ?? process.env;
@@ -721,13 +622,11 @@ export function resolvePluginSetupCliBackend(params: {
     listIds: listSetupCliBackendIds,
   });
   if (!record) {
-    setCachedSetupValue(setupCliBackendCache, cacheKey, null);
     return undefined;
   }
 
   const setupRegistration = resolveSetupRegistration(record);
   if (!setupRegistration) {
-    setCachedSetupValue(setupCliBackendCache, cacheKey, null);
     return undefined;
   }
 
@@ -760,12 +659,10 @@ export function resolvePluginSetupCliBackend(params: {
       ignoreAsyncSetupRegisterResult(result);
     }
   } catch {
-    setCachedSetupValue(setupCliBackendCache, cacheKey, null);
     return undefined;
   }
 
   const resolvedEntry = matchedBackend ? { pluginId: record.id, backend: matchedBackend } : null;
-  setCachedSetupValue(setupCliBackendCache, cacheKey, resolvedEntry);
   return resolvedEntry ?? undefined;
 }
 

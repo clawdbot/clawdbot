@@ -17,7 +17,6 @@ const ChannelModelByChannelSchema = z
   .record(z.string(), z.record(z.string(), z.string()))
   .optional();
 
-let directChannelRuntimeSchemasCache: ReadonlyMap<string, ChannelConfigRuntimeSchema> | undefined;
 const OPENCLAW_PACKAGE_ROOT =
   resolveLoaderPackageRoot({
     modulePath: fileURLToPath(import.meta.url),
@@ -25,25 +24,12 @@ const OPENCLAW_PACKAGE_ROOT =
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
 
 function getDirectChannelRuntimeSchema(channelId: string): ChannelConfigRuntimeSchema | undefined {
-  if (!directChannelRuntimeSchemasCache) {
-    directChannelRuntimeSchemasCache = new Map();
-  }
-
-  const cached = directChannelRuntimeSchemasCache.get(channelId);
-  if (cached) {
-    return cached;
-  }
-
   for (const entry of listBundledPluginMetadata({
     includeChannelConfigs: false,
     includeSyntheticChannelConfigs: false,
   })) {
     const manifestRuntime = entry.manifest.channelConfigs?.[channelId]?.runtime;
     if (manifestRuntime) {
-      (directChannelRuntimeSchemasCache as Map<string, ChannelConfigRuntimeSchema>).set(
-        channelId,
-        manifestRuntime,
-      );
       return manifestRuntime;
     }
     if (!entry.manifest.channels?.includes(channelId)) {
@@ -56,10 +42,6 @@ function getDirectChannelRuntimeSchema(channelId: string): ChannelConfigRuntimeS
     });
     const collectedRuntime = collectedChannelConfigs?.[channelId]?.runtime;
     if (collectedRuntime) {
-      (directChannelRuntimeSchemasCache as Map<string, ChannelConfigRuntimeSchema>).set(
-        channelId,
-        collectedRuntime,
-      );
       return collectedRuntime;
     }
   }

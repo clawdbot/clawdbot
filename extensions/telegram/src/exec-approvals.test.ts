@@ -110,7 +110,7 @@ function makeForeignChannelApprovalRequest(params: {
 }
 
 describe("telegram exec approvals", () => {
-  it("requires explicit enablement even when approvers resolve", () => {
+  it("auto-enables when approvers resolve unless explicitly disabled", () => {
     expect(isTelegramExecApprovalClientEnabled({ cfg: buildConfig() })).toBe(false);
     expect(
       isTelegramExecApprovalClientEnabled({
@@ -124,9 +124,14 @@ describe("telegram exec approvals", () => {
     ).toBe(false);
     expect(
       isTelegramExecApprovalClientEnabled({
-        cfg: buildConfig({ approvers: ["123"] }),
+        cfg: buildConfig(undefined, { defaultTo: 123 }),
       }),
     ).toBe(false);
+    expect(
+      isTelegramExecApprovalClientEnabled({
+        cfg: buildConfig({ approvers: ["123"] }),
+      }),
+    ).toBe(true);
     expect(
       isTelegramExecApprovalClientEnabled({
         cfg: buildConfig({ enabled: "auto", approvers: ["123"] }),
@@ -146,7 +151,40 @@ describe("telegram exec approvals", () => {
     expect(isTelegramExecApprovalApprover({ cfg, senderId: "789" })).toBe(false);
   });
 
-  it("infers approvers from allowFrom and direct defaultTo", () => {
+  it("infers approvers from command owners", () => {
+    const cfg = {
+      ...buildConfig(),
+      commands: {
+        ownerAllowFrom: ["telegram:12345", "tg:67890", "discord:ignored", "-100999"],
+      },
+    } as OpenClawConfig;
+
+    expect(getTelegramExecApprovalApprovers({ cfg })).toEqual(["12345", "67890"]);
+    expect(isTelegramExecApprovalClientEnabled({ cfg })).toBe(true);
+    expect(isTelegramExecApprovalApprover({ cfg, senderId: "12345" })).toBe(true);
+    expect(isTelegramExecApprovalApprover({ cfg, senderId: "67890" })).toBe(true);
+  });
+
+  it("does not require explicit Telegram exec approvers when command owner identifies the Telegram operator", () => {
+    const cfg = {
+      ...buildConfig(),
+      commands: {
+        ownerAllowFrom: ["telegram:12345"],
+      },
+    } as OpenClawConfig;
+
+    expect(cfg.channels?.telegram?.execApprovals?.approvers).toBeUndefined();
+    expect(getTelegramExecApprovalApprovers({ cfg })).toEqual(["12345"]);
+    expect(isTelegramExecApprovalClientEnabled({ cfg })).toBe(true);
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        request: makeForeignChannelApprovalRequest({ id: "discord-diagnostics" }),
+      }),
+    ).toBe(true);
+  });
+
+  it("does not infer approvers from Telegram chat allowlists", () => {
     const cfg = buildConfig(
       { enabled: true },
       {
@@ -155,9 +193,10 @@ describe("telegram exec approvals", () => {
       },
     );
 
-    expect(getTelegramExecApprovalApprovers({ cfg })).toEqual(["12345", "67890"]);
-    expect(isTelegramExecApprovalApprover({ cfg, senderId: "12345" })).toBe(true);
-    expect(isTelegramExecApprovalApprover({ cfg, senderId: "67890" })).toBe(true);
+    expect(getTelegramExecApprovalApprovers({ cfg })).toEqual([]);
+    expect(isTelegramExecApprovalClientEnabled({ cfg })).toBe(false);
+    expect(isTelegramExecApprovalApprover({ cfg, senderId: "12345" })).toBe(false);
+    expect(isTelegramExecApprovalApprover({ cfg, senderId: "67890" })).toBe(false);
   });
 
   it("defaults target to dm", () => {
@@ -302,6 +341,83 @@ describe("telegram exec approvals", () => {
         request,
       }),
     ).toBe(false);
+  });
+
+  it("scopes native exec approval handling to configured target accountIds", () => {
+    const cfg = {
+      ...buildMultiAccountTelegramConfig({}),
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "telegram", to: "123", accountId: "ops" }],
+        },
+      },
+    } as OpenClawConfig;
+    const request: TelegramExecApprovalRequest = {
+      id: "req-target-account",
+      request: {
+        command: "echo hi",
+        sessionKey: "agent:ops:main",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "default",
+        request,
+      }),
+    ).toBe(false);
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "ops",
+        request,
+      }),
+    ).toBe(true);
+  });
+
+  it("preserves unscoped telegram targets when mixed with scoped target accountIds", () => {
+    const cfg = {
+      ...buildMultiAccountTelegramConfig({}),
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [
+            { channel: "telegram", to: "123" },
+            { channel: "telegram", to: "456", accountId: "ops" },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+    const request: TelegramExecApprovalRequest = {
+      id: "req-mixed-target-account",
+      request: {
+        command: "echo hi",
+        sessionKey: "agent:ops:main",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "default",
+        request,
+      }),
+    ).toBe(true);
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "ops",
+        request,
+      }),
+    ).toBe(true);
   });
 
   it("ignores disabled telegram accounts when checking foreign-channel ambiguity", () => {

@@ -90,9 +90,11 @@ runs:
 
         install_args=(
           install
+          --prefer-offline
           --ignore-scripts=false
           --config.engine-strict=false
           --config.enable-pre-post-scripts=true
+          --config.side-effects-cache=true
         )
         if [ -n "$LOCKFILE_FLAG" ]; then
           install_args+=("$LOCKFILE_FLAG")

@@ -4,6 +4,11 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  evaluateLocalTestboxKey,
+  evaluateOpenClawTestboxClaim,
+  resolveTestboxId,
+} from "./blacksmith-testbox-state.mjs";
 
 const DEFAULT_DELETION_THRESHOLD = 200;
 const REQUIRED_ROOT_FILES = ["package.json", "pnpm-lock.yaml", ".gitignore"];
@@ -78,11 +83,22 @@ function git(args, cwd) {
 export function runTestboxSyncSanity({
   cwd = process.cwd(),
   env = process.env,
+  argv = process.argv.slice(2),
   stdout = process.stdout,
   stderr = process.stderr,
 } = {}) {
   const root = git(["rev-parse", "--show-toplevel"], cwd).trim();
   const statusRaw = git(["status", "--short", "--untracked-files=all"], root);
+  const testboxId = resolveTestboxId({ argv, env });
+  const keyResult = evaluateLocalTestboxKey({
+    env,
+    testboxId,
+  });
+  const claimResult = evaluateOpenClawTestboxClaim({
+    cwd: root,
+    env,
+    testboxId,
+  });
   const result = evaluateTestboxSyncSanity({
     cwd: root,
     statusRaw,
@@ -92,13 +108,21 @@ export function runTestboxSyncSanity({
     ),
     allowMassDeletions: parseBooleanEnv(env.OPENCLAW_TESTBOX_ALLOW_MASS_DELETIONS),
   });
+  result.problems.push(...keyResult.problems);
+  result.problems.push(...claimResult.problems);
+  result.ok = result.problems.length === 0;
 
   if (!result.ok) {
     stderr.write(`Testbox sync sanity failed:\n- ${result.problems.join("\n- ")}\n`);
-    stderr.write("Warm a fresh box or rerun from a clean repo root before spending a gate.\n");
+    stderr.write(
+      "Warm a fresh box, keep using the id from this session, or rerun from a clean repo root before spending a gate.\n",
+    );
     return 1;
   }
 
+  if (keyResult.checked) {
+    stdout.write(`Testbox local key and OpenClaw claim ok: ${keyResult.testboxId}\n`);
+  }
   stdout.write(
     `Testbox sync sanity ok: ${result.statusEntryCount} changed entries, ${result.trackedDeletionCount} tracked deletions.\n`,
   );

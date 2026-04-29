@@ -767,18 +767,20 @@ export const registerTelegramHandlers = ({
         );
         return { allowed: false, reason: "direct-disabled" };
       }
-      if (dmPolicy !== "open") {
-        // For DMs, prefer per-DM/topic allowFrom (groupAllowOverride) over account-level allowFrom
-        const dmAllowFrom = groupAllowOverride ?? allowFrom;
-        const effectiveDmAllow = normalizeDmAllowFromWithStore({
-          allowFrom: dmAllowFrom,
-          storeAllowFrom,
-          dmPolicy,
-        });
-        if (!isAllowlistAuthorized(effectiveDmAllow, senderId, senderUsername)) {
-          logVerbose(`Blocked telegram direct sender ${senderId || "unknown"} (${deniedDmReason})`);
-          return { allowed: false, reason: "direct-unauthorized" };
-        }
+      // For DMs, prefer per-DM/topic allowFrom (groupAllowOverride) over account-level allowFrom.
+      const dmAllowFrom = groupAllowOverride ?? allowFrom;
+      const effectiveDmAllow = normalizeDmAllowFromWithStore({
+        allowFrom: dmAllowFrom,
+        storeAllowFrom,
+        dmPolicy,
+      });
+      const hasPublicDmAccess = dmPolicy === "open" && effectiveDmAllow.hasWildcard;
+      if (
+        !hasPublicDmAccess &&
+        !isAllowlistAuthorized(effectiveDmAllow, senderId, senderUsername)
+      ) {
+        logVerbose(`Blocked telegram direct sender ${senderId || "unknown"} (${deniedDmReason})`);
+        return { allowed: false, reason: "direct-unauthorized" };
       }
     }
     if (isGroup && enforceGroupAllowlistAuthorization) {

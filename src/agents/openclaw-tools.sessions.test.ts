@@ -795,9 +795,9 @@ describe("sessions tools", () => {
         const params = request.params as { message?: string; sessionKey?: string } | undefined;
         const message = params?.message ?? "";
         let reply = "REPLY_SKIP";
-        if (message === "ping" || message === "wait") {
+        if (message.includes("ping") || message.includes("wait")) {
           reply = "done";
-        } else if (message === "Agent-to-agent announce step.") {
+        } else if (message.includes("Agent-to-agent announce step.")) {
           reply = "ANNOUNCE_SKIP";
         } else if (params?.sessionKey === requesterKey) {
           reply = "pong";
@@ -884,10 +884,12 @@ describe("sessions tools", () => {
     expect(agentCalls).toHaveLength(8);
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
+        message: expect.stringContaining("[Inter-session message"),
         lane: expect.stringMatching(/^nested(?::|$)/),
         channel: "webchat",
         inputProvenance: { kind: "inter_session" },
       });
+      expect((call.params as { message?: string }).message).toContain("isUser=false");
     }
     expect(
       agentCalls.some(

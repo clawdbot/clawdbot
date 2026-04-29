@@ -1,7 +1,5 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
-import { clearPluginDiscoveryCache } from "./discovery.js";
-import { clearPluginManifestRegistryCache } from "./manifest-registry.js";
 import { refreshPluginRegistry } from "./plugin-registry.js";
 import { buildPluginRegistrySnapshotReport, buildPluginSnapshotReport } from "./status.js";
 import {
@@ -19,8 +17,6 @@ function makeTempDir() {
 }
 
 afterEach(() => {
-  clearPluginDiscoveryCache();
-  clearPluginManifestRegistryCache();
   cleanupTrackedTempDirs(tempDirs);
 });
 

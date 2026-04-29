@@ -9,7 +9,9 @@ import type { HandleCommandsParams } from "./commands-types.js";
 import { handleWhoamiCommand } from "./commands-whoami.js";
 
 const buildContextReplyMock = vi.hoisted(() => vi.fn());
-const buildExportTrajectoryReplyMock = vi.hoisted(() => vi.fn(async () => ({ text: "exported" })));
+const buildExportTrajectoryCommandReplyMock = vi.hoisted(() =>
+  vi.fn(async () => ({ text: "exported" })),
+);
 const listSkillCommandsForAgentsMock = vi.hoisted(() => vi.fn(() => []));
 const buildCommandsMessagePaginatedMock = vi.hoisted(() =>
   vi.fn(() => ({ text: "/commands", currentPage: 1, totalPages: 1 })),
@@ -20,7 +22,7 @@ vi.mock("./commands-context-report.js", () => ({
 }));
 
 vi.mock("./commands-export-trajectory.js", () => ({
-  buildExportTrajectoryReply: buildExportTrajectoryReplyMock,
+  buildExportTrajectoryCommandReply: buildExportTrajectoryCommandReplyMock,
 }));
 
 vi.mock("./commands-status.js", () => ({
@@ -92,7 +94,7 @@ function buildInfoParams(
 describe("info command handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    buildExportTrajectoryReplyMock.mockResolvedValue({ text: "exported" });
+    buildExportTrajectoryCommandReplyMock.mockResolvedValue({ text: "exported" });
     buildContextReplyMock.mockImplementation(async (params: HandleCommandsParams) => {
       const normalized = params.command.commandBodyNormalized;
       if (normalized === "/context list") {
@@ -119,7 +121,7 @@ describe("info command handlers", () => {
     const result = await handleExportTrajectoryCommand(params, true);
 
     expect(result).toEqual({ shouldContinue: false });
-    expect(buildExportTrajectoryReplyMock).not.toHaveBeenCalled();
+    expect(buildExportTrajectoryCommandReplyMock).not.toHaveBeenCalled();
   });
 
   it("returns sender details for /whoami", async () => {

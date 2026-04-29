@@ -49,6 +49,7 @@ type ResolvedGatewayConnection = {
   url: string;
   token?: string;
   password?: string;
+  preauthHandshakeTimeoutMs?: number;
   allowInsecureLocalOperatorUi?: boolean;
 };
 
@@ -117,6 +118,7 @@ export class GatewayChatClient implements TuiBackend {
       url: connection.url,
       token: connection.token,
       password: connection.password,
+      preauthHandshakeTimeoutMs: connection.preauthHandshakeTimeoutMs,
       clientName: GATEWAY_CLIENT_NAMES.TUI,
       clientDisplayName: "openclaw-tui",
       clientVersion: VERSION,
@@ -284,6 +286,7 @@ export async function resolveGatewayConnection(
       url,
       token: explicitAuth.token,
       password: explicitAuth.password,
+      preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
       allowInsecureLocalOperatorUi,
     };
   }
@@ -302,6 +305,7 @@ export async function resolveGatewayConnection(
       url,
       token: resolved.token,
       password: resolved.password,
+      preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
       allowInsecureLocalOperatorUi: false,
     };
   }
@@ -317,6 +321,7 @@ export async function resolveGatewayConnection(
       url,
       token: resolved.token,
       password: resolved.password,
+      preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
       allowInsecureLocalOperatorUi,
     };
   }
@@ -341,6 +346,7 @@ export async function resolveGatewayConnection(
     url,
     token: resolved.token,
     password: resolved.password,
+    preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
     allowInsecureLocalOperatorUi,
   };
 }

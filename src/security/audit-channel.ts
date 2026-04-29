@@ -210,6 +210,7 @@ export async function collectChannelSecurityFindings(params: {
       provider: input.provider,
       accountId: input.accountId,
       allowFrom: input.allowFrom,
+      dmPolicy: input.dmPolicy,
       normalizeEntry: input.normalizeEntry,
     });
     const dmScope = params.cfg.session?.dmScope ?? "main";

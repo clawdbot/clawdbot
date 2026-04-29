@@ -20,11 +20,13 @@ import {
   installBundledRuntimeDepsAsync,
   isWritableDirectory,
   materializeBundledRuntimeMirrorDistFile,
+  pruneUnknownBundledRuntimeDepsRoots,
   repairBundledRuntimeDepsInstallRootAsync,
   resolveBundledRuntimeDependencyInstallRoot,
   resolveBundledRuntimeDependencyInstallRootPlan,
   resolveBundledRuntimeDepsNpmRunner,
   scanBundledPluginRuntimeDeps,
+  shouldMaterializeBundledRuntimeMirrorDistFile,
   type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps.js";
 
@@ -99,24 +101,61 @@ afterEach(() => {
   spawnMock.mockReset();
   spawnSyncMock.mockReset();
   bundledRuntimeDepsActivityTesting.resetBundledRuntimeDepsInstallActivity();
+  bundledRuntimeDepsTesting.clearBundledRuntimeMirrorMaterializeCache();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
+describe("shouldMaterializeBundledRuntimeMirrorDistFile", () => {
+  it("reuses unchanged root dist file decisions without rereading source", () => {
+    const root = makeTempDir();
+    const sourcePath = path.join(root, "shared-runtime.js");
+    fs.writeFileSync(
+      sourcePath,
+      [
+        `//#region extensions/browser/src/runtime.ts`,
+        `export const marker = "shared-runtime";`,
+        `//#endregion`,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const realReadFileSync = fs.readFileSync.bind(fs);
+    let sourceReads = 0;
+    vi.spyOn(fs, "readFileSync").mockImplementation(((target, options) => {
+      if (path.resolve(target.toString()) === path.resolve(sourcePath)) {
+        sourceReads += 1;
+      }
+      return realReadFileSync(target, options as never);
+    }) as typeof fs.readFileSync);
+
+    expect(shouldMaterializeBundledRuntimeMirrorDistFile(sourcePath)).toBe(true);
+    expect(shouldMaterializeBundledRuntimeMirrorDistFile(sourcePath)).toBe(true);
+
+    expect(sourceReads).toBe(1);
+  });
+});
+
 describe("resolveBundledRuntimeDepsNpmRunner", () => {
-  it("uses npm_execpath through node on Windows when available", () => {
+  it("ignores npm_execpath and uses the Node-adjacent npm CLI on Windows", () => {
+    const execPath = "C:\\Program Files\\nodejs\\node.exe";
+    const npmCliPath = path.win32.resolve(
+      path.win32.dirname(execPath),
+      "node_modules/npm/bin/npm-cli.js",
+    );
     const runner = resolveBundledRuntimeDepsNpmRunner({
-      env: { npm_execpath: "C:\\node\\node_modules\\npm\\bin\\npm-cli.js" },
-      execPath: "C:\\Program Files\\nodejs\\node.exe",
-      existsSync: (candidate) => candidate === "C:\\node\\node_modules\\npm\\bin\\npm-cli.js",
+      env: { npm_execpath: "C:\\repo\\evil\\npm-cli.js" },
+      execPath,
+      existsSync: (candidate) =>
+        candidate === "C:\\repo\\evil\\npm-cli.js" || candidate === npmCliPath,
       npmArgs: ["install", "acpx@0.5.3"],
       platform: "win32",
     });
 
     expect(runner).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args: ["C:\\node\\node_modules\\npm\\bin\\npm-cli.js", "install", "acpx@0.5.3"],
+      command: execPath,
+      args: [npmCliPath, "install", "acpx@0.5.3"],
     });
   });
 
@@ -139,6 +178,8 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
           npm_config_global: "true",
           npm_config_location: "global",
           npm_config_prefix: "/opt/homebrew",
+          npm_execpath: "/repo/evil/npm-cli.js",
+          NPM_EXECPATH: "/repo/evil-uppercase/npm-cli.js",
         },
         { cacheDir: "/opt/openclaw/runtime-cache" },
       ),
@@ -146,6 +187,10 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
       PATH: "/usr/bin:/bin",
       npm_config_cache: "/opt/openclaw/runtime-cache",
       npm_config_dry_run: "false",
+      npm_config_fetch_retries: "5",
+      npm_config_fetch_retry_maxtimeout: "120000",
+      npm_config_fetch_retry_mintimeout: "10000",
+      npm_config_fetch_timeout: "300000",
       npm_config_global: "false",
       npm_config_legacy_peer_deps: "true",
       npm_config_location: "project",
@@ -175,15 +220,16 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
     });
   });
 
-  it("ignores pnpm npm_execpath and falls back to npm", () => {
+  it("ignores npm_execpath and falls back to Node-adjacent npm", () => {
     const execPath = "/opt/node/bin/node";
     const npmCliPath = "/opt/node/lib/node_modules/npm/bin/npm-cli.js";
     const runner = resolveBundledRuntimeDepsNpmRunner({
       env: {
-        npm_execpath: "/home/runner/setup-pnpm/node_modules/.bin/pnpm.cjs",
+        npm_execpath: "/home/runner/repo/evil/npm-cli.js",
       },
       execPath,
-      existsSync: (candidate) => candidate === npmCliPath,
+      existsSync: (candidate) =>
+        candidate === "/home/runner/repo/evil/npm-cli.js" || candidate === npmCliPath,
       npmArgs: ["install", "acpx@0.5.3"],
       platform: "linux",
     });
@@ -191,6 +237,23 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
     expect(runner).toEqual({
       command: execPath,
       args: [npmCliPath, "install", "acpx@0.5.3"],
+    });
+  });
+
+  it("uses the Node-adjacent POSIX npm shim when npm-cli.js is unavailable", () => {
+    const execPath = "/opt/node/bin/node";
+    const npmPath = "/opt/node/bin/npm";
+    const runner = resolveBundledRuntimeDepsNpmRunner({
+      env: {},
+      execPath,
+      existsSync: (candidate) => candidate === npmPath,
+      npmArgs: ["install", "acpx@0.5.3"],
+      platform: "linux",
+    });
+
+    expect(runner).toEqual({
+      command: npmPath,
+      args: ["install", "acpx@0.5.3"],
     });
   });
 
@@ -206,24 +269,18 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
     ).toThrow("Unable to resolve a safe npm executable on Windows");
   });
 
-  it("prefixes PATH with the active Node directory on POSIX", () => {
-    const runner = resolveBundledRuntimeDepsNpmRunner({
-      env: {
-        PATH: "/usr/bin:/bin",
-      },
-      execPath: "/opt/node/bin/node",
-      existsSync: () => false,
-      npmArgs: ["install", "acpx@0.5.3"],
-      platform: "linux",
-    });
-
-    expect(runner).toEqual({
-      command: "npm",
-      args: ["install", "acpx@0.5.3"],
-      env: {
-        PATH: `/opt/node/bin${path.delimiter}/usr/bin:/bin`,
-      },
-    });
+  it("refuses POSIX npm shim fallback when npm-cli.js is unavailable", () => {
+    expect(() =>
+      resolveBundledRuntimeDepsNpmRunner({
+        env: {
+          PATH: "/repo/evil/bin:/usr/bin:/bin",
+        },
+        execPath: "/opt/node/bin/node",
+        existsSync: (candidate) => candidate === "/usr/bin/npm",
+        npmArgs: ["install"],
+        platform: "linux",
+      }),
+    ).toThrow("Unable to resolve a safe npm executable");
   });
 });
 
@@ -287,11 +344,16 @@ describe("installBundledRuntimeDeps", () => {
     );
   });
 
-  it("uses the npm cmd shim on Windows", () => {
+  it("ignores npm_execpath during Windows installs", () => {
     const installRoot = makeTempDir();
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const safeNpmCliPath = path.win32.resolve(
+      path.win32.dirname(process.execPath),
+      "node_modules/npm/bin/npm-cli.js",
+    );
+    const attackerNpmCliPath = "C:\\repo\\evil\\npm-cli.js";
     vi.spyOn(fs, "existsSync").mockImplementation(
-      (candidate) => candidate === "C:\\node\\node_modules\\npm\\bin\\npm-cli.js",
+      (candidate) => candidate === attackerNpmCliPath || candidate === safeNpmCliPath,
     );
     spawnSyncMock.mockImplementation((_command, _args, options) => {
       writeInstalledPackage(String(options?.cwd ?? ""), "acpx", "0.5.3");
@@ -311,13 +373,13 @@ describe("installBundledRuntimeDeps", () => {
       env: {
         npm_config_prefix: "C:\\prefix",
         PATH: "C:\\node",
-        npm_execpath: "C:\\node\\node_modules\\npm\\bin\\npm-cli.js",
+        npm_execpath: attackerNpmCliPath,
       },
     });
 
     expect(spawnSyncMock).toHaveBeenCalledWith(
       expect.any(String),
-      ["C:\\node\\node_modules\\npm\\bin\\npm-cli.js", "install", "--ignore-scripts", "acpx@0.5.3"],
+      [safeNpmCliPath, "install", "--ignore-scripts", "acpx@0.5.3"],
       expect.objectContaining({
         cwd: installRoot,
         windowsHide: true,
@@ -335,6 +397,15 @@ describe("installBundledRuntimeDeps", () => {
       expect.objectContaining({
         env: expect.not.objectContaining({
           npm_config_prefix: expect.any(String),
+        }),
+      }),
+    );
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Array),
+      expect.objectContaining({
+        env: expect.not.objectContaining({
+          npm_execpath: expect.any(String),
         }),
       }),
     );
@@ -514,6 +585,40 @@ describe("installBundledRuntimeDeps", () => {
     });
 
     expect(spawnMock).toHaveBeenCalledOnce();
+  });
+
+  it("prunes stale retained deps during package-level repair", async () => {
+    const installRoot = makeTempDir();
+    writeInstalledPackage(installRoot, "alpha-runtime", "1.0.0");
+    fs.writeFileSync(
+      path.join(installRoot, ".openclaw-runtime-deps.json"),
+      `${JSON.stringify({ specs: ["alpha-runtime@1.0.0"] }, null, 2)}\n`,
+      "utf8",
+    );
+    spawnMock.mockImplementation((_command, _args, options) => {
+      writeInstalledPackage(String(options?.cwd ?? ""), "beta-runtime", "2.0.0");
+      const child = new EventEmitter() as ReturnType<typeof spawn>;
+      Object.assign(child, {
+        stdout: new EventEmitter(),
+        stderr: new EventEmitter(),
+      });
+      queueMicrotask(() => child.emit("close", 0, null));
+      return child;
+    });
+
+    await repairBundledRuntimeDepsInstallRootAsync({
+      installRoot,
+      missingSpecs: ["beta-runtime@2.0.0"],
+      installSpecs: ["beta-runtime@2.0.0"],
+      env: {},
+    });
+
+    expect(
+      fs.existsSync(path.join(installRoot, "node_modules", "alpha-runtime", "package.json")),
+    ).toBe(false);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(installRoot, ".openclaw-runtime-deps.json"), "utf8")),
+    ).toEqual({ specs: ["beta-runtime@2.0.0"] });
   });
 
   it("warns but still installs bundled runtime deps when disk space looks low", () => {
@@ -908,6 +1013,12 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       config: { plugins: { allow: ["browser"] } },
       includeConfiguredChannels: false,
       expectedDeps: [],
+    },
+    {
+      name: "includes selected memory slot bundled plugins behind restrictive allowlists",
+      config: { plugins: { allow: ["browser"], slots: { memory: "alpha" } } },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0"],
     },
     {
       name: "does not let explicit plugin entries bypass restrictive allowlists",
@@ -1646,6 +1757,56 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     ]);
   });
 
+  it("does not retain already staged deps for disabled bundled channel owners", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.27" }),
+    );
+    const browserRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "browser",
+      deps: { "browser-runtime": "1.0.0" },
+      enabledByDefault: true,
+    });
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "telegram",
+      deps: { grammy: "1.37.0" },
+      channels: ["telegram"],
+    });
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(browserRoot, { env });
+    writeInstalledPackage(installRoot, "browser-runtime", "1.0.0");
+    writeInstalledPackage(installRoot, "grammy", "1.37.0");
+    fs.writeFileSync(
+      path.join(installRoot, ".openclaw-runtime-deps.json"),
+      `${JSON.stringify({ specs: ["grammy@1.37.0"] }, null, 2)}\n`,
+      "utf8",
+    );
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env,
+      pluginId: "browser",
+      pluginRoot: browserRoot,
+      config: {
+        plugins: { enabled: true },
+        channels: {
+          telegram: { enabled: false, botToken: "123:disabled" },
+        },
+      },
+      installDeps: () => {
+        throw new Error("already staged active deps should not reinstall");
+      },
+    });
+
+    expect(result).toEqual({ installedSpecs: [], retainSpecs: [] });
+    expect(
+      JSON.parse(fs.readFileSync(path.join(installRoot, ".openclaw-runtime-deps.json"), "utf8")),
+    ).toEqual({ specs: ["browser-runtime@1.0.0"] });
+  });
+
   it("does not derive a second-generation stage root from external runtime mirrors", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
@@ -1725,6 +1886,44 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     const resolved = resolveBundledRuntimeDependencyInstallRoot(nestedPluginRoot, { env });
     expect(resolved).toBe(installRoot);
     expect(path.basename(resolved).startsWith("openclaw-unknown-")).toBe(false);
+  });
+
+  it("prunes stale unknown external runtime roots while keeping newest and locked roots", () => {
+    const stageDir = makeTempDir();
+    const nowMs = Date.parse("2026-04-29T08:00:00.000Z");
+    const makeRoot = (name: string, ageMs: number, locked = false) => {
+      const root = path.join(stageDir, name);
+      fs.mkdirSync(root, { recursive: true });
+      fs.writeFileSync(path.join(root, "marker"), "ok\n");
+      if (locked) {
+        const lockDir = path.join(root, ".openclaw-runtime-deps.lock");
+        fs.mkdirSync(lockDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(lockDir, "owner.json"),
+          JSON.stringify({ pid: process.pid, createdAtMs: nowMs }),
+        );
+      }
+      const mtime = new Date(nowMs - ageMs);
+      fs.utimesSync(root, mtime, mtime);
+      return root;
+    };
+    const newest = makeRoot("openclaw-unknown-newest", 1_000);
+    const stale = makeRoot("openclaw-unknown-stale", 120_000);
+    const locked = makeRoot("openclaw-unknown-locked", 120_000, true);
+    const versioned = makeRoot("openclaw-2026.4.25-versioned", 120_000);
+
+    const result = pruneUnknownBundledRuntimeDepsRoots({
+      env: { OPENCLAW_PLUGIN_STAGE_DIR: stageDir },
+      nowMs,
+      maxRootsToKeep: 1,
+      minAgeMs: 60_000,
+    });
+
+    expect(result).toEqual({ scanned: 3, removed: 1, skippedLocked: 1 });
+    expect(fs.existsSync(newest)).toBe(true);
+    expect(fs.existsSync(stale)).toBe(false);
+    expect(fs.existsSync(locked)).toBe(true);
+    expect(fs.existsSync(versioned)).toBe(true);
   });
 
   it("links source-checkout runtime deps from the cache instead of copying them", () => {
@@ -2405,6 +2604,40 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       },
     ]);
     expect(installRoot).toContain(stageDir);
+    expect(installRoot).not.toBe(pluginRoot);
+  });
+
+  it("installs runtime deps for the default memory slot bundled plugin", () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "memory-core",
+      deps: { chokidar: "^5.0.0" },
+    });
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      config: {},
+      installDeps: (params) => {
+        calls.push(params);
+      },
+      pluginId: "memory-core",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({
+      installedSpecs: ["chokidar@^5.0.0"],
+      retainSpecs: ["chokidar@^5.0.0"],
+    });
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env: {} });
+    expect(calls).toEqual([
+      {
+        installRoot,
+        missingSpecs: ["chokidar@^5.0.0"],
+        installSpecs: ["chokidar@^5.0.0"],
+      },
+    ]);
     expect(installRoot).not.toBe(pluginRoot);
   });
 

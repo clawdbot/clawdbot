@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
-import webPush from "web-push";
 import { resolveStateDir } from "../config/paths.js";
 import { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
 
@@ -40,6 +39,18 @@ const MAX_KEY_LENGTH = 512;
 const DEFAULT_VAPID_SUBJECT = "mailto:openclaw@localhost";
 
 const withLock = createAsyncLock();
+
+type WebPushRuntime = typeof import("web-push");
+type WebPushRuntimeModule = WebPushRuntime & { default?: WebPushRuntime };
+
+let webPushRuntimePromise: Promise<WebPushRuntime> | undefined;
+
+async function loadWebPushRuntime(): Promise<WebPushRuntime> {
+  webPushRuntimePromise ??= import("web-push").then(
+    (mod: WebPushRuntimeModule) => mod.default ?? mod,
+  );
+  return await webPushRuntimePromise;
+}
 
 // --- Helpers ---
 
@@ -115,6 +126,7 @@ export async function resolveVapidKeys(baseDir?: string): Promise<VapidKeyPair> 
       };
     }
 
+    const webPush = await loadWebPushRuntime();
     const keys = webPush.generateVAPIDKeys();
     const pair: VapidKeyPair = {
       publicKey: keys.publicKey,
@@ -238,7 +250,7 @@ export type WebPushPayload = {
   url?: string;
 };
 
-function applyVapidDetails(keys: VapidKeyPair): void {
+function applyVapidDetails(webPush: WebPushRuntime, keys: VapidKeyPair): void {
   webPush.setVapidDetails(keys.subject, keys.publicKey, keys.privateKey);
 }
 
@@ -248,12 +260,14 @@ export async function sendWebPushNotification(
   vapidKeys?: VapidKeyPair,
 ): Promise<WebPushSendResult> {
   const keys = vapidKeys ?? (await resolveVapidKeys());
-  applyVapidDetails(keys);
+  const webPush = await loadWebPushRuntime();
+  applyVapidDetails(webPush, keys);
 
-  return sendPreparedWebPushNotification(subscription, payload);
+  return sendPreparedWebPushNotification(webPush, subscription, payload);
 }
 
 async function sendPreparedWebPushNotification(
+  webPush: WebPushRuntime,
   subscription: WebPushSubscription,
   payload: WebPushPayload,
 ): Promise<WebPushSendResult> {
@@ -300,12 +314,13 @@ export async function broadcastWebPush(
   }
 
   const vapidKeys = await resolveVapidKeys(baseDir);
+  const webPush = await loadWebPushRuntime();
 
   // Set VAPID details once before fanning out concurrent sends.
-  applyVapidDetails(vapidKeys);
+  applyVapidDetails(webPush, vapidKeys);
 
   const results = await Promise.allSettled(
-    subscriptions.map((sub) => sendPreparedWebPushNotification(sub, payload)),
+    subscriptions.map((sub) => sendPreparedWebPushNotification(webPush, sub, payload)),
   );
 
   const mapped = results.map((r, i) =>

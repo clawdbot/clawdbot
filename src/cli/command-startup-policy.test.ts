@@ -94,6 +94,27 @@ describe("command-startup-policy", () => {
     ).toBe(false);
     expect(
       shouldLoadPluginsForCommandPath({
+        argv: ["node", "openclaw", "agent", "--json"],
+        commandPath: ["agent"],
+        jsonOutputMode: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        argv: ["node", "openclaw", "agent", "--json", "--local"],
+        commandPath: ["agent"],
+        jsonOutputMode: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        argv: ["node", "openclaw", "agent"],
+        commandPath: ["agent"],
+        jsonOutputMode: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldLoadPluginsForCommandPath({
         commandPath: ["agents", "list"],
         jsonOutputMode: false,
       }),

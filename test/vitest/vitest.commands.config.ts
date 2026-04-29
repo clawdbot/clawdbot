@@ -7,6 +7,7 @@ export function createCommandsVitestConfig(env?: Record<string, string | undefin
     env,
     exclude: commandsLightTestFiles,
     name: "commands",
+    pool: "forks",
   });
 }
 

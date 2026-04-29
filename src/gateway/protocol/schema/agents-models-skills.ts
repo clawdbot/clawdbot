@@ -39,6 +39,21 @@ export const AgentSummarySchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    agentRuntime: Type.Optional(
+      Type.Object(
+        {
+          id: NonEmptyString,
+          fallback: Type.Optional(Type.Union([Type.Literal("pi"), Type.Literal("none")])),
+          source: Type.Union([
+            Type.Literal("env"),
+            Type.Literal("agent"),
+            Type.Literal("defaults"),
+            Type.Literal("implicit"),
+          ]),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );

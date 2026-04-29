@@ -8,6 +8,11 @@ on:
         required: false
         default: ""
         type: string
+      include_android:
+        description: Run Android lanes for this manual CI dispatch.
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [main]
     paths-ignore:
@@ -50,7 +55,6 @@ jobs:
       run_checks_fast: ${{ steps.manifest.outputs.run_checks_fast }}
       checks_fast_core_matrix: ${{ steps.manifest.outputs.checks_fast_core_matrix }}
       channel_contracts_matrix: ${{ steps.manifest.outputs.channel_contracts_matrix }}
-      checks_node_extensions_matrix: ${{ steps.manifest.outputs.checks_node_extensions_matrix }}
       run_checks: ${{ steps.manifest.outputs.run_checks }}
       checks_matrix: ${{ steps.manifest.outputs.checks_matrix }}
       run_checks_node_core_nondist: ${{ steps.manifest.outputs.run_checks_node_core_nondist }}
@@ -117,13 +121,14 @@ jobs:
           OPENCLAW_CI_DOCS_CHANGED: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.docs_scope.outputs.docs_changed }}
           OPENCLAW_CI_RUN_NODE: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_node || 'false' }}
           OPENCLAW_CI_RUN_MACOS: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_macos || 'false' }}
-          OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_android || 'false' }}
+          OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && inputs.include_android && 'true' || steps.changed_scope.outputs.run_android || 'false' }}
           OPENCLAW_CI_RUN_WINDOWS: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_windows || 'false' }}
           OPENCLAW_CI_RUN_NODE_FAST_ONLY: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_only || 'false' }}
           OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_plugin_contracts || 'false' }}
           OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_ci_routing || 'false' }}
           OPENCLAW_CI_RUN_SKILLS_PYTHON: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_skills_python || 'false' }}
           OPENCLAW_CI_RUN_CONTROL_UI_I18N: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}
+          OPENCLAW_CI_CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
           OPENCLAW_CI_REPOSITORY: ${{ github.repository }}
         run: |
           node --input-type=module <<'EOF'
@@ -134,10 +139,6 @@ jobs:
           import {
             createChannelContractTestShards,
           } from "./scripts/lib/channel-contract-test-plan.mjs";
-          import {
-            createExtensionTestShards,
-            DEFAULT_EXTENSION_TEST_SHARD_COUNT,
-          } from "./scripts/lib/extension-test-plan.mjs";
 
           const parseBoolean = (value, fallback = false) => {
             if (value === undefined) return fallback;
@@ -173,26 +174,6 @@ jobs:
           const runSkillsPython = parseBoolean(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly;
           const runControlUiI18n =
             parseBoolean(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly;
-          const extensionTestShardCount = isCanonicalRepository
-            ? DEFAULT_EXTENSION_TEST_SHARD_COUNT
-            : Math.max(DEFAULT_EXTENSION_TEST_SHARD_COUNT, 36);
-          const extensionShardMatrix = createMatrix(
-            runNodeFull
-              ? createExtensionTestShards({
-                  shardCount: extensionTestShardCount,
-                }).map((shard) => ({
-                  check_name: shard.checkName,
-                  extensions_csv: shard.extensionIds.join(","),
-                  runner: isCanonicalRepository && [0, 3, 4].includes(shard.index)
-                    ? "blacksmith-8vcpu-ubuntu-2404"
-                    : isCanonicalRepository
-                      ? "blacksmith-4vcpu-ubuntu-2404"
-                      : "ubuntu-24.04",
-                  shard_index: shard.index + 1,
-                  task: "extensions-batch",
-                }))
-              : [],
-          );
           const checksFastCoreTasks = [];
           if (runNodeFull) {
             checksFastCoreTasks.push(
@@ -220,7 +201,9 @@ jobs:
           }
 
           const nodeTestShards = runNodeFull
-            ? createNodeTestShards().map((shard) => ({
+            ? createNodeTestShards({
+                includeReleaseOnlyPluginShards: false,
+              }).map((shard) => ({
                 check_name: shard.checkName,
                 runtime: "node",
                 task: "test-shard",
@@ -249,7 +232,6 @@ jobs:
             channel_contracts_matrix: createMatrix(
               runNodeFull ? createChannelContractTestShards() : [],
             ),
-            checks_node_extensions_matrix: extensionShardMatrix,
             run_checks: runNodeFull,
             checks_matrix: createMatrix(
               runNodeFull
@@ -919,97 +901,6 @@ jobs:
       - name: Run protocol check
         run: pnpm protocol:check
 
-  checks-node-extensions-shard:
-    permissions:
-      contents: read
-    name: ${{ matrix.check_name }}
-    needs: [preflight]
-    if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.preflight.outputs.checks_node_extensions_matrix) }}
-    steps:
-      - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-          CHECKOUT_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM 30s git -C "$workdir" \
-              -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/5 succeeded"
-          }
-
-          for attempt in 1 2 3 4 5; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/5 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 5 attempts" >&2
-          exit 1
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-
-      - name: Run extension shard
-        env:
-          NODE_OPTIONS: --max-old-space-size=6144
-          OPENCLAW_EXTENSION_BATCH_PARALLEL: 2
-          OPENCLAW_VITEST_MAX_WORKERS: 1
-          OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
-        run: pnpm test:extensions:batch -- "$OPENCLAW_EXTENSION_BATCH"
-
-  checks-node-extensions:
-    permissions:
-      contents: read
-    name: checks-node-extensions
-    needs: [preflight, checks-node-extensions-shard]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_checks_fast == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Verify extension shards
-        env:
-          SHARD_RESULT: ${{ needs.checks-node-extensions-shard.result }}
-        run: |
-          if [ "$SHARD_RESULT" != "success" ]; then
-            echo "Extension shard checks failed: $SHARD_RESULT" >&2
-            exit 1
-          fi
-
   checks:
     permissions:
       contents: read
@@ -1308,6 +1199,9 @@ jobs:
           - check_name: check-lint
             task: lint
             runner: blacksmith-16vcpu-ubuntu-2404
+          - check_name: check-dependencies
+            task: dependencies
+            runner: ubuntu-24.04
           - check_name: check-policy-guards
             task: policy-guards
             runner: ubuntu-24.04
@@ -1389,6 +1283,9 @@ jobs:
               ;;
             lint)
               pnpm lint --threads=8
+              ;;
+            dependencies)
+              pnpm deadcode:dependencies
               ;;
             policy-guards)
               pnpm lint:webhook:no-low-level-body-read
@@ -2061,6 +1958,14 @@ jobs:
             apps/android/**/gradle-wrapper.properties
             apps/android/gradle/libs.versions.toml
 
+      - name: Cache Android SDK
+        uses: actions/cache@v5
+        with:
+          path: ~/.android-sdk
+          key: ${{ runner.os }}-android-sdk-v1-cmdline-12266719-platform-36-build-tools-36.0.0
+          restore-keys: |
+            ${{ runner.os }}-android-sdk-v1-
+
       - name: Setup Android SDK cmdline-tools
         run: |
           set -euo pipefail
@@ -2069,11 +1974,13 @@ jobs:
           ARCHIVE="commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"
           URL="https://dl.google.com/android/repository/${ARCHIVE}"
 
-          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
-          curl -fsSL "$URL" -o "/tmp/${ARCHIVE}"
-          rm -rf "$ANDROID_SDK_ROOT/cmdline-tools/latest"
-          unzip -q "/tmp/${ARCHIVE}" -d "$ANDROID_SDK_ROOT/cmdline-tools"
-          mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+          if [ ! -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+            mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+            curl -fsSL "$URL" -o "/tmp/${ARCHIVE}"
+            rm -rf "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+            unzip -q "/tmp/${ARCHIVE}" -d "$ANDROID_SDK_ROOT/cmdline-tools"
+            mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+          fi
 
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"

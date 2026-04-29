@@ -1,6 +1,7 @@
 services:
   openclaw-gateway:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
+    build: .
     environment:
       HOME: /home/node
       TERM: xterm-256color
@@ -25,8 +26,8 @@ services:
       OPENCLAW_PLUGIN_STAGE_DIR: /var/lib/openclaw/plugin-runtime-deps
       TZ: ${OPENCLAW_TZ:-UTC}
     volumes:
-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - ${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace
       - openclaw-plugin-runtime-deps:/var/lib/openclaw/plugin-runtime-deps
       ## Uncomment the lines below to enable sandbox isolation
       ## (agents.defaults.sandbox). Requires Docker CLI in the image
@@ -89,8 +90,8 @@ services:
       OPENCLAW_PLUGIN_STAGE_DIR: /var/lib/openclaw/plugin-runtime-deps
       TZ: ${OPENCLAW_TZ:-UTC}
     volumes:
-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - ${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace
       - openclaw-plugin-runtime-deps:/var/lib/openclaw/plugin-runtime-deps
     stdin_open: true
     tty: true

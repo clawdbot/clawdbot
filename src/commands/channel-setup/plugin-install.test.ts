@@ -85,10 +85,8 @@ vi.mock("../../plugins/loader.js", () => ({
   loadOpenClawPlugins: vi.fn(),
 }));
 
-const clearPluginDiscoveryCache = vi.fn();
 const discoverOpenClawPlugins = vi.fn((_args?: unknown) => ({ candidates: [], diagnostics: [] }));
 vi.mock("../../plugins/discovery.js", () => ({
-  clearPluginDiscoveryCache: () => clearPluginDiscoveryCache(),
   discoverOpenClawPlugins: (args: unknown) => discoverOpenClawPlugins(args),
 }));
 
@@ -558,7 +556,47 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
-  it("clears discovery cache before reloading the setup plugin registry", () => {
+  it("skips the install prompt when autoConfirmSingleSource is set and only npm is available", async () => {
+    const runtime = makeRuntime();
+    const { prompter, select } = makeSkipInstallPrompter();
+    const cfg: OpenClawConfig = {};
+    // npm-only entry (no local path)
+    const npmOnlyEntry: ChannelPluginCatalogEntry = {
+      id: "wecom",
+      pluginId: "wecom",
+      meta: {
+        id: "wecom",
+        label: "WeCom",
+        selectionLabel: "WeCom",
+        docsPath: "/channels/wecom",
+        blurb: "WeCom channel",
+      },
+      install: {
+        npmSpec: "@openclaw/wecom@2026.4.23",
+      },
+    };
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: true,
+      pluginId: "wecom",
+      installPath: "/tmp/wecom",
+    });
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    resolveBundledPluginSources.mockReturnValue(new Map());
+
+    const result = await ensureChannelSetupPluginInstalled({
+      cfg,
+      entry: npmOnlyEntry,
+      prompter,
+      runtime,
+      autoConfirmSingleSource: true,
+    });
+
+    expect(select).not.toHaveBeenCalled();
+    expect(result.installed).toBe(true);
+    expect(result.pluginId).toBe("wecom");
+  });
+
+  it("reloads the setup plugin registry without using plugin registry cache", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
 
@@ -568,7 +606,6 @@ describe("ensureChannelSetupPluginInstalled", () => {
       workspaceDir: "/tmp/openclaw-workspace",
     });
 
-    expect(clearPluginDiscoveryCache).toHaveBeenCalledTimes(1);
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         config: cfg,
@@ -578,9 +615,6 @@ describe("ensureChannelSetupPluginInstalled", () => {
         cache: false,
         includeSetupOnlyChannelPlugins: true,
       }),
-    );
-    expect(clearPluginDiscoveryCache.mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(loadOpenClawPlugins).mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
   });
 
@@ -871,14 +905,10 @@ describe("ensureChannelSetupPluginInstalled", () => {
         onlyPluginIds: ["custom-external-chat-plugin"],
       }),
     );
-    expect(loadPluginManifestRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cache: false,
-      }),
-    );
+    expect(loadPluginManifestRegistry).toHaveBeenCalledWith(expect.objectContaining({}));
   });
 
-  it("uses uncached manifest discovery for activation-declared setup scoping", () => {
+  it("uses live manifest discovery for activation-declared setup scoping", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
     mockActivationOnlyPlugin({ id: "custom-external-chat-plugin" });
@@ -893,7 +923,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(loadPluginManifestRegistry).toHaveBeenCalled();
     expect(
       loadPluginManifestRegistry.mock.calls.every(
-        ([params]) => (params as { cache?: boolean }).cache === false,
+        ([params]) => !Object.prototype.hasOwnProperty.call(params ?? {}, "cache"),
       ),
     ).toBe(true);
   });

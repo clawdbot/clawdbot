@@ -31,19 +31,6 @@ export function createFacadeResolutionKey(params: {
   }::${disabledKey}`;
 }
 
-export function resolveCachedFacadeModuleLocation<TLocation>(params: {
-  cache: Map<string, TLocation | null>;
-  key: string;
-  resolve: () => TLocation | null;
-}): TLocation | null {
-  if (params.cache.has(params.key)) {
-    return params.cache.get(params.key) ?? null;
-  }
-  const resolved = params.resolve();
-  params.cache.set(params.key, resolved);
-  return resolved;
-}
-
 export function resolveFacadeBoundaryRoot(params: {
   modulePath: string;
   bundledPluginsDir?: string | null;

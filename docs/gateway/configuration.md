@@ -270,6 +270,24 @@ cannot roll back unrelated user settings.
 
   </Accordion>
 
+  <Accordion title="Tune gateway WebSocket handshake timeout">
+    Give local clients more time to complete the pre-auth WebSocket handshake on
+    loaded or low-powered hosts:
+
+    ```json5
+    {
+      gateway: {
+        handshakeTimeoutMs: 30000,
+      },
+    }
+    ```
+
+    - Default is `15000` milliseconds.
+    - `OPENCLAW_HANDSHAKE_TIMEOUT_MS` still takes precedence for one-off service or shell overrides.
+    - Prefer fixing startup/event-loop stalls first; this knob is for hosts that are healthy but slow during warmup.
+
+  </Accordion>
+
   <Accordion title="Configure sessions and resets">
     Sessions control conversation continuity and isolation:
 

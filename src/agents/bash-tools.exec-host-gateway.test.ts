@@ -1,7 +1,13 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ExecApprovalFollowupTarget } from "./bash-tools.exec-host-shared.js";
 
 type StrictInlineEvalBoundary =
   typeof import("./bash-tools.exec-host-shared.js").enforceStrictInlineEvalApprovalBoundary;
+type SendExecApprovalFollowupResult =
+  typeof import("./bash-tools.exec-host-shared.js").sendExecApprovalFollowupResult;
+type BuildExecApprovalFollowupTargetMock = (
+  value: ExecApprovalFollowupTarget,
+) => ExecApprovalFollowupTarget | null;
 
 const INLINE_EVAL_HIT = {
   executable: "python3",
@@ -12,7 +18,9 @@ const INLINE_EVAL_HIT = {
 
 const createAndRegisterDefaultExecApprovalRequestMock = vi.hoisted(() => vi.fn());
 const buildExecApprovalPendingToolResultMock = vi.hoisted(() => vi.fn());
-const buildExecApprovalFollowupTargetMock = vi.hoisted(() => vi.fn(() => null));
+const buildExecApprovalFollowupTargetMock = vi.hoisted(() =>
+  vi.fn<BuildExecApprovalFollowupTargetMock>(() => null),
+);
 const createExecApprovalDecisionStateMock = vi.hoisted(() =>
   vi.fn(
     (): {
@@ -55,7 +63,9 @@ const resolveExecHostApprovalContextMock = vi.hoisted(() =>
   })),
 );
 const runExecProcessMock = vi.hoisted(() => vi.fn());
-const sendExecApprovalFollowupResultMock = vi.hoisted(() => vi.fn(async () => undefined));
+const sendExecApprovalFollowupResultMock = vi.hoisted(() =>
+  vi.fn<SendExecApprovalFollowupResult>(async () => undefined),
+);
 const enforceStrictInlineEvalApprovalBoundaryMock = vi.hoisted(() =>
   vi.fn<StrictInlineEvalBoundary>((value) => ({
     approvedByAsk: value.approvedByAsk,
@@ -303,6 +313,87 @@ describe("processGatewayAllowlist", () => {
     expect(buildExecApprovalFollowupTargetMock).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:main:telegram:direct:123",
+      }),
+    );
+  });
+
+  it("formats diagnostics approvals as direct pasteable followups", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: false,
+      deniedReason: null,
+    });
+    const outcome = {
+      status: "completed" as const,
+      exitCode: 0,
+      exitSignal: null,
+      durationMs: 12,
+      timedOut: false,
+      aggregated: JSON.stringify({
+        path: "/tmp/openclaw-diagnostics.zip",
+        bytes: 1234,
+        manifest: {
+          generatedAt: "2026-04-28T20:58:29.311Z",
+          openclawVersion: "2026.4.27",
+          contents: [
+            { path: "diagnostics.json", bytes: 100 },
+            { path: "summary.md", bytes: 200 },
+          ],
+          privacy: {
+            payloadFree: true,
+            rawLogsIncluded: false,
+            notes: ["Logs keep operational summaries."],
+          },
+        },
+      }),
+    };
+    runExecProcessMock.mockResolvedValue({
+      session: { id: "sess-1" },
+      promise: Promise.resolve(outcome),
+    });
+    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+
+    const approvalFollowup = vi.fn(async () =>
+      [
+        "OpenAI Codex harness:",
+        "Codex diagnostics sent to OpenAI servers:",
+        "Session 1",
+        "Channel: telegram",
+        "OpenClaw session id: `session-1`",
+        "Codex thread id: `thread-1`",
+      ].join("\n"),
+    );
+
+    await runGatewayAllowlist({
+      command: "openclaw gateway diagnostics export --json",
+      trigger: "diagnostics",
+      approvalFollowupMode: "direct",
+      approvalFollowup,
+    });
+
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalled();
+    });
+    expect(buildExecApprovalFollowupTargetMock).toHaveBeenCalledWith(
+      expect.objectContaining({ direct: true }),
+    );
+    expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({ direct: true }),
+      expect.stringContaining("Diagnostics export created."),
+    );
+    const followupText = sendExecApprovalFollowupResultMock.mock.calls[0]?.[1] ?? "";
+    expect(followupText).toContain("Path: /tmp/openclaw-diagnostics.zip");
+    expect(followupText).toContain("Contents (2 files):");
+    expect(followupText).toContain("OpenAI Codex harness:");
+    expect(followupText).toContain("Codex diagnostics sent to OpenAI servers:");
+    expect(followupText).toContain("Codex thread id: `thread-1`");
+    expect(approvalFollowup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: "req-1",
+        sessionId: "sess-1",
+        trigger: "diagnostics",
+        outcome: expect.objectContaining({ status: "completed", exitCode: 0 }),
       }),
     );
   });

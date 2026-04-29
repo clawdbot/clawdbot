@@ -4,12 +4,18 @@ import { WebSocketServer } from "ws";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
+import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import { VOICECLAW_REALTIME_PATH } from "./paths.js";
 import { VoiceClawRealtimeSession } from "./session.js";
 
 export { VOICECLAW_REALTIME_PATH };
 
-const wss = new WebSocketServer({ noServer: true });
+export const VOICECLAW_REALTIME_MAX_PAYLOAD_BYTES = MAX_PAYLOAD_BYTES;
+
+const wss = new WebSocketServer({
+  noServer: true,
+  maxPayload: VOICECLAW_REALTIME_MAX_PAYLOAD_BYTES,
+});
 
 export function handleVoiceClawRealtimeUpgrade(opts: {
   req: IncomingMessage;

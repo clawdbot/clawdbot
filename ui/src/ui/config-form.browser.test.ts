@@ -98,6 +98,50 @@ describe("config form renderer", () => {
     expect(onPatch).toHaveBeenCalledWith(["bind"], "tailnet");
   });
 
+  it("keeps dropdown selects on their configured value after options render", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const schema = {
+      type: "object",
+      properties: {
+        provider: {
+          type: "string",
+          enum: ["anthropic", "codex", "gemini", "openai", "openrouter", "zai"],
+        },
+        bind: {
+          anyOf: [
+            { const: "auto" },
+            { const: "lan" },
+            { const: "tailnet" },
+            { const: "loopback" },
+            { const: "public" },
+            { const: "off" },
+          ],
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { provider: "openai", bind: "tailnet" },
+        onPatch,
+      }),
+      container,
+    );
+
+    const selects = container.querySelectorAll<HTMLSelectElement>("select.cfg-select");
+    expect(selects).toHaveLength(2);
+    const selectedLabels = Array.from(selects).map((select) =>
+      select.selectedOptions[0]?.textContent?.trim(),
+    );
+    expect(selectedLabels).toContain("openai");
+    expect(selectedLabels).toContain("tailnet");
+  });
+
   it("renders map fields from additionalProperties", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");

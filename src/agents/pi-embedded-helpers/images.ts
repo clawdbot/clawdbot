@@ -6,13 +6,26 @@ import { sanitizeContentBlocksImages } from "../tool-images.js";
 import { stripThoughtSignatures } from "./bootstrap.js";
 
 type ContentBlock = AgentToolResult<unknown>["content"][number];
+const EMPTY_CONTENT_PLACEHOLDER = "[empty content omitted]";
 
-function isThinkingOrRedactedBlock(block: unknown): boolean {
-  if (!block || typeof block !== "object") {
-    return false;
+function dropEmptyTextBlocks<T>(content: T[]): T[] {
+  return content.filter((block) => {
+    if (!block || typeof block !== "object") {
+      return true;
+    }
+    const rec = block as { type?: unknown; text?: unknown };
+    if (rec.type !== "text" || typeof rec.text !== "string") {
+      return true;
+    }
+    return rec.text.trim().length > 0;
+  });
+}
+
+function ensureNonEmptyContent<T>(content: T[]): T[] {
+  if (content.length > 0) {
+    return content;
   }
-  const rec = block as { type?: unknown };
-  return rec.type === "thinking" || rec.type === "redacted_thinking";
+  return [{ type: "text", text: EMPTY_CONTENT_PLACEHOLDER }] as T[];
 }
 
 export function isEmptyAssistantMessageContent(
@@ -87,7 +100,7 @@ export async function sanitizeSessionMessagesImages(
         label,
         imageSanitization,
       )) as unknown as typeof toolMsg.content;
-      out.push({ ...toolMsg, content: nextContent });
+      out.push({ ...toolMsg, content: ensureNonEmptyContent(dropEmptyTextBlocks(nextContent)) });
       continue;
     }
 
@@ -95,12 +108,12 @@ export async function sanitizeSessionMessagesImages(
       const userMsg = msg as Extract<AgentMessage, { role: "user" }>;
       const content = userMsg.content;
       if (Array.isArray(content)) {
-        const nextContent = (await sanitizeContentBlocksImages(
+        const nextContent = await sanitizeContentBlocksImages(
           content as unknown as ContentBlock[],
           label,
           imageSanitization,
-        )) as unknown as typeof userMsg.content;
-        out.push({ ...userMsg, content: nextContent });
+        );
+        out.push({ ...userMsg, content: ensureNonEmptyContent(dropEmptyTextBlocks(nextContent)) });
         continue;
       }
     }
@@ -115,7 +128,10 @@ export async function sanitizeSessionMessagesImages(
             label,
             imageSanitization,
           )) as unknown as typeof assistantMsg.content;
-          out.push({ ...assistantMsg, content: nextContent });
+          const finalContent = dropEmptyTextBlocks(nextContent);
+          if (finalContent.length > 0) {
+            out.push({ ...assistantMsg, content: finalContent });
+          }
         } else {
           out.push(assistantMsg);
         }
@@ -128,28 +144,17 @@ export async function sanitizeSessionMessagesImages(
           : stripThoughtSignatures(content, options?.sanitizeThoughtSignatures); // Strip for Gemini
         if (!allowNonImageSanitization) {
           const nextContent = (await sanitizeContentBlocksImages(
-            strippedContent as unknown as ContentBlock[],
+            dropEmptyTextBlocks(strippedContent) as unknown as ContentBlock[],
             label,
             imageSanitization,
           )) as unknown as typeof assistantMsg.content;
-          out.push({ ...assistantMsg, content: nextContent });
+          if (nextContent.length > 0) {
+            out.push({ ...assistantMsg, content: nextContent });
+          }
           continue;
         }
 
-        const filteredContent =
-          options?.preserveSignatures &&
-          strippedContent.some((block) => isThinkingOrRedactedBlock(block))
-            ? strippedContent
-            : strippedContent.filter((block) => {
-                if (!block || typeof block !== "object") {
-                  return true;
-                }
-                const rec = block as { type?: unknown; text?: unknown };
-                if (rec.type !== "text" || typeof rec.text !== "string") {
-                  return true;
-                }
-                return rec.text.trim().length > 0;
-              });
+        const filteredContent = dropEmptyTextBlocks(strippedContent);
         const finalContent = (await sanitizeContentBlocksImages(
           filteredContent as unknown as ContentBlock[],
           label,

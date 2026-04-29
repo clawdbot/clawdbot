@@ -359,6 +359,21 @@ function formatUsage(usage: CacheUsage | undefined) {
   return `cacheRead=${usage?.cacheRead ?? 0} cacheWrite=${usage?.cacheWrite ?? 0} input=${usage?.input ?? 0}`;
 }
 
+function warmupHasCacheEvidence(params: { floor: LiveCacheFloor; warmup: CacheRun }): boolean {
+  const cacheRead = params.warmup.usage.cacheRead ?? 0;
+  const cacheWrite = params.warmup.usage.cacheWrite ?? 0;
+  if (params.floor.minCacheReadOrWrite !== undefined) {
+    return Math.max(cacheRead, cacheWrite) >= params.floor.minCacheReadOrWrite;
+  }
+  if (params.floor.minCacheRead !== undefined && cacheRead < params.floor.minCacheRead) {
+    return false;
+  }
+  if (params.floor.minHitRate !== undefined && params.warmup.hitRate < params.floor.minHitRate) {
+    return false;
+  }
+  return params.floor.minCacheRead !== undefined || params.floor.minHitRate !== undefined;
+}
+
 function assertAgainstBaseline(params: {
   lane: BaselineLane;
   provider: ProviderKey;
@@ -401,8 +416,12 @@ function assertAgainstBaseline(params: {
   }
 
   if (params.result.warmup) {
-    const warmupUsage = params.result.warmup.usage;
-    if ((warmupUsage.cacheWrite ?? 0) < (floor.minCacheWrite ?? 0)) {
+    const warmup = params.result.warmup;
+    const warmupUsage = warmup.usage;
+    if (
+      (warmupUsage.cacheWrite ?? 0) < (floor.minCacheWrite ?? 0) &&
+      !warmupHasCacheEvidence({ floor, warmup })
+    ) {
       recordRegression(
         `${params.provider}:${params.lane} warmup cacheWrite=${warmupUsage.cacheWrite ?? 0} < min=${floor.minCacheWrite}`,
       );

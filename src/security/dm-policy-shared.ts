@@ -74,6 +74,36 @@ export const DM_GROUP_ACCESS_REASON = {
 export type DmGroupAccessReasonCode =
   (typeof DM_GROUP_ACCESS_REASON)[keyof typeof DM_GROUP_ACCESS_REASON];
 
+export function resolveOpenDmAllowlistAccess(params: {
+  effectiveAllowFrom: Array<string | number>;
+  isSenderAllowed: (allowFrom: string[]) => boolean;
+}): {
+  decision: Extract<DmGroupAccessDecision, "allow" | "block">;
+  reasonCode: DmGroupAccessReasonCode;
+  reason: string;
+} {
+  const effectiveAllowFrom = normalizeStringEntries(params.effectiveAllowFrom);
+  if (effectiveAllowFrom.includes("*")) {
+    return {
+      decision: "allow",
+      reasonCode: DM_GROUP_ACCESS_REASON.DM_POLICY_OPEN,
+      reason: "dmPolicy=open",
+    };
+  }
+  if (params.isSenderAllowed(effectiveAllowFrom)) {
+    return {
+      decision: "allow",
+      reasonCode: DM_GROUP_ACCESS_REASON.DM_POLICY_ALLOWLISTED,
+      reason: "dmPolicy=open (allowlisted)",
+    };
+  }
+  return {
+    decision: "block",
+    reasonCode: DM_GROUP_ACCESS_REASON.DM_POLICY_NOT_ALLOWLISTED,
+    reason: "dmPolicy=open (not allowlisted)",
+  };
+}
+
 type DmGroupAccessInputParams = {
   isGroup: boolean;
   dmPolicy?: string | null;
@@ -92,7 +122,11 @@ export async function readStoreAllowFromForDmPolicy(params: {
   shouldRead?: boolean | null;
   readStore?: (provider: ChannelId, accountId: string) => Promise<string[]>;
 }): Promise<string[]> {
-  if (params.shouldRead === false || params.dmPolicy === "allowlist") {
+  if (
+    params.shouldRead === false ||
+    params.dmPolicy === "allowlist" ||
+    params.dmPolicy === "open"
+  ) {
     return [];
   }
   const readStore =
@@ -168,11 +202,10 @@ export function resolveDmGroupAccessDecision(params: {
     };
   }
   if (dmPolicy === "open") {
-    return {
-      decision: "allow",
-      reasonCode: DM_GROUP_ACCESS_REASON.DM_POLICY_OPEN,
-      reason: "dmPolicy=open",
-    };
+    return resolveOpenDmAllowlistAccess({
+      effectiveAllowFrom,
+      isSenderAllowed: params.isSenderAllowed,
+    });
   }
   if (params.isSenderAllowed(effectiveAllowFrom)) {
     return {
@@ -234,6 +267,7 @@ export function resolveDmGroupAccessWithCommandGate(
   },
 ): {
   decision: DmGroupAccessDecision;
+  reasonCode: DmGroupAccessReasonCode;
   reason: string;
   effectiveAllowFrom: string[];
   effectiveGroupAllowFrom: string[];
@@ -295,6 +329,7 @@ export async function resolveDmAllowState(params: {
   provider: ChannelId;
   accountId: string;
   allowFrom?: Array<string | number> | null;
+  dmPolicy?: string | null;
   normalizeEntry?: (raw: string) => string;
   readStore?: (provider: ChannelId, accountId: string) => Promise<string[]>;
 }): Promise<{
@@ -310,6 +345,7 @@ export async function resolveDmAllowState(params: {
   const storeAllowFrom = await readStoreAllowFromForDmPolicy({
     provider: params.provider,
     accountId: params.accountId,
+    dmPolicy: params.dmPolicy,
     readStore: params.readStore,
   });
   const normalizeEntry = params.normalizeEntry ?? ((value: string) => value);

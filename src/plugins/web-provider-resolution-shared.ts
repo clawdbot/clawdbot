@@ -2,11 +2,7 @@ import { resolveBundledPluginCompatibleLoadValues } from "./activation-context.j
 import type { PluginLoadOptions } from "./loader.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
-import {
-  createPluginIdScopeSet,
-  normalizePluginIdScope,
-  serializePluginIdScope,
-} from "./plugin-scope.js";
+import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 
 export type WebProviderContract = "webSearchProviders" | "webFetchProviders";
 export type WebProviderConfigKey = "webSearch" | "webFetch";
@@ -180,28 +176,6 @@ export function resolveBundledWebProviderResolutionConfig(params: {
     activationSourceConfig: activation.activationSourceConfig,
     autoEnabledReasons: activation.autoEnabledReasons,
   };
-}
-
-export function buildWebProviderSnapshotCacheKey(params: {
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  bundledAllowlistCompat?: boolean;
-  onlyPluginIds?: readonly string[];
-  origin?: PluginManifestRecord["origin"];
-  envKey: string | Record<string, string>;
-}): string {
-  const envKey =
-    typeof params.envKey === "string"
-      ? params.envKey
-      : Object.entries(params.envKey).toSorted(([left], [right]) => left.localeCompare(right));
-  const onlyPluginIds = normalizePluginIdScope(params.onlyPluginIds);
-  return JSON.stringify({
-    workspaceDir: params.workspaceDir ?? "",
-    bundledAllowlistCompat: params.bundledAllowlistCompat === true,
-    origin: params.origin ?? "",
-    onlyPluginIds: serializePluginIdScope(onlyPluginIds),
-    env: envKey,
-  });
 }
 
 export function mapRegistryProviders<TProvider extends { id: string }>(params: {

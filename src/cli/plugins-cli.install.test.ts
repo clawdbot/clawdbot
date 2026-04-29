@@ -6,8 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   applyExclusiveSlotSelection,
-  buildPluginDiagnosticsReport,
-  clearPluginManifestRegistryCache,
+  buildPluginSnapshotReport,
   enablePluginInConfig,
   installHooksFromNpmSpec,
   installHooksFromPath,
@@ -363,7 +362,7 @@ describe("plugins cli install", () => {
       marketplacePlugin: "alpha",
     });
     enablePluginInConfig.mockReturnValue({ config: enabledCfg });
-    buildPluginDiagnosticsReport.mockReturnValue({
+    buildPluginSnapshotReport.mockReturnValue({
       plugins: [{ id: "alpha", kind: "provider" }],
       diagnostics: [],
     });
@@ -374,7 +373,6 @@ describe("plugins cli install", () => {
 
     await runPluginsCommand(["plugins", "install", "alpha", "--marketplace", "local/repo"]);
 
-    expect(clearPluginManifestRegistryCache).toHaveBeenCalledTimes(1);
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
       alpha: expect.objectContaining({
         source: "marketplace",

@@ -75,6 +75,10 @@ function buildPendingPayload(params: {
           approvalId: params.request.id,
           approvalSlug: params.request.id.slice(0, 8),
           approvalCommandId: params.request.id,
+          warningText:
+            params.view.approvalKind === "exec"
+              ? (params.view.warningText ?? undefined)
+              : undefined,
           command: params.view.approvalKind === "exec" ? params.view.commandText : "",
           cwd: params.view.approvalKind === "exec" ? (params.view.cwd ?? undefined) : undefined,
           host:

@@ -148,6 +148,9 @@ function createHarness(params?: {
         }),
   } as unknown as MatrixClient;
 
+  const dmPolicy = params?.dmPolicy ?? "open";
+  const allowFrom = params?.allowFrom ?? (dmPolicy === "open" ? ["*"] : []);
+
   registerMatrixMonitorEvents({
     cfg: params?.cfg ?? { channels: { matrix: {} } },
     client,
@@ -155,9 +158,9 @@ function createHarness(params?: {
       accountId: params?.accountId ?? "default",
       encryption: params?.authEncryption ?? true,
     } as MatrixAuth,
-    allowFrom: params?.allowFrom ?? [],
+    allowFrom,
     dmEnabled: params?.dmEnabled ?? true,
-    dmPolicy: params?.dmPolicy ?? "open",
+    dmPolicy,
     readStoreAllowFrom,
     directTracker: {
       invalidateRoom,

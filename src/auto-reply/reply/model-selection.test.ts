@@ -557,6 +557,7 @@ describe("createModelSelectionState respects session model override", () => {
     });
 
     expect(state.resetModelOverride).toBe(true);
+    expect(state.resetModelOverrideRef).toBe("openai/gpt-4o-mini");
     expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
     expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
   });

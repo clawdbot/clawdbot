@@ -128,6 +128,14 @@ current run, or collected for a followup turn.
 
 Details: [Queueing](/concepts/queue).
 
+## Channel run ownership
+
+Channel plugins may preserve ordering, debounce input, and apply transport
+backpressure before a message enters the session queue. They should not impose a
+separate timeout around the agent turn itself. Once a message is routed to a
+session, long-running work is governed by the session, tool, and runtime
+lifecycle so all channels report and recover from slow turns consistently.
+
 ## Streaming, chunking, and batching
 
 Block streaming sends partial replies as the model produces text blocks.

@@ -15,11 +15,11 @@ import {
   installPluginFromNpmSpec,
   installPluginFromPath,
 } from "../plugins/install.js";
-import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import {
   installPluginFromMarketplace,
   resolveMarketplaceInstallShortcut,
 } from "../plugins/marketplace.js";
+import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { defaultRuntime } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
@@ -306,7 +306,6 @@ async function tryInstallPluginOrHookPackFromNpmSpec(params: {
     return { ok: false };
   }
 
-  clearPluginManifestRegistryCache();
   const installRecord = resolvePinnedNpmInstallRecordForCli(
     params.spec,
     Boolean(params.pin),
@@ -394,7 +393,11 @@ async function loadConfigFromSnapshotForInstall(
 export async function loadConfigForInstall(
   request: PluginInstallRequestContext,
 ): Promise<ConfigSnapshotForInstallPersist> {
-  const snapshot = await readConfigFileSnapshot();
+  const snapshot = await tracePluginLifecyclePhaseAsync(
+    "config read",
+    () => readConfigFileSnapshot(),
+    { command: "install" },
+  );
   if (snapshot.valid) {
     return {
       config: snapshot.sourceConfig,
@@ -414,7 +417,11 @@ export async function runPluginInstallCommand(params: {
   };
 }) {
   const shorthand = !params.opts.marketplace
-    ? await resolveMarketplaceInstallShortcut(params.raw)
+    ? await tracePluginLifecyclePhaseAsync(
+        "marketplace shortcut resolution",
+        () => resolveMarketplaceInstallShortcut(params.raw),
+        { command: "install" },
+      )
     : null;
   if (shorthand?.ok === false) {
     defaultRuntime.error(shorthand.error);
@@ -476,7 +483,6 @@ export async function runPluginInstallCommand(params: {
       return defaultRuntime.exit(1);
     }
 
-    clearPluginManifestRegistryCache();
     await persistPluginInstall({
       snapshot,
       pluginId: result.pluginId,
@@ -579,7 +585,6 @@ export async function runPluginInstallCommand(params: {
       return defaultRuntime.exit(1);
     }
 
-    clearPluginManifestRegistryCache();
     const source: "archive" | "path" = resolveArchiveKind(resolved) ? "archive" : "path";
     await persistPluginInstall({
       snapshot,
@@ -641,12 +646,21 @@ export async function runPluginInstallCommand(params: {
     findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
   });
   if (bundledPreNpmPlan) {
-    await installBundledPluginSource({
-      snapshot,
-      rawSpec: raw,
-      bundledSource: bundledPreNpmPlan.bundledSource,
-      warning: bundledPreNpmPlan.warning,
-    });
+    await tracePluginLifecyclePhaseAsync(
+      "install execution",
+      () =>
+        installBundledPluginSource({
+          snapshot,
+          rawSpec: raw,
+          bundledSource: bundledPreNpmPlan.bundledSource,
+          warning: bundledPreNpmPlan.warning,
+        }),
+      {
+        command: "install",
+        source: "bundled",
+        pluginId: bundledPreNpmPlan.bundledSource.pluginId,
+      },
+    );
     return;
   }
 
@@ -664,7 +678,6 @@ export async function runPluginInstallCommand(params: {
       return defaultRuntime.exit(1);
     }
 
-    clearPluginManifestRegistryCache();
     await persistPluginInstall({
       snapshot,
       pluginId: result.pluginId,
@@ -694,7 +707,6 @@ export async function runPluginInstallCommand(params: {
       logger: createPluginInstallLogger(),
     });
     if (clawhubResult.ok) {
-      clearPluginManifestRegistryCache();
       await persistPluginInstall({
         snapshot,
         pluginId: clawhubResult.pluginId,

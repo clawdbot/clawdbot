@@ -302,6 +302,8 @@ Agents should route user requests by intent, not by the word "Codex" alone:
 | "Bind this chat to Codex"                                | `/codex bind`                                    |
 | "Resume Codex thread `<id>` here"                        | `/codex resume <id>`                             |
 | "Show Codex threads"                                     | `/codex threads`                                 |
+| "File a support report for a bad Codex run"              | `/diagnostics [note]`                            |
+| "Only send Codex feedback for this attached thread"      | `/codex diagnostics [note]`                      |
 | "Use Codex as the runtime for this agent"                | config change to `agentRuntime.id`               |
 | "Use my ChatGPT/Codex subscription with normal OpenClaw" | `openai-codex/*` model refs                      |
 | "Run Codex through ACP/acpx"                             | ACP `sessions_spawn({ runtime: "acp", ... })`    |
@@ -750,16 +752,89 @@ Common forms:
 - `/codex resume <thread-id>` attaches the current OpenClaw session to an existing Codex thread.
 - `/codex compact` asks Codex app-server to compact the attached thread.
 - `/codex review` starts Codex native review for the attached thread.
+- `/codex diagnostics [note]` asks before sending Codex diagnostics feedback for the attached thread.
 - `/codex computer-use status` checks the configured Computer Use plugin and MCP server.
 - `/codex computer-use install` installs the configured Computer Use plugin and reloads MCP servers.
 - `/codex account` shows account and rate-limit status.
 - `/codex mcp` lists Codex app-server MCP server status.
 - `/codex skills` lists Codex app-server skills.
 
+### Common debugging workflow
+
+When a Codex-backed agent does something surprising in Telegram, Discord, Slack,
+or another channel, start with the conversation where the problem happened:
+
+1. Run `/diagnostics bad tool choice after image upload` or another short note
+   that describes what you saw.
+2. Approve the diagnostics request once. The approval creates the local Gateway
+   diagnostics zip and, because the session is using the Codex harness, also
+   sends the relevant Codex feedback bundle to OpenAI servers.
+3. Copy the completed diagnostics reply into the bug report or support thread.
+   It includes the local bundle path, privacy summary, OpenClaw session ids,
+   Codex thread ids, and an `Inspect locally` line for each Codex thread.
+4. If you want to debug the run yourself, run the printed `Inspect locally`
+   command in a terminal. It looks like `codex resume <thread-id>` and opens the
+   native Codex thread so you can inspect the conversation, continue it locally,
+   or ask Codex why it chose a particular tool or plan.
+
+Use `/codex diagnostics [note]` only when you specifically want the Codex
+feedback upload for the currently attached thread without the full OpenClaw
+Gateway diagnostics bundle. For most support reports, `/diagnostics [note]` is
+the better starting point because it ties the local Gateway state and Codex
+thread ids together in one reply. See [Diagnostics export](/gateway/diagnostics)
+for the full privacy model and group-chat behavior.
+
+Core OpenClaw also exposes owner-only `/diagnostics [note]` as the general
+Gateway diagnostics command. Its approval prompt shows the sensitive-data
+preamble, links to [Diagnostics Export](/gateway/diagnostics), and requests
+`openclaw gateway diagnostics export --json` through explicit exec approval
+every time. Do not approve diagnostics with an allow-all rule. After approval,
+OpenClaw sends a pasteable report with the local bundle path and manifest
+summary. When the active OpenClaw session is using the Codex harness, that
+same approval also authorizes sending the relevant Codex feedback bundles to
+OpenAI servers. The approval prompt says that Codex feedback will be sent, but
+it does not list Codex session or thread ids before approval.
+
+If `/diagnostics` is invoked by an owner in a group chat, OpenClaw keeps the
+shared channel clean: the group receives only a short notice, while the
+diagnostics preamble, approval prompts, and Codex session/thread ids are sent to
+the owner through the private approval route. If there is no private owner route,
+OpenClaw refuses the group request and asks the owner to run it from a DM.
+
+The approved Codex upload calls Codex app-server `feedback/upload` and asks
+app-server to include logs for each listed thread and spawned Codex subthreads
+when available. The upload goes through Codex's normal feedback path to OpenAI
+servers; if Codex feedback is disabled in that app-server, the command returns
+the app-server error. The completed diagnostics reply lists the channels,
+OpenClaw session ids, Codex thread ids, and local `codex resume <thread-id>`
+commands for the threads that were sent. If you deny or ignore the approval,
+OpenClaw does not print those Codex ids. This upload does not replace the local
+Gateway diagnostics export.
+
 `/codex resume` writes the same sidecar binding file that the harness uses for
 normal turns. On the next message, OpenClaw resumes that Codex thread, passes the
 currently selected OpenClaw model into app-server, and keeps extended history
 enabled.
+
+### Inspect a Codex thread from the CLI
+
+The fastest way to understand a bad Codex run is often to open the native Codex
+thread directly:
+
+```sh
+codex resume <thread-id>
+```
+
+Use this when you notice a bug in a channel conversation and want to inspect the
+problematic Codex session, continue it locally, or ask Codex why it made a
+particular tool or reasoning choice. The easiest path is usually to run
+`/diagnostics [note]` first: after you approve it, the completed report lists
+each Codex thread and prints an `Inspect locally` command, for example
+`codex resume <thread-id>`. You can copy that command directly into a terminal.
+
+You can also get a thread id from `/codex binding` for the current chat or
+`/codex threads [filter]` for recent Codex app-server threads, then run the same
+`codex resume` command in your shell.
 
 The command surface requires Codex app-server `0.125.0` or newer. Individual
 control methods are reported as `unsupported by this Codex app-server` if a

@@ -30,9 +30,7 @@ vi.mock("./pi-embedded-helpers.js", async () => ({
 
 vi.mock("../plugins/provider-hook-runtime.js", async () => ({
   __testing: {},
-  clearProviderRuntimeHookCache: vi.fn(),
   prepareProviderExtraParams: vi.fn(() => undefined),
-  resetProviderRuntimeHookCacheForTest: vi.fn(),
   resolveProviderHookPlugin: vi.fn(() => undefined),
   resolveProviderPluginsForHooks: vi.fn(() => []),
   resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) =>

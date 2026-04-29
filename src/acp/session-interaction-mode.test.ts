@@ -13,11 +13,19 @@ describe("resolveAcpSessionInteractionMode", () => {
     expect(resolveAcpSessionInteractionMode(undefined)).toBe("interactive");
   });
 
-  it("returns interactive for non-oneshot ACP sessions", () => {
+  it("returns parent-owned-background for persistent sessions with spawnedBy set", () => {
     expect(
       resolveAcpSessionInteractionMode({
         acp: { mode: "persistent" } as never,
         spawnedBy: parentKey,
+      }),
+    ).toBe("parent-owned-background");
+  });
+
+  it("returns interactive for persistent ACP sessions without parent linkage", () => {
+    expect(
+      resolveAcpSessionInteractionMode({
+        acp: { mode: "persistent" } as never,
       }),
     ).toBe("interactive");
   });
@@ -83,13 +91,13 @@ describe("isRequesterParentOfBackgroundAcpSession", () => {
     expect(isRequesterParentOfBackgroundAcpSession(backgroundEntry, "")).toBe(false);
   });
 
-  it("returns false when target is not a parent-owned background ACP session", () => {
+  it("returns true when target is parent-owned persistent ACP session", () => {
     expect(
       isRequesterParentOfBackgroundAcpSession(
         { acp: { mode: "persistent" } as never, spawnedBy: parentKey },
         parentKey,
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("delegates to isParentOwnedBackgroundAcpSession for target-only checks", () => {

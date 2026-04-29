@@ -79,13 +79,34 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
   const hourMsgs = Array.from({ length: 24 }, () => 0);
 
   for (const session of sessions) {
-    const messageCounts = session.usage?.messageCounts;
-    if (!messageCounts || messageCounts.total === 0) {
+    const usage = session.usage;
+    if (!usage?.messageCounts || usage.messageCounts.total === 0) {
       continue;
     }
+
+    // Prefer precise quarter-hour message counts when available.
+    // Data is stored as UTC quarter-hour buckets (quarterIndex 0-95) with UTC date keys.
+    // For local view, construct a Date from the UTC components and use getHours()
+    // so the browser's DST-aware timezone logic handles offset automatically.
+    if (usage.utcQuarterHourMessageCounts && usage.utcQuarterHourMessageCounts.length > 0) {
+      for (const quarterHour of usage.utcQuarterHourMessageCounts) {
+        const hour =
+          timeZone === "utc"
+            ? Math.floor(quarterHour.quarterIndex / 4)
+            : (() => {
+                const [y, m, d] = quarterHour.date.split("-").map(Number);
+                return new Date(Date.UTC(y, m - 1, d, 0, quarterHour.quarterIndex * 15)).getHours();
+              })();
+        hourErrors[hour] += quarterHour.errors;
+        hourMsgs[hour] += quarterHour.total;
+      }
+      continue;
+    }
+
+    // Fallback: time-based proportional allocation (legacy algorithm)
     forEachSessionHourSlice(session, timeZone, ({ hour, share }) => {
-      hourErrors[hour] += messageCounts.errors * share;
-      hourMsgs[hour] += messageCounts.total * share;
+      hourErrors[hour] += usage.messageCounts!.errors * share;
+      hourMsgs[hour] += usage.messageCounts!.total * share;
     });
   }
 

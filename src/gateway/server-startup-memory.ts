@@ -8,8 +8,8 @@ import {
 import { getActiveMemorySearchManager } from "../plugins/memory-runtime.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
-function shouldStartQmdBackgroundWork(qmd: ResolvedQmdConfig): boolean {
-  return qmd.update.onBoot || qmd.update.intervalMs > 0 || qmd.update.embedIntervalMs > 0;
+function shouldRunQmdStartupBootSync(qmd: ResolvedQmdConfig): boolean {
+  return qmd.update.onBoot && qmd.update.startup !== "off";
 }
 
 function hasExplicitAgentMemorySearchConfig(cfg: OpenClawConfig, agentId: string): boolean {
@@ -53,7 +53,7 @@ export async function startGatewayMemoryBackend(params: {
     if (resolved.backend !== "qmd" || !resolved.qmd) {
       continue;
     }
-    if (!shouldStartQmdBackgroundWork(resolved.qmd)) {
+    if (!shouldRunQmdStartupBootSync(resolved.qmd)) {
       continue;
     }
     if (
@@ -67,18 +67,34 @@ export async function startGatewayMemoryBackend(params: {
       continue;
     }
 
-    const { manager, error } = await getActiveMemorySearchManager({ cfg: params.cfg, agentId });
+    const { manager, error } = await getActiveMemorySearchManager({
+      cfg: params.cfg,
+      agentId,
+      purpose: "cli",
+    });
     if (!manager) {
       params.log.warn(
         `qmd memory startup initialization failed for agent "${agentId}": ${error ?? "unknown error"}`,
       );
       continue;
     }
+    try {
+      await manager.sync?.({ reason: "boot", force: true });
+    } catch (err) {
+      params.log.warn(`qmd memory startup boot sync failed for agent "${agentId}": ${String(err)}`);
+      continue;
+    } finally {
+      await manager.close?.().catch((err) => {
+        params.log.warn(
+          `qmd memory startup manager close failed for agent "${agentId}": ${String(err)}`,
+        );
+      });
+    }
     armedAgentIds.push(agentId);
   }
   if (armedAgentIds.length > 0) {
     params.log.info?.(
-      `qmd memory startup initialization armed for ${formatAgentCount(armedAgentIds.length)}: ${armedAgentIds
+      `qmd memory startup boot sync completed for ${formatAgentCount(armedAgentIds.length)}: ${armedAgentIds
         .map((agentId) => `"${agentId}"`)
         .join(", ")}`,
     );

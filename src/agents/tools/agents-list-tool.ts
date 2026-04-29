@@ -5,12 +5,8 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { resolveAgentRuntimePolicy } from "../agent-runtime-policy.js";
-import {
-  listAgentEntries,
-  resolveAgentConfig,
-  resolveAgentEffectiveModelPrimary,
-} from "../agent-scope.js";
+import { resolveAgentRuntimeMetadata } from "../agent-runtime-metadata.js";
+import { resolveAgentConfig, resolveAgentEffectiveModelPrimary } from "../agent-scope.js";
 import { resolveSubagentAllowedTargetIds } from "../subagent-target-policy.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
@@ -29,49 +25,6 @@ type AgentListEntry = {
     source: "env" | "agent" | "defaults" | "implicit";
   };
 };
-
-function normalizeRuntimeValue(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
-}
-
-function resolveAgentRuntimeMetadata(
-  cfg: ReturnType<typeof getRuntimeConfig>,
-  agentId: string,
-): NonNullable<AgentListEntry["agentRuntime"]> {
-  const envRuntime = normalizeRuntimeValue(process.env.OPENCLAW_AGENT_RUNTIME);
-  if (envRuntime) {
-    return {
-      id: envRuntime,
-      source: "env",
-    };
-  }
-
-  const agentEntry = listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === agentId);
-  const agentPolicy = resolveAgentRuntimePolicy(agentEntry);
-  const agentRuntime = normalizeRuntimeValue(agentPolicy?.id);
-  if (agentRuntime) {
-    return {
-      id: agentRuntime,
-      fallback: agentPolicy?.fallback,
-      source: "agent",
-    };
-  }
-
-  const defaultsPolicy = resolveAgentRuntimePolicy(cfg.agents?.defaults);
-  const defaultsRuntime = normalizeRuntimeValue(defaultsPolicy?.id);
-  if (defaultsRuntime) {
-    return {
-      id: defaultsRuntime,
-      fallback: defaultsPolicy?.fallback,
-      source: "defaults",
-    };
-  }
-
-  return {
-    id: "pi",
-    source: "implicit",
-  };
-}
 
 export function createAgentsListTool(opts?: {
   agentSessionKey?: string;

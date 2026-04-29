@@ -134,6 +134,7 @@ describe("discord live qa runtime", () => {
 
     expect(next.plugins?.allow).toContain("discord");
     expect(next.plugins?.entries?.discord).toEqual({ enabled: true });
+    expect(next.messages?.groupChat?.visibleReplies).toBe("automatic");
     expect(next.channels?.discord).toEqual({
       enabled: true,
       defaultAccount: "sut",

@@ -191,6 +191,23 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       tier: "essential",
     }),
     defineChatCommand({
+      key: "diagnostics",
+      nativeName: "diagnostics",
+      description: "Explain Gateway diagnostics and Codex feedback upload options.",
+      textAlias: "/diagnostics",
+      acceptsArgs: true,
+      category: "status",
+      tier: "standard",
+      args: [
+        {
+          name: "note",
+          description: "Optional note for Codex feedback upload",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "crestodian",
       description: "Run the Crestodian setup and repair helper.",
       textAlias: "/crestodian",
@@ -714,7 +731,7 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
           name: "level",
           description: "Thinking level",
           type: "string",
-          choices: ({ provider, model }) => listThinkingLevels(provider, model),
+          choices: ({ provider, model, catalog }) => listThinkingLevels(provider, model, catalog),
         },
       ],
       argsMenu: "auto",

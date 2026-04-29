@@ -58,7 +58,11 @@ type AssertAllPluginPromptMutationResultFieldsListed =
 const assertAllPluginPromptMutationResultFieldsListed: AssertAllPluginPromptMutationResultFieldsListed = true;
 void assertAllPluginPromptMutationResultFieldsListed;
 
-// before_agent_start hook (legacy compatibility: combines both phases)
+/**
+ * @deprecated Use before_model_resolve and before_prompt_build.
+ *
+ * Legacy compatibility hook that combines both phases.
+ */
 export type PluginHookBeforeAgentStartEvent = {
   prompt: string;
   runId?: string;
@@ -66,9 +70,11 @@ export type PluginHookBeforeAgentStartEvent = {
   messages?: unknown[];
 };
 
+/** @deprecated Use before_model_resolve and before_prompt_build result types. */
 export type PluginHookBeforeAgentStartResult = PluginHookBeforePromptBuildResult &
   PluginHookBeforeModelResolveResult;
 
+/** @deprecated Use before_model_resolve override result types. */
 export type PluginHookBeforeAgentStartOverrideResult = Omit<
   PluginHookBeforeAgentStartResult,
   keyof PluginHookBeforePromptBuildResult

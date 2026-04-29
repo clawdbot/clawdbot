@@ -108,7 +108,6 @@ function registerSharedHostedMediaRoute(params: {
     auth: "plugin",
     match: "prefix",
     path: params.path,
-    replaceExisting: true,
     pluginId: "zalo",
     source: "zalo-hosted-media",
     accountId: params.accountId,

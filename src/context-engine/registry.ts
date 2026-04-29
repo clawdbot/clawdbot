@@ -5,10 +5,28 @@ import { sanitizeForLog } from "../terminal/ansi.js";
 import type { ContextEngine } from "./types.js";
 
 /**
+ * Runtime context passed to context engine factories during resolution.
+ * Provides config and path information so plugins can initialize engines
+ * without fragile workarounds.
+ */
+export type ContextEngineFactoryContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+};
+
+/**
  * A factory that creates a ContextEngine instance.
  * Supports async creation for engines that need DB connections etc.
+ *
+ * The factory receives a {@link ContextEngineFactoryContext} with runtime
+ * environment context (config, paths). Existing no-arg factories remain
+ * backward compatible because TypeScript permits assigning functions with
+ * fewer parameters to wider signatures.
  */
-export type ContextEngineFactory = () => ContextEngine | Promise<ContextEngine>;
+export type ContextEngineFactory = (
+  ctx: ContextEngineFactoryContext,
+) => ContextEngine | Promise<ContextEngine>;
 export type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string };
 
 type RegisterContextEngineForOwnerOptions = {
@@ -456,17 +474,33 @@ function describeResolvedContextEngineContractError(
 // ---------------------------------------------------------------------------
 
 /**
+ * Options for {@link resolveContextEngine}.
+ */
+export type ResolveContextEngineOptions = {
+  agentDir?: string;
+  workspaceDir?: string;
+};
+
+/**
  * Resolve which ContextEngine to use based on plugin slot configuration.
  *
  * Resolution order:
  *   1. `config.plugins.slots.contextEngine` (explicit slot override)
  *   2. Default slot value ("legacy")
  *
+ * When `config` is provided it is forwarded to the factory as part of a
+ * {@link ContextEngineFactoryContext}. Additional runtime paths can be
+ * supplied via `options`. Existing no-arg factories continue to work
+ * because JavaScript permits extra arguments at call sites.
+ *
  * Non-default engines that fail (unregistered, factory throw, or contract
  * violation) are logged and silently replaced by the default engine.
  * Throws only when the default engine itself cannot be resolved.
  */
-export async function resolveContextEngine(config?: OpenClawConfig): Promise<ContextEngine> {
+export async function resolveContextEngine(
+  config?: OpenClawConfig,
+  options?: ResolveContextEngineOptions,
+): Promise<ContextEngine> {
   const slotValue = config?.plugins?.slots?.contextEngine;
   const engineId =
     typeof slotValue === "string" && slotValue.trim()
@@ -475,6 +509,12 @@ export async function resolveContextEngine(config?: OpenClawConfig): Promise<Con
 
   const defaultEngineId = defaultSlotIdForKey("contextEngine");
   const isDefaultEngine = engineId === defaultEngineId;
+
+  const factoryCtx: ContextEngineFactoryContext = {
+    config,
+    agentDir: options?.agentDir,
+    workspaceDir: options?.workspaceDir,
+  };
 
   const entry = getContextEngineRegistryState().engines.get(engineId);
   if (!entry) {
@@ -488,12 +528,12 @@ export async function resolveContextEngine(config?: OpenClawConfig): Promise<Con
       `[context-engine] Context engine "${sanitizeForLog(engineId)}" is not registered; ` +
         `falling back to default engine "${defaultEngineId}".`,
     );
-    return resolveDefaultContextEngine(defaultEngineId);
+    return resolveDefaultContextEngine(defaultEngineId, factoryCtx);
   }
 
   let engine: ContextEngine;
   try {
-    engine = await entry.factory();
+    engine = await entry.factory(factoryCtx);
   } catch (factoryError) {
     if (isDefaultEngine) {
       throw factoryError;
@@ -503,7 +543,7 @@ export async function resolveContextEngine(config?: OpenClawConfig): Promise<Con
         `${sanitizeForLog(factoryError instanceof Error ? factoryError.message : String(factoryError))}; ` +
         `falling back to default engine "${defaultEngineId}".`,
     );
-    return resolveDefaultContextEngine(defaultEngineId);
+    return resolveDefaultContextEngine(defaultEngineId, factoryCtx);
   }
 
   let contractError: string | null;
@@ -518,7 +558,7 @@ export async function resolveContextEngine(config?: OpenClawConfig): Promise<Con
         `${sanitizeForLog(validationError instanceof Error ? validationError.message : String(validationError))}; ` +
         `falling back to default engine "${defaultEngineId}".`,
     );
-    return resolveDefaultContextEngine(defaultEngineId);
+    return resolveDefaultContextEngine(defaultEngineId, factoryCtx);
   }
   if (contractError) {
     if (isDefaultEngine) {
@@ -528,7 +568,7 @@ export async function resolveContextEngine(config?: OpenClawConfig): Promise<Con
     console.error(
       `[context-engine] ${sanitizeForLog(contractError)}; falling back to default engine "${defaultEngineId}".`,
     );
-    return resolveDefaultContextEngine(defaultEngineId);
+    return resolveDefaultContextEngine(defaultEngineId, factoryCtx);
   }
 
   return wrapContextEngineWithSessionKeyCompat(engine);
@@ -540,7 +580,10 @@ export async function resolveContextEngine(config?: OpenClawConfig): Promise<Con
  * This helper is intentionally strict: if the default engine itself fails,
  * there is no further fallback and the error must propagate.
  */
-async function resolveDefaultContextEngine(defaultEngineId: string): Promise<ContextEngine> {
+async function resolveDefaultContextEngine(
+  defaultEngineId: string,
+  factoryCtx: ContextEngineFactoryContext,
+): Promise<ContextEngine> {
   const defaultEntry = getContextEngineRegistryState().engines.get(defaultEngineId);
   if (!defaultEntry) {
     throw new Error(
@@ -548,7 +591,7 @@ async function resolveDefaultContextEngine(defaultEngineId: string): Promise<Con
         `Available engines: ${listContextEngineIds().join(", ") || "(none)"}`,
     );
   }
-  const engine = await defaultEntry.factory();
+  const engine = await defaultEntry.factory(factoryCtx);
   const contractError = describeResolvedContextEngineContractError(defaultEngineId, engine);
   if (contractError) {
     throw new Error(`[context-engine] ${contractError}`);

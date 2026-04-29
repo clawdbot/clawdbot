@@ -1,10 +1,31 @@
+import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import * as providerTransportStream from "../provider-transport-stream.js";
 import {
   describeEmbeddedAgentStreamStrategy,
   resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentStreamFn,
 } from "./stream-resolution.js";
+
+// Wrap createBoundaryAwareStreamFnForModel with a spy that delegates to the
+// real implementation by default so existing routing tests still observe a
+// real transport stream; per-test overrideBoundaryAwareStreamFnOnce() injects
+// a probe stream when a regression test needs to inspect the wrapped
+// transport's options.
+vi.mock("../provider-transport-stream.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof providerTransportStream>();
+  return {
+    ...actual,
+    createBoundaryAwareStreamFnForModel: vi.fn(actual.createBoundaryAwareStreamFnForModel),
+  };
+});
+
+const overrideBoundaryAwareStreamFnOnce = (streamFn: StreamFn): void => {
+  vi.mocked(providerTransportStream.createBoundaryAwareStreamFnForModel).mockReturnValueOnce(
+    streamFn,
+  );
+};
 
 describe("describeEmbeddedAgentStreamStrategy", () => {
   it("describes provider-owned stream paths explicitly", () => {
@@ -202,5 +223,139 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     ).resolves.toMatchObject({
       signal: explicitSignal,
     });
+  });
+
+  it("injects the resolved run api key into the boundary-aware Codex Responses fallback", async () => {
+    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
+    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        id: "gpt-5.5",
+      } as never,
+      resolvedApiKey: "oauth-bearer-token",
+    });
+
+    await expect(
+      streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, {} as never, {}),
+    ).resolves.toMatchObject({ apiKey: "oauth-bearer-token" });
+    expect(innerStreamFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to authStorage when no resolved api key is available for boundary-aware fallback", async () => {
+    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
+    const authStorage = {
+      getApiKey: vi.fn(async () => "stored-bearer-token"),
+    };
+    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        id: "gpt-5.5",
+      } as never,
+      authStorage,
+    });
+
+    await expect(
+      streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, {} as never, {}),
+    ).resolves.toMatchObject({ apiKey: "stored-bearer-token" });
+    expect(authStorage.getApiKey).toHaveBeenCalledWith("openai-codex");
+  });
+
+  it("forwards the run abort signal into the boundary-aware fallback when callers omit one", async () => {
+    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
+    const runSignal = new AbortController().signal;
+    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      signal: runSignal,
+      model: {
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        id: "gpt-5.5",
+      } as never,
+      resolvedApiKey: "oauth-bearer-token",
+    });
+
+    await expect(
+      streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, {} as never, {}),
+    ).resolves.toMatchObject({ signal: runSignal, apiKey: "oauth-bearer-token" });
+  });
+
+  it("does not overwrite an explicit signal on the boundary-aware fallback path", async () => {
+    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
+    const runSignal = new AbortController().signal;
+    const explicitSignal = new AbortController().signal;
+    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      signal: runSignal,
+      model: {
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        id: "gpt-5.5",
+      } as never,
+      resolvedApiKey: "oauth-bearer-token",
+    });
+
+    await expect(
+      streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, {} as never, {
+        signal: explicitSignal,
+      }),
+    ).resolves.toMatchObject({ signal: explicitSignal });
+  });
+
+  it("forwards the run signal on the sync boundary-aware fallback path without auth credentials", async () => {
+    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
+    const runSignal = new AbortController().signal;
+    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      signal: runSignal,
+      model: {
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        id: "gpt-5.5",
+      } as never,
+    });
+
+    await expect(
+      streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, {} as never, {}),
+    ).resolves.toMatchObject({ signal: runSignal });
+  });
+
+  it("does not strip cache boundary markers on the boundary-aware fallback path", async () => {
+    const innerStreamFn = vi.fn(async (_model, context, _options) => context);
+    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        id: "gpt-5.5",
+      } as never,
+      resolvedApiKey: "oauth-bearer-token",
+    });
+
+    const systemPrompt = "intro<<openclaw-cache-boundary>>tail";
+    await expect(
+      streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, { systemPrompt } as never, {}),
+    ).resolves.toMatchObject({ systemPrompt });
   });
 });

@@ -12,12 +12,16 @@ Status: experimental. DMs are supported. The [Capabilities](#capabilities) secti
 Zalo ships as a bundled plugin in current OpenClaw releases, so normal packaged
 builds do not need a separate install.
 
-If you are on an older build or a custom install that excludes Zalo, install it
-manually:
+If you are on an older build or a custom install that excludes Zalo, install a
+current npm package when one is published:
 
 - Install via CLI: `openclaw plugins install @openclaw/zalo`
 - Or from a source checkout: `openclaw plugins install ./path/to/local/zalo-plugin`
 - Details: [Plugins](/tools/plugin)
+
+If npm reports the OpenClaw-owned package as deprecated, use a current packaged
+OpenClaw build or the local checkout path until a newer npm package is
+published.
 
 ## Quick setup (beginner)
 

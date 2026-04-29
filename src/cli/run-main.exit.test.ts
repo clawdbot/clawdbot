@@ -545,6 +545,17 @@ describe("runCli exit behavior", () => {
     expect(closeActiveMemorySearchManagersMock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not fail the command when memory cleanup is unavailable", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(true);
+    hasMemoryRuntimeMock.mockImplementationOnce(() => {
+      throw new Error("stale memory-state chunk");
+    });
+
+    await expect(runCli(["node", "openclaw", "status"])).resolves.toBeUndefined();
+
+    expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
+  });
+
   it("returns after a handled container-target invocation", async () => {
     maybeRunCliInContainerMock.mockReturnValueOnce({ handled: true, exitCode: 0 });
 

@@ -17,6 +17,12 @@ beforeAll(async () => {
 installProviderHttpMockCleanup();
 
 describe("openai video generation provider", () => {
+  it("declares the openai-codex alias for default-model ordering", () => {
+    const provider = buildOpenAIVideoGenerationProvider();
+
+    expect(provider.aliases).toContain("openai-codex");
+  });
+
   it("declares explicit mode capabilities", () => {
     expectExplicitVideoGenerationCapabilities(buildOpenAIVideoGenerationProvider());
   });

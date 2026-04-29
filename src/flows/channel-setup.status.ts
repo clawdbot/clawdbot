@@ -17,6 +17,11 @@ import type {
 import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  findBundledPluginSourceInMap,
+  resolveBundledPluginSources,
+  type BundledPluginSource,
+} from "../plugins/bundled-sources.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -127,6 +132,63 @@ function formatSetupDisplayMeta(meta: ChannelMeta): ChannelMeta {
   };
 }
 
+/**
+ * Hint shown next to an installable channel option in the selection menu when
+ * we don't yet have a runtime-collected status. Mirrors the "configured" /
+ * "installed" affordance other channels get so users can see "download from
+ * <npm-spec>" before committing to install.
+ *
+ * Bundled channels (the plugin lives under `extensions/<id>` in the host
+ * repo, e.g. Signal / Tlon / Twitch / Slack) are NOT downloaded from npm —
+ * they ship with the host. Even when their `package.json` declares an
+ * `npmSpec` (or the catalog falls back to the package name), surfacing
+ * "download from <npm-spec>" misleads users into believing the plugin is
+ * missing. For bundled channels we suppress the npm hint entirely so the
+ * menu shows the same neutral "plugin · install" affordance used when no
+ * npm source is known.
+ */
+export function resolveCatalogChannelSelectionHint(
+  entry: { install?: { npmSpec?: string } },
+  options?: { bundledLocalPath?: string | null },
+): string {
+  const npmSpec = entry.install?.npmSpec?.trim();
+  if (npmSpec && !options?.bundledLocalPath) {
+    return `download from ${formatSetupSelectionLabel(npmSpec, npmSpec)}`;
+  }
+  return "";
+}
+
+/**
+ * Look up the bundled-source entry for a catalog channel, regardless of
+ * whether the catalog refers to it by `pluginId` or `npmSpec`. We use this
+ * to detect bundled channels in the selection menu so we can suppress the
+ * misleading "download from <npm-spec>" hint for plugins that already ship
+ * with the host (Signal / Tlon / Twitch / Slack ...).
+ */
+export function findBundledSourceForCatalogChannel(params: {
+  bundled: ReadonlyMap<string, BundledPluginSource>;
+  entry: { id: string; pluginId?: string; install?: { npmSpec?: string } };
+}): BundledPluginSource | undefined {
+  const pluginId = params.entry.pluginId?.trim() || params.entry.id.trim();
+  if (pluginId) {
+    const byId = findBundledPluginSourceInMap({
+      bundled: params.bundled,
+      lookup: { kind: "pluginId", value: pluginId },
+    });
+    if (byId) {
+      return byId;
+    }
+  }
+  const npmSpec = params.entry.install?.npmSpec?.trim();
+  if (npmSpec) {
+    return findBundledPluginSourceInMap({
+      bundled: params.bundled,
+      lookup: { kind: "npmSpec", value: npmSpec },
+    });
+  }
+  return undefined;
+}
+
 export async function collectChannelStatus(params: {
   cfg: OpenClawConfig;
   options?: SetupChannelsOptions;
@@ -141,6 +203,7 @@ export async function collectChannelStatus(params: {
     installedPlugins,
     workspaceDir,
   });
+  const bundledSources = resolveBundledPluginSources({ workspaceDir });
   const resolveAdapter =
     params.resolveAdapter ??
     ((channel: ChannelChoice) =>
@@ -199,15 +262,22 @@ export async function collectChannelStatus(params: {
         quickstartScore: 0,
       };
     });
-  const catalogStatuses = installableCatalogEntries.map((entry) => ({
-    channel: entry.id,
-    configured: false,
-    statusLines: [
-      `${formatSetupSelectionLabel(entry.meta.label, entry.id)}: install plugin to enable`,
-    ],
-    selectionHint: "plugin · install",
-    quickstartScore: 0,
-  }));
+  const catalogStatuses = installableCatalogEntries.map((entry) => {
+    const bundledLocalPath =
+      findBundledSourceForCatalogChannel({ bundled: bundledSources, entry })?.localPath ?? null;
+    const isBundled = Boolean(bundledLocalPath);
+    // For bundled channels we already have the plugin code on disk; the user
+    // just needs to enable + configure it. Reflect that in the status line so
+    // it does not read like a fresh "install plugin to enable" download flow.
+    const statusLabel = isBundled ? "bundled · enable to use" : "install plugin to enable";
+    return {
+      channel: entry.id,
+      configured: false,
+      statusLines: [`${formatSetupSelectionLabel(entry.meta.label, entry.id)}: ${statusLabel}`],
+      selectionHint: resolveCatalogChannelSelectionHint(entry, { bundledLocalPath }),
+      quickstartScore: 0,
+    };
+  });
   const combinedStatuses = [
     ...statusEntries,
     ...fallbackStatuses,

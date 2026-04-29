@@ -132,7 +132,6 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     applyProviderResolvedTransportWithPlugin: vi.fn(() => undefined),
     buildProviderMissingAuthMessageWithPlugin: vi.fn(() => undefined),
     buildProviderUnknownModelHintWithPlugin: vi.fn(() => undefined),
-    clearProviderRuntimeHookCache: vi.fn(),
     normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),
     normalizeProviderTransportWithPlugin: vi.fn(() => undefined),
     prepareProviderDynamicModel: vi.fn(async () => undefined),

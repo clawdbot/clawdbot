@@ -1,12 +1,29 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  createGridLayout,
-  messageAction,
-  uriAction,
-  postbackAction,
-  datetimePickerAction,
   createDefaultMenuConfig,
+  createGridLayout,
+  datetimePickerAction,
+  messageAction,
+  postbackAction,
+  uploadRichMenuImage,
+  uriAction,
 } from "./rich-menu.js";
+
+const { setRichMenuImageMock, MessagingApiBlobClientMock } = vi.hoisted(() => {
+  const setRichMenuImageMock = vi.fn();
+  const MessagingApiBlobClientMock = vi.fn(function () {
+    return { setRichMenuImage: setRichMenuImageMock };
+  });
+  return { setRichMenuImageMock, MessagingApiBlobClientMock };
+});
+
+vi.mock("@line/bot-sdk", () => ({
+  messagingApi: { MessagingApiBlobClient: MessagingApiBlobClientMock },
+}));
 
 describe("messageAction", () => {
   it("creates message actions with explicit or default text", () => {
@@ -203,5 +220,91 @@ describe("createDefaultMenuConfig", () => {
     expect(commands).toContain("/help");
     expect(commands).toContain("/status");
     expect(commands).toContain("/settings");
+  });
+});
+
+const richMenuUploadCfg: OpenClawConfig = {
+  channels: {
+    line: {
+      channelAccessToken: "line-token",
+      channelSecret: "line-secret",
+    },
+  },
+};
+
+describe("uploadRichMenuImage", () => {
+  let tempRoot: string;
+
+  beforeEach(async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-line-rich-menu-"));
+    setRichMenuImageMock.mockReset();
+    MessagingApiBlobClientMock.mockClear();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  it("loads local image paths through approved media localRoots", async () => {
+    const workspaceDir = path.join(tempRoot, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const imagePath = path.join(workspaceDir, "menu.png");
+    const imageBytes = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x00,
+    ]);
+    await fs.writeFile(imagePath, imageBytes);
+
+    await uploadRichMenuImage("rich-menu-1", imagePath, {
+      cfg: richMenuUploadCfg,
+      mediaLocalRoots: [workspaceDir],
+    });
+
+    expect(MessagingApiBlobClientMock).toHaveBeenCalledWith({ channelAccessToken: "line-token" });
+    expect(setRichMenuImageMock).toHaveBeenCalledOnce();
+    const [richMenuId, blob] = setRichMenuImageMock.mock.calls[0] ?? [];
+    expect(richMenuId).toBe("rich-menu-1");
+    expect(blob).toBeInstanceOf(Blob);
+    expect((blob as Blob).type).toBe("image/png");
+    await expect((blob as Blob).arrayBuffer()).resolves.toEqual(
+      imageBytes.buffer.slice(imageBytes.byteOffset, imageBytes.byteOffset + imageBytes.byteLength),
+    );
+  });
+
+  it("rejects local image paths outside approved media localRoots before uploading", async () => {
+    const workspaceDir = path.join(tempRoot, "workspace");
+    const outsideDir = path.join(tempRoot, "outside");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(outsideDir, { recursive: true });
+    const outsideImagePath = path.join(outsideDir, "menu.jpg");
+    await fs.writeFile(outsideImagePath, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+
+    await expect(
+      uploadRichMenuImage("rich-menu-1", outsideImagePath, {
+        cfg: richMenuUploadCfg,
+        mediaLocalRoots: [workspaceDir],
+      }),
+    ).rejects.toThrow(/Local media path is not under an allowed directory/i);
+
+    expect(setRichMenuImageMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves extension-based content-type fallback for approved local paths", async () => {
+    const workspaceDir = path.join(tempRoot, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const imagePath = path.join(workspaceDir, "menu.jpg");
+    const imageBytes = Buffer.from("placeholder image bytes");
+    await fs.writeFile(imagePath, imageBytes);
+
+    await uploadRichMenuImage("rich-menu-2", imagePath, {
+      cfg: richMenuUploadCfg,
+      mediaLocalRoots: [workspaceDir],
+    });
+
+    expect(setRichMenuImageMock).toHaveBeenCalledOnce();
+    const blob = setRichMenuImageMock.mock.calls[0]?.[1] as Blob;
+    expect(blob.type).toBe("image/jpeg");
+    await expect(blob.arrayBuffer()).resolves.toEqual(
+      imageBytes.buffer.slice(imageBytes.byteOffset, imageBytes.byteOffset + imageBytes.byteLength),
+    );
   });
 });

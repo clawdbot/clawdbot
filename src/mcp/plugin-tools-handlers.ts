@@ -4,6 +4,7 @@ import {
 } from "../agents/pi-tools.before-tool-call.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { coerceChatContentText } from "../shared/chat-content.js";
 
 type CallPluginToolParams = {
   name: string;
@@ -54,7 +55,7 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
         return {
           content: Array.isArray(result.content)
             ? result.content
-            : [{ type: "text", text: String(result.content) }],
+            : [{ type: "text", text: coerceChatContentText(result.content) }],
         };
       } catch (err) {
         return {

@@ -98,4 +98,20 @@ describe("buildQaSuiteSummaryJson", () => {
       failed: 1,
     });
   });
+
+  it("records optional runtime metrics when provided", () => {
+    const json = buildQaSuiteSummaryJson({
+      ...baseParams,
+      metrics: {
+        wallMs: 12_000,
+        gatewayProcessCpuMs: 3_400,
+        gatewayCpuCoreRatio: 0.283,
+      },
+    });
+    expect(json.metrics).toEqual({
+      wallMs: 12_000,
+      gatewayProcessCpuMs: 3_400,
+      gatewayCpuCoreRatio: 0.283,
+    });
+  });
 });

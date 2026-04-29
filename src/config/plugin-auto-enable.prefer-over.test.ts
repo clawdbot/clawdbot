@@ -1,14 +1,24 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { cleanupTrackedTempDirs } from "../plugins/test-helpers/fs-fixtures.js";
 
+vi.mock("../plugins/bundled-dir.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/bundled-dir.js")>();
+  return {
+    ...actual,
+    resolveBundledPluginsDir: (env: NodeJS.ProcessEnv = process.env) =>
+      env.OPENCLAW_BUNDLED_PLUGINS_DIR,
+  };
+});
+
 const tempDirs: string[] = [];
 
 function makeTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-prefer-over-"));
+  const trustedRoot = path.resolve("dist-runtime", "extensions");
+  fs.mkdirSync(trustedRoot, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(trustedRoot, ".openclaw-plugin-prefer-over-"));
   tempDirs.push(dir);
   return dir;
 }
@@ -38,7 +48,13 @@ const EMPTY_MANIFEST_REGISTRY: PluginManifestRegistry = {
   diagnostics: [],
 };
 
-afterEach(() => {
+async function setBundledPluginsDirFixture(dir: string | undefined): Promise<void> {
+  const { setBundledPluginsDirOverrideForTest } = await import("../plugins/bundled-dir.js");
+  setBundledPluginsDirOverrideForTest(dir);
+}
+
+afterEach(async () => {
+  await setBundledPluginsDirFixture(undefined);
   vi.unstubAllEnvs();
   vi.resetModules();
   cleanupTrackedTempDirs(tempDirs);
@@ -52,10 +68,12 @@ describe("plugin auto-enable preferOver", () => {
     writeBundledChannelPackage(rootDir, channelId);
 
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", rootDir);
+    await setBundledPluginsDirFixture(rootDir);
     const { normalizeChatChannelId } = await import("../channels/ids.js");
     expect(normalizeChatChannelId(channelId)).toBe(channelId);
 
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(rootDir, "missing"));
+    await setBundledPluginsDirFixture(undefined);
     const { materializePluginAutoEnableCandidates } = await import("./plugin-auto-enable.js");
 
     const result = materializePluginAutoEnableCandidates({

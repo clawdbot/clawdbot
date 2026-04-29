@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resolveAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
   listAgentIds,
   resolveAgentConfig,
@@ -17,6 +18,7 @@ import {
 } from "../agents/model-catalog.js";
 import {
   inferUniqueProviderFromConfiguredModels,
+  isCliProvider,
   normalizeStoredOverrideModel,
   parseModelRef,
   resolveConfiguredModelRef,
@@ -794,6 +796,7 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
         name: meta?.name,
         identity: meta?.identity,
         workspace: resolveAgentWorkspaceDir(cfg, id),
+        agentRuntime: resolveAgentRuntimeMetadata(cfg, id),
       },
       model ? { model } : {},
     );
@@ -1042,7 +1045,7 @@ export function resolveGatewaySessionStoreTarget(params: {
 
 export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
 
-function resolveGatewaySessionThinkingDefault(params: {
+export function resolveGatewaySessionThinkingDefault(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
@@ -1247,6 +1250,45 @@ export function resolveSessionModelIdentityRef(
   return { provider: resolved.provider, model: resolved.model };
 }
 
+export function resolveSessionDisplayModelIdentityRef(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  provider?: string;
+  model?: string;
+}): { provider?: string; model?: string } {
+  const provider = normalizeOptionalString(params.provider);
+  const model = normalizeOptionalString(params.model);
+  if (!provider || !model || !isCliProvider(provider, params.cfg)) {
+    return { provider, model };
+  }
+
+  const defaultRef = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
+  if (model.includes("/")) {
+    const parsedModel = parseModelRef(model, defaultRef.provider);
+    if (parsedModel && !isCliProvider(parsedModel.provider, params.cfg)) {
+      return parsedModel;
+    }
+  }
+
+  const inferredProvider = inferUniqueProviderFromConfiguredModels({
+    cfg: params.cfg,
+    model,
+  });
+  if (inferredProvider && !isCliProvider(inferredProvider, params.cfg)) {
+    return { provider: inferredProvider, model };
+  }
+
+  const parsedModel = parseModelRef(model, defaultRef.provider);
+  if (parsedModel && !isCliProvider(parsedModel.provider, params.cfg)) {
+    return parsedModel;
+  }
+
+  return {
+    provider: defaultRef.provider || provider,
+    model,
+  };
+}
+
 export function buildGatewaySessionRow(params: {
   cfg: OpenClawConfig;
   storePath: string;
@@ -1393,11 +1435,22 @@ export function buildGatewaySessionRow(params: {
       : transcriptUsage?.totalTokensFresh === true;
   const childSessions = resolveChildSessionKeys(key, store, now);
   const latestCompactionCheckpoint = resolveLatestCompactionCheckpoint(entry);
+  const agentRuntime = resolveAgentRuntimeMetadata(cfg, sessionAgentId);
+  const selectedOrRuntimeModelProvider = selectedModel?.provider ?? modelProvider;
+  const selectedOrRuntimeModel = selectedModel?.model ?? model;
+  const rowModelIdentity = resolveSessionDisplayModelIdentityRef({
+    cfg,
+    agentId: sessionAgentId,
+    provider: selectedOrRuntimeModelProvider,
+    model: selectedOrRuntimeModel,
+  });
+  const rowModelProvider = rowModelIdentity.provider;
+  const rowModel = rowModelIdentity.model;
   const estimatedCostUsd =
     resolveEstimatedSessionCostUsd({
       cfg,
-      provider: modelProvider,
-      model,
+      provider: rowModelProvider,
+      model: rowModel,
       entry,
     }) ?? resolveNonNegativeNumber(transcriptUsage?.estimatedCostUsd);
   const contextTokens =
@@ -1406,8 +1459,8 @@ export function buildGatewaySessionRow(params: {
     resolvePositiveNumber(
       resolveContextTokensForModel({
         cfg,
-        provider: modelProvider,
-        model,
+        provider: rowModelProvider,
+        model: rowModel,
         // Gateway/session listing is read-only; don't start async model discovery.
         allowAsyncLoad: false,
       }),
@@ -1430,8 +1483,6 @@ export function buildGatewaySessionRow(params: {
     }
   }
 
-  const rowModelProvider = selectedModel?.provider ?? modelProvider;
-  const rowModel = selectedModel?.model ?? model;
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
   const thinkingLevels = listThinkingLevelOptions(
@@ -1498,6 +1549,7 @@ export function buildGatewaySessionRow(params: {
     responseUsage: entry?.responseUsage,
     modelProvider: rowModelProvider,
     model: rowModel,
+    agentRuntime,
     contextTokens,
     deliveryContext: deliveryFields.deliveryContext,
     lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,

@@ -3,6 +3,7 @@ import {
   __testing,
   abortActiveReplyRuns,
   createReplyOperation,
+  forceClearReplyRunBySessionId,
   isReplyRunActiveForSessionId,
   queueReplyRunMessage,
   replyRunRegistry,
@@ -63,6 +64,39 @@ describe("reply run registry", () => {
 
     expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
     expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
+  });
+
+  it("force-clears a running operation after abort without backend cleanup", async () => {
+    vi.useFakeTimers();
+    try {
+      const cancel = vi.fn();
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:main",
+        sessionId: "session-running",
+        resetTriggered: false,
+      });
+      operation.attachBackend({
+        kind: "embedded",
+        cancel,
+        isStreaming: () => true,
+      });
+      operation.setPhase("running");
+
+      operation.abortByUser();
+      const waitPromise = waitForReplyRunEndBySessionId("session-running", 1_000);
+
+      expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+      expect(cancel).toHaveBeenCalledWith("user_abort");
+      expect(isReplyRunActiveForSessionId("session-running")).toBe(true);
+
+      expect(forceClearReplyRunBySessionId("session-running", new Error("stuck"))).toBe(true);
+
+      expect(isReplyRunActiveForSessionId("session-running")).toBe(false);
+      await expect(waitPromise).resolves.toBe(true);
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
   });
 
   it("queues messages only through the active running backend", async () => {

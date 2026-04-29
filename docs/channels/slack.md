@@ -117,6 +117,27 @@ openclaw gateway
   </Tab>
 </Tabs>
 
+## Socket Mode transport tuning
+
+OpenClaw sets the Slack SDK client pong timeout to 15 seconds by default for Socket Mode. Override the transport settings only when you need workspace- or host-specific tuning:
+
+```json5
+{
+  channels: {
+    slack: {
+      mode: "socket",
+      socketMode: {
+        clientPingTimeout: 20000,
+        serverPingTimeout: 30000,
+        pingPongLoggingEnabled: false,
+      },
+    },
+  },
+}
+```
+
+Use this only for Socket Mode workspaces that log Slack websocket pong/server-ping timeouts or run on hosts with known event-loop starvation. `clientPingTimeout` is the pong wait after the SDK sends a client ping; `serverPingTimeout` is the wait for Slack server pings. App messages and events remain application state, not transport liveness signals.
+
 ## Manifest and scope checklist
 
 The base Slack app manifest is the same for Socket Mode and HTTP Request URLs. Only the `settings` block (and the slash command `url`) differs.
@@ -611,6 +632,8 @@ Notes:
   <Accordion title="Inbound attachments">
     Slack file attachments are downloaded from Slack-hosted private URLs (token-authenticated request flow) and written to the media store when fetch succeeds and size limits permit. File placeholders include the Slack `fileId` so agents can fetch the original file with `download-file`.
 
+    Downloads use bounded idle and total timeouts. If Slack file retrieval stalls or fails, OpenClaw keeps processing the message and falls back to the file placeholder.
+
     Runtime inbound size cap defaults to `20MB` unless overridden by `channels.slack.mediaMaxMb`.
 
   </Accordion>
@@ -875,6 +898,71 @@ openclaw pairing list slack
 
   </Accordion>
 </AccordionGroup>
+
+## Attachment vision reference
+
+Slack can attach downloaded media to the agent turn when Slack file downloads succeed and size limits permit. Image files can be passed through the media understanding path or directly to a vision-capable reply model; other files are retained as downloadable file context rather than treated as image input.
+
+### Supported media types
+
+| Media type                     | Source               | Current behavior                                                                  | Notes                                                                     |
+| ------------------------------ | -------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| JPEG / PNG / GIF / WebP images | Slack file URL       | Downloaded and attached to the turn for vision-capable handling                   | Per-file cap: `channels.slack.mediaMaxMb` (default 20 MB)                 |
+| PDF files                      | Slack file URL       | Downloaded and exposed as file context for tools such as `download-file` or `pdf` | Slack inbound does not convert PDFs into image-vision input automatically |
+| Other files                    | Slack file URL       | Downloaded when possible and exposed as file context                              | Binary files are not treated as image input                               |
+| Thread replies                 | Thread starter files | Root-message files can be hydrated as context when the reply has no direct media  | File-only starters use an attachment placeholder                          |
+| Multi-image messages           | Multiple Slack files | Each file is evaluated independently                                              | Slack processing is capped at eight files per message                     |
+
+### Inbound pipeline
+
+When a Slack message with file attachments arrives:
+
+1. OpenClaw downloads the file from Slack's private URL using the bot token (`xoxb-...`).
+2. The file is written to the media store on success.
+3. Downloaded media paths and content types are added to the inbound context.
+4. Image-capable model/tool paths can use image attachments from that context.
+5. Non-image files remain available as file metadata or media references for tools that can handle them.
+
+### Thread-root attachment inheritance
+
+When a message arrives in a thread (has a `thread_ts` parent):
+
+- If the reply itself has no direct media and the included root message has files, Slack can hydrate the root files as thread-starter context.
+- Direct reply attachments take precedence over root-message attachments.
+- A root message that has only files and no text is represented with an attachment placeholder so the fallback can still include its files.
+
+### Multi-attachment handling
+
+When a single Slack message contains multiple file attachments:
+
+- Each attachment is processed independently through the media pipeline.
+- Downloaded media references are aggregated into the message context.
+- Processing order follows Slack's file order in the event payload.
+- A failure in one attachment's download does not block others.
+
+### Size, download, and model limits
+
+- **Size cap**: Default 20 MB per file. Configurable via `channels.slack.mediaMaxMb`.
+- **Download failures**: Files that Slack cannot serve, expired URLs, inaccessible files, oversize files, and Slack auth/login HTML responses are skipped instead of being reported as unsupported formats.
+- **Vision model**: Image analysis uses the active reply model when it supports vision, or the image model configured at `agents.defaults.imageModel`.
+
+### Known limits
+
+| Scenario                               | Current behavior                                                             | Workaround                                                                 |
+| -------------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Expired Slack file URL                 | File skipped; no error shown                                                 | Re-upload the file in Slack                                                |
+| Vision model not configured            | Image attachments are stored as media references, but not analyzed as images | Configure `agents.defaults.imageModel` or use a vision-capable reply model |
+| Very large images (> 20 MB by default) | Skipped per size cap                                                         | Increase `channels.slack.mediaMaxMb` if Slack allows                       |
+| Forwarded/shared attachments           | Text and Slack-hosted image/file media are best-effort                       | Re-share directly in the OpenClaw thread                                   |
+| PDF attachments                        | Stored as file/media context, not automatically routed through image vision  | Use `download-file` for file metadata or the `pdf` tool for PDF analysis   |
+
+### Related documentation
+
+- [Media understanding pipeline](/nodes/media-understanding)
+- [PDF tool](/tools/pdf)
+- Epic: [#51349](https://github.com/openclaw/openclaw/issues/51349) — Slack attachment vision enablement
+- Regression tests: [#51353](https://github.com/openclaw/openclaw/issues/51353)
+- Live verification: [#51354](https://github.com/openclaw/openclaw/issues/51354)
 
 ## Related
 

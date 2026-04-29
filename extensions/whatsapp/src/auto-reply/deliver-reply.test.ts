@@ -177,6 +177,54 @@ describe("deliverWebReply", () => {
     expect(replyLogger.info).toHaveBeenCalledWith(expect.any(Object), "auto-reply sent (text)");
   });
 
+  it("strips raw XML tool-call blocks before WhatsApp text delivery", async () => {
+    const msg = makeMsg();
+
+    await deliverWebReply({
+      replyResult: {
+        text: 'Before\n<function_calls><invoke name="web_search"><parameter name="query">x</parameter></invoke></function_calls>\nAfter',
+      },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 4000,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).toHaveBeenCalledTimes(1);
+    const sentText = vi.mocked(msg.reply).mock.calls[0]?.[0];
+    expect(sentText).not.toContain("function_calls");
+    expect(sentText).not.toContain("invoke");
+    expect(sentText).toContain("Before");
+    expect(sentText).toContain("After");
+  });
+
+  it("uses the same final sanitizer stack for auto-reply text delivery", async () => {
+    const msg = makeMsg();
+
+    await deliverWebReply({
+      replyResult: {
+        text: [
+          "Before",
+          "<function_calls>",
+          '  <invoke name="send_message">',
+          '    <parameter name="text"><b>hidden</b></parameter>',
+          "  </invoke>",
+          "</function_calls>",
+          "<div>After</div>",
+        ].join("\n"),
+      },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 4000,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(msg.reply).mock.calls[0]?.[0]).toBe("Before\n\nAfter\n");
+  });
+
   it("keeps quote threading on every text chunk for a threaded reply", async () => {
     const msg = makeMsg();
     cacheInboundMessageMeta("work", "15551234567@s.whatsapp.net", "reply-1", {
@@ -476,6 +524,30 @@ describe("deliverWebReply", () => {
     expect(
       String((msg.reply as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0]),
     ).not.toContain("boom");
+  });
+
+  it("sanitizes XML tool-call blocks for outbound sendPayload delivery", async () => {
+    const sendWhatsApp = vi.fn(async (_to: string, _text: string) => ({
+      messageId: "wa-1",
+      toJid: "jid",
+    }));
+
+    await whatsappOutbound.sendPayload!({
+      cfg: {},
+      to: "5511999999999@c.us",
+      text: "",
+      payload: {
+        text: 'Before\n<function_calls><invoke name="web_search"><parameter name="query">x</parameter></invoke></function_calls>\nAfter',
+      },
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    const sentText = sendWhatsApp.mock.calls[0]?.[1];
+    expect(sentText).not.toContain("function_calls");
+    expect(sentText).not.toContain("invoke");
+    expect(sentText).toContain("Before");
+    expect(sentText).toContain("After");
   });
 
   it("keeps payload and auto-reply media normalization in parity", async () => {

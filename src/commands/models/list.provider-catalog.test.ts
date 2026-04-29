@@ -205,7 +205,6 @@ describe("loadProviderCatalogModelsForList", () => {
     expect(providerDiscoveryMocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
       config: baseParams.cfg,
       env: baseParams.env,
-      cache: true,
     });
     expect(providerDiscoveryMocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
   });

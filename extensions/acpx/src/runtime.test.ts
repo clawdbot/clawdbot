@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AcpRuntime } from "../runtime-api.js";
+import { AcpRuntimeError, type AcpRuntime } from "../runtime-api.js";
 import { AcpxRuntime, __testing } from "./runtime.js";
 
 type TestSessionStore = {
@@ -83,6 +83,43 @@ function makeRuntime(
 describe("AcpxRuntime fresh reset wrapper", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("rejects unsupported runtime session modes with a clear AcpRuntimeError (issue #73071)", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const ensureSpy = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "claude",
+    });
+
+    for (const badMode of ["run", "session", "", undefined, null, 0]) {
+      await expect(
+        runtime.ensureSession({
+          sessionKey: "agent:claude:acp:test",
+          agent: "claude",
+          mode: badMode as never,
+        }),
+      ).rejects.toMatchObject({
+        name: "AcpRuntimeError",
+        code: "ACP_INVALID_RUNTIME_OPTION",
+        message: expect.stringContaining("Unsupported ACP runtime session mode"),
+      });
+    }
+
+    expect(ensureSpy).not.toHaveBeenCalled();
+  });
+
+  it("exposes assertSupportedRuntimeSessionMode as a typed guard", () => {
+    expect(() => __testing.assertSupportedRuntimeSessionMode("persistent")).not.toThrow();
+    expect(() => __testing.assertSupportedRuntimeSessionMode("oneshot")).not.toThrow();
+    expect(() => __testing.assertSupportedRuntimeSessionMode("run" as never)).toThrow(
+      AcpRuntimeError,
+    );
   });
 
   it("normalizes OpenClaw Codex model ids for ACP startup", async () => {

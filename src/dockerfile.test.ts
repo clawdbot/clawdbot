@@ -74,6 +74,20 @@ describe("Dockerfile", () => {
     );
   });
 
+  it("copies postinstall helper imports before pnpm install", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
+    const postinstallIndex = dockerfile.indexOf("COPY scripts/postinstall-bundled-plugins.mjs");
+    const distImportHelperIndex = dockerfile.indexOf(
+      "COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs",
+    );
+
+    expect(postinstallIndex).toBeGreaterThan(-1);
+    expect(distImportHelperIndex).toBeGreaterThan(-1);
+    expect(postinstallIndex).toBeLessThan(installIndex);
+    expect(distImportHelperIndex).toBeLessThan(installIndex);
+  });
+
   it("prunes runtime dependencies after the build stage", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain("FROM build AS runtime-assets");

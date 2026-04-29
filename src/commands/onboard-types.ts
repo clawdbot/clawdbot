@@ -8,7 +8,7 @@ export type OnboardMode = "local" | "remote";
  * are normalized elsewhere (for example `oauth` -> `setup-token`).
  */
 export type BuiltInAuthChoice =
-  // Legacy alias for `setup-token` (kept for backwards CLI compatibility).
+  /** @deprecated Use `setup-token`. */
   "oauth" | "setup-token" | "token" | "apiKey" | "custom-api-key" | "skip";
 export type AuthChoice = BuiltInAuthChoice | (string & {});
 
@@ -20,7 +20,7 @@ export type GatewayBind = "loopback" | "lan" | "auto" | "custom" | "tailnet";
 export type TailscaleMode = "off" | "serve" | "funnel";
 export type NodeManagerChoice = "npm" | "pnpm" | "bun";
 export type ChannelChoice = ChannelId;
-// Legacy alias (pre-rename).
+/** @deprecated Use ChannelChoice. */
 export type ProviderChoice = ChannelChoice;
 export type { SecretInputMode } from "../plugins/provider-auth-types.js";
 

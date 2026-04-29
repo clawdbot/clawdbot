@@ -507,8 +507,23 @@ function resolveFallbackCandidates(params: {
     defaultProvider,
   });
   const { candidates, addExplicitCandidate } = createModelCandidateCollector(allowlist);
+  const resolvedModelAlias = resolveModelRefFromString({
+    raw: modelRaw,
+    defaultProvider: providerRaw,
+    aliasIndex,
+  });
+  const resolvedProviderModelAlias = resolveModelRefFromString({
+    raw: `${providerRaw}/${modelRaw}`,
+    defaultProvider,
+    aliasIndex,
+  });
+  const resolvedPrimary =
+    (resolvedModelAlias?.alias ? resolvedModelAlias.ref : null) ??
+    (resolvedProviderModelAlias?.alias ? resolvedProviderModelAlias.ref : null) ??
+    normalizedPrimary;
+  const effectivePrimary = normalizeModelRef(resolvedPrimary.provider, resolvedPrimary.model);
 
-  addExplicitCandidate(normalizedPrimary);
+  addExplicitCandidate(effectivePrimary);
 
   const modelFallbacks = (() => {
     if (params.fallbacksOverride !== undefined) {
@@ -519,14 +534,14 @@ function resolveFallbackCandidates(params: {
     );
     // When user runs a different provider than config, only use configured fallbacks
     // if the current model is already in that chain (e.g. session on first fallback).
-    if (normalizedPrimary.provider !== configuredPrimary.provider) {
+    if (effectivePrimary.provider !== configuredPrimary.provider) {
       const isConfiguredFallback = configuredFallbacks.some((raw) => {
         const resolved = resolveModelRefFromString({
           raw,
           defaultProvider,
           aliasIndex,
         });
-        return resolved ? sameModelCandidate(resolved.ref, normalizedPrimary) : false;
+        return resolved ? sameModelCandidate(resolved.ref, effectivePrimary) : false;
       });
       return isConfiguredFallback ? configuredFallbacks : [];
     }
@@ -778,12 +793,14 @@ export async function runWithModelFallback<T>(params: {
   };
 
   const hasFallbackCandidates = candidates.length > 1;
+  const requestedCandidate = candidates[0];
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
     const isPrimary = i === 0;
-    const requestedModel =
-      params.provider === candidate.provider && params.model === candidate.model;
+    const requestedModel = requestedCandidate
+      ? sameModelCandidate(candidate, requestedCandidate)
+      : false;
     let runOptions: ModelFallbackRunOptions | undefined;
     let attemptedDuringCooldown = false;
     let transientProbeProviderForAttempt: string | null = null;

@@ -59,6 +59,27 @@ describe("codex plugin", () => {
     expect(onConversationBindingResolved).toHaveBeenCalledWith(expect.any(Function));
   });
 
+  it("registers with capture APIs that do not expose conversation binding hooks yet", () => {
+    const api = createTestPluginApi({
+      id: "codex",
+      name: "Codex",
+      source: "test",
+      config: {},
+      pluginConfig: {},
+      runtime: {} as never,
+      registerAgentHarness: vi.fn(),
+      registerCommand: vi.fn(),
+      registerMediaUnderstandingProvider: vi.fn(),
+      registerProvider: vi.fn(),
+      on: vi.fn(),
+    }) as ReturnType<typeof createTestPluginApi> & {
+      onConversationBindingResolved?: ReturnType<typeof vi.fn>;
+    };
+    delete (api as { onConversationBindingResolved?: unknown }).onConversationBindingResolved;
+
+    expect(() => plugin.register(api)).not.toThrow();
+  });
+
   it("only claims the codex provider by default", () => {
     const harness = createCodexAppServerAgentHarness();
 

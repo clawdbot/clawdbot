@@ -161,6 +161,8 @@ const MAX_LOG_CHARS = 8000;
 const PREFLIGHT_MAX_COMMITS = 10;
 const DEFAULT_PACKAGE_NAME = "openclaw";
 const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
+const UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV =
+  "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE";
 const PREFLIGHT_TEMP_PREFIX =
   process.platform === "win32" ? "ocu-pf-" : "openclaw-update-preflight-";
 const PREFLIGHT_WORKTREE_DIRNAME = process.platform === "win32" ? "wt" : "worktree";
@@ -1292,7 +1294,10 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       const doctorNodePath = await resolveStableNodePath(process.execPath);
       const doctorArgv = [doctorNodePath, doctorEntry, "doctor", "--non-interactive", "--fix"];
       const doctorStep = await runStep(
-        step("openclaw doctor", doctorArgv, gitRoot, { OPENCLAW_UPDATE_IN_PROGRESS: "1" }),
+        step("openclaw doctor", doctorArgv, gitRoot, {
+          OPENCLAW_UPDATE_IN_PROGRESS: "1",
+          [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
+        }),
       );
       steps.push(doctorStep);
       if (doctorStep.exitCode !== 0) {

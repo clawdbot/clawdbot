@@ -4,12 +4,6 @@ import {
   withBundledPluginEnablementCompat,
   withBundledPluginVitestCompat,
 } from "./bundled-compat.js";
-import {
-  buildPluginSnapshotCacheEnvKey,
-  resolvePluginSnapshotCacheTtlMs,
-  shouldUsePluginSnapshotCache,
-} from "./cache-controls.js";
-import { hasExplicitPluginConfig } from "./config-policy.js";
 import { resolveRuntimePluginRegistry } from "./loader.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -37,11 +31,6 @@ type CapabilityContractKey =
 type CapabilityProviderForKey<K extends CapabilityProviderRegistryKey> =
   PluginRegistry[K][number] extends { provider: infer T } ? T : never;
 
-type CapabilityProviderPluginIdCacheEntry = {
-  expiresAt: number;
-  pluginIds: string[];
-};
-
 const CAPABILITY_CONTRACT_KEY: Record<CapabilityProviderRegistryKey, CapabilityContractKey> = {
   memoryEmbeddingProviders: "memoryEmbeddingProviders",
   speechProviders: "speechProviders",
@@ -53,84 +42,14 @@ const CAPABILITY_CONTRACT_KEY: Record<CapabilityProviderRegistryKey, CapabilityC
   musicGenerationProviders: "musicGenerationProviders",
 };
 
-const capabilityProviderPluginIdCache = new WeakMap<
-  OpenClawConfig,
-  WeakMap<NodeJS.ProcessEnv, Map<string, CapabilityProviderPluginIdCacheEntry>>
->();
-
-function buildCapabilityProviderPluginIdCacheKey(params: {
-  key: CapabilityProviderRegistryKey;
-  env: NodeJS.ProcessEnv;
-  providerId?: string;
-}): string {
-  return JSON.stringify({
-    key: params.key,
-    providerId: params.providerId ?? "",
-    env: buildPluginSnapshotCacheEnvKey(params.env),
-  });
-}
-
-function getCachedCapabilityProviderPluginIds(params: {
-  key: CapabilityProviderRegistryKey;
-  cfg?: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  providerId?: string;
-}): string[] | undefined {
-  if (!params.cfg || !shouldUsePluginSnapshotCache(params.env)) {
-    return undefined;
-  }
-  const envCache = capabilityProviderPluginIdCache.get(params.cfg)?.get(params.env);
-  const cached = envCache?.get(buildCapabilityProviderPluginIdCacheKey(params));
-  if (!cached || cached.expiresAt <= Date.now()) {
-    return undefined;
-  }
-  return [...cached.pluginIds];
-}
-
-function memoizeCapabilityProviderPluginIds(params: {
-  key: CapabilityProviderRegistryKey;
-  cfg?: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  providerId?: string;
-  pluginIds: string[];
-}): void {
-  if (!params.cfg || !shouldUsePluginSnapshotCache(params.env)) {
-    return;
-  }
-  let configCache = capabilityProviderPluginIdCache.get(params.cfg);
-  if (!configCache) {
-    configCache = new WeakMap<
-      NodeJS.ProcessEnv,
-      Map<string, CapabilityProviderPluginIdCacheEntry>
-    >();
-    capabilityProviderPluginIdCache.set(params.cfg, configCache);
-  }
-  let envCache = configCache.get(params.env);
-  if (!envCache) {
-    envCache = new Map<string, CapabilityProviderPluginIdCacheEntry>();
-    configCache.set(params.env, envCache);
-  }
-  envCache.set(buildCapabilityProviderPluginIdCacheKey(params), {
-    expiresAt: Date.now() + resolvePluginSnapshotCacheTtlMs(params.env),
-    pluginIds: [...params.pluginIds],
-  });
-}
-
 function resolveBundledCapabilityCompatPluginIds(params: {
   key: CapabilityProviderRegistryKey;
   cfg?: OpenClawConfig;
   providerId?: string;
 }): string[] {
   const env = process.env;
-  const cached = getCachedCapabilityProviderPluginIds({
-    ...params,
-    env,
-  });
-  if (cached) {
-    return cached;
-  }
   const contractKey = CAPABILITY_CONTRACT_KEY[params.key];
-  const pluginIds = loadPluginManifestRegistryForPluginRegistry({
+  return loadPluginManifestRegistryForPluginRegistry({
     config: params.cfg,
     env,
     includeDisabled: true,
@@ -143,12 +62,6 @@ function resolveBundledCapabilityCompatPluginIds(params: {
     )
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
-  memoizeCapabilityProviderPluginIds({
-    ...params,
-    env,
-    pluginIds,
-  });
-  return pluginIds;
 }
 
 function resolveCapabilityProviderConfig(params: {
@@ -312,7 +225,9 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
     pluginIds,
   });
   const loadOptions =
-    compatConfig === undefined ? undefined : { config: compatConfig, activate: false };
+    compatConfig === undefined
+      ? { onlyPluginIds: pluginIds, activate: false }
+      : { config: compatConfig, onlyPluginIds: pluginIds, activate: false };
   const registry = resolveRuntimePluginRegistry(loadOptions);
   return findProviderById(registry?.[params.key] ?? [], params.providerId);
 }
@@ -326,8 +241,7 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   if (
     activeProviders.length > 0 &&
     params.key !== "memoryEmbeddingProviders" &&
-    params.key !== "speechProviders" &&
-    !hasExplicitPluginConfig(params.cfg?.plugins)
+    params.key !== "speechProviders"
   ) {
     return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
   }
@@ -344,9 +258,19 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
       return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
     }
   }
-  const compatConfig = resolveCapabilityProviderConfig({ key: params.key, cfg: params.cfg });
+  const pluginIds = resolveBundledCapabilityCompatPluginIds({
+    key: params.key,
+    cfg: params.cfg,
+  });
+  const compatConfig = resolveCapabilityProviderConfig({
+    key: params.key,
+    cfg: params.cfg,
+    pluginIds,
+  });
   const loadOptions =
-    compatConfig === undefined ? undefined : { config: compatConfig, activate: false };
+    compatConfig === undefined
+      ? { onlyPluginIds: pluginIds, activate: false }
+      : { config: compatConfig, onlyPluginIds: pluginIds, activate: false };
   const registry = resolveRuntimePluginRegistry(loadOptions);
   const loadedProviders = registry?.[params.key] ?? [];
   if (params.key !== "memoryEmbeddingProviders") {

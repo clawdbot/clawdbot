@@ -13,11 +13,19 @@ It uses the official `matrix-js-sdk` and supports DMs, rooms, threads, media, re
 
 Current packaged OpenClaw releases ship the Matrix plugin in the box. You do not need to install anything; configuring `channels.matrix.*` (see [Setup](#setup)) is what activates it.
 
-For older builds or custom installs that exclude Matrix, install manually first:
+For older builds or custom installs that exclude Matrix, install a current npm
+package when one is published:
 
 ```bash
 openclaw plugins install @openclaw/matrix
-# or, from a local checkout
+```
+
+If npm reports the OpenClaw-owned package as deprecated, use a current packaged
+OpenClaw build or a local checkout until a newer npm package is published.
+
+From a local checkout:
+
+```bash
 openclaw plugins install ./path/to/local/matrix-plugin
 ```
 

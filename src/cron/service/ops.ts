@@ -167,6 +167,7 @@ export async function start(state: CronServiceState) {
 
   await runMissedJobs(state, {
     skipJobIds: interruptedJobIds.size > 0 ? interruptedJobIds : undefined,
+    deferAgentTurnJobs: true,
   });
 
   await locked(state, async () => {
@@ -183,6 +184,7 @@ export async function start(state: CronServiceState) {
       emit(state, {
         jobId: interrupted.jobId,
         action: "finished",
+        job,
         status: "error",
         error: STARTUP_INTERRUPTED_ERROR,
         delivered: false,
@@ -338,6 +340,7 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
     emit(state, {
       jobId: job.id,
       action: "added",
+      job,
       nextRunAtMs: job.state.nextRunAtMs,
     });
     return job;
@@ -387,6 +390,7 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
     emit(state, {
       jobId: id,
       action: "updated",
+      job,
       nextRunAtMs: job.state.nextRunAtMs,
     });
     return job;
@@ -401,12 +405,13 @@ export async function remove(state: CronServiceState, id: string) {
     if (!state.store) {
       return { ok: false, removed: false } as const;
     }
+    const removedJob = state.store.jobs.find((j) => j.id === id);
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
     const removed = (state.store.jobs.length ?? 0) !== before;
     await persist(state);
     armTimer(state);
     if (removed) {
-      emit(state, { jobId: id, action: "removed" });
+      emit(state, { jobId: id, action: "removed", job: removedJob });
     }
     return { ok: true, removed } as const;
   });
@@ -637,7 +642,7 @@ async function prepareManualRun(
     // Persist the running marker before releasing lock so timer ticks that
     // force-reload from disk cannot start the same job concurrently.
     await persist(state);
-    emit(state, { jobId: job.id, action: "started", runAtMs: preflight.now });
+    emit(state, { jobId: job.id, action: "started", job, runAtMs: preflight.now });
     const taskRunId = tryCreateManualTaskRun({
       state,
       job,
@@ -701,6 +706,7 @@ async function finishPreparedManualRun(
     emit(state, {
       jobId: job.id,
       action: "finished",
+      job,
       status: coreResult.status,
       error: coreResult.error,
       summary: coreResult.summary,
@@ -720,7 +726,7 @@ async function finishPreparedManualRun(
 
     if (shouldDelete && state.store) {
       state.store.jobs = state.store.jobs.filter((entry) => entry.id !== job.id);
-      emit(state, { jobId: job.id, action: "removed" });
+      emit(state, { jobId: job.id, action: "removed", job });
     }
 
     // Manual runs should not advance other due jobs without executing them.

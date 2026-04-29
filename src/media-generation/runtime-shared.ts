@@ -62,6 +62,7 @@ const IMAGE_RESOLUTION_ORDER = ["1K", "2K", "4K"] as const;
 
 type CapabilityProviderCandidate = {
   id: string;
+  aliases?: readonly string[];
   defaultModel?: string | null;
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
 };
@@ -122,7 +123,7 @@ function resolveAutoCapabilityFallbackRefs(params: {
   agentDir?: string;
   listProviders: (cfg?: OpenClawConfig) => CapabilityProviderCandidate[];
 }): string[] {
-  const providerDefaults = new Map<string, string>();
+  const providerDefaults = new Map<string, { ref: string; aliases: string[] }>();
   for (const provider of params.listProviders(params.cfg)) {
     const providerId = normalizeOptionalString(provider.id);
     const modelId = normalizeOptionalString(provider.defaultModel);
@@ -138,19 +139,26 @@ function resolveAutoCapabilityFallbackRefs(params: {
     ) {
       continue;
     }
-    providerDefaults.set(providerId, `${providerId}/${modelId}`);
+    const aliases = (provider.aliases ?? []).flatMap((alias) => {
+      const normalized = normalizeOptionalString(alias);
+      return normalized ? [normalized] : [];
+    });
+    providerDefaults.set(providerId, { ref: `${providerId}/${modelId}`, aliases });
   }
 
   const defaultProvider = resolveCurrentDefaultProviderId(params.cfg);
+  const providerIds = [...providerDefaults.keys()].toSorted();
+  const matchesDefaultProvider = (providerId: string): boolean => {
+    const entry = providerDefaults.get(providerId);
+    return providerId === defaultProvider || (entry?.aliases ?? []).includes(defaultProvider);
+  };
   const orderedProviders = [
-    defaultProvider,
-    ...[...providerDefaults.keys()]
-      .filter((providerId) => providerId !== defaultProvider)
-      .toSorted(),
+    ...providerIds.filter(matchesDefaultProvider),
+    ...providerIds.filter((providerId) => !matchesDefaultProvider(providerId)),
   ];
   return orderedProviders.flatMap((providerId) => {
-    const ref = providerDefaults.get(providerId);
-    return ref ? [ref] : [];
+    const entry = providerDefaults.get(providerId);
+    return entry ? [entry.ref] : [];
   });
 }
 

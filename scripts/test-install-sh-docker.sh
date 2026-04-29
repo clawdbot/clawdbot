@@ -226,6 +226,15 @@ restore_local_dist_from_image() {
   docker rm -f "$container_id" >/dev/null
 }
 
+ensure_local_update_dist_import_closure() {
+  if node scripts/check-package-dist-imports.mjs "$ROOT_DIR"; then
+    return 0
+  fi
+  echo "WARN: reused Docker image dist failed import-closure check; rebuilding local release artifacts" >&2
+  pnpm build
+  pnpm ui:build
+}
+
 prepare_update_tarball() {
   local pack_json
   local baseline_pack_json
@@ -241,6 +250,7 @@ prepare_update_tarball() {
     echo "==> Build local release artifacts for update smoke"
     if [[ -n "$UPDATE_DIST_IMAGE" ]]; then
       restore_local_dist_from_image "$UPDATE_DIST_IMAGE"
+      ensure_local_update_dist_import_closure
     elif [[ "$UPDATE_SKIP_LOCAL_BUILD" != "1" ]]; then
       pnpm build
       pnpm ui:build
@@ -249,6 +259,7 @@ prepare_update_tarball() {
       node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version'
     )"
     node --import tsx scripts/write-package-dist-inventory.ts
+    node scripts/check-package-dist-imports.mjs "$ROOT_DIR"
     quiet_npm pack --ignore-scripts --json --pack-destination "$UPDATE_DIR" >"$pack_json_file"
   fi
   UPDATE_TGZ_FILE="$(
@@ -262,6 +273,9 @@ if (!last || typeof last.filename !== "string" || last.filename.length === 0) {
 process.stdout.write(last.filename);
 ' "$pack_json_file"
   )"
+  if [[ -z "$UPDATE_PACKAGE_SPEC" ]]; then
+    node scripts/check-openclaw-package-tarball.mjs "${UPDATE_DIR}/${UPDATE_TGZ_FILE}"
+  fi
   print_pack_audit "update" "$pack_json_file"
   assert_pack_unpacked_size_budget "update" "$pack_json_file"
   packed_update_version="$(

@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { msteamsActionsAdapter } from "./actions.js";
 import { msteamsPlugin } from "./channel.js";
 
 const {
@@ -100,7 +99,7 @@ function okMSTeamsActionDetails(action: string, details?: Record<string, unknown
 }
 
 function requireMSTeamsHandleAction() {
-  const handleAction = msteamsActionsAdapter.handleAction;
+  const handleAction = msteamsPlugin.actions?.handleAction;
   if (!handleAction) {
     throw new Error("msteams actions.handleAction unavailable");
   }
@@ -234,7 +233,7 @@ describe("msteamsPlugin message actions", () => {
 
   it("advertises upload-file in the message tool surface", () => {
     expect(
-      msteamsActionsAdapter.describeMessageTool?.({
+      msteamsPlugin.actions?.describeMessageTool?.({
         cfg: {
           channels: {
             msteams: {

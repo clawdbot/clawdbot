@@ -55,6 +55,7 @@ describe("venice provider plugin", () => {
               },
             ],
           },
+          { role: "assistant", content: "done" },
         ],
       };
       (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(payload);
@@ -85,6 +86,11 @@ describe("venice provider plugin", () => {
                 function: { name: "read", arguments: "{}" },
               },
             ],
+            reasoning_content: "",
+          },
+          {
+            role: "assistant",
+            content: "done",
             reasoning_content: "",
           },
         ],

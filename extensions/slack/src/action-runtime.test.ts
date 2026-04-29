@@ -515,6 +515,24 @@ describe("handleSlackAction", () => {
     await sendSecondMessageAndExpectNoThread({ cfg, context });
   });
 
+  it("replyToMode=first normalizes channel target when accounting explicit threadTs", async () => {
+    const { cfg, context, hasRepliedRef } = createReplyToFirstScenario();
+
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "#c123",
+        content: "Explicit",
+        threadTs: "9999999999.999999",
+      },
+      cfg,
+      context,
+    );
+
+    expect(hasRepliedRef.value).toBe(true);
+    await sendSecondMessageAndExpectNoThread({ cfg, context });
+  });
+
   it("replyToMode=first marks hasRepliedRef even when threadTs is explicit", async () => {
     const { cfg, context, hasRepliedRef } = createReplyToFirstScenario();
 

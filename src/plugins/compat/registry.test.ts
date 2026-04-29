@@ -123,7 +123,7 @@ const knownDeprecatedSurfaceMarkers = [
   {
     code: "bundled-channel-config-schema-legacy",
     file: "src/plugin-sdk/channel-config-schema-legacy.ts",
-    marker: "Deprecated bundled-channel compatibility surface",
+    marker: "Compatibility surface for bundled channel schemas",
   },
   {
     code: "plugin-sdk-testing-barrel",

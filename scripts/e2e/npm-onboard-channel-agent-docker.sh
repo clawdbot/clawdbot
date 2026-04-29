@@ -38,19 +38,20 @@ prepare_package_tgz() {
 prepare_package_tgz
 
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
-docker_e2e_harness_mount_args
 run_log="$(docker_e2e_run_log npm-onboard-channel-agent)"
+OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 npm-onboard-channel-agent empty)"
 
 echo "Running npm tarball onboard/channel/agent Docker E2E ($CHANNEL)..."
-if ! docker run --rm \
+if ! docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_NPM_ONBOARD_CHANNEL="$CHANNEL" \
+  -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
-  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
 set -euo pipefail
 
-export HOME="$(mktemp -d "/tmp/openclaw-npm-onboard.XXXXXX")"
+source scripts/lib/openclaw-e2e-instance.sh
+openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
 export NPM_CONFIG_PREFIX="$HOME/.npm-global"
 export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 export OPENAI_API_KEY="sk-openclaw-npm-onboard-e2e"
@@ -61,6 +62,7 @@ PORT="18789"
 MOCK_PORT="44080"
 SUCCESS_MARKER="OPENCLAW_AGENT_E2E_OK_ASSISTANT"
 MOCK_REQUEST_LOG="/tmp/openclaw-mock-openai-requests.jsonl"
+export SUCCESS_MARKER MOCK_REQUEST_LOG
 mock_pid=""
 
 case "$CHANNEL" in
@@ -79,17 +81,14 @@ case "$CHANNEL" in
 esac
 
 cleanup() {
-  if [ -n "${mock_pid:-}" ] && kill -0 "$mock_pid" 2>/dev/null; then
-    kill "$mock_pid" 2>/dev/null || true
-    wait "$mock_pid" 2>/dev/null || true
-  fi
+  openclaw_e2e_stop_process "${mock_pid:-}"
 }
 trap cleanup EXIT
 
 dump_debug_logs() {
   local status="$1"
   echo "npm onboard/channel/agent scenario failed with exit code $status" >&2
-  for file in \
+  openclaw_e2e_dump_logs \
     /tmp/openclaw-install.log \
     /tmp/openclaw-onboard.json \
     /tmp/openclaw-channel-add.log \
@@ -98,51 +97,18 @@ dump_debug_logs() {
     /tmp/openclaw-agent.err \
     /tmp/openclaw-agent.json \
     /tmp/openclaw-mock-openai.log \
-    "$MOCK_REQUEST_LOG"; do
-    if [ -f "$file" ]; then
-      echo "--- $file ---" >&2
-      sed -n '1,220p' "$file" >&2 || true
-    fi
-  done
+    "$MOCK_REQUEST_LOG"
 }
 trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
 
-echo "Installing mounted OpenClaw package..."
-package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
-npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-install.log 2>&1
+openclaw_e2e_install_package /tmp/openclaw-install.log
 
 command -v openclaw >/dev/null
-package_root="$(npm root -g)/openclaw"
-test -d "$package_root/dist/extensions/telegram"
-test -d "$package_root/dist/extensions/discord"
+package_root="$(openclaw_e2e_package_root)"
+openclaw_e2e_assert_package_extensions "$package_root" telegram discord
 
-assert_dep_absent() {
-  local sentinel="$1"
-  if find "$package_root" "$HOME/.openclaw" -path "*/node_modules/$sentinel/package.json" -print -quit 2>/dev/null | grep -q .; then
-    echo "$sentinel should not be installed before channel activation repair" >&2
-    find "$package_root" "$HOME/.openclaw" -path "*/node_modules/$sentinel/package.json" -print 2>/dev/null >&2 || true
-    exit 1
-  fi
-}
-
-assert_dep_present() {
-  local sentinel="$1"
-  if ! find "$package_root" "$HOME/.openclaw" -path "*/node_modules/$sentinel/package.json" -print -quit 2>/dev/null | grep -q .; then
-    echo "$sentinel was not installed on demand" >&2
-    find "$package_root" "$HOME/.openclaw" -maxdepth 6 -type d -name node_modules -print 2>/dev/null >&2 || true
-    exit 1
-  fi
-}
-
-MOCK_PORT="$MOCK_PORT" SUCCESS_MARKER="$SUCCESS_MARKER" MOCK_REQUEST_LOG="$MOCK_REQUEST_LOG" node scripts/e2e/mock-openai-server.mjs >/tmp/openclaw-mock-openai.log 2>&1 &
-mock_pid="$!"
-for _ in $(seq 1 80); do
-  if node -e "fetch('http://127.0.0.1:${MOCK_PORT}/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then
-    break
-  fi
-  sleep 0.1
-done
-node -e "fetch('http://127.0.0.1:${MOCK_PORT}/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+mock_pid="$(openclaw_e2e_start_mock_openai "$MOCK_PORT" /tmp/openclaw-mock-openai.log)"
+openclaw_e2e_wait_mock_openai "$MOCK_PORT"
 
 echo "Running non-interactive onboarding..."
 openclaw onboard --non-interactive --accept-risk \
@@ -240,7 +206,7 @@ cfg.plugins = {
 fs.writeFileSync(configPath, `${JSON.stringify(cfg, null, 2)}\n`);
 NODE
 
-assert_dep_absent "$DEP_SENTINEL"
+openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$package_root" "$HOME/.openclaw"
 
 echo "Configuring $CHANNEL..."
 openclaw channels add --channel "$CHANNEL" --token "$CHANNEL_TOKEN" >/tmp/openclaw-channel-add.log 2>&1
@@ -262,7 +228,7 @@ NODE
 
 echo "Running doctor after channel activation..."
 openclaw doctor --repair --non-interactive >/tmp/openclaw-doctor.log 2>&1
-assert_dep_present "$DEP_SENTINEL"
+openclaw_e2e_assert_dep_present "$DEP_SENTINEL" "$package_root" "$HOME/.openclaw"
 
 echo "Running local agent turn against mocked OpenAI..."
 openclaw agent --local \

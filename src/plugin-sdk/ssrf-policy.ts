@@ -23,7 +23,7 @@ export type PrivateNetworkOptInInput =
   | Pick<SsrFPolicy, "allowPrivateNetwork" | "dangerouslyAllowPrivateNetwork">
   | {
       dangerouslyAllowPrivateNetwork?: boolean | null;
-      /** Compatibility alias for legacy callers; prefer dangerouslyAllowPrivateNetwork. */
+      /** @deprecated Compatibility alias; prefer dangerouslyAllowPrivateNetwork. */
       allowPrivateNetwork?: boolean | null;
       network?:
         | Pick<SsrFPolicy, "allowPrivateNetwork" | "dangerouslyAllowPrivateNetwork">

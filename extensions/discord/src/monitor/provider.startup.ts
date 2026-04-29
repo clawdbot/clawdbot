@@ -253,7 +253,6 @@ export function registerDiscordMonitorListeners(params: {
   logger: NonNullable<ConstructorParameters<typeof DiscordMessageListener>[1]>;
   messageHandler: ConstructorParameters<typeof DiscordMessageListener>[0];
   trackInboundEvent?: () => void;
-  eventQueueListenerTimeoutMs?: number;
 }) {
   registerDiscordListener(
     params.client.listeners,
@@ -261,9 +260,7 @@ export function registerDiscordMonitorListeners(params: {
   );
   registerDiscordListener(
     params.client.listeners,
-    new DiscordMessageListener(params.messageHandler, params.logger, params.trackInboundEvent, {
-      timeoutMs: params.eventQueueListenerTimeoutMs,
-    }),
+    new DiscordMessageListener(params.messageHandler, params.logger, params.trackInboundEvent),
   );
 
   const reactionListenerOptions: ConstructorParameters<typeof DiscordReactionListener>[0] = {

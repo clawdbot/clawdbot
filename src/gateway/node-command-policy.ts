@@ -115,7 +115,14 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...SCREEN_COMMANDS,
   ],
   linux: [...SYSTEM_COMMANDS],
-  windows: [...SYSTEM_COMMANDS],
+  windows: [
+    ...CANVAS_COMMANDS,
+    ...CAMERA_COMMANDS,
+    ...LOCATION_COMMANDS,
+    ...DEVICE_COMMANDS,
+    ...SYSTEM_COMMANDS,
+    ...SCREEN_COMMANDS,
+  ],
   // Fail-safe: unknown metadata should not receive host exec defaults.
   unknown: [...UNKNOWN_PLATFORM_COMMANDS],
 };

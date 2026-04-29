@@ -257,22 +257,20 @@ export async function authorizeSlackSystemEventSender(params: {
     if (!params.ctx.dmEnabled || params.ctx.dmPolicy === "disabled") {
       return { allowed: false, reason: "dm-disabled", channelType, channelName };
     }
-    if (params.ctx.dmPolicy !== "open") {
-      const allowFromLower = await resolveAllowFromLower(true);
-      const senderAllowListed = isSlackSenderAllowListed({
-        allowListLower: allowFromLower,
-        senderId,
-        senderName,
-        allowNameMatching: params.ctx.allowNameMatching,
-      });
-      if (!senderAllowListed) {
-        return {
-          allowed: false,
-          reason: "sender-not-allowlisted",
-          channelType,
-          channelName,
-        };
-      }
+    const allowFromLower = await resolveAllowFromLower(true);
+    const senderAllowListed = isSlackSenderAllowListed({
+      allowListLower: allowFromLower,
+      senderId,
+      senderName,
+      allowNameMatching: params.ctx.allowNameMatching,
+    });
+    if (!senderAllowListed) {
+      return {
+        allowed: false,
+        reason: "sender-not-allowlisted",
+        channelType,
+        channelName,
+      };
     }
   } else if (!channelId) {
     // No channel context. Preserve the existing open default unless a global

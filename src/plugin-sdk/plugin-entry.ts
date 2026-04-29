@@ -224,6 +224,11 @@ type DefinePluginEntryOptions = {
   id: string;
   name: string;
   description: string;
+  /**
+   * @deprecated Declare exclusive plugin kind in `openclaw.plugin.json` via
+   * manifest `kind`. Runtime-entry `kind` remains only as a compatibility
+   * fallback for older plugins.
+   */
   kind?: OpenClawPluginDefinition["kind"];
   configSchema?: OpenClawPluginConfigSchema | (() => OpenClawPluginConfigSchema);
   reload?: OpenClawPluginDefinition["reload"];

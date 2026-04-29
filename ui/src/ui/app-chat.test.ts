@@ -427,6 +427,110 @@ describe("handleSendChat", () => {
     vi.unstubAllGlobals();
   });
 
+  it("cancels button-triggered /new resets when confirmation is declined", async () => {
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm);
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "keep this draft",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host, "/new", { confirmReset: true, restoreDraft: true });
+
+    expect(confirm).toHaveBeenCalledWith("Start a new session? This will reset the current chat.");
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatMessage).toBe("keep this draft");
+    expect(host.chatMessages).toEqual([]);
+    expect(host.chatRunId).toBeNull();
+    expect(host.refreshSessionsAfterChat.size).toBe(0);
+  });
+
+  it("cancels button-triggered /new resets when confirmation is unavailable", async () => {
+    vi.stubGlobal("confirm", undefined);
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "keep this draft",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host, "/new", { confirmReset: true, restoreDraft: true });
+
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatMessage).toBe("keep this draft");
+    expect(host.chatMessages).toEqual([]);
+    expect(host.chatRunId).toBeNull();
+    expect(host.refreshSessionsAfterChat.size).toBe(0);
+  });
+
+  it("sends button-triggered /new resets after confirmation", async () => {
+    const confirm = vi.fn(() => true);
+    vi.stubGlobal("confirm", confirm);
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "restore me",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host, "/new", { confirmReset: true, restoreDraft: true });
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "agent:main",
+        message: "/new",
+        deliver: false,
+        idempotencyKey: expect.any(String),
+      }),
+    );
+    expect(host.chatMessage).toBe("restore me");
+    expect(host.refreshSessionsAfterChat).toContain(host.chatRunId);
+  });
+
+  it.each(["/new", "/reset"])(
+    "preserves typed %s command dispatch without confirmation",
+    async (command) => {
+      const confirm = vi.fn(() => false);
+      vi.stubGlobal("confirm", confirm);
+      const request = vi.fn(async (method: string) => {
+        if (method === "chat.send") {
+          return { status: "started" };
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const host = makeHost({
+        client: { request } as unknown as ChatHost["client"],
+        chatMessage: command,
+        sessionKey: "agent:main",
+      });
+
+      await handleSendChat(host);
+
+      expect(confirm).not.toHaveBeenCalled();
+      expect(request).toHaveBeenCalledWith(
+        "chat.send",
+        expect.objectContaining({
+          sessionKey: "agent:main",
+          message: command,
+        }),
+      );
+      expect(host.chatMessage).toBe("");
+    },
+  );
+
   it("keeps slash-command model changes in sync with the chat header cache", async () => {
     vi.stubGlobal(
       "fetch",

@@ -27,7 +27,7 @@ the Gateway, then restart the Gateway to load it.
 <Steps>
   <Step title="Install the plugin">
     <Tabs>
-      <Tab title="From npm (recommended)">
+      <Tab title="From npm">
         ```bash
         openclaw plugins install @openclaw/voice-call
         ```
@@ -40,6 +40,10 @@ the Gateway, then restart the Gateway to load it.
         ```
       </Tab>
     </Tabs>
+
+    If npm reports the OpenClaw-owned package as deprecated, that package version
+    is from an older external package train; use a current packaged OpenClaw
+    build or the local folder path until a newer npm package is published.
 
     Restart the Gateway afterwards so the plugin loads.
 

@@ -87,6 +87,7 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.OPENCLAW_TEST_FAST).toBe("1");
     expect(env.OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER).toBe("1");
     expect(env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS).toBe("1");
+    expect(env.OPENCLAW_SKIP_STARTUP_MODEL_PREWARM).toBe("1");
     expect(env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBe("/tmp/openclaw-qa/bundled-plugins");
     expect(env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2026.4.8");
   });

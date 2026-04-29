@@ -399,6 +399,46 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("skips distinct late final text after streaming card close", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    await options.deliver({ text: "First complete answer" }, { kind: "final" });
+    await options.onIdle?.();
+    await options.deliver(
+      { text: "Late tool-result final", mediaUrl: "https://example.com/a.png" },
+      { kind: "final" },
+    );
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("First complete answer", {
+      note: "Agent: agent",
+    });
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "https://example.com/a.png",
+      }),
+    );
+  });
+
   it("suppresses duplicate final text while still sending media", async () => {
     const options = setupNonStreamingAutoDispatcher();
     await options.deliver({ text: "plain final" }, { kind: "final" });
@@ -916,6 +956,86 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances[0].close).toHaveBeenCalledWith("final answer", {
       note: "Agent: agent",
     });
+  });
+
+  it("does not suppress a later final after error closeout", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("media failed"));
+
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    await expect(
+      options.deliver(
+        { text: "First answer", mediaUrl: "https://example.com/a.png" },
+        { kind: "final" },
+      ),
+    ).rejects.toThrow("media failed");
+    await Promise.all([
+      options.onError?.(new Error("media failed"), { kind: "final" }),
+      options.onIdle?.(),
+    ]);
+    await options.deliver({ text: "Second answer" }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(2);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("First answer", {
+      note: "Agent: agent",
+    });
+    expect(streamingInstances[1].close).toHaveBeenCalledWith("Second answer", {
+      note: "Agent: agent",
+    });
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("does not suppress a recovery final after late media failure", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    await options.deliver({ text: "First answer" }, { kind: "final" });
+    await options.onIdle?.();
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("media failed"));
+    await expect(
+      options.deliver(
+        { text: "Late attachment", mediaUrl: "https://example.com/a.png" },
+        { kind: "final" },
+      ),
+    ).rejects.toThrow("media failed");
+    await options.onError?.(new Error("media failed"), { kind: "final" });
+    await options.deliver({ text: "Recovered answer" }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(2);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("First answer", {
+      note: "Agent: agent",
+    });
+    expect(streamingInstances[1].close).toHaveBeenCalledWith("Recovered answer", {
+      note: "Agent: agent",
+    });
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
 
   it("cleans streaming state even when close throws", async () => {

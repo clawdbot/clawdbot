@@ -462,7 +462,7 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("keeps removed bundled-channel aliases out of the public sdk list", () => {
-    const removedChannelAliases = new Set(["discord", "signal", "slack", "telegram", "whatsapp"]);
+    const removedChannelAliases = new Set(["signal", "slack", "telegram", "whatsapp"]);
     const banned = pluginSdkSubpaths.filter((subpath) => removedChannelAliases.has(subpath));
     expect(banned).toEqual([]);
   });
@@ -640,6 +640,7 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceMentions("compat", [
       "createPluginRuntimeStore",
       "createScopedChannelConfigAdapter",
+      "collectOpenGroupPolicyConfiguredRouteWarnings",
       "resolveControlCommandGate",
       "delegateCompactionToRuntime",
     ]);
@@ -683,15 +684,15 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceContains(
       "memory-core-host-runtime-core",
-      'export * from "../memory-host-sdk/runtime-core.js";',
+      'export * from "../../packages/memory-host-sdk/src/runtime-core.js";',
     );
     expectSourceContains(
       "memory-core-host-runtime-cli",
-      'export * from "../memory-host-sdk/runtime-cli.js";',
+      'export * from "../../packages/memory-host-sdk/src/runtime-cli.js";',
     );
     expectSourceContains(
       "memory-core-host-runtime-files",
-      'export * from "../memory-host-sdk/runtime-files.js";',
+      'export * from "../../packages/memory-host-sdk/src/runtime-files.js";',
     );
     expectSourceMentions("plugin-test-runtime", [
       "registerSingleProviderPlugin",
@@ -847,6 +848,7 @@ describe("plugin-sdk subpath exports", () => {
       "createDraftStreamLoop",
       "createLoggedPairingApprovalNotifier",
       "createPairingPrefixStripper",
+      "createChannelRunQueue",
       "createRunStateMachine",
       "createRuntimeDirectoryLiveAdapter",
       "createRuntimeOutboundDelegates",
@@ -1297,6 +1299,7 @@ describe("plugin-sdk subpath exports", () => {
 
     expect(typeof channelLifecycleSdk.createDraftStreamLoop).toBe("function");
     expect(typeof channelLifecycleSdk.createFinalizableDraftLifecycle).toBe("function");
+    expect(typeof channelLifecycleSdk.createChannelRunQueue).toBe("function");
     expect(typeof channelLifecycleSdk.runPassiveAccountLifecycle).toBe("function");
     expect(typeof channelLifecycleSdk.createRunStateMachine).toBe("function");
     expect(typeof channelLifecycleSdk.createArmableStallWatchdog).toBe("function");

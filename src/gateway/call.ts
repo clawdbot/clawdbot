@@ -33,8 +33,10 @@ import {
   type GatewayRemoteCredentialPrecedence,
 } from "./credentials.js";
 import { canSkipGatewayConfigLoad } from "./explicit-connection-policy.js";
+import { resolvePreauthHandshakeTimeoutMs } from "./handshake-timeouts.js";
 import {
   CLI_DEFAULT_OPERATOR_SCOPES,
+  isGatewayMethodClassified,
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
@@ -79,6 +81,54 @@ export type CallGatewayCliOptions = CallGatewayBaseOptions & {
 export type CallGatewayOptions = CallGatewayBaseOptions & {
   scopes?: OperatorScope[];
 };
+
+export type GatewayTransportErrorKind = "closed" | "timeout";
+
+export class GatewayTransportError extends Error {
+  readonly kind: GatewayTransportErrorKind;
+  readonly connectionDetails: GatewayConnectionDetails;
+  readonly code?: number;
+  readonly reason?: string;
+  readonly timeoutMs?: number;
+
+  constructor(params: {
+    kind: GatewayTransportErrorKind;
+    message: string;
+    connectionDetails: GatewayConnectionDetails;
+    code?: number;
+    reason?: string;
+    timeoutMs?: number;
+  }) {
+    super(params.message);
+    this.name = "GatewayTransportError";
+    this.kind = params.kind;
+    this.connectionDetails = params.connectionDetails;
+    if (params.code !== undefined) {
+      this.code = params.code;
+    }
+    if (params.reason !== undefined) {
+      this.reason = params.reason;
+    }
+    if (params.timeoutMs !== undefined) {
+      this.timeoutMs = params.timeoutMs;
+    }
+  }
+}
+
+export function isGatewayTransportError(value: unknown): value is GatewayTransportError {
+  if (value instanceof GatewayTransportError) {
+    return true;
+  }
+  if (!(value instanceof Error) || value.name !== "GatewayTransportError") {
+    return false;
+  }
+  const candidate = value as Partial<GatewayTransportError>;
+  return (
+    (candidate.kind === "closed" || candidate.kind === "timeout") &&
+    typeof candidate.connectionDetails === "object" &&
+    candidate.connectionDetails !== null
+  );
+}
 
 const defaultCreateGatewayClient = (opts: GatewayClientOptions) => new GatewayClient(opts);
 const defaultGatewayCallDeps = {
@@ -317,12 +367,30 @@ type ResolvedGatewayCallContext = {
   remotePasswordFallback?: GatewayRemoteCredentialFallback;
 };
 
-function resolveGatewayCallTimeout(timeoutValue: unknown): {
+function resolveGatewayCallTimeout(
+  timeoutValue: unknown,
+  configuredHandshakeTimeoutMs?: number | null,
+): {
   timeoutMs: number;
   safeTimerTimeoutMs: number;
 } {
+  const hasConfiguredHandshakeTimeout =
+    typeof configuredHandshakeTimeoutMs === "number" &&
+    Number.isFinite(configuredHandshakeTimeoutMs) &&
+    configuredHandshakeTimeoutMs > 0;
+  const hasEnvHandshakeTimeout =
+    Boolean(process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS) ||
+    Boolean(process.env.VITEST && process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS);
+  const resolvedHandshakeTimeoutMs =
+    hasConfiguredHandshakeTimeout || hasEnvHandshakeTimeout
+      ? resolvePreauthHandshakeTimeoutMs({ configuredTimeoutMs: configuredHandshakeTimeoutMs })
+      : undefined;
   const timeoutMs =
-    typeof timeoutValue === "number" && Number.isFinite(timeoutValue) ? timeoutValue : 10_000;
+    typeof timeoutValue === "number" && Number.isFinite(timeoutValue)
+      ? timeoutValue
+      : typeof resolvedHandshakeTimeoutMs === "number" && resolvedHandshakeTimeoutMs > 10_000
+        ? resolvedHandshakeTimeoutMs
+        : 10_000;
   const safeTimerTimeoutMs = resolveSafeTimeoutDelayMs(timeoutMs);
   return { timeoutMs, safeTimerTimeoutMs };
 }
@@ -468,6 +536,33 @@ function formatGatewayTimeoutError(
   return `gateway timeout after ${timeoutMs}ms\n${connectionDetails.message}`;
 }
 
+function createGatewayCloseTransportError(params: {
+  code: number;
+  reason: string;
+  connectionDetails: GatewayConnectionDetails;
+}): GatewayTransportError {
+  const reasonText = normalizeOptionalString(params.reason) || "no close reason";
+  return new GatewayTransportError({
+    kind: "closed",
+    code: params.code,
+    reason: reasonText,
+    connectionDetails: params.connectionDetails,
+    message: formatGatewayCloseError(params.code, params.reason, params.connectionDetails),
+  });
+}
+
+function createGatewayTimeoutTransportError(params: {
+  timeoutMs: number;
+  connectionDetails: GatewayConnectionDetails;
+}): GatewayTransportError {
+  return new GatewayTransportError({
+    kind: "timeout",
+    timeoutMs: params.timeoutMs,
+    connectionDetails: params.connectionDetails,
+    message: formatGatewayTimeoutError(params.timeoutMs, params.connectionDetails),
+  });
+}
+
 function ensureGatewaySupportsRequiredMethods(params: {
   requiredMethods: string[] | undefined;
   methods: string[] | undefined;
@@ -504,12 +599,22 @@ async function executeGatewayRequestWithScopes<T>(params: {
   token?: string;
   password?: string;
   tlsFingerprint?: string;
+  preauthHandshakeTimeoutMs?: number;
   timeoutMs: number;
   safeTimerTimeoutMs: number;
   connectionDetails: GatewayConnectionDetails;
 }): Promise<T> {
-  const { opts, scopes, url, token, password, tlsFingerprint, timeoutMs, safeTimerTimeoutMs } =
-    params;
+  const {
+    opts,
+    scopes,
+    url,
+    token,
+    password,
+    tlsFingerprint,
+    preauthHandshakeTimeoutMs,
+    timeoutMs,
+    safeTimerTimeoutMs,
+  } = params;
   // Yield to the event loop before starting the WebSocket connection.
   // On Windows with large dist bundles, heavy synchronous module loading
   // can starve the event loop, preventing timely processing of the
@@ -538,6 +643,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       token,
       password,
       tlsFingerprint,
+      preauthHandshakeTimeoutMs,
       instanceId: opts.instanceId ?? randomUUID(),
       clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
       clientDisplayName: resolveGatewayClientDisplayName(opts),
@@ -575,13 +681,24 @@ async function executeGatewayRequestWithScopes<T>(params: {
           return;
         }
         ignoreClose = true;
-        stop(new Error(formatGatewayCloseError(code, reason, params.connectionDetails)));
+        stop(
+          createGatewayCloseTransportError({
+            code,
+            reason,
+            connectionDetails: params.connectionDetails,
+          }),
+        );
       },
     });
 
     const timer = setTimeout(() => {
       ignoreClose = true;
-      stop(new Error(formatGatewayTimeoutError(timeoutMs, params.connectionDetails)));
+      stop(
+        createGatewayTimeoutTransportError({
+          timeoutMs,
+          connectionDetails: params.connectionDetails,
+        }),
+      );
     }, safeTimerTimeoutMs);
 
     client.start();
@@ -592,8 +709,11 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   opts: CallGatewayBaseOptions,
   scopes: OperatorScope[],
 ): Promise<T> {
-  const { timeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(opts.timeoutMs);
   const context = resolveGatewayCallContext(opts);
+  const { timeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(
+    opts.timeoutMs,
+    context.config.gateway?.handshakeTimeoutMs,
+  );
   const resolvedCredentials = await resolveGatewayCredentials(context);
   ensureExplicitGatewayAuth({
     urlOverride: context.urlOverride,
@@ -620,6 +740,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     token,
     password,
     tlsFingerprint,
+    preauthHandshakeTimeoutMs: context.config.gateway?.handshakeTimeoutMs,
     timeoutMs,
     safeTimerTimeoutMs,
     connectionDetails,
@@ -635,7 +756,11 @@ export async function callGatewayScoped<T = Record<string, unknown>>(
 export async function callGatewayCli<T = Record<string, unknown>>(
   opts: CallGatewayCliOptions,
 ): Promise<T> {
-  const scopes = Array.isArray(opts.scopes) ? opts.scopes : CLI_DEFAULT_OPERATOR_SCOPES;
+  const scopes = Array.isArray(opts.scopes)
+    ? opts.scopes
+    : isGatewayMethodClassified(opts.method)
+      ? resolveLeastPrivilegeOperatorScopesForMethod(opts.method)
+      : CLI_DEFAULT_OPERATOR_SCOPES;
   return await callGatewayWithScopes(opts, scopes);
 }
 

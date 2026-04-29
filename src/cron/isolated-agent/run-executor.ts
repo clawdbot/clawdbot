@@ -1,4 +1,5 @@
 import type { SkillSnapshot } from "../../agents/skills.js";
+import { normalizeToolList } from "../../agents/tool-policy.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -45,6 +46,13 @@ async function loadCronEmbeddedRuntime() {
 async function loadCronSubagentRegistryRuntime() {
   cronSubagentRegistryRuntimePromise ??= import("./run-subagent-registry.runtime.js");
   return await cronSubagentRegistryRuntimePromise;
+}
+
+function resolveCronOwnerOnlyToolAllowlist(toolsAllow: string[] | undefined): string[] | undefined {
+  if (!normalizeToolList(toolsAllow).includes("cron")) {
+    return undefined;
+  }
+  return ["cron"];
 }
 
 export type CronExecutionResult = {
@@ -172,6 +180,9 @@ export function createCronPromptExecutor(params: {
           cleanupBundleMcpOnRunEnd: params.job.sessionTarget === "isolated",
           allowGatewaySubagentBinding: true,
           senderIsOwner: false,
+          ownerOnlyToolAllowlist: resolveCronOwnerOnlyToolAllowlist(
+            params.agentPayload?.toolsAllow,
+          ),
           messageChannel: params.messageChannel,
           agentAccountId: params.resolvedDelivery.accountId,
           messageTo: params.resolvedDelivery.to,

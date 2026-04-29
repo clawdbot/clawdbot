@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
@@ -18,6 +19,7 @@ import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "../
 import { deliverSubagentAnnouncement } from "../subagent-announce-delivery.js";
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-shared");
+const MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS = 60_000;
 
 export type MediaGenerationTaskHandle = {
   taskId: string;
@@ -63,6 +65,13 @@ type WakeMediaGenerationTaskCompletionParams = {
   statsLine?: string;
 };
 
+function touchMediaGenerationTaskRunContext(handle: MediaGenerationTaskHandle) {
+  registerAgentRunContext(handle.runId, {
+    sessionKey: handle.requesterSessionKey,
+    lastActiveAt: Date.now(),
+  });
+}
+
 export function createMediaGenerationTaskRun(params: {
   sessionKey?: string;
   requesterOrigin?: DeliveryContext;
@@ -97,13 +106,15 @@ export function createMediaGenerationTaskRun(params: {
       lastEventAt: Date.now(),
       progressSummary: params.queuedProgressSummary,
     });
-    return {
+    const handle = {
       taskId: task.taskId,
       runId,
       requesterSessionKey: sessionKey,
       requesterOrigin: params.requesterOrigin,
       taskLabel: params.prompt,
     };
+    touchMediaGenerationTaskRunContext(handle);
+    return handle;
   } catch (error) {
     log.warn("Failed to create media generation task ledger record", {
       sessionKey,
@@ -123,6 +134,7 @@ export function recordMediaGenerationTaskProgress(params: {
   if (!params.handle) {
     return;
   }
+  touchMediaGenerationTaskRunContext(params.handle);
   recordTaskRunProgressByRunId({
     runId: params.handle.runId,
     runtime: "cli",
@@ -131,6 +143,30 @@ export function recordMediaGenerationTaskProgress(params: {
     progressSummary: params.progressSummary,
     eventSummary: params.eventSummary,
   });
+}
+
+export async function withMediaGenerationTaskKeepalive<T>(params: {
+  handle: MediaGenerationTaskHandle | null;
+  progressSummary: string;
+  eventSummary?: string;
+  run: () => Promise<T>;
+}): Promise<T> {
+  if (!params.handle) {
+    return await params.run();
+  }
+  const interval = setInterval(() => {
+    recordMediaGenerationTaskProgress({
+      handle: params.handle,
+      progressSummary: params.progressSummary,
+      eventSummary: params.eventSummary,
+    });
+  }, MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS);
+  interval.unref?.();
+  try {
+    return await params.run();
+  } finally {
+    clearInterval(interval);
+  }
 }
 
 export function completeMediaGenerationTaskRun(params: {
@@ -144,17 +180,21 @@ export function completeMediaGenerationTaskRun(params: {
   if (!params.handle) {
     return;
   }
-  const endedAt = Date.now();
-  const target = params.count === 1 ? params.paths[0] : `${params.count} files`;
-  completeTaskRunByRunId({
-    runId: params.handle.runId,
-    runtime: "cli",
-    sessionKey: params.handle.requesterSessionKey,
-    endedAt,
-    lastEventAt: endedAt,
-    progressSummary: `Generated ${params.count} ${params.generatedLabel}${params.count === 1 ? "" : "s"}`,
-    terminalSummary: `Generated ${params.count} ${params.generatedLabel}${params.count === 1 ? "" : "s"} with ${params.provider}/${params.model}${target ? ` -> ${target}` : ""}.`,
-  });
+  try {
+    const endedAt = Date.now();
+    const target = params.count === 1 ? params.paths[0] : `${params.count} files`;
+    completeTaskRunByRunId({
+      runId: params.handle.runId,
+      runtime: "cli",
+      sessionKey: params.handle.requesterSessionKey,
+      endedAt,
+      lastEventAt: endedAt,
+      progressSummary: `Generated ${params.count} ${params.generatedLabel}${params.count === 1 ? "" : "s"}`,
+      terminalSummary: `Generated ${params.count} ${params.generatedLabel}${params.count === 1 ? "" : "s"} with ${params.provider}/${params.model}${target ? ` -> ${target}` : ""}.`,
+    });
+  } finally {
+    clearAgentRunContext(params.handle.runId);
+  }
 }
 
 export function failMediaGenerationTaskRun(params: {
@@ -165,18 +205,22 @@ export function failMediaGenerationTaskRun(params: {
   if (!params.handle) {
     return;
   }
-  const endedAt = Date.now();
-  const errorText = formatErrorMessage(params.error);
-  failTaskRunByRunId({
-    runId: params.handle.runId,
-    runtime: "cli",
-    sessionKey: params.handle.requesterSessionKey,
-    endedAt,
-    lastEventAt: endedAt,
-    error: errorText,
-    progressSummary: params.progressSummary,
-    terminalSummary: errorText,
-  });
+  try {
+    const endedAt = Date.now();
+    const errorText = formatErrorMessage(params.error);
+    failTaskRunByRunId({
+      runId: params.handle.runId,
+      runtime: "cli",
+      sessionKey: params.handle.requesterSessionKey,
+      endedAt,
+      lastEventAt: endedAt,
+      error: errorText,
+      progressSummary: params.progressSummary,
+      terminalSummary: errorText,
+    });
+  } finally {
+    clearAgentRunContext(params.handle.runId);
+  }
 }
 
 function buildMediaGenerationReplyInstruction(params: {

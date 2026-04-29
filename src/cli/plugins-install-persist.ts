@@ -8,6 +8,7 @@ import {
   withoutPluginInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
 import type { PluginInstallUpdate } from "../plugins/installs.js";
+import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
 import {
@@ -78,7 +79,11 @@ export async function persistPluginInstall(params: {
       : enablePluginInConfig(installConfig, params.pluginId, {
           updateChannelConfig: false,
         }).config;
-  const installRecords = await loadInstalledPluginIndexInstallRecords();
+  const installRecords = await tracePluginLifecyclePhaseAsync(
+    "install records load",
+    () => loadInstalledPluginIndexInstallRecords(),
+    { command: "install" },
+  );
   const nextInstallRecords = recordPluginInstallInRecords(installRecords, {
     pluginId: params.pluginId,
     ...params.install,
@@ -86,18 +91,28 @@ export async function persistPluginInstall(params: {
   const slotResult =
     params.enable === false
       ? { config: next, warnings: [] }
-      : applySlotSelectionForPlugin(next, params.pluginId);
+      : await tracePluginLifecyclePhaseAsync(
+          "slot selection",
+          async () => applySlotSelectionForPlugin(next, params.pluginId),
+          { command: "install", pluginId: params.pluginId },
+        );
   next = withoutPluginInstallRecords(slotResult.config);
-  await commitPluginInstallRecordsWithConfig({
-    previousInstallRecords: installRecords,
-    nextInstallRecords,
-    nextConfig: next,
-    baseHash: params.snapshot.baseHash,
-  });
+  await tracePluginLifecyclePhaseAsync(
+    "config mutation",
+    () =>
+      commitPluginInstallRecordsWithConfig({
+        previousInstallRecords: installRecords,
+        nextInstallRecords,
+        nextConfig: next,
+        baseHash: params.snapshot.baseHash,
+      }),
+    { command: "install" },
+  );
   await refreshPluginRegistryAfterConfigMutation({
     config: next,
     reason: "source-changed",
     installRecords: nextInstallRecords,
+    traceCommand: "install",
     logger: {
       warn: (message) => defaultRuntime.log(theme.warn(message)),
     },

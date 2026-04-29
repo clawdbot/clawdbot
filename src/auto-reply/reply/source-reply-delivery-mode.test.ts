@@ -42,6 +42,15 @@ describe("resolveSourceReplyDeliveryMode", () => {
       }),
     ).toBe("automatic");
   });
+
+  it("treats native commands as explicit replies in groups", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "group", CommandSource: "native" },
+      }),
+    ).toBe("automatic");
+  });
 });
 
 describe("resolveSourceReplyVisibilityPolicy", () => {
@@ -80,6 +89,22 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
       suppressHookReplyLifecycle: false,
       suppressTyping: false,
       deliverySuppressionReason: "sourceReplyDeliveryMode: message_tool_only",
+    });
+  });
+
+  it("keeps native command replies visible in groups", () => {
+    expect(
+      resolveSourceReplyVisibilityPolicy({
+        cfg: emptyConfig,
+        ctx: { ChatType: "group", CommandSource: "native" },
+        sendPolicy: "allow",
+      }),
+    ).toMatchObject({
+      sourceReplyDeliveryMode: "automatic",
+      suppressAutomaticSourceDelivery: false,
+      suppressDelivery: false,
+      suppressHookReplyLifecycle: false,
+      suppressTyping: false,
     });
   });
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "OpenClaw Plugin Pre-Release Testing"
+  short_description: "Plan plugin release validation"
+  default_prompt: "Use $openclaw-pre-release-plugin-testing to plan or run pre-release OpenClaw plugin validation across package, lifecycle, doctor, gateway, SDK, and live-ish proof."

@@ -909,6 +909,18 @@ export async function promptModelAllowlist(params: {
   } finally {
     allowlistProgress.stop();
   }
+  if (preferredProvider) {
+    const configuredCatalog = buildConfiguredModelCatalog({ cfg }).filter(
+      (entry) => matchesPreferredProvider?.(entry.provider) === true,
+    );
+    const configuredKeys = new Set(
+      configuredCatalog.map((entry) => modelKey(entry.provider, entry.id)),
+    );
+    catalog = [
+      ...configuredCatalog,
+      ...catalog.filter((entry) => !configuredKeys.has(modelKey(entry.provider, entry.id))),
+    ];
+  }
   if (catalog.length === 0 && allowedKeys.length === 0) {
     const noCatalogInitialKeys =
       existingKeys.length > 0 ? normalizeModelKeys([...existingKeys, ...fallbackKeys]) : [];

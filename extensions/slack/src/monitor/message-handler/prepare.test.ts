@@ -148,6 +148,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     followUpTs: string;
     currentTs: string;
     channelsConfig?: Parameters<typeof createInboundSlackCtx>[0]["channelsConfig"];
+    allowFrom?: string[];
     resolveChannelName?: (channelId: string) => Promise<{
       name?: string;
       type?: SlackMessageEvent["channel_type"];
@@ -189,7 +190,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       replyToMode: "all",
       channelsConfig: params.channelsConfig,
     });
-    ctx.allowFrom = ["u-owner"];
+    ctx.allowFrom = params.allowFrom ?? ["u-owner"];
     ctx.resolveUserName = async (id: string) => ({
       name: id === params.user ? params.userName : "Owner",
     });
@@ -680,6 +681,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       replyTs: "300.500",
       followUpTs: "300.800",
       currentTs: "301.000",
+      allowFrom: ["*"],
     });
 
     expectThreadContextAllowsHumanHistory(

@@ -192,6 +192,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     signingSecret: signingSecret ?? undefined,
     slackWebhookPath,
     clientOptions: clientOptions as Record<string, unknown>,
+    ...(slackCfg.socketMode ? { socketMode: slackCfg.socketMode } : {}),
   });
 
   // Pre-set shuttingDown on the SocketModeClient before app.stop() to prevent

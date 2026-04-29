@@ -20,6 +20,21 @@ const promptAndConfigureOllamaMock = vi.hoisted(() =>
 );
 const ensureOllamaModelPulledMock = vi.hoisted(() => vi.fn(async () => {}));
 const buildOllamaProviderMock = vi.hoisted(() => vi.fn());
+const queryOllamaModelShowInfoMock = vi.hoisted(() => vi.fn());
+const buildOllamaModelDefinitionMock = vi.hoisted(() =>
+  vi.fn((modelId: string, contextWindow?: number, capabilities?: string[]) => ({
+    id: modelId,
+    name: modelId,
+    reasoning: capabilities?.includes("thinking") ?? false,
+    input: capabilities?.includes("vision") ? ["text", "image"] : ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: contextWindow ?? 8192,
+    maxTokens: 8192,
+    compat: capabilities
+      ? { supportsTools: capabilities.includes("tools"), supportsUsageInStreaming: true }
+      : { supportsUsageInStreaming: true },
+  })),
+);
 const createConfiguredOllamaStreamFnMock = vi.hoisted(() =>
   vi.fn((_params: { model: unknown; providerBaseUrl?: string }) => ({}) as never),
 );
@@ -29,6 +44,8 @@ vi.mock("./api.js", () => ({
   ensureOllamaModelPulled: ensureOllamaModelPulledMock,
   configureOllamaNonInteractive: vi.fn(),
   buildOllamaProvider: buildOllamaProviderMock,
+  queryOllamaModelShowInfo: queryOllamaModelShowInfoMock,
+  buildOllamaModelDefinition: buildOllamaModelDefinitionMock,
 }));
 
 vi.mock("./src/stream.js", async (importOriginal) => {
@@ -43,6 +60,8 @@ beforeEach(() => {
   promptAndConfigureOllamaMock.mockClear();
   ensureOllamaModelPulledMock.mockClear();
   buildOllamaProviderMock.mockReset();
+  queryOllamaModelShowInfoMock.mockReset();
+  buildOllamaModelDefinitionMock.mockClear();
   createConfiguredOllamaStreamFnMock.mockClear();
 });
 
@@ -411,6 +430,102 @@ describe("ollama plugin", () => {
         baseUrl: "http://127.0.0.1:11434",
       });
       expect(buildOllamaProviderMock).toHaveBeenCalledWith(undefined, { quiet: true });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OLLAMA_API_KEY;
+      } else {
+        process.env.OLLAMA_API_KEY = previous;
+      }
+    }
+  });
+
+  it("resolves requested Ollama cloud models that are omitted from tags but confirmed by show", async () => {
+    const provider = registerProvider();
+    const previous = process.env.OLLAMA_API_KEY;
+    process.env.OLLAMA_API_KEY = "ollama-local";
+    buildOllamaProviderMock.mockResolvedValueOnce({
+      baseUrl: "http://127.0.0.1:11434",
+      api: "ollama",
+      models: [
+        {
+          id: "kimi-k2.5:cloud",
+          name: "kimi-k2.5:cloud",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 262144,
+          maxTokens: 8192,
+        },
+      ],
+    });
+    queryOllamaModelShowInfoMock.mockResolvedValueOnce({
+      contextWindow: 1048576,
+      capabilities: ["completion", "tools", "thinking"],
+    });
+
+    try {
+      await provider.prepareDynamicModel?.({
+        config: {},
+        provider: "ollama",
+        modelId: "deepseek-v4-pro:cloud",
+        modelRegistry: { find: vi.fn(() => null) },
+      } as never);
+
+      expect(queryOllamaModelShowInfoMock).toHaveBeenCalledWith(
+        "http://127.0.0.1:11434",
+        "deepseek-v4-pro:cloud",
+      );
+      expect(
+        provider.resolveDynamicModel?.({
+          config: {},
+          provider: "ollama",
+          modelId: "deepseek-v4-pro:cloud",
+          modelRegistry: { find: vi.fn(() => null) },
+        } as never),
+      ).toMatchObject({
+        provider: "ollama",
+        id: "deepseek-v4-pro:cloud",
+        api: "ollama",
+        baseUrl: "http://127.0.0.1:11434",
+        reasoning: true,
+        compat: { supportsTools: true },
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OLLAMA_API_KEY;
+      } else {
+        process.env.OLLAMA_API_KEY = previous;
+      }
+    }
+  });
+
+  it("keeps unknown requested Ollama models unresolved when show has no metadata", async () => {
+    const provider = registerProvider();
+    const previous = process.env.OLLAMA_API_KEY;
+    process.env.OLLAMA_API_KEY = "ollama-local";
+    buildOllamaProviderMock.mockResolvedValueOnce({
+      baseUrl: "http://127.0.0.1:11434",
+      api: "ollama",
+      models: [],
+    });
+    queryOllamaModelShowInfoMock.mockResolvedValueOnce({});
+
+    try {
+      await provider.prepareDynamicModel?.({
+        config: {},
+        provider: "ollama",
+        modelId: "depseek-v4-pro:cloud",
+        modelRegistry: { find: vi.fn(() => null) },
+      } as never);
+
+      expect(
+        provider.resolveDynamicModel?.({
+          config: {},
+          provider: "ollama",
+          modelId: "depseek-v4-pro:cloud",
+          modelRegistry: { find: vi.fn(() => null) },
+        } as never),
+      ).toBeUndefined();
     } finally {
       if (previous === undefined) {
         delete process.env.OLLAMA_API_KEY;

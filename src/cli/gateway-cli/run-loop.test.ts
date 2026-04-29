@@ -50,7 +50,8 @@ const abortEmbeddedPiRun = vi.fn(
 const getActiveEmbeddedRunCount = vi.fn(() => 0);
 const waitForActiveEmbeddedRuns = vi.fn(async (_timeoutMs?: number) => ({ drained: true }));
 const DRAIN_TIMEOUT_LOG = "drain timeout reached; proceeding with restart";
-const loadConfig = vi.fn(() => ({
+const DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS = 300_000;
+const loadConfig = vi.fn<() => { gateway: { reload: { deferralTimeoutMs?: number } } }>(() => ({
   gateway: {
     reload: {
       deferralTimeoutMs: 90_000,
@@ -74,6 +75,15 @@ vi.mock("../../infra/restart.js", () => ({
   markGatewaySigusr1RestartHandled: () => markGatewaySigusr1RestartHandled(),
   peekGatewaySigusr1RestartReason: () => peekGatewaySigusr1RestartReason(),
   resetGatewayRestartStateForInProcessRestart: () => resetGatewayRestartStateForInProcessRestart(),
+  resolveGatewayRestartDeferralTimeoutMs: (timeoutMs: unknown) => {
+    if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
+      return DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS;
+    }
+    if (timeoutMs <= 0) {
+      return undefined;
+    }
+    return Math.floor(timeoutMs);
+  },
   scheduleGatewaySigusr1Restart: (opts?: { delayMs?: number; reason?: string }) =>
     scheduleGatewaySigusr1Restart(opts),
 }));
@@ -435,6 +445,31 @@ describe("runGatewayLoop", () => {
         reason: "gateway stopping",
         restartExpectedMs: null,
       });
+    });
+  });
+
+  it("uses the default restart drain timeout when config omits deferralTimeoutMs", async () => {
+    vi.clearAllMocks();
+    loadConfig.mockReturnValue({ gateway: { reload: {} } });
+    peekGatewaySigusr1RestartReason.mockReturnValue(undefined);
+    respawnGatewayProcessForUpdate.mockReturnValue({
+      mode: "disabled",
+      detail: "OPENCLAW_NO_RESPAWN",
+    });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      getActiveTaskCount.mockReturnValueOnce(1).mockReturnValue(0);
+
+      const { start } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+
+      sigusr1();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(waitForActiveTasks).toHaveBeenCalledWith(DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
+      expect(markGatewayDraining).toHaveBeenCalledOnce();
+      expect(start).toHaveBeenCalledTimes(2);
     });
   });
 

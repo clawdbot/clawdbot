@@ -12,7 +12,9 @@ Plugins extend OpenClaw with new capabilities: channels, model providers,
 agent harnesses, tools, skills, speech, realtime transcription, realtime
 voice, media-understanding, image generation, video generation, web fetch, web
 search, and more. Some plugins are **core** (shipped with OpenClaw), others
-are **external** (published on npm by the community).
+are **external**. Most external plugins are published and discovered through
+[ClawHub](/tools/clawhub). Npm remains supported for direct installs and for a
+temporary set of OpenClaw-owned plugin packages while that migration finishes.
 
 ## Quick start
 
@@ -26,7 +28,7 @@ are **external** (published on npm by the community).
   <Step title="Install a plugin">
     ```bash
     # From npm
-    openclaw plugins install @openclaw/voice-call
+    openclaw plugins install npm:@acme/openclaw-plugin
 
     # From a local directory or archive
     openclaw plugins install ./my-plugin
@@ -48,9 +50,9 @@ are **external** (published on npm by the community).
 If you prefer chat-native control, enable `commands.plugins: true` and use:
 
 ```text
-/plugin install clawhub:@openclaw/voice-call
-/plugin show voice-call
-/plugin enable voice-call
+/plugin install clawhub:<package>
+/plugin show <plugin-id>
+/plugin enable <plugin-id>
 ```
 
 The install path uses the same resolver as the CLI: local path/archive, explicit
@@ -130,16 +132,33 @@ plugin discovery rather than silently falling back to source paths.
 
 ## Official plugins
 
-### Installable (npm)
+### OpenClaw-owned npm packages during migration
 
-| Plugin          | Package                | Docs                                 |
-| --------------- | ---------------------- | ------------------------------------ |
-| Matrix          | `@openclaw/matrix`     | [Matrix](/channels/matrix)           |
-| Microsoft Teams | `@openclaw/msteams`    | [Microsoft Teams](/channels/msteams) |
-| Nostr           | `@openclaw/nostr`      | [Nostr](/channels/nostr)             |
-| Voice Call      | `@openclaw/voice-call` | [Voice Call](/plugins/voice-call)    |
-| Zalo            | `@openclaw/zalo`       | [Zalo](/channels/zalo)               |
-| Zalo Personal   | `@openclaw/zalouser`   | [Zalo Personal](/plugins/zalouser)   |
+ClawHub is the primary distribution path for most plugins. Current packaged
+OpenClaw releases already bundle many official plugins, so those do not need
+separate npm installs in normal setups. Until every OpenClaw-owned plugin has
+migrated to ClawHub, OpenClaw still ships some `@openclaw/*` plugin packages on
+npm for older/custom installs and direct npm workflows.
+
+If npm reports an `@openclaw/*` plugin package as deprecated, that package
+version is from an older external package train. Use the bundled plugin from
+current OpenClaw or a local checkout until a newer npm package is published.
+
+| Plugin          | Package                    | Docs                                       |
+| --------------- | -------------------------- | ------------------------------------------ |
+| BlueBubbles     | `@openclaw/bluebubbles`    | [BlueBubbles](/channels/bluebubbles)       |
+| Discord         | `@openclaw/discord`        | [Discord](/channels/discord)               |
+| Feishu          | `@openclaw/feishu`         | [Feishu](/channels/feishu)                 |
+| Matrix          | `@openclaw/matrix`         | [Matrix](/channels/matrix)                 |
+| Mattermost      | `@openclaw/mattermost`     | [Mattermost](/channels/mattermost)         |
+| Microsoft Teams | `@openclaw/msteams`        | [Microsoft Teams](/channels/msteams)       |
+| Nextcloud Talk  | `@openclaw/nextcloud-talk` | [Nextcloud Talk](/channels/nextcloud-talk) |
+| Nostr           | `@openclaw/nostr`          | [Nostr](/channels/nostr)                   |
+| Synology Chat   | `@openclaw/synology-chat`  | [Synology Chat](/channels/synology-chat)   |
+| Tlon            | `@openclaw/tlon`           | [Tlon](/channels/tlon)                     |
+| WhatsApp        | `@openclaw/whatsapp`       | [WhatsApp](/channels/whatsapp)             |
+| Zalo            | `@openclaw/zalo`           | [Zalo](/channels/zalo)                     |
+| Zalo Personal   | `@openclaw/zalouser`       | [Zalo Personal](/plugins/zalouser)         |
 
 ### Core (shipped with OpenClaw)
 
@@ -433,6 +452,12 @@ This CLI flag applies to plugin install/update flows only. Gateway-backed skill
 dependency installs use the matching `dangerouslyForceUnsafeInstall` request
 override instead, while `openclaw skills install` remains the separate ClawHub
 skill download/install flow.
+
+If a plugin you published on ClawHub is hidden or blocked by a scan, open the
+ClawHub dashboard or run `clawhub package rescan <name>` to ask ClawHub to check
+it again. `--dangerously-force-unsafe-install` only affects installs on your own
+machine; it does not ask ClawHub to rescan the plugin or make a blocked release
+public.
 
 Compatible bundles participate in the same plugin list/inspect/enable/disable
 flow. Current runtime support includes bundle skills, Claude command-skills,

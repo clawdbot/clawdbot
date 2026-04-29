@@ -9,7 +9,6 @@ vi.mock("../plugins/provider-hook-runtime.js", () => ({
   },
   prepareProviderExtraParams: () => undefined,
   resolveProviderExtraParamsForTransport: () => undefined,
-  resetProviderRuntimeHookCacheForTest: () => {},
   wrapProviderStreamFn: (params: { context: { streamFn?: StreamFn } }) => params.context.streamFn,
 }));
 

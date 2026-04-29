@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadPluginManifest, MAX_PLUGIN_MANIFEST_BYTES } from "./manifest.js";
+import {
+  clearPluginManifestLoadCache,
+  loadPluginManifest,
+  MAX_PLUGIN_MANIFEST_BYTES,
+} from "./manifest.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
@@ -13,6 +17,7 @@ function makeTempDir() {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  clearPluginManifestLoadCache();
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -51,6 +56,26 @@ describe("loadPluginManifest JSON5 tolerance", () => {
 
     expect(result.ok).toBe(true);
     expect(json5Parse).not.toHaveBeenCalled();
+  });
+
+  it("reuses unchanged manifest loads by file signature", () => {
+    const dir = makeTempDir();
+    fs.writeFileSync(
+      path.join(dir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "cached-json",
+        configSchema: { type: "object" },
+      }),
+      "utf-8",
+    );
+    const readFileSync = vi.spyOn(fs, "readFileSync");
+
+    const first = loadPluginManifest(dir, false);
+    const second = loadPluginManifest(dir, false);
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    expect(readFileSync).toHaveBeenCalledTimes(1);
   });
 
   it("parses a manifest with trailing commas", () => {

@@ -93,6 +93,11 @@ the response:
   immediately.
 - **Wait for reply:** set a timeout and get the response inline.
 
+Messages and A2A follow-up replies are marked as inter-session data in the
+receiving prompt (`[Inter-session message ... isUser=false]`) and in transcript
+provenance. The receiving agent should treat them as tool-routed data, not as a
+direct end-user-authored instruction.
+
 After the target responds, OpenClaw can run a **reply-back loop** where the
 agents alternate messages (up to 5 turns). The target agent can reply
 `REPLY_SKIP` to stop early.

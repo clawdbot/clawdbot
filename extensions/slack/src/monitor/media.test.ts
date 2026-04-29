@@ -6,6 +6,7 @@ import {
   resolveSlackThreadHistory,
   resolveSlackThreadStarter,
   resetSlackThreadStarterCacheForTest,
+  SLACK_MEDIA_READ_IDLE_TIMEOUT_MS,
 } from "./media.js";
 import type { FetchLike, SavedMedia } from "./media.runtime.js";
 import * as mediaRuntime from "./media.runtime.js";
@@ -19,7 +20,10 @@ const fetchRemoteMediaMock = vi.hoisted(() =>
       url: string;
       fetchImpl: FetchLike;
       filePathHint?: string;
+      maxBytes?: number;
+      readIdleTimeoutMs?: number;
       requestInit?: RequestInit;
+      ssrfPolicy?: unknown;
     }) => {
       let response = await params.fetchImpl(params.url, {
         ...params.requestInit,
@@ -353,6 +357,65 @@ describe("resolveSlackMedia", () => {
     });
 
     expect(result).toBeNull();
+  });
+
+  it("passes bounded media download timeouts while preserving Slack auth", async () => {
+    vi.spyOn(mediaRuntime, "saveMediaBuffer").mockResolvedValue(
+      createSavedMedia("/tmp/test.jpg", "image/jpeg"),
+    );
+    mockFetch.mockResolvedValueOnce(
+      new Response(Buffer.from("image data"), {
+        status: 200,
+        headers: { "content-type": "image/jpeg" },
+      }),
+    );
+
+    const result = await resolveSlackMedia({
+      files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).not.toBeNull();
+    const fetchOptions = fetchRemoteMediaMock.mock.calls[0]?.[0];
+    expect(fetchOptions?.readIdleTimeoutMs).toBe(SLACK_MEDIA_READ_IDLE_TIMEOUT_MS);
+    expect(fetchOptions?.requestInit?.signal).toBeInstanceOf(AbortSignal);
+    expect(new Headers(fetchOptions?.requestInit?.headers).get("Authorization")).toBe(
+      "Bearer xoxb-test-token",
+    );
+  });
+
+  it("returns null when a media download exceeds the total timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      let abortSignal: AbortSignal | undefined;
+      fetchRemoteMediaMock.mockImplementationOnce(
+        (params) =>
+          new Promise<never>((_resolve, reject) => {
+            abortSignal = params.requestInit?.signal ?? undefined;
+            abortSignal?.addEventListener(
+              "abort",
+              () => {
+                reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+              },
+              { once: true },
+            );
+          }),
+      );
+
+      const resultPromise = resolveSlackMedia({
+        files: [{ url_private: "https://files.slack.com/slow.jpg", name: "slow.jpg" }],
+        token: "xoxb-test-token",
+        maxBytes: 1024 * 1024,
+        totalTimeoutMs: 25,
+      });
+
+      await vi.advanceTimersByTimeAsync(25);
+      await expect(resultPromise).resolves.toBeNull();
+      expect(abortSignal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("returns null when no files are provided", async () => {

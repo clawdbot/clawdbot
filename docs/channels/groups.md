@@ -59,6 +59,8 @@ To restore legacy automatic final replies for group/channel rooms:
 }
 ```
 
+Native slash commands (Discord, Telegram, and other surfaces with native command support) bypass `visibleReplies: "message_tool"` and always reply visibly so the channel-native command UI gets the response it expects. This applies to validated native command turns only; text-typed `/...` commands and ordinary chat turns still follow the configured group default.
+
 ## Context visibility and allowlists
 
 Two different controls are involved in group safety:

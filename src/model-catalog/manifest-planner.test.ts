@@ -143,6 +143,43 @@ describe("manifest model catalog planner", () => {
     ]);
   });
 
+  it("keeps alias provider rows out of unfiltered broad planning", () => {
+    const plan = planManifestModelCatalogRows({
+      registry: {
+        plugins: [
+          {
+            id: "openai",
+            providers: ["openai"],
+            modelCatalog: {
+              aliases: {
+                "azure-openai-responses": {
+                  provider: "openai",
+                  api: "azure-openai-responses",
+                  baseUrl: "https://example.openai.azure.com/openai/v1",
+                },
+              },
+              providers: {
+                openai: {
+                  api: "openai-responses",
+                  baseUrl: "https://api.openai.com/v1",
+                  models: [{ id: "gpt-5.4", name: "GPT-5.4" }],
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(plan.entries.map((entry) => entry.provider)).toEqual(["openai"]);
+    expect(plan.rows.map((row) => row.ref)).toEqual(["openai/gpt-5.4"]);
+    expect(plan.rows).not.toContainEqual(
+      expect.objectContaining({
+        provider: "azure-openai-responses",
+      }),
+    );
+  });
+
   it("reports duplicate provider/model keys and excludes conflicted rows", () => {
     const plan = planManifestModelCatalogRows({
       registry: {

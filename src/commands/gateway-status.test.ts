@@ -794,6 +794,28 @@ describe("gateway-status command", () => {
     );
   });
 
+  it("uses configured handshake timeout as the default local probe budget", async () => {
+    const { runtime } = createRuntimeCapture();
+    probeGateway.mockClear();
+    readBestEffortConfig.mockResolvedValueOnce({
+      gateway: {
+        mode: "local",
+        handshakeTimeoutMs: 30_000,
+        auth: { mode: "token", token: "ltok" },
+      },
+    } as never);
+
+    await gatewayStatusCommand({ json: true }, asRuntimeEnv(runtime));
+
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        preauthHandshakeTimeoutMs: 30_000,
+        timeoutMs: 30_000,
+      }),
+    );
+  });
+
   it("keeps inactive local loopback probes on the short timeout in remote mode", async () => {
     const { runtime } = createRuntimeCapture();
     probeGateway.mockClear();

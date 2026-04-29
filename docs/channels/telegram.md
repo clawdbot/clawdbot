@@ -111,7 +111,10 @@ Token resolution order is account-aware. In practice, config values win over env
     - `open` (requires `allowFrom` to include `"*"`)
     - `disabled`
 
+    `dmPolicy: "open"` with `allowFrom: ["*"]` lets any Telegram account that finds or guesses the bot username command the bot. Use it only for intentionally public bots with tightly restricted tools; one-owner bots should use `allowlist` with numeric user IDs.
+
     `channels.telegram.allowFrom` accepts numeric Telegram user IDs. `telegram:` / `tg:` prefixes are accepted and normalized.
+    In multi-account configs, a restrictive top-level `channels.telegram.allowFrom` is treated as a safety boundary: account-level `allowFrom: ["*"]` entries do not make that account public unless the effective account allowlist still contains an explicit wildcard after merging.
     `dmPolicy: "allowlist"` with empty `allowFrom` blocks all DMs and is rejected by config validation.
     Setup asks for numeric user IDs only.
     If you upgraded and your config contains `@username` allowlist entries, run `openclaw doctor --fix` to resolve them (best-effort; requires a Telegram bot token).
@@ -120,8 +123,9 @@ Token resolution order is account-aware. In practice, config values win over env
     For one-owner bots, prefer `dmPolicy: "allowlist"` with explicit numeric `allowFrom` IDs to keep access policy durable in config (instead of depending on previous pairing approvals).
 
     Common confusion: DM pairing approval does not mean "this sender is authorized everywhere".
-    Pairing grants DM access only. Group sender authorization still comes from explicit config allowlists.
-    If you want "I am authorized once and both DMs and group commands work", put your numeric Telegram user ID in `channels.telegram.allowFrom`.
+    Pairing grants DM access. If no command owner exists yet, the first approved pairing also sets `commands.ownerAllowFrom` so owner-only commands and exec approvals have an explicit operator account.
+    Group sender authorization still comes from explicit config allowlists.
+    If you want "I am authorized once and both DMs and group commands work", put your numeric Telegram user ID in `channels.telegram.allowFrom`; for owner-only commands, make sure `commands.ownerAllowFrom` contains `telegram:<your user id>`.
 
     ### Finding your Telegram user ID
 
@@ -295,7 +299,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     }
     ```
 
-    Use `streaming.mode: "off"` only when you want to disable Telegram preview edits entirely. Use `streaming.preview.toolProgress: false` when you only want to disable the tool-progress status lines.
+    Use `streaming.mode: "off"` only when you want final-only delivery: Telegram preview edits are disabled and generic tool/progress chatter is suppressed instead of being sent as standalone "Working..." messages. Approval prompts, media payloads, and errors still route through normal final delivery. Use `streaming.preview.toolProgress: false` when you only want to keep answer preview edits while hiding the tool-progress status lines.
 
     For text-only replies:
 
@@ -775,9 +779,11 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
     Config path:
 
     - `channels.telegram.execApprovals.enabled` (auto-enables when at least one approver is resolvable)
-    - `channels.telegram.execApprovals.approvers` (falls back to numeric owner IDs from `allowFrom` / `defaultTo`)
+    - `channels.telegram.execApprovals.approvers` (falls back to numeric owner IDs from `commands.ownerAllowFrom`)
     - `channels.telegram.execApprovals.target`: `dm` (default) | `channel` | `both`
     - `agentFilter`, `sessionFilter`
+
+    `channels.telegram.allowFrom`, `groupAllowFrom`, and `defaultTo` control who can talk to the bot and where it sends normal replies. They do not make someone an exec approver. The first approved DM pairing bootstraps `commands.ownerAllowFrom` when no command owner exists yet, so the one-owner setup still works without duplicating IDs under `execApprovals.approvers`.
 
     Channel delivery shows the command text in the chat; only enable `channel` or `both` in trusted groups/topics. When the prompt lands in a forum topic, OpenClaw preserves the topic for the approval prompt and the follow-up. Exec approvals expire after 30 minutes by default.
 

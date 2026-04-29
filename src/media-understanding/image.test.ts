@@ -88,6 +88,7 @@ const { describeImageWithModel } = await import("./image.js");
 
 describe("describeImageWithModel", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -519,6 +520,61 @@ describe("describeImageWithModel", () => {
       expect(retryPayload).toEqual(expectedRetryPayload);
     },
   );
+
+  it("rejects when a generic image completion ignores the abort signal", async () => {
+    vi.useFakeTimers();
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4-mini",
+        input: ["text", "image"],
+        baseUrl: "https://api.openai.com/v1",
+      })),
+    });
+    completeMock.mockImplementation(() => new Promise(() => {}));
+
+    const result = describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 25,
+    });
+
+    const assertion = expect(result).rejects.toThrow("image description timed out after 25ms");
+    await vi.advanceTimersByTimeAsync(25);
+    await assertion;
+    const [, , options] = completeMock.mock.calls[0] ?? [];
+    expect(options?.signal?.aborted).toBe(true);
+    expect(options?.timeoutMs).toBe(25);
+  });
+
+  it("rejects when image runtime setup exceeds the request timeout", async () => {
+    vi.useFakeTimers();
+    ensureOpenClawModelsJsonMock.mockImplementationOnce(() => new Promise(() => {}));
+
+    const result = describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 25,
+    });
+
+    const assertion = expect(result).rejects.toThrow("image description timed out after 25ms");
+    await vi.advanceTimersByTimeAsync(25);
+    await assertion;
+    expect(completeMock).not.toHaveBeenCalled();
+  });
 
   it("normalizes deprecated google flash ids before lookup and keeps profile auth selection", async () => {
     const findMock = vi.fn((provider: string, modelId: string) => {

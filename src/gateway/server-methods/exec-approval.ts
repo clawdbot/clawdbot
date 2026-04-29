@@ -1,6 +1,7 @@
 import {
   resolveExecApprovalCommandDisplay,
   sanitizeExecApprovalDisplayText,
+  sanitizeExecApprovalWarningText,
 } from "../../infra/exec-approval-command-display.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
@@ -131,6 +132,7 @@ export function createExecApprovalHandlers(
         host?: string;
         security?: string;
         ask?: string;
+        warningText?: string | null;
         agentId?: string;
         resolvedPath?: string;
         sessionKey?: string;
@@ -204,6 +206,7 @@ export function createExecApprovalHandlers(
         return;
       }
       const envBinding = buildSystemRunApprovalEnvBinding(p.env);
+      const warningText = normalizeOptionalString(p.warningText);
       const systemRunBinding =
         host === "node"
           ? buildSystemRunApprovalBinding({
@@ -237,6 +240,7 @@ export function createExecApprovalHandlers(
         host: host || null,
         security: p.security ?? null,
         ask: p.ask ?? null,
+        warningText: warningText ? sanitizeExecApprovalWarningText(warningText) : null,
         allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: p.ask ?? null }),
         agentId: effectiveAgentId ?? null,
         resolvedPath: p.resolvedPath ?? null,

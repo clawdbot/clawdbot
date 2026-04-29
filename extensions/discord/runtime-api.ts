@@ -96,11 +96,7 @@ export {
   DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
   DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
   DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
-  isAbortError,
   mergeAbortSignals,
-  normalizeDiscordInboundWorkerTimeoutMs,
-  normalizeDiscordListenerTimeoutMs,
-  runDiscordTaskWithTimeout,
 } from "./src/monitor/timeouts.js";
 export {
   fetchDiscordApplicationId,

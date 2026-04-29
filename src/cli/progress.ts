@@ -1,5 +1,5 @@
 import { spinner } from "@clack/prompts";
-import { createOscProgressController, supportsOscProgress } from "osc-progress";
+import { createOscProgressController, supportsOscProgress } from "../terminal/osc-progress.js";
 import {
   clearActiveProgressLine,
   registerActiveProgressLine,

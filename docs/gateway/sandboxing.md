@@ -89,6 +89,8 @@ SSH-specific config lives under `agents.defaults.sandbox.ssh`. OpenShell-specifi
 
 Sandboxing is off by default. If you enable sandboxing and do not choose a backend, OpenClaw uses the Docker backend. It executes tools and sandbox browsers locally via the Docker daemon socket (`/var/run/docker.sock`). Sandbox container isolation is determined by Docker namespaces.
 
+To expose host GPUs to Docker sandboxes, set `agents.defaults.sandbox.docker.gpus` or the per-agent `agents.list[].sandbox.docker.gpus` override. The value is passed to Docker's `--gpus` flag as a separate argument, for example `"all"` or `"device=GPU-uuid"`, and requires a compatible host runtime such as NVIDIA Container Toolkit.
+
 <Warning>
 **Docker-out-of-Docker (DooD) constraints**
 
@@ -368,6 +370,8 @@ Default Docker image: `openclaw-sandbox:bookworm-slim`
     ```
 
     The default image does **not** include Node. If a skill needs Node (or other runtimes), either bake a custom image or install via `sandbox.docker.setupCommand` (requires network egress + writable root + root user).
+
+    OpenClaw does not silently substitute plain `debian:bookworm-slim` when `openclaw-sandbox:bookworm-slim` is missing. Sandbox runs that target the default image fail fast with a build instruction until you run `scripts/sandbox-setup.sh`, because the bundled image carries `python3` for sandbox write/edit helpers.
 
   </Step>
   <Step title="Optional: build the common image">

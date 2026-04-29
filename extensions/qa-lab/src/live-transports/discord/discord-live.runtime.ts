@@ -287,6 +287,13 @@ function buildDiscordQaConfig(
       allow: pluginAllow,
       entries: pluginEntries,
     },
+    messages: {
+      ...baseCfg.messages,
+      groupChat: {
+        ...baseCfg.messages?.groupChat,
+        visibleReplies: "automatic",
+      },
+    },
     channels: {
       ...baseCfg.channels,
       discord: {

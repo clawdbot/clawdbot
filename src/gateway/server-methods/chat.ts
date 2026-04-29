@@ -3,7 +3,6 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
@@ -99,6 +98,7 @@ import {
   capArrayByJsonBytes,
   loadSessionEntry,
   resolveGatewayModelSupportsImages,
+  resolveGatewaySessionThinkingDefault,
   resolveDeletedAgentIdFromSessionKey,
   readSessionMessages,
   resolveSessionModelRef,
@@ -1706,12 +1706,11 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
-      const catalog = await context.loadGatewayModelCatalog();
-      thinkingLevel = resolveThinkingDefault({
+      thinkingLevel = resolveGatewaySessionThinkingDefault({
         cfg,
+        agentId: sessionAgentId,
         provider: resolvedSessionModel.provider,
         model: resolvedSessionModel.model,
-        catalog,
       });
     }
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;

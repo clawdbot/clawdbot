@@ -17,7 +17,6 @@ export function collectEnabledInsecureOrDangerousFlags(cfg: OpenClawConfig): str
     config: cfg,
     workspaceDir: resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)),
     env: process.env,
-    cache: true,
     pluginIds: Object.keys(pluginEntries),
   });
   return collectEnabledInsecureOrDangerousFlagsFromContracts(cfg, {

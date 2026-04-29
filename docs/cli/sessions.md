@@ -26,6 +26,17 @@ Scope selection:
 - `--all-agents`: aggregate all configured agent stores
 - `--store <path>`: explicit store path (cannot be combined with `--agent` or `--all-agents`)
 
+Export a trajectory bundle for a stored session:
+
+```bash
+openclaw sessions export-trajectory --session-key "agent:main:telegram:direct:123" --workspace .
+openclaw sessions export-trajectory --session-key "agent:main:telegram:direct:123" --output bug-123 --json
+```
+
+This is the command path used by the `/export-trajectory` slash command after
+the owner approves the exec request. The output directory is always resolved
+inside `.openclaw/trajectory-exports/` under the selected workspace.
+
 `openclaw sessions --all-agents` reads configured agent stores. Gateway and ACP
 session discovery are broader: they also include disk-only stores found under
 the default `agents/` root or a templated `session.store` root. Those

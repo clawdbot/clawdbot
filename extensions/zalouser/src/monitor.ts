@@ -365,12 +365,8 @@ async function processMessage(
           groupPolicy,
           groupAllowFrom: configGroupAllowFrom,
         });
-  const shouldComputeCommandAuth = core.channel.commands.shouldComputeCommandAuthorized(
-    commandBody,
-    config,
-  );
   const storeAllowFrom =
-    !isGroup && dmPolicy !== "allowlist" && (dmPolicy !== "open" || shouldComputeCommandAuth)
+    !isGroup && dmPolicy !== "allowlist" && dmPolicy !== "open"
       ? await pairing.readAllowFromStore().catch(() => [])
       : [];
   const accessDecision = resolveDmGroupAccessWithLists({

@@ -37,6 +37,14 @@ function logLine(params: { module: string; message: string }) {
   });
 }
 
+function readJsonPayload() {
+  return JSON.parse(String(runtime.log.mock.calls[0]?.[0])) as {
+    file: string;
+    channel: string;
+    lines: Array<{ message: string }>;
+  };
+}
+
 describe("channelsLogsCommand", () => {
   let tempDir: string;
   let logPath: string;
@@ -75,11 +83,78 @@ describe("channelsLogsCommand", () => {
         includeDisabled: true,
       }),
     );
-    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0])) as {
-      channel: string;
-      lines: Array<{ message: string }>;
-    };
+    const payload = readJsonPayload();
     expect(payload.channel).toBe("external-chat");
     expect(payload.lines.map((line) => line.message)).toEqual(["external sent"]);
+  });
+
+  it("falls back to the latest rolling log when the configured rolling file is missing", async () => {
+    const configuredFile = path.join(tempDir, "openclaw-2026-04-26.log");
+    const fallbackFile = path.join(tempDir, "openclaw-2026-04-25.log");
+    const staleFile = path.join(tempDir, "openclaw-2026-04-24.log");
+    setLoggerOverride({ file: configuredFile });
+    await fs.writeFile(
+      fallbackFile,
+      [
+        logLine({ module: "gateway/channels/slack/send", message: "slack fallback" }),
+        logLine({ module: "gateway/channels/external-chat/send", message: "fallback sent" }),
+      ].join("\n"),
+    );
+    await fs.writeFile(
+      staleFile,
+      logLine({ module: "gateway/channels/external-chat/send", message: "stale sent" }),
+    );
+    await fs.utimes(
+      staleFile,
+      new Date("2026-04-24T12:00:00.000Z"),
+      new Date("2026-04-24T12:00:00.000Z"),
+    );
+    await fs.utimes(
+      fallbackFile,
+      new Date("2026-04-25T12:00:00.000Z"),
+      new Date("2026-04-25T12:00:00.000Z"),
+    );
+
+    await channelsLogsCommand({ channel: "external-chat", json: true }, runtime);
+
+    const payload = readJsonPayload();
+    expect(payload.file).toBe(fallbackFile);
+    expect(payload.lines.map((line) => line.message)).toEqual(["fallback sent"]);
+  });
+
+  it("prefers the configured rolling log when it exists", async () => {
+    const configuredFile = path.join(tempDir, "openclaw-2026-04-26.log");
+    const fallbackFile = path.join(tempDir, "openclaw-2026-04-25.log");
+    setLoggerOverride({ file: configuredFile });
+    await fs.writeFile(
+      fallbackFile,
+      logLine({ module: "gateway/channels/external-chat/send", message: "fallback sent" }),
+    );
+    await fs.writeFile(
+      configuredFile,
+      logLine({ module: "gateway/channels/external-chat/send", message: "current sent" }),
+    );
+
+    await channelsLogsCommand({ channel: "external-chat", json: true }, runtime);
+
+    const payload = readJsonPayload();
+    expect(payload.file).toBe(configuredFile);
+    expect(payload.lines.map((line) => line.message)).toEqual(["current sent"]);
+  });
+
+  it("does not fall back to rolling logs for a missing custom log file", async () => {
+    const configuredFile = path.join(tempDir, "custom-channel.log");
+    const fallbackFile = path.join(tempDir, "openclaw-2026-04-25.log");
+    setLoggerOverride({ file: configuredFile });
+    await fs.writeFile(
+      fallbackFile,
+      logLine({ module: "gateway/channels/external-chat/send", message: "fallback sent" }),
+    );
+
+    await channelsLogsCommand({ channel: "external-chat", json: true }, runtime);
+
+    const payload = readJsonPayload();
+    expect(payload.file).toBe(configuredFile);
+    expect(payload.lines).toEqual([]);
   });
 });

@@ -50,6 +50,37 @@ describe("command-execution-startup", () => {
     });
   });
 
+  it("skips local plugin bootstrap for JSON gateway agent calls", () => {
+    expect(
+      mod.resolveCliExecutionStartupContext({
+        argv: ["node", "openclaw", "agent", "--agent", "main", "--message", "hi", "--json"],
+        jsonOutputMode: true,
+      }).startupPolicy.loadPlugins,
+    ).toBe(false);
+    expect(
+      mod.resolveCliExecutionStartupContext({
+        argv: [
+          "node",
+          "openclaw",
+          "agent",
+          "--agent",
+          "main",
+          "--message",
+          "hi",
+          "--json",
+          "--local",
+        ],
+        jsonOutputMode: true,
+      }).startupPolicy.loadPlugins,
+    ).toBe(true);
+    expect(
+      mod.resolveCliExecutionStartupContext({
+        argv: ["node", "openclaw", "agent", "--agent", "main", "--message", "hi"],
+        jsonOutputMode: false,
+      }).startupPolicy.loadPlugins,
+    ).toBe(true);
+  });
+
   it("routes logs to stderr and emits banner only when allowed", async () => {
     await mod.applyCliExecutionStartupPresentation({
       startupPolicy: {

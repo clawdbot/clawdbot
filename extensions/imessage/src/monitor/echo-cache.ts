@@ -22,12 +22,17 @@ export type SentMessageCache = {
 // duplicate delivery (noisy but not lossy) — never message loss.
 const SENT_MESSAGE_TEXT_TTL_MS = 4_000;
 const SENT_MESSAGE_ID_TTL_MS = 60_000;
+const LEADING_ATTRIBUTED_BODY_CORRUPTION_MARKERS = /^[\uFEFF\uFFFD\uFFFE\uFFFF]+/u;
 
 function normalizeEchoTextKey(text: string | undefined): string | null {
   if (!text) {
     return null;
   }
-  const normalized = text.replace(/\r\n?/g, "\n").trim();
+  const normalized = text
+    .replace(/\r\n?/g, "\n")
+    .trim()
+    .replace(LEADING_ATTRIBUTED_BODY_CORRUPTION_MARKERS, "")
+    .trim();
   return normalized ? normalized : null;
 }
 

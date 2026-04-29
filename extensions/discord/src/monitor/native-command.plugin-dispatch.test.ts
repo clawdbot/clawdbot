@@ -35,7 +35,7 @@ function createConfig(): OpenClawConfig {
   return {
     channels: {
       discord: {
-        dm: { enabled: true, policy: "open" },
+        dm: { enabled: true, policy: "open", allowFrom: ["*"] },
       },
     },
   } as OpenClawConfig;
@@ -80,7 +80,7 @@ function createConfiguredAcpCase(params: {
           ? {
               channels: {
                 discord: {
-                  dm: { enabled: true, policy: "open" },
+                  dm: { enabled: true, policy: "open", allowFrom: ["*"] },
                 },
               },
             }

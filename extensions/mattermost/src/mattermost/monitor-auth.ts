@@ -202,9 +202,7 @@ export function authorizeMattermostCommandInvocation(params: {
   });
 
   const commandAuthorized =
-    kind === "direct"
-      ? dmPolicy === "open" || senderAllowedForCommands
-      : commandGate.commandAuthorized;
+    kind === "direct" ? senderAllowedForCommands : commandGate.commandAuthorized;
 
   if (kind === "direct") {
     if (dmPolicy === "disabled") {
@@ -221,7 +219,7 @@ export function authorizeMattermostCommandInvocation(params: {
       };
     }
 
-    if (dmPolicy !== "open" && !senderAllowedForCommands) {
+    if (!senderAllowedForCommands) {
       return {
         ok: false,
         denyReason: dmPolicy === "pairing" ? "dm-pairing" : "unauthorized",

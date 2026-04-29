@@ -12,6 +12,7 @@ const PLUGIN_SDK_TYPE_INPUTS = [
   "tsconfig.json",
   "src/plugin-sdk",
   "src/auto-reply",
+  "packages/memory-host-sdk/src",
   "src/video-generation/dashscope-compatible.ts",
   "src/video-generation/types.ts",
   "src/types",

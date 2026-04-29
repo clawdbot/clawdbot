@@ -306,6 +306,49 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toContain("codex/gpt-5.4 model configured, enabled automatically.");
   });
 
+  it("auto-enables provider plugins referenced by media generation model fallbacks", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        agents: {
+          defaults: {
+            imageGenerationModel: {
+              primary: "openai/gpt-image-1",
+              fallbacks: ["google/gemini-3-pro-image-preview"],
+            },
+            videoGenerationModel: {
+              primary: "openai/sora-2",
+              fallbacks: ["google/veo-3.1-fast-generate-preview", "minimax/MiniMax-Hailuo-2.3"],
+            },
+            musicGenerationModel: {
+              primary: "minimax/music-2.6",
+              fallbacks: ["google/lyria-3-clip-preview"],
+            },
+          },
+        },
+        plugins: {
+          allow: ["openai"],
+          entries: {
+            openai: { enabled: true },
+          },
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        { id: "openai", channels: [], providers: ["openai"] },
+        { id: "google", channels: [], providers: ["google"] },
+        { id: "minimax", channels: [], providers: ["minimax"] },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.minimax?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["openai", "google", "minimax"]);
+    expect(result.changes).toEqual([
+      "google/gemini-3-pro-image-preview model configured, enabled automatically.",
+      "minimax/MiniMax-Hailuo-2.3 model configured, enabled automatically.",
+    ]);
+  });
+
   it("does not auto-enable Codex when only the OpenAI plugin is explicitly enabled", () => {
     const result = applyPluginAutoEnable({
       config: {

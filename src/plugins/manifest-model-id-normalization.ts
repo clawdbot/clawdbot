@@ -2,10 +2,6 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import type { PluginManifestModelIdNormalizationProvider } from "./manifest.js";
 
-let manifestModelIdNormalizationCache:
-  | Map<string, PluginManifestModelIdNormalizationProvider>
-  | undefined;
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -114,13 +110,7 @@ function loadManifestModelIdNormalizationPolicies(): Map<
   string,
   PluginManifestModelIdNormalizationProvider
 > {
-  if (manifestModelIdNormalizationCache) {
-    return manifestModelIdNormalizationCache;
-  }
-
-  const policies = collectManifestModelIdNormalizationPolicies();
-  manifestModelIdNormalizationCache = policies;
-  return policies;
+  return collectManifestModelIdNormalizationPolicies();
 }
 
 function resolveManifestModelIdNormalizationPolicy(
@@ -177,8 +167,4 @@ export function normalizeProviderModelIdWithManifest(params: {
   }
 
   return modelId;
-}
-
-export function clearManifestModelIdNormalizationCacheForTest(): void {
-  manifestModelIdNormalizationCache = undefined;
 }

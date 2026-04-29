@@ -1020,6 +1020,115 @@ describe("cron service timer regressions", () => {
     expect(jobs.find((job) => job.id === second.id)?.state.lastStatus).toBe("ok");
   });
 
+  it("finalizes a successful isolated job that removes itself during execution", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:01.000Z");
+    const selfRemovingJob = createDueIsolatedJob({
+      id: "self-removing-success",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    selfRemovingJob.delivery = {
+      mode: "announce",
+      channel: "telegram",
+      to: "chat-123",
+    };
+    await writeCronJobs(store.storePath, [selfRemovingJob]);
+
+    const events: CronEvent[] = [];
+    const log = {
+      ...noopLogger,
+      warn: vi.fn(),
+      info: vi.fn(),
+    };
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      onEvent: (evt) => {
+        events.push(evt);
+      },
+      runIsolatedAgentJob: vi.fn(async (params: { job: { id: string } }) => {
+        await fs.writeFile(store.storePath, JSON.stringify({ version: 1, jobs: [] }), "utf-8");
+        return {
+          status: "ok" as const,
+          summary: `finished ${params.job.id}`,
+          delivered: true,
+        };
+      }),
+    });
+
+    await onTimer(state);
+
+    expect(state.store?.jobs).toEqual([]);
+    expect(log.warn).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "cron: applyOutcomeToStoredJob — job not found after forceReload, result discarded",
+    );
+    expect(log.info).toHaveBeenCalledWith(
+      { jobId: selfRemovingJob.id },
+      "cron: finalized successful run after job was removed during execution",
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        jobId: selfRemovingJob.id,
+        action: "finished",
+        status: "ok",
+        summary: `finished ${selfRemovingJob.id}`,
+        delivered: true,
+        deliveryStatus: "delivered",
+      }),
+    );
+  });
+
+  it("keeps missing-job discard semantics for failed isolated outcomes", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:01.000Z");
+    const failedJob = createDueIsolatedJob({
+      id: "self-removing-failure",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    await writeCronJobs(store.storePath, [failedJob]);
+
+    const events: CronEvent[] = [];
+    const log = {
+      ...noopLogger,
+      warn: vi.fn(),
+    };
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      onEvent: (evt) => {
+        events.push(evt);
+      },
+      runIsolatedAgentJob: vi.fn(async () => {
+        await fs.writeFile(store.storePath, JSON.stringify({ version: 1, jobs: [] }), "utf-8");
+        return { status: "error" as const, error: "agent failed after removal" };
+      }),
+    });
+
+    await onTimer(state);
+
+    expect(state.store?.jobs).toEqual([]);
+    expect(log.warn).toHaveBeenCalledWith(
+      { jobId: failedJob.id },
+      "cron: applyOutcomeToStoredJob — job not found after forceReload, result discarded",
+    );
+    expect(
+      events.some(
+        (evt) => evt.jobId === failedJob.id && evt.action === "finished" && evt.status === "error",
+      ),
+    ).toBe(false);
+  });
+
   it("outer cron timeout fires at configured timeoutSeconds, not at 1/3 (#29774)", async () => {
     vi.useFakeTimers();
     try {

@@ -70,6 +70,7 @@ const GATEWAY_TEST_ENV_KEYS = [
   "OPENCLAW_SKIP_GMAIL_WATCHER",
   "OPENCLAW_SKIP_CANVAS_HOST",
   "OPENCLAW_BUNDLED_PLUGINS_DIR",
+  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
   "OPENCLAW_SKIP_CHANNELS",
   "OPENCLAW_SKIP_PROVIDERS",
   "OPENCLAW_SKIP_CRON",
@@ -235,6 +236,7 @@ function applyGatewaySkipEnv() {
   process.env.OPENCLAW_SKIP_PROVIDERS = "1";
   process.env.OPENCLAW_SKIP_CRON = "1";
   process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
+  process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tempHome
     ? path.join(tempHome, "openclaw-test-no-bundled-extensions")
     : "openclaw-test-no-bundled-extensions";

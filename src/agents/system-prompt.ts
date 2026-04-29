@@ -149,9 +149,9 @@ function buildExecApprovalPromptGuidance(params: {
       ? Boolean(resolveChannelApprovalCapability(getChannelPlugin(runtimeChannel))?.native)
       : false);
   if (usesNativeApprovalUi) {
-    return "When exec returns approval-pending on this channel, rely on native approval card/buttons when they appear and do not also send plain chat /approve instructions. Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.";
+    return 'When exec returns approval-pending on this channel, rely on native approval card/buttons when they appear and do not also send plain chat /approve instructions. Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible; when needed, copy the exact /approve command from the tool output\'s "Reply with:" line.';
   }
-  return "When exec returns approval-pending, include the concrete /approve command from tool output as plain chat text for the user, and do not ask for a different or rotated code.";
+  return 'When exec returns approval-pending, include the concrete /approve command from the tool output\'s "Reply with:" line as plain chat text for the user, and do not ask for a different or rotated code.';
 }
 
 function buildSkillsSection(params: { skillsPrompt?: string; readToolName: string }) {
@@ -769,7 +769,7 @@ export function buildAgentSystemPrompt(params: {
         }),
         "Never execute /approve through exec or any other shell/tool path; /approve is a user-facing approval command, not a shell command.",
         "Treat allow-once as single-command only: if another elevated command needs approval, request a fresh /approve and do not claim prior approval covered it.",
-        "When approvals are required, preserve and show the full command/script exactly as provided (including chained operators like &&, ||, |, ;, or multiline shells) so the user can approve what will actually run.",
+        "When approvals are required, preserve and show the full command/script exactly as provided (including chained operators like &&, ||, |, ;, or multiline shells) so the user can approve what will actually run, but keep command/script previews separate from the /approve command and never substitute the shell command/script for the approval id or slug.",
         "",
       ],
     }),
@@ -903,46 +903,8 @@ export function buildAgentSystemPrompt(params: {
     "These user-editable files are loaded by OpenClaw and included below in Project Context.",
     "",
     ...buildAssistantOutputDirectivesSection(isMinimal),
-    ...buildWebchatCanvasSection({
-      isMinimal,
-      runtimeChannel,
-      canvasRootDir: params.runtimeInfo?.canvasRootDir,
-    }),
-    ...buildMessagingSection({
-      isMinimal,
-      availableTools,
-      messageChannelOptions,
-      inlineButtonsEnabled,
-      runtimeChannel,
-      messageToolHints: params.messageToolHints,
-      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    }),
-    ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
   ];
 
-  if (params.reactionGuidance) {
-    const { level, channel } = params.reactionGuidance;
-    const guidanceText =
-      level === "minimal"
-        ? [
-            `Reactions are enabled for ${channel} in MINIMAL mode.`,
-            "React ONLY when truly relevant:",
-            "- Acknowledge important user requests or confirmations",
-            "- Express genuine sentiment (humor, appreciation) sparingly",
-            "- Avoid reacting to routine messages or your own replies",
-            "Guideline: at most 1 reaction per 5-10 exchanges.",
-          ].join("\n")
-        : [
-            `Reactions are enabled for ${channel} in EXTENSIVE mode.`,
-            "Feel free to react liberally:",
-            "- Acknowledge messages with appropriate emojis",
-            "- Express sentiment and personality through reactions",
-            "- React to interesting content, humor, or notable events",
-            "- Use reactions to confirm understanding or agreement",
-            "Guideline: react whenever it feels natural.",
-          ].join("\n");
-    lines.push("## Reactions", guidanceText, "");
-  }
   if (reasoningHint) {
     lines.push("## Reasoning Format", reasoningHint, "");
   }
@@ -993,11 +955,54 @@ export function buildAgentSystemPrompt(params: {
     }),
   );
 
+  // Channel/session-specific guidance lives below the cache boundary so large
+  // stable workspace context can remain a byte-identical prefix across turns.
+  lines.push(
+    ...buildWebchatCanvasSection({
+      isMinimal,
+      runtimeChannel,
+      canvasRootDir: params.runtimeInfo?.canvasRootDir,
+    }),
+    ...buildMessagingSection({
+      isMinimal,
+      availableTools,
+      messageChannelOptions,
+      inlineButtonsEnabled,
+      runtimeChannel,
+      messageToolHints: params.messageToolHints,
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    }),
+    ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
+  );
+
   if (extraSystemPrompt) {
     // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"
     const contextHeader =
       promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
     lines.push(contextHeader, extraSystemPrompt, "");
+  }
+  if (params.reactionGuidance) {
+    const { level, channel } = params.reactionGuidance;
+    const guidanceText =
+      level === "minimal"
+        ? [
+            `Reactions are enabled for ${channel} in MINIMAL mode.`,
+            "React ONLY when truly relevant:",
+            "- Acknowledge important user requests or confirmations",
+            "- Express genuine sentiment (humor, appreciation) sparingly",
+            "- Avoid reacting to routine messages or your own replies",
+            "Guideline: at most 1 reaction per 5-10 exchanges.",
+          ].join("\n")
+        : [
+            `Reactions are enabled for ${channel} in EXTENSIVE mode.`,
+            "Feel free to react liberally:",
+            "- Acknowledge messages with appropriate emojis",
+            "- Express sentiment and personality through reactions",
+            "- React to interesting content, humor, or notable events",
+            "- Use reactions to confirm understanding or agreement",
+            "Guideline: react whenever it feels natural.",
+          ].join("\n");
+    lines.push("## Reactions", guidanceText, "");
   }
   if (providerDynamicSuffix) {
     lines.push(providerDynamicSuffix, "");

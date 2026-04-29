@@ -51,6 +51,7 @@ describe("resolveGatewayClientBootstrap", () => {
     expect(result).toEqual({
       url: "wss://override.example/ws",
       urlSource: "cli --url",
+      preauthHandshakeTimeoutMs: undefined,
       auth: {
         token: undefined,
         password: undefined,
@@ -83,5 +84,19 @@ describe("resolveGatewayClientBootstrap", () => {
         urlOverrideSource: undefined,
       }),
     );
+  });
+
+  it("carries configured preauth handshake timeout for GatewayClient callers", async () => {
+    mockState.buildGatewayConnectionDetails.mockReturnValue({
+      url: "ws://127.0.0.1:18789",
+      urlSource: "local loopback",
+    });
+
+    const result = await resolveGatewayClientBootstrap({
+      config: { gateway: { handshakeTimeoutMs: 30_000 } } as never,
+      env: process.env,
+    });
+
+    expect(result.preauthHandshakeTimeoutMs).toBe(30_000);
   });
 });

@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
 import { backupVerifyCommand } from "../commands/backup-verify.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   buildExtensionsNodeModulesFilter,
   createBackupArchive,
@@ -25,14 +25,6 @@ function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateRe
     skipped: [],
     ...overrides,
   };
-}
-
-function restoreEnvValue(key: string, value: string | undefined): void {
-  if (value === undefined) {
-    delete process.env[key];
-  } else {
-    process.env[key] = value;
-  }
 }
 
 async function listArchiveEntries(archivePath: string): Promise<string[]> {
@@ -140,72 +132,67 @@ describe("buildExtensionsNodeModulesFilter", () => {
 
 describe("createBackupArchive", () => {
   it("omits installed plugin node_modules from the real archive while keeping plugin files", async () => {
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-plugin-deps-"));
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-plugin-deps-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const stateDir = state.stateDir;
+        const outputDir = state.path("backups");
+        await fs.mkdir(path.join(stateDir, "extensions", "demo", "node_modules", "dep"), {
+          recursive: true,
+        });
+        await fs.mkdir(path.join(stateDir, "extensions", "demo", "src"), { recursive: true });
+        await fs.mkdir(path.join(stateDir, "node_modules", "root-dep"), { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, "extensions", "demo", "openclaw.plugin.json"),
+          '{"id":"demo"}\n',
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(stateDir, "extensions", "demo", "src", "index.js"),
+          "export default {}\n",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(stateDir, "extensions", "demo", "node_modules", "dep", "index.js"),
+          "module.exports = {}\n",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(stateDir, "node_modules", "root-dep", "index.js"),
+          "module.exports = {}\n",
+          "utf8",
+        );
+        await fs.mkdir(outputDir, { recursive: true });
 
-    try {
-      const stateDir = path.join(root, "state");
-      const outputDir = path.join(root, "backups");
-      process.env.OPENCLAW_STATE_DIR = stateDir;
-      process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
+        const result = await createBackupArchive({
+          output: outputDir,
+          includeWorkspace: false,
+          nowMs: Date.UTC(2026, 3, 28, 12, 0, 0),
+        });
+        const entries = await listArchiveEntries(result.archivePath);
 
-      await fs.mkdir(path.join(stateDir, "extensions", "demo", "node_modules", "dep"), {
-        recursive: true,
-      });
-      await fs.mkdir(path.join(stateDir, "extensions", "demo", "src"), { recursive: true });
-      await fs.mkdir(path.join(stateDir, "node_modules", "root-dep"), { recursive: true });
-      await fs.writeFile(process.env.OPENCLAW_CONFIG_PATH, "{}\n", "utf8");
-      await fs.writeFile(
-        path.join(stateDir, "extensions", "demo", "openclaw.plugin.json"),
-        '{"id":"demo"}\n',
-        "utf8",
-      );
-      await fs.writeFile(
-        path.join(stateDir, "extensions", "demo", "src", "index.js"),
-        "export default {}\n",
-        "utf8",
-      );
-      await fs.writeFile(
-        path.join(stateDir, "extensions", "demo", "node_modules", "dep", "index.js"),
-        "module.exports = {}\n",
-        "utf8",
-      );
-      await fs.writeFile(
-        path.join(stateDir, "node_modules", "root-dep", "index.js"),
-        "module.exports = {}\n",
-        "utf8",
-      );
-      await fs.mkdir(outputDir, { recursive: true });
+        expect(
+          entries.some((entry) => entry.endsWith("/state/extensions/demo/openclaw.plugin.json")),
+        ).toBe(true);
+        expect(entries.some((entry) => entry.endsWith("/state/extensions/demo/src/index.js"))).toBe(
+          true,
+        );
+        expect(
+          entries.some((entry) => entry.endsWith("/state/node_modules/root-dep/index.js")),
+        ).toBe(true);
+        expect(
+          entries.some((entry) => entry.includes("/state/extensions/demo/node_modules/")),
+        ).toBe(false);
 
-      const result = await createBackupArchive({
-        output: outputDir,
-        includeWorkspace: false,
-        nowMs: Date.UTC(2026, 3, 28, 12, 0, 0),
-      });
-      const entries = await listArchiveEntries(result.archivePath);
-
-      expect(
-        entries.some((entry) => entry.endsWith("/state/extensions/demo/openclaw.plugin.json")),
-      ).toBe(true);
-      expect(entries.some((entry) => entry.endsWith("/state/extensions/demo/src/index.js"))).toBe(
-        true,
-      );
-      expect(entries.some((entry) => entry.endsWith("/state/node_modules/root-dep/index.js"))).toBe(
-        true,
-      );
-      expect(entries.some((entry) => entry.includes("/state/extensions/demo/node_modules/"))).toBe(
-        false,
-      );
-
-      const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-      await expect(
-        backupVerifyCommand(runtime, { archive: result.archivePath }),
-      ).resolves.toMatchObject({ ok: true });
-    } finally {
-      restoreEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
-      restoreEnvValue("OPENCLAW_CONFIG_PATH", previousConfigPath);
-      await fs.rm(root, { recursive: true, force: true });
-    }
+        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        await expect(
+          backupVerifyCommand(runtime, { archive: result.archivePath }),
+        ).resolves.toMatchObject({ ok: true });
+      },
+    );
   });
 });

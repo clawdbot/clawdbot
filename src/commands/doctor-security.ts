@@ -269,6 +269,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
       provider: params.provider,
       accountId: params.accountId,
       allowFrom: params.allowFrom,
+      dmPolicy,
       normalizeEntry: params.normalizeEntry,
     });
     const dmScope = cfg.session?.dmScope ?? "main";
@@ -306,7 +307,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
 
   for (const plugin of listReadOnlyChannelPluginsForConfig(cfg, {
     includePersistedAuthState: true,
-    includeSetupRuntimeFallback: false,
+    includeSetupRuntimeFallback: true,
   })) {
     if (!plugin.security) {
       continue;

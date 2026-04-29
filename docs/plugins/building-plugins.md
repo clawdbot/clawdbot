@@ -14,9 +14,9 @@ generation, video generation, web fetch, web search, agent tools, or any
 combination.
 
 You do not need to add your plugin to the OpenClaw repository. Publish to
-[ClawHub](/tools/clawhub) or npm and users install with
+[ClawHub](/tools/clawhub) and users install with
 `openclaw plugins install <package-name>`. OpenClaw tries ClawHub first and
-falls back to npm automatically.
+falls back to npm automatically for packages that still use npm distribution.
 
 ## Prerequisites
 
@@ -136,7 +136,8 @@ and provider plugins have dedicated guides linked above.
     ```
 
     OpenClaw also checks ClawHub before npm for bare package specs like
-    `@myorg/openclaw-my-plugin`.
+    `@myorg/openclaw-my-plugin`; npm remains a fallback for packages that have
+    not migrated to ClawHub yet.
 
     **In-repo plugins:** place under the bundled plugin workspace tree — automatically discovered.
 

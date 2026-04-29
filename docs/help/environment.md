@@ -156,6 +156,18 @@ openclaw gateway run
 Do not rely on writing only to `~/.openclaw/.env` for this variable; Node reads
 `NODE_EXTRA_CA_CERTS` at process startup.
 
+## Legacy environment variables
+
+OpenClaw only reads `OPENCLAW_*` environment variables. The legacy
+`CLAWDBOT_*` and `MOLTBOT_*` prefixes from earlier releases are silently
+ignored.
+
+If any are still set on the Gateway process at startup, OpenClaw emits a
+single Node deprecation warning (`OPENCLAW_LEGACY_ENV_VARS`) listing the
+detected prefixes and the total count. Rename each value by replacing the
+legacy prefix with `OPENCLAW_` (for example `CLAWDBOT_GATEWAY_TOKEN` →
+`OPENCLAW_GATEWAY_TOKEN`); the old names take no effect.
+
 ## Related
 
 - [Gateway configuration](/gateway/configuration)

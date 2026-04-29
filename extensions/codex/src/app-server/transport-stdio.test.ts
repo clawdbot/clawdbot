@@ -112,6 +112,28 @@ describe("resolveCodexAppServerSpawnEnv", () => {
     });
   });
 
+  it("clears denied env vars case-insensitively on Windows", () => {
+    expect({
+      ...resolveCodexAppServerSpawnEnv(
+        {
+          env: {
+            OpenAI_Api_Key: "configured-openai-key",
+            Other: "configured",
+          },
+          clearEnv: ["OPENAI_API_KEY", " CODEX_API_KEY ", ""],
+        },
+        {
+          Codex_Api_Key: "parent-codex-key",
+          KEEP: "parent",
+        },
+        "win32",
+      ),
+    }).toEqual({
+      KEEP: "parent",
+      Other: "configured",
+    });
+  });
+
   it("uses a null-prototype env map and ignores prototype-polluting keys", () => {
     const overrides = Object.create(null) as Record<string, string | undefined>;
     Object.defineProperty(overrides, "__proto__", {

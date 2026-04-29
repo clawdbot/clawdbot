@@ -32,6 +32,11 @@ function createOwnerPolicyTools() {
       ownerOnly: true,
       execute: async () => ({ content: [], details: {} }) as any,
     },
+    {
+      name: "nodes",
+      ownerOnly: true,
+      execute: async () => ({ content: [], details: {} }) as any,
+    },
   ] as unknown as AnyAgentTool[];
 }
 
@@ -107,7 +112,20 @@ describe("tool-policy", () => {
   it("keeps owner-only tools for the owner sender", async () => {
     const tools = createOwnerPolicyTools();
     const filtered = applyOwnerOnlyToolPolicy(tools, true);
-    expect(filtered.map((t) => t.name)).toEqual(["read", "cron", "gateway"]);
+    expect(filtered.map((t) => t.name)).toEqual(["read", "cron", "gateway", "nodes"]);
+  });
+
+  it("keeps only explicitly authorized owner-only tools for non-owner senders", async () => {
+    const tools = createOwnerPolicyTools();
+    const filtered = applyOwnerOnlyToolPolicy(tools, false, ["cron"]);
+    expect(filtered.map((t) => t.name)).toEqual(["read", "cron"]);
+
+    await expect(
+      filtered.find((tool) => tool.name === "cron")?.execute?.("call_1", {}),
+    ).resolves.toEqual({
+      content: [],
+      details: {},
+    });
   });
 
   it("honors ownerOnly metadata for custom tool names", async () => {

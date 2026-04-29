@@ -53,6 +53,14 @@ The prompt is intentionally compact and uses fixed sections:
 - **Runtime**: host, OS, node, model, repo root (when detected), thinking level (one line).
 - **Reasoning**: current visibility level + /reasoning toggle hint.
 
+OpenClaw keeps large stable content, including **Project Context**, above the
+internal prompt cache boundary. Volatile channel/session sections such as
+Control UI embed guidance, **Messaging**, **Voice**, **Group Chat Context**,
+**Reactions**, **Heartbeats**, and **Runtime** are appended below that boundary
+so local backends with prefix caches can reuse the stable workspace prefix
+across channel turns. Tool descriptions should likewise avoid embedding current
+channel names when the accepted schema already carries that runtime detail.
+
 The Tooling section also includes runtime guidance for long-running work:
 
 - use cron for future follow-up (`check back later`, reminders, recurring work)

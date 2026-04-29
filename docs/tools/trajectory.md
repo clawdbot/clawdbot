@@ -20,6 +20,13 @@ Use it when you need to answer questions like:
 - Which model, plugins, skills, and runtime settings were active?
 - What usage and prompt-cache metadata did the provider return?
 
+If you are filing a broad support report for a live Gateway issue, start with
+[`/diagnostics`](/gateway/diagnostics#chat-command). Diagnostics collects the
+sanitized Gateway bundle and, for OpenAI Codex harness sessions, can also send
+Codex feedback to OpenAI servers after approval. Use `/export-trajectory` when
+you specifically need the detailed per-session prompt, tool, and transcript
+timeline.
+
 ## Quick start
 
 Send this in the active session:
@@ -48,6 +55,20 @@ You can choose a relative output directory name:
 
 The custom path is resolved inside `.openclaw/trajectory-exports/`. Absolute
 paths and `~` paths are rejected.
+
+Trajectory bundles can contain prompts, model messages, tool schemas, tool
+results, runtime events, and local paths. The chat slash command therefore runs
+through exec approval every time. Approve the export once when you intend to
+create the bundle; do not use allow-all. In group chats, OpenClaw sends the
+approval prompt and export result to the owner privately instead of posting the
+trajectory details back to the shared room.
+
+For local inspection or support workflows, you can also run the approved command
+path directly:
+
+```bash
+openclaw sessions export-trajectory --session-key "agent:main:telegram:direct:123" --workspace .
+```
 
 ## Access
 

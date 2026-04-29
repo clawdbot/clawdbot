@@ -16,6 +16,9 @@ import { createOpenClawCodingTools } from "./pi-tools.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { expectReadWriteEditTools } from "./test-helpers/pi-tools-fs-helpers.js";
 import { createPiToolsSandboxContext } from "./test-helpers/pi-tools-sandbox-context.js";
+import { providerAliasCases } from "./test-helpers/provider-alias-cases.js";
+import { buildEmptyExplicitToolAllowlistError } from "./tool-allowlist-guard.js";
+import { normalizeToolName } from "./tool-policy.js";
 
 const tinyPngBuffer = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
@@ -83,6 +86,11 @@ function expectNoSubagentControlTools(tools: ReturnType<typeof createOpenClawCod
   expect(names.has("subagents")).toBe(false);
 }
 
+function applyRuntimeToolsAllow<T extends { name: string }>(tools: T[], toolsAllow: string[]) {
+  const allowSet = new Set(toolsAllow.map((name) => normalizeToolName(name)));
+  return tools.filter((tool) => allowSet.has(normalizeToolName(tool.name)));
+}
+
 describe("createOpenClawCodingTools", () => {
   const testConfig: OpenClawConfig = {};
 
@@ -103,6 +111,56 @@ describe("createOpenClawCodingTools", () => {
     expect([...values]).toEqual(
       expect.arrayContaining(["restart", "config.get", "config.patch", "config.apply"]),
     );
+  });
+
+  it("exposes only an explicitly authorized owner-only tool to non-owner sessions", () => {
+    const tools = createOpenClawCodingTools({
+      config: testConfig,
+      senderIsOwner: false,
+      ownerOnlyToolAllowlist: ["cron"],
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+
+    expect(names.has("cron")).toBe(true);
+    expect(names.has("gateway")).toBe(false);
+    expect(names.has("nodes")).toBe(false);
+  });
+
+  it("resolves isolated cron runtime toolsAllow after the cron owner-only grant", () => {
+    const withoutGrant = applyRuntimeToolsAllow(
+      createOpenClawCodingTools({
+        config: testConfig,
+        senderIsOwner: false,
+      }),
+      ["cron"],
+    );
+    const errorWithoutGrant = buildEmptyExplicitToolAllowlistError({
+      sources: [{ label: "runtime toolsAllow", entries: ["cron"] }],
+      callableToolNames: withoutGrant.map((tool) => tool.name),
+      toolsEnabled: true,
+    });
+
+    expect(errorWithoutGrant?.message).toContain(
+      "No callable tools remain after resolving explicit tool allowlist (runtime toolsAllow: cron); no registered tools matched.",
+    );
+
+    const withGrant = applyRuntimeToolsAllow(
+      createOpenClawCodingTools({
+        config: testConfig,
+        senderIsOwner: false,
+        ownerOnlyToolAllowlist: ["cron"],
+      }),
+      ["cron"],
+    );
+
+    expect(withGrant.map((tool) => tool.name)).toEqual(["cron"]);
+    expect(
+      buildEmptyExplicitToolAllowlistError({
+        sources: [{ label: "runtime toolsAllow", entries: ["cron"] }],
+        callableToolNames: withGrant.map((tool) => tool.name),
+        toolsEnabled: true,
+      }),
+    ).toBeNull();
   });
 
   it("preserves action enums in normalized schemas", () => {
@@ -436,6 +494,26 @@ describe("createOpenClawCodingTools", () => {
     });
     expect(cronTools.some((tool) => tool.name === "message")).toBe(true);
   });
+
+  it.each(providerAliasCases)(
+    "applies canonical tools.byProvider deny policy to core tools for alias %s",
+    (alias, canonical) => {
+      const tools = createOpenClawCodingTools({
+        config: {
+          tools: {
+            byProvider: {
+              [canonical]: { deny: ["read"] },
+            },
+          },
+        } as OpenClawConfig,
+        modelProvider: alias,
+      });
+      const names = new Set(tools.map((tool) => tool.name));
+
+      expect(names.has("read")).toBe(false);
+      expect(names.has("write")).toBe(true);
+    },
+  );
 
   it("expands group shorthands in global tool policy", () => {
     const tools = createOpenClawCodingTools({

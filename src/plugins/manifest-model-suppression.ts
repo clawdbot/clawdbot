@@ -7,64 +7,17 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
-type ManifestSuppressionCache = Map<string, readonly ManifestModelCatalogSuppressionEntry[]>;
-
-let cacheWithoutConfig = new WeakMap<NodeJS.ProcessEnv, ManifestSuppressionCache>();
-let cacheByConfig = new WeakMap<
-  OpenClawConfig,
-  WeakMap<NodeJS.ProcessEnv, ManifestSuppressionCache>
->();
-
-function resolveSuppressionCache(params: {
-  config?: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-}): ManifestSuppressionCache {
-  if (!params.config) {
-    let cache = cacheWithoutConfig.get(params.env);
-    if (!cache) {
-      cache = new Map();
-      cacheWithoutConfig.set(params.env, cache);
-    }
-    return cache;
-  }
-  let envCaches = cacheByConfig.get(params.config);
-  if (!envCaches) {
-    envCaches = new WeakMap();
-    cacheByConfig.set(params.config, envCaches);
-  }
-  let cache = envCaches.get(params.env);
-  if (!cache) {
-    cache = new Map();
-    envCaches.set(params.env, cache);
-  }
-  return cache;
-}
-
-function cacheKey(params: { workspaceDir?: string }): string {
-  return params.workspaceDir ?? "";
-}
-
 function listManifestModelCatalogSuppressions(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): readonly ManifestModelCatalogSuppressionEntry[] {
-  const cache = resolveSuppressionCache({
-    config: params.config,
-    env: params.env,
-  });
-  const key = cacheKey(params);
-  const cached = cache.get(key);
-  if (cached) {
-    return cached;
-  }
   const registry = loadPluginManifestRegistryForPluginRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
   const planned = planManifestModelCatalogSuppressions({ registry });
-  cache.set(key, planned.suppressions);
   return planned.suppressions;
 }
 
@@ -78,14 +31,19 @@ function buildManifestSuppressionError(params: {
 }
 
 function normalizeBaseUrlHost(baseUrl: string | null | undefined): string {
-  if (!baseUrl?.trim()) {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
     return "";
   }
   try {
-    return new URL(baseUrl).hostname.toLowerCase();
+    return normalizeSuppressionHost(new URL(trimmed).hostname);
   } catch {
     return "";
   }
+}
+
+function normalizeSuppressionHost(host: string): string {
+  return normalizeLowercaseStringOrEmpty(host).replace(/\.+$/, "");
 }
 
 function resolveConfiguredProviderValue(params: {
@@ -133,7 +91,7 @@ function manifestSuppressionMatchesConditions(params: {
     if (!baseUrlHost) {
       return false;
     }
-    const allowedHosts = new Set(when.baseUrlHosts.map(normalizeLowercaseStringOrEmpty));
+    const allowedHosts = new Set(when.baseUrlHosts.map(normalizeSuppressionHost));
     if (!allowedHosts.has(baseUrlHost)) {
       return false;
     }
@@ -142,11 +100,7 @@ function manifestSuppressionMatchesConditions(params: {
 }
 
 export function clearManifestModelSuppressionCacheForTest(): void {
-  cacheWithoutConfig = new WeakMap<NodeJS.ProcessEnv, ManifestSuppressionCache>();
-  cacheByConfig = new WeakMap<
-    OpenClawConfig,
-    WeakMap<NodeJS.ProcessEnv, ManifestSuppressionCache>
-  >();
+  // Manifest suppressions are read fresh. Keep the test hook as a no-op.
 }
 
 export function resolveManifestBuiltInModelSuppression(params: {

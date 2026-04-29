@@ -188,6 +188,23 @@ openclaw nodes invoke --node <idOrNameOrIp> --command canvas.eval --params '{"ja
 
 Higher-level helpers exist for the common “give the agent a MEDIA attachment” workflows.
 
+## Command policy
+
+Node commands must pass two gates before they can be invoked:
+
+1. The node must declare the command in its WebSocket `connect.commands` list.
+2. The gateway's platform policy must allow the declared command.
+
+Windows and macOS companion nodes allow safe declared commands such as
+`canvas.*`, `camera.list`, `location.get`, and `screen.snapshot` by default.
+Dangerous or privacy-heavy commands such as `camera.snap`, `camera.clip`, and
+`screen.record` still require explicit opt-in with
+`gateway.nodes.allowCommands`. `gateway.nodes.denyCommands` always wins over
+defaults and extra allowlist entries.
+
+After a node changes its declared command list, reject the old device pairing
+and approve the new request so the gateway stores the updated command snapshot.
+
 ## Screenshots (canvas snapshots)
 
 If the node is showing the Canvas (WebView), `canvas.snapshot` returns `{ format, base64 }`.

@@ -237,10 +237,7 @@ describeLive("gateway live (cli backend)", () => {
         : undefined;
       process.env.OPENCLAW_STATE_DIR = stateDir;
       const bundleMcp = backendResolved?.bundleMcp === true;
-      const bootstrapWorkspace =
-        backendResolved?.bundleMcpMode === "claude-config-file"
-          ? await createBootstrapWorkspace(tempDir)
-          : null;
+      const bootstrapWorkspace = await createBootstrapWorkspace(tempDir);
       const disableMcpConfig = process.env.OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG !== "0";
       let cliArgs = baseCliArgs;
       if (
@@ -354,11 +351,14 @@ describeLive("gateway live (cli backend)", () => {
             {
               sessionKey,
               idempotencyKey: `idem-${randomUUID()}`,
-              message: enableCliModelSwitchProbe
-                ? `Please include the token CLI-BACKEND-${nonce} in your reply.` +
-                  ` Also remember this session note for later: ${memoryToken}.` +
-                  " Do not include the note in your reply."
-                : `Please include the token CLI-BACKEND-${nonce} in your reply.`,
+              message:
+                providerId === "codex-cli"
+                  ? `Do not inspect files or run tools. Reply with exactly: CLI-BACKEND-${nonce}.`
+                  : enableCliModelSwitchProbe
+                    ? `Please include the token CLI-BACKEND-${nonce} in your reply.` +
+                      ` Also remember this session note for later: ${memoryToken}.` +
+                      " Do not include the note in your reply."
+                    : `Please include the token CLI-BACKEND-${nonce} in your reply.`,
               deliver: false,
               timeout: CLI_BACKEND_AGENT_TIMEOUT_SECONDS,
             },
@@ -457,7 +457,7 @@ describeLive("gateway live (cli backend)", () => {
                   idempotencyKey: `idem-${randomUUID()}`,
                   message:
                     providerId === "codex-cli"
-                      ? `Please include the token CLI-RESUME-${resumeNonce} in your reply.`
+                      ? `Do not inspect files or run tools. Reply with exactly: CLI-RESUME-${resumeNonce}.`
                       : `Reply with exactly: CLI backend RESUME OK ${resumeNonce}.`,
                   deliver: false,
                   timeout: CLI_BACKEND_AGENT_TIMEOUT_SECONDS,

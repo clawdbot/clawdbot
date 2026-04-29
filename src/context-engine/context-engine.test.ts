@@ -17,7 +17,11 @@ import {
   listContextEngineIds,
   resolveContextEngine,
 } from "./registry.js";
-import type { ContextEngineFactory, ContextEngineRegistrationResult } from "./registry.js";
+import type {
+  ContextEngineFactory,
+  ContextEngineFactoryContext,
+  ContextEngineRegistrationResult,
+} from "./registry.js";
 import type {
   ContextEngine,
   ContextEngineInfo,
@@ -356,7 +360,7 @@ describe("Engine contract tests", () => {
     const resolved = getContextEngineFactory("mock");
     expect(resolved).toBe(factory);
 
-    const engine = await resolved!();
+    const engine = await resolved!({});
     expect(engine).toBeInstanceOf(MockContextEngine);
     expect(engine.info.id).toBe("mock");
   });
@@ -690,6 +694,108 @@ describe("Default engine selection", () => {
   it("resolveContextEngine() with config contextEngine='test-engine' returns the custom engine", async () => {
     const engine = await resolveContextEngine(configWithSlot("test-engine"));
     expect(engine.info.id).toBe("test-engine");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 3b. Factory context passing
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Factory context passing", () => {
+  it("passes ContextEngineFactoryContext to factories that accept a parameter", async () => {
+    const engineId = `factory-ctx-${Date.now().toString(36)}`;
+    let receivedCtx: ContextEngineFactoryContext | undefined;
+
+    const factory: ContextEngineFactory = (ctx: ContextEngineFactoryContext) => {
+      receivedCtx = ctx;
+      return {
+        info: { id: engineId, name: "Ctx Engine" },
+        async ingest() {
+          return { ingested: true };
+        },
+        async assemble({ messages }: { messages: AgentMessage[] }) {
+          return { messages, estimatedTokens: 0 };
+        },
+        async compact() {
+          return { ok: true, compacted: false };
+        },
+      };
+    };
+    registerContextEngine(engineId, factory);
+
+    const cfg = configWithSlot(engineId);
+    await resolveContextEngine(cfg, {
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(receivedCtx).toBeDefined();
+    expect(receivedCtx!.config).toBe(cfg);
+    expect(receivedCtx!.agentDir).toBe("/tmp/agent");
+    expect(receivedCtx!.workspaceDir).toBe("/tmp/workspace");
+  });
+
+  it("no-arg factories still work when context is passed", async () => {
+    const engineId = `factory-noarg-${Date.now().toString(36)}`;
+    let called = false;
+
+    const factory: ContextEngineFactory = () => {
+      called = true;
+      return {
+        info: { id: engineId, name: "No-Arg Engine" },
+        async ingest() {
+          return { ingested: true };
+        },
+        async assemble({ messages }: { messages: AgentMessage[] }) {
+          return { messages, estimatedTokens: 0 };
+        },
+        async compact() {
+          return { ok: true, compacted: false };
+        },
+      };
+    };
+    registerContextEngine(engineId, factory);
+
+    const engine = await resolveContextEngine(configWithSlot(engineId), {
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(called).toBe(true);
+    expect(engine.info.id).toBe(engineId);
+  });
+
+  it("passes undefined config when resolveContextEngine is called without config", async () => {
+    let receivedCtx: ContextEngineFactoryContext | undefined;
+
+    // Override the default "legacy" engine to intercept the no-config path
+    registerContextEngineForOwner(
+      "legacy",
+      (ctx: ContextEngineFactoryContext) => {
+        receivedCtx = ctx;
+        return {
+          info: { id: "legacy", name: "NoConfig Engine", version: "1" },
+          async ingest() {
+            return { ingested: true };
+          },
+          async assemble({ messages }: { messages: AgentMessage[] }) {
+            return { messages, estimatedTokens: 0 };
+          },
+          async compact() {
+            return { ok: true, compacted: false };
+          },
+        };
+      },
+      "core",
+      { allowSameOwnerRefresh: true },
+    );
+
+    await resolveContextEngine(undefined);
+
+    expect(receivedCtx).toBeDefined();
+    expect(receivedCtx!.config).toBeUndefined();
+    expect(receivedCtx!.agentDir).toBeUndefined();
+    expect(receivedCtx!.workspaceDir).toBeUndefined();
   });
 });
 

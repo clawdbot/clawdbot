@@ -50,8 +50,8 @@ TIMEOUT_UPDATE_POLL_GRACE_S=60
 TIMEOUT_VERIFY_S=120
 TIMEOUT_ONBOARD_S=600
 TIMEOUT_ONBOARD_PHASE_S=$((TIMEOUT_ONBOARD_S + 120))
-# verify_gateway_reachable runs six 30s probes plus short retry sleeps.
 TIMEOUT_GATEWAY_S=420
+GATEWAY_RECOVERY_AFTER_S="${OPENCLAW_PARALLELS_WINDOWS_GATEWAY_RECOVERY_AFTER_S:-180}"
 TIMEOUT_AGENT_S="${OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S:-900}"
 PHASE_STALE_WARN_S=60
 
@@ -1029,11 +1029,24 @@ for wanted in preferred_names:
       break
 
 if best is None:
+  candidates = []
   for asset in assets:
     name = asset.get("name", "")
-    if name.startswith("MinGit-") and name.endswith(".zip") and "busybox" not in name:
-      best = asset
-      break
+    if not (name.startswith("MinGit-") and name.endswith(".zip")):
+      continue
+    if "busybox" in name:
+      continue
+    if "-arm64." in name:
+      rank = 0
+    elif "-64-bit." in name:
+      rank = 1
+    elif "-32-bit." in name:
+      rank = 2
+    else:
+      rank = 3
+    candidates.append((rank, name, asset))
+  if candidates:
+    best = sorted(candidates, key=lambda item: (item[0], item[1]))[0][2]
 
 if best is None:
   raise SystemExit("no MinGit asset found")
@@ -1137,7 +1150,7 @@ ensure_mingit_zip() {
   MINGIT_ZIP_PATH="$MAIN_TGZ_DIR/$mingit_name"
   if [[ ! -f "$MINGIT_ZIP_PATH" ]]; then
     say "Download $MINGIT_ZIP_NAME"
-    curl -fsSL "$mingit_url" -o "$MINGIT_ZIP_PATH"
+    curl --retry 5 --retry-delay 3 --retry-all-errors -fsSL "$mingit_url" -o "$MINGIT_ZIP_PATH"
   fi
 }
 
@@ -2382,8 +2395,13 @@ verify_gateway() {
 }
 
 verify_gateway_reachable() {
-  local probe_json attempt
-  for attempt in 1 2 3 4 5 6; do
+  local probe_json attempt start_seconds deadline recovery_tried
+  start_seconds="$SECONDS"
+  deadline=$((SECONDS + TIMEOUT_GATEWAY_S))
+  recovery_tried=0
+  attempt=1
+
+  while (( SECONDS < deadline )); do
     probe_json="$(
       guest_run_openclaw "" "" gateway probe --url ws://127.0.0.1:18789 --timeout 30000 --json
     )"
@@ -2398,11 +2416,25 @@ PY
     then
       return 0
     fi
-    if (( attempt < 6 )); then
-      printf 'gateway-reachable retry %s\n' "$attempt" >&2
-      sleep 3
+
+    if [[ "$recovery_tried" -eq 0 && $((SECONDS - start_seconds)) -ge "$GATEWAY_RECOVERY_AFTER_S" ]]; then
+      printf 'gateway-reachable recovery: gateway start after %ss\n' "$((SECONDS - start_seconds))" >&2
+      if ! run_gateway_daemon_action start; then
+        printf 'gateway-reachable recovery start failed; continuing probes\n' >&2
+      fi
+      recovery_tried=1
     fi
+
+    printf 'gateway-reachable retry %s elapsed=%ss\n' "$attempt" "$((SECONDS - start_seconds))" >&2
+    attempt=$((attempt + 1))
+    sleep 5
   done
+
+  if [[ "$recovery_tried" -eq 0 ]]; then
+    printf 'gateway-reachable recovery: gateway start after timeout\n' >&2
+    run_gateway_daemon_action start || true
+  fi
+
   return 1
 }
 

@@ -1,6 +1,5 @@
 import {
   getActivePluginChannelRegistry,
-  getActivePluginRegistryVersion,
   requireActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -9,21 +8,10 @@ import { listBundledChannelSetupPlugins } from "./bundled.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 
-type CachedChannelSetupPlugins = {
-  registryVersion: number;
-  registryRef: object | null;
+type ChannelSetupPluginView = {
   sorted: ChannelPlugin[];
   byId: Map<string, ChannelPlugin>;
 };
-
-const EMPTY_CHANNEL_SETUP_CACHE: CachedChannelSetupPlugins = {
-  registryVersion: -1,
-  registryRef: null,
-  sorted: [],
-  byId: new Map(),
-};
-
-let cachedChannelSetupPlugins = EMPTY_CHANNEL_SETUP_CACHE;
 
 function dedupeSetupPlugins(plugins: readonly ChannelPlugin[]): ChannelPlugin[] {
   const seen = new Set<string>();
@@ -52,13 +40,8 @@ function sortChannelSetupPlugins(plugins: readonly ChannelPlugin[]): ChannelPlug
   });
 }
 
-function resolveCachedChannelSetupPlugins(): CachedChannelSetupPlugins {
+function resolveChannelSetupPlugins(): ChannelSetupPluginView {
   const registry = requireActivePluginRegistry();
-  const registryVersion = getActivePluginRegistryVersion();
-  const cached = cachedChannelSetupPlugins;
-  if (cached.registryVersion === registryVersion && cached.registryRef === registry) {
-    return cached;
-  }
 
   const registryPlugins = (registry.channelSetups ?? []).map((entry) => entry.plugin);
   const sorted = sortChannelSetupPlugins(
@@ -69,18 +52,14 @@ function resolveCachedChannelSetupPlugins(): CachedChannelSetupPlugins {
     byId.set(plugin.id, plugin);
   }
 
-  const next: CachedChannelSetupPlugins = {
-    registryVersion,
-    registryRef: registry,
+  return {
     sorted,
     byId,
   };
-  cachedChannelSetupPlugins = next;
-  return next;
 }
 
 export function listChannelSetupPlugins(): ChannelPlugin[] {
-  return resolveCachedChannelSetupPlugins().sorted.slice();
+  return resolveChannelSetupPlugins().sorted.slice();
 }
 
 export function listActiveChannelSetupPlugins(): ChannelPlugin[] {
@@ -93,5 +72,5 @@ export function getChannelSetupPlugin(id: ChannelId): ChannelPlugin | undefined 
   if (!resolvedId) {
     return undefined;
   }
-  return resolveCachedChannelSetupPlugins().byId.get(resolvedId);
+  return resolveChannelSetupPlugins().byId.get(resolvedId);
 }

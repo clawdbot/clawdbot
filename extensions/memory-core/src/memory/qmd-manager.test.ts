@@ -432,6 +432,18 @@ describe("QmdMemoryManager", () => {
     };
     const initialUpdateCalls = spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update");
     expect(initialUpdateCalls).toHaveLength(0);
+    const [, watchOptions] = watchMock.mock.calls[0] as unknown as [
+      string[],
+      { ignored?: (watchPath: string) => boolean },
+    ];
+    expect(watchOptions.ignored?.(path.join(workspaceDir, "node_modules", "pkg", "note.md"))).toBe(
+      true,
+    );
+    expect(watchOptions.ignored?.(path.join(workspaceDir, ".cache", "qmd", "note.md"))).toBe(true);
+    expect(watchOptions.ignored?.(path.join(workspaceDir, "vendor", "pkg", "note.md"))).toBe(true);
+    expect(watchOptions.ignored?.(path.join(workspaceDir, "dist", "note.md"))).toBe(true);
+    expect(watchOptions.ignored?.(path.join(workspaceDir, "build", "note.md"))).toBe(true);
+    expect(watchOptions.ignored?.(path.join(workspaceDir, "notes.md"))).toBe(false);
 
     watcher.emit("change", path.join(workspaceDir, "notes.md"));
     expect(manager.status().dirty).toBe(true);

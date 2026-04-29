@@ -60,8 +60,8 @@ describe("setup-registry runtime fallback", () => {
     });
     expect(resolvePluginSetupCliBackendRuntime({ backend: "local-cli" })).toBeUndefined();
     expect(resolvePluginSetupCliBackendRuntime({ backend: "disabled-cli" })).toBeUndefined();
-    expect(loadPluginRegistrySnapshotMock).toHaveBeenCalledTimes(1);
-    expect(loadPluginRegistrySnapshotMock).toHaveBeenCalledWith({ cache: true });
+    expect(loadPluginRegistrySnapshotMock).toHaveBeenCalledTimes(3);
+    expect(loadPluginRegistrySnapshotMock).toHaveBeenCalledWith({});
     expect(loadPluginManifestRegistryForInstalledIndexMock).toHaveBeenCalledWith({
       index: expect.objectContaining({
         plugins: expect.arrayContaining([expect.objectContaining({ pluginId: "openai" })]),

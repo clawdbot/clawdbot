@@ -203,6 +203,7 @@ type EmbeddedAgentParams = {
   onAgentEvent?: (payload: {
     stream: string;
     data: Record<string, unknown>;
+    sessionKey?: string;
   }) => Promise<void> | void;
 };
 
@@ -1147,6 +1148,7 @@ describe("runAgentTurnWithFallback", () => {
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       await params.onAgentEvent?.({
         stream: "codex_app_server.guardian",
+        sessionKey: "agent:main:subagent:codex-child",
         data: {
           phase: "blocked",
           message: "command requires approval",
@@ -1184,6 +1186,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(emitAgentEvent).toHaveBeenCalledWith({
       runId: "run-codex",
       stream: "codex_app_server.guardian",
+      sessionKey: "agent:main:subagent:codex-child",
       data: {
         phase: "blocked",
         message: "command requires approval",

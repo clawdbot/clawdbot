@@ -1,6 +1,7 @@
 import {
   abortActiveReplyRuns,
   abortReplyRunBySessionId,
+  forceClearReplyRunBySessionId,
   isReplyRunActiveForSessionId,
   isReplyRunStreamingForSessionId,
   queueReplyRunMessage,
@@ -157,12 +158,28 @@ export function isEmbeddedPiRunActive(sessionId: string): boolean {
   return active;
 }
 
+export function isEmbeddedPiRunHandleActive(sessionId: string): boolean {
+  const active = ACTIVE_EMBEDDED_RUNS.has(sessionId);
+  if (active) {
+    diag.debug(`run handle active check: sessionId=${sessionId} active=true`);
+  }
+  return active;
+}
+
 export function isEmbeddedPiRunStreaming(sessionId: string): boolean {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!handle) {
     return isReplyRunStreamingForSessionId(sessionId);
   }
   return handle.isStreaming();
+}
+
+export function resolveActiveEmbeddedRunHandleSessionId(sessionKey: string): string | undefined {
+  const normalizedSessionKey = sessionKey.trim();
+  if (!normalizedSessionKey) {
+    return undefined;
+  }
+  return ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey);
 }
 
 export function resolveActiveEmbeddedRunSessionId(sessionKey: string): string | undefined {
@@ -353,6 +370,25 @@ export function clearActiveEmbeddedRun(
   } else {
     diag.debug(`run clear skipped: sessionId=${sessionId} reason=handle_mismatch`);
   }
+}
+
+export function forceClearEmbeddedPiRun(
+  sessionId: string,
+  sessionKey?: string,
+  reason = "stuck_recovery",
+): boolean {
+  let cleared = false;
+  if (ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
+    ACTIVE_EMBEDDED_RUNS.delete(sessionId);
+    ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
+    EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.delete(sessionId);
+    clearActiveRunSessionKeys(sessionId, sessionKey);
+    logSessionStateChange({ sessionId, sessionKey, state: "idle", reason });
+    notifyEmbeddedRunEnded(sessionId);
+    cleared = true;
+  }
+  const cause = new Error(`Embedded run force-cleared by ${reason}`);
+  return forceClearReplyRunBySessionId(sessionId, cause) || cleared;
 }
 
 export const __testing = {

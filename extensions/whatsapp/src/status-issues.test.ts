@@ -84,4 +84,54 @@ describe("collectWhatsAppStatusIssues", () => {
       }),
     ]);
   });
+
+  it("reports recently reconnected accounts even when the socket is currently healthy", () => {
+    const issues = collectWhatsAppStatusIssues([
+      {
+        accountId: "default",
+        enabled: true,
+        linked: true,
+        running: true,
+        connected: true,
+        reconnectAttempts: 3,
+        healthState: "healthy",
+        lastDisconnect: {
+          at: Date.now() - 2 * 60_000,
+          status: 408,
+          error: "status=408 Request Time-out Connection was lost",
+        },
+      },
+    ]);
+
+    expect(issues).toEqual([
+      expect.objectContaining({
+        channel: "whatsapp",
+        accountId: "default",
+        kind: "runtime",
+        message:
+          "Linked but recently reconnected (reconnectAttempts=3): status=408 Request Time-out Connection was lost",
+      }),
+    ]);
+  });
+
+  it("does not report old reconnect history after a stable healthy period", () => {
+    const issues = collectWhatsAppStatusIssues([
+      {
+        accountId: "default",
+        enabled: true,
+        linked: true,
+        running: true,
+        connected: true,
+        reconnectAttempts: 1,
+        healthState: "healthy",
+        lastDisconnect: {
+          at: Date.now() - 60 * 60_000,
+          status: 408,
+          error: "old disconnect",
+        },
+      },
+    ]);
+
+    expect(issues).toEqual([]);
+  });
 });

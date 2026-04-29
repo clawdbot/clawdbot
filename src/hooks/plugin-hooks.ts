@@ -30,7 +30,6 @@ export function resolvePluginHookDirs(params: {
     workspaceDir,
     config: params.config,
     // Hook discovery should reflect freshly written bundle manifests immediately.
-    cache: false,
     includeDisabled: true,
   });
   if (registry.plugins.length === 0) {

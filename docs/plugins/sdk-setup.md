@@ -477,7 +477,7 @@ The `ChannelSetupWizard` type supports `credentials`, `textInputs`, `dmPolicy`, 
 
 ## Publishing and installing
 
-**External plugins:** publish to [ClawHub](/tools/clawhub) or npm, then install:
+**External plugins:** publish to [ClawHub](/tools/clawhub), then install:
 
 <Tabs>
   <Tab title="Auto (ClawHub then npm)">
@@ -494,10 +494,11 @@ The `ChannelSetupWizard` type supports `credentials`, `textInputs`, `dmPolicy`, 
     ```
   </Tab>
   <Tab title="npm package spec">
-    There is no matching `npm:` override. Use the normal npm package spec when you want the npm path after ClawHub fallback:
+    Use npm when a package has not moved to ClawHub yet, or when you need a
+    direct npm install path during migration:
 
     ```bash
-    openclaw plugins install @myorg/openclaw-my-plugin
+    openclaw plugins install npm:@myorg/openclaw-my-plugin
     ```
 
   </Tab>

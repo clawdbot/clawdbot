@@ -1,9 +1,6 @@
 // Public provider-catalog runtime seams for provider plugin contract tests.
 
-export {
-  augmentModelCatalogWithProviderPlugins,
-  resetProviderRuntimeHookCacheForTest,
-} from "../plugins/provider-runtime.js";
+export { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.js";
 export {
   resolveCatalogHookProviderPluginIds,
   resolveOwningPluginIdsForProvider,

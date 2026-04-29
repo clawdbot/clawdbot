@@ -75,6 +75,14 @@ describe("Z.ai vendor error codes (#48988)", () => {
       ).toBe(true);
     });
 
+    it("OpenRouter high-load text is classified as overloaded", () => {
+      expect(
+        isOverloadedErrorMessage(
+          "The service is currently experiencing high load and cannot process your request.",
+        ),
+      ).toBe(true);
+    });
+
     it("billing still classified correctly", () => {
       expect(isBillingErrorMessage("insufficient credits")).toBe(true);
     });

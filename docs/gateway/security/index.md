@@ -608,7 +608,7 @@ Why:
 
 - OpenAI-compatible backends that front self-hosted models sometimes preserve special tokens that appear in user text, instead of masking them. An attacker who can write into inbound external content (a fetched page, an email body, a file contents tool output) could otherwise inject a synthetic `assistant` or `system` role boundary and escape the wrapped-content guardrails.
 - Sanitization happens at the external-content wrapping layer, so it applies uniformly across fetch/read tools and inbound channel content rather than being per-provider.
-- Outbound model responses already have a separate sanitizer that strips leaked `<tool_call>`, `<function_calls>`, and similar scaffolding from user-visible replies. The external-content sanitizer is the inbound counterpart.
+- Outbound model responses already have a separate sanitizer that strips leaked `<tool_call>`, `<function_calls>`, `<system-reminder>`, `<previous_response>`, and similar internal runtime scaffolding from user-visible replies at the final channel delivery boundary. The external-content sanitizer is the inbound counterpart.
 
 This does not replace the other hardening on this page — `dmPolicy`, allowlists, exec approvals, sandboxing, and `contextVisibility` still do the primary work. It closes one specific tokenizer-layer bypass against self-hosted stacks that forward user text with special tokens intact.
 

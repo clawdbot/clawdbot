@@ -1084,6 +1084,7 @@
                   "channels/wechat",
                   "channels/qqbot",
                   "channels/feishu",
+                  "channels/yuanbao",
                   "channels/zalo",
                   "channels/zalouser"
                 ]

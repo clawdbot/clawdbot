@@ -109,6 +109,7 @@ describe("Synology channel wiring integration", () => {
               incomingUrl: "https://nas.example.com/incoming-alpha",
               webhookPath: "/webhook/synology-alpha",
               dmPolicy: "open",
+              allowedUserIds: ["*"],
             },
             beta: {
               enabled: true,
@@ -116,6 +117,7 @@ describe("Synology channel wiring integration", () => {
               incomingUrl: "https://nas.example.com/incoming-beta",
               webhookPath: "/webhook/synology-beta",
               dmPolicy: "open",
+              allowedUserIds: ["*"],
             },
           },
         },

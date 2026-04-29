@@ -1195,7 +1195,9 @@ describe("qa mock openai server", () => {
                 type: "input_text",
                 text: [
                   "You are a memory search agent.",
-                  "Use only memory_search and memory_get.",
+                  "Use only the available memory tools.",
+                  "Prefer memory_recall when available.",
+                  "If memory_recall is unavailable, use memory_search and memory_get.",
                   "",
                   "Conversation context:",
                   "Latest user message:",
@@ -1208,9 +1210,9 @@ describe("qa mock openai server", () => {
       }),
     });
     expect(activeMemorySearch.status).toBe(200);
-    expect(await activeMemorySearch.text()).toContain('"name":"memory_search"');
+    expect(await activeMemorySearch.text()).toContain('"name":"memory_recall"');
 
-    const activeMemoryGet = await fetch(`${server.baseUrl}/v1/responses`, {
+    const activeMemoryStreamSummary = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -1225,7 +1227,9 @@ describe("qa mock openai server", () => {
                 type: "input_text",
                 text: [
                   "You are a memory search agent.",
-                  "Use only memory_search and memory_get.",
+                  "Use only the available memory tools.",
+                  "Prefer memory_recall when available.",
+                  "If memory_recall is unavailable, use memory_search and memory_get.",
                   "",
                   "Conversation context:",
                   "Latest user message:",
@@ -1237,20 +1241,14 @@ describe("qa mock openai server", () => {
           {
             type: "function_call_output",
             output: JSON.stringify({
-              results: [
-                {
-                  path: "MEMORY.md",
-                  startLine: 1,
-                  endLine: 1,
-                },
-              ],
+              text: "Stable QA movie night snack preference: lemon pepper wings with blue cheese.",
             }),
           },
         ],
       }),
     });
-    expect(activeMemoryGet.status).toBe(200);
-    expect(await activeMemoryGet.text()).toContain('"name":"memory_get"');
+    expect(activeMemoryStreamSummary.status).toBe(200);
+    expect(await activeMemoryStreamSummary.text()).toContain("lemon pepper wings with blue cheese");
 
     const activeMemorySummary = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
@@ -1267,7 +1265,9 @@ describe("qa mock openai server", () => {
                 type: "input_text",
                 text: [
                   "You are a memory search agent.",
-                  "Use only memory_search and memory_get.",
+                  "Use only the available memory tools.",
+                  "Prefer memory_recall when available.",
+                  "If memory_recall is unavailable, use memory_search and memory_get.",
                   "",
                   "Conversation context:",
                   "Latest user message:",

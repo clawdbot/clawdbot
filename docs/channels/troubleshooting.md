@@ -31,12 +31,12 @@ Healthy baseline:
 
 ### WhatsApp failure signatures
 
-| Symptom                         | Fastest check                                       | Fix                                                      |
-| ------------------------------- | --------------------------------------------------- | -------------------------------------------------------- |
-| Connected but no DM replies     | `openclaw pairing list whatsapp`                    | Approve sender or switch DM policy/allowlist.            |
-| Group messages ignored          | Check `requireMention` + mention patterns in config | Mention the bot or relax mention policy for that group.  |
-| QR login times out with 408     | Check gateway `HTTPS_PROXY` / `HTTP_PROXY` env      | Set a reachable proxy; use `NO_PROXY` only for bypasses. |
-| Random disconnect/relogin loops | `openclaw channels status --probe` + logs           | Re-login and verify credentials directory is healthy.    |
+| Symptom                         | Fastest check                                       | Fix                                                                                                                              |
+| ------------------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Connected but no DM replies     | `openclaw pairing list whatsapp`                    | Approve sender or switch DM policy/allowlist.                                                                                    |
+| Group messages ignored          | Check `requireMention` + mention patterns in config | Mention the bot or relax mention policy for that group.                                                                          |
+| QR login times out with 408     | Check gateway `HTTPS_PROXY` / `HTTP_PROXY` env      | Set a reachable proxy; use `NO_PROXY` only for bypasses.                                                                         |
+| Random disconnect/relogin loops | `openclaw channels status --probe` + logs           | Recent reconnects are flagged even when currently connected; watch logs, restart the gateway, then relink if flapping continues. |
 
 Full troubleshooting: [WhatsApp troubleshooting](/channels/whatsapp#troubleshooting)
 

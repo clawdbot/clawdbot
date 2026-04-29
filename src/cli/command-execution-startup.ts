@@ -18,6 +18,7 @@ export function resolveCliExecutionStartupContext(params: {
     invocation,
     commandPath,
     startupPolicy: resolveCliStartupPolicy({
+      argv: params.argv,
       commandPath,
       jsonOutputMode: params.jsonOutputMode,
       env: params.env,

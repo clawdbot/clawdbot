@@ -65,6 +65,16 @@ function hasOnlyModelDirective(directives: InlineDirectives): boolean {
   );
 }
 
+export function formatModelOverrideResetEvent(params: {
+  rejectedRef?: string;
+  initialModelLabel: string;
+}): string {
+  if (params.rejectedRef) {
+    return `Model override ${params.rejectedRef} is not allowed for this agent; reverted to ${params.initialModelLabel}. Add ${params.rejectedRef} to agents.defaults.models or pick an allowed model with /model list.`;
+  }
+  return `Model override not allowed for this agent; reverted to ${params.initialModelLabel}.`;
+}
+
 export type ApplyDirectiveResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
   | {
@@ -179,7 +189,10 @@ export async function applyInlineDirectiveOverrides(params: {
 
   if (modelState.resetModelOverride) {
     enqueueSystemEvent(
-      `Model override not allowed for this agent; reverted to ${initialModelLabel}.`,
+      formatModelOverrideResetEvent({
+        rejectedRef: modelState.resetModelOverrideRef,
+        initialModelLabel,
+      }),
       {
         sessionKey,
         contextKey: `model:reset:${initialModelLabel}`,

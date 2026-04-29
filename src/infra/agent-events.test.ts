@@ -106,6 +106,7 @@ describe("agent-events sequencing", () => {
     registerAgentRunContext("run-ctx", {
       verboseLevel: "full",
       isHeartbeat: true,
+      lastActiveAt: 12_345,
     });
 
     expect(getAgentRunContext("run-ctx")).toMatchObject({
@@ -113,6 +114,7 @@ describe("agent-events sequencing", () => {
       verboseLevel: "full",
       isHeartbeat: true,
       isControlUiVisible: true,
+      lastActiveAt: 12_345,
     });
   });
 

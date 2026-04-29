@@ -109,6 +109,13 @@ run_with_heartbeat() {
   return "$status"
 }
 
+is_self_swapped_package_process_exit() {
+  local stderr="$1"
+  [[ "$stderr" == *"[openclaw] Failed to start CLI:"* ]] &&
+    [[ "$stderr" == *"ERR_MODULE_NOT_FOUND"* ]] &&
+    [[ "$stderr" == *"/node_modules/openclaw/dist/"* ]]
+}
+
 npm_install_global() {
   local label="$1"
   shift
@@ -262,8 +269,12 @@ run_update_smoke() {
     printf "%s\n" "$update_stderr" >&2
   fi
   if [[ "$update_status" -ne 0 ]]; then
-    echo "ERROR: openclaw update failed with exit code $update_status" >&2
-    return "$update_status"
+    if is_self_swapped_package_process_exit "$update_stderr"; then
+      echo "WARN: legacy updater process exited after self-swap; validating update JSON and installed CLI" >&2
+    else
+      echo "ERROR: openclaw update failed with exit code $update_status" >&2
+      return "$update_status"
+    fi
   fi
 
   UPDATE_JSON="$UPDATE_JSON" \

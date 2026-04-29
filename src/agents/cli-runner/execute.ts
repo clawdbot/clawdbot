@@ -340,6 +340,8 @@ export async function executePreparedCliRun(
             throw new Error("Claude live session requires JSONL streaming parser");
           }
           claudeSkillsPluginCleanupOwned = true;
+          const ownedPreparedBackendCleanup = context.preparedBackend.cleanup;
+          context.preparedBackend.cleanup = undefined;
           const liveResult = await runClaudeLiveSessionTurn({
             context,
             args,
@@ -364,7 +366,13 @@ export async function executePreparedCliRun(
                 },
               });
             },
-            cleanup: claudeSkillsPlugin.cleanup,
+            cleanup: async () => {
+              try {
+                await claudeSkillsPlugin.cleanup();
+              } finally {
+                await ownedPreparedBackendCleanup?.();
+              }
+            },
           });
           const rawText = liveResult.output.text;
           return {

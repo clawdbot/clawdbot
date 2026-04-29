@@ -329,7 +329,7 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
     title: "Synology Chat access control",
     lines: [
       `Default outgoing webhook path: ${DEFAULT_WEBHOOK_PATH}`,
-      'Set allowed user IDs, or manually switch `channels.synology-chat.dmPolicy` to `"open"` for public DMs.',
+      'Set allowed user IDs, or manually switch `channels.synology-chat.dmPolicy` to `"open"` with `allowedUserIds: ["*"]` for public DMs.',
       'With `dmPolicy="allowlist"`, an empty allowedUserIds list blocks the route from starting.',
       `Docs: ${formatDocsLink("/channels/synology-chat", "channels/synology-chat")}`,
     ],

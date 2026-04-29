@@ -454,11 +454,9 @@ describe("stageBundledPluginRuntime", () => {
     };
     const discovery = discoverOpenClawPlugins({
       env,
-      cache: false,
     });
     const manifestRegistry = loadPluginManifestRegistry({
       env,
-      cache: false,
       candidates: discovery.candidates,
       diagnostics: discovery.diagnostics,
     });

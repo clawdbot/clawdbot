@@ -2,6 +2,7 @@ import type { ChatType } from "../channels/chat-type.js";
 import type { SessionCompactionCheckpoint, SessionEntry } from "../config/sessions/types.js";
 import type { PluginSessionExtensionProjection } from "../plugins/host-hooks.js";
 import type {
+  GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
   SessionsListResultBase,
   SessionsPatchResultBase,
@@ -75,6 +76,7 @@ export type GatewaySessionRow = {
   responseUsage?: "on" | "off" | "tokens" | "full";
   modelProvider?: string;
   model?: string;
+  agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number;
   deliveryContext?: DeliveryContext;
   lastChannel?: SessionEntry["lastChannel"];
@@ -111,5 +113,6 @@ export type SessionsPatchResult = SessionsPatchResultBase<SessionEntry> & {
   resolved?: {
     modelProvider?: string;
     model?: string;
+    agentRuntime?: GatewayAgentRuntime;
   };
 };

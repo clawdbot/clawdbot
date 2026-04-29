@@ -166,8 +166,23 @@ describe("resolveGatewayConnection", () => {
     expect(result).toEqual({
       url: "wss://override.example/ws",
       ...expected,
+      preauthHandshakeTimeoutMs: undefined,
       allowInsecureLocalOperatorUi: false,
     });
+  });
+
+  it("carries configured handshake timeout to the TUI client connection", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        handshakeTimeoutMs: 30_000,
+        auth: { token: "config-token" },
+      },
+    });
+
+    const result = await resolveGatewayConnection({});
+
+    expect(result.preauthHandshakeTimeoutMs).toBe(30_000);
   });
   it("uses config auth token for local mode when both config and env tokens are set", async () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local", auth: { token: "config-token" } } });
@@ -504,6 +519,7 @@ describe("GatewayChatClient", () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
       token: "test-token",
+      preauthHandshakeTimeoutMs: 30_000,
       allowInsecureLocalOperatorUi: true,
     });
 
@@ -519,6 +535,10 @@ describe("GatewayChatClient", () => {
       (client as unknown as { client: { opts: { deviceIdentity?: unknown } } }).client.opts
         .deviceIdentity,
     ).toBeUndefined();
+    expect(
+      (client as unknown as { client: { opts: { preauthHandshakeTimeoutMs?: number } } }).client
+        .opts.preauthHandshakeTimeoutMs,
+    ).toBe(30_000);
   });
 
   it("retries startup-unavailable chat history until the gateway finishes booting", async () => {

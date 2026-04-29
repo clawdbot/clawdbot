@@ -833,6 +833,36 @@ describe("gateway agent handler", () => {
     resetTimeConfig();
   });
 
+  it("marks inter-session agent messages at the gateway boundary without timestamping them", async () => {
+    setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
+    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
+
+    await invokeAgent(
+      {
+        message: "forwarded reply",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:discord:source",
+          sourceTool: "sessions_send",
+        },
+        idempotencyKey: "test-inter-session-marker",
+      },
+      { reqId: "inter-session-marker" },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+
+    const callArgs = mocks.agentCommand.mock.calls[0][0] as { message?: string };
+    expect(callArgs.message).toMatch(/^\[Inter-session message\]/);
+    expect(callArgs.message).toContain("isUser=false");
+    expect(callArgs.message).toContain("forwarded reply");
+    expect(callArgs.message).not.toContain("[Wed 2026-01-28 20:30 EST]");
+
+    resetTimeConfig();
+  });
+
   it("keeps model-run gateway prompts undecorated and forwards raw-run flags", async () => {
     setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
     primeMainAgentRun({ cfg: mocks.loadConfigReturn });
@@ -846,6 +876,11 @@ describe("gateway agent handler", () => {
         modelRun: true,
         promptMode: "none",
         sessionKey: "agent:main:main",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:discord:source",
+          sourceTool: "sessions_send",
+        },
         idempotencyKey: "test-model-run-raw",
       },
       {
@@ -868,6 +903,7 @@ describe("gateway agent handler", () => {
         promptMode: "none",
       }),
     );
+    expect(callArgs.message).not.toContain("[Inter-session message]");
 
     resetTimeConfig();
   });

@@ -10,18 +10,18 @@ IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-openai-image-auth-e2e" OPENCLAW
 SKIP_BUILD="${OPENCLAW_OPENAI_IMAGE_AUTH_E2E_SKIP_BUILD:-0}"
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" openai-image-auth "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "" "$SKIP_BUILD"
-docker_e2e_harness_mount_args
+OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 openai-image-auth empty)"
 
 echo "Running OpenAI image auth Docker E2E..."
 # Harness files are mounted read-only; the app under test comes from /app/dist.
-run_logged openai-image-auth docker run --rm \
+docker_e2e_run_logged_with_harness openai-image-auth \
   -e "OPENAI_API_KEY=sk-openclaw-image-auth-e2e" \
   -e "OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER=1" \
-  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
+  -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   -i "$IMAGE_NAME" bash -lc '
 set -euo pipefail
-export HOME="$(mktemp -d "/tmp/openclaw-openai-image-auth.XXXXXX")"
-export OPENCLAW_STATE_DIR="$HOME/.openclaw"
+source scripts/lib/openclaw-e2e-instance.sh
+openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
 export OPENCLAW_SKIP_CHANNELS=1
 export OPENCLAW_SKIP_GMAIL_WATCHER=1
 export OPENCLAW_SKIP_CRON=1

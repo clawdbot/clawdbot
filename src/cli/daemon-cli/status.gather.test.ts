@@ -231,6 +231,31 @@ describe("gatherDaemonStatus", () => {
     );
   });
 
+  it("uses configured handshake timeout as the default daemon probe budget", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        bind: "lan",
+        tls: { enabled: true },
+        handshakeTimeoutMs: 30_000,
+        auth: { token: "daemon-token" },
+      },
+    };
+
+    await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(callGatewayStatusProbe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: daemonLoadedConfig,
+        preauthHandshakeTimeoutMs: 30_000,
+        timeoutMs: 30_000,
+      }),
+    );
+  });
+
   it("reuses the shared CLI config snapshot when the daemon uses the same config path", async () => {
     serviceReadCommand.mockResolvedValueOnce({
       programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],

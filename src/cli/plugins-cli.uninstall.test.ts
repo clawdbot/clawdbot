@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   applyPluginUninstallDirectoryRemoval,
   buildPluginDiagnosticsReport,
+  buildPluginSnapshotReport,
   loadConfig,
   planPluginUninstall,
   promptYesNo,
@@ -46,7 +47,7 @@ describe("plugins cli uninstall", () => {
         },
       },
     } as OpenClawConfig);
-    buildPluginDiagnosticsReport.mockReturnValue({
+    buildPluginSnapshotReport.mockReturnValue({
       plugins: [{ id: "alpha", name: "alpha" }],
       diagnostics: [],
     });
@@ -68,6 +69,8 @@ describe("plugins cli uninstall", () => {
 
     await runPluginsCommand(["plugins", "uninstall", "alpha", "--dry-run"]);
 
+    expect(buildPluginSnapshotReport).toHaveBeenCalled();
+    expect(buildPluginDiagnosticsReport).not.toHaveBeenCalled();
     expect(planPluginUninstall).toHaveBeenCalled();
     expect(writeConfigFile).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
@@ -99,7 +102,7 @@ describe("plugins cli uninstall", () => {
 
     loadConfig.mockReturnValue(baseConfig);
     setInstalledPluginIndexInstallRecords(baseConfig.plugins?.installs ?? {});
-    buildPluginDiagnosticsReport.mockReturnValue({
+    buildPluginSnapshotReport.mockReturnValue({
       plugins: [{ id: "alpha", name: "alpha" }],
       diagnostics: [],
     });
@@ -170,7 +173,7 @@ describe("plugins cli uninstall", () => {
 
     loadConfig.mockReturnValue(baseConfig);
     setInstalledPluginIndexInstallRecords(installRecords);
-    buildPluginDiagnosticsReport.mockReturnValue({
+    buildPluginSnapshotReport.mockReturnValue({
       plugins: [{ id: "alpha", name: "alpha" }],
       diagnostics: [],
     });
@@ -229,7 +232,7 @@ describe("plugins cli uninstall", () => {
 
     loadConfig.mockReturnValue(baseConfig);
     setInstalledPluginIndexInstallRecords(installRecords);
-    buildPluginDiagnosticsReport.mockReturnValue({
+    buildPluginSnapshotReport.mockReturnValue({
       plugins: [{ id: "alpha", name: "alpha" }],
       diagnostics: [],
     });
@@ -275,7 +278,7 @@ describe("plugins cli uninstall", () => {
         installs: {},
       },
     } as OpenClawConfig);
-    buildPluginDiagnosticsReport.mockReturnValue({
+    buildPluginSnapshotReport.mockReturnValue({
       plugins: [{ id: "alpha", name: "alpha" }],
       diagnostics: [],
     });

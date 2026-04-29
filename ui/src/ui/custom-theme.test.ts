@@ -254,6 +254,27 @@ describe("custom theme import helpers", () => {
     ).toThrow("Unsupported tweakcn token");
   });
 
+  it("validates imported font families without regex backtracking", () => {
+    const payload = createTweakcnPayload();
+    payload.cssVars.theme["font-sans"] =
+      '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+
+    expect(
+      normalizeImportedCustomTheme(payload, {
+        sourceUrl: "https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z",
+        themeId: "cmlhfpjhw000004l4f4ax3m7z",
+      }).light["font-body"],
+    ).toBe('"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif');
+
+    payload.cssVars.theme["font-sans"] = `${"Inter, ".repeat(20)}@bad`;
+    expect(() =>
+      normalizeImportedCustomTheme(payload, {
+        sourceUrl: "https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z",
+        themeId: "cmlhfpjhw000004l4f4ax3m7z",
+      }),
+    ).toThrow("Unsupported tweakcn token");
+  });
+
   it("builds stable CSS blocks for custom dark and light themes", () => {
     const css = buildCustomThemeStyles(createImportedTheme());
 

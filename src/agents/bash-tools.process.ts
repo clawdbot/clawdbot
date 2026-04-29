@@ -49,7 +49,7 @@ function defaultTailNote(totalLines: number, usingDefaultTail: boolean) {
   return `\n\n[showing last ${DEFAULT_LOG_TAIL_LINES} of ${totalLines} lines; pass offset/limit to page]`;
 }
 
-const MAX_POLL_WAIT_MS = 120_000;
+const MAX_POLL_WAIT_MS = 30_000;
 
 function resolvePollWaitMs(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -94,6 +94,44 @@ function resetPollRetrySuggestion(sessionId: string): void {
   }
 }
 
+function createAbortError(reason: unknown): Error {
+  if (reason instanceof Error) {
+    return reason;
+  }
+  const error = new Error(typeof reason === "string" ? reason : "Aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+async function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    throw createAbortError(signal.reason);
+  }
+  await new Promise<void>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
+    const cleanup = () => {
+      if (timer) {
+        clearTimeout(timer);
+      }
+      if (onAbort) {
+        signal?.removeEventListener("abort", onAbort);
+      }
+    };
+    const onResolve = () => {
+      cleanup();
+      resolve();
+    };
+    onAbort = () => {
+      cleanup();
+      reject(createAbortError(signal?.reason));
+    };
+    timer = setTimeout(onResolve, ms);
+    timer.unref?.();
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 export function createProcessTool(
   defaults?: ProcessToolDefaults,
 ): AgentToolWithMeta<typeof processSchema, unknown> {
@@ -129,7 +167,7 @@ export function createProcessTool(
     displaySummary: PROCESS_TOOL_DISPLAY_SUMMARY,
     description: describeProcessTool({ hasCronTool: defaults?.hasCronTool === true }),
     parameters: processSchema,
-    execute: async (_toolCallId, args, _signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
+    execute: async (_toolCallId, args, signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
       const params = args as {
         action:
           | "list"
@@ -307,9 +345,7 @@ export function createProcessTool(
           if (pollWaitMs > 0 && !scopedSession.exited) {
             const deadline = Date.now() + pollWaitMs;
             while (!scopedSession.exited && Date.now() < deadline) {
-              await new Promise((resolve) =>
-                setTimeout(resolve, Math.max(0, Math.min(250, deadline - Date.now()))),
-              );
+              await sleepPollInterval(Math.max(0, Math.min(250, deadline - Date.now())), signal);
             }
           }
           const { stdout, stderr } = drainSession(scopedSession);

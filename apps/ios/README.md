@@ -245,6 +245,7 @@ gateway can only send pushes for iOS devices that paired with that gateway.
 - Gateway connection via discovery or manual host/port with TLS fingerprint trust prompt.
 - Chat + Talk surfaces through the operator gateway session.
 - iPhone node commands in foreground: camera snap/clip, canvas present/navigate/eval/snapshot, screen record, location, contacts, calendar, reminders, photos, motion, local notifications.
+- Authenticated background `node.presence.alive` beacons that update gateway last-seen metadata when the app moves between foreground and background, without treating suspended sockets as connected.
 - Share extension deep-link forwarding into the connected gateway session.
 
 ## Computer Use Relationship

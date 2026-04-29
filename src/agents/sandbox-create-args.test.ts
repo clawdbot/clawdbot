@@ -164,6 +164,21 @@ describe("buildSandboxCreateArgs", () => {
     );
   });
 
+  it("emits Docker GPU passthrough as a separate argument", () => {
+    const cfg = createSandboxConfig({
+      gpus: "device=GPU-123",
+    });
+
+    const args = buildSandboxCreateArgs({
+      name: "openclaw-sbx-gpu",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+    });
+
+    expect(args).toEqual(expect.arrayContaining(["--gpus", "device=GPU-123"]));
+  });
+
   it("emits -v flags for safe custom binds", () => {
     const cfg: SandboxDockerConfig = {
       image: "openclaw-sandbox:bookworm-slim",

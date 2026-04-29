@@ -121,6 +121,9 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
     "export-session",
     "export",
   ]);
+  if (args.error) {
+    return { text: args.error };
+  }
   const sessionTarget = resolveExportCommandSessionTarget(params);
   if (isReplyPayload(sessionTarget)) {
     return sessionTarget;

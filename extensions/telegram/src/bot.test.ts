@@ -2429,7 +2429,7 @@ describe("createTelegramBot", () => {
 
     loadConfig.mockReturnValue({
       channels: {
-        telegram: { dmPolicy: "open", reactionNotifications: "all" },
+        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
       },
     });
 
@@ -2521,6 +2521,34 @@ describe("createTelegramBot", () => {
       expectedEnqueueCalls: 1,
     },
     {
+      name: "blocks reaction in open mode when wildcard access was constrained",
+      updateId: 515,
+      channelConfig: { dmPolicy: "open", allowFrom: ["12345"], reactionNotifications: "all" },
+      reaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 42,
+        user: { id: 9, first_name: "Ada" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
+      },
+      expectedEnqueueCalls: 0,
+    },
+    {
+      name: "allows reaction in open mode with explicit wildcard access",
+      updateId: 516,
+      channelConfig: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
+      reaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 42,
+        user: { id: 9, first_name: "Ada" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
+      },
+      expectedEnqueueCalls: 1,
+    },
+    {
       name: "blocks reaction in group allowlist mode for unauthorized sender",
       updateId: 513,
       channelConfig: {
@@ -2600,7 +2628,7 @@ describe("createTelegramBot", () => {
 
     loadConfig.mockReturnValue({
       channels: {
-        telegram: { dmPolicy: "open" },
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
       },
     });
 
@@ -2631,7 +2659,7 @@ describe("createTelegramBot", () => {
 
     loadConfig.mockReturnValue({
       channels: {
-        telegram: { dmPolicy: "open", reactionNotifications: "all" },
+        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
       },
     });
 
@@ -2666,7 +2694,7 @@ describe("createTelegramBot", () => {
 
     loadConfig.mockReturnValue({
       channels: {
-        telegram: { dmPolicy: "open", reactionNotifications: "own" },
+        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "own" },
       },
     });
 
@@ -2697,7 +2725,7 @@ describe("createTelegramBot", () => {
 
     loadConfig.mockReturnValue({
       channels: {
-        telegram: { dmPolicy: "open", reactionNotifications: "own" },
+        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "own" },
       },
     });
 
@@ -2728,7 +2756,7 @@ describe("createTelegramBot", () => {
 
     loadConfig.mockReturnValue({
       channels: {
-        telegram: { dmPolicy: "open", reactionNotifications: "all" },
+        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
       },
     });
 
@@ -2758,7 +2786,7 @@ describe("createTelegramBot", () => {
 
     loadConfig.mockReturnValue({
       channels: {
-        telegram: { dmPolicy: "open", reactionNotifications: "all" },
+        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
       },
     });
 
@@ -2788,7 +2816,7 @@ describe("createTelegramBot", () => {
 
     loadConfig.mockReturnValue({
       channels: {
-        telegram: { dmPolicy: "open", reactionNotifications: "all" },
+        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
       },
     });
 

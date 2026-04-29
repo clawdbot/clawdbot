@@ -61,6 +61,7 @@ provider is configured.
 | MiniMax     |   ✓   |   ✓   |   ✓   |  ✓  |     |                |                     |
 | Mistral     |       |       |       |     |  ✓  |                |                     |
 | OpenAI      |   ✓   |   ✓   |       |  ✓  |  ✓  |       ✓        |          ✓          |
+| OpenRouter  |   ✓   |   ✓   |       |  ✓  |     |                |          ✓          |
 | Qwen        |       |   ✓   |       |     |     |                |                     |
 | Runway      |       |   ✓   |       |     |     |                |                     |
 | SenseAudio  |       |       |       |     |  ✓  |                |                     |

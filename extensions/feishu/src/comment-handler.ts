@@ -1,4 +1,5 @@
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
+import { resolveOpenDmAllowlistAccess } from "openclaw/plugin-sdk/security-runtime";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { createFeishuCommentReplyDispatcher } from "./comment-dispatcher.js";
@@ -96,7 +97,19 @@ export async function handleFeishuCommentEvent(
     senderId: turn.senderId,
     senderIds: [turn.senderUserId],
   }).allowed;
-  if (dmPolicy !== "open" && !senderAllowed) {
+  const dmAccessAllowed =
+    dmPolicy === "open"
+      ? resolveOpenDmAllowlistAccess({
+          effectiveAllowFrom: effectiveDmAllowFrom,
+          isSenderAllowed: (allowFrom) =>
+            resolveFeishuAllowlistMatch({
+              allowFrom,
+              senderId: turn.senderId,
+              senderIds: [turn.senderUserId],
+            }).allowed,
+        }).decision === "allow"
+      : senderAllowed;
+  if (!dmAccessAllowed) {
     if (dmPolicy === "pairing") {
       const client = createFeishuClient(account);
       await pairing.issueChallenge({

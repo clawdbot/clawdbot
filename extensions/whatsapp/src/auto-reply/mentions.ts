@@ -10,6 +10,7 @@ import {
   identitiesOverlap,
   type WhatsAppIdentity,
 } from "../identity.js";
+import { isWhatsAppGroupJid } from "../normalize-target.js";
 import { isSelfChatMode, normalizeE164 } from "../text-runtime.js";
 import type { WebInboundMsg } from "./types.js";
 
@@ -44,10 +45,21 @@ export function isBotMentionedFromTargets(
     // Remove zero-width and directionality markers WhatsApp injects around display names
     normalizeMentionText(text);
 
-  const isSelfChat =
-    typeof mentionCfg.isSelfChat === "boolean"
-      ? mentionCfg.isSelfChat
-      : isSelfChatMode(targets.self.e164, mentionCfg.allowFrom);
+  const explicitSelfChatOverride = typeof mentionCfg.isSelfChat === "boolean";
+  // `isSelfChatMode` is a config-shaped check ("is the bot's own E.164 in
+  // allowFrom?"), not a conversation-shaped check, so it returns true even
+  // for group conversations whenever the operator put their own number in
+  // allowFrom — which is the common config. The original mention-skip path
+  // was designed to prevent owner-mentioning-self in a true 1:1 self DM
+  // from falsely triggering the bot, so when we derive the flag implicitly
+  // from `allowFrom`, confine the suppression to non-group conversations
+  // and let real group @mentions go through the identity-overlap check
+  // (#49317). Explicit `mentionCfg.isSelfChat` overrides from the caller
+  // are honored as-is so multi-account / precomputed paths keep working.
+  const isGroupConversation = isWhatsAppGroupJid(msg.from);
+  const isSelfChat = explicitSelfChatOverride
+    ? Boolean(mentionCfg.isSelfChat)
+    : isSelfChatMode(targets.self.e164, mentionCfg.allowFrom) && !isGroupConversation;
 
   const hasMentions = targets.normalizedMentions.length > 0;
   if (hasMentions && !isSelfChat) {
@@ -59,7 +71,7 @@ export function isBotMentionedFromTargets(
     // If the message explicitly mentions someone else, do not fall back to regex matches.
     return false;
   } else if (hasMentions && isSelfChat) {
-    // Self-chat mode: ignore WhatsApp @mention JIDs, otherwise @mentioning the owner in group chats triggers the bot.
+    // Self-chat mode: ignore WhatsApp @mention JIDs, otherwise @mentioning the owner in self-chat triggers the bot.
   }
   const bodyClean = clean(msg.body);
   if (mentionCfg.mentionRegexes.some((re) => re.test(bodyClean))) {

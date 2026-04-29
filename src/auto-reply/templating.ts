@@ -45,6 +45,8 @@ export type MsgContext = {
     timestamp?: number;
   }>;
   /**
+   * @deprecated Use CommandBody.
+   *
    * Raw message body without structural context (history, sender labels).
    * Legacy alias for CommandBody. Falls back to Body if not set.
    */

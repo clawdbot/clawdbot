@@ -280,6 +280,49 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it("marks inter-session prompts after CLI prompt-build hook context is applied", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const hookRunner = {
+        hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+        runBeforePromptBuild: vi.fn(async () => ({
+          prependContext: "trusted hook context",
+        })),
+        runBeforeAgentStart: vi.fn(),
+      };
+      mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:test",
+        agentId: "main",
+        trigger: "user",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "foreign reply text",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:slack:dm:U123",
+          sourceChannel: "slack",
+          sourceTool: "sessions_send",
+        },
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test",
+        config: createCliBackendConfig(),
+      });
+
+      expect(context.params.prompt).toMatch(/^\[Inter-session message/);
+      expect(context.params.prompt).toContain("sourceSession=agent:main:slack:dm:U123");
+      expect(context.params.prompt).toContain("isUser=false");
+      expect(context.params.prompt).toContain("trusted hook context");
+      expect(context.params.prompt).toContain("foreign reply text");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("applies agent_turn_prepare-only context on the CLI path", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {

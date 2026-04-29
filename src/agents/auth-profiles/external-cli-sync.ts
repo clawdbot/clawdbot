@@ -3,6 +3,7 @@ import {
   readCodexCliCredentialsCached,
   readMiniMaxCliCredentialsCached,
 } from "../cli-credentials.js";
+import { normalizeProviderId } from "../provider-id.js";
 import {
   CLAUDE_CLI_PROFILE_ID,
   EXTERNAL_CLI_SYNC_TTL_MS,
@@ -34,10 +35,19 @@ export type ExternalCliResolvedProfile = {
   credential: OAuthCredential;
 };
 
+export type ExternalCliAuthProfileOptions = {
+  allowKeychainPrompt?: boolean;
+  providerIds?: Iterable<string>;
+  profileIds?: Iterable<string>;
+};
+
 type ExternalCliSyncProvider = {
   profileId: string;
   provider: string;
-  readCredentials: () => OAuthCredential | null;
+  aliases?: readonly string[];
+  readCredentials: (
+    options?: Pick<ExternalCliAuthProfileOptions, "allowKeychainPrompt">,
+  ) => OAuthCredential | null;
   // bootstrapOnly providers adopt the external CLI credential only to
   // seed an empty slot; once a local OAuth credential exists for the
   // profile, the local refresh token is treated as canonical and the
@@ -90,14 +100,18 @@ const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
   {
     profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
     provider: "openai-codex",
+    aliases: ["codex", "codex-cli"],
     readCredentials: () => readCodexCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
     bootstrapOnly: true,
   },
   {
     profileId: CLAUDE_CLI_PROFILE_ID,
     provider: "claude-cli",
-    readCredentials: () => {
-      const credential = readClaudeCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS });
+    readCredentials: (options) => {
+      const credential = readClaudeCliCredentialsCached({
+        ttlMs: EXTERNAL_CLI_SYNC_TTL_MS,
+        allowKeychainPrompt: options?.allowKeychainPrompt,
+      });
       if (credential?.type !== "oauth") {
         return null;
       }
@@ -107,6 +121,7 @@ const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
   {
     profileId: MINIMAX_CLI_PROFILE_ID,
     provider: "minimax-portal",
+    aliases: ["minimax", "minimax-cli"],
     readCredentials: () => readMiniMaxCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
   },
 ];
@@ -147,13 +162,75 @@ export function readExternalCliBootstrapCredential(params: {
 
 export const readManagedExternalCliCredential = readExternalCliBootstrapCredential;
 
+function normalizeProviderScope(values: Iterable<string> | undefined): Set<string> | undefined {
+  if (values === undefined) {
+    return undefined;
+  }
+  const out = new Set<string>();
+  for (const value of values) {
+    const raw = value.trim();
+    if (!raw) {
+      continue;
+    }
+    out.add(raw.toLowerCase());
+    const normalized = normalizeProviderId(raw);
+    if (normalized) {
+      out.add(normalized);
+    }
+  }
+  return out;
+}
+
+function normalizeProfileScope(values: Iterable<string> | undefined): Set<string> | undefined {
+  if (values === undefined) {
+    return undefined;
+  }
+  const out = new Set<string>();
+  for (const value of values) {
+    const raw = value.trim().toLowerCase();
+    if (raw) {
+      out.add(raw);
+    }
+  }
+  return out;
+}
+
+function isExternalCliProviderInScope(
+  providerConfig: ExternalCliSyncProvider,
+  options?: ExternalCliAuthProfileOptions,
+): boolean {
+  const providerScope = normalizeProviderScope(options?.providerIds);
+  const profileScope = normalizeProfileScope(options?.profileIds);
+  if (providerScope === undefined && profileScope === undefined) {
+    return true;
+  }
+  if (profileScope?.has(providerConfig.profileId.toLowerCase())) {
+    return true;
+  }
+  if (!providerScope || providerScope.size === 0) {
+    return false;
+  }
+  const aliases = [providerConfig.provider, ...(providerConfig.aliases ?? [])];
+  return aliases.some((alias) => {
+    const raw = alias.trim().toLowerCase();
+    const normalized = normalizeProviderId(alias);
+    return providerScope.has(raw) || (normalized ? providerScope.has(normalized) : false);
+  });
+}
+
 export function resolveExternalCliAuthProfiles(
   store: AuthProfileStore,
+  options?: ExternalCliAuthProfileOptions,
 ): ExternalCliResolvedProfile[] {
   const profiles: ExternalCliResolvedProfile[] = [];
   const now = Date.now();
   for (const providerConfig of EXTERNAL_CLI_SYNC_PROVIDERS) {
-    const creds = providerConfig.readCredentials();
+    if (!isExternalCliProviderInScope(providerConfig, options)) {
+      continue;
+    }
+    const creds = providerConfig.readCredentials({
+      allowKeychainPrompt: options?.allowKeychainPrompt,
+    });
     if (!creds) {
       continue;
     }

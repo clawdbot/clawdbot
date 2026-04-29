@@ -299,7 +299,6 @@ export async function migratePluginRegistryForInstall(
   const inspection = await inspectPersistedInstalledPluginIndex(migrationParams);
   const candidateIndex = loadInstalledPluginIndex({
     ...migrationParams,
-    cache: false,
   });
   const current: InstalledPluginIndex = {
     ...candidateIndex,

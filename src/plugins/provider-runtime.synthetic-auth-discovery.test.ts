@@ -40,9 +40,7 @@ vi.mock("./provider-hook-runtime.js", async (importOriginal) => {
   return {
     ...actual,
     __testing: {},
-    clearProviderRuntimeHookCache: vi.fn(),
     prepareProviderExtraParams: vi.fn(),
-    resetProviderRuntimeHookCacheForTest: vi.fn(),
     resolveProviderHookPlugin: vi.fn(),
     resolveProviderPluginsForHooks: vi.fn(() => []),
     resolveProviderRuntimePlugin,

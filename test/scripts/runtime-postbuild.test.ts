@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   copyStaticExtensionAssets,
   listStaticExtensionAssetOutputs,
+  writeLegacyCliExitCompatChunks,
   writeStableRootRuntimeAliases,
 } from "../../scripts/runtime-postbuild.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
@@ -78,5 +79,15 @@ describe("runtime postbuild static assets", () => {
       'export * from "./runtime-tts.runtime-AbCd1234.js";\n',
     );
     await expect(fs.stat(path.join(distDir, "library.js"))).rejects.toThrow();
+  });
+
+  it("writes legacy CLI exit compatibility chunks", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+
+    writeLegacyCliExitCompatChunks({ rootDir });
+
+    await expect(
+      fs.readFile(path.join(rootDir, "dist", "memory-state-CcqRgDZU.js"), "utf8"),
+    ).resolves.toContain("function hasMemoryRuntime()");
   });
 });

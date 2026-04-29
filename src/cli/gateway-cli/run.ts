@@ -49,6 +49,7 @@ type GatewayRunOpts = {
   force?: boolean;
   verbose?: boolean;
   cliBackendLogs?: boolean;
+  /** @deprecated Use cliBackendLogs. */
   claudeCliLogs?: boolean;
   wsLog?: unknown;
   compact?: boolean;

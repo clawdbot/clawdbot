@@ -98,7 +98,7 @@ export type MemoryPluginRuntime = {
   getMemorySearchManager(params: {
     cfg: OpenClawConfig;
     agentId: string;
-    purpose?: "default" | "status";
+    purpose?: "default" | "status" | "cli";
   }): Promise<{
     manager: RegisteredMemorySearchManager | null;
     error?: string;

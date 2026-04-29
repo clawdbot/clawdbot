@@ -4,12 +4,27 @@ import { QQBOT_ACCESS_REASON } from "./types.js";
 
 describe("resolveQQBotAccess", () => {
   describe("DM scenarios", () => {
-    it("allows everyone when no allowFrom is configured (open)", () => {
+    it("allows default-open DMs when allowFrom is omitted", () => {
       const result = resolveQQBotAccess({ isGroup: false, senderId: "USER1" });
       expect(result).toMatchObject({
         decision: "allow",
         reasonCode: QQBOT_ACCESS_REASON.DM_POLICY_OPEN,
         dmPolicy: "open",
+        effectiveAllowFrom: ["*"],
+      });
+    });
+
+    it("allows default-open DMs when allowFrom is explicitly empty", () => {
+      const result = resolveQQBotAccess({
+        isGroup: false,
+        senderId: "USER1",
+        allowFrom: [],
+      });
+      expect(result).toMatchObject({
+        decision: "allow",
+        reasonCode: QQBOT_ACCESS_REASON.DM_POLICY_OPEN,
+        dmPolicy: "open",
+        effectiveAllowFrom: ["*"],
       });
     });
 
@@ -32,6 +47,18 @@ describe("resolveQQBotAccess", () => {
       expect(result.decision).toBe("allow");
       expect(result.reasonCode).toBe(QQBOT_ACCESS_REASON.DM_POLICY_ALLOWLISTED);
       expect(result.dmPolicy).toBe("allowlist");
+    });
+
+    it("allows open mode when sender matches restrictive allowFrom", () => {
+      const result = resolveQQBotAccess({
+        isGroup: false,
+        senderId: "USER1",
+        allowFrom: ["USER1"],
+        dmPolicy: "open",
+      });
+      expect(result.decision).toBe("allow");
+      expect(result.reasonCode).toBe(QQBOT_ACCESS_REASON.DM_POLICY_ALLOWLISTED);
+      expect(result.reason).toBe("dmPolicy=open (allowlisted)");
     });
 
     it("blocks sender not in allowlist", () => {

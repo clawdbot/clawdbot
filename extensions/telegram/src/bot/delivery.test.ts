@@ -4,6 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { loadWebMedia } = vi.hoisted(() => ({
   loadWebMedia: vi.fn(),
 }));
+const { probeVideoDimensions } = vi.hoisted(() => ({
+  probeVideoDimensions: vi.fn(),
+}));
 const triggerInternalHook = vi.hoisted(() => vi.fn(async () => {}));
 const messageHookRunner = vi.hoisted(() => ({
   hasHooks: vi.fn<(name: string) => boolean>(() => false),
@@ -27,6 +30,14 @@ type RuntimeStub = Pick<RuntimeEnv, "error" | "log" | "exit">;
 vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMedia(...args),
 }));
+
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
+  return {
+    ...actual,
+    probeVideoDimensions,
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/hook-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/hook-runtime")>();
@@ -135,6 +146,8 @@ function createVoiceFailureHarness(params: {
 describe("deliverReplies", () => {
   beforeEach(() => {
     loadWebMedia.mockClear();
+    probeVideoDimensions.mockReset();
+    probeVideoDimensions.mockResolvedValue(undefined);
     triggerInternalHook.mockReset();
     messageHookRunner.hasHooks.mockReset();
     messageHookRunner.hasHooks.mockReturnValue(false);
@@ -485,6 +498,63 @@ describe("deliverReplies", () => {
       expect.objectContaining({
         caption: "hi <b>boss</b>",
         parse_mode: "HTML",
+      }),
+    );
+  });
+
+  it("passes probed dimensions to video reply sends", async () => {
+    const runtime = createRuntime();
+    const sendVideo = vi.fn().mockResolvedValue({
+      message_id: 22,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendVideo });
+    probeVideoDimensions.mockResolvedValueOnce({ width: 720, height: 1280 });
+
+    mockMediaLoad("video.mp4", "video/mp4", "video");
+
+    await deliverWith({
+      replies: [{ mediaUrl: "https://example.com/video.mp4", text: "hi **boss**" }],
+      runtime,
+      bot,
+    });
+
+    expect(probeVideoDimensions).toHaveBeenCalledWith(Buffer.from("video"));
+    expect(sendVideo).toHaveBeenCalledWith(
+      "123",
+      expect.anything(),
+      expect.objectContaining({
+        caption: "hi <b>boss</b>",
+        parse_mode: "HTML",
+        width: 720,
+        height: 1280,
+      }),
+    );
+  });
+
+  it("does not probe GIF reply animations", async () => {
+    const runtime = createRuntime();
+    const sendAnimation = vi.fn().mockResolvedValue({
+      message_id: 23,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendAnimation });
+
+    mockMediaLoad("fun.gif", "image/gif", "GIF89a");
+
+    await deliverWith({
+      replies: [{ mediaUrl: "https://example.com/fun.gif", text: "gif" }],
+      runtime,
+      bot,
+    });
+
+    expect(probeVideoDimensions).not.toHaveBeenCalled();
+    expect(sendAnimation).toHaveBeenCalledWith(
+      "123",
+      expect.anything(),
+      expect.not.objectContaining({
+        width: expect.any(Number),
+        height: expect.any(Number),
       }),
     );
   });

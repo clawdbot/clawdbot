@@ -54,7 +54,10 @@ describe("package acceptance workflow", () => {
       "package_label: openclaw@${{ needs.resolve_package.outputs.package_version }}",
     );
     expect(workflow).toContain(
-      "harness_ref: ${{ inputs.source == 'ref' && inputs.package_ref || inputs.workflow_ref }}",
+      "package_source_sha: ${{ steps.resolve.outputs.package_source_sha }}",
+    );
+    expect(workflow).toContain(
+      "harness_ref: ${{ needs.resolve_package.outputs.package_source_sha || inputs.workflow_ref }}",
     );
   });
 });
@@ -133,12 +136,16 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("suite_id: native-live-extensions-a-k");
     expect(workflow).toContain("suite_id: native-live-extensions-l-n");
     expect(workflow).toContain("suite_id: native-live-extensions-openai");
-    expect(workflow).toContain("suite_id: native-live-extensions-o-z");
-    expect(workflow).toContain("suite_id: native-live-extensions-media");
-    expect(workflow).toMatch(
-      /suite_id: native-live-extensions-media-audio[\s\S]*?needs_ffmpeg: true/u,
-    );
-    expect(workflow).toContain("if: matrix.needs_ffmpeg");
+    expect(workflow).toContain("suite_id: native-live-extensions-o-z-other");
+    expect(workflow).toContain("validate_live_media_provider_suites:");
+    expect(workflow).toContain("image: ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04");
+    expect(workflow).toContain("ffmpeg -version | head -1");
+    expect(workflow).toContain("ffprobe -version | head -1");
+    expect(workflow).toContain("suite_id: native-live-extensions-media-audio");
+    expect(workflow).toContain("suite_id: native-live-extensions-media-music-google");
+    expect(workflow).toContain("suite_id: native-live-extensions-media-music-minimax");
+    expect(workflow).toContain("suite_id: native-live-extensions-media-video");
+    expect(workflow).not.toContain("needs_ffmpeg: true");
   });
 
   it("runs Docker live harnesses from trusted helper scripts", () => {
@@ -232,8 +239,13 @@ describe("package artifact reuse", () => {
 
     expect(workflow).toContain("package_acceptance_release_checks:");
     expect(workflow).toContain(
-      'live_and_e2e_release_checks:\n    needs: [resolve_target, prepare_release_package]\n    if: contains(fromJSON(\'["all","live-e2e"]\'), needs.resolve_target.outputs.rerun_group)',
+      "live_repo_e2e_release_checks:\n    name: Run repo/live E2E validation\n    needs: [resolve_target]",
     );
+    expect(workflow).toContain(
+      "docker_e2e_release_checks:\n    name: Run Docker release-path validation\n    needs: [resolve_target, prepare_release_package]",
+    );
+    expect(workflow).toContain("include_release_path_suites: false");
+    expect(workflow).toContain("include_release_path_suites: true");
     expect(workflow).toContain("uses: ./.github/workflows/package-acceptance.yml");
     expect(workflow).toContain("source: artifact");
     expect(workflow).toContain("artifact_run_id: ${{ github.run_id }}");
@@ -271,7 +283,15 @@ describe("package artifact reuse", () => {
       'pnpm openclaw qa matrix --help 2>/dev/null | grep -F -q -- "--fail-fast"',
     );
     expect(releaseWorkflow).toContain("matrix_args+=(--fail-fast)");
-    expect(releaseWorkflow).toContain('pnpm openclaw qa matrix "${matrix_args[@]}"');
+    expect(releaseWorkflow).toContain(
+      'pnpm openclaw qa matrix --output-dir "${attempt_output_dir}" "${matrix_args[@]}"',
+    );
+    expect(releaseWorkflow).toContain(
+      'echo "Matrix live lane failed on attempt ${attempt}; retrying once..." >&2',
+    );
+    expect(releaseWorkflow).toContain(
+      'echo "Telegram live lane failed on attempt ${attempt}; retrying once..." >&2',
+    );
     expect(qaWorkflow).toContain(
       'pnpm openclaw qa matrix --help 2>/dev/null | grep -F -q -- "--fail-fast"',
     );
@@ -299,6 +319,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("child_rerun_group=all");
     expect(workflow).toContain('-f rerun_group="$child_rerun_group"');
     expect(workflow).toContain("NORMAL_CI_RESULT: ${{ needs.normal_ci.result }}");
+    expect(workflow.match(/trap - EXIT INT TERM/g)?.length ?? 0).toBeGreaterThanOrEqual(6);
     expect(workflow).not.toContain("workflow_ref:");
     expect(workflow).not.toContain("inputs.workflow_ref");
   });

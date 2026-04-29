@@ -50,12 +50,43 @@ function buildFileContext(params: { filePath: string; mime?: string }) {
 export async function runMediaUnderstandingFile(
   params: RunMediaUnderstandingFileParams,
 ): Promise<RunMediaUnderstandingFileResult> {
+  const requestPrompt = params.prompt?.trim();
+  const requestTimeoutSeconds =
+    typeof params.timeoutMs === "number" &&
+    Number.isFinite(params.timeoutMs) &&
+    params.timeoutMs > 0
+      ? Math.ceil(params.timeoutMs / 1000)
+      : undefined;
+  const cfg =
+    requestPrompt || requestTimeoutSeconds !== undefined
+      ? {
+          ...params.cfg,
+          tools: {
+            ...params.cfg.tools,
+            media: {
+              ...params.cfg.tools?.media,
+              [params.capability]: {
+                ...params.cfg.tools?.media?.[params.capability],
+                ...(requestPrompt
+                  ? {
+                      prompt: requestPrompt,
+                      _requestPromptOverride: requestPrompt,
+                    }
+                  : {}),
+                ...(requestTimeoutSeconds !== undefined
+                  ? { timeoutSeconds: requestTimeoutSeconds }
+                  : {}),
+              },
+            },
+          },
+        }
+      : params.cfg;
   const ctx = buildFileContext(params);
   const attachments = normalizeMediaAttachments(ctx);
   if (attachments.length === 0) {
     return { text: undefined };
   }
-  const config = params.cfg.tools?.media?.[params.capability];
+  const config = cfg.tools?.media?.[params.capability];
   if (config?.enabled === false) {
     return {
       text: undefined,
@@ -65,16 +96,16 @@ export async function runMediaUnderstandingFile(
     };
   }
 
-  const providerRegistry = buildProviderRegistry(undefined, params.cfg);
+  const providerRegistry = buildProviderRegistry(undefined, cfg);
   const cache = createMediaAttachmentCache(attachments, {
     localPathRoots: [path.dirname(params.filePath)],
-    ssrfPolicy: params.cfg.tools?.web?.fetch?.ssrfPolicy,
+    ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
   });
 
   try {
     const result = await runCapability({
       capability: params.capability,
-      cfg: params.cfg,
+      cfg,
       ctx,
       attachments: cache,
       media: attachments,

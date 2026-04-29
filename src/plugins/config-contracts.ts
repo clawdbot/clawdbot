@@ -101,7 +101,6 @@ export function resolvePluginConfigContractsById(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  cache?: boolean;
   fallbackToBundledMetadata?: boolean;
   fallbackToBundledMetadataForResolvedBundled?: boolean;
   fallbackBundledPluginIds?: readonly string[];
@@ -123,7 +122,6 @@ export function resolvePluginConfigContractsById(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    cache: params.cache,
     includeDisabled: true,
   });
   for (const plugin of registry.plugins) {

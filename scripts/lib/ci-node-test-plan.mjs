@@ -1,5 +1,6 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
+import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
 
 const EXCLUDED_FULL_SUITE_SHARDS = new Set([
@@ -9,6 +10,7 @@ const EXCLUDED_FULL_SUITE_SHARDS = new Set([
 ]);
 
 const EXCLUDED_PROJECT_CONFIGS = new Set(["test/vitest/vitest.channels.config.ts"]);
+const RELEASE_ONLY_PLUGIN_SHARDS = new Set(["agentic-plugins"]);
 function listTestFiles(rootDir) {
   if (!existsSync(rootDir)) {
     return [];
@@ -80,6 +82,63 @@ function createAutoReplyReplySplitShards() {
       includePatterns,
       requiresDist: false,
       shardName: groupName,
+    }))
+    .filter((shard) => shard.includePatterns.length > 0);
+}
+
+function resolveCommandShardName(file) {
+  const name = relative("src/commands", file).replaceAll("\\", "/");
+  if (name.startsWith("agent") || name.startsWith("channel") || name === "message.test.ts") {
+    return "agentic-commands-agent-channel";
+  }
+  if (name.startsWith("doctor")) {
+    if (name.startsWith("doctor/shared/") || name.startsWith("doctor/")) {
+      return "agentic-commands-doctor-shared";
+    }
+    return "agentic-commands-doctor";
+  }
+  if (
+    name.startsWith("auth-choice") ||
+    name.startsWith("configure") ||
+    name.startsWith("onboard") ||
+    name === "setup.test.ts"
+  ) {
+    return "agentic-commands-onboard-config";
+  }
+  if (
+    name.startsWith("models/") ||
+    name === "model-picker.test.ts" ||
+    name === "openai-model-default.test.ts"
+  ) {
+    return "agentic-commands-models";
+  }
+  return "agentic-commands-status-tools";
+}
+
+function createAgenticCommandSplitShards() {
+  const commandsLightTests = new Set(commandsLightTestFiles);
+  const groups = new Map();
+  for (const file of listTestFiles("src/commands")) {
+    if (commandsLightTests.has(file)) {
+      continue;
+    }
+    const shardName = resolveCommandShardName(file);
+    groups.set(shardName, [...(groups.get(shardName) ?? []), file]);
+  }
+
+  return [
+    "agentic-commands-agent-channel",
+    "agentic-commands-doctor",
+    "agentic-commands-doctor-shared",
+    "agentic-commands-models",
+    "agentic-commands-onboard-config",
+    "agentic-commands-status-tools",
+  ]
+    .map((shardName) => ({
+      configs: ["test/vitest/vitest.commands.config.ts"],
+      includePatterns: groups.get(shardName) ?? [],
+      requiresDist: false,
+      shardName,
     }))
     .filter((shard) => shard.includePatterns.length > 0);
 }
@@ -179,15 +238,19 @@ const SPLIT_NODE_SHARDS = new Map([
         runner: "blacksmith-4vcpu-ubuntu-2404",
       },
       {
-        shardName: "agentic-commands",
+        shardName: "agentic-cli",
+        configs: ["test/vitest/vitest.cli.config.ts"],
+        requiresDist: false,
+      },
+      {
+        shardName: "agentic-command-support",
         configs: [
-          "test/vitest/vitest.cli.config.ts",
           "test/vitest/vitest.commands-light.config.ts",
-          "test/vitest/vitest.commands.config.ts",
           "test/vitest/vitest.daemon.config.ts",
         ],
         requiresDist: false,
       },
+      ...createAgenticCommandSplitShards(),
       {
         shardName: "agentic-agents",
         configs: [
@@ -226,7 +289,9 @@ function formatNodeTestShardCheckName(shardName) {
   return `checks-node-${normalizedShardName}`;
 }
 
-export function createNodeTestShards() {
+export function createNodeTestShards(options = {}) {
+  const includeReleaseOnlyPluginShards = options.includeReleaseOnlyPluginShards ?? true;
+
   return fullSuiteVitestShards.flatMap((shard) => {
     if (EXCLUDED_FULL_SUITE_SHARDS.has(shard.config)) {
       return [];
@@ -240,6 +305,13 @@ export function createNodeTestShards() {
     const splitShards = SPLIT_NODE_SHARDS.get(shard.name);
     if (splitShards) {
       return splitShards.flatMap((splitShard) => {
+        if (
+          RELEASE_ONLY_PLUGIN_SHARDS.has(splitShard.shardName) &&
+          !includeReleaseOnlyPluginShards
+        ) {
+          return [];
+        }
+
         const splitConfigs = splitShard.includeExternalConfigs
           ? splitShard.configs
           : splitShard.configs.filter((config) => configs.includes(config));

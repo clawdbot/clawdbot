@@ -74,6 +74,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   private playhead = 0;
   private closed = false;
   private pendingCalls = new Map<string, PendingFunctionCall>();
+  private readonly sources = new Set<AudioBufferSourceNode>();
 
   constructor(
     private readonly session: RealtimeTalkJsonPcmWebSocketSessionResult,
@@ -93,11 +94,17 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     this.inputContext = new AudioContext({ sampleRate: this.session.audio.inputSampleRateHz });
     this.outputContext = new AudioContext({ sampleRate: this.session.audio.outputSampleRateHz });
     this.ws = new WebSocket(wsUrl);
+    this.ws.binaryType = "arraybuffer";
     this.ws.addEventListener("open", () => {
+      if (this.closed) {
+        return;
+      }
       this.send(this.session.initialMessage ?? { setup: {} });
       this.startMicrophonePump();
     });
-    this.ws.addEventListener("message", (event) => this.handleMessage(event.data));
+    this.ws.addEventListener("message", (event) => {
+      void this.handleMessage(event.data);
+    });
     this.ws.addEventListener("close", () => {
       if (!this.closed) {
         this.ctx.callbacks.onStatus?.("error", "Realtime connection closed");
@@ -119,6 +126,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     this.inputSource = null;
     this.media?.getTracks().forEach((track) => track.stop());
     this.media = null;
+    this.stopOutput();
     void this.inputContext?.close();
     this.inputContext = null;
     void this.outputContext?.close();
@@ -128,7 +136,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   private startMicrophonePump(): void {
-    if (!this.media || !this.inputContext) {
+    if (this.closed || !this.media || !this.inputContext) {
       return;
     }
     this.inputSource = this.inputContext.createMediaStreamSource(this.media);
@@ -152,16 +160,22 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   private send(message: unknown): void {
-    if (this.ws?.readyState === WebSocket.OPEN) {
+    if (!this.closed && this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(message));
     }
   }
 
-  private handleMessage(data: unknown): void {
+  private async handleMessage(data: unknown): Promise<void> {
+    if (this.closed) {
+      return;
+    }
     let message: GoogleLiveMessage;
     try {
-      message = JSON.parse(String(data)) as GoogleLiveMessage;
+      message = JSON.parse(await decodeGoogleLiveMessageData(data)) as GoogleLiveMessage;
     } catch {
+      return;
+    }
+    if (this.closed) {
       return;
     }
     if (message.setupComplete) {
@@ -169,7 +183,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     }
     const content = message.serverContent;
     if (content?.interrupted) {
-      this.playhead = this.outputContext?.currentTime ?? 0;
+      this.stopOutput();
     }
     if (content?.inputTranscription?.text) {
       this.ctx.callbacks.onTranscript?.({
@@ -216,11 +230,23 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     );
     buffer.getChannelData(0).set(samples);
     const source = this.outputContext.createBufferSource();
+    this.sources.add(source);
+    source.addEventListener("ended", () => this.sources.delete(source));
     source.buffer = buffer;
     source.connect(this.outputContext.destination);
     const startAt = Math.max(this.outputContext.currentTime, this.playhead);
     source.start(startAt);
     this.playhead = startAt + buffer.duration;
+  }
+
+  private stopOutput(): void {
+    for (const source of this.sources) {
+      try {
+        source.stop();
+      } catch {}
+    }
+    this.sources.clear();
+    this.playhead = this.outputContext?.currentTime ?? 0;
   }
 
   private async handleToolCall(call: {
@@ -238,11 +264,29 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       return;
     }
     await submitRealtimeTalkConsult({
-      ctx: this.ctx,
+      ctx: this.createActiveContext(),
       callId,
       args: call.args ?? {},
       submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
     });
+  }
+
+  private createActiveContext(): RealtimeTalkTransportContext {
+    return {
+      ...this.ctx,
+      callbacks: {
+        onStatus: (status, detail) => {
+          if (!this.closed) {
+            this.ctx.callbacks.onStatus?.(status, detail);
+          }
+        },
+        onTranscript: (entry) => {
+          if (!this.closed) {
+            this.ctx.callbacks.onTranscript?.(entry);
+          }
+        },
+      },
+    };
   }
 
   private submitToolResult(callId: string, result: unknown): void {
@@ -267,4 +311,26 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       },
     });
   }
+}
+
+async function decodeGoogleLiveMessageData(data: unknown): Promise<string> {
+  if (typeof data === "string") {
+    return data;
+  }
+  if (typeof Blob !== "undefined" && data instanceof Blob) {
+    data = await data.arrayBuffer();
+  }
+  if (isArrayBufferLike(data)) {
+    return new TextDecoder().decode(new Uint8Array(data));
+  }
+  if (ArrayBuffer.isView(data)) {
+    return new TextDecoder().decode(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+  }
+  return String(data);
+}
+
+function isArrayBufferLike(data: unknown): data is ArrayBuffer {
+  return (
+    data instanceof ArrayBuffer || Object.prototype.toString.call(data) === "[object ArrayBuffer]"
+  );
 }

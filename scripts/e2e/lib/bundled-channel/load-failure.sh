@@ -4,30 +4,25 @@
 # Sourced by scripts/e2e/bundled-channel-runtime-deps-docker.sh.
 
 run_load_failure_scenario() {
-  local run_log
-  run_log="$(docker_e2e_run_log bundled-channel-load-failure)"
-
   echo "Running bundled channel load-failure isolation Docker E2E..."
-  if ! timeout "$DOCKER_RUN_TIMEOUT" docker run --rm \
-    -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  run_bundled_channel_container_with_state \
+    bundled-channel-load-failure \
+    "$DOCKER_RUN_TIMEOUT" \
+    bundled-channel-load-failure \
     "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
-    -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
+    -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
 
-export HOME="$(mktemp -d "/tmp/openclaw-bundled-channel-load-failure.XXXXXX")"
+source scripts/lib/openclaw-e2e-instance.sh
+source scripts/e2e/lib/bundled-channel/common.sh
+openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
 export NPM_CONFIG_PREFIX="$HOME/.npm-global"
 export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 export OPENCLAW_NO_ONBOARD=1
 
-package_root() {
-  printf "%s/openclaw" "$(npm root -g)"
-}
+bundled_channel_install_package /tmp/openclaw-load-failure-install.log
 
-echo "Installing mounted OpenClaw package..."
-package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
-npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-load-failure-install.log 2>&1
-
-root="$(package_root)"
+root="$(bundled_channel_package_root)"
 plugin_dir="$root/dist/extensions/load-failure-alpha"
 mkdir -p "$plugin_dir"
 cat >"$plugin_dir/package.json" <<'JSON'
@@ -85,75 +80,8 @@ export default {
 JS
 
 echo "Loading synthetic failing bundled channel through packaged loader..."
-(
-  cd "$root"
-  OPENCLAW_BUNDLED_PLUGINS_DIR="$root/dist/extensions" node --input-type=module - <<'NODE'
-import fs from "node:fs";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
-
-const root = process.cwd();
-const distDir = path.join(root, "dist");
-const bundledPath = fs
-  .readdirSync(distDir)
-  .filter((entry) => /^bundled-[A-Za-z0-9_-]+\.js$/.test(entry))
-  .map((entry) => path.join(distDir, entry))
-  .find((entry) => fs.readFileSync(entry, "utf8").includes("src/channels/plugins/bundled.ts"));
-if (!bundledPath) {
-  throw new Error("missing packaged bundled channel loader artifact");
-}
-const bundled = await import(pathToFileURL(bundledPath));
-const oneArgExports = Object.entries(bundled).filter(
-  ([, value]) => typeof value === "function" && value.length === 1,
-);
-if (oneArgExports.length === 0) {
-  throw new Error(`missing one-argument bundled loader exports; exports=${Object.keys(bundled).join(",")}`);
-}
-
-const id = "load-failure-alpha";
-for (let i = 0; i < 2; i += 1) {
-  for (const [name, fn] of oneArgExports) {
-    try {
-      fn(id);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (message.includes("synthetic")) {
-        throw new Error(`bundled export ${name} leaked synthetic load failure: ${message}`);
-      }
-    }
-  }
-}
-
-const counts = {
-  plugin: globalThis.__loadFailurePlugin,
-  setup: globalThis.__loadFailureSetup,
-  secrets: globalThis.__loadFailureSecrets,
-  setupSecrets: globalThis.__loadFailureSetupSecrets,
-};
-for (const [key, value] of Object.entries({
-  plugin: counts.plugin,
-  setup: counts.setup,
-  setupSecrets: counts.setupSecrets,
-})) {
-  if (value !== 1) {
-    throw new Error(`expected ${key} failure to be cached after one load, got ${value}`);
-  }
-}
-if (counts.secrets !== undefined && counts.secrets !== 1) {
-  throw new Error(`expected secrets failure to be cached after one load when exercised, got ${counts.secrets}`);
-}
-console.log("synthetic bundled channel load failures were isolated and cached");
-NODE
-)
+node scripts/e2e/lib/bundled-channel/loader-probe.mjs load-failure "$root" load-failure-alpha
 
 echo "bundled channel load-failure isolation Docker E2E passed"
 EOF
-  then
-    docker_e2e_print_log "$run_log"
-    rm -f "$run_log"
-    exit 1
-  fi
-
-  docker_e2e_print_log "$run_log"
-  rm -f "$run_log"
 }

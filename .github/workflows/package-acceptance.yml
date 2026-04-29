@@ -262,6 +262,7 @@ jobs:
       include_openwebui: ${{ steps.profile.outputs.include_openwebui }}
       include_release_path_suites: ${{ steps.profile.outputs.include_release_path_suites }}
       package_artifact_name: ${{ steps.profile.outputs.package_artifact_name }}
+      package_source_sha: ${{ steps.resolve.outputs.package_source_sha }}
       package_sha256: ${{ steps.resolve.outputs.sha256 }}
       package_version: ${{ steps.resolve.outputs.package_version }}
       telegram_enabled: ${{ steps.profile.outputs.telegram_enabled }}
@@ -493,7 +494,7 @@ jobs:
       package_spec: ${{ inputs.package_spec }}
       package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}
       package_label: openclaw@${{ needs.resolve_package.outputs.package_version }}
-      harness_ref: ${{ inputs.source == 'ref' && inputs.package_ref || inputs.workflow_ref }}
+      harness_ref: ${{ needs.resolve_package.outputs.package_source_sha || inputs.workflow_ref }}
       provider_mode: ${{ needs.resolve_package.outputs.telegram_mode }}
       scenario: ${{ inputs.telegram_scenarios }}
     secrets:

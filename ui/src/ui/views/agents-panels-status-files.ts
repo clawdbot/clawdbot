@@ -113,6 +113,10 @@ function renderAgentContextCard(
           <div class="mono">${context.model}</div>
         </div>
         <div class="agent-kv">
+          <div class="label">Runtime</div>
+          <div class="mono">${context.runtime}</div>
+        </div>
+        <div class="agent-kv">
           <div class="label">Identity Name</div>
           <div>${context.identityName}</div>
         </div>

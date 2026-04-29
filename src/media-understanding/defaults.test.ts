@@ -57,7 +57,11 @@ const mediaMetadataPlugins = vi.hoisted(() => [
         defaultModels: { image: "gpt-5.4-mini", audio: "gpt-4o-transcribe" },
         autoPriority: { image: 10, audio: 10 },
       },
-      "openai-codex": { capabilities: ["image"], defaultModels: { image: "gpt-5.5" } },
+      "openai-codex": {
+        capabilities: ["image"],
+        defaultModels: { image: "gpt-5.5" },
+        autoPriority: { image: 20 },
+      },
       opencode: { capabilities: ["image"], defaultModels: { image: "gpt-5-nano" } },
       "opencode-go": { capabilities: ["image"], defaultModels: { image: "kimi-k2.6" } },
       openrouter: { capabilities: ["image"], defaultModels: { image: "auto" } },
@@ -124,6 +128,7 @@ describe("resolveAutoMediaKeyProviders", () => {
     expect(resolveAutoMediaKeyProviders({ capability: "image" })).toEqual([
       "openai",
       "anthropic",
+      "openai-codex",
       "google",
       "minimax",
       "minimax-portal",

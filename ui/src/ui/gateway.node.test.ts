@@ -515,6 +515,36 @@ describe("GatewayBrowserClient", () => {
 
     vi.useRealTimers();
   });
+
+  it("clears stale stored device tokens and does not reconnect on AUTH_DEVICE_TOKEN_MISMATCH", async () => {
+    vi.useFakeTimers();
+
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+    });
+
+    const { ws, connectFrame } = await startConnect(client);
+    expect(connectFrame.params?.auth?.token).toBe("stored-device-token");
+
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "unauthorized",
+        details: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
+      },
+    });
+    await expectSocketClosed(ws);
+    ws.emitClose(4008, "connect failed");
+
+    expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator" })).toBeNull();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(wsInstances).toHaveLength(1);
+
+    vi.useRealTimers();
+  });
 });
 
 describe("shouldRetryWithDeviceToken", () => {

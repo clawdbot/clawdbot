@@ -12,7 +12,6 @@ vi.mock("../../plugins/provider-runtime.js", async () => {
     applyProviderResolvedModelCompatWithPlugins: () => undefined,
     applyProviderResolvedTransportWithPlugin: () => undefined,
     buildProviderUnknownModelHintWithPlugin: () => undefined,
-    clearProviderRuntimeHookCache: () => {},
     normalizeProviderTransportWithPlugin: () => undefined,
     normalizeProviderResolvedModelWithPlugin: () => undefined,
     prepareProviderDynamicModel: async () => {},

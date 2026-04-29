@@ -358,13 +358,14 @@ async function isVerificationNoticeAuthorized(params: {
     );
     return false;
   }
-  if (params.dmPolicy === "open") {
-    return true;
-  }
-  const storeAllowFrom = await params.readStoreAllowFrom();
+  const storeAllowFrom =
+    params.dmPolicy !== "allowlist" && params.dmPolicy !== "open"
+      ? await params.readStoreAllowFrom()
+      : [];
   const accessState = resolveMatrixMonitorAccessState({
     allowFrom: params.allowFrom,
     storeAllowFrom,
+    dmPolicy: params.dmPolicy,
     // Verification flows only exist in strict DMs, so room/group allowlists do
     // not participate in the authorization decision here.
     groupAllowFrom: [],

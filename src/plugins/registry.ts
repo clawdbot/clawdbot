@@ -26,7 +26,10 @@ import {
 } from "../infra/node-commands.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import {
   getDetachedTaskLifecycleRuntimeRegistration,
   registerDetachedTaskLifecycleRuntime,
@@ -46,7 +49,7 @@ import {
   registerPluginCommand,
   validatePluginCommandDefinition,
 } from "./command-registration.js";
-import { clearPluginCommandsForPlugin } from "./command-registry-state.js";
+import { clearPluginCommandsForPlugin, pluginCommands } from "./command-registry-state.js";
 import {
   getRegisteredCompactionProvider,
   registerCompactionProvider,
@@ -1329,6 +1332,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    if (allowReservedCommandNames && record.id !== normalizeLowercaseStringOrEmpty(name)) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `command registration failed: Reserved command ownership requires plugin id "${record.id}" to match reserved command name "${normalizeLowercaseStringOrEmpty(name)}"`,
+      });
+      return;
+    }
 
     // For snapshot (non-activating) loads, record the command locally without touching the
     // global plugin command registry so running gateway commands stay intact.
@@ -1350,11 +1362,17 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         return;
       }
     } else {
-      const result = registerPluginCommand(record.id, command, {
-        pluginName: record.name,
-        pluginRoot: record.rootDir,
-        allowReservedCommandNames,
-      });
+      const { ownership: _ownership, ...commandForRegistration } = command;
+      void _ownership;
+      const result = registerPluginCommand(
+        record.id,
+        allowReservedCommandNames ? commandForRegistration : command,
+        {
+          pluginName: record.name,
+          pluginRoot: record.rootDir,
+          allowReservedCommandNames,
+        },
+      );
       if (!result.ok) {
         pushDiagnostic({
           level: "error",
@@ -1363,6 +1381,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           message: `command registration failed: ${result.error}`,
         });
         return;
+      }
+      if (allowReservedCommandNames) {
+        const registeredCommand = pluginCommands.get(`/${name.toLowerCase()}`);
+        if (registeredCommand?.pluginId === record.id) {
+          registeredCommand.ownership = "reserved";
+        }
       }
     }
 
@@ -1822,7 +1846,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     hookName: K,
     handler: PluginHookHandlerMap[K],
-    opts?: { priority?: number },
+    opts?: { priority?: number; timeoutMs?: number },
     policy?: PluginTypedHookPolicy,
   ) => {
     if (!isPluginHookName(hookName)) {
@@ -1884,6 +1908,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       hookName,
       handler: effectiveHandler,
       priority: opts?.priority,
+      ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
       source: record.source,
     } as TypedPluginHookRegistration);
   };

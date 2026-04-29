@@ -85,6 +85,7 @@ Defaults: `debounceMs: 1000`, `cap: 20`, `drop: summarize`.
 
 - If commands seem stuck, enable verbose logs and look for “queued for …ms” lines to confirm the queue is draining.
 - If you need queue depth, enable verbose logs and watch for queue timing lines.
+- When diagnostics are enabled, sessions that remain in `processing` past `diagnostics.stuckSessionWarnMs` log a stuck-session warning. Active embedded runs, active reply operations, and active lane tasks remain warning-only by default; stale startup bookkeeping with no active session work can release the affected session lane so queued work drains.
 
 ## Related
 

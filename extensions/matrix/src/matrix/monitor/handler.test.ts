@@ -1614,7 +1614,7 @@ describe("matrix monitor handler pairing account scope", () => {
         channels: {
           matrix: {
             threadReplies: "always",
-            dm: { threadReplies: "off" },
+            dm: { allowFrom: ["*"], threadReplies: "off" },
           },
         },
       },

@@ -2,7 +2,6 @@ import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { createRestartIterationHook } from "./restart-recovery.js";
 import { spawnWithFallback } from "./spawn-utils.js";
 
 function createStubChild() {
@@ -60,21 +59,5 @@ describe("spawnWithFallback", () => {
       }),
     ).rejects.toThrow(/ENOENT/);
     expect(spawnMock).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("restart-recovery", () => {
-  it("skips recovery on first iteration and runs on subsequent iterations", () => {
-    const onRestart = vi.fn();
-    const onIteration = createRestartIterationHook(onRestart);
-
-    expect(onIteration()).toBe(false);
-    expect(onRestart).not.toHaveBeenCalled();
-
-    expect(onIteration()).toBe(true);
-    expect(onRestart).toHaveBeenCalledTimes(1);
-
-    expect(onIteration()).toBe(true);
-    expect(onRestart).toHaveBeenCalledTimes(2);
   });
 });

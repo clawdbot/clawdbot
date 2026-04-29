@@ -20,11 +20,11 @@ describe("resolveDiscordDmCommandAccess", () => {
     });
   }
 
-  it("allows open DMs and keeps command auth enabled without allowlist entries", async () => {
+  it("blocks open DMs without allowlist wildcard entries", async () => {
     const result = await resolveOpenDmAccess([]);
 
-    expect(result.decision).toBe("allow");
-    expect(result.commandAuthorized).toBe(true);
+    expect(result.decision).toBe("block");
+    expect(result.commandAuthorized).toBe(false);
   });
 
   it("marks command auth true when sender is allowlisted", async () => {
@@ -34,7 +34,7 @@ describe("resolveDiscordDmCommandAccess", () => {
     expect(result.commandAuthorized).toBe(true);
   });
 
-  it("keeps command auth enabled for open DMs when configured allowlist does not match", async () => {
+  it("blocks open DMs when configured allowlist does not match", async () => {
     const result = await resolveDiscordDmCommandAccess({
       accountId: "default",
       dmPolicy: "open",
@@ -45,9 +45,9 @@ describe("resolveDiscordDmCommandAccess", () => {
       readStoreAllowFrom: async () => [],
     });
 
-    expect(result.decision).toBe("allow");
+    expect(result.decision).toBe("block");
     expect(result.allowMatch.allowed).toBe(false);
-    expect(result.commandAuthorized).toBe(true);
+    expect(result.commandAuthorized).toBe(false);
   });
 
   it("returns pairing decision and unauthorized command auth for unknown senders", async () => {
@@ -80,7 +80,7 @@ describe("resolveDiscordDmCommandAccess", () => {
     expect(result.commandAuthorized).toBe(true);
   });
 
-  it("keeps open DM command auth true when access groups are disabled", async () => {
+  it("keeps open DM blocked without wildcard even when access groups are disabled", async () => {
     const result = await resolveDiscordDmCommandAccess({
       accountId: "default",
       dmPolicy: "open",
@@ -91,7 +91,7 @@ describe("resolveDiscordDmCommandAccess", () => {
       readStoreAllowFrom: async () => [],
     });
 
-    expect(result.decision).toBe("allow");
-    expect(result.commandAuthorized).toBe(true);
+    expect(result.decision).toBe("block");
+    expect(result.commandAuthorized).toBe(false);
   });
 });

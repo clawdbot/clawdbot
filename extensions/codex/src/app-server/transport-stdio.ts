@@ -46,14 +46,36 @@ export function resolveCodexAppServerSpawnInvocation(
 export function resolveCodexAppServerSpawnEnv(
   options: Pick<CodexAppServerStartOptions, "env" | "clearEnv">,
   baseEnv: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
   const env = Object.create(null) as NodeJS.ProcessEnv;
   copySafeEnvironmentEntries(env, baseEnv);
   copySafeEnvironmentEntries(env, options.env ?? {});
-  for (const key of options.clearEnv ?? []) {
-    delete env[key];
+  const keysToClear = normalizedEnvironmentKeys(options.clearEnv ?? []);
+  if (platform === "win32") {
+    const lowerCaseKeysToClear = new Set(keysToClear.map((key) => key.toLowerCase()));
+    for (const candidate of Object.keys(env)) {
+      if (lowerCaseKeysToClear.has(candidate.toLowerCase())) {
+        delete env[candidate];
+      }
+    }
+  } else {
+    for (const key of keysToClear) {
+      delete env[key];
+    }
   }
   return env;
+}
+
+function normalizedEnvironmentKeys(rawKeys: readonly string[]): string[] {
+  const keys: string[] = [];
+  for (const rawKey of rawKeys) {
+    const key = rawKey.trim();
+    if (key.length > 0) {
+      keys.push(key);
+    }
+  }
+  return keys;
 }
 
 function copySafeEnvironmentEntries(

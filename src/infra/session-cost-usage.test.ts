@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -274,6 +275,17 @@ describe("session cost usage", () => {
     expect(summary?.dailyLatency?.[0]?.count).toBe(1);
     expect(summary?.dailyModelUsage?.[0]?.date).toBe("2026-02-01");
     expect(summary?.dailyModelUsage?.[0]?.model).toBe("gpt-5.4");
+
+    // utcQuarterHourMessageCounts should use UTC quarter-hour buckets
+    // start = 2026-02-01T10:00Z → quarterIndex = floor((10*60+0)/15) = 40
+    // end   = 2026-02-01T10:05Z → quarterIndex = floor((10*60+5)/15) = 40
+    expect(summary?.utcQuarterHourMessageCounts).toBeDefined();
+    expect(summary?.utcQuarterHourMessageCounts?.length).toBe(1);
+    expect(summary?.utcQuarterHourMessageCounts?.[0]?.quarterIndex).toBe(40);
+    expect(summary?.utcQuarterHourMessageCounts?.[0]?.date).toBe("2026-02-01");
+    expect(summary?.utcQuarterHourMessageCounts?.[0]?.total).toBe(2);
+    expect(summary?.utcQuarterHourMessageCounts?.[0]?.user).toBe(1);
+    expect(summary?.utcQuarterHourMessageCounts?.[0]?.assistant).toBe(1);
   });
 
   it("does not exclude sessions with mtime after endMs during discovery", async () => {
@@ -751,6 +763,83 @@ example
     expect(logs).toHaveLength(1);
     expect(logs?.[0]?.role).toBe("user");
     expect(logs?.[0]?.content).toBe("hello there");
+  });
+
+  it("buckets hourly message counts into UTC quarter-hour slots", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-quarter-"));
+    const sessionFile = path.join(root, "session.jsonl");
+
+    // Messages at different UTC quarter-hour boundaries:
+    //   00:14 UTC → quarterIndex = floor((0*60+14)/15) = 0
+    //   00:15 UTC → quarterIndex = floor((0*60+15)/15) = 1
+    //   06:30 UTC → quarterIndex = floor((6*60+30)/15) = 26
+    //   23:59 UTC → quarterIndex = floor((23*60+59)/15) = 95
+    const entries = [
+      {
+        type: "message",
+        timestamp: "2026-03-15T00:14:00.000Z",
+        message: { role: "user", content: "a" },
+      },
+      {
+        type: "message",
+        timestamp: "2026-03-15T00:15:00.000Z",
+        message: { role: "user", content: "b" },
+      },
+      {
+        type: "message",
+        timestamp: "2026-03-15T06:30:00.000Z",
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.2",
+          usage: { input: 5, output: 5, totalTokens: 10, cost: { total: 0.001 } },
+        },
+      },
+      {
+        type: "message",
+        timestamp: "2026-03-15T23:59:00.000Z",
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.2",
+          stopReason: "error",
+          usage: { input: 3, output: 3, totalTokens: 6, cost: { total: 0.001 } },
+        },
+      },
+    ];
+
+    await fs.writeFile(
+      sessionFile,
+      entries.map((entry) => JSON.stringify(entry)).join("\n"),
+      "utf-8",
+    );
+
+    const summary = await loadSessionCostSummary({ sessionFile });
+    const quarterHourly = summary?.utcQuarterHourMessageCounts;
+    expect(quarterHourly).toBeDefined();
+    expect(quarterHourly?.length).toBe(4);
+
+    // Sort by quarterIndex for deterministic checks
+    const sorted = [...(quarterHourly ?? [])].toSorted((a, b) => a.quarterIndex - b.quarterIndex);
+    expect(sorted[0]?.quarterIndex).toBe(0); // 00:14
+    expect(sorted[0]?.user).toBe(1);
+    expect(sorted[1]?.quarterIndex).toBe(1); // 00:15
+    expect(sorted[1]?.user).toBe(1);
+    expect(sorted[2]?.quarterIndex).toBe(26); // 06:30
+    expect(sorted[2]?.assistant).toBe(1);
+    expect(sorted[3]?.quarterIndex).toBe(95); // 23:59
+    expect(sorted[3]?.assistant).toBe(1);
+    expect(sorted[3]?.errors).toBe(1); // stopReason "error"
+  });
+
+  it("returns undefined utcQuarterHourMessageCounts when session has no messages", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-empty-hourly-"));
+    const sessionFile = path.join(root, "session.jsonl");
+    // Empty file — no entries at all
+    await fs.writeFile(sessionFile, "", "utf-8");
+
+    const summary = await loadSessionCostSummary({ sessionFile });
+    expect(summary?.utcQuarterHourMessageCounts).toBeUndefined();
   });
 
   it("preserves totals and cumulative values when downsampling timeseries", async () => {

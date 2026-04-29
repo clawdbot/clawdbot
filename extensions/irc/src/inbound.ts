@@ -207,36 +207,34 @@ export async function handleIrcInbound(params: {
       runtime.log?.(`irc: drop DM sender=${senderDisplay} (dmPolicy=disabled)`);
       return;
     }
-    if (dmPolicy !== "open") {
-      const dmAllowed = resolveIrcAllowlistMatch({
-        allowFrom: effectiveAllowFrom,
-        message,
-        allowNameMatching,
-      }).allowed;
-      if (!dmAllowed) {
-        if (dmPolicy === "pairing") {
-          await pairing.issueChallenge({
-            senderId: normalizeLowercaseStringOrEmpty(senderDisplay),
-            senderIdLine: `Your IRC id: ${senderDisplay}`,
-            meta: { name: message.senderNick || undefined },
-            sendPairingReply: async (text) => {
-              await deliverIrcReply({
-                payload: { text },
-                cfg: config,
-                target: message.senderNick,
-                accountId: account.accountId,
-                sendReply: params.sendReply,
-                statusSink,
-              });
-            },
-            onReplyError: (err) => {
-              runtime.error?.(`irc: pairing reply failed for ${senderDisplay}: ${String(err)}`);
-            },
-          });
-        }
-        runtime.log?.(`irc: drop DM sender ${senderDisplay} (dmPolicy=${dmPolicy})`);
-        return;
+    const dmAllowed = resolveIrcAllowlistMatch({
+      allowFrom: effectiveAllowFrom,
+      message,
+      allowNameMatching,
+    }).allowed;
+    if (!dmAllowed) {
+      if (dmPolicy === "pairing") {
+        await pairing.issueChallenge({
+          senderId: normalizeLowercaseStringOrEmpty(senderDisplay),
+          senderIdLine: `Your IRC id: ${senderDisplay}`,
+          meta: { name: message.senderNick || undefined },
+          sendPairingReply: async (text) => {
+            await deliverIrcReply({
+              payload: { text },
+              cfg: config,
+              target: message.senderNick,
+              accountId: account.accountId,
+              sendReply: params.sendReply,
+              statusSink,
+            });
+          },
+          onReplyError: (err) => {
+            runtime.error?.(`irc: pairing reply failed for ${senderDisplay}: ${String(err)}`);
+          },
+        });
       }
+      runtime.log?.(`irc: drop DM sender ${senderDisplay} (dmPolicy=${dmPolicy})`);
+      return;
     }
   }
 

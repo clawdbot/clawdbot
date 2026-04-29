@@ -44,6 +44,57 @@ function hasLegacyPluginEntryTtsProviderKeys(value: unknown): boolean {
   });
 }
 
+function hasLegacyTtsEnabled(value: unknown): boolean {
+  return typeof getRecord(value)?.enabled === "boolean";
+}
+
+function hasLegacyTtsEnabledInAgentLocations(value: unknown): boolean {
+  const agents = getRecord(value);
+  if (hasLegacyTtsEnabled(getRecord(getRecord(agents?.defaults)?.tts))) {
+    return true;
+  }
+  const agentList = Array.isArray(agents?.list) ? agents.list : [];
+  return agentList.some((entry) => hasLegacyTtsEnabled(getRecord(getRecord(entry)?.tts)));
+}
+
+function hasLegacyTtsEnabledInChannelLocations(value: unknown): boolean {
+  const channels = getRecord(value);
+  for (const [channelId, channelValue] of Object.entries(channels ?? {})) {
+    if (isBlockedObjectKey(channelId)) {
+      continue;
+    }
+    const channel = getRecord(channelValue);
+    if (hasLegacyTtsEnabled(getRecord(channel?.tts))) {
+      return true;
+    }
+    const accounts = getRecord(channel?.accounts);
+    for (const [accountId, accountValue] of Object.entries(accounts ?? {})) {
+      if (isBlockedObjectKey(accountId)) {
+        continue;
+      }
+      if (hasLegacyTtsEnabled(getRecord(getRecord(accountValue)?.tts))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function hasLegacyTtsEnabledInPluginLocations(value: unknown): boolean {
+  const entries = getRecord(value);
+  if (!entries) {
+    return false;
+  }
+  return Object.entries(entries).some(([pluginId, entryValue]) => {
+    if (isBlockedObjectKey(pluginId) || !LEGACY_TTS_PLUGIN_IDS.has(pluginId)) {
+      return false;
+    }
+    const entry = getRecord(entryValue);
+    const config = getRecord(entry?.config);
+    return hasLegacyTtsEnabled(getRecord(config?.tts));
+  });
+}
+
 function getOrCreateTtsProviders(tts: Record<string, unknown>): Record<string, unknown> {
   const providers = getRecord(tts.providers) ?? {};
   tts.providers = providers;
@@ -121,7 +172,73 @@ function migrateLegacyTtsConfig(
   }
 }
 
-const LEGACY_TTS_RULES: LegacyConfigRule[] = [
+function migrateLegacyTtsEnabled(
+  tts: Record<string, unknown> | null | undefined,
+  pathLabel: string,
+  changes: string[],
+): void {
+  if (!tts || typeof tts.enabled !== "boolean") {
+    return;
+  }
+  const nextAuto = tts.enabled ? "always" : "off";
+  delete tts.enabled;
+  if (typeof tts.auto === "string" && tts.auto.trim()) {
+    changes.push(`Removed ${pathLabel}.enabled because ${pathLabel}.auto is already set.`);
+    return;
+  }
+  tts.auto = nextAuto;
+  changes.push(`Moved ${pathLabel}.enabled → ${pathLabel}.auto "${nextAuto}".`);
+}
+
+function visitKnownTtsConfigLocations(
+  raw: Record<string, unknown>,
+  visit: (tts: Record<string, unknown> | null | undefined, pathLabel: string) => void,
+): void {
+  const messages = getRecord(raw.messages);
+  visit(getRecord(messages?.tts), "messages.tts");
+
+  const agents = getRecord(raw.agents);
+  const agentDefaults = getRecord(agents?.defaults);
+  visit(getRecord(agentDefaults?.tts), "agents.defaults.tts");
+
+  const agentList = Array.isArray(agents?.list) ? agents.list : [];
+  agentList.forEach((entry, index) => {
+    const agent = getRecord(entry);
+    visit(getRecord(agent?.tts), `agents.list[${index}].tts`);
+  });
+
+  const channels = getRecord(raw.channels);
+  for (const [channelId, channelValue] of Object.entries(channels ?? {})) {
+    if (isBlockedObjectKey(channelId)) {
+      continue;
+    }
+    const channel = getRecord(channelValue);
+    visit(getRecord(channel?.tts), `channels.${channelId}.tts`);
+    const accounts = getRecord(channel?.accounts);
+    for (const [accountId, accountValue] of Object.entries(accounts ?? {})) {
+      if (isBlockedObjectKey(accountId)) {
+        continue;
+      }
+      visit(
+        getRecord(getRecord(accountValue)?.tts),
+        `channels.${channelId}.accounts.${accountId}.tts`,
+      );
+    }
+  }
+
+  const plugins = getRecord(raw.plugins);
+  const pluginEntries = getRecord(plugins?.entries);
+  for (const [pluginId, entryValue] of Object.entries(pluginEntries ?? {})) {
+    if (isBlockedObjectKey(pluginId) || !LEGACY_TTS_PLUGIN_IDS.has(pluginId)) {
+      continue;
+    }
+    const entry = getRecord(entryValue);
+    const config = getRecord(entry?.config);
+    visit(getRecord(config?.tts), `plugins.entries.${pluginId}.config.tts`);
+  }
+}
+
+const LEGACY_TTS_PROVIDER_RULES: LegacyConfigRule[] = [
   {
     path: ["messages", "tts"],
     message:
@@ -136,11 +253,36 @@ const LEGACY_TTS_RULES: LegacyConfigRule[] = [
   },
 ];
 
+const LEGACY_TTS_ENABLED_RULES: LegacyConfigRule[] = [
+  {
+    path: ["messages", "tts"],
+    message: 'messages.tts.enabled is legacy; use messages.tts.auto. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyTtsEnabled(value),
+  },
+  {
+    path: ["agents"],
+    message: 'agents.*.tts.enabled is legacy; use agents.*.tts.auto. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyTtsEnabledInAgentLocations(value),
+  },
+  {
+    path: ["channels"],
+    message:
+      'channels.*.tts.enabled is legacy; use channels.*.tts.auto. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyTtsEnabledInChannelLocations(value),
+  },
+  {
+    path: ["plugins", "entries"],
+    message:
+      'plugins.entries.voice-call.config.tts.enabled is legacy; use plugins.entries.voice-call.config.tts.auto. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyTtsEnabledInPluginLocations(value),
+  },
+];
+
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "tts.providers-generic-shape",
     describe: "Move legacy bundled TTS config keys into messages.tts.providers",
-    legacyRules: LEGACY_TTS_RULES,
+    legacyRules: LEGACY_TTS_PROVIDER_RULES,
     apply: (raw, changes) => {
       const messages = getRecord(raw.messages);
       migrateLegacyTtsConfig(getRecord(messages?.tts), "messages.tts", changes);
@@ -162,6 +304,16 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS: LegacyConfigMigrationSpec[] =
           changes,
         );
       }
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "tts.enabled-auto-mode",
+    describe: "Move legacy TTS enabled toggles to auto mode",
+    legacyRules: LEGACY_TTS_ENABLED_RULES,
+    apply: (raw, changes) => {
+      visitKnownTtsConfigLocations(raw, (tts, pathLabel) =>
+        migrateLegacyTtsEnabled(tts, pathLabel, changes),
+      );
     },
   }),
 ];

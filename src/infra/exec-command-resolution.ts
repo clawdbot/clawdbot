@@ -229,7 +229,7 @@ export function resolveApprovalAuditCandidatePath(
   return resolvePolicyTargetCandidatePath(resolution, cwd);
 }
 
-// Legacy alias kept while callers migrate to explicit target naming.
+/** @deprecated Use resolveExecutionTargetCandidatePath. */
 export function resolveAllowlistCandidatePath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,

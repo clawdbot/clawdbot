@@ -123,6 +123,40 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
   });
 
+  it("fails marked sessions with stale approval-pending exec tool results", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "run a command that needs approval" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      {
+        role: "toolResult",
+        content: "Approval required (id stale, full stale-approval-id).",
+        details: {
+          status: "approval-pending",
+          approvalId: "stale-approval-id",
+          host: "gateway",
+          command: "echo stale",
+        },
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    expect(callGateway).not.toHaveBeenCalled();
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(store["agent:main:main"]?.status).toBe("failed");
+    expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
+  });
+
   it("does not scan ordinary running sessions without the restart-aborted marker", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {

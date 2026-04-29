@@ -23,6 +23,10 @@ export function createNpmProjectInstallEnv(
   return {
     ...nextEnv,
     npm_config_dry_run: "false",
+    npm_config_fetch_retries: nextEnv.npm_config_fetch_retries ?? "5",
+    npm_config_fetch_retry_maxtimeout: nextEnv.npm_config_fetch_retry_maxtimeout ?? "120000",
+    npm_config_fetch_retry_mintimeout: nextEnv.npm_config_fetch_retry_mintimeout ?? "10000",
+    npm_config_fetch_timeout: nextEnv.npm_config_fetch_timeout ?? "300000",
     npm_config_global: "false",
     npm_config_location: "project",
     npm_config_package_lock: "false",

@@ -3,6 +3,7 @@ import { CodexAppServerRpcError } from "./client.js";
 export const CODEX_CONTROL_METHODS = {
   account: "account/read",
   compact: "thread/compact/start",
+  feedback: "feedback/upload",
   listMcpServers: "mcpServerStatus/list",
   listSkills: "skills/list",
   listThreads: "thread/list",

@@ -2866,19 +2866,22 @@ public struct AgentSummary: Codable, Sendable {
     public let identity: [String: AnyCodable]?
     public let workspace: String?
     public let model: [String: AnyCodable]?
+    public let agentruntime: [String: AnyCodable]?
 
     public init(
         id: String,
         name: String?,
         identity: [String: AnyCodable]?,
         workspace: String?,
-        model: [String: AnyCodable]?)
+        model: [String: AnyCodable]?,
+        agentruntime: [String: AnyCodable]?)
     {
         self.id = id
         self.name = name
         self.identity = identity
         self.workspace = workspace
         self.model = model
+        self.agentruntime = agentruntime
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2887,6 +2890,7 @@ public struct AgentSummary: Codable, Sendable {
         case identity
         case workspace
         case model
+        case agentruntime = "agentRuntime"
     }
 }
 
@@ -4195,6 +4199,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
     public let host: AnyCodable?
     public let security: AnyCodable?
     public let ask: AnyCodable?
+    public let warningtext: AnyCodable?
     public let agentid: AnyCodable?
     public let resolvedpath: AnyCodable?
     public let sessionkey: AnyCodable?
@@ -4216,6 +4221,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         host: AnyCodable?,
         security: AnyCodable?,
         ask: AnyCodable?,
+        warningtext: AnyCodable?,
         agentid: AnyCodable?,
         resolvedpath: AnyCodable?,
         sessionkey: AnyCodable?,
@@ -4236,6 +4242,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         self.host = host
         self.security = security
         self.ask = ask
+        self.warningtext = warningtext
         self.agentid = agentid
         self.resolvedpath = resolvedpath
         self.sessionkey = sessionkey
@@ -4258,6 +4265,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         case host
         case security
         case ask
+        case warningtext = "warningText"
         case agentid = "agentId"
         case resolvedpath = "resolvedPath"
         case sessionkey = "sessionKey"

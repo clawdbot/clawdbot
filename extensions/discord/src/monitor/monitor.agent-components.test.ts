@@ -101,11 +101,13 @@ describe("agent components", () => {
   async function expectSuccessfulDmButtonInteraction(params: {
     dmPolicy: "pairing" | "open";
     expectPairingStoreRead: boolean;
+    allowFrom?: string[];
   }) {
     const button = createAgentComponentButton({
       cfg: createCfg(),
       accountId: "default",
       dmPolicy: params.dmPolicy,
+      allowFrom: params.allowFrom,
     });
     const { interaction, defer, reply } = createDmButtonInteraction();
 
@@ -259,6 +261,7 @@ describe("agent components", () => {
     await expectSuccessfulDmButtonInteraction({
       dmPolicy: "open",
       expectPairingStoreRead: false,
+      allowFrom: ["*"],
     });
   });
 

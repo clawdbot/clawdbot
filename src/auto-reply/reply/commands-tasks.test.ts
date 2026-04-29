@@ -84,6 +84,29 @@ describe("buildTasksReply", () => {
     expect(reply.text).toContain("approval denied");
   });
 
+  it("lists session-backed video generation tasks for the current session", async () => {
+    createRunningTaskRun({
+      runtime: "cli",
+      taskKind: "video_generation",
+      sourceId: "video_generate:openai",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:main:main",
+      runId: "tool:video_generate:tasks-visible",
+      label: "Video generation",
+      task: "friendly lobster surfing",
+      progressSummary: "Queued video generation",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+    });
+
+    const reply = await buildTasksReplyForTest();
+
+    expect(reply.text).toContain("Current session: 1 active · 1 total");
+    expect(reply.text).toContain("🟢 Video generation");
+    expect(reply.text).toContain("CLI · running");
+    expect(reply.text).toContain("Queued video generation");
+  });
+
   it("sanitizes leaked internal runtime context from visible task details", async () => {
     createRunningTaskRun({
       runtime: "acp",
@@ -182,6 +205,31 @@ describe("buildTasksReply", () => {
     expect(reply.text).toContain("Agent-local: 1 active · 1 total");
     expect(reply.text).not.toContain("hidden background task");
     expect(reply.text).not.toContain("hidden progress detail");
+  });
+
+  it("counts session-backed video generation tasks in agent-local fallback", async () => {
+    createRunningTaskRun({
+      runtime: "cli",
+      taskKind: "video_generation",
+      sourceId: "video_generate:openai",
+      requesterSessionKey: "agent:main:other-session",
+      childSessionKey: "agent:main:other-session",
+      runId: "tool:video_generate:tasks-agent-fallback",
+      label: "Video generation",
+      task: "hidden video background task",
+      progressSummary: "Queued video generation",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+    });
+
+    const reply = await buildTasksReplyForTest({
+      sessionKey: "agent:main:empty-session",
+    });
+
+    expect(reply.text).toContain("All clear - nothing linked to this session right now.");
+    expect(reply.text).toContain("Agent-local: 1 active · 1 total");
+    expect(reply.text).not.toContain("hidden video background task");
+    expect(reply.text).not.toContain("Queued video generation");
   });
 
   it("uses the canonical target session agent for agent-local fallback counts", async () => {

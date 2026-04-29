@@ -13,7 +13,6 @@ export function resolveInstalledPluginIndexRegistry(params: LoadInstalledPluginI
       registry: loadPluginManifestRegistry({
         config: params.config,
         workspaceDir: params.workspaceDir,
-        cache: false,
         env: params.env,
         candidates: params.candidates,
         diagnostics: params.diagnostics,
@@ -26,7 +25,6 @@ export function resolveInstalledPluginIndexRegistry(params: LoadInstalledPluginI
   const discovery = discoverOpenClawPlugins({
     workspaceDir: params.workspaceDir,
     extraPaths: normalized.loadPaths,
-    cache: params.cache,
     env: params.env,
   });
   return {
@@ -34,7 +32,6 @@ export function resolveInstalledPluginIndexRegistry(params: LoadInstalledPluginI
     registry: loadPluginManifestRegistry({
       config: params.config,
       workspaceDir: params.workspaceDir,
-      cache: false,
       env: params.env,
       candidates: discovery.candidates,
       diagnostics: discovery.diagnostics,

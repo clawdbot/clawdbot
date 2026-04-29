@@ -102,6 +102,49 @@ describe("media-understanding runtime", () => {
     expect(mocks.cleanup).toHaveBeenCalledTimes(1);
   });
 
+  it("passes per-request image prompts into media understanding config", async () => {
+    const output: MediaUnderstandingOutput = {
+      kind: "image.description",
+      attachmentIndex: 0,
+      provider: "vision-plugin",
+      model: "vision-v1",
+      text: "button count ok",
+    };
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, path: "/tmp/sample.jpg", mime: "image/jpeg" },
+    ]);
+    mocks.runCapability.mockResolvedValue({
+      outputs: [output],
+    });
+
+    await describeImageFile({
+      filePath: "/tmp/sample.jpg",
+      mime: "image/jpeg",
+      cfg: {
+        tools: {
+          media: {
+            image: {
+              prompt: "default image prompt",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      agentDir: "/tmp/agent",
+      prompt: "Count visible buttons",
+      timeoutMs: 90_000,
+    });
+
+    expect(mocks.runCapability).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          prompt: "Count visible buttons",
+          _requestPromptOverride: "Count visible buttons",
+          timeoutSeconds: 90,
+        }),
+      }),
+    );
+  });
+
   it("surfaces the underlying provider failure when media understanding fails", async () => {
     mocks.normalizeMediaAttachments.mockReturnValue([
       { index: 0, path: "/tmp/sample.ogg", mime: "audio/ogg" },

@@ -116,6 +116,8 @@ export type DiscordIntentsConfig = {
   presence?: boolean;
   /** Enable Guild Members privileged intent (requires Portal opt-in). Default: false. */
   guildMembers?: boolean;
+  /** Enable Guild Voice States intent. Defaults to voice.enabled, unless explicitly set. */
+  voiceStates?: boolean;
 };
 
 export type DiscordVoiceAutoJoinConfig = {
@@ -241,6 +243,8 @@ export type DiscordAccountConfig = {
   token?: SecretInput;
   /** HTTP(S) proxy URL for Discord gateway WebSocket connections. */
   proxy?: string;
+  /** Timeout for Discord /gateway/bot metadata lookup before falling back to the default gateway URL. Default: 30000. */
+  gatewayInfoTimeoutMs?: number;
   /** Allow bot-authored messages to trigger replies (default: false). Set "mentions" to gate on mentions. */
   allowBots?: boolean | "mentions";
   /**
@@ -336,13 +340,13 @@ export type DiscordAccountConfig = {
   /** Streaming URL (Twitch/YouTube). Required when activityType=1. */
   activityUrl?: string;
   /**
-   * In-process worker settings for queued inbound Discord runs.
-   * This is separate from Carbon's eventQueue listener budget.
+   * Legacy compatibility block. Discord no longer enforces channel-owned
+   * timeouts for queued inbound agent runs.
    */
   inboundWorker?: {
     /**
-     * Max time (ms) a queued inbound run may execute before OpenClaw aborts it.
-     * Defaults to 1800000 (30 minutes). Set 0 to disable the worker-owned timeout.
+     * Ignored. Queued Discord agent runs are governed by the session/tool/runtime
+     * lifecycle, not by Discord channel config.
      */
     runTimeoutMs?: number;
   };

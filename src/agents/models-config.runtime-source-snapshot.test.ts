@@ -11,7 +11,6 @@ import {
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  clearPluginManifestRegistryCache: () => undefined,
   loadPluginManifestRegistry: () => ({ plugins: [] }),
 }));
 
@@ -25,7 +24,6 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   applyProviderConfigDefaultsWithPlugin: (config: OpenClawConfig) => config,
   applyProviderNativeStreamingUsageCompatWithPlugin: () => undefined,
   normalizeProviderConfigWithPlugin: () => undefined,
-  resetProviderRuntimeHookCacheForTest: () => undefined,
   resolveProviderConfigApiKeyWithPlugin: () => undefined,
   resolveProviderSyntheticAuthWithPlugin: () => undefined,
 }));

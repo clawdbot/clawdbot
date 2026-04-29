@@ -41,6 +41,54 @@ const log = createSubsystemLogger("ollama-stream");
 
 export const OLLAMA_NATIVE_BASE_URL = OLLAMA_DEFAULT_BASE_URL;
 
+const GARBLED_VISIBLE_TEXT_MODEL_RE = /\b(?:glm|kimi)\b/i;
+const GARBLED_VISIBLE_TEXT_MIN_CHARS = 80;
+const GARBLED_VISIBLE_TEXT_SYMBOL_RE = /[$#%&="'_~`^|\\/*+\-[\]{}()<>:;,.!?]/gu;
+const LETTER_OR_DIGIT_RE = /[\p{L}\p{N}]/gu;
+
+function countMatches(text: string, re: RegExp): number {
+  re.lastIndex = 0;
+  return Array.from(text.matchAll(re)).length;
+}
+
+function maxCharacterFrequency(text: string): number {
+  const counts = new Map<string, number>();
+  let max = 0;
+  for (const char of text) {
+    const count = (counts.get(char) ?? 0) + 1;
+    counts.set(char, count);
+    max = Math.max(max, count);
+  }
+  return max;
+}
+
+function isKnownOllamaGarbledVisibleTextModel(modelId: string): boolean {
+  return GARBLED_VISIBLE_TEXT_MODEL_RE.test(modelId);
+}
+
+function isLikelyGarbledVisibleText(params: { text: string; modelId: string }): boolean {
+  if (!isKnownOllamaGarbledVisibleTextModel(params.modelId)) {
+    return false;
+  }
+  const compact = params.text.replace(/\s+/g, "");
+  if (compact.length < GARBLED_VISIBLE_TEXT_MIN_CHARS) {
+    return false;
+  }
+
+  const letterOrDigitCount = countMatches(compact, LETTER_OR_DIGIT_RE);
+  const symbolCount = countMatches(compact, GARBLED_VISIBLE_TEXT_SYMBOL_RE);
+  const maxFrequency = maxCharacterFrequency(compact);
+  const letterOrDigitRatio = letterOrDigitCount / compact.length;
+  const symbolRatio = symbolCount / compact.length;
+  const dominantCharacterRatio = maxFrequency / compact.length;
+
+  return (
+    letterOrDigitRatio < 0.08 &&
+    symbolRatio > 0.6 &&
+    (dominantCharacterRatio > 0.22 || /[$#%&="'_~`^|\\/*+\-[\]{}()<>:;,.!?]{12,}/u.test(compact))
+  );
+}
+
 export function resolveOllamaBaseUrlForRun(params: {
   modelBaseUrl?: string;
   providerBaseUrl?: string;
@@ -339,8 +387,7 @@ export function createConfiguredOllamaCompatStreamWrapper(
   return streamFn;
 }
 
-// Backward-compatible alias for existing imports/tests while the broader
-// Ollama compat wrapper now owns more than num_ctx injection.
+/** @deprecated Use createConfiguredOllamaCompatStreamWrapper. */
 export const createConfiguredOllamaCompatNumCtxWrapper = createConfiguredOllamaCompatStreamWrapper;
 
 export function buildOllamaChatRequest(params: {
@@ -890,10 +937,12 @@ function resolveOllamaModelHeaders(model: {
 
 function resolveOllamaRequestTimeoutMs(
   model: object,
-  options: { requestTimeoutMs?: unknown } | undefined,
+  options: { requestTimeoutMs?: unknown; timeoutMs?: unknown } | undefined,
 ): number | undefined {
   const raw =
-    options?.requestTimeoutMs ?? (model as { requestTimeoutMs?: unknown }).requestTimeoutMs;
+    options?.requestTimeoutMs ??
+    options?.timeoutMs ??
+    (model as { requestTimeoutMs?: unknown }).requestTimeoutMs;
   return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : undefined;
 }
 
@@ -951,12 +1000,12 @@ export function createOllamaStreamFn(
             method: "POST",
             headers,
             body: JSON.stringify(body),
-            signal: options?.signal,
           },
           policy: ssrfPolicy,
+          ...(options?.signal ? { signal: options.signal } : {}),
           timeoutMs: resolveOllamaRequestTimeoutMs(
             model,
-            options as { requestTimeoutMs?: unknown } | undefined,
+            options as { requestTimeoutMs?: unknown; timeoutMs?: unknown } | undefined,
           ),
           auditContext: "ollama-stream.chat",
         });
@@ -1127,6 +1176,12 @@ export function createOllamaStreamFn(
 
           if (!finalResponse) {
             throw new Error("Ollama API stream ended without a final response");
+          }
+
+          if (isLikelyGarbledVisibleText({ text: accumulatedContent, modelId: model.id })) {
+            throw new Error(
+              `Ollama returned non-linguistic garbled visible text for ${model.id}; retry or switch models`,
+            );
           }
 
           finalResponse.message.content = accumulatedContent;

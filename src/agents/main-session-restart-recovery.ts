@@ -62,9 +62,26 @@ function isResumableTailMessage(message: unknown): boolean {
   return role === "user" || role === "tool" || role === "toolResult";
 }
 
-function isMainSessionResumable(messages: unknown[]): boolean {
+function isApprovalPendingToolResult(message: unknown): boolean {
+  if (!message || typeof message !== "object" || getMessageRole(message) !== "toolResult") {
+    return false;
+  }
+  const details = (message as { details?: unknown }).details;
+  if (!details || typeof details !== "object") {
+    return false;
+  }
+  return (details as { status?: unknown }).status === "approval-pending";
+}
+
+function resolveMainSessionResumeBlockReason(messages: unknown[]): string | null {
   const lastMeaningful = messages.toReversed().find(isMeaningfulTailMessage);
-  return lastMeaningful ? isResumableTailMessage(lastMeaningful) : false;
+  if (!lastMeaningful || !isResumableTailMessage(lastMeaningful)) {
+    return "transcript tail is not resumable";
+  }
+  if (isApprovalPendingToolResult(lastMeaningful)) {
+    return "transcript tail is a stale approval-pending tool result";
+  }
+  return null;
 }
 
 function buildResumeMessage(): string {
@@ -216,11 +233,12 @@ async function recoverStore(params: {
       continue;
     }
 
-    if (!isMainSessionResumable(messages)) {
+    const resumeBlockReason = resolveMainSessionResumeBlockReason(messages);
+    if (resumeBlockReason) {
       await markSessionFailed({
         storePath: params.storePath,
         sessionKey,
-        reason: "transcript tail is not resumable",
+        reason: resumeBlockReason,
       });
       result.failed++;
       continue;

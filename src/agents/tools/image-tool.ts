@@ -30,6 +30,7 @@ import {
   decodeDataUrl,
   hasImageReasoningOnlyResponse,
   type ImageModelConfig,
+  resolveConfiguredImageModelRefs,
   resolveProviderVisionModelFromConfig,
 } from "./image-tool.helpers.js";
 import {
@@ -123,7 +124,10 @@ export function resolveImageModelConfigForTool(params: {
   // The tool description is adjusted via modelHasVision to discourage redundant usage.
   const explicit = coerceImageModelConfig(params.cfg);
   if (hasToolModelConfig(explicit)) {
-    return explicit;
+    return resolveConfiguredImageModelRefs({
+      cfg: params.cfg,
+      imageModelConfig: explicit,
+    });
   }
 
   const primary = resolveDefaultModelRef(params.cfg);

@@ -450,12 +450,10 @@ export function resolveModelRefFromString(params: {
   if (!model) {
     return null;
   }
-  if (!model.includes("/")) {
-    const aliasKey = normalizeLowercaseStringOrEmpty(model);
-    const aliasMatch = params.aliasIndex?.byAlias.get(aliasKey);
-    if (aliasMatch) {
-      return { ref: aliasMatch.ref, alias: aliasMatch.alias };
-    }
+  const aliasKey = normalizeLowercaseStringOrEmpty(model);
+  const aliasMatch = params.aliasIndex?.byAlias.get(aliasKey);
+  if (aliasMatch) {
+    return { ref: aliasMatch.ref, alias: aliasMatch.alias };
   }
   const parsed = parseModelRefWithCompatAlias({
     cfg: params.cfg,
@@ -486,6 +484,12 @@ export function resolveConfiguredModelRef(params: {
       allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
     });
+    const aliasKey = normalizeLowercaseStringOrEmpty(trimmed);
+    const aliasMatch = aliasIndex.byAlias.get(aliasKey);
+    if (aliasMatch) {
+      return aliasMatch.ref;
+    }
+
     if (!trimmed.includes("/")) {
       const openrouterCompatRef = resolveConfiguredOpenRouterCompatAlias({
         cfg: params.cfg,
@@ -496,12 +500,6 @@ export function resolveConfiguredModelRef(params: {
       });
       if (openrouterCompatRef) {
         return openrouterCompatRef;
-      }
-
-      const aliasKey = normalizeLowercaseStringOrEmpty(trimmed);
-      const aliasMatch = aliasIndex.byAlias.get(aliasKey);
-      if (aliasMatch) {
-        return aliasMatch.ref;
       }
 
       const inferredProvider = inferUniqueProviderFromConfiguredModels({

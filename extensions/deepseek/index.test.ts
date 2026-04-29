@@ -309,6 +309,73 @@ describe("deepseek provider plugin", () => {
     });
   });
 
+  it("adds blank reasoning_content for replayed plain assistant messages", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const model = {
+      provider: "deepseek",
+      id: "deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      api: "openai-completions",
+      baseUrl: "https://api.deepseek.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+      compat: {
+        supportsUsageInStreaming: true,
+        supportsReasoningEffort: true,
+        maxTokensField: "max_tokens",
+      },
+    } as Model<"openai-completions">;
+    const context = {
+      messages: [
+        { role: "user", content: "hi", timestamp: 1 },
+        {
+          role: "assistant",
+          api: "openai-completions",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "Hello." }],
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: 2,
+        },
+        { role: "user", content: "next", timestamp: 3 },
+      ],
+    } as Context;
+    const baseStreamFn = (
+      streamModel: Model<"openai-completions">,
+      streamContext: Context,
+      options?: { onPayload?: (payload: unknown, model: unknown) => unknown },
+    ) => {
+      capturedPayload = buildOpenAICompletionsParams(streamModel, streamContext, {
+        reasoning: "high",
+      } as never);
+      options?.onPayload?.(capturedPayload, streamModel);
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => stream.end());
+      return stream;
+    };
+
+    const wrapThinkingHigh = createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "high");
+    expect(wrapThinkingHigh).toBeDefined();
+    await wrapThinkingHigh?.(model, context, {});
+
+    expect((capturedPayload?.messages as Array<Record<string, unknown>>)[1]).toMatchObject({
+      role: "assistant",
+      content: "Hello.",
+      reasoning_content: "",
+    });
+  });
+
   it("strips replayed reasoning_content when DeepSeek V4 thinking is disabled", async () => {
     let capturedPayload: Record<string, unknown> | undefined;
     const model = {

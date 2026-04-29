@@ -31,7 +31,7 @@ export function createInboundSlackTestContext(params: {
     mainKey: "main",
     dmEnabled: true,
     dmPolicy: "open",
-    allowFrom: [],
+    allowFrom: ["*"],
     allowNameMatching: false,
     groupDmEnabled: true,
     groupDmChannels: [],

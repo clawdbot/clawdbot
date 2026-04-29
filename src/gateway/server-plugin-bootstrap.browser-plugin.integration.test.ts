@@ -1,16 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBundledBrowserPluginFixture } from "../../test/helpers/browser-bundled-plugin-fixture.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
 import { clearPluginLoaderCache } from "../plugins/loader.js";
-import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { loadGatewayStartupPlugins } from "./server-plugin-bootstrap.js";
 
 function resetPluginState() {
   clearPluginLoaderCache();
-  clearPluginDiscoveryCache();
-  clearPluginManifestRegistryCache();
   resetPluginRuntimeStateForTest();
 }
 

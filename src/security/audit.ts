@@ -1059,7 +1059,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
         env,
         stateDir,
         includePersistedAuthState: true,
-        includeSetupRuntimeFallback: false,
+        includeSetupRuntimeFallback: true,
       });
     const { collectChannelSecurityFindings } = await loadAuditChannelModule();
     findings.push(

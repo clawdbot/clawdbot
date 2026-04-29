@@ -10,6 +10,12 @@ import { writeOfficialChannelCatalog } from "./write-official-channel-catalog.mj
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ROOT_RUNTIME_ALIAS_PATTERN = /^(?<base>.+\.(?:runtime|contract))-[A-Za-z0-9_-]+\.js$/u;
+export const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
+  {
+    dest: "dist/memory-state-CcqRgDZU.js",
+    contents: "export function hasMemoryRuntime() {\n  return false;\n}\n",
+  },
+];
 
 /**
  * Copy static (non-transpiled) runtime assets that are referenced by their
@@ -81,6 +87,14 @@ export function writeStableRootRuntimeAliases(params = {}) {
   }
 }
 
+export function writeLegacyCliExitCompatChunks(params = {}) {
+  const rootDir = params.rootDir ?? ROOT;
+  const chunks = params.chunks ?? LEGACY_CLI_EXIT_COMPAT_CHUNKS;
+  for (const { dest, contents } of chunks) {
+    writeTextFileIfChanged(path.join(rootDir, dest), contents);
+  }
+}
+
 export function runRuntimePostBuild(params = {}) {
   copyPluginSdkRootAlias(params);
   copyBundledPluginMetadata(params);
@@ -88,6 +102,7 @@ export function runRuntimePostBuild(params = {}) {
   stageBundledPluginRuntimeDeps(params);
   stageBundledPluginRuntime(params);
   writeStableRootRuntimeAliases(params);
+  writeLegacyCliExitCompatChunks(params);
   copyStaticExtensionAssets(params);
 }
 

@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   healthCommand: vi.fn(),
   sessionsCommand: vi.fn(),
   sessionsCleanupCommand: vi.fn(),
+  exportTrajectoryCommand: vi.fn(),
   tasksListCommand: vi.fn(),
   tasksAuditCommand: vi.fn(),
   tasksMaintenanceCommand: vi.fn(),
@@ -28,6 +29,7 @@ const statusCommand = mocks.statusCommand;
 const healthCommand = mocks.healthCommand;
 const sessionsCommand = mocks.sessionsCommand;
 const sessionsCleanupCommand = mocks.sessionsCleanupCommand;
+const exportTrajectoryCommand = mocks.exportTrajectoryCommand;
 const tasksListCommand = mocks.tasksListCommand;
 const tasksAuditCommand = mocks.tasksAuditCommand;
 const tasksMaintenanceCommand = mocks.tasksMaintenanceCommand;
@@ -54,6 +56,10 @@ vi.mock("../../commands/sessions.js", () => ({
 
 vi.mock("../../commands/sessions-cleanup.js", () => ({
   sessionsCleanupCommand: mocks.sessionsCleanupCommand,
+}));
+
+vi.mock("../../commands/export-trajectory.js", () => ({
+  exportTrajectoryCommand: mocks.exportTrajectoryCommand,
 }));
 
 vi.mock("../../commands/tasks.js", () => ({
@@ -93,6 +99,7 @@ describe("registerStatusHealthSessionsCommands", () => {
     healthCommand.mockResolvedValue(undefined);
     sessionsCommand.mockResolvedValue(undefined);
     sessionsCleanupCommand.mockResolvedValue(undefined);
+    exportTrajectoryCommand.mockResolvedValue(undefined);
     tasksListCommand.mockResolvedValue(undefined);
     tasksAuditCommand.mockResolvedValue(undefined);
     tasksMaintenanceCommand.mockResolvedValue(undefined);
@@ -244,6 +251,51 @@ describe("registerStatusHealthSessionsCommands", () => {
     expect(sessionsCleanupCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         allAgents: true,
+      }),
+      runtime,
+    );
+  });
+
+  it("runs sessions export-trajectory with owner-routable export options", async () => {
+    await runCli([
+      "sessions",
+      "--store",
+      "/tmp/sessions.json",
+      "export-trajectory",
+      "--session-key",
+      "agent:main:telegram:direct:owner",
+      "--workspace",
+      "/workspace",
+      "--output",
+      "bug-123",
+      "--json",
+    ]);
+
+    expect(exportTrajectoryCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:direct:owner",
+        output: "bug-123",
+        workspace: "/workspace",
+        store: "/tmp/sessions.json",
+        json: true,
+      }),
+      runtime,
+    );
+  });
+
+  it("forwards encoded sessions export-trajectory requests", async () => {
+    await runCli([
+      "sessions",
+      "export-trajectory",
+      "--request-json-base64",
+      "eyJzZXNzaW9uS2V5IjoiYWdlbnQ6bWFpbjp0ZWxlZ3JhbTpkaXJlY3Q6b3duZXIifQ",
+      "--json",
+    ]);
+
+    expect(exportTrajectoryCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestJsonBase64: "eyJzZXNzaW9uS2V5IjoiYWdlbnQ6bWFpbjp0ZWxlZ3JhbTpkaXJlY3Q6b3duZXIifQ",
+        json: true,
       }),
       runtime,
     );

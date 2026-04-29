@@ -47,7 +47,6 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
         config,
         workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)),
         env: {},
-        cache: true,
         fallbackToBundledMetadata: true,
         fallbackToBundledMetadataForResolvedBundled: true,
         pluginIds: ["voice-call"],

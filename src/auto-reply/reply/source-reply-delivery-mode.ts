@@ -5,6 +5,7 @@ import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 
 export type SourceReplyDeliveryModeContext = {
   ChatType?: string;
+  CommandSource?: "text" | "native";
 };
 
 export function resolveSourceReplyDeliveryMode(params: {
@@ -14,6 +15,9 @@ export function resolveSourceReplyDeliveryMode(params: {
 }): SourceReplyDeliveryMode {
   if (params.requested) {
     return params.requested;
+  }
+  if (params.ctx.CommandSource === "native") {
+    return "automatic";
   }
   const chatType = normalizeChatType(params.ctx.ChatType);
   if (chatType === "group" || chatType === "channel") {

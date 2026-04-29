@@ -64,7 +64,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/telegram-command-config` | Telegram custom-command normalization/validation helpers with bundled-contract fallback |
     | `plugin-sdk/command-gating` | Narrow command authorization gate helpers |
     | `plugin-sdk/channel-policy` | `resolveChannelGroupRequireMention` |
-    | `plugin-sdk/channel-lifecycle` | `createAccountStatusSink`, draft stream lifecycle/finalization helpers |
+    | `plugin-sdk/channel-lifecycle` | `createAccountStatusSink`, `createChannelRunQueue`, draft stream lifecycle/finalization helpers |
     | `plugin-sdk/inbound-envelope` | Shared inbound route + envelope builder helpers |
     | `plugin-sdk/inbound-reply-dispatch` | Shared inbound record-and-dispatch helpers |
     | `plugin-sdk/messaging-targets` | Target parsing/matching helpers |
@@ -84,6 +84,8 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/allowlist-config-edit` | Allowlist config edit/read helpers |
     | `plugin-sdk/group-access` | Shared group-access decision helpers |
     | `plugin-sdk/direct-dm` | Shared direct-DM auth/guard helpers |
+    | `plugin-sdk/discord` | Deprecated Discord compatibility facade for published `@openclaw/discord@2026.3.13` and tracked owner compatibility; new plugins should use generic channel SDK subpaths |
+    | `plugin-sdk/telegram-account` | Deprecated Telegram account-resolution compatibility facade for tracked owner compatibility; new plugins should use injected runtime helpers or generic channel SDK subpaths |
     | `plugin-sdk/interactive-runtime` | Semantic message presentation, delivery, and legacy interactive reply helpers. See [Message Presentation](/plugins/message-presentation) |
     | `plugin-sdk/channel-inbound` | Compatibility barrel for inbound debounce, mention matching, mention-policy helpers, and envelope helpers |
     | `plugin-sdk/channel-inbound-debounce` | Narrow inbound debounce helpers |
@@ -256,7 +258,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
   <Accordion title="Capability and testing subpaths">
     | Subpath | Key exports |
     | --- | --- |
-    | `plugin-sdk/media-runtime` | Shared media fetch/transform/store helpers plus media payload builders |
+    | `plugin-sdk/media-runtime` | Shared media fetch/transform/store helpers, ffprobe-backed video dimension probing, and media payload builders |
     | `plugin-sdk/media-store` | Narrow media store helpers such as `saveMediaBuffer` |
     | `plugin-sdk/media-generation-runtime` | Shared media-generation failover helpers, candidate selection, and missing-model messaging |
     | `plugin-sdk/media-understanding` | Media understanding provider types plus provider-facing image/audio helper exports |

@@ -5,6 +5,15 @@ import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 
+vi.mock("../../plugins/bundled-dir.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../plugins/bundled-dir.js")>();
+  return {
+    ...actual,
+    resolveBundledPluginsDir: (env: NodeJS.ProcessEnv = process.env) =>
+      env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? actual.resolveBundledPluginsDir(env),
+  };
+});
+
 const bundledChannelEntrypointPaths = ["index.ts", "channel-entry.ts", "setup-entry.ts"] as const;
 
 type BundledEntrySource = { built?: string; source?: string };
@@ -95,7 +104,7 @@ afterEach(() => {
 });
 
 describe("bundled channel entry shape guards", () => {
-  const bundledPluginRoots = loadPluginManifestRegistry({ cache: true, config: {} })
+  const bundledPluginRoots = loadPluginManifestRegistry({ config: {} })
     .plugins.filter((plugin) => plugin.origin === "bundled")
     .map((plugin) => plugin.rootDir);
 

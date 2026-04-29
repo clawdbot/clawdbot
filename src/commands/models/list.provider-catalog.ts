@@ -73,7 +73,6 @@ function resolveInstalledIndexPluginIdsForProviderFilter(params: {
   const snapshot = loadPluginRegistrySnapshotWithMetadata({
     config: params.cfg,
     env: params.env,
-    cache: true,
   });
   if (snapshot.source !== "persisted" && snapshot.source !== "provided") {
     return undefined;

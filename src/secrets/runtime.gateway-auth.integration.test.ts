@@ -37,7 +37,6 @@ describe("secrets runtime snapshot gateway-auth integration", () => {
     await withEnvAsync(
       {
         OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-        OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
         OPENCLAW_VERSION: undefined,
       },
       async () => {

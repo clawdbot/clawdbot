@@ -8,6 +8,7 @@ import {
 } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { createProcessTool } from "./bash-tools.process.js";
+import { processSchema } from "./bash-tools.schemas.js";
 
 afterEach(() => {
   resetProcessRegistryForTests();
@@ -30,13 +31,14 @@ async function pollSession(
   callId: string,
   sessionId: string,
   timeout?: number | string,
+  signal?: AbortSignal,
 ) {
   const args = {
     action: "poll",
     sessionId,
     ...(timeout === undefined ? {} : { timeout }),
   } as unknown as Parameters<ReturnType<typeof createProcessTool>["execute"]>[1];
-  return processTool.execute(callId, args);
+  return processTool.execute(callId, args, signal);
 }
 
 function retryMs(result: Awaited<ReturnType<ReturnType<typeof createProcessTool>["execute"]>>) {
@@ -100,6 +102,57 @@ test("process poll accepts string timeout values", async () => {
     timeout: "2000",
     advanceMs: 350,
   });
+});
+
+test("process poll clamps long waits to 30 seconds", async () => {
+  vi.useFakeTimers();
+  try {
+    const { processTool } = createProcessSessionHarness("sess-clamp");
+
+    const pollPromise = pollSession(processTool, "toolcall", "sess-clamp", 120_000);
+    let resolved = false;
+    void pollPromise.finally(() => {
+      resolved = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(resolved).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    const poll = await pollPromise;
+    expect(pollStatus(poll)).toBe("running");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("process poll schema advertises the 30 second wait cap", () => {
+  const timeoutSchema = processSchema.properties.timeout;
+  expect(timeoutSchema).toMatchObject({
+    description: expect.stringContaining("max 30000 ms"),
+  });
+});
+
+test("process poll aborts while waiting for completion", async () => {
+  vi.useFakeTimers();
+  try {
+    const { processTool } = createProcessSessionHarness("sess-abort");
+    const controller = new AbortController();
+
+    const pollPromise = pollSession(
+      processTool,
+      "toolcall",
+      "sess-abort",
+      30_000,
+      controller.signal,
+    );
+    await vi.advanceTimersByTimeAsync(500);
+    controller.abort();
+
+    await expect(pollPromise).rejects.toMatchObject({ name: "AbortError" });
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("process poll exposes adaptive retryInMs for repeated no-output polls", async () => {

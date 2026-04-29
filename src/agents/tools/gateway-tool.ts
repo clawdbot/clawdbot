@@ -89,6 +89,17 @@ function getSnapshotConfig(snapshot: unknown): Record<string, unknown> {
   return config as Record<string, unknown>;
 }
 
+// Direct RPC callers need the validated config echoed after writes; the
+// agent-facing gateway tool does not, and replaying it bloats transcripts.
+function stripConfigWriteResultPayload(result: unknown): unknown {
+  if (!isPlainObject(result) || !Object.hasOwn(result, "config")) {
+    return result;
+  }
+  const stripped = { ...result };
+  delete stripped.config;
+  return stripped;
+}
+
 function parseGatewayConfigMutationRaw(
   raw: string,
   action: "config.apply" | "config.patch",
@@ -481,7 +492,7 @@ export function createGatewayTool(opts?: {
           note,
           restartDelayMs,
         });
-        return jsonResult({ ok: true, result });
+        return jsonResult({ ok: true, result: stripConfigWriteResultPayload(result) });
       }
       if (action === "config.patch") {
         const { raw, baseHash, snapshotConfig, sessionKey, note, restartDelayMs } =
@@ -498,7 +509,7 @@ export function createGatewayTool(opts?: {
           note,
           restartDelayMs,
         });
-        return jsonResult({ ok: true, result });
+        return jsonResult({ ok: true, result: stripConfigWriteResultPayload(result) });
       }
       if (action === "update.run") {
         const { sessionKey, note, restartDelayMs } = resolveGatewayWriteMeta();

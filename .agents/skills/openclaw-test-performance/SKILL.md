@@ -1,12 +1,13 @@
 ---
 name: openclaw-test-performance
-description: Benchmark, diagnose, and optimize OpenClaw test runtime, import hotspots, CPU/RSS, and slow coverage paths.
+description: Benchmark, diagnose, and optimize OpenClaw test and plugin-suite runtime, import hotspots, CPU/RSS, heap growth, and slow coverage paths.
 ---
 
 # OpenClaw Test Performance
 
-Use evidence first. The goal is real `pnpm test` speed/RSS improvement with
-coverage intact, not runner tuning by guesswork.
+Use evidence first. The goal is real `pnpm test`, plugin-suite, and
+plugin-inspector speed/RSS improvement with coverage intact, not runner tuning by
+guesswork.
 
 ## Workflow
 
@@ -21,6 +22,9 @@ coverage intact, not runner tuning by guesswork.
 2. Establish a baseline before changing code:
    - Prefer `pnpm test:perf:groups --full-suite --allow-failures --output <file>`
      for full-suite ranking.
+   - For bundled plugin breadth, run the smallest relevant `pnpm
+test:extensions:batch <plugin[,plugin...]>` or plugin-inspector command
+     before jumping to the full extension sweep.
    - For a scoped hotspot use:
      `/usr/bin/time -l pnpm test <file-or-files> --maxWorkers=1 --reporter=verbose`
    - For import-heavy suspicion add:
@@ -33,6 +37,8 @@ coverage intact, not runner tuning by guesswork.
      passed, capture that as harness/noise and verify the suspect file directly.
 4. Pick the next attack by return and risk:
    - High return: one file/test dominates seconds or RSS and has a clear root.
+   - High leverage: one plugin or SDK barrel causes every plugin-inspector or
+     extension-batch run to load broad runtime.
    - Lower risk: static descriptors, target parsing, routing, auth bypass,
      setup hints, registry fixtures, or test server lifecycle.
    - Higher risk: real memory/runtime behavior, live providers, protocol
@@ -44,6 +50,8 @@ coverage intact, not runner tuning by guesswork.
      and pure helpers over broad mocks.
    - Reuse suite-level servers/clients when a fresh handshake is irrelevant.
    - Keep schedulers/background loops off unless the test proves scheduling.
+   - In plugin paths, move static metadata into manifest/lightweight artifacts
+     and keep runtime plugin loads behind explicit execution boundaries.
 6. Preserve coverage shape:
    - Do not delete a slow integration proof unless the exact production
      composition is extracted into a named helper and tested.
@@ -57,6 +65,90 @@ coverage intact, not runner tuning by guesswork.
 9. Commit with `scripts/committer "<message>" <paths...>` and push when the
    user asked for commits/pushes. Stage only files touched for this attack.
 
+## Plugin-Suite Workflow
+
+Use this section when perf work involves bundled plugins, plugin-inspector, SDK
+barrels, package-boundary tests, or extension suites.
+
+1. Map the suite shape first:
+   - source tests: `pnpm test extensions/<id>` or `pnpm test:extensions:batch <id>`
+   - package boundaries: `pnpm run test:extensions:package-boundary:canary` and
+     `pnpm run test:extensions:package-boundary:compile`
+   - all bundled source tests: `pnpm test:extensions`
+   - plugin import memory: `pnpm test:extensions:memory -- --json .artifacts/test-perf/extensions-memory.json`
+   - plugin-inspector/report work: keep report primitives in `plugin-inspector`;
+     keep wrappers thin and collect peak RSS when the command supports it.
+2. Start narrow, then widen:
+   - one plugin changed: run that plugin's tests and plugin-inspector slice.
+   - SDK/public barrel changed: add representative provider, channel, memory,
+     and feature plugins.
+   - loader/runtime mirror changed: add package-boundary checks and build/package
+     proof as needed.
+   - unknown shared plugin behavior: run `test:extensions:batch` groups before
+     `pnpm test:extensions`.
+3. Treat plugin-inspector failures as product signals:
+   - JSON must parse.
+   - warnings/errors must be classified, not hidden.
+   - runtime capture should be quiet and config-tolerant.
+   - command output should include wall time, exit code, and peak RSS when
+     available.
+4. For broad or package-heavy plugin proof, use Blacksmith Testbox by default on
+   maintainer machines. Warm once and reuse the same box:
+   - `blacksmith testbox warmup ci-check-testbox.yml --ref main --idle-timeout 90`
+   - `blacksmith testbox run --id <ID> "OPENCLAW_TESTBOX=1 pnpm test:extensions:batch <ids>"`
+   - stop the box when done.
+5. If plugin performance is package-artifact sensitive, switch to
+   `openclaw-pre-release-plugin-testing` and Package Acceptance rather than
+   trusting source-only timing.
+
+## Metric Collection
+
+Collect at least one stable metric before and after. Prefer the same machine and
+same command. For Testbox comparisons, use the same `tbx_...` id when possible.
+
+| Metric          | Use for                            | Preferred source                                                            |
+| --------------- | ---------------------------------- | --------------------------------------------------------------------------- |
+| wall time       | user-visible suite cost            | `/usr/bin/time -l`, test wrapper duration, Testbox run time                 |
+| Vitest duration | test body/import cost              | Vitest output per file/shard                                                |
+| import duration | broad barrel/runtime loads         | `OPENCLAW_VITEST_IMPORT_DURATIONS=1`                                        |
+| max RSS         | memory pressure and OOM risk       | `/usr/bin/time -l`, `pnpm test:extensions:memory`, wrapper memory summaries |
+| CPU/user/sys    | CPU-bound vs wait-bound split      | `/usr/bin/time -l` locally, Testbox job timing when local CPU is noisy      |
+| heap snapshots  | real leak vs retained module graph | `openclaw-test-heap-leaks` workflow                                         |
+
+Local scoped command with CPU/RSS:
+
+```bash
+timeout 240 /usr/bin/time -l pnpm test <file> --maxWorkers=1 --reporter=verbose
+```
+
+Plugin import memory profile:
+
+```bash
+pnpm build
+pnpm test:extensions:memory -- --top 20 --json .artifacts/test-perf/extensions-memory.json
+```
+
+Targeted plugin import memory:
+
+```bash
+pnpm test:extensions:memory -- --extension discord --extension telegram --skip-combined
+```
+
+Heap/RSS escalation:
+
+```bash
+OPENCLAW_TEST_MEMORY_TRACE=1 \
+OPENCLAW_TEST_HEAPSNAPSHOT_INTERVAL_MS=60000 \
+OPENCLAW_TEST_HEAPSNAPSHOT_DIR=.tmp/heapsnap \
+OPENCLAW_TEST_WORKERS=2 \
+OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144 \
+pnpm test
+```
+
+Use `openclaw-test-heap-leaks` when RSS keeps growing across intervals, workers
+OOM, or the suspect command has app-object retention. Do not call RSS growth a
+leak until snapshots or retainers support it.
+
 ## Common Root Causes
 
 - Full bundled channel/plugin runtime loaded for static data.
@@ -64,6 +156,12 @@ coverage intact, not runner tuning by guesswork.
   parser would suffice.
 - Broad `api.ts`, `runtime-api.ts`, `test-api.ts`, or plugin-sdk barrels pulled
   into hot tests.
+- SDK root aliases or package barrels pulling focused subpaths back into a broad
+  plugin graph.
+- Plugin-inspector loading runtime code just to render metadata, reports, or CI
+  policy scores.
+- Bundled plugin capture reusing real config/home state instead of synthetic,
+  redacted, isolated state.
 - Partial-real mocks using `importActual()` around broad modules.
 - `vi.resetModules()` plus fresh imports in per-test loops.
 - Test plugin registry seeded in `beforeAll` while runtime state resets in
@@ -72,6 +170,10 @@ coverage intact, not runner tuning by guesswork.
 - Runtime/default model/auth selection paid by idle snapshots or fixtures.
 - Plugin-owned media/action discovery triggered before checking whether args
   contain plugin-owned fields.
+- Timings missing from `test/fixtures/test-timings.unit.json`, causing hotspot
+  files to stay in shared workers.
+- Parallel Vitest runs sharing `node_modules/.experimental-vitest-cache` without
+  distinct `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH` values.
 
 ## Benchmark Commands
 
@@ -97,6 +199,25 @@ pnpm test:perf:groups --full-suite --allow-failures \
   --output .artifacts/test-perf/<name>.json
 ```
 
+Extension batch:
+
+```bash
+pnpm test:extensions:batch <plugin[,plugin...]> -- --reporter=verbose
+```
+
+All extension tests:
+
+```bash
+pnpm test:extensions
+```
+
+Package-boundary plugin checks:
+
+```bash
+pnpm run test:extensions:package-boundary:canary
+pnpm run test:extensions:package-boundary:compile
+```
+
 Reuse an existing Vitest JSON report:
 
 ```bash
@@ -107,19 +228,26 @@ pnpm test:perf:groups --report <vitest-json> \
 ## Verification
 
 - Always run the targeted test surface that proves the change.
-- Run `pnpm check` before commit unless the change is docs-only and the hook
-  handles it.
+- For source changes, run `pnpm check:changed` before push; in maintainer
+  Testbox mode run it in the warmed Testbox.
+- For test-only changes, run `pnpm test:changed` or the exact edited tests.
 - Run `pnpm build` when touching lazy-loading, bundled artifacts, package
   boundaries, dynamic imports, build output, or public surfaces.
+- For plugin SDK/barrel/runtime changes, add `pnpm plugin-sdk:api:check` or
+  `pnpm plugin-sdk:api:gen` when the API surface may drift.
+- For plugin-suite perf fixes, verify at least one representative plugin batch
+  plus the changed gate; use Package Acceptance if the bug only exists in a
+  packed artifact.
 - If deps are missing/stale, run `pnpm install` and retry the exact failed
   command once.
 - Use the report format:
 
 ```markdown
-| Metric         | Before | After |          Gain |
-| -------------- | -----: | ----: | ------------: |
-| File wall time |   `Xs` |  `Ys` |  `-Zs` (`P%`) |
-| Max RSS        |  `XMB` | `YMB` | `-ZMB` (`P%`) |
+| Metric         | Before |  After |          Gain |
+| -------------- | -----: | -----: | ------------: |
+| File wall time |   `Xs` |   `Ys` |  `-Zs` (`P%`) |
+| Max RSS        |  `XMB` |  `YMB` | `-ZMB` (`P%`) |
+| CPU user/sys   | `X/Ys` | `A/Bs` |       explain |
 ```
 
 ## Handoff
@@ -127,8 +255,12 @@ pnpm test:perf:groups --report <vitest-json> \
 Keep the final concise:
 
 - Root cause.
+- Suite/plugin scope.
 - Files changed.
-- Before/after numbers.
+- Before/after wall, Vitest/import, CPU, and RSS numbers where available.
+- Leak classification if memory was involved: real leak, retained module graph,
+  or inconclusive.
 - Coverage retained.
 - Verification commands.
+- Testbox ID or workflow URL for remote proof.
 - Commit hash and push status.

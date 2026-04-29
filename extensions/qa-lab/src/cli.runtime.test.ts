@@ -206,6 +206,48 @@ describe("qa cli runtime", () => {
     });
   });
 
+  it("passes explicit suite plugin enablements into the host gateway run", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      providerMode: "mock-openai",
+      scenarioIds: ["channel-chat-baseline"],
+      enabledPluginIds: ["browser", "memory-core"],
+    });
+
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      outputDir: undefined,
+      transportId: "qa-channel",
+      providerMode: "mock-openai",
+      primaryModel: undefined,
+      alternateModel: undefined,
+      fastMode: undefined,
+      scenarioIds: ["channel-chat-baseline"],
+      enabledPluginIds: ["browser", "memory-core"],
+    });
+  });
+
+  it("drops blank suite model refs so provider defaults apply", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      providerMode: "mock-openai",
+      primaryModel: " ",
+      alternateModel: "",
+      scenarioIds: ["thread-memory-isolation"],
+    });
+
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      outputDir: undefined,
+      transportId: "qa-channel",
+      providerMode: "mock-openai",
+      primaryModel: undefined,
+      alternateModel: undefined,
+      fastMode: undefined,
+      scenarioIds: ["thread-memory-isolation"],
+    });
+  });
+
   it("resolves telegram qa repo-root-relative paths before dispatching", async () => {
     await runQaTelegramCommand({
       repoRoot: "/tmp/openclaw-repo",

@@ -30,14 +30,12 @@ vi.mock("../../plugins/public-surface-loader.js", () => ({
 }));
 
 import {
-  __testing,
   describeBundledChannelMessageTool,
   resolveBundledChannelMessageToolDiscoveryAdapter,
 } from "./message-tool-api.js";
 
 describe("bundled channel message tool fast path", () => {
   beforeEach(() => {
-    __testing.clearMessageToolApiCache();
     loadBundledPluginPublicArtifactModuleSyncMock.mockClear();
   });
 

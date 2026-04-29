@@ -43,6 +43,7 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
     runId: "forward-attempt-params",
     params: {
       toolsAllow: ["exec", "read"],
+      ownerOnlyToolAllowlist: ["cron"],
       bootstrapContextMode: "lightweight",
       bootstrapContextRunKind: "cron",
       disableMessageTool: true,
@@ -52,6 +53,7 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
     },
     expected: {
       toolsAllow: ["exec", "read"],
+      ownerOnlyToolAllowlist: ["cron"],
       bootstrapContextMode: "lightweight",
       bootstrapContextRunKind: "cron",
       disableMessageTool: true,

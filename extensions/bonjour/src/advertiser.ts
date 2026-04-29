@@ -69,6 +69,7 @@ type ServiceStateTracker = {
 type ConsoleLogFn = (...args: unknown[]) => void;
 type UncaughtExceptionHandler = (error: unknown) => boolean;
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
+type ProcessUnhandledRejectionListener = (reason: unknown, promise: Promise<unknown>) => void;
 type ExecBridge = (command: string, options?: unknown, callback?: unknown) => ChildProcess;
 type ExecOptionsRecord = Record<string, unknown> & { windowsHide?: boolean };
 
@@ -324,6 +325,25 @@ function installCiaoWindowsExecHidePatch(): () => void {
   };
 }
 
+function installCiaoUnhandledRejectionListener(handler: UnhandledRejectionHandler): () => void {
+  const hadOtherListeners = process.listenerCount("unhandledRejection") > 0;
+  const listener: ProcessUnhandledRejectionListener = (reason) => {
+    if (handler(reason)) {
+      return;
+    }
+    if (hadOtherListeners) {
+      return;
+    }
+    queueMicrotask(() => {
+      throw reason instanceof Error ? reason : new Error(String(reason));
+    });
+  };
+  process.on("unhandledRejection", listener);
+  return () => {
+    process.off("unhandledRejection", listener);
+  };
+}
+
 export async function startGatewayBonjourAdvertiser(
   opts: GatewayBonjourAdvertiseOpts,
   deps: BonjourAdvertiserDeps = {},
@@ -341,6 +361,7 @@ export async function startGatewayBonjourAdvertiser(
   let restoreConsoleLog: () => void = () => {};
   let requestCiaoRecovery: ((classification: CiaoProcessErrorClassification) => void) | undefined;
   let cleanupUnhandledRejection: (() => void) | undefined;
+  let cleanupDirectUnhandledRejection: (() => void) | undefined;
   let cleanupUncaughtException: (() => void) | undefined;
   let processHandlersCleaned = false;
 
@@ -349,6 +370,7 @@ export async function startGatewayBonjourAdvertiser(
       return;
     }
     processHandlersCleaned = true;
+    cleanupDirectUnhandledRejection?.();
     cleanupUncaughtException?.();
     cleanupUnhandledRejection?.();
   }
@@ -363,7 +385,8 @@ export async function startGatewayBonjourAdvertiser(
       }
 
       if (classification.kind === "cancellation") {
-        logger.debug(`bonjour: ignoring unhandled ciao rejection: ${classification.formatted}`);
+        logger.warn(`bonjour: suppressing ciao cancellation: ${classification.formatted}`);
+        requestCiaoRecovery?.(classification);
       } else if (classification.kind === "interface-enumeration-failure") {
         // Restricted sandboxes can refuse os.networkInterfaces(); mDNS cannot
         // function without it, so surface a single warning and skip recovery.
@@ -379,6 +402,7 @@ export async function startGatewayBonjourAdvertiser(
       }
       return true;
     };
+    cleanupDirectUnhandledRejection = installCiaoUnhandledRejectionListener(handleCiaoProcessError);
     cleanupUnhandledRejection = deps.registerUnhandledRejectionHandler?.(handleCiaoProcessError);
     cleanupUncaughtException = deps.registerUncaughtExceptionHandler?.(handleCiaoProcessError);
 
@@ -490,6 +514,28 @@ export async function startGatewayBonjourAdvertiser(
       }
     }
 
+    function handleAdvertiseFailure(
+      label: string,
+      svc: BonjourService,
+      err: unknown,
+      action: "failed" | "threw",
+    ) {
+      const classification = classifyCiaoProcessError(err);
+      if (classification) {
+        logger.warn(
+          `bonjour: advertise ${action} with ciao ${classification.kind} (${serviceSummary(
+            label,
+            svc,
+          )}): ${classification.formatted}`,
+        );
+        requestCiaoRecovery?.(classification);
+        return;
+      }
+      logger.warn(
+        `bonjour: advertise ${action} (${serviceSummary(label, svc)}): ${formatBonjourError(err)}`,
+      );
+    }
+
     function startAdvertising(services: Array<{ label: string; svc: BonjourService }>) {
       for (const { label, svc } of services) {
         try {
@@ -499,14 +545,10 @@ export async function startGatewayBonjourAdvertiser(
               logger.info(`bonjour: advertised ${serviceSummary(label, svc)}`);
             })
             .catch((err) => {
-              logger.warn(
-                `bonjour: advertise failed (${serviceSummary(label, svc)}): ${formatBonjourError(err)}`,
-              );
+              handleAdvertiseFailure(label, svc, err, "failed");
             });
         } catch (err) {
-          logger.warn(
-            `bonjour: advertise threw (${serviceSummary(label, svc)}): ${formatBonjourError(err)}`,
-          );
+          handleAdvertiseFailure(label, svc, err, "threw");
         }
       }
     }
@@ -523,8 +565,6 @@ export async function startGatewayBonjourAdvertiser(
     let consecutiveRestarts = 0;
     let cycle: BonjourCycle | null = createCycle();
     const stateTracker = new Map<string, ServiceStateTracker>();
-    attachConflictListeners(cycle.services);
-    startAdvertising(cycle.services);
 
     const updateStateTrackers = (services: Array<{ label: string; svc: BonjourService }>) => {
       const now = Date.now();
@@ -578,6 +618,8 @@ export async function startGatewayBonjourAdvertiser(
     requestCiaoRecovery = (classification) => {
       void recreateAdvertiser(`ciao ${classification.kind}: ${classification.formatted}`);
     };
+    attachConflictListeners(cycle.services);
+    startAdvertising(cycle.services);
 
     const lastRepairAttempt = new Map<string, number>();
     const watchdog = setInterval(() => {

@@ -43,7 +43,7 @@ export interface QQBotAccessInput extends EffectivePolicyInput {
  *         - otherwise                     → allow
  *   - Direct message:
  *     - `dmPolicy=disabled`    → block
- *     - `dmPolicy=open`        → allow
+ *     - `dmPolicy=open`        → allow wildcard, legacy empty allowFrom, or matching allowFrom
  *     - `dmPolicy=allowlist`:
  *         - empty effectiveAllowFrom → block (empty_allowlist)
  *         - sender not in list       → block (not_allowlisted)
@@ -63,7 +63,9 @@ export function resolveQQBotAccess(input: QQBotAccessInput): QQBotAccessResult {
       ? input.groupAllowFrom
       : (input.allowFrom ?? []);
 
-  const effectiveAllowFrom = normalizeQQBotAllowFrom(input.allowFrom);
+  const normalizedAllowFrom = normalizeQQBotAllowFrom(input.allowFrom);
+  const effectiveAllowFrom =
+    dmPolicy === "open" && normalizedAllowFrom.length === 0 ? ["*"] : normalizedAllowFrom;
   const effectiveGroupAllowFrom = normalizeQQBotAllowFrom(rawGroupAllowFrom);
 
   const isSenderAllowed = createQQBotSenderMatcher(input.senderId);
@@ -158,11 +160,27 @@ function evaluateDmDecision(ctx: DecisionContext): QQBotAccessResult {
   }
 
   if (ctx.dmPolicy === "open") {
+    if (ctx.effectiveAllowFrom.includes("*")) {
+      return {
+        ...base,
+        decision: "allow",
+        reasonCode: QQBOT_ACCESS_REASON.DM_POLICY_OPEN,
+        reason: "dmPolicy=open",
+      };
+    }
+    if (ctx.isSenderAllowed(ctx.effectiveAllowFrom)) {
+      return {
+        ...base,
+        decision: "allow",
+        reasonCode: QQBOT_ACCESS_REASON.DM_POLICY_ALLOWLISTED,
+        reason: "dmPolicy=open (allowlisted)",
+      };
+    }
     return {
       ...base,
-      decision: "allow",
-      reasonCode: QQBOT_ACCESS_REASON.DM_POLICY_OPEN,
-      reason: "dmPolicy=open",
+      decision: "block",
+      reasonCode: QQBOT_ACCESS_REASON.DM_POLICY_NOT_ALLOWLISTED,
+      reason: "dmPolicy=open (not allowlisted)",
     };
   }
 

@@ -17,6 +17,7 @@ export type RequestExecApprovalDecisionParams = {
   host: "gateway" | "node";
   security: ExecSecurity;
   ask: ExecAsk;
+  warningText?: string;
   agentId?: string;
   resolvedPath?: string;
   sessionKey?: string;
@@ -45,6 +46,7 @@ function buildExecApprovalRequestToolParams(
     host: params.host,
     security: params.security,
     ask: params.ask,
+    warningText: params.warningText,
     agentId: params.agentId,
     resolvedPath: params.resolvedPath,
     sessionKey: params.sessionKey,
@@ -156,6 +158,7 @@ type HostExecApprovalParams = {
   nodeId?: string;
   security: ExecSecurity;
   ask: ExecAsk;
+  warningText?: string;
   agentId?: string;
   resolvedPath?: string;
   sessionKey?: string;
@@ -212,6 +215,7 @@ function buildHostApprovalDecisionParams(
     host: params.host,
     security: params.security,
     ask: params.ask,
+    warningText: params.warningText,
     ...buildExecApprovalRequesterContext({
       agentId: params.agentId,
       sessionKey: params.sessionKey,

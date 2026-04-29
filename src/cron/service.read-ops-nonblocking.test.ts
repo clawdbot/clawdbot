@@ -214,7 +214,7 @@ describe("CronService read ops while job is running", () => {
     }
   });
 
-  it("keeps list and status responsive during startup catch-up runs", async () => {
+  it("keeps list and status responsive after startup defers catch-up runs", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeatNow = vi.fn();
@@ -249,12 +249,12 @@ describe("CronService read ops while job is running", () => {
       enqueueSystemEvent,
       requestHeartbeatNow,
       runIsolatedAgentJob: isolatedRun.runIsolatedAgentJob,
+      startupDeferredMissedAgentJobDelayMs: 120_000,
     });
 
     try {
-      const startPromise = cron.start();
-      await isolatedRun.runStarted;
-      expect(isolatedRun.runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+      await cron.start();
+      expect(isolatedRun.runIsolatedAgentJob).not.toHaveBeenCalled();
 
       await expect(
         withTimeout(cron.list({ includeDisabled: true }), 300, "cron.list during startup"),
@@ -263,12 +263,10 @@ describe("CronService read ops while job is running", () => {
         expect.objectContaining({ enabled: true, storePath: store.storePath }),
       );
 
-      isolatedRun.completeRun({ status: "ok", summary: "done" });
-      await startPromise;
-
       const jobs = await cron.list({ includeDisabled: true });
-      expect(jobs[0]?.state.lastStatus).toBe("ok");
+      expect(jobs[0]?.state.lastStatus).toBeUndefined();
       expect(jobs[0]?.state.runningAtMs).toBeUndefined();
+      expect(jobs[0]?.state.nextRunAtMs).toBe(nowMs + 120_000);
     } finally {
       cron.stop();
       await store.cleanup();

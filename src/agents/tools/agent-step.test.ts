@@ -48,10 +48,17 @@ describe("runAgentStep", () => {
     ).resolves.toBe("done");
 
     expect(gatewayCalls[0]?.params).toMatchObject({
+      message: expect.stringContaining("[Inter-session message"),
       sessionKey: "agent:main:subagent:child",
       deliver: false,
       lane: "nested:agent:main:subagent:child",
+      inputProvenance: {
+        kind: "inter_session",
+        sourceTool: "sessions_send",
+      },
     });
+    expect((gatewayCalls[0]?.params as { message?: string })?.message).toContain("isUser=false");
+    expect((gatewayCalls[0]?.params as { message?: string })?.message).toContain("hello");
     expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).toHaveBeenCalledWith({
       sessionKey: "agent:main:subagent:child",
       reason: "nested-agent-step-complete",

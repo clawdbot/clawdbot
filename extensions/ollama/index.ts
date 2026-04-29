@@ -19,10 +19,13 @@ import {
   OPENAI_COMPATIBLE_REPLAY_HOOKS,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  OLLAMA_DEFAULT_BASE_URL,
+  buildOllamaModelDefinition,
   buildOllamaProvider,
   configureOllamaNonInteractive,
   ensureOllamaModelPulled,
   promptAndConfigureOllama,
+  queryOllamaModelShowInfo,
 } from "./api.js";
 import {
   OLLAMA_DEFAULT_API_KEY,
@@ -98,6 +101,29 @@ function toDynamicOllamaModel(params: {
     ...(params.model.compat ? { compat: params.model.compat as never } : {}),
     ...(params.model.params ? { params: params.model.params } : {}),
   };
+}
+
+async function resolveRequestedDynamicOllamaModel(params: {
+  provider: string;
+  providerConfig: ModelProviderConfig;
+  modelId: string;
+}): Promise<ProviderRuntimeModel | undefined> {
+  const showInfo = await queryOllamaModelShowInfo(
+    readProviderBaseUrl(params.providerConfig) ?? OLLAMA_DEFAULT_BASE_URL,
+    params.modelId,
+  );
+  if (typeof showInfo.contextWindow !== "number" && (showInfo.capabilities?.length ?? 0) === 0) {
+    return undefined;
+  }
+  return toDynamicOllamaModel({
+    provider: params.provider,
+    providerConfig: params.providerConfig,
+    model: buildOllamaModelDefinition(
+      params.modelId,
+      showInfo.contextWindow,
+      showInfo.capabilities,
+    ),
+  });
 }
 
 export default definePluginEntry({
@@ -268,16 +294,24 @@ export default definePluginEntry({
         }
         const baseUrl = readProviderBaseUrl(providerConfig);
         const provider = await buildOllamaProvider(baseUrl, { quiet: true });
-        dynamicModelCache.set(
-          buildDynamicCacheKey(ctx.provider, baseUrl),
-          (provider.models ?? []).map((model) =>
-            toDynamicOllamaModel({
-              provider: ctx.provider,
-              providerConfig: provider,
-              model,
-            }),
-          ),
+        const dynamicModels = (provider.models ?? []).map((model) =>
+          toDynamicOllamaModel({
+            provider: ctx.provider,
+            providerConfig: provider,
+            model,
+          }),
         );
+        if (!dynamicModels.some((model) => model.id === ctx.modelId)) {
+          const requestedModel = await resolveRequestedDynamicOllamaModel({
+            provider: ctx.provider,
+            providerConfig: provider,
+            modelId: ctx.modelId,
+          });
+          if (requestedModel) {
+            dynamicModels.push(requestedModel);
+          }
+        }
+        dynamicModelCache.set(buildDynamicCacheKey(ctx.provider, baseUrl), dynamicModels);
       },
       resolveDynamicModel: (ctx) => {
         const providerConfig = resolveConfiguredOllamaProviderConfig({

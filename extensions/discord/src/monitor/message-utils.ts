@@ -343,7 +343,7 @@ async function fetchDiscordMedia(params: {
   abortSignal?: AbortSignal;
 }) {
   // `totalTimeoutMs` is enforced per individual attachment or sticker fetch.
-  // The inbound worker's abort signal remains the outer bound for the message.
+  // The caller abort signal remains the outer bound for the message.
   const timeoutAbortController = params.totalTimeoutMs ? new AbortController() : undefined;
   const signal = mergeAbortSignals([params.abortSignal, timeoutAbortController?.signal]);
   let timedOut = false;

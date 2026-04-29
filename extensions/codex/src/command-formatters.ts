@@ -148,6 +148,7 @@ export function buildHelp(): string {
     "- /codex detach",
     "- /codex compact",
     "- /codex review",
+    "- /codex diagnostics [note]",
     "- /codex computer-use [status|install]",
     "- /codex account",
     "- /codex mcp",

@@ -89,7 +89,7 @@ describe("mattermost monitor auth", () => {
     });
   });
 
-  it("authorizes direct messages in open mode and blocks disabled/group-restricted channels", async () => {
+  it("requires open direct messages to match the effective allowlist", async () => {
     isDangerousNameMatchingEnabled.mockReturnValue(false);
     resolveEffectiveAllowFromLists.mockReturnValue({
       effectiveAllowFrom: [],
@@ -119,10 +119,34 @@ describe("mattermost monitor auth", () => {
         hasControlCommand: false,
       }),
     ).toMatchObject({
+      ok: false,
+      denyReason: "unauthorized",
+      kind: "direct",
+    });
+
+    resolveEffectiveAllowFromLists.mockReturnValue({
+      effectiveAllowFrom: ["*"],
+      effectiveGroupAllowFrom: [],
+    });
+    resolveAllowlistMatchSimple.mockReturnValue({ allowed: true });
+
+    expect(
+      authorizeMattermostCommandInvocation({
+        account: {
+          config: { dmPolicy: "open", allowFrom: ["*"] },
+        } as never,
+        cfg: {} as never,
+        senderId: "alice",
+        senderName: "Alice",
+        channelId: "dm-1",
+        channelInfo: { type: "D", name: "alice", display_name: "Alice" } as never,
+        allowTextCommands: false,
+        hasControlCommand: false,
+      }),
+    ).toMatchObject({
       ok: true,
       commandAuthorized: true,
       kind: "direct",
-      roomLabel: "#alice",
     });
 
     expect(

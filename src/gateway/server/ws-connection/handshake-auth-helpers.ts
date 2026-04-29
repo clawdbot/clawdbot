@@ -265,7 +265,7 @@ export function shouldSkipLocalBackendSelfPairing(params: {
   const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
   const usesDeviceTokenAuth = params.authMethod === "device-token";
   return (
-    params.locality === "direct_local" &&
+    (params.locality === "direct_local" || params.locality === "shared_secret_loopback_local") &&
     !params.hasBrowserOriginHeader &&
     ((params.sharedAuthOk && usesSharedSecretAuth) || usesDeviceTokenAuth)
   );

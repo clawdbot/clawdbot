@@ -34,6 +34,6 @@ export default definePluginEntry({
         pluginConfig: resolveCurrentPluginConfig(),
       }),
     );
-    api.onConversationBindingResolved(handleCodexConversationBindingResolved);
+    api.onConversationBindingResolved?.(handleCodexConversationBindingResolved);
   },
 });

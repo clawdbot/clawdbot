@@ -46,6 +46,7 @@ function addBeforePromptBuildHook(
     ctx: PluginHookAgentContext,
   ) => PluginHookBeforePromptBuildResult | Promise<PluginHookBeforePromptBuildResult>,
   priority?: number,
+  timeoutMs?: number,
 ) {
   addTestHook({
     registry,
@@ -53,6 +54,7 @@ function addBeforePromptBuildHook(
     hookName: "before_prompt_build",
     handler: handler as PluginHookRegistration["handler"],
     priority,
+    timeoutMs,
   });
 }
 
@@ -225,6 +227,81 @@ describe("model override pipeline wiring", () => {
         legacyPrependContext,
         expectedPrependContext,
       });
+    });
+
+    it("skips timed-out handlers and continues", async () => {
+      vi.useFakeTimers();
+      try {
+        addBeforePromptBuildHook(
+          registry,
+          "slow-plugin",
+          () => new Promise<PluginHookBeforePromptBuildResult>(() => undefined),
+          10,
+        );
+        addBeforePromptBuildHook(registry, "fast-plugin", () => ({ prependContext: "fast" }), 1);
+        const logger = {
+          error: vi.fn(),
+          warn: vi.fn(),
+          info: vi.fn(),
+          debug: vi.fn(),
+        };
+        const runner = createHookRunner(registry, {
+          logger,
+          modifyingHookTimeoutMsByHook: { before_prompt_build: 5 },
+        });
+
+        const resultPromise = runner.runBeforePromptBuild(
+          { prompt: "test", messages: [] },
+          stubCtx,
+        );
+        await vi.advanceTimersByTimeAsync(5);
+
+        await expect(resultPromise).resolves.toEqual({ prependContext: "fast" });
+        expect(logger.error).toHaveBeenCalledWith(
+          expect.stringContaining(
+            "[hooks] before_prompt_build handler from slow-plugin failed: timed out after 5ms",
+          ),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("honors per-hook registration timeouts over the default modifying hook timeout", async () => {
+      vi.useFakeTimers();
+      try {
+        addBeforePromptBuildHook(
+          registry,
+          "active-memory",
+          async () => {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            return { prependContext: "memory context" };
+          },
+          10,
+          30,
+        );
+        const logger = {
+          error: vi.fn(),
+          warn: vi.fn(),
+          info: vi.fn(),
+          debug: vi.fn(),
+        };
+        const runner = createHookRunner(registry, {
+          logger,
+          modifyingHookTimeoutMsByHook: { before_prompt_build: 5 },
+        });
+
+        const resultPromise = runner.runBeforePromptBuild(
+          { prompt: "test", messages: [] },
+          stubCtx,
+        );
+        await vi.advanceTimersByTimeAsync(20);
+
+        await expect(resultPromise).resolves.toEqual({ prependContext: "memory context" });
+        expect(logger.error).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

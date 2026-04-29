@@ -6,6 +6,12 @@ type OwnerPlugin = Pick<PluginManifestRecord, "id" | "origin" | "enabledByDefaul
 
 type NormalizedPluginsConfig = ReturnType<typeof normalizePluginsConfig>;
 
+export type ManifestOwnerBasePolicyBlockReason =
+  | "plugins-disabled"
+  | "blocked-by-denylist"
+  | "plugin-disabled"
+  | "not-in-allowlist";
+
 export function isBundledManifestOwner(plugin: Pick<PluginManifestRecord, "origin">): boolean {
   return plugin.origin === "bundled";
 }
@@ -26,26 +32,35 @@ export function passesManifestOwnerBasePolicy(params: {
   allowExplicitlyDisabled?: boolean;
   allowRestrictiveAllowlistBypass?: boolean;
 }): boolean {
+  return resolveManifestOwnerBasePolicyBlock(params) === null;
+}
+
+export function resolveManifestOwnerBasePolicyBlock(params: {
+  plugin: Pick<PluginManifestRecord, "id">;
+  normalizedConfig: NormalizedPluginsConfig;
+  allowExplicitlyDisabled?: boolean;
+  allowRestrictiveAllowlistBypass?: boolean;
+}): ManifestOwnerBasePolicyBlockReason | null {
   if (!params.normalizedConfig.enabled) {
-    return false;
+    return "plugins-disabled";
   }
   if (params.normalizedConfig.deny.includes(params.plugin.id)) {
-    return false;
+    return "blocked-by-denylist";
   }
   if (
     params.normalizedConfig.entries[params.plugin.id]?.enabled === false &&
     params.allowExplicitlyDisabled !== true
   ) {
-    return false;
+    return "plugin-disabled";
   }
   if (
     params.allowRestrictiveAllowlistBypass !== true &&
     params.normalizedConfig.allow.length > 0 &&
     !params.normalizedConfig.allow.includes(params.plugin.id)
   ) {
-    return false;
+    return "not-in-allowlist";
   }
-  return true;
+  return null;
 }
 
 export function isActivatedManifestOwner(params: {

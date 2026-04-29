@@ -67,6 +67,7 @@ export type GuardedFetchOptions = {
   allowCrossOriginUnsafeRedirectReplay?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
+  requireHttps?: boolean;
   policy?: SsrFPolicy;
   lookupFn?: LookupFn;
   dispatcherPolicy?: PinnedDispatcherPolicy;
@@ -317,6 +318,8 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
   const { signal, cleanup } = buildTimeoutAbortSignal({
     timeoutMs: params.timeoutMs,
     signal: params.signal,
+    operation: "fetchWithSsrFGuard",
+    url: params.url,
   });
 
   let released = false;
@@ -345,6 +348,10 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
     if (!["http:", "https:"].includes(parsedUrl.protocol)) {
       await release();
       throw new Error("Invalid URL: must be http or https");
+    }
+    if (params.requireHttps === true && parsedUrl.protocol !== "https:") {
+      await release();
+      throw new Error("URL must use https");
     }
 
     let dispatcher: Dispatcher | null = null;

@@ -192,6 +192,57 @@ describe("runCapability image skip", () => {
     );
   });
 
+  it("lets per-request image prompts override entry prompts", async () => {
+    await withMediaFixture(
+      {
+        filePrefix: "openclaw-image-request-prompt",
+        extension: "png",
+        mediaType: "image/png",
+        fileContents: Buffer.from("image"),
+      },
+      async ({ ctx, media, cache }) => {
+        let seenPrompt: string | undefined;
+        const cfg = {} as OpenClawConfig;
+
+        const result = await runCapability({
+          capability: "image",
+          cfg,
+          ctx,
+          attachments: cache,
+          media,
+          agentDir: "/tmp",
+          providerRegistry: new Map([
+            [
+              "openrouter",
+              {
+                id: "openrouter",
+                capabilities: ["image"],
+                describeImage: async (req) => {
+                  seenPrompt = req.prompt;
+                  return { text: "request prompt ok", model: req.model };
+                },
+              },
+            ],
+          ]),
+          config: {
+            _requestPromptOverride: "Use this request prompt",
+            models: [
+              {
+                provider: "openrouter",
+                model: "google/gemini-2.5-flash",
+                prompt: "entry prompt",
+              },
+            ],
+          },
+          activeModel: { provider: "openai", model: "gpt-4.1" },
+        });
+
+        expect(result.decision.outcome).toBe("success");
+        expect(seenPrompt).toBe("Use this request prompt");
+      },
+    );
+  });
+
   it("prefers agents.defaults.imageModel over the active model for auto image resolution", async () => {
     const cfg = {
       agents: {

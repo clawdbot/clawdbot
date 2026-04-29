@@ -543,8 +543,8 @@ describe("CLI attempt execution", () => {
 
     await runAgentAttempt({
       providerOverride: "anthropic",
-      originalProvider: "anthropic",
       modelOverride: "claude-opus-4-7",
+      originalProvider: "anthropic",
       cfg: {
         agents: {
           defaults: {
@@ -567,6 +567,11 @@ describe("CLI attempt execution", () => {
         senderIsOwner: false,
         modelRun: true,
         promptMode: "none",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:discord:source",
+          sourceTool: "sessions_send",
+        },
       } as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
@@ -587,10 +592,14 @@ describe("CLI attempt execution", () => {
         provider: "anthropic",
         model: "claude-opus-4-7",
         agentHarnessId: "pi",
+        prompt: "raw prompt",
         modelRun: true,
         promptMode: "none",
         disableTools: true,
       }),
+    );
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt).not.toContain(
+      "[Inter-session message]",
     );
   });
 

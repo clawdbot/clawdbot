@@ -6,15 +6,18 @@ read_when:
   - You are debugging failing GitHub Actions checks
 ---
 
-The CI runs on every push to `main` and every pull request. It uses smart scoping to skip expensive jobs when only unrelated areas changed. Manual `workflow_dispatch` runs intentionally bypass smart scoping and fan out the full normal CI graph for release candidates or broad validation.
+The CI runs on every push to `main` and every pull request. It uses smart scoping to skip expensive jobs when only unrelated areas changed. Manual `workflow_dispatch` runs intentionally bypass smart scoping and fan out the full normal CI graph for release candidates or broad validation, with Android lanes opt-in through `include_android` for standalone manual runs. Release-only plugin prerelease lanes live in the separate `Plugin Prerelease` workflow and run only from `Full Release Validation` or an explicit manual dispatch.
+
+The `check-dependencies` shard runs `pnpm deadcode:dependencies`, a production Knip dependency-only pass pinned to the latest Knip version used by that script, with pnpm's minimum release age disabled for the `dlx` install. It gates newly unused, unlisted, unresolved, binary, or catalog dependencies without enabling Knip's full unused-file mode, which remains a manual audit because OpenClaw intentionally loads many plugin and runtime surfaces through manifests and string specifiers.
 
 `Full Release Validation` is the manual umbrella workflow for "run everything
 before release." It accepts a branch, tag, or full commit SHA, dispatches the
-manual `CI` workflow with that target, and dispatches `OpenClaw Release Checks`
-for install smoke, package acceptance, Docker release-path suites, live/E2E,
-OpenWebUI, QA Lab parity, Matrix, and Telegram lanes. It can also run the
-post-publish `NPM Telegram Beta E2E` workflow when a published package spec is
-provided. `release_profile=minimum|stable|full` controls the live/provider
+manual `CI` workflow with that target, dispatches `Plugin Prerelease` for
+release-only plugin/package/static/Docker proof, and dispatches
+`OpenClaw Release Checks` for install smoke, package acceptance, Docker
+release-path suites, live/E2E, OpenWebUI, QA Lab parity, Matrix, and Telegram
+lanes. It can also run the post-publish `NPM Telegram Beta E2E` workflow when a
+published package spec is provided. `release_profile=minimum|stable|full` controls the live/provider
 breadth passed into release checks: `minimum` keeps the fastest OpenAI/core
 release-critical lanes, `stable` adds the stable provider/backend set, and
 `full` runs the broad advisory provider/media matrix. The umbrella records the
@@ -44,6 +47,21 @@ provider failures easier to rerun and diagnose. The aggregate
 `native-live-extensions-o-z`, `native-live-extensions-media`, and
 `native-live-extensions-media-music` shard names remain valid for manual
 one-shot reruns.
+
+The native live media shards run in
+`ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04`, built by the
+`Live Media Runner Image` workflow. That image preinstalls `ffmpeg` and
+`ffprobe`; media jobs only verify the binaries before setup. Keep Docker-backed
+live suites on normal Blacksmith runners, because container jobs are the wrong
+place to launch nested Docker tests.
+
+Docker-backed live model/backend shards use a separate shared
+`ghcr.io/openclaw/openclaw-live-test:<sha>` image per selected commit. The live
+release workflow builds and pushes that image once, then the Docker live model,
+gateway, CLI backend, ACP bind, and Codex harness shards run with
+`OPENCLAW_SKIP_DOCKER_BUILD=1`. If those shards rebuild the full source Docker
+target independently, the release run is misconfigured and will waste the wall
+clock on duplicate image builds.
 
 `OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected
 ref once into a `release-package-under-test` tarball, then passes that artifact
@@ -207,10 +225,16 @@ builds the private QA runtime and compares the mock GPT-5.5 and Opus 4.6
 agentic packs. The `QA-Lab - All Lanes` workflow runs nightly on `main` and on
 manual dispatch; it fans out the mock parity gate, live Matrix lane, and live
 Telegram and Discord lanes as parallel jobs. The live jobs use the
-`qa-live-shared` environment, and Telegram/Discord use Convex leases. Matrix
-uses `--profile fast` for scheduled and release gates, adding `--fail-fast` only
-when the checked-out CLI supports it. The CLI default and manual workflow input
-remain `all`; manual `matrix_profile=all`
+`qa-live-shared` environment, and Telegram/Discord use Convex leases. Release
+checks run Matrix and Telegram live transport lanes with the deterministic mock
+provider and mock-qualified models (`mock-openai/gpt-5.5` and
+`mock-openai/gpt-5.5-alt`) so the channel contract is isolated from live model
+latency and normal provider-plugin startup. The live transport gateway also
+disables memory search because QA parity covers memory behavior separately;
+provider connectivity is covered by the separate live model, native provider,
+and Docker provider suites. Matrix uses `--profile fast` for scheduled and release gates,
+adding `--fail-fast` only when the checked-out CLI supports it. The CLI default
+and manual workflow input remain `all`; manual `matrix_profile=all`
 dispatch always shards full Matrix coverage into `transport`, `media`,
 `e2ee-smoke`, `e2ee-deep`, and `e2ee-cli` jobs. `OpenClaw Release Checks` also
 runs the release-critical QA Lab lanes before release approval; its QA parity
@@ -230,22 +254,60 @@ or overlapping changed hunks.
 The `CodeQL` workflow is intentionally a narrow first-pass security scanner,
 not the full repository sweep. Daily and manual runs scan Actions workflow code
 plus the highest-risk JavaScript/TypeScript auth, secrets, sandbox, cron, and
-gateway surfaces with high-precision security queries. macOS remains a manual
-security shard so its runtime and alert quality can be tracked separately.
+gateway surfaces with high-precision security queries. The
+channel-runtime-boundary job separately scans core channel implementation
+contracts plus the channel plugin runtime, gateway, Plugin SDK, secrets, and
+audit touchpoints under the `/codeql-critical-security/channel-runtime-boundary`
+category so channel security signal can scale without broadening the baseline
+JS/TS category.
 
 The `CodeQL Android Critical Security` workflow is the scheduled Android
 security shard. It builds the Android app manually for CodeQL on the smallest
 Blacksmith Linux runner label accepted by workflow sanity and uploads results
 under the `/codeql-critical-security/android` category.
 
+The `CodeQL macOS Critical Security` workflow is the weekly/manual macOS
+security shard. It builds the macOS app manually for CodeQL on Blacksmith macOS,
+filters dependency build results out of the uploaded SARIF, and uploads results
+under the `/codeql-critical-security/macos` category. Keep it outside the daily
+default workflow because the macOS build dominates runtime even when clean.
+
 The `CodeQL Critical Quality` workflow is the matching non-security shard. It
 runs only error-severity, non-security JavaScript/TypeScript quality queries
-over the same narrow auth, secrets, sandbox, cron, and gateway surface. Keep it
-separate from the security workflow so quality findings can be scheduled,
-measured, disabled, or expanded without obscuring security signal. Swift,
-Python, UI, and bundled-plugin CodeQL expansion should be added back as scoped
-or sharded follow-up work only after the narrow profiles have stable runtime and
-signal.
+over narrow high-value surfaces on the smaller Blacksmith Linux runner. Its
+core-auth-secrets job scans auth, secrets, sandbox, cron, and gateway security
+boundary code under the separate `/codeql-critical-quality/core-auth-secrets`
+category. The config-boundary
+job scans config schema, migration, normalization, and IO contracts under the
+separate `/codeql-critical-quality/config-boundary` category. The
+gateway-runtime-boundary job scans gateway protocol schemas and server method
+contracts under the separate
+`/codeql-critical-quality/gateway-runtime-boundary` category. The
+channel-runtime-boundary job scans core channel implementation contracts under
+the separate `/codeql-critical-quality/channel-runtime-boundary` category. The
+agent-runtime-boundary job scans command execution, model/provider dispatch,
+auto-reply dispatch and queues, and ACP control-plane runtime contracts under
+the separate `/codeql-critical-quality/agent-runtime-boundary` category. The
+mcp-process-runtime-boundary job scans MCP servers and tool bridges, process
+supervision helpers, and outbound delivery contracts under the separate
+`/codeql-critical-quality/mcp-process-runtime-boundary` category. The
+memory-runtime-boundary job scans the memory host SDK, memory runtime facades,
+memory Plugin SDK aliases, memory runtime activation glue, and memory doctor
+commands under the separate `/codeql-critical-quality/memory-runtime-boundary`
+category. The
+ui-control-plane job scans Control UI bootstrap, local persistence, gateway
+control flows, and task control-plane runtime contracts under the separate
+`/codeql-critical-quality/ui-control-plane` category. The
+web-media-runtime-boundary job scans core web fetch/search, media IO, media
+understanding, image-generation, and media-generation runtime contracts under
+the separate `/codeql-critical-quality/web-media-runtime-boundary` category. The
+plugin-boundary job scans loader, registry, public-surface, and Plugin SDK
+entrypoint contracts under a separate `/codeql-critical-quality/plugin-boundary`
+category. Keep the workflow separate from security so quality findings can be
+scheduled, measured, disabled, or expanded without obscuring security signal.
+Swift, Python, and bundled-plugin CodeQL expansion should be added back as
+scoped or sharded follow-up work only after the narrow profiles have stable
+runtime and signal.
 
 The `Docs Agent` workflow is an event-driven Codex maintenance lane for keeping
 existing docs aligned with recently landed changes. It has no pure schedule: a
@@ -288,7 +350,6 @@ gh workflow run duplicate-after-merge.yml \
 | `build-artifacts`                | Build `dist/`, Control UI, built-artifact checks, and reusable downstream artifacts          | Node-relevant changes              |
 | `checks-fast-core`               | Fast Linux correctness lanes such as bundled/plugin-contract/protocol checks                 | Node-relevant changes              |
 | `checks-fast-contracts-channels` | Sharded channel contract checks with a stable aggregate check result                         | Node-relevant changes              |
-| `checks-node-extensions`         | Full bundled-plugin test shards across the extension suite                                   | Node-relevant changes              |
 | `checks-node-core-test`          | Core Node test shards, excluding channel, bundled, contract, and extension lanes             | Node-relevant changes              |
 | `check`                          | Sharded main local gate equivalent: prod types, lint, guards, test types, and strict smoke   | Node-relevant changes              |
 | `check-additional`               | Architecture, boundary, extension-surface guards, package-boundary, and gateway-watch shards | Node-relevant changes              |
@@ -304,9 +365,16 @@ gh workflow run duplicate-after-merge.yml \
 | `test-performance-agent`         | Daily Codex slow-test optimization after trusted activity                                    | Main CI success or manual dispatch |
 
 Manual CI dispatches run the same job graph as normal CI but force every
-scoped lane on: Linux Node shards, bundled-plugin shards, channel contracts,
-Node 22 compatibility, `check`, `check-additional`, build smoke, docs checks,
-Python skills, Windows, macOS, Android, and Control UI i18n. Manual runs use a
+non-Android scoped lane on: Linux Node shards, bundled-plugin shards, channel
+contracts, Node 22 compatibility, `check`, `check-additional`, build smoke, docs
+checks, Python skills, Windows, macOS, and Control UI i18n. Standalone manual CI
+dispatches run Android only with `include_android=true`; the full release
+umbrella enables Android by passing `include_android=true`. Plugin prerelease
+static checks, the release-only `agentic-plugins` shard, the full extension
+batch sweep, and plugin prerelease Docker lanes are excluded from CI. The Docker
+prerelease suite runs only when `Full Release Validation` dispatches the
+separate `Plugin Prerelease` workflow with the release-validation gate enabled.
+Manual runs use a
 unique concurrency group so a release-candidate full suite is not cancelled by
 another push or PR run on the same ref. The optional `target_ref` input lets a
 trusted caller run that graph against a branch, tag, or full commit SHA while
@@ -314,7 +382,7 @@ using the workflow file from the selected dispatch ref.
 
 ```bash
 gh workflow run ci.yml --ref release/YYYY.M.D
-gh workflow run ci.yml --ref main -f target_ref=<branch-or-sha>
+gh workflow run ci.yml --ref main -f target_ref=<branch-or-sha> -f include_android=true
 gh workflow run full-release-validation.yml --ref main -f ref=<branch-or-sha>
 ```
 
@@ -325,7 +393,7 @@ Jobs are ordered so cheap checks fail before expensive ones run:
 1. `preflight` decides which lanes exist at all. The `docs-scope` and `changed-scope` logic are steps inside this job, not standalone jobs.
 2. `security-scm-fast`, `security-dependency-audit`, `security-fast`, `check`, `check-additional`, `check-docs`, and `skills-python` fail quickly without waiting on the heavier artifact and platform matrix jobs.
 3. `build-artifacts` overlaps with the fast Linux lanes so downstream consumers can start as soon as the shared build is ready.
-4. Heavier platform and runtime lanes fan out after that: `checks-fast-core`, `checks-fast-contracts-channels`, `checks-node-extensions`, `checks-node-core-test`, `checks`, `checks-windows`, `macos-node`, `macos-swift`, and `android`.
+4. Heavier platform and runtime lanes fan out after that: `checks-fast-core`, `checks-fast-contracts-channels`, `checks-node-core-test`, `checks`, `checks-windows`, `macos-node`, `macos-swift`, and `android`.
 
 Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`.
 Manual dispatch skips changed-scope detection and makes the preflight manifest
@@ -358,9 +426,9 @@ copy of the PR. Stop that box and warm a fresh one instead of debugging the
 product test failure. For intentional large deletion PRs, set
 `OPENCLAW_TESTBOX_ALLOW_MASS_DELETIONS=1` for that sanity run.
 
-Manual CI dispatches run `checks-node-compat-node22` as release-candidate compatibility coverage. Normal pull requests and `main` pushes skip that lane and keep the matrix focused on the Node 24 test/channel lanes.
+Manual CI dispatches run `checks-node-compat-node22` as broad compatibility coverage. Android is opt-in for standalone manual CI through `include_android=true` and always enabled for `Full Release Validation`. `Plugin Prerelease` is more expensive product/package coverage, so it is a separate workflow dispatched by `Full Release Validation` or by an explicit operator. Normal pull requests, `main` pushes, and standalone manual CI dispatches keep that suite off.
 
-The slowest Node test families are split or balanced so each job stays small without over-reserving runners: channel contracts run as three weighted shards, bundled plugin tests balance across six extension workers, small core unit lanes are paired, auto-reply runs as four balanced workers with the reply subtree split into agent-runner, dispatch, and commands/state-routing shards, and agentic gateway/plugin configs are spread across the existing source-only agentic Node jobs instead of waiting on built artifacts. Broad browser, QA, media, and miscellaneous plugin tests use their dedicated Vitest configs instead of the shared plugin catch-all. Extension shard jobs run up to two plugin config groups at a time with one Vitest worker per group and a larger Node heap so import-heavy plugin batches do not create extra CI jobs. The broad agents lane uses the shared Vitest file-parallel scheduler because it is import/scheduling dominated rather than owned by a single slow test file. `runtime-config` runs with the infra core-runtime shard to keep the shared runtime shard from owning the tail. Include-pattern shards record timing entries using the CI shard name, so `.artifacts/vitest-shard-timings.json` can distinguish a whole config from a filtered shard. `check-additional` keeps package-boundary compile/canary work together and separates runtime topology architecture from gateway watch coverage; the boundary guard shard runs its small independent guards concurrently inside one job. Gateway watch, channel tests, and the core support-boundary shard run concurrently inside `build-artifacts` after `dist/` and `dist-runtime/` are already built, keeping their old check names as lightweight verifier jobs while avoiding two extra Blacksmith workers and a second artifact-consumer queue.
+The slowest Node test families are split or balanced so each job stays small without over-reserving runners: channel contracts run as three weighted shards, small core unit lanes are paired, auto-reply runs as four balanced workers with the reply subtree split into agent-runner, dispatch, and commands/state-routing shards, and agentic gateway/plugin configs are spread across the existing source-only agentic Node jobs instead of waiting on built artifacts. Broad browser, QA, media, and miscellaneous plugin tests use their dedicated Vitest configs instead of the shared plugin catch-all. `Plugin Prerelease` balances bundled plugin tests across eight extension workers; those extension shard jobs run up to two plugin config groups at a time with one Vitest worker per group and a larger Node heap so import-heavy plugin batches do not create extra CI jobs. The broad agents lane uses the shared Vitest file-parallel scheduler because it is import/scheduling dominated rather than owned by a single slow test file. `runtime-config` runs with the infra core-runtime shard to keep the shared runtime shard from owning the tail. Include-pattern shards record timing entries using the CI shard name, so `.artifacts/vitest-shard-timings.json` can distinguish a whole config from a filtered shard. `check-additional` keeps package-boundary compile/canary work together and separates runtime topology architecture from gateway watch coverage; the boundary guard shard runs its small independent guards concurrently inside one job. Gateway watch, channel tests, and the core support-boundary shard run concurrently inside `build-artifacts` after `dist/` and `dist-runtime/` are already built, keeping their old check names as lightweight verifier jobs while avoiding two extra Blacksmith workers and a second artifact-consumer queue.
 Android CI runs both `testPlayDebugUnitTest` and `testThirdPartyDebugUnitTest`, then builds the Play debug APK. The third-party flavor has no separate source set or manifest; its unit-test lane still compiles that flavor with the SMS/call-log BuildConfig flags, while avoiding a duplicate debug APK packaging job on every Android-relevant push.
 GitHub may mark superseded jobs as `cancelled` when a newer push lands on the same PR or `main` ref. Treat that as CI noise unless the newest run for the same ref is also failing. Aggregate shard checks use `!cancelled() && always()` so they still report normal shard failures but do not queue after the whole workflow has already been superseded.
 The automatic CI concurrency key is versioned (`CI-v7-*`) so a GitHub-side zombie in an old queue group cannot indefinitely block newer main runs. Manual full-suite runs use `CI-manual-v1-*` and do not cancel in-progress runs.
@@ -370,6 +438,7 @@ The automatic CI concurrency key is versioned (`CI-v7-*`) so a GitHub-side zombi
 | Runner                           | Jobs                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ubuntu-24.04`                   | `preflight`, fast security jobs and aggregates (`security-scm-fast`, `security-dependency-audit`, `security-fast`), fast protocol/contract/bundled checks, sharded channel contract checks, `check` shards except lint, `check-additional` shards and aggregates, Node test aggregate verifiers, docs checks, Python skills, workflow-sanity, labeler, auto-response; install-smoke preflight also uses GitHub-hosted Ubuntu so the Blacksmith matrix can queue earlier |
+| `blacksmith-4vcpu-ubuntu-2404`   | `CodeQL Critical Quality`, lower-weight extension shards, `checks-fast-core`, `checks-node-compat-node22`, `check-prod-types`, and `check-test-types`                                                                                                                                                                                                                                                                                                                   |
 | `blacksmith-8vcpu-ubuntu-2404`   | `build-artifacts`, build-smoke, Linux Node test shards, bundled plugin test shards, `android`                                                                                                                                                                                                                                                                                                                                                                           |
 | `blacksmith-16vcpu-ubuntu-2404`  | `check-lint`, which remains CPU-sensitive enough that 8 vCPU cost more than it saved; install-smoke Docker builds, where 32-vCPU queue time cost more than it saved                                                                                                                                                                                                                                                                                                     |
 | `blacksmith-16vcpu-windows-2025` | `checks-windows`                                                                                                                                                                                                                                                                                                                                                                                                                                                        |

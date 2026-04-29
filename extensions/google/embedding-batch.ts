@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import {
   buildEmbeddingBatchGroupOptions,
   runEmbeddingBatchGroups,
-  type EmbeddingBatchExecutionParams,
   buildBatchHeaders,
   debugEmbeddingsLog,
   normalizeBatchBaseUrl,
@@ -11,6 +10,14 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import type { GeminiEmbeddingClient, GeminiTextEmbeddingRequest } from "./embedding-provider.js";
+
+type EmbeddingBatchExecutionParams = {
+  wait: boolean;
+  pollIntervalMs: number;
+  timeoutMs: number;
+  concurrency: number;
+  debug?: (message: string, data?: Record<string, unknown>) => void;
+};
 
 export type GeminiBatchRequest = {
   custom_id: string;

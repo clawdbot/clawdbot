@@ -1,0 +1,413 @@
+name: Plugin Prerelease
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Branch, tag, or full commit SHA to validate
+        required: false
+        default: main
+        type: string
+      expected_sha:
+        description: Optional full commit SHA that target_ref must resolve to
+        required: false
+        default: ""
+        type: string
+      full_release_validation:
+        description: Enable release-only Docker prerelease lanes from Full Release Validation
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-prerelease-${{ inputs.target_ref }}
+  cancel-in-progress: ${{ inputs.target_ref == 'main' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  preflight:
+    name: Build plugin prerelease plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      checkout_revision: ${{ steps.manifest.outputs.checkout_revision }}
+      run_plugin_prerelease_suite: ${{ steps.manifest.outputs.run_plugin_prerelease_suite }}
+      run_plugin_prerelease_static: ${{ steps.manifest.outputs.run_plugin_prerelease_static }}
+      plugin_prerelease_static_matrix: ${{ steps.manifest.outputs.plugin_prerelease_static_matrix }}
+      run_plugin_prerelease_node: ${{ steps.manifest.outputs.run_plugin_prerelease_node }}
+      plugin_prerelease_node_matrix: ${{ steps.manifest.outputs.plugin_prerelease_node_matrix }}
+      run_plugin_prerelease_extensions: ${{ steps.manifest.outputs.run_plugin_prerelease_extensions }}
+      plugin_prerelease_extension_matrix: ${{ steps.manifest.outputs.plugin_prerelease_extension_matrix }}
+      run_plugin_prerelease_docker: ${{ steps.manifest.outputs.run_plugin_prerelease_docker }}
+      plugin_prerelease_docker_lanes: ${{ steps.manifest.outputs.plugin_prerelease_docker_lanes }}
+    steps:
+      - name: Checkout target
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.target_ref }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Build plugin prerelease manifest
+        id: manifest
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          FULL_RELEASE_VALIDATION: ${{ inputs.full_release_validation && 'true' || 'false' }}
+        run: |
+          node --input-type=module <<'EOF'
+          import { appendFileSync } from "node:fs";
+          import { execFileSync } from "node:child_process";
+
+          const createMatrix = (include) => ({ include });
+          const outputPath = process.env.GITHUB_OUTPUT;
+          const checkoutRevision = execFileSync("git", ["rev-parse", "HEAD"], {
+            encoding: "utf8",
+          }).trim();
+          const expectedSha = (process.env.EXPECTED_SHA ?? "").trim();
+          const fullReleaseValidation = process.env.FULL_RELEASE_VALIDATION === "true";
+          if (expectedSha && expectedSha !== checkoutRevision) {
+            console.error(
+              `target_ref resolved to ${checkoutRevision}, expected ${expectedSha}`,
+            );
+            process.exit(1);
+          }
+
+          let pluginPrereleasePlan = { staticChecks: [], dockerLanes: [] };
+          let extensionShards = [];
+          let nodeShards = [];
+
+          try {
+            const { assertPluginPrereleaseTestPlanComplete } = await import(
+              "./scripts/lib/plugin-prerelease-test-plan.mjs"
+            );
+            pluginPrereleasePlan = assertPluginPrereleaseTestPlanComplete();
+          } catch (error) {
+            const errorCode =
+              error && typeof error === "object" && "code" in error ? error.code : "";
+            const moduleUrl =
+              error && typeof error === "object" && "url" in error ? String(error.url) : "";
+            if (
+              errorCode === "ERR_MODULE_NOT_FOUND" &&
+              moduleUrl.endsWith("/scripts/lib/plugin-prerelease-test-plan.mjs")
+            ) {
+              console.warn(
+                "Plugin prerelease plan unavailable in target ref; skipping static and Docker plugin prerelease lanes.",
+              );
+            } else {
+              throw error;
+            }
+          }
+
+          try {
+            const { createExtensionTestShards, DEFAULT_EXTENSION_TEST_SHARD_COUNT } = await import(
+              "./scripts/lib/extension-test-plan.mjs"
+            );
+            extensionShards = createExtensionTestShards({
+              shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT,
+            }).map((shard) => ({
+              check_name: shard.checkName,
+              extensions_csv: shard.extensionIds.join(","),
+              runner: [0, 1, 2, 3].includes(shard.index)
+                ? "blacksmith-8vcpu-ubuntu-2404"
+                : "blacksmith-4vcpu-ubuntu-2404",
+              shard_index: shard.index + 1,
+              task: "extensions-batch",
+            }));
+          } catch (error) {
+            const errorCode =
+              error && typeof error === "object" && "code" in error ? error.code : "";
+            const moduleUrl =
+              error && typeof error === "object" && "url" in error ? String(error.url) : "";
+            if (
+              errorCode === "ERR_MODULE_NOT_FOUND" &&
+              moduleUrl.endsWith("/scripts/lib/extension-test-plan.mjs")
+            ) {
+              console.warn(
+                "Extension test plan unavailable in target ref; skipping extension prerelease shards.",
+              );
+            } else {
+              throw error;
+            }
+          }
+
+          try {
+            const { createNodeTestShards } = await import("./scripts/lib/ci-node-test-plan.mjs");
+            nodeShards = createNodeTestShards({
+              includeReleaseOnlyPluginShards: true,
+            })
+              .filter((shard) => shard.shardName === "agentic-plugins")
+              .map((shard) => ({
+                check_name: shard.checkName,
+                runtime: "node",
+                task: "test-shard",
+                shard_name: shard.shardName,
+                configs: shard.configs,
+                includePatterns: shard.includePatterns,
+                runner: shard.runner,
+              }));
+          } catch (error) {
+            const errorCode =
+              error && typeof error === "object" && "code" in error ? error.code : "";
+            const moduleUrl =
+              error && typeof error === "object" && "url" in error ? String(error.url) : "";
+            if (
+              errorCode === "ERR_MODULE_NOT_FOUND" &&
+              moduleUrl.endsWith("/scripts/lib/ci-node-test-plan.mjs")
+            ) {
+              console.warn(
+                "Node test plan unavailable in target ref; skipping release-only plugin Node shard.",
+              );
+            } else {
+              throw error;
+            }
+          }
+
+          const staticChecks = pluginPrereleasePlan.staticChecks.map((check) => ({
+            check_name: check.checkName,
+            command: check.command,
+            task: check.check,
+          }));
+          const dockerLanes = pluginPrereleasePlan.dockerLanes;
+          const runStatic = staticChecks.length > 0;
+          const runNode = nodeShards.length > 0;
+          const runExtensions = extensionShards.length > 0;
+          const runDocker = fullReleaseValidation && dockerLanes.length > 0;
+          const runSuite = runStatic || runNode || runExtensions || runDocker;
+
+          const manifest = {
+            checkout_revision: checkoutRevision,
+            run_plugin_prerelease_suite: runSuite,
+            run_plugin_prerelease_static: runStatic,
+            plugin_prerelease_static_matrix: createMatrix(staticChecks),
+            run_plugin_prerelease_node: runNode,
+            plugin_prerelease_node_matrix: createMatrix(nodeShards),
+            run_plugin_prerelease_extensions: runExtensions,
+            plugin_prerelease_extension_matrix: createMatrix(extensionShards),
+            run_plugin_prerelease_docker: runDocker,
+            plugin_prerelease_docker_lanes: dockerLanes.join(" "),
+          };
+
+          for (const [key, value] of Object.entries(manifest)) {
+            appendFileSync(
+              outputPath,
+              `${key}=${typeof value === "string" ? value : JSON.stringify(value)}\n`,
+              "utf8",
+            );
+          }
+          EOF
+
+  plugin-prerelease-static-shard:
+    permissions:
+      contents: read
+    name: ${{ matrix.check_name }}
+    needs: [preflight]
+    if: needs.preflight.outputs.run_plugin_prerelease_static == 'true'
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.preflight.outputs.plugin_prerelease_static_matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.checkout_revision }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Run plugin prerelease static shard
+        env:
+          PLUGIN_PRERELEASE_COMMAND: ${{ matrix.command }}
+          PLUGIN_PRERELEASE_TASK: ${{ matrix.task }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Running ${PLUGIN_PRERELEASE_TASK}: ${PLUGIN_PRERELEASE_COMMAND}"
+          bash -c "$PLUGIN_PRERELEASE_COMMAND"
+
+  plugin-prerelease-node-shard:
+    permissions:
+      contents: read
+    name: ${{ matrix.check_name }}
+    needs: [preflight]
+    if: needs.preflight.outputs.run_plugin_prerelease_node == 'true'
+    runs-on: ${{ matrix.runner || 'ubuntu-24.04' }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.preflight.outputs.plugin_prerelease_node_matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.checkout_revision }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Configure Node test resources
+        run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
+
+      - name: Run release-only plugin Node shard
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+          OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
+          OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
+          OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
+          OPENCLAW_TEST_PROJECTS_PARALLEL: "2"
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'EOF'
+          import { spawnSync } from "node:child_process";
+          import { writeFileSync } from "node:fs";
+          import { join } from "node:path";
+
+          const configs = JSON.parse(process.env.OPENCLAW_NODE_TEST_CONFIGS_JSON ?? "[]");
+          if (!Array.isArray(configs) || configs.length === 0) {
+            console.error("Missing node test shard configs");
+            process.exit(1);
+          }
+          const includePatterns = JSON.parse(
+            process.env.OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON ?? "null",
+          );
+          const childEnv = { ...process.env };
+          if (Array.isArray(includePatterns) && includePatterns.length > 0) {
+            const includeFile = join(
+              process.env.RUNNER_TEMP ?? ".",
+              `node-test-include-${process.env.GITHUB_JOB ?? "local"}-${Date.now()}.json`,
+            );
+            writeFileSync(includeFile, JSON.stringify(includePatterns), "utf8");
+            childEnv.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
+          }
+
+          const result = spawnSync(
+            "pnpm",
+            ["exec", "node", "scripts/test-projects.mjs", ...configs],
+            {
+              env: childEnv,
+              stdio: "inherit",
+            },
+          );
+          process.exit(result.status ?? 1);
+          EOF
+
+  plugin-prerelease-extension-shard:
+    permissions:
+      contents: read
+    name: ${{ matrix.check_name }}
+    needs: [preflight]
+    if: needs.preflight.outputs.run_plugin_prerelease_extensions == 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.preflight.outputs.plugin_prerelease_extension_matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.checkout_revision }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Run extension shard
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+          OPENCLAW_EXTENSION_BATCH_PARALLEL: 2
+          OPENCLAW_VITEST_MAX_WORKERS: 1
+          OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
+        run: pnpm test:extensions:batch -- "$OPENCLAW_EXTENSION_BATCH"
+
+  plugin-prerelease-docker-suite:
+    name: plugin-prerelease-docker-suite
+    needs: [preflight]
+    if: ${{ inputs.full_release_validation && needs.preflight.outputs.run_plugin_prerelease_docker == 'true' }}
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+      pull-requests: read
+    uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
+    with:
+      ref: ${{ needs.preflight.outputs.checkout_revision }}
+      include_repo_e2e: false
+      include_release_path_suites: false
+      include_openwebui: false
+      docker_lanes: ${{ needs.preflight.outputs.plugin_prerelease_docker_lanes }}
+      include_live_suites: false
+      live_models_only: false
+
+  plugin-prerelease-suite:
+    permissions:
+      contents: read
+    name: plugin-prerelease-suite
+    needs:
+      - preflight
+      - plugin-prerelease-static-shard
+      - plugin-prerelease-node-shard
+      - plugin-prerelease-extension-shard
+      - plugin-prerelease-docker-suite
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_plugin_prerelease_suite == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Verify plugin prerelease suite
+        env:
+          RUN_STATIC: ${{ needs.preflight.outputs.run_plugin_prerelease_static }}
+          RUN_NODE: ${{ needs.preflight.outputs.run_plugin_prerelease_node }}
+          RUN_EXTENSIONS: ${{ needs.preflight.outputs.run_plugin_prerelease_extensions }}
+          RUN_DOCKER: ${{ needs.preflight.outputs.run_plugin_prerelease_docker }}
+          STATIC_RESULT: ${{ needs.plugin-prerelease-static-shard.result }}
+          NODE_RESULT: ${{ needs.plugin-prerelease-node-shard.result }}
+          EXTENSIONS_RESULT: ${{ needs.plugin-prerelease-extension-shard.result }}
+          DOCKER_RESULT: ${{ needs.plugin-prerelease-docker-suite.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          failed=0
+          check_required() {
+            local name="$1"
+            local required="$2"
+            local status="$3"
+            if [ "$required" != "true" ]; then
+              return 0
+            fi
+            if [ "$status" != "success" ]; then
+              echo "::error::${name} ended with ${status}"
+              failed=1
+            fi
+          }
+
+          check_required "plugin-prerelease-static" "$RUN_STATIC" "$STATIC_RESULT"
+          check_required "plugin-prerelease-node" "$RUN_NODE" "$NODE_RESULT"
+          check_required "plugin-prerelease-extensions" "$RUN_EXTENSIONS" "$EXTENSIONS_RESULT"
+          check_required "plugin-prerelease-docker" "$RUN_DOCKER" "$DOCKER_RESULT"
+          exit "$failed"

@@ -50,6 +50,10 @@ export function clearPluginCommandsForPlugin(pluginId: string): void {
   }
 }
 
+export function isTrustedReservedCommandOwner(command: RegisteredPluginCommand): boolean {
+  return command.ownership === "reserved";
+}
+
 export function listRegisteredPluginCommands(): RegisteredPluginCommand[] {
   return Array.from(pluginCommands.values());
 }

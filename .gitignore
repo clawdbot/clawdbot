@@ -3,6 +3,7 @@ node_modules
 .env
 docker-compose.override.yml
 docker-compose.extra.yml
+docker-compose.sandbox.yml
 dist
 dist-runtime/
 pnpm-lock.yaml

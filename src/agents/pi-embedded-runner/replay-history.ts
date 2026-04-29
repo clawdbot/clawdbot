@@ -12,6 +12,7 @@ import type {
   ProviderReplaySessionState,
 } from "../../plugins/types.js";
 import {
+  annotateInterSessionPromptText,
   hasInterSessionUserProvenance,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
@@ -49,7 +50,6 @@ import {
   stripInvalidThinkingSignatures,
 } from "./thinking.js";
 
-const INTER_SESSION_PREFIX_BASE = "[Inter-session message]";
 const MODEL_SNAPSHOT_CUSTOM_TYPE = "model-snapshot";
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
 type ModelSnapshotEntry = {
@@ -90,22 +90,6 @@ function createProviderReplayPluginParams(params: ProviderReplayHookParams) {
   };
 }
 
-function buildInterSessionPrefix(message: AgentMessage): string {
-  const provenance = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
-  if (!provenance) {
-    return INTER_SESSION_PREFIX_BASE;
-  }
-  const details = [
-    provenance.sourceSessionKey ? `sourceSession=${provenance.sourceSessionKey}` : undefined,
-    provenance.sourceChannel ? `sourceChannel=${provenance.sourceChannel}` : undefined,
-    provenance.sourceTool ? `sourceTool=${provenance.sourceTool}` : undefined,
-  ].filter(Boolean);
-  if (details.length === 0) {
-    return INTER_SESSION_PREFIX_BASE;
-  }
-  return `${INTER_SESSION_PREFIX_BASE} ${details.join(" ")}`;
-}
-
 function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessage[] {
   let touched = false;
   const out: AgentMessage[] = [];
@@ -114,17 +98,18 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
       out.push(msg);
       continue;
     }
-    const prefix = buildInterSessionPrefix(msg);
+    const provenance = normalizeInputProvenance((msg as { provenance?: unknown }).provenance);
     const user = msg as Extract<AgentMessage, { role: "user" }>;
     if (typeof user.content === "string") {
-      if (user.content.startsWith(prefix)) {
+      const annotated = annotateInterSessionPromptText(user.content, provenance);
+      if (annotated === user.content) {
         out.push(msg);
         continue;
       }
       touched = true;
       out.push({
         ...(msg as unknown as Record<string, unknown>),
-        content: `${prefix}\n${user.content}`,
+        content: annotated,
       } as AgentMessage);
       continue;
     }
@@ -143,14 +128,15 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
 
     if (textIndex >= 0) {
       const existing = user.content[textIndex] as { type: "text"; text: string };
-      if (existing.text.startsWith(prefix)) {
+      const annotated = annotateInterSessionPromptText(existing.text, provenance);
+      if (annotated === existing.text) {
         out.push(msg);
         continue;
       }
       const nextContent = [...user.content];
       nextContent[textIndex] = {
         ...existing,
-        text: `${prefix}\n${existing.text}`,
+        text: annotated,
       };
       touched = true;
       out.push({
@@ -163,7 +149,13 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
     touched = true;
     out.push({
       ...(msg as unknown as Record<string, unknown>),
-      content: [{ type: "text", text: prefix }, ...user.content],
+      content: [
+        {
+          type: "text",
+          text: annotateInterSessionPromptText("Inter-session content follows.", provenance),
+        },
+        ...user.content,
+      ],
     } as AgentMessage);
   }
   return touched ? out : messages;

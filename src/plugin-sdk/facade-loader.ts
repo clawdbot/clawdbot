@@ -11,11 +11,7 @@ import {
   type PluginJitiLoaderFactory,
 } from "../plugins/jiti-loader-cache.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
-import {
-  createFacadeResolutionKey as createFacadeResolutionKeyShared,
-  resolveBundledFacadeModuleLocation,
-  resolveCachedFacadeModuleLocation,
-} from "./facade-resolution-shared.js";
+import { resolveBundledFacadeModuleLocation } from "./facade-resolution-shared.js";
 
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 
@@ -23,13 +19,6 @@ const nodeRequire = createRequire(import.meta.url);
 const jitiLoaders: PluginJitiLoaderCache = new Map();
 const loadedFacadeModules = new Map<string, unknown>();
 const loadedFacadePluginIds = new Set<string>();
-const cachedFacadeModuleLocationsByKey = new Map<
-  string,
-  {
-    modulePath: string;
-    boundaryRoot: string;
-  } | null
->();
 let facadeLoaderJitiFactory: PluginJitiLoaderFactory | undefined;
 let cachedOpenClawPackageRoot: string | undefined;
 
@@ -54,20 +43,7 @@ function getOpenClawPackageRoot() {
   return cachedOpenClawPackageRoot;
 }
 
-function createFacadeResolutionKey(params: {
-  dirName: string;
-  artifactBasename: string;
-  env?: NodeJS.ProcessEnv;
-}): string {
-  const bundledPluginsDir = resolveBundledPluginsDir(params.env ?? process.env);
-  return createFacadeResolutionKeyShared({
-    ...params,
-    bundledPluginsDir,
-    ...(params.env ? { env: params.env } : {}),
-  });
-}
-
-function resolveFacadeModuleLocationUncached(params: {
+function resolveFacadeModuleLocation(params: {
   dirName: string;
   artifactBasename: string;
   env?: NodeJS.ProcessEnv;
@@ -78,18 +54,6 @@ function resolveFacadeModuleLocationUncached(params: {
     currentModulePath: CURRENT_MODULE_PATH,
     packageRoot: getOpenClawPackageRoot(),
     bundledPluginsDir,
-  });
-}
-
-function resolveFacadeModuleLocation(params: {
-  dirName: string;
-  artifactBasename: string;
-  env?: NodeJS.ProcessEnv;
-}): { modulePath: string; boundaryRoot: string } | null {
-  return resolveCachedFacadeModuleLocation({
-    cache: cachedFacadeModuleLocationsByKey,
-    key: createFacadeResolutionKey(params),
-    resolve: () => resolveFacadeModuleLocationUncached(params),
   });
 }
 
@@ -337,7 +301,6 @@ export function resetFacadeLoaderStateForTest(): void {
   loadedFacadeModules.clear();
   loadedFacadePluginIds.clear();
   jitiLoaders.clear();
-  cachedFacadeModuleLocationsByKey.clear();
   facadeLoaderJitiFactory = undefined;
   cachedOpenClawPackageRoot = undefined;
 }

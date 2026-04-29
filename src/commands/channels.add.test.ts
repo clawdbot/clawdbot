@@ -20,6 +20,7 @@ import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-hel
 let channelsAddCommand: typeof import("./channels/add.js").channelsAddCommand;
 
 const catalogMocks = vi.hoisted(() => ({
+  getChannelPluginCatalogEntry: vi.fn(),
   listChannelPluginCatalogEntries: vi.fn((): ChannelPluginCatalogEntry[] => []),
 }));
 
@@ -41,6 +42,7 @@ const pluginInstallRecordCommitMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../channels/plugins/catalog.js", () => ({
+  getChannelPluginCatalogEntry: catalogMocks.getChannelPluginCatalogEntry,
   listChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
 }));
 
@@ -279,6 +281,8 @@ describe("channelsAddCommand", () => {
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
+    catalogMocks.getChannelPluginCatalogEntry.mockClear();
+    catalogMocks.getChannelPluginCatalogEntry.mockReturnValue(undefined);
     catalogMocks.listChannelPluginCatalogEntries.mockClear();
     catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([]);
     discoveryMocks.isCatalogChannelInstalled.mockClear();
@@ -542,6 +546,103 @@ describe("channelsAddCommand", () => {
       expect.objectContaining({ installRuntimeDeps: false }),
     );
     expectExternalChatEnabledConfigWrite();
+  });
+
+  it("falls back from untrusted workspace catalog shadows when adding by alias", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+    setActivePluginRegistry(createTestRegistry());
+    const workspaceEntry: ChannelPluginCatalogEntry = {
+      ...createExternalChatCatalogEntry(),
+      pluginId: "evil-external-chat-shadow",
+      origin: "workspace",
+      meta: {
+        ...createExternalChatCatalogEntry().meta,
+        aliases: ["ext"],
+      },
+      install: {
+        npmSpec: "evil-external-chat-shadow",
+      },
+    };
+    const trustedEntry: ChannelPluginCatalogEntry = {
+      ...createExternalChatCatalogEntry(),
+      origin: "bundled",
+      meta: {
+        ...createExternalChatCatalogEntry().meta,
+        aliases: ["ext"],
+      },
+    };
+    catalogMocks.listChannelPluginCatalogEntries.mockImplementation(
+      ({ excludeWorkspace }: { excludeWorkspace?: boolean } = {}) =>
+        excludeWorkspace ? [trustedEntry] : [workspaceEntry],
+    );
+    registerExternalChatSetupPlugin("@vendor/external-chat-plugin");
+
+    await channelsAddCommand(
+      {
+        channel: "ext",
+        account: "default",
+        token: "tenant-scoped",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(
+      expect.objectContaining({ entry: trustedEntry, promptInstall: false }),
+    );
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginId: "@vendor/external-chat-plugin" }),
+    );
+    expectExternalChatEnabledConfigWrite();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicitly trusted workspace catalog ownership when adding by alias", async () => {
+    const workspaceEntry: ChannelPluginCatalogEntry = {
+      ...createExternalChatCatalogEntry(),
+      pluginId: "trusted-external-chat-shadow",
+      origin: "workspace",
+      meta: {
+        ...createExternalChatCatalogEntry().meta,
+        aliases: ["ext"],
+      },
+      install: {
+        npmSpec: "trusted-external-chat-shadow",
+      },
+    };
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        plugins: {
+          enabled: true,
+          allow: ["trusted-external-chat-shadow"],
+        },
+      },
+    });
+    setActivePluginRegistry(createTestRegistry());
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([workspaceEntry]);
+    registerExternalChatSetupPlugin("trusted-external-chat-shadow");
+
+    await channelsAddCommand(
+      {
+        channel: "ext",
+        account: "default",
+        token: "tenant-scoped",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(
+      expect.objectContaining({ entry: workspaceEntry, promptInstall: false }),
+    );
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginId: "trusted-external-chat-shadow" }),
+    );
+    expectExternalChatEnabledConfigWrite();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("commits channel setup plugin install records with the guarded config write", async () => {

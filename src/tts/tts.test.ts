@@ -1,53 +1,21 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
 
-const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
-const loadActivatedBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
-const createLazyFacadeObjectValue = vi.hoisted(() => {
-  return <T extends object>(load: () => T): T =>
-    new Proxy(
-      {},
-      {
-        get(_target, property, receiver) {
-          return Reflect.get(load(), property, receiver);
-        },
-      },
-    ) as T;
-});
-const createLazyFacadeValue = vi.hoisted(() => {
-  return <T extends object, K extends keyof T>(load: () => T, key: K): T[K] =>
-    ((...args: unknown[]) => {
-      const value = load()[key];
-      if (typeof value !== "function") {
-        return value;
-      }
-      return (value as (...innerArgs: unknown[]) => unknown)(...args);
-    }) as T[K];
-});
-
-vi.mock("../plugin-sdk/facade-runtime.js", () => ({
-  createLazyFacadeObjectValue,
-  createLazyFacadeValue,
-  loadActivatedBundledPluginPublicSurfaceModuleSync,
-  loadBundledPluginPublicSurfaceModuleSync,
-}));
-
-const tts = await import("./tts.js");
+function readSource(relativePath: string): string {
+  return readFileSync(new URL(relativePath, import.meta.url), "utf8");
+}
 
 describe("tts runtime facade", () => {
-  beforeEach(() => {
-    loadActivatedBundledPluginPublicSurfaceModuleSync.mockReset();
-    loadBundledPluginPublicSurfaceModuleSync.mockReset();
-  });
+  it("keeps speech-core behind the lazy runtime facade", () => {
+    const publicFacadeSource = readSource("./tts.ts");
+    const runtimeFacadeSource = readSource("../plugin-sdk/tts-runtime.ts");
 
-  it("loads speech-core lazily after module import", () => {
-    const buildTtsSystemPromptHint = vi.fn().mockReturnValue("hint");
-    loadActivatedBundledPluginPublicSurfaceModuleSync.mockReturnValue({
-      buildTtsSystemPromptHint,
-    });
-
-    expect(loadActivatedBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
-    expect(tts.buildTtsSystemPromptHint({} as never)).toBe("hint");
-    expect(loadActivatedBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledTimes(1);
-    expect(buildTtsSystemPromptHint).toHaveBeenCalledTimes(1);
+    expect(publicFacadeSource).toContain('} from "../plugin-sdk/tts-runtime.js";');
+    expect(publicFacadeSource).not.toContain("speech-core");
+    expect(runtimeFacadeSource).toContain("function loadFacadeModule()");
+    expect(runtimeFacadeSource).toContain('dirName: "speech-core"');
+    expect(runtimeFacadeSource).toContain(
+      'createLazyFacadeRuntimeValue(loadFacadeModule, "buildTtsSystemPromptHint")',
+    );
   });
 });

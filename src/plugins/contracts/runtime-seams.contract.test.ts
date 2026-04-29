@@ -8,8 +8,6 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "../../infra/net/undici-runtime.js";
-import { clearPluginDiscoveryCache } from "../discovery.js";
-import { clearPluginManifestRegistryCache } from "../manifest-registry.js";
 
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -71,8 +69,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.resetModules();
   vi.doUnmock("../../config/plugin-auto-enable.js");
-  clearPluginDiscoveryCache();
-  clearPluginManifestRegistryCache();
   Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
   if (originalBundledPluginsDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -109,8 +105,6 @@ describe("shared runtime seam contracts", () => {
         },
       },
     });
-    clearPluginDiscoveryCache();
-    clearPluginManifestRegistryCache();
     vi.resetModules();
     vi.doMock("../../config/plugin-auto-enable.js", () => ({
       applyPluginAutoEnable: ({ config }: { config?: unknown }) => ({

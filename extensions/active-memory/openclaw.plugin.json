@@ -24,8 +24,16 @@
         "type": "array",
         "items": {
           "type": "string",
-          "enum": ["direct", "group", "channel"]
+          "enum": ["direct", "group", "channel", "explicit"]
         }
+      },
+      "allowedChatIds": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "deniedChatIds": {
+        "type": "array",
+        "items": { "type": "string" }
       },
       "thinking": {
         "type": "string",
@@ -93,7 +101,15 @@
     },
     "allowedChatTypes": {
       "label": "Allowed Chat Types",
-      "help": "Choose which session types may run Active Memory. Defaults to direct-message style sessions only."
+      "help": "Choose which session types may run Active Memory. Defaults to direct-message style sessions only, but explicit portal/webchat sessions can also be enabled."
+    },
+    "allowedChatIds": {
+      "label": "Allowed Chat IDs",
+      "help": "Optional explicit allowlist of chat/user IDs (e.g. Feishu chat_id oc_xxx, open_id ou_xxx, Telegram chat id, Slack channel id). When non-empty, Active Memory only runs for sessions whose conversation id is in the list, across **every** chat type at once (direct, group, channel). Setting this narrows every allowed chat type simultaneously — if you want 'all directs + only specific groups', use allowedChatTypes: ['group'] + allowedChatIds: [<group ids>] and rely on direct chats being matched via the direct session id (e.g. the user's open_id) instead. Leave empty to fall back to allowedChatTypes alone."
+    },
+    "deniedChatIds": {
+      "label": "Denied Chat IDs",
+      "help": "Optional explicit denylist of chat/user IDs. Sessions whose resolved conversation id matches the list are skipped even when the chat type is allowed. Applied after allowedChatIds."
     },
     "timeoutMs": {
       "label": "Timeout (ms)"

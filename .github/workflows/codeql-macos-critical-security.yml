@@ -1,0 +1,89 @@
+name: CodeQL macOS Critical Security
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 8 * * 1"
+
+concurrency:
+  group: codeql-macos-critical-security-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.sha }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+jobs:
+  macos:
+    name: Critical Security (macOS)
+    runs-on: blacksmith-6vcpu-macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          submodules: false
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.1.app
+          xcodebuild -version
+          swift --version
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        with:
+          languages: swift
+          build-mode: manual
+          config-file: ./.github/codeql/codeql-macos-critical-security.yml
+
+      - name: Build macOS for CodeQL
+        run: swift build --package-path apps/macos --product OpenClaw
+
+      - name: Analyze
+        id: analyze
+        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        with:
+          output: sarif-results
+          upload: failure-only
+          category: "/codeql-critical-security/macos"
+
+      - name: Remove dependency build results
+        env:
+          SARIF_OUTPUT: sarif-results
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          if [ ! -d "$SARIF_OUTPUT" ]; then
+            echo "SARIF output directory not found: $SARIF_OUTPUT" >&2
+            exit 1
+          fi
+
+          mkdir -p sarif-results-filtered
+
+          files=("$SARIF_OUTPUT"/*.sarif)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No SARIF files found in $SARIF_OUTPUT" >&2
+            exit 1
+          fi
+
+          for file in "${files[@]}"; do
+            jq '
+              def in_dependency_build:
+                ((.locations // []) | length > 0)
+                and all(.locations[]; (.physicalLocation.artifactLocation.uri? // "") | test("^apps/macos/\\.build/"));
+
+              .runs |= map(.results = ((.results // []) | map(select(in_dependency_build | not))))
+            ' "$file" > "sarif-results-filtered/$(basename "$file")"
+          done
+
+      - name: Upload filtered SARIF
+        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        with:
+          sarif_file: sarif-results-filtered
+          category: "/codeql-critical-security/macos"

@@ -3,11 +3,20 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 import { withProgress } from "./progress.js";
 
+type CallGatewayFromCliRuntimeExtra = {
+  clientName?: Parameters<typeof callGateway>[0]["clientName"];
+  mode?: Parameters<typeof callGateway>[0]["mode"];
+  deviceIdentity?: Parameters<typeof callGateway>[0]["deviceIdentity"];
+  expectFinal?: boolean;
+  progress?: boolean;
+  scopes?: Parameters<typeof callGateway>[0]["scopes"];
+};
+
 export async function callGatewayFromCliRuntime(
   method: string,
   opts: GatewayRpcOpts,
   params?: unknown,
-  extra?: { expectFinal?: boolean; progress?: boolean },
+  extra?: CallGatewayFromCliRuntimeExtra,
 ) {
   const showProgress = extra?.progress ?? opts.json !== true;
   return await withProgress(
@@ -22,10 +31,12 @@ export async function callGatewayFromCliRuntime(
         token: opts.token,
         method,
         params,
+        deviceIdentity: extra?.deviceIdentity,
         expectFinal: extra?.expectFinal ?? Boolean(opts.expectFinal),
+        scopes: extra?.scopes,
         timeoutMs: Number(opts.timeout ?? 10_000),
-        clientName: GATEWAY_CLIENT_NAMES.CLI,
-        mode: GATEWAY_CLIENT_MODES.CLI,
+        clientName: extra?.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
+        mode: extra?.mode ?? GATEWAY_CLIENT_MODES.CLI,
       }),
   );
 }

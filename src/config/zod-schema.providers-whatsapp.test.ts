@@ -72,6 +72,21 @@ describe("WhatsApp prompt config Zod validation", () => {
     }
   });
 
+  it("validates exposeErrorText at root and account scope", () => {
+    const result = WhatsAppConfigSchema.safeParse({
+      exposeErrorText: false,
+      accounts: {
+        work: { exposeErrorText: true },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.exposeErrorText).toBe(false);
+      expect(result.data.accounts?.work?.exposeErrorText).toBe(true);
+    }
+  });
+
   it("validates WhatsAppAccountSchema directly", () => {
     const accountConfig = {
       name: "Personal Account",

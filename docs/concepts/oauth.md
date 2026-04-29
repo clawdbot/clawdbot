@@ -48,6 +48,9 @@ To reduce that, OpenClaw treats `auth-profiles.json` as a **token sink**:
   `openai-codex:default` profile, but once OpenClaw has a local OAuth profile,
   the local refresh token is canonical; other integrations can remain
   externally managed and re-read their CLI auth store
+- status and startup paths that already know the configured provider set scope
+  external CLI discovery to that set, so an unrelated CLI login store is not
+  probed for a single-provider setup
 
 ## Storage (where tokens live)
 

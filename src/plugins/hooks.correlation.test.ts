@@ -86,4 +86,40 @@ describe("hook correlation fields", () => {
       vi.useRealTimers();
     }
   });
+
+  it("honors per-hook registration timeouts over the default void hook timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const handler = vi.fn(
+        async () =>
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 20);
+          }),
+      );
+      addTestHook({
+        registry,
+        pluginId: "plugin-a",
+        hookName: "agent_end",
+        handler: handler as PluginHookRegistration["handler"],
+        timeoutMs: 30,
+      });
+      const logger = {
+        error: vi.fn(),
+        warn: vi.fn(),
+      };
+
+      const runner = createHookRunner(registry, {
+        logger,
+        voidHookTimeoutMsByHook: { agent_end: 5 },
+      });
+      const run = runner.runAgentEnd({ messages: [], success: true }, TEST_PLUGIN_AGENT_CTX);
+
+      await vi.advanceTimersByTimeAsync(20);
+
+      await expect(run).resolves.toBeUndefined();
+      expect(logger.error).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -497,8 +497,10 @@ QMD model overrides stay on the QMD side, not OpenClaw config. If you need to ov
     | ------------------------- | --------- | ------- | ------------------------------------- |
     | `update.interval`         | `string`  | `5m`    | Refresh interval                      |
     | `update.debounceMs`       | `number`  | `15000` | Debounce file changes                 |
-    | `update.onBoot`           | `boolean` | `true`  | Refresh on startup                    |
-    | `update.waitForBootSync`  | `boolean` | `false` | Block startup until refresh completes |
+    | `update.onBoot`           | `boolean` | `true`  | Refresh when the long-lived QMD manager opens; also gates opt-in startup refresh |
+    | `update.startup`          | `string`  | `off`   | Optional gateway-start refresh: `off`, `idle`, or `immediate` |
+    | `update.startupDelayMs`   | `number`  | `120000` | Delay before `startup: "idle"` refresh runs |
+    | `update.waitForBootSync`  | `boolean` | `false` | Block manager opening until its initial refresh completes |
     | `update.embedInterval`    | `string`  | --      | Separate embed cadence                |
     | `update.commandTimeoutMs` | `number`  | --      | Timeout for QMD commands              |
     | `update.updateTimeoutMs`  | `number`  | --      | Timeout for QMD update operations     |
@@ -544,6 +546,8 @@ QMD model overrides stay on the QMD side, not OpenClaw config. If you need to ov
 
   </Accordion>
 </AccordionGroup>
+
+QMD boot refreshes use a one-shot subprocess path during gateway startup. The long-lived QMD manager still owns the regular file watcher and interval timers when memory search is opened for interactive use.
 
 ### Full QMD example
 

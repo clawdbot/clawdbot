@@ -54,7 +54,7 @@ describe("projects vitest config", () => {
     expect(createAgentsSupportVitestConfig().test.pool).toBe("threads");
     expect(createAgentsToolsVitestConfig().test.pool).toBe("threads");
     expect(createCommandsLightVitestConfig().test.pool).toBe("threads");
-    expect(createCommandsVitestConfig().test.pool).toBe("threads");
+    expect(createCommandsVitestConfig().test.pool).toBe("forks");
     expect(createPluginSdkLightVitestConfig().test.pool).toBe("threads");
     expect(createUnitFastVitestConfig().test.pool).toBe("threads");
     expect(createContractsVitestConfig(pluginContractPatterns).test.pool).toBe("forks");

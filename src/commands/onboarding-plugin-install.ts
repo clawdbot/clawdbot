@@ -286,10 +286,27 @@ function resolveInstallDefaultChoice(params: {
 async function promptInstallChoice(params: {
   entry: OnboardingPluginInstallEntry;
   localPath?: string | null;
+  bundledLocalPath?: string | null;
   defaultChoice: InstallChoice;
   prompter: WizardPrompter;
+  /** When true and only one real install source (npm *or* local, not both)
+   *  exists, skip the "Install <plugin>? / Skip" prompt and resolve directly
+   *  to that source. Useful when the caller already knows the user's intent
+   *  (e.g. they just picked the channel in a previous menu). */
+  autoConfirmSingleSource?: boolean;
 }): Promise<InstallChoice> {
-  const npmSpec = resolveNpmSpecForOnboarding(params.entry.install);
+  const rawNpmSpec = resolveNpmSpecForOnboarding(params.entry.install);
+  // When the plugin already ships bundled with the host (i.e. lives under
+  // `extensions/<id>` and is discovered via `resolveBundledPluginSources`),
+  // the bundled copy is the source of truth: it is version-locked to the
+  // current host build and is what `defaultChoice` will pick anyway (see
+  // `resolveInstallDefaultChoice`). Surfacing a "Download from npm (...)"
+  // option in that case is misleading — it suggests the plugin is missing
+  // and forces the user to reason about an npm catalog channel that, for
+  // bundled channels, only exists as a fallback for non-bundled builds.
+  // Hide the npm option entirely in this scenario so bundled channels like
+  // Tlon look identical to Twitch / Slack in the menu.
+  const npmSpec = params.bundledLocalPath ? null : rawNpmSpec;
   const safeLabel = sanitizeTerminalText(params.entry.label);
   const safeNpmSpec = npmSpec ? sanitizeTerminalText(npmSpec) : null;
   const safeLocalPath = params.localPath ? sanitizeTerminalText(params.localPath) : null;
@@ -307,6 +324,20 @@ async function promptInstallChoice(params: {
       ...(safeLocalPath ? { hint: safeLocalPath } : {}),
     });
   }
+
+  if (params.autoConfirmSingleSource) {
+    const realSources: InstallChoice[] = [];
+    if (safeNpmSpec) {
+      realSources.push("npm");
+    }
+    if (params.localPath) {
+      realSources.push("local");
+    }
+    if (realSources.length === 1) {
+      return realSources[0];
+    }
+  }
+
   options.push({ value: "skip", label: "Skip for now" });
 
   const initialValue =
@@ -366,6 +397,120 @@ async function applyPluginEnablement(params: {
   return enableResult;
 }
 
+type AnimatedProgress = {
+  setLabel: (label: string) => void;
+  stop: () => void;
+};
+
+const PROGRESS_BAR_WIDTH = 16;
+const PROGRESS_BAR_TICK_MS = 200;
+const PROGRESS_BAR_DURATION_MS = 10_000;
+const PROGRESS_BAR_MAX_PERCENT = 99;
+
+/**
+ * Maps a verbose install log line (e.g. `Downloading @scope/pkg@1.2.3 from
+ * ClawHub…`, `Extracting /tmp/…/wecom-…-2026.4.23.tgz…`, `Installing to
+ * /home/.../plugins/demo…`) to a short verb suitable for a progress label.
+ *
+ * Falls back to the raw message when no known verb prefix is recognised so
+ * that unexpected log lines still surface to the user instead of being
+ * swallowed.
+ */
+function shortenInstallLabel(message: string): string {
+  const trimmed = message.trim();
+  // Match a leading verb phrase. Order matters: more specific phrases first.
+  const patterns: Array<[RegExp, string]> = [
+    [/^Downloading\b/i, "Downloading"],
+    [/^Extracting\b/i, "Extracting"],
+    [/^Installing\s+to\b/i, "Installing"],
+    [/^Installing\b/i, "Installing"],
+    [/^Resolving\b/i, "Resolving"],
+    [/^Cloning\b/i, "Cloning"],
+    [/^Verifying\b/i, "Verifying"],
+    [/^Preparing\b/i, "Preparing"],
+    [/^Linking\b/i, "Linking"],
+    [/^Linked\b/i, "Linking"],
+    [/^Compatibility\b/i, "Resolving"],
+    [/^ClawHub\b/i, "Resolving"],
+  ];
+  for (const [pattern, label] of patterns) {
+    if (pattern.test(trimmed)) {
+      return label;
+    }
+  }
+  return trimmed;
+}
+
+/**
+ * Wraps a {@link WizardProgress} so the spinner message keeps a steadily
+ * growing ASCII bar attached to whatever the current install step label is.
+ *
+ * The plugin install pipeline only emits coarse `info` log lines, so without
+ * animation the spinner can sit on the same string for many seconds with no
+ * visible feedback. We render a deterministic left-to-right filling bar that
+ * advances linearly over {@link PROGRESS_BAR_DURATION_MS} (default 10s) up to
+ * {@link PROGRESS_BAR_MAX_PERCENT} (99%). If the install takes longer than the
+ * preset duration the bar simply stays pinned at 99% — never wrapping back to
+ * 0% — so the user always sees forward motion and a ceiling that signals
+ * "almost there, just waiting on the last bit".
+ *
+ * The bare label is forwarded to `progress.update` first on every label
+ * change so callers/tests that assert on the unadorned message continue to
+ * observe it before any decorated frame is overlaid.
+ */
+function createAnimatedInstallProgress(
+  progress: { update: (message: string) => void },
+  options: { totalMs?: number } = {},
+): AnimatedProgress {
+  const totalMs = options.totalMs ?? PROGRESS_BAR_DURATION_MS;
+  let currentLabel = "";
+  const startedAt = Date.now();
+
+  const computePercent = (): number => {
+    const elapsed = Date.now() - startedAt;
+    const raw = Math.floor((elapsed / totalMs) * 100);
+    return Math.max(0, Math.min(PROGRESS_BAR_MAX_PERCENT, raw));
+  };
+
+  const renderBar = (): string => {
+    const percent = computePercent();
+    const filled = Math.round((percent / 100) * PROGRESS_BAR_WIDTH);
+    const bar =
+      "█".repeat(filled) + "░".repeat(Math.max(0, PROGRESS_BAR_WIDTH - filled));
+    return `[${bar}] ${percent}%`;
+  };
+
+  const decorate = (label: string): string => {
+    if (!label) {
+      return renderBar();
+    }
+    return `${label}  ${renderBar()}`;
+  };
+
+  const timer = setInterval(() => {
+    if (currentLabel) {
+      progress.update(decorate(currentLabel));
+    }
+  }, PROGRESS_BAR_TICK_MS);
+  // Animation is decorative: never let it hold the event loop open if a caller
+  // forgets to stop us (e.g. an unexpected throw bypasses the `finally`).
+  if (typeof timer.unref === "function") {
+    timer.unref();
+  }
+
+  return {
+    setLabel: (label: string) => {
+      currentLabel = label;
+      // Always emit the bare label first so existing log/test expectations
+      // continue to observe the unadorned message before any animation frame.
+      progress.update(label);
+    },
+    stop: () => {
+      clearInterval(timer);
+    },
+  };
+}
+
 async function installPluginFromNpmSpecWithProgress(params: {
   entry: OnboardingPluginInstallEntry;
   npmSpec: string;
@@ -380,12 +525,14 @@ async function installPluginFromNpmSpecWithProgress(params: {
 > {
   const safeLabel = sanitizeTerminalText(params.entry.label);
   const progress = params.prompter.progress(`Installing ${safeLabel} plugin…`);
+  const animated = createAnimatedInstallProgress(progress);
+  animated.setLabel("Preparing");
   const updateProgress = (message: string) => {
-    const next = sanitizeTerminalText(message).trim();
-    if (!next) {
+    const sanitized = sanitizeTerminalText(message).trim();
+    if (!sanitized) {
       return;
     }
-    progress.update(next);
+    animated.setLabel(shortenInstallLabel(sanitized));
   };
 
   try {
@@ -405,6 +552,7 @@ async function installPluginFromNpmSpecWithProgress(params: {
       }),
       ONBOARDING_PLUGIN_INSTALL_WATCHDOG_TIMEOUT_MS,
     );
+    animated.stop();
     if (result.ok) {
       progress.stop(`Installed ${safeLabel} plugin`);
     } else {
@@ -415,6 +563,7 @@ async function installPluginFromNpmSpecWithProgress(params: {
       result,
     };
   } catch (error) {
+    animated.stop();
     if (isTimeoutError(error)) {
       progress.stop(`Install timed out: ${safeLabel}`);
       return { status: "timed_out" };
@@ -437,6 +586,7 @@ export async function ensureOnboardingPluginInstalled(params: {
   runtime: RuntimeEnv;
   workspaceDir?: string;
   promptInstall?: boolean;
+  autoConfirmSingleSource?: boolean;
 }): Promise<OnboardingPluginInstallResult> {
   const { entry, prompter, runtime, workspaceDir } = params;
   let next = params.cfg;
@@ -463,8 +613,10 @@ export async function ensureOnboardingPluginInstalled(params: {
       : await promptInstallChoice({
           entry,
           localPath,
+          bundledLocalPath,
           defaultChoice,
           prompter,
+          autoConfirmSingleSource: params.autoConfirmSingleSource,
         });
 
   if (choice === "skip") {

@@ -351,7 +351,7 @@ export function resolveMemoryDreamingPluginConfig(
   return asNullableRecord(memoryPlugin?.config) ?? undefined;
 }
 
-// Keep the legacy helper name exported until downstream memory plugins migrate.
+/** @deprecated Use resolveMemoryDreamingPluginConfig. */
 export const resolveMemoryCorePluginConfig = resolveMemoryDreamingPluginConfig;
 
 export function resolveMemoryDreamingConfig(params: {

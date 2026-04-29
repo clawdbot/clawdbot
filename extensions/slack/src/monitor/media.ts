@@ -146,6 +146,92 @@ const SLACK_MEDIA_SSRF_POLICY = {
   hostnameAllowlist: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
   allowRfc2544BenchmarkRange: true,
 };
+export const SLACK_MEDIA_READ_IDLE_TIMEOUT_MS = 60_000;
+export const SLACK_MEDIA_TOTAL_TIMEOUT_MS = 120_000;
+type SlackFetchRemoteMediaOptions = Parameters<typeof fetchRemoteMedia>[0];
+
+function mergeAbortSignals(signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
+  const activeSignals = signals.filter((signal): signal is AbortSignal => Boolean(signal));
+  if (activeSignals.length === 0) {
+    return undefined;
+  }
+  if (activeSignals.length === 1) {
+    return activeSignals[0];
+  }
+  if (typeof AbortSignal.any === "function") {
+    return AbortSignal.any(activeSignals);
+  }
+  const controller = new AbortController();
+  for (const signal of activeSignals) {
+    if (signal.aborted) {
+      controller.abort();
+      return controller.signal;
+    }
+  }
+  const abort = () => {
+    controller.abort();
+    for (const signal of activeSignals) {
+      signal.removeEventListener("abort", abort);
+    }
+  };
+  for (const signal of activeSignals) {
+    signal.addEventListener("abort", abort, { once: true });
+  }
+  return controller.signal;
+}
+
+async function fetchSlackMedia(params: {
+  options: SlackFetchRemoteMediaOptions;
+  readIdleTimeoutMs?: number;
+  totalTimeoutMs?: number;
+  abortSignal?: AbortSignal;
+}): ReturnType<typeof fetchRemoteMedia> {
+  const timeoutAbortController = params.totalTimeoutMs ? new AbortController() : undefined;
+  const signal = mergeAbortSignals([
+    params.abortSignal,
+    params.options.requestInit?.signal ?? undefined,
+    timeoutAbortController?.signal,
+  ]);
+  let timedOut = false;
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+  const fetchPromise = fetchRemoteMedia({
+    ...params.options,
+    readIdleTimeoutMs: params.readIdleTimeoutMs ?? SLACK_MEDIA_READ_IDLE_TIMEOUT_MS,
+    ...(signal
+      ? {
+          requestInit: {
+            ...params.options.requestInit,
+            signal,
+          },
+        }
+      : {}),
+  }).catch((error) => {
+    if (timedOut) {
+      return new Promise<never>(() => {});
+    }
+    throw error;
+  });
+
+  try {
+    if (!params.totalTimeoutMs) {
+      return await fetchPromise;
+    }
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        timeoutAbortController?.abort();
+        reject(new Error(`slack media download timed out after ${params.totalTimeoutMs}ms`));
+      }, params.totalTimeoutMs);
+      timeoutHandle.unref?.();
+    });
+    return await Promise.race([fetchPromise, timeoutPromise]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+}
 
 /**
  * Slack voice messages (audio clips, huddle recordings) carry a `subtype` of
@@ -229,6 +315,9 @@ export async function resolveSlackMedia(params: {
   files?: SlackFile[];
   token: string;
   maxBytes: number;
+  readIdleTimeoutMs?: number;
+  totalTimeoutMs?: number;
+  abortSignal?: AbortSignal;
 }): Promise<SlackMediaResult[] | null> {
   const files = params.files ?? [];
   const limitedFiles =
@@ -245,13 +334,18 @@ export async function resolveSlackMedia(params: {
       try {
         const { url: slackUrl, requestInit } = createSlackMediaRequest(url, params.token);
         const fetchImpl = createSlackMediaFetch();
-        const fetched = await fetchRemoteMedia({
-          url: slackUrl,
-          fetchImpl,
-          requestInit,
-          filePathHint: file.name,
-          maxBytes: params.maxBytes,
-          ssrfPolicy: SLACK_MEDIA_SSRF_POLICY,
+        const fetched = await fetchSlackMedia({
+          options: {
+            url: slackUrl,
+            fetchImpl,
+            requestInit,
+            filePathHint: file.name,
+            maxBytes: params.maxBytes,
+            ssrfPolicy: SLACK_MEDIA_SSRF_POLICY,
+          },
+          readIdleTimeoutMs: params.readIdleTimeoutMs,
+          totalTimeoutMs: params.totalTimeoutMs ?? SLACK_MEDIA_TOTAL_TIMEOUT_MS,
+          abortSignal: params.abortSignal,
         });
         if (fetched.buffer.byteLength > params.maxBytes) {
           return null;
@@ -299,6 +393,9 @@ export async function resolveSlackAttachmentContent(params: {
   attachments?: SlackAttachment[];
   token: string;
   maxBytes: number;
+  readIdleTimeoutMs?: number;
+  totalTimeoutMs?: number;
+  abortSignal?: AbortSignal;
 }): Promise<{ text: string; media: SlackMediaResult[] } | null> {
   const attachments = params.attachments;
   if (!attachments || attachments.length === 0) {
@@ -328,12 +425,17 @@ export async function resolveSlackAttachmentContent(params: {
       try {
         const { url: slackUrl, requestInit } = createSlackMediaRequest(imageUrl, params.token);
         const fetchImpl = createSlackMediaFetch();
-        const fetched = await fetchRemoteMedia({
-          url: slackUrl,
-          fetchImpl,
-          requestInit,
-          maxBytes: params.maxBytes,
-          ssrfPolicy: SLACK_MEDIA_SSRF_POLICY,
+        const fetched = await fetchSlackMedia({
+          options: {
+            url: slackUrl,
+            fetchImpl,
+            requestInit,
+            maxBytes: params.maxBytes,
+            ssrfPolicy: SLACK_MEDIA_SSRF_POLICY,
+          },
+          readIdleTimeoutMs: params.readIdleTimeoutMs,
+          totalTimeoutMs: params.totalTimeoutMs ?? SLACK_MEDIA_TOTAL_TIMEOUT_MS,
+          abortSignal: params.abortSignal,
         });
         if (fetched.buffer.byteLength <= params.maxBytes) {
           const saved = await saveMediaBuffer(
@@ -359,6 +461,9 @@ export async function resolveSlackAttachmentContent(params: {
         files: att.files,
         token: params.token,
         maxBytes: params.maxBytes,
+        readIdleTimeoutMs: params.readIdleTimeoutMs,
+        totalTimeoutMs: params.totalTimeoutMs,
+        abortSignal: params.abortSignal,
       });
       if (fileMedia) {
         allMedia.push(...fileMedia);

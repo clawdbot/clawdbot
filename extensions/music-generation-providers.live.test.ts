@@ -14,8 +14,14 @@ import {
   encodePngRgba,
   fillPixel,
   getShellEnvAppliedKeys,
+  isAuthErrorMessage,
+  isBillingErrorMessage,
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
+  isModelNotFoundErrorMessage,
+  isOverloadedErrorMessage,
+  isServerErrorMessage,
+  isTimeoutErrorMessage,
   isTruthyEnvValue,
   parseCsvFilter,
   parseProviderModelMap,
@@ -121,12 +127,30 @@ function resolveLiveLyrics(providerId: string): string | undefined {
   ].join("\n");
 }
 
-function isSkippableLiveMusicProviderError(providerId: string, error: unknown): boolean {
+function resolveLiveMusicSkipReason(providerId: string, error: unknown): string | null {
   const message = error instanceof Error ? error.message : String(error);
-  return (
+  if (
     providerId === "google" &&
     message.toLowerCase().includes("music generation response missing audio data")
-  );
+  ) {
+    return "transient no-audio response";
+  }
+  if (isAuthErrorMessage(message)) {
+    return "auth drift";
+  }
+  if (isModelNotFoundErrorMessage(message)) {
+    return "model drift";
+  }
+  if (isBillingErrorMessage(message)) {
+    return "billing drift";
+  }
+  if (isTimeoutErrorMessage(message) || /operation was aborted/i.test(message)) {
+    return "provider timeout";
+  }
+  if (isOverloadedErrorMessage(message) || isServerErrorMessage(message)) {
+    return "provider outage";
+  }
+  return null;
 }
 
 describeLive("music generation provider live", () => {
@@ -204,8 +228,9 @@ describeLive("music generation provider live", () => {
           expect(result.tracks[0]?.buffer.byteLength).toBeGreaterThan(1024);
           attempted.push(`${testCase.providerId}:generate:${providerModel} (${authLabel})`);
         } catch (error) {
-          if (isSkippableLiveMusicProviderError(testCase.providerId, error)) {
-            skipped.push(`${testCase.providerId}:generate transient no-audio response`);
+          const skipReason = resolveLiveMusicSkipReason(testCase.providerId, error);
+          if (skipReason) {
+            skipped.push(`${testCase.providerId}:generate ${skipReason}`);
             continue;
           }
           failures.push(
@@ -242,8 +267,9 @@ describeLive("music generation provider live", () => {
           expect(result.tracks[0]?.buffer.byteLength).toBeGreaterThan(1024);
           attempted.push(`${testCase.providerId}:edit:${providerModel} (${authLabel})`);
         } catch (error) {
-          if (isSkippableLiveMusicProviderError(testCase.providerId, error)) {
-            skipped.push(`${testCase.providerId}:edit transient no-audio response`);
+          const skipReason = resolveLiveMusicSkipReason(testCase.providerId, error);
+          if (skipReason) {
+            skipped.push(`${testCase.providerId}:edit ${skipReason}`);
             continue;
           }
           failures.push(

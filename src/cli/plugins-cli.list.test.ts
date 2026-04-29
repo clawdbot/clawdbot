@@ -4,10 +4,12 @@ import {
   buildPluginDiagnosticsReport,
   buildPluginInspectReport,
   buildPluginRegistrySnapshotReport,
+  buildPluginSnapshotReport,
   inspectPluginRegistry,
   resetPluginsCliTestState,
   refreshPluginRegistry,
   runPluginsCommand,
+  runtimeErrors,
   runtimeLogs,
 } from "./plugins-cli-test-helpers.js";
 
@@ -119,6 +121,10 @@ describe("plugins cli list", () => {
   });
 
   it("shows conversation-access hook policy in inspect output", async () => {
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [createPluginRecord({ id: "openclaw-mem0", name: "Mem0" })],
+      diagnostics: [],
+    });
     buildPluginInspectReport.mockReturnValue({
       workspaceDir: "/workspace",
       plugin: createPluginRecord({ id: "openclaw-mem0", name: "Mem0" }),
@@ -150,7 +156,26 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "inspect", "openclaw-mem0"]);
 
+    expect(buildPluginDiagnosticsReport).toHaveBeenCalledWith({
+      config: {},
+      onlyPluginIds: ["openclaw-mem0"],
+    });
     expect(runtimeLogs.join("\n")).toContain("Policy");
     expect(runtimeLogs.join("\n")).toContain("allowConversationAccess: true");
+  });
+
+  it("does not runtime-load plugins when inspect target is missing", async () => {
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+
+    await expect(runPluginsCommand(["plugins", "inspect", "missing-plugin"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(buildPluginSnapshotReport).toHaveBeenCalledWith({ config: {} });
+    expect(buildPluginDiagnosticsReport).not.toHaveBeenCalled();
+    expect(runtimeErrors.at(-1)).toContain("Plugin not found: missing-plugin");
   });
 });

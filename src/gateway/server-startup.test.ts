@@ -15,6 +15,11 @@ vi.mock("../agents/agent-paths.js", () => ({
   resolveOpenClawAgentDir: () => "/tmp/agent",
 }));
 
+vi.mock("../agents/agent-scope.js", () => ({
+  resolveAgentWorkspaceDir: () => "/tmp/workspace",
+  resolveDefaultAgentId: () => "default",
+}));
+
 vi.mock("../agents/models-config.js", () => ({
   ensureOpenClawModelsJson: (config: unknown, agentDir: unknown, options?: unknown) =>
     ensureOpenClawModelsJsonMock(config, agentDir, options),
@@ -32,11 +37,12 @@ vi.mock("../agents/pi-embedded-runner/runtime.js", () => ({
 }));
 
 let prewarmConfiguredPrimaryModel: typeof import("./server-startup.js").__testing.prewarmConfiguredPrimaryModel;
+let shouldSkipStartupModelPrewarm: typeof import("./server-startup.js").__testing.shouldSkipStartupModelPrewarm;
 
 describe("gateway startup primary model warmup", () => {
   beforeAll(async () => {
     ({
-      __testing: { prewarmConfiguredPrimaryModel },
+      __testing: { prewarmConfiguredPrimaryModel, shouldSkipStartupModelPrewarm },
     } = await import("./server-startup.js"));
   });
 
@@ -67,8 +73,10 @@ describe("gateway startup primary model warmup", () => {
       cfg,
       "/tmp/agent",
       expect.objectContaining({
+        workspaceDir: "/tmp/workspace",
         providerDiscoveryProviderIds: ["openai-codex"],
         providerDiscoveryTimeoutMs: 5000,
+        providerDiscoveryEntriesOnly: true,
       }),
     );
     expect(piModelModuleLoadedMock).not.toHaveBeenCalled();
@@ -82,6 +90,20 @@ describe("gateway startup primary model warmup", () => {
 
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
     expect(piModelModuleLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("honors the startup model prewarm skip env", () => {
+    expect(shouldSkipStartupModelPrewarm({})).toBe(false);
+    expect(
+      shouldSkipStartupModelPrewarm({
+        OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipStartupModelPrewarm({
+        OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "true",
+      }),
+    ).toBe(true);
   });
 
   it("skips static warmup for configured CLI backends", async () => {
@@ -148,8 +170,10 @@ describe("gateway startup primary model warmup", () => {
       cfg,
       "/tmp/agent",
       expect.objectContaining({
+        workspaceDir: "/tmp/workspace",
         providerDiscoveryProviderIds: ["openai-codex"],
         providerDiscoveryTimeoutMs: 5000,
+        providerDiscoveryEntriesOnly: true,
       }),
     );
     expect(piModelModuleLoadedMock).not.toHaveBeenCalled();

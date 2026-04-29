@@ -12,6 +12,8 @@ RAW_SANDBOX_SETTING="${OPENCLAW_SANDBOX:-}"
 SANDBOX_ENABLED=""
 DOCKER_SOCKET_PATH="${OPENCLAW_DOCKER_SOCKET:-}"
 TIMEZONE="${OPENCLAW_TZ:-}"
+RAW_SKIP_ONBOARDING="${OPENCLAW_SKIP_ONBOARDING:-}"
+SKIP_ONBOARDING=""
 
 fail() {
   echo "ERROR: $*" >&2
@@ -232,6 +234,9 @@ fi
 if is_truthy_value "$RAW_SANDBOX_SETTING"; then
   SANDBOX_ENABLED="1"
 fi
+if is_truthy_value "$RAW_SKIP_ONBOARDING"; then
+  SKIP_ONBOARDING="1"
+fi
 
 OPENCLAW_CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
 OPENCLAW_WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
@@ -295,6 +300,7 @@ export OTEL_EXPORTER_OTLP_PROTOCOL="${OTEL_EXPORTER_OTLP_PROTOCOL:-}"
 export OTEL_SERVICE_NAME="${OTEL_SERVICE_NAME:-}"
 export OTEL_SEMCONV_STABILITY_OPT_IN="${OTEL_SEMCONV_STABILITY_OPT_IN:-}"
 export OPENCLAW_OTEL_PRELOADED="${OPENCLAW_OTEL_PRELOADED:-}"
+export OPENCLAW_SKIP_ONBOARDING="$SKIP_ONBOARDING"
 
 # Detect Docker socket GID for sandbox group_add.
 DOCKER_GID=""
@@ -489,7 +495,8 @@ upsert_env "$ENV_FILE" \
   OTEL_EXPORTER_OTLP_PROTOCOL \
   OTEL_SERVICE_NAME \
   OTEL_SEMCONV_STABILITY_OPT_IN \
-  OPENCLAW_OTEL_PRELOADED
+  OPENCLAW_OTEL_PRELOADED \
+  OPENCLAW_SKIP_ONBOARDING
 
 if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   echo "==> Building Docker image: $IMAGE_NAME"
@@ -525,22 +532,26 @@ run_prestart_gateway --user root --entrypoint sh openclaw-gateway -c \
    [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R node:node /home/node/.openclaw/workspace/.openclaw || true'
 
 echo ""
-echo "==> Onboarding (interactive)"
-echo "Docker setup pins Gateway mode to local."
-echo "Gateway runtime bind comes from OPENCLAW_GATEWAY_BIND (default: lan)."
-echo "Current runtime bind: $OPENCLAW_GATEWAY_BIND"
-if is_truthy_value "$OPENCLAW_DISABLE_BONJOUR"; then
-  echo "Bonjour/mDNS advertising: force disabled (OPENCLAW_DISABLE_BONJOUR=$OPENCLAW_DISABLE_BONJOUR)."
-elif [[ -z "$OPENCLAW_DISABLE_BONJOUR" ]]; then
-  echo "Bonjour/mDNS advertising: auto (disabled inside the Gateway container unless explicitly enabled)."
+if [[ -n "$SKIP_ONBOARDING" ]]; then
+  echo "==> Skipping onboarding (OPENCLAW_SKIP_ONBOARDING is set)"
 else
-  echo "Bonjour/mDNS advertising: explicitly enabled (OPENCLAW_DISABLE_BONJOUR=$OPENCLAW_DISABLE_BONJOUR)."
+  echo "==> Onboarding (interactive)"
+  echo "Docker setup pins Gateway mode to local."
+  echo "Gateway runtime bind comes from OPENCLAW_GATEWAY_BIND (default: lan)."
+  echo "Current runtime bind: $OPENCLAW_GATEWAY_BIND"
+  if is_truthy_value "$OPENCLAW_DISABLE_BONJOUR"; then
+    echo "Bonjour/mDNS advertising: force disabled (OPENCLAW_DISABLE_BONJOUR=$OPENCLAW_DISABLE_BONJOUR)."
+  elif [[ -z "$OPENCLAW_DISABLE_BONJOUR" ]]; then
+    echo "Bonjour/mDNS advertising: auto (disabled inside the Gateway container unless explicitly enabled)."
+  else
+    echo "Bonjour/mDNS advertising: explicitly enabled (OPENCLAW_DISABLE_BONJOUR=$OPENCLAW_DISABLE_BONJOUR)."
+  fi
+  echo "Gateway token: $OPENCLAW_GATEWAY_TOKEN"
+  echo "Tailscale exposure: Off (use host-level tailnet/Tailscale setup separately)."
+  echo "Install Gateway daemon: No (managed by Docker Compose)"
+  echo ""
+  run_prestart_cli onboard --mode local --no-install-daemon
 fi
-echo "Gateway token: $OPENCLAW_GATEWAY_TOKEN"
-echo "Tailscale exposure: Off (use host-level tailnet/Tailscale setup separately)."
-echo "Install Gateway daemon: No (managed by Docker Compose)"
-echo ""
-run_prestart_cli onboard --mode local --no-install-daemon
 
 echo ""
 echo "==> Docker gateway defaults"

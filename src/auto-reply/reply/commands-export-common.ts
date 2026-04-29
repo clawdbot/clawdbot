@@ -15,6 +15,8 @@ export interface ExportCommandSessionTarget {
   sessionFile: string;
 }
 
+export const MAX_EXPORT_COMMAND_OUTPUT_PATH_CHARS = 512;
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -22,7 +24,7 @@ function escapeRegExp(value: string): string {
 export function parseExportCommandOutputPath(
   commandBodyNormalized: string,
   aliases: readonly string[],
-): { outputPath?: string } {
+): { outputPath?: string; error?: string } {
   const normalized = commandBodyNormalized.trim();
   if (aliases.some((alias) => normalized === `/${alias}`)) {
     return {};
@@ -30,6 +32,11 @@ export function parseExportCommandOutputPath(
   const aliasPattern = aliases.map(escapeRegExp).join("|");
   const args = normalized.replace(new RegExp(`^/(${aliasPattern})\\s*`), "").trim();
   const outputPath = args.split(/\s+/).find((part) => !part.startsWith("-"));
+  if (outputPath && outputPath.length > MAX_EXPORT_COMMAND_OUTPUT_PATH_CHARS) {
+    return {
+      error: `❌ Output path is too long. Keep it at ${MAX_EXPORT_COMMAND_OUTPUT_PATH_CHARS} characters or less.`,
+    };
+  }
   return { outputPath };
 }
 

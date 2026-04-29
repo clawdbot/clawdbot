@@ -9,10 +9,8 @@ import {
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-registry.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { tasksAuditJsonCommand, tasksListJsonCommand } from "./tasks-json.js";
-
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
 function createRuntime(): RuntimeEnv {
   return {
@@ -27,19 +25,21 @@ function readJsonLog(runtime: RuntimeEnv): unknown {
 }
 
 async function withTaskJsonStateDir(run: () => Promise<void>): Promise<void> {
-  await withTempDir({ prefix: "openclaw-tasks-json-command-" }, async (root) => {
-    process.env.OPENCLAW_STATE_DIR = root;
-    resetTaskRegistryDeliveryRuntimeForTests();
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
-    try {
-      await run();
-    } finally {
+  await withOpenClawTestState(
+    { layout: "state-only", prefix: "openclaw-tasks-json-command-" },
+    async () => {
       resetTaskRegistryDeliveryRuntimeForTests();
       resetTaskRegistryForTests({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
-    }
-  });
+      try {
+        await run();
+      } finally {
+        resetTaskRegistryDeliveryRuntimeForTests();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+      }
+    },
+  );
 }
 
 describe("tasks JSON commands", () => {
@@ -49,11 +49,6 @@ describe("tasks JSON commands", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    if (ORIGINAL_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-    }
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });

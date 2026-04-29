@@ -79,7 +79,7 @@ export function loadInstalledPluginIndex(
 export function refreshInstalledPluginIndex(
   params: RefreshInstalledPluginIndexParams,
 ): InstalledPluginIndex {
-  return buildInstalledPluginIndex({ ...params, cache: false, refreshReason: params.reason });
+  return buildInstalledPluginIndex({ ...params, refreshReason: params.reason });
 }
 
 export function listInstalledPluginRecords(

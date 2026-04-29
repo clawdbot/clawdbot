@@ -91,6 +91,7 @@ export type RegisterSubagentRunParams = {
   cleanup: "delete" | "keep";
   label?: string;
   model?: string;
+  agentDir?: string;
   workspaceDir?: string;
   runTimeoutSeconds?: number;
   expectsCompletionMessage?: boolean;
@@ -124,6 +125,7 @@ export function createSubagentRunManager(params: {
   notifyContextEngineSubagentEnded(args: {
     childSessionKey: string;
     reason: "completed" | "deleted" | "released";
+    agentDir?: string;
     workspaceDir?: string;
   }): Promise<void>;
   completeCleanupBookkeeping(args: {
@@ -402,6 +404,7 @@ export function createSubagentRunManager(params: {
       spawnMode,
       label: registerParams.label,
       model: registerParams.model,
+      agentDir: registerParams.agentDir,
       workspaceDir: registerParams.workspaceDir,
       runTimeoutSeconds,
       createdAt: now,
@@ -458,6 +461,7 @@ export function createSubagentRunManager(params: {
       void params.notifyContextEngineSubagentEnded({
         childSessionKey: entry.childSessionKey,
         reason: "released",
+        agentDir: entry.agentDir,
         workspaceDir: entry.workspaceDir,
       });
     }

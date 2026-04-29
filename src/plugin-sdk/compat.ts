@@ -1,5 +1,8 @@
-// Legacy compat surface for external plugins that still depend on older
-// broad plugin-sdk imports. Keep this file intentionally small.
+/**
+ * @deprecated Legacy compat surface for external plugins that still depend on
+ * older broad plugin-sdk imports. Use focused openclaw/plugin-sdk subpaths
+ * instead.
+ */
 
 const shouldWarnCompatImport =
   process.env.VITEST !== "true" &&
@@ -61,6 +64,7 @@ export {
 export { formatAllowFromLowercase, formatNormalizedAllowFromEntries } from "./allow-from.js";
 export * from "./channel-config-schema.js";
 export * from "./channel-policy.js";
+export { collectOpenGroupPolicyConfiguredRouteWarnings } from "./channel-policy.js";
 export * from "./reply-history.js";
 export * from "./directory-runtime.js";
 export { mapAllowlistResolutionInputs } from "./allow-from.js";

@@ -47,6 +47,21 @@ describe("resolveMatrixMonitorAccessState", () => {
     ]);
   });
 
+  it("does not let pairing-store entries authorize open DMs without wildcard", () => {
+    const state = resolveMatrixMonitorAccessState({
+      allowFrom: [],
+      storeAllowFrom: ["@alice:example.org"],
+      dmPolicy: "open",
+      groupAllowFrom: [],
+      roomUsers: [],
+      senderId: "@alice:example.org",
+      isRoom: false,
+    });
+
+    expect(state.effectiveAllowFrom).toEqual([]);
+    expect(state.directAllowMatch.allowed).toBe(false);
+  });
+
   it("does not let configured DM allowFrom authorize room control commands", () => {
     const state = resolveMatrixMonitorAccessState({
       allowFrom: ["@owner:example.org"],

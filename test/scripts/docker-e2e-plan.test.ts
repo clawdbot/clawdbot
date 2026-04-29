@@ -154,12 +154,36 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "doctor-switch",
       "update-channel-switch",
     ]);
+    expect(packageUpdateCore.lanes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "npm-onboard-channel-agent",
+          stateScenario: "empty",
+        }),
+        expect.objectContaining({
+          name: "doctor-switch",
+          stateScenario: "empty",
+        }),
+        expect.objectContaining({
+          name: "update-channel-switch",
+          stateScenario: "update-stable",
+        }),
+      ]),
+    );
     expect(pluginsRuntimePlugins.lanes.map((lane) => lane.name)).toEqual(["plugins"]);
     expect(pluginsRuntimeServices.lanes.map((lane) => lane.name)).toEqual([
       "cron-mcp-cleanup",
       "openai-web-search-minimal",
       "openwebui",
     ]);
+    expect(pluginsRuntimeServices.lanes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "cron-mcp-cleanup",
+          stateScenario: "empty",
+        }),
+      ]),
+    );
     expect(pluginsRuntimePlugins.lanes.map((lane) => lane.name)).not.toContain(
       "bundled-plugin-install-uninstall-0",
     );
@@ -187,6 +211,10 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "bundled-channel-feishu",
       "bundled-channel-memory-lancedb",
     ]);
+    expect(bundledChannelsCore.lanes[0]).toMatchObject({
+      name: "plugin-update",
+      stateScenario: "empty",
+    });
     expect(bundledChannelsUpdateA.lanes.map((lane) => lane.name)).toEqual([
       "bundled-channel-update-telegram",
       "bundled-channel-update-memory-lancedb",
@@ -297,6 +325,111 @@ describe("scripts/lib/docker-e2e-plan", () => {
       functionalImage: true,
       package: true,
     });
+  });
+
+  it("surfaces Docker lane test-state scenarios in plan JSON", () => {
+    const plan = planFor({
+      selectedLaneNames: [
+        "onboard",
+        "agents-delete-shared-workspace",
+        "doctor-switch",
+        "openai-image-auth",
+        "openai-web-search-minimal",
+        "mcp-channels",
+        "cron-mcp-cleanup",
+        "pi-bundle-mcp-tools",
+        "crestodian-first-run",
+        "crestodian-planner",
+        "crestodian-rescue",
+        "config-reload",
+        "plugin-update",
+        "plugins",
+        "kitchen-sink-plugin",
+        "bundled-channel-deps-compat",
+        "bundled-channel-setup-entry",
+        "bundled-plugin-install-uninstall-0",
+        "update-channel-switch",
+      ],
+    });
+
+    expect(plan.lanes).toEqual([
+      expect.objectContaining({
+        name: "onboard",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "agents-delete-shared-workspace",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "doctor-switch",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "openai-image-auth",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "openai-web-search-minimal",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "mcp-channels",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "cron-mcp-cleanup",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "pi-bundle-mcp-tools",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "crestodian-first-run",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "crestodian-planner",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "crestodian-rescue",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "config-reload",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "plugin-update",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "plugins",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "kitchen-sink-plugin",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "bundled-channel-deps-compat",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "bundled-channel-setup-entry",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "bundled-plugin-install-uninstall-0",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "update-channel-switch",
+        stateScenario: "update-stable",
+      }),
+    ]);
   });
 
   it("maps the legacy bundled channel deps lane to the split compat lane", () => {

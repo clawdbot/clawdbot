@@ -317,7 +317,12 @@ describe("synology-chat security helpers", () => {
     expect(checkUserAllowed("user1", ["user1", "user2"])).toBe(true);
     expect(checkUserAllowed("user3", ["user1", "user2"])).toBe(false);
 
-    expect(authorizeUserForDm("user1", "open", [])).toEqual({ allowed: true });
+    expect(authorizeUserForDm("user1", "open", [])).toEqual({
+      allowed: false,
+      reason: "not-allowlisted",
+    });
+    expect(authorizeUserForDm("user1", "open", ["*"])).toEqual({ allowed: true });
+    expect(authorizeUserForDm("user1", "open", ["user1"])).toEqual({ allowed: true });
     expect(authorizeUserForDm("user1", "disabled", ["user1"])).toEqual({
       allowed: false,
       reason: "disabled",

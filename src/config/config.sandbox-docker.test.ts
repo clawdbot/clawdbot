@@ -62,6 +62,39 @@ describe("sandbox docker config", () => {
     }
   });
 
+  it("accepts non-empty Docker GPU passthrough config", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              gpus: "all",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.agents?.defaults?.sandbox?.docker?.gpus).toBe("all");
+    }
+  });
+
+  it("rejects empty Docker GPU passthrough config", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              gpus: "",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+
   it("rejects network host mode via Zod schema validation", () => {
     const res = validateConfigObject({
       agents: {

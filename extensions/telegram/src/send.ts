@@ -36,6 +36,7 @@ import {
   loadWebMedia,
   type MediaKind,
   normalizePollInput,
+  probeVideoDimensions,
   type OpenClawConfig,
   type PollInput,
   requireRuntimeConfig,
@@ -821,10 +822,13 @@ export async function sendMessageTelegram(
       ...(hasThreadParams ? threadParams : {}),
       ...(!needsSeparateText && replyMarkup ? { reply_markup: replyMarkup } : {}),
     };
+    const videoDimensions =
+      kind === "video" && !isVideoNote ? await probeVideoDimensions(media.buffer) : undefined;
     const mediaParams = {
       ...(htmlCaption ? { caption: htmlCaption, parse_mode: "HTML" as const } : {}),
       ...baseMediaParams,
       ...(opts.silent === true ? { disable_notification: true } : {}),
+      ...(videoDimensions ? { width: videoDimensions.width, height: videoDimensions.height } : {}),
     };
     const sendMedia = async (
       label: string,

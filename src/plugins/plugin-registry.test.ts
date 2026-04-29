@@ -47,8 +47,6 @@ function makeTempDir() {
 function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-    OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-    OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
     OPENCLAW_VERSION: "2026.4.25",
     VITEST: "true",
     ...overrides,
@@ -544,7 +542,7 @@ describe("plugin registry facade", () => {
     ]);
   });
 
-  it("caches config-scoped derived registries when the persisted registry is missing", () => {
+  it("derives fresh config-scoped registries when the persisted registry is missing", () => {
     const stateDir = makeTempDir();
     const workspaceDir = makeTempDir();
     const bundledRoot = makeTempDir();
@@ -576,9 +574,10 @@ describe("plugin registry facade", () => {
     ).length;
 
     expect(first.source).toBe("derived");
-    expect(second).toBe(first);
+    expect(second.source).toBe("derived");
+    expect(second).not.toBe(first);
     expect(manifestReadsAfterFirst).toBeGreaterThan(0);
-    expect(manifestReadsAfterSecond).toBe(manifestReadsAfterFirst);
+    expect(manifestReadsAfterSecond).toBeGreaterThan(manifestReadsAfterFirst);
   });
 
   it("falls back to the derived registry when persisted reads are disabled", async () => {

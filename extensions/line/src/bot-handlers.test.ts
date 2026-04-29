@@ -292,6 +292,7 @@ function createLineWebhookTestContext(params: {
   const lineConfig = {
     ...(params.groupPolicy ? { groupPolicy: params.groupPolicy } : {}),
     ...(params.dmPolicy ? { dmPolicy: params.dmPolicy } : {}),
+    ...(params.dmPolicy === "open" ? { allowFrom: ["*"] } : {}),
   };
   return {
     cfg: { channels: { line: lineConfig } },
@@ -830,14 +831,14 @@ describe("handleLineWebhookEvents", () => {
     } as PostbackEvent;
 
     const context: Parameters<typeof handleLineWebhookEvents>[1] = {
-      cfg: { channels: { line: { dmPolicy: "open" } } },
+      cfg: { channels: { line: { dmPolicy: "open", allowFrom: ["*"] } } },
       account: {
         accountId: "default",
         enabled: true,
         channelAccessToken: "token",
         channelSecret: "secret",
         tokenSource: "config",
-        config: { dmPolicy: "open" },
+        config: { dmPolicy: "open", allowFrom: ["*"] },
       },
       runtime: createRuntime(),
       mediaMaxBytes: 1,

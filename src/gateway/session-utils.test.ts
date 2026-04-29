@@ -23,6 +23,7 @@ import {
   resolveDeletedAgentIdFromSessionKey,
   resolveGatewayModelSupportsImages,
   resolveGatewaySessionStoreTarget,
+  resolveSessionDisplayModelIdentityRef,
   resolveSessionModelIdentityRef,
   resolveSessionModelRef,
   resolveSessionStoreKey,
@@ -57,12 +58,14 @@ function createSingleAgentAvatarConfig(workspace: string): OpenClawConfig {
 function createModelDefaultsConfig(params: {
   primary: string;
   models?: Record<string, Record<string, never>>;
+  agentRuntime?: { id: string; fallback?: "pi" | "none" };
 }): OpenClawConfig {
   return {
     agents: {
       defaults: {
         model: { primary: params.primary },
         models: params.models,
+        agentRuntime: params.agentRuntime,
       },
     },
   } as OpenClawConfig;
@@ -154,7 +157,7 @@ describe("gateway session utils", () => {
             reasoning === true
               ? [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }]
               : [{ id: "off" }],
-          defaultLevel: "off",
+          defaultLevel: reasoning === true ? "medium" : "off",
         }),
       },
     });
@@ -193,6 +196,8 @@ describe("gateway session utils", () => {
       "high",
       "max",
     ]);
+    expect(defaults.thinkingDefault).toBe("medium");
+    expect(row.thinkingDefault).toBe("medium");
   });
 
   test("session defaults use configured thinking default", () => {
@@ -840,8 +845,9 @@ describe("gateway session utils", () => {
             primary: "openai/gpt-5.4",
             fallbacks: ["openai-codex/gpt-5.4"],
           },
+          agentRuntime: { id: "pi", fallback: "pi" },
         },
-        list: [{ id: "main", default: true }],
+        list: [{ id: "main", default: true, agentRuntime: { id: "claude-cli", fallback: "none" } }],
       },
     } as OpenClawConfig;
 
@@ -852,6 +858,65 @@ describe("gateway session utils", () => {
       model: {
         primary: "openai/gpt-5.4",
         fallbacks: ["openai-codex/gpt-5.4"],
+      },
+      agentRuntime: {
+        id: "claude-cli",
+        fallback: "none",
+        source: "agent",
+      },
+    });
+  });
+
+  test("listAgentsForGateway reports effective env runtime fallback override", () => {
+    const previousFallback = process.env.OPENCLAW_AGENT_HARNESS_FALLBACK;
+    process.env.OPENCLAW_AGENT_HARNESS_FALLBACK = "pi";
+    try {
+      const cfg = {
+        session: { mainKey: "main" },
+        agents: {
+          defaults: {
+            agentRuntime: { id: "codex", fallback: "none" },
+          },
+          list: [{ id: "main", default: true }],
+        },
+      } as OpenClawConfig;
+
+      const result = listAgentsForGateway(cfg);
+      expect(result.agents[0]).toMatchObject({
+        id: "main",
+        agentRuntime: {
+          id: "codex",
+          fallback: "pi",
+          source: "env",
+        },
+      });
+    } finally {
+      if (previousFallback === undefined) {
+        delete process.env.OPENCLAW_AGENT_HARNESS_FALLBACK;
+      } else {
+        process.env.OPENCLAW_AGENT_HARNESS_FALLBACK = previousFallback;
+      }
+    }
+  });
+
+  test("listAgentsForGateway preserves fallback-only agent runtime overrides", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        defaults: {
+          agentRuntime: { id: "auto", fallback: "pi" },
+        },
+        list: [{ id: "main", default: true, agentRuntime: { fallback: "none" } }],
+      },
+    } as OpenClawConfig;
+
+    const result = listAgentsForGateway(cfg);
+    expect(result.agents[0]).toMatchObject({
+      id: "main",
+      agentRuntime: {
+        id: "auto",
+        fallback: "none",
+        source: "agent",
       },
     });
   });
@@ -1044,6 +1109,62 @@ describe("listSessionsFromStore selected model display", () => {
     expect(result.sessions[0]?.modelProvider).toBe("anthropic");
     expect(result.sessions[0]?.model).toBe("claude-opus-4-6");
   });
+
+  test("separates Claude CLI runtime metadata from canonical model identity", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "anthropic/claude-opus-4-7",
+      agentRuntime: { id: "claude-cli", fallback: "none" },
+    });
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          modelProvider: "claude-cli",
+          model: "claude-opus-4-7",
+        } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    expect(result.sessions[0]?.modelProvider).toBe("anthropic");
+    expect(result.sessions[0]?.model).toBe("claude-opus-4-7");
+    expect(result.sessions[0]?.agentRuntime).toEqual({
+      id: "claude-cli",
+      fallback: "none",
+      source: "defaults",
+    });
+  });
+
+  test("infers canonical provider for bare CLI models before default-provider fallback", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "openai/gpt-5.4",
+      models: {
+        "anthropic/claude-opus-4-7": {},
+      },
+      agentRuntime: { id: "claude-cli", fallback: "none" },
+    });
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          modelProvider: "claude-cli",
+          model: "claude-opus-4-7",
+        } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    expect(result.sessions[0]?.modelProvider).toBe("anthropic");
+    expect(result.sessions[0]?.model).toBe("claude-opus-4-7");
+  });
 });
 
 describe("resolveSessionModelIdentityRef", () => {
@@ -1173,6 +1294,43 @@ describe("resolveSessionModelIdentityRef", () => {
       provider: "vercel-ai-gateway",
       model: "anthropic/claude-sonnet-4-6",
     });
+  });
+});
+
+describe("resolveSessionDisplayModelIdentityRef", () => {
+  test("canonicalizes CLI runtime provider to the selected model provider", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "anthropic/claude-opus-4-7",
+      agentRuntime: { id: "claude-cli", fallback: "none" },
+    });
+
+    expect(
+      resolveSessionDisplayModelIdentityRef({
+        cfg,
+        agentId: "main",
+        provider: "claude-cli",
+        model: "claude-opus-4-7",
+      }),
+    ).toEqual({ provider: "anthropic", model: "claude-opus-4-7" });
+  });
+
+  test("prefers configured provider inference over default-provider parsing for bare CLI models", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "openai/gpt-5.4",
+      models: {
+        "anthropic/claude-opus-4-7": {},
+      },
+      agentRuntime: { id: "claude-cli", fallback: "none" },
+    });
+
+    expect(
+      resolveSessionDisplayModelIdentityRef({
+        cfg,
+        agentId: "main",
+        provider: "claude-cli",
+        model: "claude-opus-4-7",
+      }),
+    ).toEqual({ provider: "anthropic", model: "claude-opus-4-7" });
   });
 });
 

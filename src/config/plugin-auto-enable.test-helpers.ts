@@ -1,10 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
-import {
-  clearPluginManifestRegistryCache,
-  type PluginManifestRegistry,
-} from "../plugins/manifest-registry.js";
+import { type PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { clearPluginSetupRegistryCache } from "../plugins/setup-registry.js";
 import {
   cleanupTrackedTempDirs,
@@ -15,8 +11,6 @@ import {
 const tempDirs: string[] = [];
 
 export function resetPluginAutoEnableTestState(): void {
-  clearPluginDiscoveryCache();
-  clearPluginManifestRegistryCache();
   clearPluginSetupRegistryCache();
   cleanupTrackedTempDirs(tempDirs);
 }

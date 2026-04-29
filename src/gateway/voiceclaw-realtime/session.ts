@@ -10,7 +10,7 @@ import {
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "../auth.js";
-import { getPreauthHandshakeTimeoutMsFromEnv } from "../handshake-timeouts.js";
+import { resolvePreauthHandshakeTimeoutMs } from "../handshake-timeouts.js";
 import { VoiceClawGeminiLiveAdapter } from "./gemini-live.js";
 import {
   createVoiceClawRealtimeToolRuntime,
@@ -70,12 +70,17 @@ export class VoiceClawRealtimeSession {
   }
 
   attach(): void {
-    this.handshakeTimer = setTimeout(() => {
-      if (!this.config && !this.closed) {
-        log.warn(`session ${this.id} handshake timed out`);
-        this.ws.close(1000, "handshake timeout");
-      }
-    }, getPreauthHandshakeTimeoutMsFromEnv());
+    this.handshakeTimer = setTimeout(
+      () => {
+        if (!this.config && !this.closed) {
+          log.warn(`session ${this.id} handshake timed out`);
+          this.ws.close(1000, "handshake timeout");
+        }
+      },
+      resolvePreauthHandshakeTimeoutMs({
+        configuredTimeoutMs: this.gatewayConfig.gateway?.handshakeTimeoutMs,
+      }),
+    );
 
     this.ws.on("message", (raw) => {
       void this.handleRawMessage(raw).catch((err) => {

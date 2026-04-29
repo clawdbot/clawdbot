@@ -262,6 +262,12 @@ agent-facing path. The agent should not also echo a duplicate plain chat
 `/approve` command unless the tool result says chat approvals are unavailable or
 manual approval is the only remaining path.
 
+If a native approval client is configured but no native runtime is active for
+the originating channel, OpenClaw keeps the local deterministic `/approve`
+prompt visible. If the native runtime is active and attempts delivery but no
+target receives the card, OpenClaw sends a same-chat fallback notice with the
+exact `/approve <id> <decision>` command so the request can still be resolved.
+
 Generic model:
 
 - host exec policy still decides whether exec approval is required
@@ -271,8 +277,8 @@ Generic model:
 Native approval clients auto-enable DM-first delivery when all of these are true:
 
 - the channel supports native approval delivery
-- approvers can be resolved from explicit `execApprovals.approvers` or that
-  channel's documented fallback sources
+- approvers can be resolved from explicit `execApprovals.approvers` or owner
+  identity such as `commands.ownerAllowFrom`
 - `channels.<channel>.execApprovals.enabled` is unset or `"auto"`
 
 Set `enabled: false` to disable a native approval client explicitly. Set `enabled: true` to force
@@ -295,7 +301,7 @@ Shared behavior:
 - when a native approval client auto-enables, the default native delivery target is approver DMs
 - for Discord and Telegram, only resolved approvers can approve or deny
 - Discord approvers can be explicit (`execApprovals.approvers`) or inferred from `commands.ownerAllowFrom`
-- Telegram approvers can be explicit (`execApprovals.approvers`) or inferred from existing owner config (`allowFrom`, plus direct-message `defaultTo` where supported)
+- Telegram approvers can be explicit (`execApprovals.approvers`) or inferred from `commands.ownerAllowFrom`
 - Slack approvers can be explicit (`execApprovals.approvers`) or inferred from `commands.ownerAllowFrom`
 - Slack native buttons preserve approval id kind, so `plugin:` ids can resolve plugin approvals
   without a second Slack-local fallback layer
@@ -312,6 +318,13 @@ Shared behavior:
 - when native `target` enables origin-chat delivery, approval prompts include the command text
 - pending exec approvals expire after 30 minutes by default
 - if no operator UI or configured approval client can accept the request, the prompt falls back to `askFallback`
+
+Sensitive owner-only group commands such as `/diagnostics` and `/export-trajectory` use private
+owner routing for approval prompts and final results. OpenClaw first tries a private route on the
+same surface where the owner ran the command. If that surface has no private owner route, it falls
+back to the first available owner route from `commands.ownerAllowFrom`, so a Discord group command
+can still send the approval and result to the owner's Telegram DM when Telegram is the configured
+primary private interface. The group chat only gets a short acknowledgement.
 
 Telegram defaults to approver DMs (`target: "dm"`). You can switch to `channel` or `both` when you
 want approval prompts to appear in the originating Telegram chat/topic as well. For Telegram forum

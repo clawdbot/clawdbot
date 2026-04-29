@@ -853,6 +853,32 @@ describe("model-selection", () => {
         ref: { provider: "opencode-go", model: "kimi-k2.6" },
       });
     });
+
+    it("resolves slash-form aliases before provider/model parsing", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/xiaomi/mimo-v2-pro-mit": {
+                alias: "xiaomi/mimo-v2-pro-mit",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [],
+        raw: "xiaomi/mimo-v2-pro-mit",
+        defaultProvider: "openai",
+      });
+
+      expect(result).toEqual({
+        key: "openai/xiaomi/mimo-v2-pro-mit",
+        ref: { provider: "openai", model: "xiaomi/mimo-v2-pro-mit" },
+      });
+    });
   });
 
   describe("resolveModelRefFromString", () => {
@@ -880,6 +906,30 @@ describe("model-selection", () => {
         defaultProvider: "anthropic",
       });
       expect(resolved?.ref).toEqual({ provider: "openai", model: "gpt-4" });
+    });
+
+    it("prefers slash-form aliases over direct provider/model parsing", () => {
+      const index = {
+        byAlias: new Map([
+          [
+            "xiaomi/mimo-v2-pro-mit",
+            {
+              alias: "xiaomi/mimo-v2-pro-mit",
+              ref: { provider: "openai", model: "xiaomi/mimo-v2-pro-mit" },
+            },
+          ],
+        ]),
+        byKey: new Map(),
+      };
+
+      const resolved = resolveModelRefFromString({
+        raw: "xiaomi/mimo-v2-pro-mit",
+        defaultProvider: "anthropic",
+        aliasIndex: index,
+      });
+
+      expect(resolved?.ref).toEqual({ provider: "openai", model: "xiaomi/mimo-v2-pro-mit" });
+      expect(resolved?.alias).toBe("xiaomi/mimo-v2-pro-mit");
     });
 
     it("strips trailing profile suffix for simple model refs", () => {
@@ -1088,6 +1138,29 @@ describe("model-selection", () => {
         setLoggerOverride(null);
         resetLogger();
       }
+    });
+
+    it("prefers slash-form aliases for configured default models", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "xiaomi/mimo-v2-pro-mit" },
+            models: {
+              "openai/xiaomi/mimo-v2-pro-mit": {
+                alias: "xiaomi/mimo-v2-pro-mit",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({ provider: "openai", model: "xiaomi/mimo-v2-pro-mit" });
     });
 
     it("should use default provider/model if config is empty", () => {

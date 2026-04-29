@@ -7,9 +7,82 @@ import {
   connectMcpClient,
   extractTextFromGatewayPayload,
   type ClaudeChannelNotification,
+  type GatewayRpcClient,
   maybeApprovePendingBridgePairing,
   waitFor,
 } from "./mcp-channels-harness.ts";
+
+function summarizeSessionRows(rows: Array<Record<string, unknown>> | undefined) {
+  return (rows ?? []).map((entry) => ({
+    key: entry.key,
+    channel: entry.channel,
+    deliveryContext: entry.deliveryContext,
+    lastChannel: entry.lastChannel,
+    lastTo: entry.lastTo,
+    lastAccountId: entry.lastAccountId,
+    lastThreadId: entry.lastThreadId,
+  }));
+}
+
+function formatUnknownError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (error === undefined || error === null) {
+    return "";
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  if (typeof error === "number" || typeof error === "boolean" || typeof error === "bigint") {
+    return `${error}`;
+  }
+  if (typeof error === "symbol") {
+    return error.description ?? "symbol";
+  }
+  try {
+    return JSON.stringify(error) ?? "";
+  } catch {
+    return Object.prototype.toString.call(error);
+  }
+}
+
+async function waitForGatewaySeededConversation(gateway: GatewayRpcClient) {
+  let lastList: { sessions?: Array<Record<string, unknown>> } | undefined;
+  let lastError: unknown;
+  try {
+    return await waitFor(
+      "seeded conversation in gateway sessions.list",
+      async () => {
+        try {
+          lastList = await gateway.request<{ sessions?: Array<Record<string, unknown>> }>(
+            "sessions.list",
+            { limit: 50, includeDerivedTitles: false, includeLastMessage: false },
+          );
+          lastError = undefined;
+        } catch (error) {
+          lastError = error;
+          return undefined;
+        }
+        return lastList.sessions?.find((entry) => entry.key === "agent:main:main");
+      },
+      180_000,
+    );
+  } catch (error) {
+    throw new Error(
+      `gateway sessions.list did not include seeded conversation: ${JSON.stringify(
+        {
+          count: lastList?.sessions?.length ?? 0,
+          sessions: summarizeSessionRows(lastList?.sessions),
+          lastError: formatUnknownError(lastError),
+        },
+        null,
+        2,
+      )}`,
+      { cause: error },
+    );
+  }
+}
 
 async function main() {
   const gatewayUrl = process.env.GW_URL?.trim();
@@ -18,13 +91,26 @@ async function main() {
   assert(gatewayToken, "missing GW_TOKEN");
 
   const gateway = await connectGateway({ url: gatewayUrl, token: gatewayToken });
-  let mcpHandle = await connectMcpClient({
-    gatewayUrl,
-    gatewayToken,
-  });
-  let mcp = mcpHandle.client;
+  let mcpHandle: Awaited<ReturnType<typeof connectMcpClient>> | undefined;
 
   try {
+    const gatewayConversation = await waitForGatewaySeededConversation(gateway);
+    assert(
+      (gatewayConversation.deliveryContext as { channel?: unknown } | undefined)?.channel ===
+        "imessage",
+      "expected seeded gateway deliveryContext channel",
+    );
+    assert(
+      (gatewayConversation.deliveryContext as { to?: unknown } | undefined)?.to === "+15551234567",
+      "expected seeded gateway deliveryContext target",
+    );
+
+    mcpHandle = await connectMcpClient({
+      gatewayUrl,
+      gatewayToken,
+    });
+    let mcp = mcpHandle.client;
+
     if (await maybeApprovePendingBridgePairing(gateway)) {
       await Promise.allSettled([mcp.close(), mcpHandle.transport.close()]);
       mcpHandle = await connectMcpClient({
@@ -36,6 +122,7 @@ async function main() {
     const callTool = <T>(params: Parameters<typeof mcp.callTool>[0]) =>
       mcp.callTool(params, undefined, { timeout: 240_000 }) as Promise<T>;
 
+    let lastMcpConversationList: unknown;
     const conversation = await waitFor(
       "seeded conversation in conversations_list",
       async () => {
@@ -43,14 +130,27 @@ async function main() {
           structuredContent?: { conversations?: Array<Record<string, unknown>> };
         }>({
           name: "conversations_list",
-          arguments: {},
+          arguments: {
+            includeDerivedTitles: false,
+            includeLastMessage: false,
+          },
         });
+        lastMcpConversationList = listed;
         return listed.structuredContent?.conversations?.find(
           (entry) => entry.sessionKey === "agent:main:main",
         );
       },
       240_000,
-    );
+    ).catch((error) => {
+      throw new Error(
+        `timeout waiting for seeded MCP conversation: ${JSON.stringify(
+          lastMcpConversationList,
+          null,
+          2,
+        )}`,
+        { cause: error },
+      );
+    });
     assert(conversation.channel === "imessage", "expected seeded channel");
     assert(conversation.to === "+15551234567", "expected seeded target");
 
@@ -266,7 +366,10 @@ async function main() {
       ) + "\n",
     );
   } finally {
-    await Promise.allSettled([mcp.close(), mcpHandle.transport.close(), gateway.close()]);
+    await Promise.allSettled([
+      ...(mcpHandle ? [mcpHandle.client.close(), mcpHandle.transport.close()] : []),
+      gateway.close(),
+    ]);
   }
 }
 

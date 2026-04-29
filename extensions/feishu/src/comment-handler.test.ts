@@ -35,6 +35,7 @@ function buildConfig(overrides?: Partial<ClawdbotConfig>): ClawdbotConfig {
       feishu: {
         enabled: true,
         dmPolicy: "open",
+        allowFrom: ["*"],
       },
     },
     ...overrides,

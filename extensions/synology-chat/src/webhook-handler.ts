@@ -442,7 +442,8 @@ function authorizeSynologyWebhook(params: {
       return {
         ok: false,
         statusCode: 403,
-        error: "Allowlist is empty. Configure allowedUserIds or use dmPolicy=open.",
+        error:
+          'Allowlist is empty. Configure allowedUserIds or use dmPolicy=open with allowedUserIds=["*"].',
       };
     }
     params.log?.warn(`Unauthorized user: ${params.payload.user_id}`);

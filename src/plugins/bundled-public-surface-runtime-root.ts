@@ -37,7 +37,11 @@ export function prepareBuiltBundledPluginPublicSurfaceLocation(params: {
   location: BundledPublicSurfaceLocation;
   pluginId: string;
   env?: NodeJS.ProcessEnv;
+  installRuntimeDeps?: boolean;
 }): BundledPublicSurfaceLocation {
+  if (params.installRuntimeDeps === false) {
+    return params.location;
+  }
   const pluginRoot = resolveBuiltBundledPluginRootFromModulePath({
     modulePath: params.location.modulePath,
     pluginId: params.pluginId,

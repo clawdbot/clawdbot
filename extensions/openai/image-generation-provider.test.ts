@@ -194,6 +194,7 @@ describe("openai image generation provider", () => {
     const provider = buildOpenAIImageGenerationProvider();
 
     expect(provider.defaultModel).toBe("gpt-image-2");
+    expect(provider.aliases).toContain("openai-codex");
     expect(provider.models).toEqual([
       "gpt-image-2",
       "gpt-image-1.5",

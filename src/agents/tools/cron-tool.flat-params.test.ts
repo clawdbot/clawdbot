@@ -70,6 +70,32 @@ describe("cron tool flat-params", () => {
     });
   });
 
+  it("passes local cron wall-clock expression and timezone through add", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-local-cron-add", {
+      action: "add",
+      name: "shanghai reminder",
+      cron: "0 18 * * *",
+      tz: "Asia/Shanghai",
+      message: "send reminder",
+    });
+
+    const [method, _gatewayOpts, params] = callGatewayToolMock.mock.calls[0] as [
+      string,
+      unknown,
+      {
+        schedule?: unknown;
+      },
+    ];
+    expect(method).toBe("cron.add");
+    expect(params.schedule).toEqual({
+      kind: "cron",
+      expr: "0 18 * * *",
+      tz: "Asia/Shanghai",
+    });
+  });
+
   it("recovers flat cron schedule shorthand for update", async () => {
     const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
 

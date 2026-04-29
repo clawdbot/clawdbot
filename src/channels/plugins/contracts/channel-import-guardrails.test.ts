@@ -1,9 +1,9 @@
-import { readdirSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { describe, expect, it } from "vitest";
 import { classifyBundledExtensionSourcePath } from "../../../../scripts/lib/extension-source-classifier.mjs";
+import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../../../plugin-sdk/test-helpers/public-artifacts.js";
 import { loadPluginManifestRegistry } from "../../../plugins/manifest-registry.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -12,11 +12,12 @@ const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set(GUARDED_EXTENSION_PUBLIC_SURFA
 ALLOWED_EXTENSION_PUBLIC_SURFACES.add("test-api.js");
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
 const bundledPluginRecords = loadPluginManifestRegistry({
-  cache: true,
   config: {},
 }).plugins.filter((plugin) => plugin.origin === "bundled");
 const bundledPluginRoots = new Map(
-  bundledPluginRecords.map((plugin) => [plugin.id, plugin.rootDir] as const),
+  bundledPluginRecords.map(
+    (plugin) => [plugin.id, resolveBundledPluginSourceRoot(plugin.rootDir)] as const,
+  ),
 );
 const BUNDLED_EXTENSION_IDS = [...bundledPluginRoots.keys()].toSorted(
   (left, right) => right.length - left.length,
@@ -45,6 +46,12 @@ const GUARDED_CHANNEL_EXTENSIONS = new Set([
   "zalo",
   "zalouser",
 ]);
+
+function resolveBundledPluginSourceRoot(rootDir: string): string {
+  const sourceRoot = resolve(REPO_ROOT, BUNDLED_PLUGIN_ROOT_DIR, basename(rootDir));
+  return existsSync(sourceRoot) ? sourceRoot : rootDir;
+}
+
 function bundledPluginFile(pluginId: string, relativePath: string): string {
   const rootDir = bundledPluginRoots.get(pluginId);
   if (!rootDir) {
@@ -344,7 +351,7 @@ function collectExtensionSourceFiles(): string[] {
   }
   extensionSourceFilesCache = bundledPluginRecords.flatMap((plugin) =>
     collectSourceFiles(undefined, {
-      rootDir: plugin.rootDir,
+      rootDir: resolveBundledPluginSourceRoot(plugin.rootDir),
       shouldSkipEntry: ({ entryName, normalizedFullPath }) =>
         classifyBundledExtensionSourcePath(normalizedFullPath).isTestLike ||
         entryName === "api.ts" ||

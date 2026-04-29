@@ -3,8 +3,11 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-sha
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export function buildNvidiaProvider(): ModelProviderConfig {
-  return buildManifestModelProviderConfig({
-    providerId: "nvidia",
-    catalog: manifest.modelCatalog.providers.nvidia,
-  });
+  return {
+    ...buildManifestModelProviderConfig({
+      providerId: "nvidia",
+      catalog: manifest.modelCatalog.providers.nvidia,
+    }),
+    apiKey: "NVIDIA_API_KEY",
+  };
 }

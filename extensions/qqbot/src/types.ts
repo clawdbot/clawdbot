@@ -113,6 +113,7 @@ export interface QQBotAccountConfig {
     | boolean
     | {
         mode?: "off" | "partial";
+        /** @deprecated Prefer `streaming: true`. */
         c2cStreamApi?: boolean;
       };
 }

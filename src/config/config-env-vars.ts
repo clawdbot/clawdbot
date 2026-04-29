@@ -20,7 +20,7 @@ function collectConfigEnvVarsByTarget(cfg?: OpenClawConfig): Record<string, stri
 
   if (envConfig.vars) {
     for (const [rawKey, value] of Object.entries(envConfig.vars)) {
-      if (!value) {
+      if (typeof value !== "string" || !value.trim()) {
         continue;
       }
       const key = normalizeEnvVarKey(rawKey, { portable: true });

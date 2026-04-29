@@ -133,8 +133,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
     const { estimateUsageCost, resolveModelCostConfig } = await getUsageFormatModule();
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
+    const usageForContext = isCliProvider(providerUsed, cfg) ? undefined : usage;
     const totalTokens = deriveSessionTotalTokens({
-      usage: promptTokens ? undefined : usage,
+      usage: promptTokens ? undefined : usageForContext,
       contextTokens,
       promptTokens,
     });

@@ -23,8 +23,6 @@ type WorkerPluginRuntimeHelpers = {
   setActivePluginRegistry: typeof import("../src/plugins/runtime.js").setActivePluginRegistry;
 };
 type WorkerCleanupHelpers = {
-  clearPluginDiscoveryCache: typeof import("../src/plugins/discovery.js").clearPluginDiscoveryCache;
-  clearPluginManifestRegistryCache: typeof import("../src/plugins/manifest-registry-state.js").clearPluginManifestRegistryCache;
   clearSessionStoreCaches: typeof import("../src/config/sessions/store-cache.js").clearSessionStoreCaches;
   drainFileLockStateForTest: typeof import("../src/infra/file-lock.js").drainFileLockStateForTest;
   drainSessionStoreLockQueuesForTest: typeof import("../src/config/sessions/store-lock-state.js").drainSessionStoreLockQueuesForTest;
@@ -86,10 +84,6 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
       "../src/config/sessions/store-lock-state.js",
     ),
     vi.importActual<typeof import("../src/infra/file-lock.js")>("../src/infra/file-lock.js"),
-    vi.importActual<typeof import("../src/plugins/discovery.js")>("../src/plugins/discovery.js"),
-    vi.importActual<typeof import("../src/plugins/manifest-registry-state.js")>(
-      "../src/plugins/manifest-registry-state.js",
-    ),
   ]).then(
     ([
       contextRuntimeState,
@@ -98,11 +92,7 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
       sessionStoreCache,
       sessionStoreLockState,
       fileLock,
-      discovery,
-      manifestRegistryState,
     ]) => ({
-      clearPluginDiscoveryCache: discovery.clearPluginDiscoveryCache,
-      clearPluginManifestRegistryCache: manifestRegistryState.clearPluginManifestRegistryCache,
       clearSessionStoreCaches: sessionStoreCache.clearSessionStoreCaches,
       drainFileLockStateForTest: fileLock.drainFileLockStateForTest,
       drainSessionStoreLockQueuesForTest: sessionStoreLockState.drainSessionStoreLockQueuesForTest,
@@ -401,8 +391,6 @@ beforeAll(async () => {
 
 afterEach(async () => {
   const {
-    clearPluginDiscoveryCache,
-    clearPluginManifestRegistryCache,
     clearSessionStoreCaches,
     drainFileLockStateForTest,
     drainSessionStoreLockQueuesForTest,
@@ -420,22 +408,13 @@ afterEach(async () => {
   resetContextWindowCacheForTest();
   resetModelsJsonReadyCacheForTest();
   resetSessionWriteLockStateForTest();
-  clearPluginDiscoveryCache();
-  clearPluginManifestRegistryCache();
   await installDefaultPluginRegistry();
 });
 
 afterAll(async () => {
-  const {
-    clearPluginDiscoveryCache,
-    clearPluginManifestRegistryCache,
-    clearSessionStoreCaches,
-    drainFileLockStateForTest,
-    drainSessionWriteLockStateForTest,
-  } = await loadWorkerCleanupHelpers();
+  const { clearSessionStoreCaches, drainFileLockStateForTest, drainSessionWriteLockStateForTest } =
+    await loadWorkerCleanupHelpers();
   clearSessionStoreCaches();
   await drainFileLockStateForTest();
   await drainSessionWriteLockStateForTest();
-  clearPluginDiscoveryCache();
-  clearPluginManifestRegistryCache();
 });

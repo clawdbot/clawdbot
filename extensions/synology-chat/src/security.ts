@@ -31,6 +31,9 @@ export function checkUserAllowed(userId: string, allowedUserIds: string[]): bool
   if (allowedUserIds.length === 0) {
     return false;
   }
+  if (allowedUserIds.includes("*")) {
+    return true;
+  }
   return allowedUserIds.includes(userId);
 }
 
@@ -47,7 +50,9 @@ export function authorizeUserForDm(
     return { allowed: false, reason: "disabled" };
   }
   if (dmPolicy === "open") {
-    return { allowed: true };
+    return checkUserAllowed(userId, allowedUserIds)
+      ? { allowed: true }
+      : { allowed: false, reason: "not-allowlisted" };
   }
   if (allowedUserIds.length === 0) {
     return { allowed: false, reason: "allowlist-empty" };

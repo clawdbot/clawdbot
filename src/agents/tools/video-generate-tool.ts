@@ -31,6 +31,7 @@ import type {
 } from "../../video-generation/types.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
+import { withMediaGenerationTaskKeepalive } from "./media-generate-background-shared.js";
 import {
   applyVideoGenerationModelConfigDefaults,
   buildMediaReferenceDetails,
@@ -982,24 +983,29 @@ export function createVideoGenerateTool(options?: {
       if (shouldDetach) {
         scheduleBackgroundWork(async () => {
           try {
-            const executed = await executeVideoGenerationJob({
-              effectiveCfg,
-              prompt,
-              agentDir: options?.agentDir,
-              model,
-              size,
-              aspectRatio,
-              resolution,
-              durationSeconds,
-              audio,
-              watermark,
-              filename,
-              loadedReferenceImages,
-              loadedReferenceVideos,
-              loadedReferenceAudios,
-              taskHandle,
-              providerOptions,
-              timeoutMs,
+            const executed = await withMediaGenerationTaskKeepalive({
+              handle: taskHandle,
+              progressSummary: "Generating video",
+              run: () =>
+                executeVideoGenerationJob({
+                  effectiveCfg,
+                  prompt,
+                  agentDir: options?.agentDir,
+                  model,
+                  size,
+                  aspectRatio,
+                  resolution,
+                  durationSeconds,
+                  audio,
+                  watermark,
+                  filename,
+                  loadedReferenceImages,
+                  loadedReferenceVideos,
+                  loadedReferenceAudios,
+                  taskHandle,
+                  providerOptions,
+                  timeoutMs,
+                }),
             });
             completeVideoGenerationTaskRun({
               handle: taskHandle,

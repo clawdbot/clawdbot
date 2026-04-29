@@ -15,7 +15,7 @@ Status: bundled plugin (bot token + WebSocket events). Channels, groups, and DMs
 Mattermost ships as a bundled plugin in current OpenClaw releases, so normal packaged builds do not need a separate install.
 </Note>
 
-If you are on an older build or a custom install that excludes Mattermost, install it manually:
+If you are on an older build or a custom install that excludes Mattermost, install a current npm package when one is published:
 
 <Tabs>
   <Tab title="npm registry">
@@ -29,6 +29,10 @@ If you are on an older build or a custom install that excludes Mattermost, insta
     ```
   </Tab>
 </Tabs>
+
+If npm reports the OpenClaw-owned package as deprecated, use a current packaged
+OpenClaw build or the local checkout path until a newer npm package is
+published.
 
 Details: [Plugins](/tools/plugin)
 

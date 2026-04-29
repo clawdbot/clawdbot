@@ -131,6 +131,12 @@ This happens **before** a normal reply is generated, so the message can feel lik
 
 </Warning>
 
+For local/GGUF models, store the full provider-prefixed ref in the allowlist,
+for example `ollama/gemma4:26b`, `lmstudio/Gemma4-26b-a4-it-gguf`, or the
+exact provider/model shown by `openclaw models list --provider <provider>`.
+Bare local filenames or display names are not enough when the allowlist is
+active.
+
 Example allowlist config:
 
 ```json5

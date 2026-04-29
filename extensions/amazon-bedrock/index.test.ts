@@ -296,6 +296,105 @@ describe("amazon-bedrock provider plugin", () => {
     });
   });
 
+  it("omits temperature for Bedrock Opus 4.7 model ids", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "amazon-bedrock",
+      modelId: "us.anthropic.claude-opus-4-7",
+      streamFn: spyStreamFn,
+    } as never);
+
+    expect(
+      wrapped?.(
+        {
+          api: "bedrock-converse-stream",
+          provider: "amazon-bedrock",
+          id: "us.anthropic.claude-opus-4-7",
+        } as never,
+        { messages: [] } as never,
+        { temperature: 0.2, maxTokens: 10 },
+      ),
+    ).toEqual({ maxTokens: 10 });
+  });
+
+  it("omits temperature for dotted Bedrock Opus 4.7 model ids", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "amazon-bedrock",
+      modelId: "us.anthropic.claude-opus-4.7-v1:0",
+      streamFn: spyStreamFn,
+    } as never);
+
+    expect(
+      wrapped?.(
+        {
+          api: "bedrock-converse-stream",
+          provider: "amazon-bedrock",
+          id: "us.anthropic.claude-opus-4.7-v1:0",
+        } as never,
+        { messages: [] } as never,
+        { temperature: 0.2, maxTokens: 10 },
+      ),
+    ).toEqual({ maxTokens: 10 });
+  });
+
+  it("omits temperature for named Bedrock Opus 4.7 inference profile ARNs", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+    const modelId =
+      "arn:aws:bedrock:us-west-2:123456789012:inference-profile/us.anthropic.claude-opus-4-7";
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "amazon-bedrock",
+      modelId,
+      streamFn: spyStreamFn,
+    } as never);
+
+    expect(
+      wrapped?.(
+        {
+          api: "bedrock-converse-stream",
+          provider: "amazon-bedrock",
+          id: modelId,
+        } as never,
+        { messages: [] } as never,
+        { temperature: 0, region: "us-west-2" } as never,
+      ),
+    ).toEqual({ region: "us-west-2" });
+  });
+
+  it("omits temperature for non-US Bedrock Opus 4.7 regional profiles", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "amazon-bedrock",
+      modelId: "eu.anthropic.claude-opus-4-7",
+      streamFn: spyStreamFn,
+    } as never);
+
+    expect(
+      wrapped?.(
+        {
+          api: "bedrock-converse-stream",
+          provider: "amazon-bedrock",
+          id: "eu.anthropic.claude-opus-4-7",
+        } as never,
+        { messages: [] } as never,
+        { temperature: 0.4, maxTokens: 12 },
+      ),
+    ).toEqual({ maxTokens: 12 });
+  });
+
+  it("classifies nested Bedrock deprecated-temperature validation as format failover", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+
+    expect(
+      provider.classifyFailoverReason?.({
+        provider: "amazon-bedrock",
+        modelId: "us.anthropic.claude-opus-4-7",
+        errorMessage:
+          'ValidationException: The model returned the following errors: {"type":"error","error":{"type":"invalid_request_error","message":"`temperature` is deprecated for this model."}}',
+      } as never),
+    ).toBe("format");
+  });
+
   describe("guardrail config schema", () => {
     it("defines discovery and guardrail objects with the expected shape", () => {
       const pluginJson = JSON.parse(
@@ -742,6 +841,66 @@ describe("amazon-bedrock provider plugin", () => {
       );
 
       const system = payload.system as Array<Record<string, unknown>>;
+      expect(system[1]).toEqual({ cachePoint: { type: "default" } });
+      expect(sendBedrockCommand).toHaveBeenCalledTimes(1);
+      expect(bedrockClientConfigs).toEqual([{ region: "us-east-1" }]);
+    });
+
+    it("omits temperature for opaque application inference profile ARNs that resolve to Opus 4.7", async () => {
+      const modelId =
+        "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/z27qyso459dd";
+      inferenceProfileGetResults.push({
+        models: [
+          {
+            modelArn: "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-opus-4.7-v1:0",
+          },
+        ],
+      });
+      const provider = await registerWithConfig(undefined);
+      const payload: Record<string, unknown> = {
+        inferenceConfig: { temperature: 0.3, maxTokens: 10 },
+        system: [{ text: "You are helpful." }],
+        messages: [{ role: "user", content: [{ text: "Hello" }] }],
+      };
+
+      await callWrappedStreamWithPayload(
+        provider,
+        modelId,
+        makeAppInferenceProfileDescriptor(modelId),
+        { temperature: 0.3, maxTokens: 10, cacheRetention: "none" },
+        payload,
+      );
+
+      expect(payload.inferenceConfig).toEqual({ maxTokens: 10 });
+      expect(sendBedrockCommand).toHaveBeenCalledTimes(1);
+      expect(bedrockClientConfigs).toEqual([{ region: "us-west-2" }]);
+    });
+
+    it("omits temperature for Claude-named application inference profile ARNs that resolve to Opus 4.7", async () => {
+      inferenceProfileGetResults.push({
+        models: [
+          {
+            modelArn: "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-opus-4-7-v1:0",
+          },
+        ],
+      });
+      const provider = await registerWithConfig(undefined);
+      const payload: Record<string, unknown> = {
+        inferenceConfig: { temperature: 0.3, maxTokens: 10 },
+        system: [{ text: "You are helpful." }],
+        messages: [{ role: "user", content: [{ text: "Hello" }] }],
+      };
+
+      await callWrappedStreamWithPayload(
+        provider,
+        APP_INFERENCE_PROFILE_ARN,
+        APP_INFERENCE_PROFILE_DESCRIPTOR,
+        { temperature: 0.3, maxTokens: 10, cacheRetention: "short" },
+        payload,
+      );
+
+      const system = payload.system as Array<Record<string, unknown>>;
+      expect(payload.inferenceConfig).toEqual({ maxTokens: 10 });
       expect(system[1]).toEqual({ cachePoint: { type: "default" } });
       expect(sendBedrockCommand).toHaveBeenCalledTimes(1);
       expect(bedrockClientConfigs).toEqual([{ region: "us-east-1" }]);

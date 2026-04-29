@@ -19,7 +19,6 @@ function loadManifestRegistry(config: OpenClawConfig, env?: NodeJS.ProcessEnv) {
     config,
     // Bundled channel schemas are already generated into the base schema; avoid
     // loading plugin config-schema modules on every config.get/config.schema.
-    cache: true,
     env,
     workspaceDir,
     includeDisabled: true,

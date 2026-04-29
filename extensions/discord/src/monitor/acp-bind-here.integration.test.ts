@@ -200,6 +200,7 @@ describe("Discord ACP bind here end-to-end flow", () => {
         client: createDmClient("dm-1"),
         botUserId: "bot-1",
       }),
+      allowFrom: ["*"],
     });
 
     expect(preflight).not.toBeNull();

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withPathResolutionEnv } from "../test-utils/env.js";
+import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { formatPluginSourceForTable, resolvePluginSourceRoots } from "./source-display.js";
 
 const PLUGIN_SOURCE_ROOTS = {
@@ -71,17 +72,20 @@ describe("formatPluginSourceForTable", () => {
     createFormattedSourceExpectation("global", "global", "demo-global", "index.js"),
   ])("shortens $origin sources under the $sourceKey root", expectFormattedSourceCase);
 
-  it("resolves source roots from an explicit env override", () => {
+  it("ignores untrusted explicit env override for the stock source root", () => {
     const homeDir = path.resolve(path.sep, "tmp", "openclaw-home");
+    const rawEnv = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: "~/bundled",
+      OPENCLAW_STATE_DIR: "~/state",
+    } as NodeJS.ProcessEnv;
+    const stock = withPathResolutionEnv(homeDir, rawEnv, (env) => resolveBundledPluginsDir(env));
+    expect(stock).toBeDefined();
     expectResolvedSourceRoots({
       homeDir,
-      env: {
-        OPENCLAW_BUNDLED_PLUGINS_DIR: "~/bundled",
-        OPENCLAW_STATE_DIR: "~/state",
-      } as NodeJS.ProcessEnv,
+      env: rawEnv,
       workspaceDir: "~/ws",
       expected: {
-        stock: path.join(homeDir, "bundled"),
+        stock: stock!,
         global: path.join(homeDir, "state", "extensions"),
         workspace: path.join(homeDir, "ws", ".openclaw", "extensions"),
       },

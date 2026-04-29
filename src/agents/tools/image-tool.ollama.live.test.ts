@@ -39,13 +39,13 @@ async function withLiveImageWorkspace<T>(
 }
 
 describe.skipIf(!LIVE)("image tool Ollama live", () => {
-  it("describes a local image through the explicit image tool", async () => {
+  it("describes a local image through a providerless configured Ollama image model", async () => {
     process.env.OLLAMA_API_KEY ||= "ollama-local";
     await withLiveImageWorkspace(async ({ agentDir, workspaceDir, imagePath }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
-            imageModel: { primary: `ollama/${OLLAMA_IMAGE_MODEL}` },
+            imageModel: { primary: OLLAMA_IMAGE_MODEL },
           },
         },
         models: {

@@ -479,6 +479,15 @@ export function abortReplyRunBySessionId(sessionId: string): boolean {
   return true;
 }
 
+export function forceClearReplyRunBySessionId(sessionId: string, cause?: unknown): boolean {
+  const operation = resolveReplyRunForCurrentSessionId(sessionId);
+  if (!operation) {
+    return false;
+  }
+  operation.fail("run_failed", cause);
+  return true;
+}
+
 export function waitForReplyRunEndBySessionId(
   sessionId: string,
   timeoutMs = 15_000,

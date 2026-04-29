@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   isPluginRegistryLoadInFlight: vi.fn(() => false),
   loadOpenClawPlugins: vi.fn(),
   resolveCompatibleRuntimePluginRegistry: vi.fn(),
+  resolvePluginRegistryLoadCacheKey: vi.fn((options: unknown) => JSON.stringify(options)),
   resolveRuntimePluginRegistry: vi.fn(),
   getActivePluginRegistryWorkspaceDir: vi.fn(() => undefined),
   buildPluginRuntimeLoadOptionsFromValues: vi.fn(
@@ -23,6 +24,7 @@ vi.mock("./loader.js", () => ({
   isPluginRegistryLoadInFlight: mocks.isPluginRegistryLoadInFlight,
   loadOpenClawPlugins: mocks.loadOpenClawPlugins,
   resolveCompatibleRuntimePluginRegistry: mocks.resolveCompatibleRuntimePluginRegistry,
+  resolvePluginRegistryLoadCacheKey: mocks.resolvePluginRegistryLoadCacheKey,
   resolveRuntimePluginRegistry: mocks.resolveRuntimePluginRegistry,
 }));
 
@@ -35,13 +37,12 @@ vi.mock("./runtime/load-context.js", () => ({
   createPluginRuntimeLoaderLogger: mocks.createPluginRuntimeLoaderLogger,
 }));
 
-let createWebProviderSnapshotCache: typeof import("./web-provider-runtime-shared.js").createWebProviderSnapshotCache;
 let resolvePluginWebProviders: typeof import("./web-provider-runtime-shared.js").resolvePluginWebProviders;
 let resolveRuntimeWebProviders: typeof import("./web-provider-runtime-shared.js").resolveRuntimeWebProviders;
 
 describe("web-provider-runtime-shared", () => {
   beforeAll(async () => {
-    ({ createWebProviderSnapshotCache, resolvePluginWebProviders, resolveRuntimeWebProviders } =
+    ({ resolvePluginWebProviders, resolveRuntimeWebProviders } =
       await import("./web-provider-runtime-shared.js"));
   });
 
@@ -50,6 +51,10 @@ describe("web-provider-runtime-shared", () => {
     mocks.isPluginRegistryLoadInFlight.mockReturnValue(false);
     mocks.loadOpenClawPlugins.mockReset();
     mocks.resolveCompatibleRuntimePluginRegistry.mockReset();
+    mocks.resolvePluginRegistryLoadCacheKey.mockReset();
+    mocks.resolvePluginRegistryLoadCacheKey.mockImplementation((options: unknown) =>
+      JSON.stringify(options),
+    );
     mocks.resolveRuntimePluginRegistry.mockReset();
     mocks.getActivePluginRegistryWorkspaceDir.mockReset();
     mocks.getActivePluginRegistryWorkspaceDir.mockReturnValue(undefined);
@@ -71,7 +76,6 @@ describe("web-provider-runtime-shared", () => {
         onlyPluginIds: [],
       },
       {
-        snapshotCache: createWebProviderSnapshotCache(),
         resolveBundledResolutionConfig: () => ({
           config: {},
           activationSourceConfig: {},
@@ -104,7 +108,6 @@ describe("web-provider-runtime-shared", () => {
         onlyPluginIds: [],
       },
       {
-        snapshotCache: createWebProviderSnapshotCache(),
         resolveBundledResolutionConfig: () => ({
           config: {},
           activationSourceConfig: {},
@@ -136,7 +139,6 @@ describe("web-provider-runtime-shared", () => {
         onlyPluginIds: ["alpha"],
       },
       {
-        snapshotCache: createWebProviderSnapshotCache(),
         resolveBundledResolutionConfig: () => ({
           config: {},
           activationSourceConfig: {},

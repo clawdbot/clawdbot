@@ -202,6 +202,43 @@ describe("memory plugin e2e", () => {
     expect(config?.autoRecall).toBe(true);
   });
 
+  test("registers as disabled instead of throwing when inspected without config", async () => {
+    const registerService = vi.fn();
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+    const mockApi = {
+      id: "memory-lancedb",
+      name: "Memory (LanceDB)",
+      source: "test",
+      config: {},
+      pluginConfig: {},
+      runtime: {},
+      logger,
+      registerTool: vi.fn(),
+      registerCli: vi.fn(),
+      registerService,
+      on: vi.fn(),
+      resolvePath: (filePath: string) => filePath,
+    };
+
+    expect(() => memoryPlugin.register(mockApi as any)).not.toThrow();
+    expect(registerService).toHaveBeenCalledWith({
+      id: "memory-lancedb",
+      start: expect.any(Function),
+    });
+    expect(mockApi.registerTool).not.toHaveBeenCalled();
+    expect(mockApi.on).not.toHaveBeenCalled();
+
+    registerService.mock.calls[0]?.[0].start({});
+    expect(logger.warn).toHaveBeenCalledWith(
+      "memory-lancedb: disabled until configured (embedding config required)",
+    );
+  });
+
   test("registers auto-recall on before_prompt_build instead of the legacy hook", async () => {
     const on = vi.fn();
     const mockApi = {
@@ -562,6 +599,102 @@ describe("memory plugin e2e", () => {
       vi.doUnmock("openai");
       vi.doUnmock("./lancedb-runtime.js");
       vi.resetModules();
+    }
+  });
+
+  test("bounds auto-recall latency during prompt build", async () => {
+    vi.useFakeTimers();
+    const post = vi.fn(() => new Promise(() => undefined));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          vectorSearch: vi.fn(() => ({ limit: vi.fn(() => ({ toArray: vi.fn(async () => []) })) })),
+          countRows: vi.fn(async () => 0),
+          add: vi.fn(async () => undefined),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    vi.resetModules();
+    vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
+      ensureGlobalUndiciEnvProxyDispatcher,
+    }));
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        post = post;
+      },
+    }));
+    vi.doMock("./lancedb-runtime.js", () => ({
+      loadLanceDbModule,
+    }));
+
+    try {
+      const { default: dynamicMemoryPlugin } = await import("./index.js");
+      const on = vi.fn();
+      const logger = {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      };
+      const mockApi = {
+        id: "memory-lancedb",
+        name: "Memory (LanceDB)",
+        source: "test",
+        config: {},
+        pluginConfig: {
+          embedding: {
+            apiKey: OPENAI_API_KEY,
+            model: "text-embedding-3-small",
+          },
+          dbPath: getDbPath(),
+          autoCapture: false,
+          autoRecall: true,
+        },
+        runtime: {},
+        logger,
+        registerTool: vi.fn(),
+        registerCli: vi.fn(),
+        registerService: vi.fn(),
+        on,
+        resolvePath: (p: string) => p,
+      };
+
+      dynamicMemoryPlugin.register(mockApi as any);
+
+      const beforePromptBuild = on.mock.calls.find(
+        ([hookName]) => hookName === "before_prompt_build",
+      )?.[1];
+      expect(beforePromptBuild).toBeTypeOf("function");
+
+      const resultPromise = beforePromptBuild?.(
+        { prompt: "what editor should i use?", messages: [] },
+        {},
+      );
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await expect(resultPromise).resolves.toBeUndefined();
+      expect(ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledOnce();
+      expect(post).toHaveBeenCalledWith(
+        "/embeddings",
+        expect.objectContaining({
+          maxRetries: 0,
+          timeout: 15_000,
+        }),
+      );
+      expect(loadLanceDbModule).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(
+        "memory-lancedb: auto-recall timed out after 15000ms; skipping memory injection to avoid stalling agent startup",
+      );
+    } finally {
+      vi.doUnmock("openclaw/plugin-sdk/runtime-env");
+      vi.doUnmock("openai");
+      vi.doUnmock("./lancedb-runtime.js");
+      vi.resetModules();
+      vi.useRealTimers();
     }
   });
 

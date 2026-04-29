@@ -701,7 +701,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           senderNamePromise ??= getMemberDisplayName(roomId, senderId).catch(() => senderId);
           return await senderNamePromise;
         };
-        const storeAllowFrom = isDirectMessage ? await readStoreAllowFrom() : [];
+        const storeAllowFrom =
+          isDirectMessage && dmPolicy !== "allowlist" && dmPolicy !== "open"
+            ? await readStoreAllowFrom()
+            : [];
         const roomUsers = roomConfig?.users ?? [];
         const liveCfg = core.config.current() as CoreConfig;
         const liveAccountAllowlists = resolveMatrixAccountAllowlistConfig({
@@ -729,6 +732,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         const accessState = resolveMatrixMonitorAccessState({
           allowFrom: liveDmAllowFrom,
           storeAllowFrom,
+          dmPolicy,
           groupAllowFrom: liveGroupAllowFrom,
           roomUsers,
           senderId,
@@ -749,63 +753,59 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             await commitInboundEventIfClaimed();
             return undefined;
           }
-          if (dmPolicy !== "open") {
-            const allowMatchMeta = formatAllowlistMatchMeta(directAllowMatch);
-            if (!directAllowMatch.allowed) {
-              if (!isReactionEvent && dmPolicy === "pairing") {
-                const senderName = await getSenderName();
-                const { code, created } = await core.channel.pairing.upsertPairingRequest({
+          const allowMatchMeta = formatAllowlistMatchMeta(directAllowMatch);
+          if (!directAllowMatch.allowed) {
+            if (!isReactionEvent && dmPolicy === "pairing") {
+              const senderName = await getSenderName();
+              const { code, created } = await core.channel.pairing.upsertPairingRequest({
+                channel: "matrix",
+                id: senderId,
+                accountId,
+                meta: { name: senderName },
+              });
+              if (shouldSendPairingReply(senderId, created)) {
+                const pairingReply = core.channel.pairing.buildPairingReply({
                   channel: "matrix",
-                  id: senderId,
-                  accountId,
-                  meta: { name: senderName },
+                  idLine: `Your Matrix user id: ${senderId}`,
+                  code,
                 });
-                if (shouldSendPairingReply(senderId, created)) {
-                  const pairingReply = core.channel.pairing.buildPairingReply({
-                    channel: "matrix",
-                    idLine: `Your Matrix user id: ${senderId}`,
-                    code,
-                  });
-                  logVerboseMessage(
+                logVerboseMessage(
+                  created
+                    ? `matrix pairing request sender=${senderId} name=${senderName ?? "unknown"} (${allowMatchMeta})`
+                    : `matrix pairing reminder sender=${senderId} name=${senderName ?? "unknown"} (${allowMatchMeta})`,
+                );
+                try {
+                  const { sendMessageMatrix } = await loadMatrixSendModule();
+                  await sendMessageMatrix(
+                    `room:${roomId}`,
                     created
-                      ? `matrix pairing request sender=${senderId} name=${senderName ?? "unknown"} (${allowMatchMeta})`
-                      : `matrix pairing reminder sender=${senderId} name=${senderName ?? "unknown"} (${allowMatchMeta})`,
-                  );
-                  try {
-                    const { sendMessageMatrix } = await loadMatrixSendModule();
-                    await sendMessageMatrix(
-                      `room:${roomId}`,
-                      created
-                        ? pairingReply
-                        : `${pairingReply}\n\nPairing request is still pending approval. Reusing existing code.`,
-                      {
-                        client,
-                        cfg,
-                        accountId,
-                      },
-                    );
-                    await commitInboundEventIfClaimed();
-                  } catch (err) {
-                    logVerboseMessage(
-                      `matrix pairing reply failed for ${senderId}: ${String(err)}`,
-                    );
-                    return undefined;
-                  }
-                } else {
-                  logVerboseMessage(
-                    `matrix pairing reminder suppressed sender=${senderId} (cooldown)`,
+                      ? pairingReply
+                      : `${pairingReply}\n\nPairing request is still pending approval. Reusing existing code.`,
+                    {
+                      client,
+                      cfg,
+                      accountId,
+                    },
                   );
                   await commitInboundEventIfClaimed();
+                } catch (err) {
+                  logVerboseMessage(`matrix pairing reply failed for ${senderId}: ${String(err)}`);
+                  return undefined;
                 }
-              }
-              if (isReactionEvent || dmPolicy !== "pairing") {
+              } else {
                 logVerboseMessage(
-                  `matrix: blocked ${isReactionEvent ? "reaction" : "dm"} sender ${senderId} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
+                  `matrix pairing reminder suppressed sender=${senderId} (cooldown)`,
                 );
                 await commitInboundEventIfClaimed();
               }
-              return undefined;
             }
+            if (isReactionEvent || dmPolicy !== "pairing") {
+              logVerboseMessage(
+                `matrix: blocked ${isReactionEvent ? "reaction" : "dm"} sender ${senderId} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
+              );
+              await commitInboundEventIfClaimed();
+            }
+            return undefined;
           }
         }
 

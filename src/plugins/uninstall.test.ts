@@ -762,6 +762,32 @@ describe("uninstallPlugin", () => {
       },
     },
     {
+      name: "deletes managed directory for copied path installs",
+      setup: async (baseDir: string) => {
+        const sourceDir = await createPluginDirFixture(path.join(baseDir, "source"));
+        const extensionsDir = path.join(baseDir, "extensions");
+        const installDir = resolvePluginInstallDir("my-plugin", extensionsDir);
+        await fs.mkdir(installDir, { recursive: true });
+        await fs.writeFile(path.join(installDir, "index.js"), "// copied plugin");
+        return {
+          config: createPluginConfig({
+            entries: createSinglePluginEntries(),
+            installs: {
+              "my-plugin": createPathInstallRecord(installDir, sourceDir),
+            },
+          }),
+          deleteFiles: true,
+          extensionsDir,
+          accessPath: installDir,
+          preservedPath: sourceDir,
+          expectedAccess: "missing" as const,
+          expectedActions: {
+            directory: true,
+          },
+        };
+      },
+    },
+    {
       name: "does not delete directory when deleteFiles is false",
       setup: async (baseDir: string) => {
         const pluginDir = await createPluginDirFixture(baseDir);
@@ -793,11 +819,15 @@ describe("uninstallPlugin", () => {
       config: params.config,
       pluginId: "my-plugin",
       deleteFiles: params.deleteFiles,
+      extensionsDir: "extensionsDir" in params ? params.extensionsDir : undefined,
     });
 
     expectSuccessfulUninstallActions(result, params.expectedActions);
     if ("accessPath" in params && "expectedAccess" in params) {
       await expectPathAccessState(params.accessPath, params.expectedAccess);
+    }
+    if ("preservedPath" in params) {
+      await expectPathAccessState(params.preservedPath, "exists");
     }
   });
 
@@ -890,6 +920,24 @@ describe("resolveUninstallDirectoryTarget", () => {
         },
       }),
     ).toBeNull();
+  });
+
+  it("returns managed install path for copied path installs", () => {
+    const extensionsDir = path.join(os.tmpdir(), "openclaw-uninstall-safe");
+    const installPath = resolvePluginInstallDir("my-plugin", extensionsDir);
+
+    expect(
+      resolveUninstallDirectoryTarget({
+        pluginId: "my-plugin",
+        hasInstall: true,
+        installRecord: {
+          source: "path",
+          sourcePath: "/tmp/source-plugin",
+          installPath,
+        },
+        extensionsDir,
+      }),
+    ).toBe(installPath);
   });
 
   it("falls back to default path when configured installPath is untrusted", () => {

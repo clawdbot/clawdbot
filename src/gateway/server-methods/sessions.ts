@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import { resolveAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   abortEmbeddedPiRun,
@@ -79,6 +80,7 @@ import {
   resolveDeletedAgentIdFromSessionKey,
   resolveFreshestSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
+  resolveSessionDisplayModelIdentityRef,
   resolveSessionModelRef,
   resolveSessionTranscriptCandidates,
   type SessionsPatchResult,
@@ -101,10 +103,44 @@ import { assertValidParams } from "./validation.js";
 type SessionsRuntimeModule = typeof import("./sessions.runtime.js");
 
 let sessionsRuntimeModulePromise: Promise<SessionsRuntimeModule> | undefined;
+let loggedSlowSessionsListCatalog = false;
+
+const SESSIONS_LIST_MODEL_CATALOG_TIMEOUT_MS = 750;
 
 function loadSessionsRuntimeModule(): Promise<SessionsRuntimeModule> {
   sessionsRuntimeModulePromise ??= import("./sessions.runtime.js");
   return sessionsRuntimeModulePromise;
+}
+
+async function loadOptionalSessionsListModelCatalog(
+  context: GatewayRequestContext,
+): Promise<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>> | undefined> {
+  let timeout: NodeJS.Timeout | undefined;
+  const timedOut = Symbol("sessions-list-model-catalog-timeout");
+  const timeoutPromise = new Promise<typeof timedOut>((resolve) => {
+    timeout = setTimeout(() => resolve(timedOut), SESSIONS_LIST_MODEL_CATALOG_TIMEOUT_MS);
+    timeout.unref?.();
+  });
+  try {
+    const result = await Promise.race([
+      context.loadGatewayModelCatalog().catch(() => undefined),
+      timeoutPromise,
+    ]);
+    if (result === timedOut) {
+      if (!loggedSlowSessionsListCatalog) {
+        loggedSlowSessionsListCatalog = true;
+        context.logGateway.debug(
+          `sessions.list continuing without model catalog after ${SESSIONS_LIST_MODEL_CATALOG_TIMEOUT_MS}ms`,
+        );
+      }
+      return undefined;
+    }
+    return Array.isArray(result) ? result : undefined;
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 function requireSessionKey(key: unknown, respond: RespondFn): string | null {
@@ -611,8 +647,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const p = params;
     const cfg = context.getRuntimeConfig();
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
-    const loadedCatalog = await context.loadGatewayModelCatalog().catch(() => undefined);
-    const modelCatalog = Array.isArray(loadedCatalog) ? loadedCatalog : undefined;
+    const modelCatalog = await loadOptionalSessionsListModelCatalog(context);
     const result = listSessionsFromStore({
       cfg,
       storePath,
@@ -1364,14 +1399,22 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const parsed = parseAgentSessionKey(target.canonicalKey ?? key);
     const agentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
     const resolved = resolveSessionModelRef(cfg, applied.entry, agentId);
+    const resolvedDisplayModel = resolveSessionDisplayModelIdentityRef({
+      cfg,
+      agentId,
+      provider: resolved.provider,
+      model: resolved.model,
+    });
+    const agentRuntime = resolveAgentRuntimeMetadata(cfg, agentId);
     const result: SessionsPatchResult = {
       ok: true,
       path: storePath,
       key: target.canonicalKey,
       entry: applied.entry,
       resolved: {
-        modelProvider: resolved.provider,
-        model: resolved.model,
+        modelProvider: resolvedDisplayModel.provider,
+        model: resolvedDisplayModel.model,
+        agentRuntime,
       },
     };
     respond(true, result, undefined);

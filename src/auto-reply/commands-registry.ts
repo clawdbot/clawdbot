@@ -1,5 +1,8 @@
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import {
+  buildConfiguredModelCatalog,
+  resolveConfiguredModelRef,
+} from "../agents/model-selection.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -26,6 +29,7 @@ import type {
   NativeCommandSpec,
   ShouldHandleTextCommandsParams,
 } from "./commands-registry.types.js";
+import type { ThinkingCatalogEntry } from "./thinking.shared.js";
 
 export {
   isCommandEnabled,
@@ -257,6 +261,7 @@ export function resolveCommandArgChoices(params: {
   cfg?: OpenClawConfig;
   provider?: string;
   model?: string;
+  catalog?: ThinkingCatalogEntry[];
 }): ResolvedCommandArgChoice[] {
   const { command, arg, cfg } = params;
   if (!arg.choices) {
@@ -271,6 +276,7 @@ export function resolveCommandArgChoices(params: {
           cfg,
           provider: params.provider ?? defaults.provider,
           model: params.model ?? defaults.model,
+          catalog: params.catalog ?? (cfg ? buildConfiguredModelCatalog({ cfg }) : undefined),
           command,
           arg,
         };
@@ -287,19 +293,29 @@ export function resolveCommandArgMenu(params: {
   cfg?: OpenClawConfig;
   provider?: string;
   model?: string;
+  catalog?: ThinkingCatalogEntry[];
 }): { arg: CommandArgDefinition; choices: ResolvedCommandArgChoice[]; title?: string } | null {
-  const { command, args, cfg, provider, model } = params;
+  const { command, args, cfg, provider, model, catalog } = params;
   if (!command.args || !command.argsMenu) {
     return null;
   }
   if (command.argsParsing === "none") {
     return null;
   }
+  const resolvedCatalog = catalog ?? (cfg ? buildConfiguredModelCatalog({ cfg }) : undefined);
   const argSpec = command.argsMenu;
   const argName =
     argSpec === "auto"
       ? command.args.find(
-          (arg) => resolveCommandArgChoices({ command, arg, cfg, provider, model }).length > 0,
+          (arg) =>
+            resolveCommandArgChoices({
+              command,
+              arg,
+              cfg,
+              provider,
+              model,
+              catalog: resolvedCatalog,
+            }).length > 0,
         )?.name
       : argSpec.arg;
   if (!argName) {
@@ -315,7 +331,14 @@ export function resolveCommandArgMenu(params: {
   if (!arg) {
     return null;
   }
-  const choices = resolveCommandArgChoices({ command, arg, cfg, provider, model });
+  const choices = resolveCommandArgChoices({
+    command,
+    arg,
+    cfg,
+    provider,
+    model,
+    catalog: resolvedCatalog,
+  });
   if (choices.length === 0) {
     return null;
   }

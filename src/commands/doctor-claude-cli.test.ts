@@ -112,6 +112,71 @@ describe("noteClaudeCliHealth", () => {
     });
   });
 
+  it("reports the Claude CLI workspace for a non-default runtime agent", async () => {
+    await withTempHome(({ homeDir, workspaceDir }) => {
+      const root = path.dirname(workspaceDir);
+      const defaultWorkspace = path.join(root, "workspace-coder");
+      const claudeWorkspace = path.join(root, "workspace-xiaoao");
+      fs.mkdirSync(defaultWorkspace, { recursive: true });
+      fs.mkdirSync(claudeWorkspace, { recursive: true });
+      const projectDir = resolveClaudeCliProjectDirForWorkspace({
+        workspaceDir: claudeWorkspace,
+        homeDir,
+      });
+      fs.mkdirSync(projectDir, { recursive: true });
+
+      const noteFn = vi.fn();
+      noteClaudeCliHealth(
+        {
+          agents: {
+            defaults: {
+              agentRuntime: { id: "codex" },
+              model: { primary: "openai/gpt-5.5" },
+            },
+            list: [
+              {
+                id: "coder",
+                default: true,
+                workspace: defaultWorkspace,
+                agentRuntime: { id: "codex" },
+              },
+              {
+                id: "xiaoao",
+                workspace: claudeWorkspace,
+                agentRuntime: { id: "claude-cli", fallback: "none" },
+                model: "anthropic/claude-opus-4-7",
+              },
+            ],
+          },
+        },
+        {
+          homeDir,
+          noteFn,
+          store: createStore({
+            [CLAUDE_CLI_PROFILE_ID]: {
+              type: "oauth",
+              provider: "claude-cli",
+              access: "token-a",
+              refresh: "token-r",
+              expires: Date.now() + 60_000,
+            },
+          }),
+          readClaudeCliCredentials: () => ({
+            type: "oauth",
+            expires: Date.now() + 60_000,
+          }),
+          resolveCommandPath: () => "/opt/homebrew/bin/claude",
+        },
+      );
+
+      expect(noteFn).toHaveBeenCalledTimes(1);
+      const body = String(noteFn.mock.calls[0]?.[0]);
+      expect(body).toContain(`Agent xiaoao workspace: ${claudeWorkspace} (writable).`);
+      expect(body).toContain(`Agent xiaoao Claude project dir: ${projectDir} (present).`);
+      expect(body).not.toContain(defaultWorkspace);
+    });
+  });
+
   it("explains the exact bad wiring when the claude-cli auth profile is missing", async () => {
     await withTempHome(({ homeDir, workspaceDir }) => {
       const noteFn = vi.fn();

@@ -45,7 +45,7 @@ Configure `dmPolicy` to control who can DM the bot:
 
 - `"pairing"` — unknown users receive a pairing code; approve via CLI
 - `"allowlist"` — only users listed in `allowFrom` can chat (default: bot owner only)
-- `"open"` — allow all users
+- `"open"` — allow public DMs only when `allowFrom` includes `"*"`; with restrictive entries, only matching users can chat
 - `"disabled"` — disable all DMs
 
 **Approve a pairing request:**

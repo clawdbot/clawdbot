@@ -135,6 +135,74 @@ async function prepareMainHistoryHarness(params: {
 }
 
 describe("gateway server chat", () => {
+  test("chat.history does not wait for model catalog discovery to return history", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      testState.agentConfig = {
+        model: { primary: "test-provider/slow-catalog-model" },
+      };
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            modelProvider: "test-provider",
+            model: "slow-catalog-model",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = {
+        loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(
+          async () => {
+            throw new Error("model catalog should not load for chat.history");
+          },
+        ),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+      } as unknown as GatewayRequestContext;
+      const { chatHandlers } = await import("./server-methods/chat.js");
+
+      await chatHandlers["chat.history"]({
+        req: {
+          type: "req",
+          id: "history-no-catalog",
+          method: "chat.history",
+          params: { sessionKey: "main" },
+        },
+        params: { sessionKey: "main" },
+        client: null,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload, error) => {
+          responses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+
+      expect(context.loadGatewayModelCatalog).not.toHaveBeenCalled();
+      expect(responses).toEqual([
+        expect.objectContaining({
+          ok: true,
+          payload: expect.objectContaining({
+            sessionKey: "main",
+            sessionId: "sess-main",
+            messages: expect.any(Array),
+          }),
+        }),
+      ]);
+    } finally {
+      clearConfigCache();
+      testState.agentConfig = undefined;
+      testState.sessionStorePath = undefined;
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
   test("chat.send returns in_flight when duplicate attachment send wins parsing race", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     const dispatchRelease = createDeferred<void>();

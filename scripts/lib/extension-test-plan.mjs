@@ -28,7 +28,7 @@ import { BUNDLED_PLUGIN_PATH_PREFIX, BUNDLED_PLUGIN_ROOT_DIR } from "./bundled-p
 import { listAvailableExtensionIds } from "./changed-extensions.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
-export const DEFAULT_EXTENSION_TEST_SHARD_COUNT = 6;
+export const DEFAULT_EXTENSION_TEST_SHARD_COUNT = 8;
 const EXTENSION_TEST_COST_MULTIPLIERS = {
   // CI shard planning uses measured wall time rather than raw file count.
   // These ratios come from Blacksmith extension batch timings; import-heavy

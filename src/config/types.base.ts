@@ -195,11 +195,11 @@ export type SessionMaintenanceConfig = {
   mode?: SessionMaintenanceMode;
   /** Remove session entries older than this duration (e.g. "30d", "12h"). Default: "30d". */
   pruneAfter?: string | number;
-  /** Deprecated. Use pruneAfter instead. */
+  /** @deprecated Use pruneAfter instead. */
   pruneDays?: number;
   /** Maximum number of session entries to keep. Default: 500. */
   maxEntries?: number;
-  /** Deprecated and ignored. Run `openclaw doctor --fix` to remove. */
+  /** @deprecated Ignored. Run `openclaw doctor --fix` to remove. */
   rotateBytes?: number | string;
   /**
    * Retention for archived reset transcripts (`*.reset.<timestamp>`).
@@ -290,11 +290,21 @@ export type WebReconnectConfig = {
   maxAttempts?: number; // 0 = unlimited
 };
 
+export type WebWhatsAppConfig = {
+  /** Baileys application ping interval in milliseconds. Default: 25000. */
+  keepAliveIntervalMs?: number;
+  /** WebSocket opening handshake timeout in milliseconds. Default: 60000. */
+  connectTimeoutMs?: number;
+  /** Baileys query timeout in milliseconds. Default: 60000. */
+  defaultQueryTimeoutMs?: number;
+};
+
 export type WebConfig = {
   /** If false, do not start the WhatsApp web provider. Default: true. */
   enabled?: boolean;
   heartbeatSeconds?: number;
   reconnect?: WebReconnectConfig;
+  whatsapp?: WebWhatsAppConfig;
 };
 
 // Provider docking: allowlists keyed by provider id (and internal "webchat").

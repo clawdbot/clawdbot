@@ -138,6 +138,7 @@
           },
           "format": {
             "type": "string",
+            "description": "Deprecated alias for fileFormat.",
             "enum": ["png", "pdf"]
           },
           "fileQuality": {
@@ -157,19 +158,23 @@
           },
           "imageFormat": {
             "type": "string",
+            "description": "Deprecated alias for fileFormat.",
             "enum": ["png", "pdf"]
           },
           "imageQuality": {
             "type": "string",
+            "description": "Deprecated alias for fileQuality.",
             "enum": ["standard", "hq", "print"]
           },
           "imageScale": {
             "type": "number",
+            "description": "Deprecated alias for fileScale.",
             "minimum": 1,
             "maximum": 4
           },
           "imageMaxWidth": {
             "type": "number",
+            "description": "Deprecated alias for fileMaxWidth.",
             "minimum": 640,
             "maximum": 2400
           },

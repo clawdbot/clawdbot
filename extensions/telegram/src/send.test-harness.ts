@@ -42,6 +42,10 @@ const { imageMetadata } = vi.hoisted(() => ({
   },
 }));
 
+const { probeVideoDimensions } = vi.hoisted(() => ({
+  probeVideoDimensions: vi.fn(),
+}));
+
 const { loadConfig, resolveStorePath } = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({})),
   resolveStorePath: vi.fn(
@@ -90,6 +94,7 @@ type TelegramSendTestMocks = {
   loadWebMedia: MockFn;
   maybePersistResolvedTelegramTarget: MockFn;
   imageMetadata: { width: number | undefined; height: number | undefined };
+  probeVideoDimensions: MockFn;
 };
 
 vi.mock("openclaw/plugin-sdk/web-media", () => ({
@@ -153,6 +158,7 @@ vi.mock("./send.runtime.js", () => ({
   loadConfig,
   loadWebMedia,
   normalizePollInput,
+  probeVideoDimensions,
   requireRuntimeConfig: vi.fn((cfg: unknown) => cfg ?? loadConfig()),
   resolveMarkdownTableMode,
   resolveStorePath,
@@ -171,6 +177,7 @@ export function getTelegramSendTestMocks(): TelegramSendTestMocks {
     loadWebMedia,
     maybePersistResolvedTelegramTarget,
     imageMetadata,
+    probeVideoDimensions,
   };
 }
 
@@ -179,6 +186,8 @@ export function installTelegramSendTestHooks() {
     loadConfig.mockReturnValue({});
     resolveStorePath.mockReturnValue("/tmp/openclaw-telegram-send-tests.json");
     loadWebMedia.mockReset();
+    probeVideoDimensions.mockReset();
+    probeVideoDimensions.mockResolvedValue(undefined);
     imageMetadata.width = 1200;
     imageMetadata.height = 800;
     maybePersistResolvedTelegramTarget.mockReset();

@@ -101,7 +101,7 @@ function createPluginSdkAliasFixture(params?: {
   mkdirSafeDir(path.join(root, "scripts", "lib"));
   fs.writeFileSync(
     path.join(root, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
-    JSON.stringify(["qa-lab", "qa-runtime"], null, 2),
+    JSON.stringify(["qa-channel", "qa-channel-protocol", "qa-lab", "qa-runtime"], null, 2),
     "utf-8",
   );
   fs.writeFileSync(srcFile, params?.srcBody ?? "export {};\n", "utf-8");
@@ -531,6 +531,16 @@ describe("plugin sdk alias helpers", () => {
       },
     });
     fs.writeFileSync(
+      path.join(fixture.root, "src", "plugin-sdk", "qa-channel.ts"),
+      "export const qaChannel = true;\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(fixture.root, "src", "plugin-sdk", "qa-channel-protocol.ts"),
+      "export const qaChannelProtocol = true;\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
       path.join(fixture.root, "src", "plugin-sdk", "qa-runtime.ts"),
       "export const qaRuntime = true;\n",
       "utf-8",
@@ -546,7 +556,7 @@ describe("plugin sdk alias helpers", () => {
         modulePath: path.join(fixture.root, "src", "plugins", "loader.ts"),
       }),
     );
-    expect(subpaths).toEqual(["core", "qa-lab", "qa-runtime"]);
+    expect(subpaths).toEqual(["core", "qa-channel", "qa-channel-protocol", "qa-lab", "qa-runtime"]);
   });
 
   it("does not reuse a non-private cached subpath list after private qa gets enabled", () => {
@@ -555,6 +565,16 @@ describe("plugin sdk alias helpers", () => {
         "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
       },
     });
+    fs.writeFileSync(
+      path.join(fixture.root, "src", "plugin-sdk", "qa-channel.ts"),
+      "export const qaChannel = true;\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(fixture.root, "src", "plugin-sdk", "qa-channel-protocol.ts"),
+      "export const qaChannelProtocol = true;\n",
+      "utf-8",
+    );
     fs.writeFileSync(
       path.join(fixture.root, "src", "plugin-sdk", "qa-runtime.ts"),
       "export const qaRuntime = true;\n",
@@ -577,7 +597,13 @@ describe("plugin sdk alias helpers", () => {
         modulePath: path.join(fixture.root, "src", "plugins", "loader.ts"),
       }),
     );
-    expect(privateSubpaths).toEqual(["core", "qa-lab", "qa-runtime"]);
+    expect(privateSubpaths).toEqual([
+      "core",
+      "qa-channel",
+      "qa-channel-protocol",
+      "qa-lab",
+      "qa-runtime",
+    ]);
   });
 
   it.each([
@@ -657,9 +683,22 @@ describe("plugin sdk alias helpers", () => {
       },
     });
     const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
+    const sourceQaChannelPath = path.join(fixture.root, "src", "plugin-sdk", "qa-channel.ts");
+    const sourceQaChannelProtocolPath = path.join(
+      fixture.root,
+      "src",
+      "plugin-sdk",
+      "qa-channel-protocol.ts",
+    );
     const sourceQaRuntimePath = path.join(fixture.root, "src", "plugin-sdk", "qa-runtime.ts");
     const distQaLabPath = path.join(fixture.root, "dist", "plugin-sdk", "qa-lab.js");
     fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
+    fs.writeFileSync(sourceQaChannelPath, "export const qaChannel = true;\n", "utf-8");
+    fs.writeFileSync(
+      sourceQaChannelProtocolPath,
+      "export const qaChannelProtocol = true;\n",
+      "utf-8",
+    );
     fs.writeFileSync(sourceQaRuntimePath, "export const qaRuntime = true;\n", "utf-8");
     fs.writeFileSync(distQaLabPath, "export const qaLab = true;\n", "utf-8");
     const sourcePluginEntry = writePluginEntry(
@@ -676,6 +715,12 @@ describe("plugin sdk alias helpers", () => {
     );
     expect(fs.realpathSync(aliases["openclaw/plugin-sdk/qa-runtime"] ?? "")).toBe(
       fs.realpathSync(sourceQaRuntimePath),
+    );
+    expect(fs.realpathSync(aliases["openclaw/plugin-sdk/qa-channel"] ?? "")).toBe(
+      fs.realpathSync(sourceQaChannelPath),
+    );
+    expect(fs.realpathSync(aliases["openclaw/plugin-sdk/qa-channel-protocol"] ?? "")).toBe(
+      fs.realpathSync(sourceQaChannelProtocolPath),
     );
     expect(fs.realpathSync(aliases["openclaw/plugin-sdk/qa-lab"] ?? "")).toBe(
       fs.realpathSync(distQaLabPath),

@@ -48,6 +48,10 @@ openclaw plugins marketplace list <marketplace>
 openclaw plugins marketplace list <marketplace> --json
 ```
 
+For slow install, inspect, uninstall, or registry-refresh investigation, run the
+command with `OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1`. The trace writes phase timings
+to stderr and keeps JSON output parseable. See [Debugging](/help/debugging#plugin-lifecycle-trace).
+
 <Note>
 Bundled plugins ship with OpenClaw. Some are enabled by default (for example bundled model providers, bundled speech providers, and the bundled browser plugin); others require `plugins enable`.
 
@@ -75,6 +79,16 @@ openclaw plugins install <plugin> --marketplace https://github.com/<owner>/<repo
 Bare package names are checked against ClawHub first, then npm. Treat plugin installs like running code. Prefer pinned versions.
 </Warning>
 
+<Note>
+ClawHub is the primary distribution and discovery surface for most plugins. Npm
+remains a supported fallback and direct-install path. During the migration to
+ClawHub, OpenClaw still ships some OpenClaw-owned `@openclaw/*` plugin packages
+on npm; those package versions can lag the bundled source between plugin release
+trains. If npm reports an OpenClaw-owned plugin package as deprecated, that
+published version is an old external artifact; use the plugin bundled with
+current OpenClaw or a local checkout until a newer npm package is published.
+</Note>
+
 <AccordionGroup>
   <Accordion title="Config includes and invalid-config recovery">
     If your `plugins` section is backed by a single-file `$include`, `plugins install/update/enable/disable/uninstall` write through to that included file and leave `openclaw.json` untouched. Root includes, include arrays, and includes with sibling overrides fail closed instead of flattening. See [Config includes](/gateway/configuration) for the supported shapes.
@@ -95,6 +109,8 @@ Bare package names are checked against ClawHub first, then npm. Treat plugin ins
     `--dangerously-force-unsafe-install` is a break-glass option for false positives in the built-in dangerous-code scanner. It allows the install to continue even when the built-in scanner reports `critical` findings, but it does **not** bypass plugin `before_install` hook policy blocks and does **not** bypass scan failures.
 
     This CLI flag applies to plugin install/update flows. Gateway-backed skill dependency installs use the matching `dangerouslyForceUnsafeInstall` request override, while `openclaw skills install` remains a separate ClawHub skill download/install flow.
+
+    If a plugin you published on ClawHub is blocked by a registry scan, use the publisher steps in [ClawHub](/tools/clawhub).
 
   </Accordion>
   <Accordion title="Hook packs and npm specs">

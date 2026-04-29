@@ -16,18 +16,18 @@ cleanup() {
 trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" crestodian-first-run
-docker_e2e_harness_mount_args
+OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 crestodian-first-run empty)"
 
 echo "Running in-container Crestodian first-run smoke..."
 # Harness files are mounted read-only; the app under test comes from /app/dist.
 set +e
-docker run --rm \
+docker_e2e_run_with_harness \
   --name "$CONTAINER_NAME" \
-  -e "OPENCLAW_STATE_DIR=/tmp/openclaw-state" \
-  -e "OPENCLAW_CONFIG_PATH=/tmp/openclaw-state/openclaw.json" \
-  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
+  -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "$IMAGE_NAME" \
   bash -lc "set -euo pipefail
+    source scripts/lib/openclaw-e2e-instance.sh
+    openclaw_e2e_eval_test_state_from_b64 \"\${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}\"
     tsx scripts/e2e/crestodian-first-run-docker-client.ts
   " >"$RUN_LOG" 2>&1
 status=${PIPESTATUS[0]}

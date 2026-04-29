@@ -32,7 +32,6 @@ export function resolvePluginRuntimeRecord(
 ): PluginRuntimeRecord | null {
   const manifestRegistry = loadPluginManifestRegistry({
     config: readPluginBoundaryConfigSafely(),
-    cache: true,
   });
   const record = manifestRegistry.plugins.find((plugin) => plugin.id === pluginId);
   if (!record?.source) {
@@ -54,7 +53,6 @@ export function resolvePluginRuntimeRecordByEntryBaseNames(
 ): PluginRuntimeRecord | null {
   const manifestRegistry = loadPluginManifestRegistry({
     config: readPluginBoundaryConfigSafely(),
-    cache: true,
   });
   const matches = manifestRegistry.plugins.filter((plugin) => {
     if (!plugin?.source) {

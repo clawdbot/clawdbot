@@ -32,7 +32,6 @@ type NormalizedTransportLike = {
 };
 
 type ProviderRuntimeTestMockOptions = {
-  clearHookCache?: () => void;
   getOpenRouterModelCapabilities?: (modelId: string) => OpenRouterModelCapabilities | undefined;
   handledDynamicProviders?: readonly string[];
   loadOpenRouterModelCapabilities?: (modelId: string) => Promise<void>;
@@ -526,7 +525,6 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
     options.loadOpenRouterModelCapabilities ?? (async () => {});
 
   return {
-    clearProviderRuntimeHookCache: options.clearHookCache ?? (() => {}),
     buildProviderUnknownModelHintWithPlugin: (params: { provider: string }) => {
       switch (params.provider) {
         case "ollama":

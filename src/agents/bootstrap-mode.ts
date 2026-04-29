@@ -18,7 +18,7 @@ export function resolveBootstrapMode(params: {
     return "none";
   }
   if (!params.hasBootstrapFileAccess) {
-    return "none";
+    return "limited";
   }
   return params.isCanonicalWorkspace ? "full" : "limited";
 }

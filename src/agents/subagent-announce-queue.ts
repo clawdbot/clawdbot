@@ -111,6 +111,39 @@ function getAnnounceQueue(
   return created;
 }
 
+function resolveAnnounceAuthorizationKey(item: AnnounceQueueItem): string {
+  return JSON.stringify([item.sessionKey, item.originKey ?? ""]);
+}
+
+function splitCollectItemsByAuthorization(items: AnnounceQueueItem[]): AnnounceQueueItem[][] {
+  if (items.length <= 1) {
+    return items.length === 0 ? [] : [items];
+  }
+
+  const groups: AnnounceQueueItem[][] = [];
+  let currentGroup: AnnounceQueueItem[] = [];
+  let currentKey: string | undefined;
+
+  for (const item of items) {
+    const itemKey = resolveAnnounceAuthorizationKey(item);
+    if (currentGroup.length === 0 || itemKey === currentKey) {
+      currentGroup.push(item);
+      currentKey = itemKey;
+      continue;
+    }
+
+    groups.push(currentGroup);
+    currentGroup = [item];
+    currentKey = itemKey;
+  }
+
+  if (currentGroup.length > 0) {
+    groups.push(currentGroup);
+  }
+
+  return groups;
+}
+
 function hasAnnounceCrossChannelItems(items: AnnounceQueueItem[]): boolean {
   return hasCrossChannelItems(items, (item) => {
     if (!item.origin) {
@@ -171,25 +204,34 @@ function scheduleAnnounceDrain(key: string) {
           }
           const items = queue.items.slice();
           const summary = previewQueueSummaryPrompt({ state: queue, noun: "announce" });
-          const prompt = buildCollectPrompt({
-            title: "[Queued announce messages while agent was busy]",
-            items,
-            summary,
-            renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
-          });
-          const internalEvents = items.flatMap((item) => item.internalEvents ?? []);
-          const last = items.at(-1);
-          if (!last) {
+          const authGroups = splitCollectItemsByAuthorization(items);
+          if (authGroups.length === 0) {
             break;
           }
-          await queue.send({
-            ...last,
-            prompt,
-            internalEvents: internalEvents.length > 0 ? internalEvents : last.internalEvents,
-          });
-          queue.items.splice(0, items.length);
-          if (summary) {
-            clearQueueSummaryState(queue);
+
+          let pendingSummary = summary;
+          for (const groupItems of authGroups) {
+            const prompt = buildCollectPrompt({
+              title: "[Queued announce messages while agent was busy]",
+              items: groupItems,
+              summary: pendingSummary,
+              renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
+            });
+            const internalEvents = groupItems.flatMap((item) => item.internalEvents ?? []);
+            const last = groupItems.at(-1);
+            if (!last) {
+              break;
+            }
+            await queue.send({
+              ...last,
+              prompt,
+              internalEvents: internalEvents.length > 0 ? internalEvents : last.internalEvents,
+            });
+            queue.items.splice(0, groupItems.length);
+            if (pendingSummary) {
+              clearQueueSummaryState(queue);
+              pendingSummary = undefined;
+            }
           }
           continue;
         }

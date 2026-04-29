@@ -83,4 +83,53 @@ describe("live cache regression runner", () => {
       ),
     ).toBe(false);
   });
+
+  it("accepts a warmup that already hits the provider cache", () => {
+    const findings = __testing.evaluateAgainstBaseline({
+      lane: "image",
+      provider: "anthropic",
+      result: {
+        best: {
+          hitRate: 0.999,
+          suffix: "image-hit",
+          text: "CACHE-OK image-hit",
+          usage: { cacheRead: 5_742, cacheWrite: 0, input: 3 },
+        },
+        warmup: {
+          hitRate: 0.999,
+          suffix: "image-warmup",
+          text: "CACHE-OK image-warmup",
+          usage: { cacheRead: 5_741, cacheWrite: 0, input: 3 },
+        },
+      },
+    });
+
+    expect(findings).toEqual({ regressions: [], warnings: [] });
+  });
+
+  it("still rejects warmups with no cache write or cache hit evidence", () => {
+    const findings = __testing.evaluateAgainstBaseline({
+      lane: "image",
+      provider: "anthropic",
+      result: {
+        best: {
+          hitRate: 0.999,
+          suffix: "image-hit",
+          text: "CACHE-OK image-hit",
+          usage: { cacheRead: 5_742, cacheWrite: 0, input: 3 },
+        },
+        warmup: {
+          hitRate: 0,
+          suffix: "image-warmup",
+          text: "CACHE-OK image-warmup",
+          usage: { cacheRead: 0, cacheWrite: 0, input: 5_741 },
+        },
+      },
+    });
+
+    expect(findings).toEqual({
+      regressions: ["anthropic:image warmup cacheWrite=0 < min=1"],
+      warnings: [],
+    });
+  });
 });

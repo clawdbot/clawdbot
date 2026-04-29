@@ -199,6 +199,43 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     }
   });
 
+  it("marks inter-session transcriptPrompt before submitting the visible prompt", async () => {
+    let seenPrompt: string | undefined;
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        prompt: [
+          "visible ask",
+          "",
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "secret runtime context",
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        ].join("\n"),
+        transcriptPrompt: "visible ask",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:discord:source",
+          sourceTool: "sessions_send",
+        },
+      },
+      sessionPrompt: async (session, prompt) => {
+        seenPrompt = prompt;
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(seenPrompt).toMatch(/^\[Inter-session message\]/);
+    expect(seenPrompt).toContain("isUser=false");
+    expect(seenPrompt).toContain("visible ask");
+    expect(result.finalPromptText).toBe(seenPrompt);
+  });
+
   it("submits runtime-only context through system prompt without visible prompt", async () => {
     let seenPrompt: string | undefined;
 
@@ -278,6 +315,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       attemptOverrides: {
         promptMode: "none",
         disableTools: true,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:discord:source",
+          sourceTool: "sessions_send",
+        },
       },
       sessionPrompt: async (session, prompt) => {
         seen.prompt = prompt;
@@ -291,6 +333,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(seen.prompt).toBe("hello");
+    expect(seen.prompt).not.toContain("[Inter-session message]");
     expect(seen.messages).toEqual([]);
     expect(seen.systemPrompt ?? "").toBe("");
     expect(result.finalPromptText).toBe("hello");

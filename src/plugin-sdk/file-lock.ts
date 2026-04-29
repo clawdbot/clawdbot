@@ -183,10 +183,16 @@ export async function acquireFileLock(
   for (let attempt = 0; attempt <= options.retries.retries; attempt += 1) {
     try {
       const handle = await fs.open(lockPath, "wx");
-      await handle.writeFile(
-        JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }, null, 2),
-        "utf8",
-      );
+      try {
+        await handle.writeFile(
+          JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }, null, 2),
+          "utf8",
+        );
+      } catch (writeError) {
+        await handle.close().catch(() => undefined);
+        await fs.rm(lockPath, { force: true }).catch(() => undefined);
+        throw writeError;
+      }
       HELD_LOCKS.set(normalizedFile, { count: 1, handle, lockPath });
       return {
         lockPath,

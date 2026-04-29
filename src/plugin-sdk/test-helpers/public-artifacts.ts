@@ -1,4 +1,7 @@
-import { assertUniqueValues, BUNDLED_RUNTIME_SIDECAR_PATHS } from "../testing.js";
+import {
+  assertUniqueValues,
+  BUNDLED_RUNTIME_SIDECAR_PATHS,
+} from "../../plugins/runtime-sidecar-paths.js";
 
 export function getPublicArtifactBasename(relativePath: string): string {
   return relativePath.split("/").at(-1) ?? relativePath;

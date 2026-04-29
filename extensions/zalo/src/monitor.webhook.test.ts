@@ -559,6 +559,7 @@ describe("handleZaloWebhookRequest", () => {
         ...DEFAULT_ACCOUNT,
         config: {
           dmPolicy: "open",
+          allowFrom: ["*"],
         },
       },
     });

@@ -8,6 +8,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
 import type {
+  PluginHookCronChangedEvent,
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
@@ -53,12 +54,75 @@ describe("gateway hook runner methods", () => {
     await expectGatewayHookCall({ hookName, event, gatewayCtx });
   });
 
+  it("runCronChanged invokes registered cron_changed hooks", async () => {
+    const handler = vi.fn();
+    const { runner } = createHookRunnerWithRegistry([{ hookName: "cron_changed", handler }]);
+    const event: PluginHookCronChangedEvent = {
+      action: "updated",
+      jobId: "job-1",
+      nextRunAtMs: 123,
+      job: {
+        id: "job-1",
+        state: { nextRunAtMs: 123 },
+      },
+    };
+
+    await runner.runCronChanged(event, gatewayCtx);
+
+    expect(handler).toHaveBeenCalledWith(event, gatewayCtx);
+  });
+
+  it("runCronChanged passes finished events with delivery and error fields", async () => {
+    const handler = vi.fn();
+    const { runner } = createHookRunnerWithRegistry([{ hookName: "cron_changed", handler }]);
+    const event: PluginHookCronChangedEvent = {
+      action: "finished",
+      jobId: "job-2",
+      status: "error",
+      error: "timeout",
+      summary: "Job timed out",
+      delivered: false,
+      deliveryStatus: "not-delivered",
+      deliveryError: "channel unavailable",
+      durationMs: 5000,
+      runAtMs: 100,
+      nextRunAtMs: 200,
+      model: "gpt-5.4",
+      provider: "openai",
+      job: {
+        id: "job-2",
+        state: { lastRunStatus: "error", lastError: "timeout" },
+      },
+    };
+
+    await runner.runCronChanged(event, gatewayCtx);
+
+    expect(handler).toHaveBeenCalledWith(event, gatewayCtx);
+  });
+
+  it("runCronChanged handles removed events without job", async () => {
+    const handler = vi.fn();
+    const { runner } = createHookRunnerWithRegistry([{ hookName: "cron_changed", handler }]);
+    const event: PluginHookCronChangedEvent = {
+      action: "removed",
+      jobId: "job-3",
+      job: { id: "job-3", name: "deleted-job" },
+    };
+
+    await runner.runCronChanged(event, gatewayCtx);
+
+    expect(handler).toHaveBeenCalledWith(event, gatewayCtx);
+    expect(handler.mock.calls[0][0].job).toEqual({ id: "job-3", name: "deleted-job" });
+  });
+
   it("hasHooks returns true for registered gateway hooks", () => {
     const { runner } = createHookRunnerWithRegistry([
       { hookName: "gateway_start", handler: vi.fn() },
+      { hookName: "cron_changed", handler: vi.fn() },
     ]);
 
     expect(runner.hasHooks("gateway_start")).toBe(true);
+    expect(runner.hasHooks("cron_changed")).toBe(true);
     expect(runner.hasHooks("gateway_stop")).toBe(false);
   });
 });

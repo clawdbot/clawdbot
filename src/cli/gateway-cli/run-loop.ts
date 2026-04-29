@@ -279,11 +279,12 @@ export async function runGatewayLoop(params: {
   const SHUTDOWN_TIMEOUT_MS = SUPERVISOR_STOP_TIMEOUT_MS - 5_000;
   const resolveRestartDrainTimeoutMs = async (): Promise<RestartDrainTimeoutMs> => {
     try {
-      const { getRuntimeConfig } = await loadRuntimeConfigModule();
+      const [{ getRuntimeConfig }, { resolveGatewayRestartDeferralTimeoutMs }] = await Promise.all([
+        loadRuntimeConfigModule(),
+        loadRestartModule(),
+      ]);
       const timeoutMs = getRuntimeConfig().gateway?.reload?.deferralTimeoutMs;
-      return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-        ? timeoutMs
-        : undefined;
+      return resolveGatewayRestartDeferralTimeoutMs(timeoutMs);
     } catch {
       return DEFAULT_RESTART_DRAIN_TIMEOUT_MS;
     }

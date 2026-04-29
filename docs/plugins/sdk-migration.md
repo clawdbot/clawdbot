@@ -489,7 +489,7 @@ releases.
   | `plugin-sdk/provider-stream` | Provider stream wrapper helpers | `ProviderStreamFamily`, `buildProviderStreamFamilyHooks`, `composeProviderStreamWrappers`, stream wrapper types, and shared Anthropic/Bedrock/DeepSeek V4/Google/Kilocode/Moonshot/OpenAI/OpenRouter/Z.A.I/MiniMax/Copilot wrapper helpers |
   | `plugin-sdk/provider-transport-runtime` | Provider transport helpers | Native provider transport helpers such as guarded fetch, transport message transforms, and writable transport event streams |
   | `plugin-sdk/keyed-async-queue` | Ordered async queue | `KeyedAsyncQueue` |
-  | `plugin-sdk/media-runtime` | Shared media helpers | Media fetch/transform/store helpers plus media payload builders |
+  | `plugin-sdk/media-runtime` | Shared media helpers | Media fetch/transform/store helpers, ffprobe-backed video dimension probing, and media payload builders |
   | `plugin-sdk/media-generation-runtime` | Shared media-generation helpers | Shared failover helpers, candidate selection, and missing-model messaging for image/video/music generation |
   | `plugin-sdk/media-understanding` | Media-understanding helpers | Media understanding provider types plus provider-facing image/audio helper exports |
   | `plugin-sdk/text-runtime` | Shared text helpers | Assistant-visible-text stripping, markdown render/chunking/table helpers, redaction helpers, directive-tag helpers, safe-text utilities, and related text/logging helpers |
@@ -545,10 +545,12 @@ surface. The full list of 200+ entrypoints lives in
 `scripts/lib/plugin-sdk-entrypoints.json`.
 
 Reserved bundled-plugin helper seams have been retired from the public SDK
-export map. Owner-specific helpers live inside the owning plugin package; shared
-host behavior should move through generic SDK contracts such as
-`plugin-sdk/gateway-runtime`, `plugin-sdk/security-runtime`, and
-`plugin-sdk/plugin-config-runtime`.
+export map except for explicitly documented compatibility facades such as the
+deprecated `plugin-sdk/discord` shim retained for the published
+`@openclaw/discord@2026.3.13` package. Owner-specific helpers live inside the
+owning plugin package; shared host behavior should move through generic SDK
+contracts such as `plugin-sdk/gateway-runtime`, `plugin-sdk/security-runtime`,
+and `plugin-sdk/plugin-config-runtime`.
 
 Use the narrowest import that matches the job. If you cannot find an export,
 check the source at `src/plugin-sdk/` or ask maintainers which generic contract
@@ -645,8 +647,8 @@ canonical replacement.
     | `ProviderPluginDiscovery` | `ProviderPluginCatalog`   |
 
     Plus the legacy `ProviderCapabilities` static bag — provider plugins
-    should attach capability facts through the provider runtime contract
-    rather than a static object.
+    should use explicit provider hooks such as `buildReplayPolicy`,
+    `normalizeToolSchemas`, and `wrapStreamFn` rather than a static object.
 
   </Accordion>
 

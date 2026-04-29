@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createStubSessionHarness,
   emitAssistantTextDelta,
+  emitAssistantTextEnd,
   emitMessageStartAndEndForAssistantText,
   extractAgentEventPayloads,
 } from "./pi-embedded-subscribe.e2e-harness.js";
@@ -77,6 +78,160 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(onPartialReply).toHaveBeenCalled();
     expect(onPartialReply.mock.calls[0][0].text).toBe("Hello world");
+  });
+
+  it("strips final tags split across streamed deltas without emitting tag remnants", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    for (const delta of ["<", "final>Title\n", "Line one\nLine two</", "final>"]) {
+      emitAssistantTextDelta({ emit, delta });
+    }
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    const streamedText = payloads.map((payload) => payload.delta).join("");
+    expect(streamedText).toBe("Title\nLine one\nLine two");
+    expect(streamedText).not.toContain("<");
+    expect(streamedText).not.toContain("final>");
+    expect(payloads.some((payload) => payload.replace)).toBe(false);
+  });
+
+  it("preserves final content when enforced final tags are split across streamed deltas", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onPartialReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      enforceFinalTag: true,
+      onPartialReply,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    for (const delta of ["<fi", "nal>Visible", " content</fi", "nal>"]) {
+      emitAssistantTextDelta({ emit, delta });
+    }
+
+    const streamedText = onPartialReply.mock.calls
+      .map((call) => (call[0] as { delta?: unknown }).delta)
+      .filter((delta): delta is string => typeof delta === "string")
+      .join("");
+    expect(streamedText).toBe("Visible content");
+  });
+
+  it("does not buffer ordinary trailing less-than text as a tag fragment", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "1 < 2" });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads.map((payload) => payload.delta).join("")).toBe("1 < 2");
+  });
+
+  it("flushes a literal trailing final-tag prefix when the text stream ends", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "Answer ends with <fi" });
+    emitAssistantTextEnd({ emit });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads.map((payload) => payload.delta).join("")).toBe("Answer ends with <fi");
+  });
+
+  it("flushes a literal trailing final-tag prefix in text_end block replies", async () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onBlockReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "text_end",
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "Answer ends with <fi" });
+    emitAssistantTextEnd({ emit });
+    await Promise.resolve();
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Answer ends with <fi");
+  });
+
+  it("keeps a trailing final-tag prefix when synchronous message_end drains chunked text_end replies", async () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onBlockReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "text_end",
+      blockReplyChunking: { minChars: 1, maxChars: 200 },
+    });
+
+    const text = "Answer ends with <fi";
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text }],
+    } as AssistantMessage;
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: text });
+    emitAssistantTextEnd({ emit });
+    emit({ type: "message_end", message: assistantMessage });
+    await Promise.resolve();
+
+    expect(onBlockReply.mock.calls.map((call) => call[0]?.text)).toEqual([
+      "Answer ends with",
+      "<fi",
+    ]);
+  });
+
+  it("preserves literal trailing tag-prefix text from message end fallback", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    emitMessageStartAndEndForAssistantText({ emit, text: "Answer ends with <" });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads.map((payload) => payload.delta).join("")).toBe("Answer ends with <");
   });
   it("does not require <final> when enforcement is off", () => {
     const { session, emit } = createStubSessionHarness();

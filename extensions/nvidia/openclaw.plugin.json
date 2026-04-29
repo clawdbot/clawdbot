@@ -29,6 +29,9 @@
               "output": 0,
               "cacheRead": 0,
               "cacheWrite": 0
+            },
+            "compat": {
+              "requiresStringContent": true
             }
           },
           {
@@ -42,6 +45,9 @@
               "output": 0,
               "cacheRead": 0,
               "cacheWrite": 0
+            },
+            "compat": {
+              "requiresStringContent": true
             }
           },
           {
@@ -55,6 +61,9 @@
               "output": 0,
               "cacheRead": 0,
               "cacheWrite": 0
+            },
+            "compat": {
+              "requiresStringContent": true
             }
           },
           {
@@ -68,6 +77,9 @@
               "output": 0,
               "cacheRead": 0,
               "cacheWrite": 0
+            },
+            "compat": {
+              "requiresStringContent": true
             }
           }
         ]

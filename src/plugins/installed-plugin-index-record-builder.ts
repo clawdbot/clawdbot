@@ -7,6 +7,7 @@ import type { PluginCandidate } from "./discovery.js";
 import type { PluginInstallSourceInfo } from "./install-source-info.js";
 import { describePluginInstallSource } from "./install-source-info.js";
 import { hashJson, safeHashFile } from "./installed-plugin-index-hash.js";
+import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import type {
   InstalledPluginIndexRecord,
   InstalledPluginInstallRecordInfo,
@@ -219,6 +220,40 @@ function normalizePackageChannel(
   };
 }
 
+function hashManifestlessBundleRecord(record: PluginManifestRecord): string {
+  return hashJson({
+    id: record.id,
+    name: record.name,
+    description: record.description,
+    version: record.version,
+    format: record.format,
+    bundleFormat: record.bundleFormat,
+    bundleCapabilities: record.bundleCapabilities ?? [],
+    skills: record.skills ?? [],
+    settingsFiles: record.settingsFiles ?? [],
+    hooks: record.hooks ?? [],
+  });
+}
+
+function resolveManifestHash(params: {
+  record: PluginManifestRecord;
+  diagnostics: PluginDiagnostic[];
+}): string {
+  if (hasOptionalMissingPluginManifestFile(params.record)) {
+    return hashManifestlessBundleRecord(params.record);
+  }
+  const hash = safeHashFile({
+    filePath: params.record.manifestPath,
+    pluginId: params.record.id,
+    diagnostics: params.diagnostics,
+    required: true,
+  });
+  if (hash) {
+    return hash;
+  }
+  return "";
+}
+
 function buildCandidateLookup(
   candidates: readonly PluginCandidate[],
 ): Map<string, PluginCandidate> {
@@ -244,13 +279,7 @@ export function buildInstalledPluginIndexRecords(params: {
     const installRecord = params.installRecords[record.id];
     const packageInstall = describePackageInstallSource(candidate);
     const packageChannel = normalizePackageChannel(candidate?.packageManifest?.channel);
-    const manifestHash =
-      safeHashFile({
-        filePath: record.manifestPath,
-        pluginId: record.id,
-        diagnostics: params.diagnostics,
-        required: true,
-      }) ?? "";
+    const manifestHash = resolveManifestHash({ record, diagnostics: params.diagnostics });
     const packageJson = resolvePackageJsonRecord({
       candidate,
       packageJsonPath,

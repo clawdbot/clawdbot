@@ -13,20 +13,34 @@ const WEB_LOGOUT_TEST_TIMEOUT_MS = 15_000;
 
 describe("web logout", () => {
   let fixtureRoot = "";
+  let previousOAuthDir: string | undefined;
   let caseId = 0;
   let logoutWeb: typeof import("./auth-store.js").logoutWeb;
 
   beforeAll(async () => {
     fixtureRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-test-web-logout-"));
+    previousOAuthDir = process.env.OPENCLAW_OAUTH_DIR;
+    process.env.OPENCLAW_OAUTH_DIR = path.join(fixtureRoot, "oauth");
     ({ logoutWeb } = await import("./auth-store.js"));
   });
 
   afterAll(async () => {
+    if (previousOAuthDir === undefined) {
+      delete process.env.OPENCLAW_OAUTH_DIR;
+    } else {
+      process.env.OPENCLAW_OAUTH_DIR = previousOAuthDir;
+    }
     await fsPromises.rm(fixtureRoot, { recursive: true, force: true });
   });
 
   const makeCaseDir = async () => {
-    const dir = path.join(fixtureRoot, `case-${caseId++}`);
+    const dir = path.join(fixtureRoot, "oauth", "whatsapp", `case-${caseId++}`);
+    await fsPromises.mkdir(dir, { recursive: true });
+    return dir;
+  };
+
+  const makeExternalCaseDir = async () => {
+    const dir = path.join(fixtureRoot, "external", `case-${caseId++}`);
     await fsPromises.mkdir(dir, { recursive: true });
     return dir;
   };
@@ -79,11 +93,11 @@ describe("web logout", () => {
   });
 
   it("keeps shared oauth.json when using legacy auth dir", async () => {
-    const credsDir = await createAuthCase({
-      "creds.json": "{}",
-      "oauth.json": '{"token":true}',
-      "session-abc.json": "{}",
-    });
+    const credsDir = path.join(fixtureRoot, "oauth");
+    await fsPromises.mkdir(credsDir, { recursive: true });
+    await fsPromises.writeFile(path.join(credsDir, "creds.json"), "{}", "utf-8");
+    await fsPromises.writeFile(path.join(credsDir, "oauth.json"), '{"token":true}', "utf-8");
+    await fsPromises.writeFile(path.join(credsDir, "session-abc.json"), "{}", "utf-8");
 
     const result = await logoutWeb({
       authDir: credsDir,
@@ -94,5 +108,55 @@ describe("web logout", () => {
     expect(fs.existsSync(path.join(credsDir, "oauth.json"))).toBe(true);
     expect(fs.existsSync(path.join(credsDir, "creds.json"))).toBe(false);
     expect(fs.existsSync(path.join(credsDir, "session-abc.json"))).toBe(false);
+  });
+
+  it("does not delete custom auth directories outside the OpenClaw auth root", async () => {
+    const authDir = await makeExternalCaseDir();
+    await fsPromises.mkdir(path.join(authDir, "nested"));
+    await fsPromises.writeFile(path.join(authDir, "creds.json"), "{}", "utf-8");
+    await fsPromises.writeFile(path.join(authDir, "oauth.json"), '{"token":true}', "utf-8");
+    await fsPromises.writeFile(path.join(authDir, "notes.txt"), "keep", "utf-8");
+    await fsPromises.writeFile(path.join(authDir, "nested", "session-abc.json"), "keep", "utf-8");
+
+    const result = await logoutWeb({ authDir, runtime: runtime as never });
+    expect(result).toBe(false);
+    expect(fs.existsSync(authDir)).toBe(true);
+    expect(fs.existsSync(path.join(authDir, "creds.json"))).toBe(true);
+    expect(fs.existsSync(path.join(authDir, "oauth.json"))).toBe(true);
+    expect(fs.existsSync(path.join(authDir, "notes.txt"))).toBe(true);
+    expect(fs.existsSync(path.join(authDir, "nested", "session-abc.json"))).toBe(true);
+  });
+
+  it("does not delete through symlinked auth dirs inside the OpenClaw auth root", async () => {
+    const externalDir = await makeExternalCaseDir();
+    const authDir = path.join(fixtureRoot, "oauth", "whatsapp", `case-${caseId++}`);
+    await fsPromises.mkdir(path.dirname(authDir), { recursive: true });
+    await fsPromises.writeFile(path.join(externalDir, "creds.json"), "{}", "utf-8");
+    await fsPromises.writeFile(path.join(externalDir, "notes.txt"), "keep", "utf-8");
+    await fsPromises.symlink(externalDir, authDir, "dir");
+
+    const result = await logoutWeb({ authDir, runtime: runtime as never });
+    expect(result).toBe(false);
+    expect(fs.existsSync(authDir)).toBe(true);
+    expect(fs.existsSync(path.join(externalDir, "creds.json"))).toBe(true);
+    expect(fs.existsSync(path.join(externalDir, "notes.txt"))).toBe(true);
+  });
+
+  it("does not delete through intermediate symlinks inside the OpenClaw auth root", async () => {
+    const externalRoot = path.join(fixtureRoot, "external", `case-${caseId++}`);
+    const externalAuthDir = path.join(externalRoot, "default");
+    const linkedParent = path.join(fixtureRoot, "oauth", "whatsapp", `linked-${caseId++}`);
+    const authDir = path.join(linkedParent, "default");
+    await fsPromises.mkdir(externalAuthDir, { recursive: true });
+    await fsPromises.mkdir(path.dirname(linkedParent), { recursive: true });
+    await fsPromises.writeFile(path.join(externalAuthDir, "creds.json"), "{}", "utf-8");
+    await fsPromises.writeFile(path.join(externalAuthDir, "notes.txt"), "keep", "utf-8");
+    await fsPromises.symlink(externalRoot, linkedParent, "dir");
+
+    const result = await logoutWeb({ authDir, runtime: runtime as never });
+    expect(result).toBe(false);
+    expect(fs.existsSync(authDir)).toBe(true);
+    expect(fs.existsSync(path.join(externalAuthDir, "creds.json"))).toBe(true);
+    expect(fs.existsSync(path.join(externalAuthDir, "notes.txt"))).toBe(true);
   });
 });

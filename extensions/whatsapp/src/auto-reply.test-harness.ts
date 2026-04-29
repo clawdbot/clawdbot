@@ -7,6 +7,7 @@ import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-dedupe";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
+import type { WebChannelStatus } from "./auto-reply/types.js";
 import type { WebInboundMessage, WebListenerCloseReason } from "./inbound.js";
 import {
   resetBaileysMocks as _resetBaileysMocks,
@@ -44,8 +45,13 @@ type WebAutoReplyMonitorHarness = {
   run: Promise<unknown>;
 };
 type MockSessionSocket = {
-  ev: { on: ReturnType<typeof vi.fn>; off: ReturnType<typeof vi.fn> };
-  ws: EventEmitter & { close: ReturnType<typeof vi.fn> };
+  ev: {
+    on: ReturnType<typeof vi.fn>;
+    off: ReturnType<typeof vi.fn>;
+  };
+  ws: EventEmitter & {
+    close: ReturnType<typeof vi.fn>;
+  };
   user: { id: string };
 };
 
@@ -67,7 +73,7 @@ vi.mock("./session.js", async () => {
     createWaSocket: vi.fn(async () => {
       const ws = new EventEmitter() as MockSessionSocket["ws"];
       ws.close = vi.fn();
-      const sock: MockSessionSocket = {
+      const socket: MockSessionSocket = {
         ev: {
           on: vi.fn(),
           off: vi.fn(),
@@ -75,8 +81,8 @@ vi.mock("./session.js", async () => {
         ws,
         user: { id: "123@s.whatsapp.net" },
       };
-      getSessionSockets().push(sock);
-      return sock;
+      getSessionSockets().push(socket);
+      return socket;
     }),
     waitForWaConnection: vi.fn().mockResolvedValue(undefined),
   };
@@ -308,9 +314,12 @@ export function startWebAutoReplyMonitor(params: {
   sleep: UnknownMock | AsyncUnknownMock;
   signal?: AbortSignal;
   heartbeatSeconds?: number;
+  transportTimeoutMs?: number;
   messageTimeoutMs?: number;
   watchdogCheckMs?: number;
   reconnect?: { initialMs: number; maxMs: number; maxAttempts: number; factor: number };
+  accountId?: string;
+  statusSink?: (status: WebChannelStatus) => void;
 }): WebAutoReplyMonitorHarness {
   const runtime = createWebAutoReplyRuntime();
   const controller = new AbortController();
@@ -323,10 +332,13 @@ export function startWebAutoReplyMonitor(params: {
     params.signal ?? controller.signal,
     {
       heartbeatSeconds: params.heartbeatSeconds ?? 1,
+      transportTimeoutMs: params.transportTimeoutMs,
       messageTimeoutMs: params.messageTimeoutMs,
       watchdogCheckMs: params.watchdogCheckMs,
       reconnect: params.reconnect ?? { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
       sleep: params.sleep,
+      accountId: params.accountId,
+      statusSink: params.statusSink,
     },
   );
 

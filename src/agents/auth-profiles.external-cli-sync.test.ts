@@ -3,9 +3,11 @@ import type { AuthProfileStore, OAuthCredential } from "./auth-profiles/types.js
 import type { ClaudeCliCredential } from "./cli-credentials.js";
 
 const mocks = vi.hoisted(() => ({
-  readClaudeCliCredentialsCached: vi.fn<() => ClaudeCliCredential | null>(() => null),
-  readCodexCliCredentialsCached: vi.fn<() => OAuthCredential | null>(() => null),
-  readMiniMaxCliCredentialsCached: vi.fn<() => OAuthCredential | null>(() => null),
+  readClaudeCliCredentialsCached: vi.fn<(options?: unknown) => ClaudeCliCredential | null>(
+    () => null,
+  ),
+  readCodexCliCredentialsCached: vi.fn<(options?: unknown) => OAuthCredential | null>(() => null),
+  readMiniMaxCliCredentialsCached: vi.fn<(options?: unknown) => OAuthCredential | null>(() => null),
 }));
 
 let readManagedExternalCliCredential: typeof import("./auth-profiles/external-cli-sync.js").readManagedExternalCliCredential;
@@ -329,6 +331,47 @@ describe("external cli oauth resolution", () => {
         }),
       },
     ]);
+  });
+
+  it("skips external cli readers outside the scoped provider set", () => {
+    const profiles = resolveExternalCliAuthProfiles(makeStore(), {
+      providerIds: ["opencode-go"],
+    });
+
+    expect(profiles).toEqual([]);
+    expect(mocks.readCodexCliCredentialsCached).not.toHaveBeenCalled();
+    expect(mocks.readClaudeCliCredentialsCached).not.toHaveBeenCalled();
+    expect(mocks.readMiniMaxCliCredentialsCached).not.toHaveBeenCalled();
+  });
+
+  it("passes non-prompting keychain policy to scoped Claude CLI credential reads", () => {
+    mocks.readClaudeCliCredentialsCached.mockReturnValue({
+      type: "oauth",
+      provider: "anthropic",
+      access: "claude-cli-access",
+      refresh: "claude-cli-refresh",
+      expires: Date.now() + 5 * 24 * 60 * 60_000,
+    });
+
+    const profiles = resolveExternalCliAuthProfiles(makeStore(), {
+      providerIds: ["claude-cli"],
+      allowKeychainPrompt: false,
+    });
+
+    expect(profiles).toEqual([
+      {
+        profileId: CLAUDE_CLI_PROFILE_ID,
+        credential: expect.objectContaining({
+          type: "oauth",
+          provider: "claude-cli",
+        }),
+      },
+    ]);
+    expect(mocks.readClaudeCliCredentialsCached).toHaveBeenCalledWith(
+      expect.objectContaining({ allowKeychainPrompt: false }),
+    );
+    expect(mocks.readCodexCliCredentialsCached).not.toHaveBeenCalled();
+    expect(mocks.readMiniMaxCliCredentialsCached).not.toHaveBeenCalled();
   });
 
   it("ignores Claude CLI token credentials", () => {

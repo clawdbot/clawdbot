@@ -7,6 +7,7 @@ import {
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasNonEmptyString } from "../infra/outbound/channel-target.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import { listBundledChannelPluginIds } from "./plugins/bundled-ids.js";
 
@@ -36,6 +37,17 @@ export function hasMeaningfulChannelConfig(value: unknown): boolean {
     return false;
   }
   return Object.keys(value).some((key) => key !== "enabled");
+}
+
+export function listExplicitlyDisabledChannelIdsForConfig(cfg: OpenClawConfig): string[] {
+  const channels = isRecord(cfg.channels) ? cfg.channels : null;
+  if (!channels) {
+    return [];
+  }
+  return Object.entries(channels)
+    .filter(([, value]) => isRecord(value) && value.enabled === false)
+    .map(([channelId]) => normalizeOptionalLowercaseString(channelId))
+    .filter((channelId): channelId is string => Boolean(channelId));
 }
 
 function listChannelEnvPrefixes(

@@ -33,6 +33,7 @@ export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   requestedByClientId?: string | null;
   resolvedAtMs?: number;
   decision?: ExecApprovalDecision;
+  consumedDecision?: ExecApprovalDecision;
   resolvedBy?: string | null;
 };
 
@@ -181,6 +182,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     }
     // One-time approvals must be consumed atomically so the same runId
     // cannot be replayed during the resolved-entry grace window.
+    record.consumedDecision = record.decision;
     record.decision = undefined;
     return true;
   }
@@ -194,7 +196,10 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     return entry?.promise ?? null;
   }
 
-  lookupPendingId(input: string): ExecApprovalIdLookupResult {
+  lookupApprovalId(
+    input: string,
+    opts: { includeResolved?: boolean } = {},
+  ): ExecApprovalIdLookupResult {
     const normalized = input.trim();
     if (!normalized) {
       return { kind: "none" };
@@ -202,7 +207,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
 
     const exact = this.pending.get(normalized);
     if (exact) {
-      return exact.record.resolvedAtMs === undefined
+      return opts.includeResolved || exact.record.resolvedAtMs === undefined
         ? { kind: "exact", id: normalized }
         : { kind: "none" };
     }
@@ -210,7 +215,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     const lowerPrefix = normalizeLowercaseStringOrEmpty(normalized);
     const matches: string[] = [];
     for (const [id, entry] of this.pending.entries()) {
-      if (entry.record.resolvedAtMs !== undefined) {
+      if (!opts.includeResolved && entry.record.resolvedAtMs !== undefined) {
         continue;
       }
       if (normalizeLowercaseStringOrEmpty(id).startsWith(lowerPrefix)) {
@@ -225,5 +230,9 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       return { kind: "ambiguous", ids: matches };
     }
     return { kind: "none" };
+  }
+
+  lookupPendingId(input: string): ExecApprovalIdLookupResult {
+    return this.lookupApprovalId(input);
   }
 }

@@ -7,6 +7,7 @@ import {
   pruneExpiredPending,
   readDurableJsonFile,
   reconcilePendingPairingRequests,
+  coercePairingStateRecord,
   resolvePairingPaths,
   writeJsonAtomic,
 } from "./pairing-files.js";
@@ -136,12 +137,12 @@ type ApproveNodePairingResult = ApprovedNodePairingResult | ForbiddenNodePairing
 async function loadState(baseDir?: string): Promise<NodePairingStateFile> {
   const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "nodes");
   const [pending, paired] = await Promise.all([
-    readDurableJsonFile<Record<string, NodePairingPendingRequest>>(pendingPath),
-    readDurableJsonFile<Record<string, NodePairingPairedNode>>(pairedPath),
+    readDurableJsonFile<unknown>(pendingPath),
+    readDurableJsonFile<unknown>(pairedPath),
   ]);
   const state: NodePairingStateFile = {
-    pendingById: pending ?? {},
-    pairedByNodeId: paired ?? {},
+    pendingById: coercePairingStateRecord<NodePairingPendingRequest>(pending),
+    pairedByNodeId: coercePairingStateRecord<NodePairingPairedNode>(paired),
   };
   pruneExpiredPending(state.pendingById, Date.now(), PENDING_TTL_MS);
   return state;

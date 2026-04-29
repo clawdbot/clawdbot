@@ -18,6 +18,13 @@ export function resolvePairingPaths(baseDir: string | undefined, subdir: string)
   };
 }
 
+export function coercePairingStateRecord<T>(value: unknown): Record<string, T> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return value as Record<string, T>;
+}
+
 export function pruneExpiredPending<T extends { ts: number }>(
   pendingById: Record<string, T>,
   nowMs: number,

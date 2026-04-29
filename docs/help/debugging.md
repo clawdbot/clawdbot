@@ -43,6 +43,32 @@ Use `/trace` for plugin diagnostics such as Active Memory debug summaries.
 Keep using `/verbose` for normal verbose status/tool output, and keep using
 `/debug` for runtime-only config overrides.
 
+## Plugin lifecycle trace
+
+Use `OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1` when plugin lifecycle commands feel slow
+and you need a built-in phase breakdown for plugin metadata, discovery, registry,
+runtime mirror, config mutation, and refresh work. The trace is opt-in and writes
+to stderr, so JSON command output remains parseable.
+
+Example:
+
+```bash
+OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1 openclaw plugins install tokenjuice --force
+```
+
+Example output:
+
+```text
+[plugins:lifecycle] phase="config read" ms=6.83 status=ok command="install"
+[plugins:lifecycle] phase="slot selection" ms=94.31 status=ok command="install" pluginId="tokenjuice"
+[plugins:lifecycle] phase="registry refresh" ms=51.56 status=ok command="install" reason="source-changed"
+```
+
+Use this for plugin lifecycle investigation before reaching for a CPU profiler.
+If the command is running from a source checkout, prefer measuring the built
+runtime with `node dist/entry.js ...` after `pnpm build`; `pnpm openclaw ...`
+also measures source-runner overhead.
+
 ## Temporary CLI debug timing
 
 OpenClaw keeps `src/cli/debug-timing.ts` as a small helper for local
@@ -190,11 +216,41 @@ For fast iteration, run the gateway under the file watcher:
 pnpm gateway:watch
 ```
 
-This maps to:
+By default, this starts or restarts a tmux session named
+`openclaw-gateway-watch-main` (or a profile/port-specific variant such as
+`openclaw-gateway-watch-dev-19001`) and auto-attaches from interactive terminals.
+Non-interactive shells, CI, and agent exec calls stay detached and print attach
+instructions instead. Attach manually when needed:
+
+```bash
+tmux attach -t openclaw-gateway-watch-main
+```
+
+The tmux pane runs the raw watcher:
 
 ```bash
 node scripts/watch-node.mjs gateway --force
 ```
+
+Use foreground mode when tmux is not wanted:
+
+```bash
+pnpm gateway:watch:raw
+# or
+OPENCLAW_GATEWAY_WATCH_TMUX=0 pnpm gateway:watch
+```
+
+Disable auto-attach while keeping tmux management:
+
+```bash
+OPENCLAW_GATEWAY_WATCH_ATTACH=0 pnpm gateway:watch
+```
+
+The tmux wrapper carries common non-secret runtime selectors such as
+`OPENCLAW_PROFILE`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_STATE_DIR`,
+`OPENCLAW_GATEWAY_PORT`, and `OPENCLAW_SKIP_CHANNELS` into the pane. Put
+provider credentials in your normal profile/config, or use raw foreground mode
+for one-off ephemeral secrets.
 
 The watcher restarts on build-relevant files under `src/`, extension source files,
 extension `package.json` and `openclaw.plugin.json` metadata, `tsconfig.json`,
@@ -203,8 +259,9 @@ gateway without forcing a `tsdown` rebuild; source and config changes still
 rebuild `dist` first.
 
 Add any gateway CLI flags after `gateway:watch` and they will be passed through on
-each restart. Re-running the same watch command for the same repo/flag set now
-replaces the older watcher instead of leaving duplicate watcher parents behind.
+each restart. Re-running the same watch command respawns the named tmux pane, and
+the raw watcher still keeps its single-watcher lock so duplicate watcher parents
+are replaced instead of piling up.
 
 ## Dev profile + dev gateway (--dev)
 

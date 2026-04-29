@@ -29,6 +29,14 @@ function createRetryingSend() {
   return { send, prompts, waitForSecondAttempt };
 }
 
+function createCollectSendRecorder() {
+  const calls: AnnounceQueueItem[] = [];
+  const send = vi.fn(async (item: AnnounceQueueItem) => {
+    calls.push(item);
+  });
+  return { calls, send };
+}
+
 describe("subagent-announce-queue", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -120,6 +128,82 @@ describe("subagent-announce-queue", () => {
     expect(sender.prompts[1]).toContain("queued item one");
     expect(sender.prompts[1]).toContain("Queued #2");
     expect(sender.prompts[1]).toContain("queued item two");
+  });
+
+  it("splits collect-mode batches when target authorization context changes", async () => {
+    const sender = createCollectSendRecorder();
+    const settings = { mode: "collect", debounceMs: 0 } as const;
+    const origin = { channel: "slack", to: "channel:C123", accountId: "acct-1" };
+
+    enqueueAnnounce({
+      key: "announce:test:collect-auth-split",
+      item: {
+        prompt: "first child completed",
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:slack:thread:a",
+        origin,
+      },
+      settings,
+      send: sender.send,
+    });
+    enqueueAnnounce({
+      key: "announce:test:collect-auth-split",
+      item: {
+        prompt: "second child completed",
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:slack:thread:b",
+        origin,
+      },
+      settings,
+      send: sender.send,
+    });
+
+    await vi.waitFor(() => {
+      expect(sender.send).toHaveBeenCalledTimes(2);
+    });
+    expect(sender.calls.map((call) => call.sessionKey)).toEqual([
+      "agent:main:slack:thread:a",
+      "agent:main:slack:thread:b",
+    ]);
+    expect(sender.calls[0]?.prompt).toContain("first child completed");
+    expect(sender.calls[0]?.prompt).not.toContain("second child completed");
+    expect(sender.calls[1]?.prompt).toContain("second child completed");
+  });
+
+  it("keeps one collect-mode batch when target authorization context matches", async () => {
+    const sender = createCollectSendRecorder();
+    const settings = { mode: "collect", debounceMs: 0 } as const;
+    const origin = { channel: "slack", to: "channel:C123", accountId: "acct-1" };
+
+    enqueueAnnounce({
+      key: "announce:test:collect-auth-match",
+      item: {
+        prompt: "first child completed",
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:slack:thread:a",
+        origin,
+      },
+      settings,
+      send: sender.send,
+    });
+    enqueueAnnounce({
+      key: "announce:test:collect-auth-match",
+      item: {
+        prompt: "second child completed",
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:slack:thread:a",
+        origin,
+      },
+      settings,
+      send: sender.send,
+    });
+
+    await vi.waitFor(() => {
+      expect(sender.send).toHaveBeenCalledTimes(1);
+    });
+    expect(sender.calls[0]?.sessionKey).toBe("agent:main:slack:thread:a");
+    expect(sender.calls[0]?.prompt).toContain("first child completed");
+    expect(sender.calls[0]?.prompt).toContain("second child completed");
   });
 
   it("waits until a busy parent session becomes idle before draining", async () => {

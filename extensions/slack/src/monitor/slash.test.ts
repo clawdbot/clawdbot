@@ -976,7 +976,7 @@ describe("slack slash commands access groups", () => {
 
   it("still treats D-prefixed channel ids as DMs when lookup fails", async () => {
     const harness = createPolicyHarness({
-      allowFrom: [],
+      allowFrom: ["*"],
       channelId: "D123",
       channelName: "notdirectmessage",
       resolveChannelName: async () => ({}),
@@ -996,12 +996,12 @@ describe("slack slash commands access groups", () => {
     const dispatchArg = dispatchMock.mock.calls[0]?.[0] as {
       ctx?: { CommandAuthorized?: boolean };
     };
-    expect(dispatchArg?.ctx?.CommandAuthorized).toBe(false);
+    expect(dispatchArg?.ctx?.CommandAuthorized).toBe(true);
   });
 
   it("computes CommandAuthorized for DM slash commands when dmPolicy is open", async () => {
     const harness = createPolicyHarness({
-      allowFrom: ["U_OWNER"],
+      allowFrom: ["*"],
       channelId: "D999",
       channelName: "directmessage",
       resolveChannelName: async () => ({ name: "directmessage", type: "im" }),
@@ -1020,7 +1020,7 @@ describe("slack slash commands access groups", () => {
     const dispatchArg = dispatchMock.mock.calls[0]?.[0] as {
       ctx?: { CommandAuthorized?: boolean };
     };
-    expect(dispatchArg?.ctx?.CommandAuthorized).toBe(false);
+    expect(dispatchArg?.ctx?.CommandAuthorized).toBe(true);
   });
 
   it("classifies MPIM slash commands as group chat context", async () => {

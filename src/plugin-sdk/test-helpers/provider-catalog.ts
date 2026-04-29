@@ -12,14 +12,13 @@ export {
 
 type ProviderRuntimeCatalogModule = Pick<
   typeof import("openclaw/plugin-sdk/provider-catalog-runtime"),
-  "augmentModelCatalogWithProviderPlugins" | "resetProviderRuntimeHookCacheForTest"
+  "augmentModelCatalogWithProviderPlugins"
 >;
 
 export async function importProviderRuntimeCatalogModule(): Promise<ProviderRuntimeCatalogModule> {
-  const { augmentModelCatalogWithProviderPlugins, resetProviderRuntimeHookCacheForTest } =
+  const { augmentModelCatalogWithProviderPlugins } =
     await import("openclaw/plugin-sdk/provider-catalog-runtime");
   return {
     augmentModelCatalogWithProviderPlugins,
-    resetProviderRuntimeHookCacheForTest,
   };
 }

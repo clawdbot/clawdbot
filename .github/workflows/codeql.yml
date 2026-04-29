@@ -11,7 +11,6 @@ on:
         options:
           - all
           - security
-          - macos-security
   schedule:
     - cron: "0 6 * * *"
 
@@ -29,7 +28,7 @@ permissions:
 
 jobs:
   critical-security:
-    name: Critical Security (${{ matrix.language }})
+    name: Critical Security (${{ matrix.category }})
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'security' }}
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
@@ -38,10 +37,17 @@ jobs:
       matrix:
         include:
           - language: javascript-typescript
+            category: javascript-typescript
             runs_on: blacksmith-8vcpu-ubuntu-2404
             timeout_minutes: 25
             config_file: ./.github/codeql/codeql-javascript-typescript-critical-security.yml
+          - language: javascript-typescript
+            category: channel-runtime-boundary
+            runs_on: blacksmith-8vcpu-ubuntu-2404
+            timeout_minutes: 25
+            config_file: ./.github/codeql/codeql-channel-runtime-boundary-critical-security.yml
           - language: actions
+            category: actions
             runs_on: blacksmith-8vcpu-ubuntu-2404
             timeout_minutes: 10
             config_file: ./.github/codeql/codeql-actions-critical-security.yml
@@ -60,75 +66,4 @@ jobs:
       - name: Analyze
         uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
         with:
-          category: "/codeql-critical-security/${{ matrix.language }}"
-
-  macos-security:
-    name: Critical Security (macOS)
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.profile == 'macos-security' }}
-    runs-on: blacksmith-6vcpu-macos-latest
-    timeout-minutes: 45
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        with:
-          submodules: false
-
-      - name: Select Xcode
-        run: |
-          sudo xcode-select -s /Applications/Xcode_26.1.app
-          xcodebuild -version
-          swift --version
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
-        with:
-          languages: swift
-          build-mode: manual
-          config-file: ./.github/codeql/codeql-macos-critical-security.yml
-
-      - name: Build macOS for CodeQL
-        run: swift build --package-path apps/macos --product OpenClaw
-
-      - name: Analyze
-        id: analyze
-        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
-        with:
-          output: sarif-results
-          upload: failure-only
-          category: "/codeql-critical-security/macos"
-
-      - name: Remove dependency build results
-        env:
-          SARIF_OUTPUT: sarif-results
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-
-          if [ ! -d "$SARIF_OUTPUT" ]; then
-            echo "SARIF output directory not found: $SARIF_OUTPUT" >&2
-            exit 1
-          fi
-
-          mkdir -p sarif-results-filtered
-
-          files=("$SARIF_OUTPUT"/*.sarif)
-          if [ "${#files[@]}" -eq 0 ]; then
-            echo "No SARIF files found in $SARIF_OUTPUT" >&2
-            exit 1
-          fi
-
-          for file in "${files[@]}"; do
-            jq '
-              def in_dependency_build:
-                ((.locations // []) | length > 0)
-                and all(.locations[]; (.physicalLocation.artifactLocation.uri? // "") | test("^apps/macos/\\.build/"));
-
-              .runs |= map(.results = ((.results // []) | map(select(in_dependency_build | not))))
-            ' "$file" > "sarif-results-filtered/$(basename "$file")"
-          done
-
-      - name: Upload filtered SARIF
-        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
-        with:
-          sarif_file: sarif-results-filtered
-          category: "/codeql-critical-security/macos"
+          category: "/codeql-critical-security/${{ matrix.category }}"

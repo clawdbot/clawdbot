@@ -7,8 +7,6 @@ import {
   type PluginPackageChannel,
 } from "./manifest.js";
 
-let bundledPackageChannelMetadataCache: readonly PluginPackageChannel[] | undefined;
-
 function readPackageManifest(pluginDir: string): PackageManifest | undefined {
   const packagePath = path.join(pluginDir, "package.json");
   if (!fs.existsSync(packagePath)) {
@@ -22,21 +20,16 @@ function readPackageManifest(pluginDir: string): PackageManifest | undefined {
 }
 
 export function listBundledPackageChannelMetadata(): readonly PluginPackageChannel[] {
-  if (bundledPackageChannelMetadataCache) {
-    return bundledPackageChannelMetadataCache;
-  }
   const scanDir = resolveBundledPluginsDir();
   if (!scanDir || !fs.existsSync(scanDir)) {
-    bundledPackageChannelMetadataCache = [];
-    return bundledPackageChannelMetadataCache;
+    return [];
   }
-  bundledPackageChannelMetadataCache = fs
+  return fs
     .readdirSync(scanDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => readPackageManifest(path.join(scanDir, entry.name)))
     .map((manifest) => getPackageManifestMetadata(manifest)?.channel)
     .filter((channel): channel is PluginPackageChannel => Boolean(channel?.id));
-  return bundledPackageChannelMetadataCache;
 }
 
 export function findBundledPackageChannelMetadata(

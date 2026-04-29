@@ -202,7 +202,6 @@ describe("plugin-sdk qa-runner-runtime", () => {
       },
     ]);
     expect(loadPluginManifestRegistry).toHaveBeenCalledWith({
-      cache: true,
       env: expect.objectContaining({
         OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
         OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(sourceRoot, "extensions"),

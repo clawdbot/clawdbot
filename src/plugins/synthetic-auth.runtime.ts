@@ -18,7 +18,7 @@ function uniqueProviderRefs(values: readonly string[]): string[] {
 }
 
 function resolveManifestSyntheticAuthProviderRefs(): string[] {
-  const result = loadPluginRegistrySnapshotWithMetadata({ cache: true });
+  const result = loadPluginRegistrySnapshotWithMetadata({});
   if (result.source !== "persisted" && result.source !== "provided") {
     return [];
   }

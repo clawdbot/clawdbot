@@ -31,6 +31,7 @@ type ModelSelectionState = {
   allowedModelKeys: Set<string>;
   allowedModelCatalog: ModelCatalog;
   resetModelOverride: boolean;
+  resetModelOverrideRef?: string;
   resolveThinkingCatalog: () => Promise<ModelCatalog | undefined>;
   resolveDefaultThinkingLevel: () => Promise<ThinkLevel>;
   /** Default reasoning level from model capability: "on" if model has reasoning, else "off". */
@@ -49,6 +50,7 @@ export function createFastTestModelSelectionState(params: {
     allowedModelKeys: new Set<string>(),
     allowedModelCatalog: [],
     resetModelOverride: false,
+    resetModelOverrideRef: undefined,
     resolveThinkingCatalog: async () => [],
     resolveDefaultThinkingLevel: async () => params.agentCfg?.thinkingDefault as ThinkLevel,
     resolveDefaultReasoningLevel: async () => "off",
@@ -129,6 +131,7 @@ export async function createModelSelectionState(params: {
   let allowedModelCatalog: ModelCatalog = configuredModelCatalog;
   let modelCatalog: ModelCatalog | null = null;
   let resetModelOverride = false;
+  let resetModelOverrideRef: string | undefined;
   const agentEntry = params.agentId ? resolveAgentConfig(cfg, params.agentId) : undefined;
   const directStoredOverride = resolvePersistedOverrideModelRef({
     defaultProvider,
@@ -192,6 +195,9 @@ export async function createModelSelectionState(params: {
         }
       }
       resetModelOverride = updated;
+      if (updated) {
+        resetModelOverrideRef = key;
+      }
     }
   }
 
@@ -309,6 +315,7 @@ export async function createModelSelectionState(params: {
     allowedModelKeys,
     allowedModelCatalog,
     resetModelOverride,
+    resetModelOverrideRef,
     resolveThinkingCatalog,
     resolveDefaultThinkingLevel,
     resolveDefaultReasoningLevel,

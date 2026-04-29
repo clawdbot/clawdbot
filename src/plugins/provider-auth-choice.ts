@@ -347,10 +347,8 @@ export async function applyAuthChoiceLoadedPluginProvider(
     });
   }
   if (!resolved && installCatalogEntry) {
-    const [{ ensureOnboardingPluginInstalled }, { clearPluginDiscoveryCache }] = await Promise.all([
-      import("../commands/onboarding-plugin-install.js"),
-      import("./discovery.js"),
-    ]);
+    const { ensureOnboardingPluginInstalled } =
+      await import("../commands/onboarding-plugin-install.js");
     const installResult = await ensureOnboardingPluginInstalled({
       cfg: nextConfig,
       entry: {
@@ -366,7 +364,6 @@ export async function applyAuthChoiceLoadedPluginProvider(
       return { config: installResult.cfg, retrySelection: true };
     }
     nextConfig = installResult.cfg;
-    clearPluginDiscoveryCache();
     providers = resolveScopedRuntimeProviders(nextConfig);
     resolved = resolveProviderPluginChoice({
       providers,

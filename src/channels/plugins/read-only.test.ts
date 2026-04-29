@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupPluginLoaderFixturesForTest,
   EMPTY_PLUGIN_SCHEMA,
@@ -9,6 +9,104 @@ import {
   useNoBundledPlugins,
 } from "../../plugins/loader.test-fixtures.js";
 import { listReadOnlyChannelPluginsForConfig } from "./read-only.js";
+
+vi.mock("../../plugins/bundled-dir.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../plugins/bundled-dir.js")>();
+  return {
+    ...actual,
+    resolveBundledPluginsDir: (env: NodeJS.ProcessEnv = process.env) =>
+      env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? actual.resolveBundledPluginsDir(env),
+  };
+});
+
+vi.mock("../../plugins/jiti-loader-cache.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../plugins/jiti-loader-cache.js")>();
+  const { createRequire } = await import("node:module");
+  const require = createRequire(import.meta.url);
+
+  type LoaderConfig = {
+    plugins?: {
+      load?: { paths?: unknown };
+    };
+  };
+  type LoaderParams = {
+    config?: LoaderConfig;
+    onlyPluginIds?: readonly string[];
+    workspaceDir?: string;
+  };
+
+  function readJson(filePath: string): unknown {
+    return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+  }
+
+  function isRecord(value: unknown): value is Record<string, unknown> {
+    return Boolean(value && typeof value === "object" && !Array.isArray(value));
+  }
+
+  function listCandidatePluginDirs(params: LoaderParams): string[] {
+    const paths = params.config?.plugins?.load?.paths;
+    const explicitPaths = Array.isArray(paths)
+      ? paths.filter((entry): entry is string => typeof entry === "string")
+      : [];
+    const workspaceExtensionsDir = params.workspaceDir
+      ? path.join(params.workspaceDir, ".openclaw", "extensions")
+      : undefined;
+    if (!workspaceExtensionsDir || !fs.existsSync(workspaceExtensionsDir)) {
+      return explicitPaths;
+    }
+    return explicitPaths.concat(
+      fs
+        .readdirSync(workspaceExtensionsDir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => path.join(workspaceExtensionsDir, entry.name)),
+    );
+  }
+
+  function loadOpenClawPlugins(params: LoaderParams) {
+    const onlyPluginIds = new Set(params.onlyPluginIds ?? []);
+    const channelSetups = listCandidatePluginDirs(params).flatMap((pluginDir) => {
+      const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
+      const packagePath = path.join(pluginDir, "package.json");
+      if (!fs.existsSync(manifestPath) || !fs.existsSync(packagePath)) {
+        return [];
+      }
+      const manifest = readJson(manifestPath);
+      if (!isRecord(manifest) || typeof manifest.id !== "string") {
+        return [];
+      }
+      if (onlyPluginIds.size > 0 && !onlyPluginIds.has(manifest.id)) {
+        return [];
+      }
+      const packageJson = readJson(packagePath);
+      const openclaw = isRecord(packageJson) ? packageJson.openclaw : undefined;
+      const setupEntry = isRecord(openclaw) ? openclaw.setupEntry : undefined;
+      if (typeof setupEntry !== "string") {
+        return [];
+      }
+      const setupModule = require(path.join(pluginDir, setupEntry));
+      const entry = setupModule.default ?? setupModule;
+      const plugin = entry.plugin;
+      return plugin ? [{ pluginId: manifest.id, plugin }] : [];
+    });
+    return { channelSetups };
+  }
+
+  return {
+    ...actual,
+    getCachedPluginJitiLoader: ((params) => {
+      const actualLoader = actual.getCachedPluginJitiLoader(params);
+      return ((modulePath: string) => {
+        if (
+          modulePath.endsWith("/plugins/loader.js") ||
+          modulePath.endsWith("/plugins/loader.ts")
+        ) {
+          return { loadOpenClawPlugins };
+        }
+        return actualLoader(modulePath);
+      }) as ReturnType<typeof actual.getCachedPluginJitiLoader>;
+    }) satisfies typeof actual.getCachedPluginJitiLoader,
+  };
+});
 
 function writeExternalSetupChannelPlugin(
   options: {

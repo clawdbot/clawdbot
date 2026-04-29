@@ -6,7 +6,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTempHome as withTempHomeBase } from "../plugin-sdk/test-helpers/temp-home.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
-import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
 import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { resetModelsJsonReadyCacheForTest } from "./models-config-state.js";
@@ -24,14 +23,12 @@ export function withModelsTempHome<T>(fn: (home: string) => Promise<T>): Promise
 export function installModelsConfigTestHooks(opts?: {
   restoreFetch?: boolean;
   resetPluginLoaderState?: boolean;
-  resetProviderRuntimeHookCache?: boolean;
 }) {
   let previousHome: string | undefined;
   let previousOpenClawAgentDir: string | undefined;
   let previousPiCodingAgentDir: string | undefined;
   const originalFetch = globalThis.fetch;
   const shouldResetPluginLoaderState = opts?.resetPluginLoaderState !== false;
-  const shouldResetProviderRuntimeHookCache = opts?.resetProviderRuntimeHookCache !== false;
 
   beforeEach(() => {
     previousHome = process.env.HOME;
@@ -45,9 +42,6 @@ export function installModelsConfigTestHooks(opts?: {
       resetPluginLoaderTestStateForTest();
     }
     resetModelsJsonReadyCacheForTest();
-    if (shouldResetProviderRuntimeHookCache) {
-      resetProviderRuntimeHookCacheForTest();
-    }
   });
 
   afterEach(() => {
@@ -68,9 +62,6 @@ export function installModelsConfigTestHooks(opts?: {
       resetPluginLoaderTestStateForTest();
     }
     resetModelsJsonReadyCacheForTest();
-    if (shouldResetProviderRuntimeHookCache) {
-      resetProviderRuntimeHookCacheForTest();
-    }
     if (opts?.restoreFetch && originalFetch) {
       globalThis.fetch = originalFetch;
     }

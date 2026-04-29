@@ -53,7 +53,8 @@ export async function gatewayStatusCommand(
   const startedAt = Date.now();
   const cfg = await readBestEffortConfig();
   const rich = isRich() && opts.json !== true;
-  const overallTimeoutMs = parseTimeoutMs(opts.timeout, 3000);
+  const defaultTimeoutMs = Math.max(3000, cfg.gateway?.handshakeTimeoutMs ?? 0);
+  const overallTimeoutMs = parseTimeoutMs(opts.timeout, defaultTimeoutMs);
   const wideAreaDomain = resolveWideAreaDiscoveryDomain({
     configDomain: cfg.discovery?.wideArea?.domain,
   });

@@ -89,10 +89,6 @@ export const discordChannelConfigUiHints = {
     label: "Discord Thread Parent Inheritance",
     help: "If true, Discord thread sessions inherit the parent channel transcript (default: false).",
   },
-  "inboundWorker.runTimeoutMs": {
-    label: "Discord Inbound Worker Timeout (ms)",
-    help: "Optional queued Discord inbound worker timeout in ms. This is separate from Carbon listener timeouts; defaults to 1800000 and can be disabled with 0. Set per account via channels.discord.accounts.<id>.inboundWorker.runTimeoutMs.",
-  },
   "eventQueue.listenerTimeout": {
     label: "Discord EventQueue Listener Timeout (ms)",
     help: "Canonical Discord listener timeout control in ms for gateway normalization/enqueue handlers. Default is 120000 in OpenClaw; set per account via channels.discord.accounts.<id>.eventQueue.listenerTimeout.",
@@ -137,9 +133,17 @@ export const discordChannelConfigUiHints = {
     label: "Discord Guild Members Intent",
     help: "Enable the Guild Members privileged intent. Must also be enabled in the Discord Developer Portal. Default: false.",
   },
+  "intents.voiceStates": {
+    label: "Discord Voice States Intent",
+    help: "Enable the Guild Voice States intent. Defaults to the effective Discord voice setting; set false for text-only gateway sessions even when voice config is present.",
+  },
+  gatewayInfoTimeoutMs: {
+    label: "Discord Gateway Metadata Timeout (ms)",
+    help: "Timeout for Discord /gateway/bot metadata lookup before falling back to the default gateway URL. Default is 30000; OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS can override when config is unset.",
+  },
   "voice.enabled": {
     label: "Discord Voice Enabled",
-    help: "Enable Discord voice channel conversations (default: true). Omit channels.discord.voice to keep voice support disabled for the account.",
+    help: "Enable Discord voice channel conversations (default: true). Set false for text-only gateway sessions.",
   },
   "voice.model": {
     label: "Discord Voice Model",

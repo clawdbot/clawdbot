@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import {
   buildAgentSystemPrompt,
   buildAgentUserPromptPrefix,
@@ -791,6 +792,23 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("do not also send plain chat /approve instructions");
   });
 
+  it("keeps approval slug guidance separate from command previews", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        channel: "discord",
+      },
+    });
+
+    expect(prompt).toContain(
+      'copy the exact /approve command from the tool output\'s "Reply with:" line',
+    );
+    expect(prompt).toContain("keep command/script previews separate from the /approve command");
+    expect(prompt).toContain(
+      "never substitute the shell command/script for the approval id or slug",
+    );
+  });
+
   it("includes runtime provider capabilities when present", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -951,6 +969,41 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Reactions");
     expect(prompt).toContain("Reactions are enabled for Telegram in MINIMAL mode.");
+  });
+
+  it("keeps stable project context before volatile channel guidance for prefix-cache reuse", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      runtimeInfo: {
+        channel: "telegram",
+        capabilities: ["inlineButtons"],
+        canvasRootDir: "/tmp/canvas",
+      },
+      contextFiles: [
+        {
+          path: "AGENTS.md",
+          content: "Project rules mention ## Messaging, ## Group Chat Context, and ## Reactions.",
+        },
+      ],
+      extraSystemPrompt: "Current group-chat facts",
+      reactionGuidance: { level: "minimal", channel: "Telegram" },
+      ttsHint: "Use short voice-friendly replies.",
+    });
+
+    const projectContextPos = prompt.indexOf("# Project Context");
+    const boundaryPos = prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+    const messagingPos = prompt.lastIndexOf("## Messaging");
+    const groupChatPos = prompt.lastIndexOf("## Group Chat Context");
+    const reactionsPos = prompt.lastIndexOf("## Reactions");
+    const voicePos = prompt.lastIndexOf("## Voice (TTS)");
+
+    expect(projectContextPos).toBeGreaterThan(-1);
+    expect(boundaryPos).toBeGreaterThan(projectContextPos);
+    expect(messagingPos).toBeGreaterThan(boundaryPos);
+    expect(groupChatPos).toBeGreaterThan(boundaryPos);
+    expect(reactionsPos).toBeGreaterThan(boundaryPos);
+    expect(voicePos).toBeGreaterThan(boundaryPos);
   });
 });
 

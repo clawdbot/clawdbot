@@ -1222,6 +1222,7 @@ export async function runAgentTurnWithFallback(params: {
                   config: runtimeConfig,
                   prompt: params.commandBody,
                   transcriptPrompt: params.transcriptCommandBody,
+                  inputProvenance: params.followupRun.run.inputProvenance,
                   provider: cliExecutionProvider,
                   model,
                   thinkLevel: params.followupRun.run.thinkLevel,
@@ -1409,6 +1410,7 @@ export async function runAgentTurnWithFallback(params: {
                       runId,
                       stream: evt.stream,
                       data: evt.data,
+                      ...(evt.sessionKey ? { sessionKey: evt.sessionKey } : {}),
                     });
                   }
                   // Signal run start only after the embedded agent emits real activity.

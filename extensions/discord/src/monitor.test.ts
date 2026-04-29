@@ -192,7 +192,7 @@ describe("DiscordMessageListener", () => {
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("discord handler failed"));
   });
 
-  it("does not apply its own slow-listener logging (owned by inbound worker)", async () => {
+  it("does not apply its own slow-listener logging", async () => {
     const deferred = createDeferred();
     const handler = vi.fn(() => deferred.promise);
     const logger = {
@@ -212,8 +212,7 @@ describe("DiscordMessageListener", () => {
     deferred.resolve();
     await flushAsyncWork();
     expect(handler).toHaveBeenCalledOnce();
-    // The listener no longer wraps handlers with slow-listener logging;
-    // that responsibility moved to the inbound worker.
+    // The listener no longer wraps message handlers with slow-listener logging.
     expect(logger.warn).not.toHaveBeenCalled();
   });
 });
@@ -1009,7 +1008,7 @@ function makeReactionListenerParams(overrides?: {
     groupDmEnabled: overrides?.groupDmEnabled ?? true,
     groupDmChannels: overrides?.groupDmChannels ?? [],
     dmPolicy: overrides?.dmPolicy ?? "open",
-    allowFrom: overrides?.allowFrom ?? [],
+    allowFrom: overrides?.allowFrom ?? ["*"],
     groupPolicy: overrides?.groupPolicy ?? "open",
     allowNameMatching: overrides?.allowNameMatching ?? false,
     guildEntries: overrides?.guildEntries,

@@ -35,6 +35,7 @@ export function attachGatewayWsHandlers(params: GatewayWsRuntimeParams) {
     getRequiredSharedGatewaySessionGeneration: params.getRequiredSharedGatewaySessionGeneration,
     rateLimiter: params.rateLimiter,
     browserRateLimiter: params.browserRateLimiter,
+    preauthHandshakeTimeoutMs: params.preauthHandshakeTimeoutMs,
     gatewayMethods: params.gatewayMethods,
     events: params.events,
     refreshHealthSnapshot: params.context.refreshHealthSnapshot,

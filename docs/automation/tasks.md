@@ -311,11 +311,14 @@ autocheckpoint threshold plus periodic and shutdown `TRUNCATE` checkpoints.
 
 ### Automatic maintenance
 
-A sweeper runs every **60 seconds** and handles three things:
+A sweeper runs every **60 seconds** and handles four things:
 
 <Steps>
   <Step title="Reconciliation">
     Checks whether active tasks still have authoritative runtime backing. ACP/subagent tasks use child-session state, cron tasks use active-job ownership, and chat-backed CLI tasks use the owning run context. If that backing state is gone for more than 5 minutes, the task is marked `lost`.
+  </Step>
+  <Step title="ACP session repair">
+    Closes terminal or orphaned parent-owned one-shot ACP sessions, and closes stale terminal or orphaned persistent ACP sessions only when no active conversation binding remains.
   </Step>
   <Step title="Cleanup stamping">
     Sets a `cleanupAfter` timestamp on terminal tasks (endedAt + 7 days). During retention, lost tasks still appear in audit as warnings; after `cleanupAfter` expires or when cleanup metadata is missing, they are errors.

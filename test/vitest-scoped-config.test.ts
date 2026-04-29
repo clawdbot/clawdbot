@@ -69,12 +69,7 @@ import { createUtilsVitestConfig } from "./vitest/vitest.utils.config.ts";
 import { createWizardVitestConfig } from "./vitest/vitest.wizard.config.ts";
 
 const EXTENSIONS_CHANNEL_GLOB = ["extensions", "channel", "**"].join("/");
-const PRIVATE_PLUGIN_SDK_SUBPATHS = [
-  "qa-channel",
-  "qa-channel-protocol",
-  "qa-lab",
-  "qa-runtime",
-] as const;
+const PRIVATE_PLUGIN_SDK_SUBPATHS = ["qa-lab", "qa-runtime"] as const;
 
 function bundledExcludePatternCouldMatchFile(pattern: string, file: string): boolean {
   if (pattern === file) {
@@ -320,11 +315,17 @@ describe("scoped vitest configs", () => {
       expect(normalizeConfigPath(config.test?.runner)).toBe("test/non-isolated-runner.ts");
     }
 
-    for (const config of [defaultGatewayConfig, defaultCommandsConfig, defaultAgentsConfig]) {
+    for (const config of [defaultGatewayConfig, defaultAgentsConfig]) {
       expect(config.test?.pool).toBe("threads");
       expect(config.test?.isolate).toBe(false);
       expect(normalizeConfigPath(config.test?.runner)).toBe("test/non-isolated-runner.ts");
     }
+
+    expect(defaultCommandsConfig.test?.pool).toBe("forks");
+    expect(defaultCommandsConfig.test?.isolate).toBe(false);
+    expect(normalizeConfigPath(defaultCommandsConfig.test?.runner)).toBe(
+      "test/non-isolated-runner.ts",
+    );
 
     expect(defaultUiConfig.test?.pool).toBe("threads");
     expect(defaultUiConfig.test?.isolate).toBe(false);

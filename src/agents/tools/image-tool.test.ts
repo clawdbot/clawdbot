@@ -920,6 +920,124 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("resolves providerless explicit image models from unique configured image providers", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            imageModel: {
+              primary: "moondream",
+              fallbacks: ["qwen2.5vl:7b", "G-2.5-f"],
+            },
+          },
+        },
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://localhost:11434",
+              models: [
+                makeModelDefinition("moondream", ["text", "image"]),
+                makeModelDefinition("qwen2.5vl:7b", ["text", "image"]),
+                makeModelDefinition("G-2.5-f", ["text", "image"]),
+              ],
+            },
+          },
+        },
+      };
+
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+        primary: "ollama/moondream",
+        fallbacks: ["ollama/qwen2.5vl:7b", "ollama/G-2.5-f"],
+      });
+    });
+  });
+
+  it("runs providerless explicit image models on the inferred provider", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
+        text: `ok ${params.model}`,
+        model: params.model,
+      }));
+      installImageUnderstandingProviderStubs({
+        id: "ollama",
+        capabilities: ["image"],
+        describeImage,
+      });
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            imageModel: { primary: "moondream" },
+          },
+        },
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://localhost:11434",
+              models: [makeModelDefinition("moondream", ["text", "image"])],
+            },
+          },
+        },
+      };
+
+      const tool = requireImageTool(createImageTool({ config: cfg, agentDir }));
+      const result = await tool.execute("t1", {
+        prompt: "Describe this image in one word.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      });
+
+      expect(describeImage).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: "ollama", model: "moondream" }),
+      );
+      expect(result.content).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "text", text: "ok moondream" })]),
+      );
+    });
+  });
+
+  it("rejects ambiguous providerless explicit image models", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            imageModel: { primary: "moondream" },
+          },
+        },
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://localhost:11434",
+              models: [makeModelDefinition("moondream", ["text", "image"])],
+            },
+            lmstudio: {
+              baseUrl: "http://localhost:1234",
+              models: [makeModelDefinition("moondream", ["text", "image"])],
+            },
+          },
+        },
+      };
+
+      expect(() => resolveImageModelConfigForTool({ cfg, agentDir })).toThrow(
+        'Ambiguous image model "moondream"',
+      );
+    });
+  });
+
+  it("keeps unmatched providerless explicit image models on the legacy default-provider path", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            imageModel: { primary: "gpt-5.4-mini" },
+          },
+        },
+      };
+
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+        primary: "gpt-5.4-mini",
+      });
+    });
+  });
+
   it("keeps image tool available when primary model supports images (for explicit requests)", async () => {
     // When the primary model supports images, we still keep the tool available
     // because images are auto-injected into prompts. The tool description is

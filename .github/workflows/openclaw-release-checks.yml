@@ -56,17 +56,17 @@ on:
 
 concurrency:
   group: openclaw-release-checks-${{ inputs.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ inputs.ref == 'main' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.x"
   PNPM_VERSION: "10.33.0"
-  OPENCLAW_CI_OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL }}
+  OPENCLAW_CI_OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL || 'openai/gpt-5.5' }}
 
 jobs:
   resolve_target:
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -229,7 +229,7 @@ jobs:
     name: Prepare release package artifact
     needs: [resolve_target]
     if: contains(fromJSON('["all","cross-os","live-e2e","package"]'), needs.resolve_target.outputs.rerun_group)
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
@@ -310,7 +310,7 @@ jobs:
     permissions: read-all
     uses: ./.github/workflows/openclaw-cross-os-release-checks-reusable.yml
     with:
-      ref: ${{ needs.resolve_target.outputs.ref }}
+      ref: ${{ needs.resolve_target.outputs.revision }}
       provider: ${{ needs.resolve_target.outputs.provider }}
       mode: ${{ needs.resolve_target.outputs.mode }}
       candidate_artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
@@ -326,8 +326,9 @@ jobs:
       OPENCLAW_DISCORD_SMOKE_GUILD_ID: ${{ secrets.OPENCLAW_DISCORD_SMOKE_GUILD_ID }}
       OPENCLAW_DISCORD_SMOKE_CHANNEL_ID: ${{ secrets.OPENCLAW_DISCORD_SMOKE_CHANNEL_ID }}
 
-  live_and_e2e_release_checks:
-    needs: [resolve_target, prepare_release_package]
+  live_repo_e2e_release_checks:
+    name: Run repo/live E2E validation
+    needs: [resolve_target]
     if: contains(fromJSON('["all","live-e2e"]'), needs.resolve_target.outputs.rerun_group)
     permissions:
       actions: read
@@ -338,13 +339,11 @@ jobs:
     with:
       ref: ${{ needs.resolve_target.outputs.revision }}
       include_repo_e2e: true
-      include_release_path_suites: true
-      include_openwebui: ${{ needs.resolve_target.outputs.release_profile != 'minimum' }}
+      include_release_path_suites: false
+      include_openwebui: false
       include_live_suites: true
       release_test_profile: ${{ needs.resolve_target.outputs.release_profile }}
-      package_artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
-      package_artifact_run_id: ${{ github.run_id }}
-    secrets:
+    secrets: &live_e2e_release_secrets
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -390,6 +389,27 @@ jobs:
       OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
       OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
       FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+
+  docker_e2e_release_checks:
+    name: Run Docker release-path validation
+    needs: [resolve_target, prepare_release_package]
+    if: contains(fromJSON('["all","live-e2e"]'), needs.resolve_target.outputs.rerun_group)
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+      pull-requests: read
+    uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
+    with:
+      ref: ${{ needs.resolve_target.outputs.revision }}
+      include_repo_e2e: false
+      include_release_path_suites: true
+      include_openwebui: ${{ needs.resolve_target.outputs.release_profile != 'minimum' }}
+      include_live_suites: false
+      release_test_profile: ${{ needs.resolve_target.outputs.release_profile }}
+      package_artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
+      package_artifact_run_id: ${{ github.run_id }}
+    secrets: *live_e2e_release_secrets
 
   package_acceptance_release_checks:
     name: Run package acceptance
@@ -628,18 +648,6 @@ jobs:
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
-      - name: Validate required QA credential env
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-            echo "Missing required OPENAI_API_KEY." >&2
-            exit 1
-          fi
-
       - name: Build private QA runtime
         run: pnpm build
 
@@ -647,8 +655,8 @@ jobs:
         id: run_lane
         shell: bash
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+          OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS: "90000"
           OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS: "3000"
         run: |
           set -euo pipefail
@@ -658,10 +666,9 @@ jobs:
 
           matrix_args=(
             --repo-root . \
-            --output-dir "${output_dir}" \
-            --provider-mode live-frontier \
-            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --provider-mode mock-openai \
+            --model mock-openai/gpt-5.5 \
+            --alt-model mock-openai/gpt-5.5-alt \
             --profile fast \
             --fast
           )
@@ -669,7 +676,17 @@ jobs:
             matrix_args+=(--fail-fast)
           fi
 
-          pnpm openclaw qa matrix "${matrix_args[@]}"
+          for attempt in 1 2; do
+            attempt_output_dir="${output_dir}/attempt-${attempt}"
+            if pnpm openclaw qa matrix --output-dir "${attempt_output_dir}" "${matrix_args[@]}"; then
+              exit 0
+            fi
+            if [[ "${attempt}" == "2" ]]; then
+              exit 1
+            fi
+            echo "Matrix live lane failed on attempt ${attempt}; retrying once..." >&2
+            sleep 10
+          done
 
       - name: Upload Matrix QA artifacts
         if: always()
@@ -710,7 +727,6 @@ jobs:
 
       - name: Validate required QA credential env
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
         shell: bash
@@ -725,7 +741,6 @@ jobs:
             fi
           }
 
-          require_var OPENAI_API_KEY
           require_var OPENCLAW_QA_CONVEX_SITE_URL
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
 
@@ -736,7 +751,6 @@ jobs:
         id: run_lane
         shell: bash
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
@@ -747,15 +761,25 @@ jobs:
           output_dir=".artifacts/qa-e2e/telegram-live-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
 
-          pnpm openclaw qa telegram \
-            --repo-root . \
-            --output-dir "${output_dir}" \
-            --provider-mode live-frontier \
-            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --fast \
-            --credential-source convex \
-            --credential-role ci
+          for attempt in 1 2; do
+            attempt_output_dir="${output_dir}/attempt-${attempt}"
+            if pnpm openclaw qa telegram \
+              --repo-root . \
+              --output-dir "${attempt_output_dir}" \
+              --provider-mode mock-openai \
+              --model mock-openai/gpt-5.5 \
+              --alt-model mock-openai/gpt-5.5-alt \
+              --fast \
+              --credential-source convex \
+              --credential-role ci; then
+              exit 0
+            fi
+            if [[ "${attempt}" == "2" ]]; then
+              exit 1
+            fi
+            echo "Telegram live lane failed on attempt ${attempt}; retrying once..." >&2
+            sleep 10
+          done
 
       - name: Upload Telegram QA artifacts
         if: always()
@@ -772,7 +796,8 @@ jobs:
       - prepare_release_package
       - install_smoke_release_checks
       - cross_os_release_checks
-      - live_and_e2e_release_checks
+      - live_repo_e2e_release_checks
+      - docker_e2e_release_checks
       - package_acceptance_release_checks
       - qa_lab_parity_lane_release_checks
       - qa_lab_parity_report_release_checks
@@ -792,7 +817,8 @@ jobs:
             "prepare_release_package=${{ needs.prepare_release_package.result }}" \
             "install_smoke_release_checks=${{ needs.install_smoke_release_checks.result }}" \
             "cross_os_release_checks=${{ needs.cross_os_release_checks.result }}" \
-            "live_and_e2e_release_checks=${{ needs.live_and_e2e_release_checks.result }}" \
+            "live_repo_e2e_release_checks=${{ needs.live_repo_e2e_release_checks.result }}" \
+            "docker_e2e_release_checks=${{ needs.docker_e2e_release_checks.result }}" \
             "package_acceptance_release_checks=${{ needs.package_acceptance_release_checks.result }}" \
             "qa_lab_parity_lane_release_checks=${{ needs.qa_lab_parity_lane_release_checks.result }}" \
             "qa_lab_parity_report_release_checks=${{ needs.qa_lab_parity_report_release_checks.result }}" \

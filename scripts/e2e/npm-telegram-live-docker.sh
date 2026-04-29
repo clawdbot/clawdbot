@@ -89,7 +89,6 @@ if [ -z "$PACKAGE_LABEL" ]; then
 fi
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" npm-telegram-live "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "$DOCKER_TARGET"
-docker_e2e_harness_mount_args
 
 mkdir -p "$ROOT_DIR/.artifacts/qa-e2e"
 run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-npm-telegram-live.XXXXXX")"
@@ -189,10 +188,9 @@ openclaw --version
 EOF
 
 # Mount only test harness/plugin QA sources; the SUT itself is the installed package candidate.
-run_logged docker run --rm \
+run_logged docker_e2e_run_with_harness \
   "${docker_env[@]}" \
   -v "$ROOT_DIR/.artifacts:/app/.artifacts" \
-  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   -v "$ROOT_DIR/extensions:/app/extensions:ro" \
   -v "$npm_prefix_host:/npm-global" \
   -i "$IMAGE_NAME" bash -s <<'EOF'

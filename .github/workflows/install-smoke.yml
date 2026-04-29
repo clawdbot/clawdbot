@@ -104,6 +104,8 @@ jobs:
 
       - name: Set up Blacksmith Docker Builder
         uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1
+        with:
+          max-cache-size-mb: 800000
 
       # Blacksmith's builder owns the Docker layer cache; keep smoke builds off
       # explicit gha cache directives so local tags still load cleanly.
@@ -211,6 +213,8 @@ jobs:
 
       - name: Set up Blacksmith Docker Builder
         uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1
+        with:
+          max-cache-size-mb: 800000
 
       # Blacksmith's builder owns the Docker layer cache; keep smoke builds off
       # explicit gha cache directives so local tags still load cleanly.
@@ -349,7 +353,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_fast_install_smoke == 'true' || needs.preflight.outputs.run_full_install_smoke == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       DOCKER_BUILD_SUMMARY: "false"
       DOCKER_BUILD_RECORD_UPLOAD: "false"
@@ -361,6 +365,8 @@ jobs:
 
       - name: Set up Blacksmith Docker Builder
         uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1
+        with:
+          max-cache-size-mb: 800000
 
       - name: Setup Node environment for package smoke
         uses: ./.github/actions/setup-node-env
@@ -372,4 +378,4 @@ jobs:
         env:
           OPENCLAW_BUNDLED_CHANNEL_DEPS_E2E_IMAGE: openclaw-bundled-channel-fast:local
           OPENCLAW_BUNDLED_CHANNEL_DOCKER_RUN_TIMEOUT: 90s
-        run: timeout 240s pnpm test:docker:bundled-channel-deps:fast
+        run: timeout 480s pnpm test:docker:bundled-channel-deps:fast

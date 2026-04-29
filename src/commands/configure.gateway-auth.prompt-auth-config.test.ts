@@ -139,15 +139,21 @@ describe("promptAuthConfig", () => {
     mocks.applyAuthChoice.mockResolvedValue({ config: {} });
     mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
     mocks.resolveProviderPluginChoice.mockReturnValue({
-      provider: { id: "anthropic", label: "Anthropic", auth: [] },
-      method: { id: "setup-token", label: "setup-token", kind: "token" },
-      wizard: {
-        modelAllowlist: {
-          allowedKeys: ["anthropic/claude-sonnet-4-6"],
-          initialSelections: ["anthropic/claude-sonnet-4-6"],
-          message: "Anthropic OAuth models",
+      provider: {
+        id: "anthropic",
+        label: "Anthropic",
+        auth: [],
+        wizard: {
+          setup: {
+            modelAllowlist: {
+              allowedKeys: ["anthropic/claude-sonnet-4-6"],
+              initialSelections: ["anthropic/claude-sonnet-4-6"],
+              message: "Anthropic OAuth models",
+            },
+          },
         },
       },
+      method: { id: "setup-token", label: "setup-token", kind: "token" },
     });
 
     await promptAuthConfig({}, makeRuntime(), noopPrompter);
@@ -180,14 +186,20 @@ describe("promptAuthConfig", () => {
       scopeKeys: ["anthropic/claude-opus-4-6", "anthropic/claude-sonnet-4-6"],
     });
     mocks.resolveProviderPluginChoice.mockReturnValue({
-      provider: { id: "anthropic", label: "Anthropic", auth: [] },
-      method: { id: "setup-token", label: "setup-token", kind: "token" },
-      wizard: {
-        modelAllowlist: {
-          allowedKeys: ["anthropic/claude-opus-4-6", "anthropic/claude-sonnet-4-6"],
-          initialSelections: ["anthropic/claude-sonnet-4-6"],
+      provider: {
+        id: "anthropic",
+        label: "Anthropic",
+        auth: [],
+        wizard: {
+          setup: {
+            modelAllowlist: {
+              allowedKeys: ["anthropic/claude-opus-4-6", "anthropic/claude-sonnet-4-6"],
+              initialSelections: ["anthropic/claude-sonnet-4-6"],
+            },
+          },
         },
       },
+      method: { id: "setup-token", label: "setup-token", kind: "token" },
     });
 
     const result = await promptAuthConfig({}, makeRuntime(), noopPrompter);
@@ -223,14 +235,20 @@ describe("promptAuthConfig", () => {
       scopeKeys: ["openai/gpt-5.5", "openai/gpt-5.4-mini"],
     });
     mocks.resolveProviderPluginChoice.mockReturnValue({
-      provider: { id: "openai", label: "OpenAI", auth: [] },
-      method: { id: "setup-token", label: "setup-token", kind: "token" },
-      wizard: {
-        modelAllowlist: {
-          allowedKeys: ["openai/gpt-5.5", "openai/gpt-5.4-mini"],
-          initialSelections: ["openai/gpt-5.5"],
+      provider: {
+        id: "openai",
+        label: "OpenAI",
+        auth: [],
+        wizard: {
+          setup: {
+            modelAllowlist: {
+              allowedKeys: ["openai/gpt-5.5", "openai/gpt-5.4-mini"],
+              initialSelections: ["openai/gpt-5.5"],
+            },
+          },
         },
       },
+      method: { id: "setup-token", label: "setup-token", kind: "token" },
     });
 
     const result = await promptAuthConfig({}, makeRuntime(), noopPrompter);
@@ -245,6 +263,7 @@ describe("promptAuthConfig", () => {
   });
 
   it("scopes the allowlist picker to the selected provider when available", async () => {
+    vi.clearAllMocks();
     mocks.promptAuthChoiceGrouped.mockResolvedValue("openai-api-key");
     mocks.resolvePreferredProviderForAuthChoice.mockResolvedValue("openai");
     mocks.applyAuthChoice.mockResolvedValue({ config: {} });
@@ -255,6 +274,39 @@ describe("promptAuthConfig", () => {
     expect(mocks.promptModelAllowlist).toHaveBeenCalledWith(
       expect.objectContaining({
         preferredProvider: "openai",
+      }),
+    );
+  });
+
+  it("loads configured provider models after Ollama Cloud + Local and Cloud only setup", async () => {
+    vi.clearAllMocks();
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("ollama");
+    mocks.resolvePreferredProviderForAuthChoice.mockResolvedValue(undefined);
+    mocks.applyAuthChoice.mockResolvedValue({
+      config: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "https://ollama.com",
+              api: "ollama",
+              models: [
+                { id: "kimi-k2.5:cloud", name: "kimi-k2.5:cloud" },
+                { id: "qwen3-coder:480b-cloud", name: "qwen3-coder:480b-cloud" },
+              ],
+            },
+          },
+        },
+      },
+    });
+    mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
+    mocks.resolveProviderPluginChoice.mockReturnValue(null);
+
+    await promptAuthConfig({}, makeRuntime(), noopPrompter);
+
+    expect(mocks.promptModelAllowlist).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preferredProvider: "ollama",
+        loadCatalog: true,
       }),
     );
   });

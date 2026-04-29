@@ -39,8 +39,9 @@ describe("telegram native approval adapter", () => {
     });
 
     expect(text).toContain("`channels.telegram.execApprovals.approvers`");
-    expect(text).toContain("`channels.telegram.allowFrom`");
-    expect(text).toContain("`channels.telegram.defaultTo`");
+    expect(text).toContain("`commands.ownerAllowFrom`");
+    expect(text).not.toContain("`channels.telegram.allowFrom`");
+    expect(text).not.toContain("`channels.telegram.defaultTo`");
     expect(text).not.toContain("`channels.telegram.dm.allowFrom`");
   });
 
@@ -52,8 +53,9 @@ describe("telegram native approval adapter", () => {
     });
 
     expect(text).toContain("`channels.telegram.accounts.work.execApprovals.approvers`");
-    expect(text).toContain("`channels.telegram.accounts.work.allowFrom`");
-    expect(text).toContain("`channels.telegram.accounts.work.defaultTo`");
+    expect(text).toContain("`commands.ownerAllowFrom`");
+    expect(text).not.toContain("`channels.telegram.accounts.work.allowFrom`");
+    expect(text).not.toContain("`channels.telegram.accounts.work.defaultTo`");
     expect(text).not.toContain("`channels.telegram.allowFrom`");
   });
 

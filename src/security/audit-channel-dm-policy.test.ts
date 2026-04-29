@@ -54,4 +54,58 @@ describe("security audit channel dm policy", () => {
       ]),
     );
   });
+
+  it("flags public DMs and shared main-session scope together", async () => {
+    const cfg: OpenClawConfig = {
+      session: { dmScope: "main" },
+      channels: { telegram: { enabled: true } },
+    };
+    const plugins: ChannelPlugin[] = [
+      {
+        id: "telegram",
+        meta: {
+          id: "telegram",
+          label: "Telegram",
+          selectionLabel: "Telegram",
+          docsPath: "/channels/telegram",
+          blurb: "Test",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => ["default"],
+          inspectAccount: () => ({ enabled: true, configured: true }),
+          resolveAccount: () => ({}),
+          isEnabled: () => true,
+          isConfigured: () => true,
+        },
+        security: {
+          resolveDmPolicy: () => ({
+            policy: "open",
+            allowFrom: ["*"],
+            policyPath: "channels.telegram.dmPolicy",
+            allowFromPath: "channels.telegram.",
+            approveHint: "approve",
+          }),
+        },
+      },
+    ];
+
+    const findings = await collectChannelSecurityFindings({
+      cfg,
+      plugins,
+    });
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "channels.telegram.dm.open",
+          severity: "critical",
+        }),
+        expect.objectContaining({
+          checkId: "channels.telegram.dm.scope_main_multiuser",
+          severity: "warn",
+        }),
+      ]),
+    );
+  });
 });

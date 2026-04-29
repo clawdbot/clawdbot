@@ -18,12 +18,31 @@ const rootEntries = [
 ] as const;
 
 const bundledPluginEntries = [
+  "*.ts!",
   "index.ts!",
   "setup-entry.ts!",
   "{api,contract-api,helper-api,runtime-api,light-runtime-api,update-offset-runtime-api,channel-plugin-api,provider-plugin-api,setup-api}.ts!",
   "subagent-hooks-api.ts!",
   "src/{api,runtime-api,light-runtime-api,update-offset-runtime-api,channel-plugin-api,provider-plugin-api,doctor-contract,setup-surface}.ts!",
   "src/subagent-hooks-api.ts!",
+] as const;
+
+const bundledPluginIgnoredRuntimeDependencies = [
+  "@agentclientprotocol/claude-agent-acp",
+  "@azure/identity",
+  "@clawdbot/lobster",
+  "@discordjs/opus",
+  "@homebridge/ciao",
+  "@matrix-org/matrix-sdk-crypto-wasm",
+  "@mozilla/readability",
+  "@openai/codex",
+  "@pierre/theme",
+  "@tloncorp/tlon-skill",
+  "@zed-industries/codex-acp",
+  "jiti",
+  "linkedom",
+  "openclaw",
+  "pdfjs-dist",
 ] as const;
 
 const config = {
@@ -93,7 +112,7 @@ const config = {
   workspaces: {
     ".": {
       entry: rootEntries,
-      ignoreDependencies: ["@openclaw/*"],
+      ignoreDependencies: ["@openclaw/*", "sqlite-vec"],
       project: [
         "src/**/*.ts!",
         "scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
@@ -114,7 +133,7 @@ const config = {
       // `index.ts` contracts, so Knip needs these convention-based entry files.
       entry: bundledPluginEntries,
       project: ["index.ts!", "src/**/*.ts!"],
-      ignoreDependencies: ["openclaw"],
+      ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },
   },
 } as const;

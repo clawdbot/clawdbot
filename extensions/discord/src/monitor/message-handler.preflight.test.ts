@@ -366,6 +366,81 @@ describe("preflightDiscordMessage", () => {
     });
   });
 
+  it("ignores stale route-shaped channel bindings when config now routes to another agent", async () => {
+    const channelId = "channel-stale-route";
+    registerSessionBindingAdapter({
+      channel: "discord",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: (ref) =>
+        ref.conversationId === channelId
+          ? createThreadBinding({
+              bindingId: "default:channel-stale-route",
+              targetKind: "session",
+              targetSessionKey: `agent:oldagent:discord:channel:${channelId}`,
+              conversation: {
+                channel: "discord",
+                accountId: "default",
+                conversationId: channelId,
+              },
+              metadata: undefined,
+            })
+          : null,
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId: "guild-stale-route",
+      message: createDiscordMessage({
+        id: "m-stale-route",
+        channelId,
+        content: "which agent is this?",
+        author: {
+          id: "user-1",
+          bot: false,
+          username: "alice",
+        },
+      }),
+      cfg: {
+        agents: {
+          list: [{ id: "newagent" }],
+        },
+        bindings: [
+          {
+            agentId: "newagent",
+            match: {
+              channel: "discord",
+              accountId: "default",
+              peer: { kind: "channel", id: channelId },
+            },
+          },
+        ],
+        channels: {
+          discord: {},
+        },
+      },
+      discordConfig: {
+        allowBots: true,
+      } as DiscordConfig,
+      guildEntries: {
+        "guild-stale-route": {
+          channels: {
+            [channelId]: {
+              enabled: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.route.agentId).toBe("newagent");
+    expect(result?.route.sessionKey).toBe(`agent:newagent:discord:channel:${channelId}`);
+    expect(result?.boundSessionKey).toBeUndefined();
+    expect(result?.threadBinding).toBeUndefined();
+  });
+
   it("preflights direct-message voice notes without mention gating", async () => {
     transcribeFirstAudioMock.mockResolvedValue("hello openclaw from dm audio");
 

@@ -116,7 +116,7 @@ describe("buildBareSessionResetPrompt", () => {
     expect(pending.prompt).not.toContain("while bootstrap is still pending for this workspace");
   });
 
-  it("suppresses bootstrap mode when bare reset has no bootstrap file access", async () => {
+  it("uses limited bootstrap mode when bare reset has no bootstrap file access", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-reset-no-file-access-");
     await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP.md"), "ritual", "utf8");
 
@@ -125,9 +125,10 @@ describe("buildBareSessionResetPrompt", () => {
       hasBootstrapFileAccess: false,
     });
 
-    expect(pending.bootstrapMode).toBe("none");
-    expect(pending.shouldPrependStartupContext).toBe(true);
-    expect(pending.prompt).toContain("Execute your Session Startup sequence now");
-    expect(pending.prompt).not.toContain("while bootstrap is still pending for this workspace");
+    expect(pending.bootstrapMode).toBe("limited");
+    expect(pending.shouldPrependStartupContext).toBe(false);
+    expect(pending.prompt).toContain("cannot safely complete the full BOOTSTRAP.md workflow here");
+    expect(pending.prompt).toContain("while bootstrap is still pending for this workspace");
+    expect(pending.prompt).not.toContain("Execute your Session Startup sequence now");
   });
 });

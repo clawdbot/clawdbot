@@ -44,8 +44,18 @@ export type EmbeddedPiSubscribeState = {
 
   deltaBuffer: string;
   blockBuffer: string;
-  blockState: { thinking: boolean; final: boolean; inlineCode: InlineCodeState };
-  partialBlockState: { thinking: boolean; final: boolean; inlineCode: InlineCodeState };
+  blockState: {
+    thinking: boolean;
+    final: boolean;
+    inlineCode: InlineCodeState;
+    pendingTagFragment?: string;
+  };
+  partialBlockState: {
+    thinking: boolean;
+    final: boolean;
+    inlineCode: InlineCodeState;
+    pendingTagFragment?: string;
+  };
   lastStreamedAssistant?: string;
   lastStreamedAssistantCleaned?: string;
   emittedAssistantUpdate: boolean;
@@ -112,10 +122,22 @@ export type EmbeddedPiSubscribeContext = {
   emitToolOutput: (toolName?: string, meta?: string, output?: string, result?: unknown) => void;
   stripBlockTags: (
     text: string,
-    state: { thinking: boolean; final: boolean; inlineCode?: InlineCodeState },
+    state: {
+      thinking: boolean;
+      final: boolean;
+      inlineCode?: InlineCodeState;
+      pendingTagFragment?: string;
+    },
+    options?: { final?: boolean },
   ) => string;
-  emitBlockChunk: (text: string, options?: { assistantMessageIndex?: number }) => void;
-  flushBlockReplyBuffer: (options?: { assistantMessageIndex?: number }) => void | Promise<void>;
+  emitBlockChunk: (
+    text: string,
+    options?: { assistantMessageIndex?: number; final?: boolean },
+  ) => void;
+  flushBlockReplyBuffer: (options?: {
+    assistantMessageIndex?: number;
+    final?: boolean;
+  }) => void | Promise<void>;
   emitReasoningStream: (text: string) => void;
   consumeReplyDirectives: (
     text: string,

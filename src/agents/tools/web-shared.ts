@@ -94,6 +94,114 @@ export type ReadResponseTextResult = {
   bytesRead: number;
 };
 
+const RESPONSE_CHARSET_SCAN_BYTES = 4096;
+const latin1Decoder = new TextDecoder("latin1");
+const utf8Decoder = new TextDecoder("utf-8");
+
+function normalizeCharset(value: string | undefined): string | undefined {
+  const normalized = value?.trim().replace(/^["']|["']$/g, "") ?? "";
+  return normalized && normalized.length <= 64 && /^[A-Za-z0-9._:-]+$/.test(normalized)
+    ? normalized
+    : undefined;
+}
+
+function readCharsetParam(value: string | null | undefined): string | undefined {
+  const match = /(?:^|;)\s*charset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^;\s]+))/i.exec(value ?? "");
+  return normalizeCharset(match?.[1] ?? match?.[2] ?? match?.[3]);
+}
+
+function readAttribute(tag: string, name: string): string | undefined {
+  const target = name.toLowerCase();
+  for (const match of tag.matchAll(
+    /([A-Za-z0-9:_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g,
+  )) {
+    if (match[1]?.toLowerCase() === target) {
+      return match[2] ?? match[3] ?? match[4] ?? "";
+    }
+  }
+  return undefined;
+}
+
+function shouldSniffDocumentCharset(contentType: string | null): boolean {
+  const mediaType = contentType?.split(";", 1)[0]?.trim().toLowerCase();
+  if (!mediaType) {
+    return true;
+  }
+  return (
+    mediaType === "text/html" ||
+    mediaType === "application/xhtml+xml" ||
+    mediaType === "text/xml" ||
+    mediaType === "application/xml" ||
+    mediaType.endsWith("+xml")
+  );
+}
+
+function sniffCharset(contentType: string | null, bytes: Uint8Array): string | undefined {
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    return "utf-8";
+  }
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) {
+    return "utf-16le";
+  }
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) {
+    return "utf-16be";
+  }
+  if (!shouldSniffDocumentCharset(contentType)) {
+    return undefined;
+  }
+
+  const head = latin1Decoder.decode(
+    bytes.subarray(0, Math.min(bytes.byteLength, RESPONSE_CHARSET_SCAN_BYTES)),
+  );
+  const xmlEncoding = /<\?xml\s+[^>]*\bencoding\s*=\s*(?:"([^"]+)"|'([^']+)')/i.exec(head);
+  if (xmlEncoding) {
+    return normalizeCharset(xmlEncoding[1] ?? xmlEncoding[2]);
+  }
+
+  for (const match of head.matchAll(/<meta\b[^>]*>/gi)) {
+    const tag = match[0];
+    const charset = normalizeCharset(readAttribute(tag, "charset"));
+    if (charset) {
+      return charset;
+    }
+    if (/^content-type$/i.test(readAttribute(tag, "http-equiv") ?? "")) {
+      const contentCharset = readCharsetParam(readAttribute(tag, "content"));
+      if (contentCharset) {
+        return contentCharset;
+      }
+    }
+  }
+  return undefined;
+}
+
+function concatBytes(parts: Uint8Array[], totalBytes: number): Uint8Array {
+  if (parts.length === 1 && parts[0]?.byteLength === totalBytes) {
+    return parts[0];
+  }
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const part of parts) {
+    bytes.set(part, offset);
+    offset += part.byteLength;
+  }
+  return bytes;
+}
+
+function responseContentType(res: Response): string | null {
+  const headers = (res as { headers?: { get?: (name: string) => string | null } }).headers;
+  return typeof headers?.get === "function" ? headers.get("content-type") : null;
+}
+
+function decodeResponseBytes(res: Response, bytes: Uint8Array): string {
+  const contentType = responseContentType(res);
+  const charset = readCharsetParam(contentType) ?? sniffCharset(contentType, bytes);
+  try {
+    return new TextDecoder(charset ?? "utf-8").decode(bytes);
+  } catch {
+    return utf8Decoder.decode(bytes);
+  }
+}
+
 export async function readResponseText(
   res: Response,
   options?: { maxBytes?: number },
@@ -113,10 +221,9 @@ export async function readResponseText(
     typeof (body as { getReader: () => unknown }).getReader === "function"
   ) {
     const reader = (body as ReadableStream<Uint8Array>).getReader();
-    const decoder = new TextDecoder();
     let bytesRead = 0;
     let truncated = false;
-    const parts: string[] = [];
+    const parts: Uint8Array[] = [];
 
     try {
       while (true) {
@@ -140,7 +247,7 @@ export async function readResponseText(
         }
 
         bytesRead += chunk.byteLength;
-        parts.push(decoder.decode(chunk, { stream: true }));
+        parts.push(chunk);
 
         if (truncated || bytesRead >= maxBytes) {
           truncated = true;
@@ -148,7 +255,7 @@ export async function readResponseText(
         }
       }
     } catch {
-      // Best-effort: return whatever we decoded so far.
+      // Best-effort: return whatever we read so far.
     } finally {
       if (truncated) {
         // Some mocked or non-compliant streams never settle cancel(); do not
@@ -157,8 +264,22 @@ export async function readResponseText(
       }
     }
 
-    parts.push(decoder.decode());
-    return { text: parts.join(""), truncated, bytesRead };
+    const bytes = concatBytes(parts, bytesRead);
+    return { text: decodeResponseBytes(res, bytes), truncated, bytesRead };
+  }
+
+  const readBytes = (res as { arrayBuffer?: () => Promise<ArrayBuffer> }).arrayBuffer;
+  if (typeof readBytes === "function") {
+    try {
+      const bytes = new Uint8Array(await readBytes.call(res));
+      return {
+        text: decodeResponseBytes(res, bytes),
+        truncated: false,
+        bytesRead: bytes.byteLength,
+      };
+    } catch {
+      // Fall back to text() for lightweight Response-like mocks that do not expose bytes.
+    }
   }
 
   try {

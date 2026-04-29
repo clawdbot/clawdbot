@@ -1,4 +1,8 @@
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import {
+  inferUniqueProviderFromConfiguredModels,
+  isCliProvider,
+} from "../agents/model-selection.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -14,7 +18,9 @@ type SessionDisplayDefaults = {
   model: string;
 };
 
-function parseModelRef(raw: string, defaultProvider: string): { provider: string; model: string } {
+type SessionDisplayModelRef = { provider: string; model: string };
+
+function parseModelRef(raw: string, defaultProvider: string): SessionDisplayModelRef {
   const trimmed = raw.trim();
   if (!trimmed) {
     return { provider: defaultProvider, model: DEFAULT_MODEL };
@@ -59,10 +65,7 @@ function normalizeStoredOverrideModel(params: {
   };
 }
 
-function resolveDefaultModelRef(
-  cfg: OpenClawConfig,
-  agentId?: string,
-): { provider: string; model: string } {
+function resolveDefaultModelRef(cfg: OpenClawConfig, agentId?: string): SessionDisplayModelRef {
   const primary =
     resolveAgentPrimaryModel(cfg, agentId) ??
     resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ??
@@ -79,10 +82,48 @@ export function resolveSessionDisplayDefaults(
   };
 }
 
+function normalizeCliRuntimeDisplayRef(
+  cfg: OpenClawConfig,
+  ref: SessionDisplayModelRef,
+  defaultRef: SessionDisplayModelRef,
+): SessionDisplayModelRef {
+  if (!isCliProvider(ref.provider, cfg)) {
+    return ref;
+  }
+  if (ref.model.includes("/")) {
+    const parsed = parseModelRef(ref.model, defaultRef.provider);
+    if (!isCliProvider(parsed.provider, cfg)) {
+      return parsed;
+    }
+  }
+  const inferredProvider = inferUniqueProviderFromConfiguredModels({
+    cfg,
+    model: ref.model,
+  });
+  if (inferredProvider && !isCliProvider(inferredProvider, cfg)) {
+    return { provider: inferredProvider, model: ref.model };
+  }
+  const parsed = parseModelRef(ref.model, defaultRef.provider);
+  if (!isCliProvider(parsed.provider, cfg)) {
+    return parsed;
+  }
+  return {
+    provider: defaultRef.provider || ref.provider,
+    model: parsed.model || ref.model,
+  };
+}
+
 export function resolveSessionDisplayModel(
   cfg: OpenClawConfig,
   row: SessionDisplayModelRow,
 ): string {
+  return resolveSessionDisplayModelRef(cfg, row).model;
+}
+
+export function resolveSessionDisplayModelRef(
+  cfg: OpenClawConfig,
+  row: SessionDisplayModelRow,
+): SessionDisplayModelRef {
   const agentId = row.key.startsWith("agent:") ? row.key.split(":")[1] : undefined;
   const defaultRef = resolveDefaultModelRef(cfg, agentId);
   const normalizedOverride = normalizeStoredOverrideModel({
@@ -94,10 +135,14 @@ export function resolveSessionDisplayModel(
     return parseModelRef(
       normalizedOverride.modelOverride,
       normalizedOverride.providerOverride ?? defaultRef.provider,
-    ).model;
+    );
   }
   if (row.model) {
-    return parseModelRef(row.model, row.modelProvider ?? defaultRef.provider).model;
+    return normalizeCliRuntimeDisplayRef(
+      cfg,
+      parseModelRef(row.model, row.modelProvider ?? defaultRef.provider),
+      defaultRef,
+    );
   }
-  return defaultRef.model;
+  return defaultRef;
 }

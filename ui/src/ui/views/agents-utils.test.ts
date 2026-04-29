@@ -204,6 +204,7 @@ describe("buildAgentContext", () => {
           primary: "openai/gpt-5.5",
           fallbacks: ["openai-codex/gpt-5.2-codex"],
         },
+        agentRuntime: { id: "claude-cli", fallback: "none", source: "agent" },
       },
       null,
       null,
@@ -213,6 +214,7 @@ describe("buildAgentContext", () => {
 
     expect(context.workspace).toBe("/tmp/agent-workspace");
     expect(context.model).toBe("openai/gpt-5.5 (+1 fallback)");
+    expect(context.runtime).toBe("claude-cli (fallback none)");
     expect(context.isDefault).toBe(true);
   });
 

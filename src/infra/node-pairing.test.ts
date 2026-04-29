@@ -131,6 +131,41 @@ describe("node pairing tokens", () => {
     });
   });
 
+  test("recovers when pairing state files were written as arrays", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      const paths = resolvePairingPaths(baseDir, "nodes");
+      await fs.mkdir(paths.dir, { recursive: true });
+      await fs.writeFile(paths.pendingPath, "[]", "utf8");
+      await fs.writeFile(paths.pairedPath, "[]", "utf8");
+
+      const pending = await requestNodePairing(
+        {
+          nodeId: "node-array-state",
+          platform: "darwin",
+          commands: ["system.run"],
+        },
+        baseDir,
+      );
+      const approved = await approveNodePairing(
+        pending.request.requestId,
+        { callerScopes: ["operator.pairing", "operator.admin"] },
+        baseDir,
+      );
+
+      expect(approved).toEqual(
+        expect.objectContaining({
+          node: expect.objectContaining({ nodeId: "node-array-state" }),
+        }),
+      );
+      expect(Array.isArray(JSON.parse(await fs.readFile(paths.pendingPath, "utf8")))).toBe(false);
+      expect(JSON.parse(await fs.readFile(paths.pairedPath, "utf8"))).toEqual(
+        expect.objectContaining({
+          "node-array-state": expect.objectContaining({ nodeId: "node-array-state" }),
+        }),
+      );
+    });
+  });
+
   test("generates base64url node tokens and rejects mismatches", async () => {
     await withNodePairingDir(async (baseDir) => {
       const token = await setupPairedNode(baseDir);

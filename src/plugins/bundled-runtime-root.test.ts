@@ -69,6 +69,11 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       "utf8",
     );
     fs.writeFileSync(
+      path.join(packageRoot, "dist", "string-runtime.js"),
+      `const text = 'not an import: from "zod"'; export const marker = text;\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
       path.join(pluginRoot, "index.js"),
       `import { marker } from "../../pw-ai.js"; export default { id: "browser", marker };\n`,
       "utf8",
@@ -138,6 +143,82 @@ describe("prepareBundledPluginRuntimeRoot", () => {
     expect(fs.lstatSync(path.join(installRoot, "dist", "config-runtime.js")).isSymbolicLink()).toBe(
       true,
     );
+    expect(fs.lstatSync(path.join(installRoot, "dist", "string-runtime.js")).isSymbolicLink()).toBe(
+      false,
+    );
+  });
+
+  it("reuses root chunk materialization decisions across bundled plugin mirrors", () => {
+    const packageRoot = makeTempRoot();
+    const stageDir = makeTempRoot();
+    const env = { ...process.env, OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    const rootChunk = path.join(packageRoot, "dist", "shared-runtime.js");
+    const externalChunk = path.join(packageRoot, "dist", "external-runtime.js");
+    fs.mkdirSync(path.join(packageRoot, "dist", "extensions"), { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.27", type: "module" }),
+      "utf8",
+    );
+    fs.writeFileSync(rootChunk, "export const shared = 'root';\n", "utf8");
+    fs.writeFileSync(externalChunk, "import zod from 'zod'; export const schema = zod;\n", "utf8");
+
+    for (const pluginId of ["alpha", "beta"]) {
+      const pluginRoot = path.join(packageRoot, "dist", "extensions", pluginId);
+      fs.mkdirSync(pluginRoot, { recursive: true });
+      fs.writeFileSync(
+        path.join(pluginRoot, "index.js"),
+        `import { shared } from "../../shared-runtime.js"; export default { id: ${JSON.stringify(pluginId)}, shared };\n`,
+        "utf8",
+      );
+      fs.writeFileSync(
+        path.join(pluginRoot, "package.json"),
+        JSON.stringify(
+          {
+            name: `@openclaw/${pluginId}`,
+            version: "1.0.0",
+            type: "module",
+            dependencies: { [`${pluginId}-runtime`]: "1.0.0" },
+            openclaw: { extensions: ["./index.js"] },
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+      const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
+      fs.mkdirSync(path.join(installRoot, "node_modules", `${pluginId}-runtime`), {
+        recursive: true,
+      });
+      fs.writeFileSync(
+        path.join(installRoot, "node_modules", `${pluginId}-runtime`, "package.json"),
+        JSON.stringify({ name: `${pluginId}-runtime`, version: "1.0.0", type: "module" }),
+        "utf8",
+      );
+    }
+
+    const realReadFileSync = fs.readFileSync.bind(fs);
+    const readPaths: string[] = [];
+    vi.spyOn(fs, "readFileSync").mockImplementation(((target, options) => {
+      const targetPath = target.toString();
+      if (targetPath === rootChunk || targetPath === externalChunk) {
+        readPaths.push(targetPath);
+      }
+      return realReadFileSync(target, options as never);
+    }) as typeof fs.readFileSync);
+
+    for (const pluginId of ["alpha", "beta"]) {
+      const pluginRoot = path.join(packageRoot, "dist", "extensions", pluginId);
+      prepareBundledPluginRuntimeRoot({
+        pluginId,
+        pluginRoot,
+        modulePath: path.join(pluginRoot, "index.js"),
+        env,
+      });
+    }
+
+    expect(readPaths.filter((entry) => entry === rootChunk)).toHaveLength(1);
+    expect(readPaths.filter((entry) => entry === externalChunk)).toHaveLength(1);
   });
 
   it("does not copy staged runtime mirror dist files onto themselves", () => {

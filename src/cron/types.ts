@@ -147,7 +147,7 @@ export type CronJobState = {
   lastRunAtMs?: number;
   /** Preferred execution outcome field. */
   lastRunStatus?: CronRunStatus;
-  /** Back-compat alias for lastRunStatus. */
+  /** @deprecated Use lastRunStatus. */
   lastStatus?: "ok" | "error" | "skipped";
   lastError?: string;
   /** Classified reason for the last error (when available). */

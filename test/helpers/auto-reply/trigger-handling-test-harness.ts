@@ -6,7 +6,6 @@ import { afterAll, afterEach, beforeAll, expect, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../../src/agents/auth-profiles.js";
 import { withFastReplyConfig } from "../../../src/auto-reply/reply/get-reply-fast-path.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
-import { resetProviderRuntimeHookCacheForTest } from "../../../src/plugins/provider-runtime.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
 type AnyMock = any;
@@ -447,7 +446,6 @@ export async function expectBareNewOrResetAcknowledged(params: {
 export function installTriggerHandlingE2eTestHooks() {
   afterEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
-    resetProviderRuntimeHookCacheForTest();
     vi.clearAllMocks();
   });
 }

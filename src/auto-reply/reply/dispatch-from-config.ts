@@ -292,7 +292,8 @@ export async function dispatchReplyFromConfig(
   const channel = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider ?? "unknown");
   const chatId = ctx.To ?? ctx.From;
   const messageId = ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
-  const sessionKey = ctx.SessionKey;
+  const sessionKey =
+    normalizeOptionalString(ctx.SessionKey) ?? normalizeOptionalString(ctx.CommandTargetSessionKey);
   const startTime = diagnosticsEnabled ? Date.now() : 0;
   const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
 

@@ -365,6 +365,9 @@ fi
 if [[ -n "${OPENCLAW_EXTENSIONS:-}" ]]; then
   BUILD_ARGS+=(--build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}")
 fi
+if [[ -n "${OPENCLAW_INSTALL_BROWSER:-}" ]]; then
+  BUILD_ARGS+=(--build-arg "OPENCLAW_INSTALL_BROWSER=${OPENCLAW_INSTALL_BROWSER}")
+fi
 
 if [[ "$OPENCLAW_IMAGE" == "openclaw:local" ]]; then
   echo "Building image $OPENCLAW_IMAGE ..."

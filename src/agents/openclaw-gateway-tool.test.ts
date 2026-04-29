@@ -187,16 +187,48 @@ describe("gateway tool", () => {
   });
 
   it("passes config.apply through gateway call", async () => {
+    vi.mocked(callGatewayTool).mockImplementation(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          hash: "hash-1",
+          config: {
+            tools: {
+              exec: {
+                ask: "on-miss",
+                security: "allowlist",
+              },
+            },
+          },
+        };
+      }
+      if (method === "config.apply") {
+        return {
+          ok: true,
+          path: "/tmp/openclaw.json",
+          config: { agents: { defaults: { systemPromptOverride: "You are a terse assistant." } } },
+          restart: { ok: true, config: "nested field preserved" },
+        };
+      }
+      return { ok: true };
+    });
     const sessionKey = "agent:main:whatsapp:dm:+15555550123";
     const tool = requireGatewayTool(sessionKey);
 
     const raw =
       '{\n  agents: { defaults: { systemPromptOverride: "You are a terse assistant." } },\n  tools: { exec: { ask: "on-miss", security: "allowlist" } }\n}\n';
-    await tool.execute("call2", {
+    const result = await tool.execute("call2", {
       action: "config.apply",
       raw,
     });
 
+    expect(result.details).toEqual({
+      ok: true,
+      result: {
+        ok: true,
+        path: "/tmp/openclaw.json",
+        restart: { ok: true, config: "nested field preserved" },
+      },
+    });
     expectConfigMutationCall({
       callGatewayTool: vi.mocked(callGatewayTool),
       action: "config.apply",
@@ -206,15 +238,47 @@ describe("gateway tool", () => {
   });
 
   it("passes config.patch through gateway call", async () => {
+    vi.mocked(callGatewayTool).mockImplementation(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          hash: "hash-1",
+          config: {
+            tools: {
+              exec: {
+                ask: "on-miss",
+                security: "allowlist",
+              },
+            },
+          },
+        };
+      }
+      if (method === "config.patch") {
+        return {
+          ok: true,
+          noop: true,
+          path: "/tmp/openclaw.json",
+          config: { channels: { telegram: { groups: {} } } },
+        };
+      }
+      return { ok: true };
+    });
     const sessionKey = "agent:main:whatsapp:dm:+15555550123";
     const tool = requireGatewayTool(sessionKey);
 
     const raw = '{\n  channels: { telegram: { groups: { "*": { requireMention: false } } } }\n}\n';
-    await tool.execute("call4", {
+    const result = await tool.execute("call4", {
       action: "config.patch",
       raw,
     });
 
+    expect(result.details).toEqual({
+      ok: true,
+      result: {
+        ok: true,
+        noop: true,
+        path: "/tmp/openclaw.json",
+      },
+    });
     expectConfigMutationCall({
       callGatewayTool: vi.mocked(callGatewayTool),
       action: "config.patch",

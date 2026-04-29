@@ -426,3 +426,52 @@ export function formatBlueBubblesChatTarget(params: {
   }
   return "";
 }
+
+/**
+ * Derive a chat context ({chatGuid, chatIdentifier, chatId}) from a raw
+ * BlueBubbles target string such as `chat_guid:iMessage;+;chat123`,
+ * `chat_id:42`, `imessage:+15551234567`, or a bare handle. Returns an empty
+ * object for unparseable input.
+ *
+ * Used by short-ID message resolution to constrain short IDs to the chat the
+ * caller is acting on, preventing a short ID allocated for a message in one
+ * chat from silently pointing at a different chat on a later tool call.
+ */
+export function buildBlueBubblesChatContextFromTarget(raw: string | undefined | null): {
+  chatGuid?: string;
+  chatIdentifier?: string;
+  chatId?: number;
+} {
+  const trimmed = normalizeOptionalString(raw);
+  if (!trimmed) {
+    return {};
+  }
+  try {
+    const parsed = parseBlueBubblesTarget(trimmed);
+    if (parsed.kind === "chat_guid") {
+      return { chatGuid: parsed.chatGuid };
+    }
+    if (parsed.kind === "chat_identifier") {
+      return { chatIdentifier: parsed.chatIdentifier };
+    }
+    if (parsed.kind === "chat_id") {
+      return { chatId: parsed.chatId };
+    }
+    if (parsed.kind === "handle") {
+      // BlueBubbles chat records store DM handles in the third component of
+      // their chatGuid (service;-;address), and `chatIdentifier` on a chat
+      // record is typically the same address. Treat a handle target as a
+      // chatIdentifier hint; it disambiguates DM↔DM and DM↔group mixes.
+      // Normalize the handle (strip service prefix / whitespace / lowercase
+      // emails) so the comparison matches what the send path resolves to
+      // and what inbound webhooks write into the reply cache; otherwise
+      // formats like `imessage:(555) 123-4567` or mixed-case email handles
+      // would compare unequal against their normalized cached form and
+      // legitimate same-chat short IDs would be rejected as cross-chat.
+      return { chatIdentifier: normalizeBlueBubblesHandle(parsed.to) };
+    }
+    return {};
+  } catch {
+    return {};
+  }
+}

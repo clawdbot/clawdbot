@@ -13,7 +13,7 @@ import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import { resolveChannelAccountId } from "./channel-context.js";
 import { rejectNonOwnerCommand, rejectUnauthorizedCommand } from "./command-gates.js";
 import { buildExportSessionReply } from "./commands-export-session.js";
-import { buildExportTrajectoryReply } from "./commands-export-trajectory.js";
+import { buildExportTrajectoryCommandReply } from "./commands-export-trajectory.js";
 import { buildStatusReply } from "./commands-status.js";
 import type { CommandHandler } from "./commands-types.js";
 import { extractExplicitGroupId } from "./group-id.js";
@@ -259,5 +259,5 @@ export const handleExportTrajectoryCommand: CommandHandler = async (params, allo
   if (nonOwner) {
     return nonOwner;
   }
-  return { shouldContinue: false, reply: await buildExportTrajectoryReply(params) };
+  return { shouldContinue: false, reply: await buildExportTrajectoryCommandReply(params) };
 };

@@ -127,6 +127,7 @@ function shouldIncludeToolErrorDetails(params: {
 function resolveToolErrorWarningPolicy(params: {
   lastToolError: ToolErrorSummary;
   hasUserFacingReply: boolean;
+  hasUserFacingErrorReply: boolean;
   hasUserFacingFailureAcknowledgement: boolean;
   suppressToolErrors: boolean;
   suppressToolErrorWarnings?: boolean;
@@ -152,7 +153,7 @@ function resolveToolErrorWarningPolicy(params: {
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
     return {
-      showWarning: !params.hasUserFacingFailureAcknowledgement,
+      showWarning: !params.hasUserFacingErrorReply && !params.hasUserFacingFailureAcknowledgement,
       includeDetails,
     };
   }
@@ -363,6 +364,7 @@ export function buildEmbeddedRunPayloads(params: {
       ).filter((text) => !shouldSuppressRawErrorText(text));
 
   let hasUserFacingAssistantReply = false;
+  const hasUserFacingErrorReply = replyItems.some((item) => item.isError === true);
   let hasUserFacingFailureAcknowledgement = false;
   for (const text of answerTexts) {
     const {
@@ -394,6 +396,7 @@ export function buildEmbeddedRunPayloads(params: {
     const warningPolicy = resolveToolErrorWarningPolicy({
       lastToolError: params.lastToolError,
       hasUserFacingReply: hasUserFacingAssistantReply,
+      hasUserFacingErrorReply,
       hasUserFacingFailureAcknowledgement,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,

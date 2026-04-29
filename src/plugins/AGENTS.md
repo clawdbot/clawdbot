@@ -27,6 +27,13 @@ assembly, and contract enforcement.
   belongs to runtime resolution.
 - Preserve manifest-first behavior: discovery, config validation, and setup
   should work from metadata before plugin runtime executes.
+- Cache concept: metadata stays fresh unless a caller owns an explicit
+  `PluginMetadataSnapshot`, `PluginLookUpTable`, or manifest registry for the
+  current flow. Do not add persistent metadata caches for discovery, manifest
+  registries, installed-index reconstruction, owner lookup, model suppression,
+  provider policy, public-artifact metadata, or similar control-plane answers.
+  Runtime loader, jiti/module, and dependency-artifact caches are the allowed
+  cache layer once code or installed artifacts are actually loaded.
 - Keep loader behavior aligned with the documented Plugin SDK and manifest
   contracts. Do not create private backdoors that bundled plugins can use but
   external plugins cannot.
@@ -68,6 +75,9 @@ assembly, and contract enforcement.
 - If setup, discovery, or doctor flows need plugin runtime, make that need
   explicit and narrow. Do not let cold control-plane paths quietly import broad
   runtime surfaces.
+- Resolver and public-surface loader tests must use generated tiny plugin
+  fixtures for broad `api.js` / `runtime-api.js` fallback behavior. Do not point
+  those tests at real bundled plugin source APIs just to prove path resolution.
 
 ## Verification
 

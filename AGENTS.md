@@ -174,7 +174,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Before simulator/emulator testing, check real iOS/Android devices.
 - "restart iOS/Android apps" = rebuild/reinstall/relaunch, not kill/launch.
 - SwiftUI: Observation (`@Observable`, `@Bindable`) over new `ObservableObject`.
-- Mac gateway: use app or `openclaw gateway restart/status --deep`; no ad-hoc tmux gateway. Logs: `./scripts/clawlog.sh`.
+- Mac gateway: dev watch = `pnpm gateway:watch` (tmux `openclaw-gateway-watch-main`, auto-attach). Noninteractive: `OPENCLAW_GATEWAY_WATCH_ATTACH=0 pnpm gateway:watch`; attach/stop: `tmux attach -t openclaw-gateway-watch-main` / `tmux kill-session -t openclaw-gateway-watch-main`. Managed installs: `openclaw gateway restart/status --deep`. No launchd/ad-hoc tmux. Logs: `./scripts/clawlog.sh`.
 - Version bump touches: `package.json`, `apps/android/app/build.gradle.kts`, `apps/ios/version.json` + `pnpm ios:version:sync`, macOS `Info.plist`, `docs/install/updating.md`. Appcast only for Sparkle release.
 - Mobile LAN pairing: plaintext `ws://` loopback-only. Private-network `ws://` needs `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1`; Tailscale/public use `wss://` or tunnel.
 - A2UI hash `src/canvas-host/a2ui/.bundle.hash`: generated; ignore unless running `pnpm canvas:a2ui:bundle`; commit separately.

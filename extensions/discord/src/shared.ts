@@ -5,9 +5,11 @@ import { createScopedChannelConfigAdapter } from "openclaw/plugin-sdk/channel-co
 import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import {
+  isDiscordAccountEnabledForRuntime,
   listDiscordAccountIds,
   resolveDefaultDiscordAccountId,
   resolveDiscordAccount,
+  resolveDiscordAccountDisabledReason,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
 import { getChatChannelMeta, type ChannelPlugin } from "./channel-api.js";
@@ -119,6 +121,8 @@ export function createDiscordPluginBase(params: {
       ...discordConfigAdapter,
       hasConfiguredState: ({ env }) =>
         typeof env?.DISCORD_BOT_TOKEN === "string" && env.DISCORD_BOT_TOKEN.trim().length > 0,
+      isEnabled: (account, cfg) => isDiscordAccountEnabledForRuntime(account, cfg),
+      disabledReason: (account, cfg) => resolveDiscordAccountDisabledReason(account, cfg),
       isConfigured: (account) => Boolean(account.token?.trim()),
       describeAccount: (account) =>
         describeAccountSnapshot({

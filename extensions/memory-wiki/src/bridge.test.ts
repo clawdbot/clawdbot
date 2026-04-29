@@ -300,6 +300,97 @@ describe("syncMemoryWikiBridgeSources", () => {
     });
   });
 
+  it("refuses to overwrite bridge source pages through vault symlinks", async () => {
+    const workspaceDir = await createBridgeWorkspace("symlink-workspace");
+    const { rootDir: vaultDir, config } = await createVault({
+      rootDir: nextCaseRoot("symlink-vault"),
+      config: {
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          readMemoryArtifacts: true,
+          indexMemoryRoot: true,
+        },
+      },
+    });
+    const memoryPath = path.join(workspaceDir, "MEMORY.md");
+    await fs.writeFile(memoryPath, "# Durable Memory\n", "utf8");
+    registerBridgeArtifacts([
+      {
+        kind: "memory-root",
+        workspaceDir,
+        relativePath: "MEMORY.md",
+        absolutePath: memoryPath,
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
+    const appConfig: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", default: true, workspace: workspaceDir }],
+      },
+    };
+    const first = await syncMemoryWikiBridgeSources({ config, appConfig });
+    const pagePath = first.pagePaths[0] ?? "";
+    const pageAbsPath = path.join(vaultDir, pagePath);
+    const externalTarget = path.join(workspaceDir, "outside.md");
+    await fs.writeFile(externalTarget, "external target\n", "utf8");
+    await fs.rm(pageAbsPath);
+    await fs.symlink(externalTarget, pageAbsPath);
+    await fs.writeFile(memoryPath, "# Updated Durable Memory\n", "utf8");
+
+    await expect(syncMemoryWikiBridgeSources({ config, appConfig })).rejects.toThrow(
+      "Refusing to write imported source page through symlink",
+    );
+    await expect(fs.readFile(externalTarget, "utf8")).resolves.toBe("external target\n");
+  });
+
+  it("replaces bridge source page hardlinks without clobbering their target", async () => {
+    const workspaceDir = await createBridgeWorkspace("hardlink-workspace");
+    const { rootDir: vaultDir, config } = await createVault({
+      rootDir: nextCaseRoot("hardlink-vault"),
+      config: {
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          readMemoryArtifacts: true,
+          indexMemoryRoot: true,
+        },
+      },
+    });
+    const memoryPath = path.join(workspaceDir, "MEMORY.md");
+    await fs.writeFile(memoryPath, "# Durable Memory\n", "utf8");
+    registerBridgeArtifacts([
+      {
+        kind: "memory-root",
+        workspaceDir,
+        relativePath: "MEMORY.md",
+        absolutePath: memoryPath,
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
+    const appConfig: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", default: true, workspace: workspaceDir }],
+      },
+    };
+    const first = await syncMemoryWikiBridgeSources({ config, appConfig });
+    const pagePath = first.pagePaths[0] ?? "";
+    const pageAbsPath = path.join(vaultDir, pagePath);
+    const externalTarget = path.join(workspaceDir, "outside-hardlink.md");
+    await fs.writeFile(externalTarget, "external target\n", "utf8");
+    await fs.rm(pageAbsPath);
+    await fs.link(externalTarget, pageAbsPath);
+    await fs.writeFile(memoryPath, "# Updated Durable Memory\n", "utf8");
+
+    const second = await syncMemoryWikiBridgeSources({ config, appConfig });
+
+    expect(second.updatedCount).toBe(1);
+    await expect(fs.readFile(externalTarget, "utf8")).resolves.toBe("external target\n");
+    await expect(fs.readFile(pageAbsPath, "utf8")).resolves.toContain("# Updated Durable Memory");
+  });
+
   it("caps composed bridge source filenames to the filesystem component limit", async () => {
     const workspaceDir = await createBridgeWorkspace(`${"漢".repeat(50)}-workspace`);
     const { rootDir: vaultDir, config } = await createVault({

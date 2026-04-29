@@ -718,6 +718,31 @@ describe("resolveNodeCommandAllowlist", () => {
     expect(allow.has("screen.record")).toBe(false);
   });
 
+  it("allows safe Windows companion commands by default but keeps dangerous media gated", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {},
+      {
+        platform: "Windows_NT",
+        deviceFamily: "Windows",
+      },
+    );
+
+    expect(allow.has("canvas.present")).toBe(true);
+    expect(allow.has("canvas.a2ui.pushJSONL")).toBe(true);
+    expect(allow.has("camera.list")).toBe(true);
+    expect(allow.has("location.get")).toBe(true);
+    expect(allow.has("device.info")).toBe(true);
+    expect(allow.has("device.status")).toBe(true);
+    expect(allow.has("screen.snapshot")).toBe(true);
+    expect(allow.has("system.run")).toBe(true);
+    expect(allow.has("system.which")).toBe(true);
+    expect(allow.has("system.notify")).toBe(true);
+
+    for (const cmd of DEFAULT_DANGEROUS_NODE_COMMANDS) {
+      expect(allow.has(cmd)).toBe(false);
+    }
+  });
+
   it("can explicitly allow dangerous commands via allowCommands", () => {
     const allow = resolveNodeCommandAllowlist(
       {

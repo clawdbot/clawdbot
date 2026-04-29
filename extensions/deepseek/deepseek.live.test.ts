@@ -176,4 +176,59 @@ describeLive("deepseek plugin live", () => {
     });
     expect(extractNonEmptyAssistantText(result.content).length).toBeGreaterThan(0);
   }, 60_000);
+
+  it("accepts V4 thinking replay after a prior plain assistant message", async () => {
+    const context: Context = {
+      messages: [
+        {
+          role: "user",
+          content: "Say hello.",
+          timestamp: Date.now() - 2,
+        },
+        {
+          role: "assistant",
+          api: "openai-completions",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "Hello." }],
+          usage: ZERO_USAGE,
+          stopReason: "stop",
+          timestamp: Date.now() - 1,
+        },
+        {
+          role: "user",
+          content: "Reply with exactly: ok",
+          timestamp: Date.now(),
+        },
+      ],
+    };
+    let capturedPayload: Record<string, unknown> | undefined;
+    const streamFn = createDeepSeekV4ThinkingWrapper(streamSimple, "high");
+    expect(streamFn).toBeDefined();
+
+    const stream = streamFn?.(resolveDeepSeekV4LiveModel(), context, {
+      apiKey: DEEPSEEK_KEY,
+      maxTokens: 64,
+      onPayload: (payload) => {
+        capturedPayload = payload as Record<string, unknown>;
+      },
+    });
+    expect(stream).toBeDefined();
+
+    const result = await (await stream!).result();
+    if (result.stopReason === "error") {
+      throw new Error(
+        result.errorMessage || "DeepSeek V4 plain replay returned error with no message",
+      );
+    }
+
+    const messages = capturedPayload?.messages;
+    expect(Array.isArray(messages)).toBe(true);
+    expect((messages as Array<Record<string, unknown>>)[1]).toMatchObject({
+      role: "assistant",
+      content: "Hello.",
+      reasoning_content: "",
+    });
+    expect(extractNonEmptyAssistantText(result.content).length).toBeGreaterThan(0);
+  }, 60_000);
 });

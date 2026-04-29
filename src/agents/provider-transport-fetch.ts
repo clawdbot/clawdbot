@@ -10,6 +10,103 @@ import {
 
 const DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS = 60;
 
+function hasReadableSseData(block: string): boolean {
+  const dataLines = block
+    .split(/\r\n|\n|\r/)
+    .filter((line) => line === "data" || line.startsWith("data:"))
+    .map((line) => {
+      if (line === "data") {
+        return "";
+      }
+      const value = line.slice("data:".length);
+      return value.startsWith(" ") ? value.slice(1) : value;
+    });
+  return dataLines.length > 0 && dataLines.join("\n").trim().length > 0;
+}
+
+function findSseEventBoundary(buffer: string): { index: number; length: number } | undefined {
+  let best: { index: number; length: number } | undefined;
+  for (const delimiter of ["\r\n\r\n", "\n\n", "\r\r"]) {
+    const index = buffer.indexOf(delimiter);
+    if (index === -1) {
+      continue;
+    }
+    if (!best || index < best.index) {
+      best = { index, length: delimiter.length };
+    }
+  }
+  return best;
+}
+
+function sanitizeOpenAISdkSseResponse(response: Response): Response {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!response.body || !/\btext\/event-stream\b/i.test(contentType)) {
+    return response;
+  }
+
+  const source = response.body;
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let buffer = "";
+
+  const enqueueSanitized = (
+    controller: ReadableStreamDefaultController<Uint8Array>,
+    text: string,
+  ) => {
+    buffer += text;
+    for (;;) {
+      const boundary = findSseEventBoundary(buffer);
+      if (!boundary) {
+        return;
+      }
+      const block = buffer.slice(0, boundary.index);
+      const separator = buffer.slice(boundary.index, boundary.index + boundary.length);
+      buffer = buffer.slice(boundary.index + boundary.length);
+      // OpenAI's SDK currently tries to JSON.parse event-only or blank-data SSE
+      // messages. Drop those malformed keepalive-style blocks before it parses.
+      if (hasReadableSseData(block)) {
+        controller.enqueue(encoder.encode(`${block}${separator}`));
+      }
+    }
+  };
+
+  const sanitizedBody = new ReadableStream<Uint8Array>({
+    start() {
+      reader = source.getReader();
+    },
+    async pull(controller) {
+      try {
+        const chunk = await reader?.read();
+        if (!chunk || chunk.done) {
+          const tail = decoder.decode();
+          if (tail) {
+            enqueueSanitized(controller, tail);
+          }
+          if (buffer && hasReadableSseData(buffer)) {
+            controller.enqueue(encoder.encode(buffer));
+          }
+          buffer = "";
+          controller.close();
+          return;
+        }
+        enqueueSanitized(controller, decoder.decode(chunk.value, { stream: true }));
+      } catch (error) {
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      await reader?.cancel(reason);
+    },
+  });
+
+  return new Response(sanitizedBody, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
 function parseRetryAfterSeconds(headers: Headers): number | undefined {
   const retryAfterMs = headers.get("retry-after-ms");
   if (retryAfterMs) {
@@ -218,6 +315,7 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
         headers,
       });
     }
+    response = sanitizeOpenAISdkSseResponse(response);
     return buildManagedResponse(response, result.release);
   };
 }

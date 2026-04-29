@@ -123,17 +123,22 @@ instantly and boots the CI environment in the background while you work:
     blacksmith testbox warmup ci-check-testbox.yml
     # → tbx_01jkz5b3t9...
 
-Save this ID. You need it for every `run` command.
+Save this ID in the current session. You need it for every `run` command.
+Treat `blacksmith testbox list` as diagnostics, not a reusable work queue.
+Listed boxes can be visible at the org/repo level while still being unusable or
+stale for the current local agent lane.
 
 For OpenClaw maintainer Testbox mode, pre-warm at the start of longer or wider
 tasks:
 
     blacksmith testbox warmup ci-check-testbox.yml --ref main --idle-timeout 90
+    pnpm testbox:claim --id <ID>
 
 Use the build-artifact warmup when e2e/package/build proof benefits from seeded
 `dist/`, `dist-runtime/`, and build-all caches:
 
     blacksmith testbox warmup ci-build-artifacts-testbox.yml --ref main --idle-timeout 90
+    pnpm testbox:claim --id <ID>
 
 Warmup dispatches a GitHub Actions workflow that provisions a VM with the
 full CI environment: dependencies installed, services started, secrets
@@ -177,6 +182,26 @@ If your shell is in a subdirectory, `cd` back to the repo root first:
 The `run` command automatically waits for the testbox to become ready if
 it is still booting, so you can call `run` immediately after warmup without
 needing to check status first.
+
+In OpenClaw, prefer the guarded runner wrapper so stale/reused ids fail before
+the Blacksmith CLI spends time syncing or emits a confusing missing-key error:
+
+    pnpm testbox:run --id <ID> -- "OPENCLAW_TESTBOX=1 pnpm check:changed"
+
+The wrapper refuses to run when the local per-Testbox key is missing or when the
+id was not claimed by this OpenClaw checkout with `pnpm testbox:claim --id
+<ID>`. Treat that as the expected remediation, not as a GitHub account or
+normal SSH-key problem. A local key alone is not enough; a ready box may still
+carry stale rsync state from another lane.
+
+If the agent crashes, the remote box relies on Blacksmith's idle timeout. The
+local OpenClaw claim marker is not deleted automatically, so the wrapper treats
+claims older than 12 hours as stale. Override only for intentional long-running
+work with `OPENCLAW_TESTBOX_CLAIM_TTL_MINUTES=<minutes>`.
+
+Before spending a broad gate on a manually assembled command, you can also run:
+
+    pnpm testbox:sanity -- --id <ID>
 
 ## Downloading files from a testbox
 
@@ -286,16 +311,17 @@ checks that need parity or remote state.
 1. Decide whether the repo's local loop is the right default. For OpenClaw,
    `OPENCLAW_TESTBOX=1` makes Testbox the maintainer default.
 2. If Testbox is warranted, warm up early:
-   `blacksmith testbox warmup ci-check-testbox.yml --ref main --idle-timeout 90` → save the ID
+   `blacksmith testbox warmup ci-check-testbox.yml --ref main --idle-timeout 90` → save the ID,
+   then `pnpm testbox:claim --id <ID>`
 3. Write code while the testbox boots in the background.
 4. Run the remote command when needed:
-   `blacksmith testbox run --id <ID> "pnpm check:changed"`
+   `pnpm testbox:run --id <ID> -- "OPENCLAW_TESTBOX=1 pnpm check:changed"`
 5. If tests fail, fix code and re-run against the same warm box.
 6. If you changed dependency manifests (package.json, etc.), prepend
    the install command: `blacksmith testbox run --id <ID> "npm install && npm test"`
 7. If a narrow PR reports a full sync or the box was reused/expired, sanity
    check the remote copy before a slow gate:
-   `blacksmith testbox run --id <ID> "pnpm testbox:sanity"`.
+   `pnpm testbox:run --id <ID> -- "pnpm testbox:sanity"`.
    If it reports missing root files or mass tracked deletions, stop the box and
    warm a fresh one. Use `OPENCLAW_TESTBOX_ALLOW_MASS_DELETIONS=1` only for an
    intentional large deletion PR.

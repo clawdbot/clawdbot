@@ -159,6 +159,12 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
     existing.isHeartbeat = context.isHeartbeat;
   }
+  if (context.registeredAt !== undefined) {
+    existing.registeredAt = context.registeredAt;
+  }
+  if (context.lastActiveAt !== undefined) {
+    existing.lastActiveAt = context.lastActiveAt;
+  }
 }
 
 export function getAgentRunContext(runId: string) {

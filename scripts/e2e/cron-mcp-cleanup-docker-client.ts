@@ -133,7 +133,7 @@ async function runCronCleanupScenario(params: {
       message: "Use available context and then stop.",
       timeoutSeconds: 90,
       lightContext: true,
-      toolsAllow: ["bundle-mcp"],
+      toolsAllow: ["bundle-mcp", "cronCleanupProbe__cleanup_probe"],
     },
     delivery: { mode: "none" },
   });

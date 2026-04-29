@@ -39,6 +39,52 @@ describe("whatsappChannelOutbound", () => {
     });
   });
 
+  it("keeps XML sanitizer normalization idempotent", () => {
+    const raw = [
+      "<function_calls>",
+      '  <invoke name="send_message">',
+      '    <parameter name="text">hidden</parameter>',
+      "  </invoke>",
+      "</function_calls>",
+      "After",
+    ].join("\n");
+    const once = whatsappChannelOutbound.normalizePayload?.({ payload: { text: raw } });
+    const twice = whatsappChannelOutbound.normalizePayload?.({ payload: { text: once?.text } });
+
+    expect(once?.text).toBe("After");
+    expect(twice?.text).toBe("After");
+  });
+
+  it("drops whitespace-only text after XML sanitizer removal", () => {
+    const raw = [
+      "  <function_calls>",
+      '    <invoke name="send_message">',
+      '      <parameter name="text">hidden</parameter>',
+      "    </invoke>",
+      "  </function_calls>",
+    ].join("\n");
+
+    expect(whatsappChannelOutbound.normalizePayload?.({ payload: { text: raw } })).toEqual({
+      text: "",
+    });
+  });
+
+  it("sanitizes XML tool payloads before plain HTML stripping", () => {
+    const raw = [
+      "Before",
+      "<function_calls>",
+      '  <invoke name="send_message">',
+      '    <parameter name="text">hidden</parameter>',
+      "  </invoke>",
+      "</function_calls>",
+      "After",
+    ].join("\n");
+
+    expect(whatsappChannelOutbound.sanitizeText?.({ text: raw, payload: { text: raw } })).toBe(
+      "Before\n\nAfter",
+    );
+  });
+
   it("preserves indentation for live text sends", async () => {
     await whatsappChannelOutbound.sendText!({
       cfg: {},

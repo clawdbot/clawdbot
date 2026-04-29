@@ -11,9 +11,11 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
   }),
 }));
 
-type FetchRemoteMedia = typeof import("./fetch.js").fetchRemoteMedia;
+type FetchModule = typeof import("./fetch.js");
+type FetchRemoteMedia = FetchModule["fetchRemoteMedia"];
 type LookupFn = NonNullable<Parameters<FetchRemoteMedia>[0]["lookupFn"]>;
 let fetchRemoteMedia: FetchRemoteMedia;
+let defaultFetchMediaMaxBytes: number;
 
 function makeStream(chunks: Uint8Array[]) {
   return new ReadableStream<Uint8Array>({
@@ -177,7 +179,9 @@ describe("fetchRemoteMedia", () => {
   const botFileUrl = `https://files.example.test/file/bot${botToken}/photos/1.jpg`;
 
   beforeAll(async () => {
-    ({ fetchRemoteMedia } = await import("./fetch.js"));
+    const fetchModule = await import("./fetch.js");
+    fetchRemoteMedia = fetchModule.fetchRemoteMedia;
+    defaultFetchMediaMaxBytes = fetchModule.DEFAULT_FETCH_MEDIA_MAX_BYTES;
   });
 
   beforeEach(() => {
@@ -221,6 +225,24 @@ describe("fetchRemoteMedia", () => {
     },
   ] as const)("$name", async ({ fetchImpl }) => {
     await expectRemoteMediaMaxBytesError({ fetchImpl, maxBytes: 4 });
+  });
+
+  it("applies a default stream limit when maxBytes is omitted", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(makeStream([new Uint8Array([1])]), {
+          status: 200,
+          headers: { "content-length": String(defaultFetchMediaMaxBytes + 1) },
+        }),
+    );
+
+    await expect(
+      fetchRemoteMedia({
+        url: "https://example.com/file.bin",
+        fetchImpl,
+        lookupFn: makeLookupFn(),
+      }),
+    ).rejects.toThrow(`exceeds maxBytes ${defaultFetchMediaMaxBytes}`);
   });
 
   it.each([

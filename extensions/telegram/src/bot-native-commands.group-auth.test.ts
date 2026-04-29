@@ -14,6 +14,7 @@ describe("native command auth in groups", () => {
     telegramCfg?: TelegramAccountConfig;
     allowFrom?: string[];
     groupAllowFrom?: string[];
+    storeAllowFrom?: string[];
     useAccessGroups?: boolean;
     groupConfig?: Record<string, unknown>;
     resolveGroupPolicy?: () => ChannelGroupPolicy;
@@ -23,6 +24,7 @@ describe("native command auth in groups", () => {
       telegramCfg: params.telegramCfg ?? ({} as TelegramAccountConfig),
       allowFrom: params.allowFrom ?? [],
       groupAllowFrom: params.groupAllowFrom ?? [],
+      storeAllowFrom: params.storeAllowFrom,
       useAccessGroups: params.useAccessGroups ?? false,
       resolveGroupPolicy:
         params.resolveGroupPolicy ??
@@ -48,6 +50,20 @@ describe("native command auth in groups", () => {
 
     const notAuthCalls = findNotAuthorizedCalls(sendMessage);
     expect(notAuthCalls).toHaveLength(0);
+  });
+
+  it("does not authorize group native commands from the DM allowlist store", async () => {
+    const { handlers, sendMessage } = setup({
+      storeAllowFrom: ["12345"],
+      useAccessGroups: true,
+    });
+
+    const ctx = createTelegramGroupCommandContext();
+
+    await handlers.status?.(ctx);
+
+    const notAuthCalls = findNotAuthorizedCalls(sendMessage);
+    expect(notAuthCalls.length).toBeGreaterThan(0);
   });
 
   it("authorizes native commands in groups from commands.allowFrom.telegram", async () => {

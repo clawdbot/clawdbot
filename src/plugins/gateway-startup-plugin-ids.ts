@@ -1,5 +1,8 @@
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
-import { listPotentialConfiguredChannelIds } from "../channels/config-presence.js";
+import {
+  listExplicitlyDisabledChannelIdsForConfig,
+  listPotentialConfiguredChannelIds,
+} from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
@@ -32,26 +35,6 @@ function shouldDisableLegacyImplicitStartupSidecars(env: NodeJS.ProcessEnv): boo
   return isTruthyEnvValue(env[DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS_ENV]);
 }
 
-function listDisabledChannelIds(config: OpenClawConfig): Set<string> {
-  const channels = config.channels;
-  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
-    return new Set();
-  }
-  return new Set(
-    Object.entries(channels)
-      .filter(([, value]) => {
-        return (
-          value &&
-          typeof value === "object" &&
-          !Array.isArray(value) &&
-          (value as { enabled?: unknown }).enabled === false
-        );
-      })
-      .map(([channelId]) => normalizeOptionalLowercaseString(channelId))
-      .filter((channelId): channelId is string => Boolean(channelId)),
-  );
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -67,7 +50,7 @@ function isConfigActivationValueEnabled(value: unknown): boolean {
 }
 
 function listPotentialEnabledChannelIds(config: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
-  const disabled = listDisabledChannelIds(config);
+  const disabled = new Set(listExplicitlyDisabledChannelIdsForConfig(config));
   return listPotentialConfiguredChannelIds(config, env, { includePersistedAuthState: false })
     .map((id) => normalizeOptionalLowercaseString(id) ?? "")
     .filter((id) => id && !disabled.has(id));

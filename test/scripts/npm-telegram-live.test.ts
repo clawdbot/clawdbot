@@ -31,12 +31,16 @@ describe("package Telegram live Docker E2E", () => {
   it("installs the package candidate before forwarding runtime secrets", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
     const installRunStart = script.indexOf('echo "Running package Telegram live Docker E2E');
-    const installRunEnd = script.indexOf('run_logged docker run --rm \\\n  "${docker_env[@]}"');
+    const installRunEnd = script.indexOf("# Mount only test harness/plugin QA sources");
     const installRun = script.slice(installRunStart, installRunEnd);
 
+    expect(installRunStart).toBeGreaterThanOrEqual(0);
+    expect(installRunEnd).toBeGreaterThan(installRunStart);
     expect(installRun).toContain('npm install -g "$install_source" --no-fund --no-audit');
     expect(installRun).toContain('"${package_mount_args[@]}"');
     expect(installRun).not.toContain('"${docker_env[@]}"');
+    expect(script).toContain("run_logged docker_e2e_run_with_harness");
+    expect(script).toContain('"${docker_env[@]}"');
     expect(script).toContain('if [ -z "$credential_role" ] && [ -n "${CI:-}" ]');
     expect(script).toContain('credential_role="ci"');
   });
@@ -70,10 +74,6 @@ describe("package Telegram live Docker E2E", () => {
     expect(script).toContain('cp "$openclaw_package_dir/package.json" /app/package.json');
     expect(script).toContain('ln -sfnT /app/extensions "$openclaw_package_dir/extensions"');
     expect(script).toContain('"/app/node_modules/openclaw/package.json"');
-    expect(script).toContain('pkg.exports["./plugin-sdk/qa-channel"]');
-    expect(script).toContain('"./extensions/qa-channel/api.ts"');
-    expect(script).toContain('pkg.exports["./plugin-sdk/qa-channel-protocol"]');
-    expect(script).toContain('"./extensions/qa-channel/src/protocol.ts"');
     expect(script).toContain('pkg.exports["./plugin-sdk/gateway-runtime"]');
     expect(script).toContain('"./dist/plugin-sdk/gateway-runtime.js"');
     expect(gatewayRpcClient).toContain('from "openclaw/plugin-sdk/gateway-runtime"');

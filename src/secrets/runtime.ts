@@ -145,7 +145,6 @@ async function resolveLoadablePluginOrigins(params: {
   const index = loadPluginRegistrySnapshot({
     config: params.config,
     workspaceDir,
-    cache: true,
     env: params.env,
   });
   const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({

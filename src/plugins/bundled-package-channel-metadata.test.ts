@@ -48,4 +48,34 @@ describe("bundled package channel metadata", () => {
       warnOnEmptyGroupSenderAllowlist: true,
     });
   });
+
+  it("reflects package channel metadata edits on the next read", () => {
+    const root = makeTempRepoRoot(tempDirs, "bpcm-fresh-");
+    const extensionsRoot = path.join(root, "dist", "extensions");
+    const packagePath = path.join(extensionsRoot, "matrix", "package.json");
+    vi.mocked(resolveBundledPluginsDir).mockReturnValue(extensionsRoot);
+
+    writeJsonFile(packagePath, {
+      name: "@openclaw/matrix",
+      openclaw: {
+        channel: {
+          id: "matrix",
+          label: "Before",
+        },
+      },
+    });
+    expect(findBundledPackageChannelMetadata("matrix")?.label).toBe("Before");
+
+    writeJsonFile(packagePath, {
+      name: "@openclaw/matrix",
+      openclaw: {
+        channel: {
+          id: "matrix",
+          label: "After",
+        },
+      },
+    });
+
+    expect(findBundledPackageChannelMetadata("matrix")?.label).toBe("After");
+  });
 });

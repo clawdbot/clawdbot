@@ -5,6 +5,7 @@ import {
   isActivatedManifestOwner,
   isBundledManifestOwner,
   passesManifestOwnerBasePolicy,
+  resolveManifestOwnerBasePolicyBlock,
 } from "./manifest-owner-policy.js";
 
 describe("manifest owner policy", () => {
@@ -63,6 +64,46 @@ describe("manifest owner policy", () => {
         normalizedConfig,
       }),
     ).toBe(false);
+  });
+
+  it("reports base policy block reasons and supports explicit allowlist bypasses", () => {
+    const normalizedConfig = normalizePluginsConfig({
+      enabled: true,
+      allow: ["allowed"],
+      deny: ["blocked"],
+      entries: {
+        disabled: { enabled: false },
+      },
+    });
+
+    expect(
+      resolveManifestOwnerBasePolicyBlock({
+        plugin: { id: "other" },
+        normalizedConfig,
+      }),
+    ).toBe("not-in-allowlist");
+    expect(
+      resolveManifestOwnerBasePolicyBlock({
+        plugin: { id: "other" },
+        normalizedConfig,
+        allowRestrictiveAllowlistBypass: true,
+      }),
+    ).toBeNull();
+    expect(
+      resolveManifestOwnerBasePolicyBlock({
+        plugin: { id: "blocked" },
+        normalizedConfig,
+        allowRestrictiveAllowlistBypass: true,
+      }),
+    ).toBe("blocked-by-denylist");
+    expect(
+      resolveManifestOwnerBasePolicyBlock({
+        plugin: { id: "disabled" },
+        normalizedConfig,
+        allowExplicitlyDisabled: true,
+        allowRestrictiveAllowlistBypass: true,
+      }),
+    ).toBeNull();
   });
 
   it("detects explicit manifest owner trust from allowlist or explicit enablement", () => {

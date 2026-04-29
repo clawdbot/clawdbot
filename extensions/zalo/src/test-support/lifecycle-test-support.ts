@@ -3,6 +3,13 @@ import { expect, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "../types.js";
 
+function resolveLifecycleAllowFrom(params: {
+  dmPolicy: "open" | "pairing";
+  allowFrom?: string[];
+}): string[] | undefined {
+  return params.allowFrom ?? (params.dmPolicy === "open" ? ["*"] : undefined);
+}
+
 export function createLifecycleConfig(params: {
   accountId: string;
   dmPolicy: "open" | "pairing";
@@ -12,6 +19,7 @@ export function createLifecycleConfig(params: {
 }): OpenClawConfig {
   const webhookUrl = params.webhookUrl ?? "https://example.com/hooks/zalo";
   const webhookSecret = params.webhookSecret ?? "supersecret";
+  const allowFrom = resolveLifecycleAllowFrom(params);
   return {
     channels: {
       zalo: {
@@ -22,7 +30,7 @@ export function createLifecycleConfig(params: {
             webhookUrl,
             webhookSecret, // pragma: allowlist secret
             dmPolicy: params.dmPolicy,
-            ...(params.allowFrom ? { allowFrom: params.allowFrom } : {}),
+            ...(allowFrom ? { allowFrom } : {}),
           },
         },
       },
@@ -39,6 +47,7 @@ export function createLifecycleAccount(params: {
 }): ResolvedZaloAccount {
   const webhookUrl = params.webhookUrl ?? "https://example.com/hooks/zalo";
   const webhookSecret = params.webhookSecret ?? "supersecret";
+  const allowFrom = resolveLifecycleAllowFrom(params);
   return {
     accountId: params.accountId,
     enabled: true,
@@ -48,7 +57,7 @@ export function createLifecycleAccount(params: {
       webhookUrl,
       webhookSecret, // pragma: allowlist secret
       dmPolicy: params.dmPolicy,
-      ...(params.allowFrom ? { allowFrom: params.allowFrom } : {}),
+      ...(allowFrom ? { allowFrom } : {}),
     },
   } as ResolvedZaloAccount;
 }

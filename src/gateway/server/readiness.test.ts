@@ -64,6 +64,7 @@ function createReadinessHarness(params: {
   startedAgoMs: number;
   accounts: Record<string, Partial<ChannelAccountSnapshot>>;
   getStartupPending?: () => boolean;
+  getEventLoopHealth?: Parameters<typeof createReadinessChecker>[0]["getEventLoopHealth"];
   cacheTtlMs?: number;
 }) {
   const startedAt = Date.now() - params.startedAgoMs;
@@ -74,6 +75,7 @@ function createReadinessHarness(params: {
       channelManager: manager,
       startedAt,
       getStartupPending: params.getStartupPending,
+      getEventLoopHealth: params.getEventLoopHealth,
       cacheTtlMs: params.cacheTtlMs,
     }),
   };
@@ -271,6 +273,39 @@ describe("createReadinessChecker", () => {
       vi.advanceTimersByTime(600);
       expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 301_100 });
       expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("adds event-loop health to detailed readiness without changing readiness state", () => {
+    withReadinessClock(() => {
+      const { readiness } = createReadinessHarness({
+        startedAgoMs: 5 * 60_000,
+        accounts: {},
+        getEventLoopHealth: () => ({
+          degraded: true,
+          reasons: ["cpu", "event_loop_utilization"],
+          intervalMs: 2_000,
+          delayP99Ms: 42.1,
+          delayMaxMs: 88.7,
+          utilization: 0.991,
+          cpuCoreRatio: 0.973,
+        }),
+      });
+
+      expect(readiness()).toEqual({
+        ready: true,
+        failing: [],
+        uptimeMs: 300_000,
+        eventLoop: {
+          degraded: true,
+          reasons: ["cpu", "event_loop_utilization"],
+          intervalMs: 2_000,
+          delayP99Ms: 42.1,
+          delayMaxMs: 88.7,
+          utilization: 0.991,
+          cpuCoreRatio: 0.973,
+        },
+      });
     });
   });
 });

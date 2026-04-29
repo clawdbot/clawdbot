@@ -20,9 +20,13 @@ describe("qwen provider catalog", () => {
 
   it("only advertises qwen3.6-plus on Standard endpoints", () => {
     const coding = buildQwenProvider({ baseUrl: QWEN_BASE_URL });
+    const codingTrailingDot = buildQwenProvider({
+      baseUrl: " https://coding-intl.dashscope.aliyuncs.com./v1 ",
+    });
     const standard = buildQwenProvider({ baseUrl: QWEN_STANDARD_GLOBAL_BASE_URL });
 
     expect(coding.models?.find((model) => model.id === "qwen3.6-plus")).toBeFalsy();
+    expect(codingTrailingDot.models?.find((model) => model.id === "qwen3.6-plus")).toBeFalsy();
     expect(standard.models?.find((model) => model.id === "qwen3.6-plus")).toBeTruthy();
   });
 

@@ -1,6 +1,4 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
-import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import { refreshPluginRegistry } from "../plugins/plugin-registry.js";
 import {
   createColdPluginConfig,
@@ -20,8 +18,6 @@ function makeTempDir() {
 }
 
 afterEach(() => {
-  clearPluginDiscoveryCache();
-  clearPluginManifestRegistryCache();
   cleanupTrackedTempDirs(tempDirs);
 });
 

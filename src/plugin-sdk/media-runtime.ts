@@ -20,6 +20,7 @@ export * from "../media/qr-terminal.ts";
 export * from "../media/read-response-with-limit.js";
 export * from "../media/store.js";
 export * from "../media/temp-files.js";
+export * from "../media/video-dimensions.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
 export * from "./agent-media-payload.js";
 export * from "../media-understanding/audio-preflight.ts";

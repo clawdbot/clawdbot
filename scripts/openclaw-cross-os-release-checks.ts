@@ -10,6 +10,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -53,6 +54,19 @@ const providerConfig = {
     model: "minimax/MiniMax-M2.7",
   },
 };
+
+const RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE = [
+  "acpx",
+  "bonjour",
+  "browser",
+  "device-pair",
+  "phone-control",
+  "talk-voice",
+];
+
+export function buildCrossOsReleaseSmokePluginAllowlist(providerMeta) {
+  return [...new Set([providerMeta.extensionId, ...RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE])];
+}
 
 const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
 const OMITTED_QA_EXTENSION_PREFIXES = [
@@ -691,18 +705,22 @@ async function runUpgradeLane(params) {
       "--timeout",
       String(updateStepTimeoutSeconds()),
     ];
-    await runOpenClaw({
+    const updateResult = await runOpenClaw({
       lane,
       env: updateEnv,
       args: updateArgs,
       logPath: join(params.logsDir, "upgrade-update.log"),
       timeoutMs: updateTimeoutMs(),
+      check: false,
+    });
+    verifyPackagedUpgradeUpdateResult(updateResult, {
+      candidateVersion: params.build.candidateVersion,
     });
 
     logLanePhase(lane, "update-status");
     await runOpenClaw({
       lane,
-      env,
+      env: updateEnv,
       args: ["update", "status", "--json"],
       logPath: join(params.logsDir, "upgrade-update-status.log"),
       timeoutMs: 2 * 60 * 1000,
@@ -1218,9 +1236,53 @@ export function shouldSkipInstallerDaemonHealthCheck(platform = process.platform
 }
 
 export function buildRealUpdateEnv(env) {
-  const updateEnv = { ...env };
+  const updateEnv = {
+    ...env,
+    NODE_DISABLE_COMPILE_CACHE: "1",
+  };
   delete updateEnv.OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL;
+  delete updateEnv.NODE_COMPILE_CACHE;
   return updateEnv;
+}
+
+export function verifyPackagedUpgradeUpdateResult(result, options) {
+  if (result.exitCode === 0) {
+    return;
+  }
+
+  let payload = null;
+  try {
+    payload = JSON.parse(result.stdout);
+  } catch {
+    payload = null;
+  }
+
+  const steps = Array.isArray(payload?.steps) ? payload.steps : [];
+  const allStepsSucceeded = steps.every((step) => step?.exitCode === 0);
+  const afterVersion = typeof payload?.after?.version === "string" ? payload.after.version : "";
+  if (
+    payload?.status === "ok" &&
+    afterVersion === options.candidateVersion &&
+    allStepsSucceeded &&
+    isSelfSwappedPackageProcessExit(result.stderr)
+  ) {
+    return;
+  }
+
+  throw new Error(
+    `Packaged upgrade failed (${result.exitCode}): ${trimForSummary(
+      `${result.stdout}\n${result.stderr}`,
+    )}`,
+  );
+}
+
+function isSelfSwappedPackageProcessExit(stderr) {
+  return (
+    typeof stderr === "string" &&
+    stderr.includes("[openclaw] Failed to start CLI:") &&
+    stderr.includes("ERR_MODULE_NOT_FOUND") &&
+    /[\\/]node_modules[\\/]openclaw[\\/]dist[\\/]/u.test(stderr)
+  );
 }
 
 export function resolveExplicitBaselineVersion(baselineSpec) {
@@ -1302,7 +1364,9 @@ export function resolveInstalledPrefixDirFromCliPath(cliPath, platform = process
 }
 
 function readInstalledMetadataFromCliPath(cliPath, platform = process.platform) {
-  return readInstalledMetadata(resolveInstalledPrefixDirFromCliPath(cliPath, platform));
+  return readInstalledMetadataFromPackageRoot(
+    resolveInstalledPackageRootFromCliPath(cliPath, platform),
+  );
 }
 
 function resolveInstalledCliInvocation(cliPath, platform = process.platform) {
@@ -1795,6 +1859,20 @@ async function runInstalledModelsSet(params) {
   });
   await runInstalledCli({
     cliPath: params.cliPath,
+    args: [
+      "config",
+      "set",
+      "plugins.allow",
+      JSON.stringify(buildCrossOsReleaseSmokePluginAllowlist(params.providerConfig)),
+      "--strict-json",
+    ],
+    cwd: params.cwd,
+    env: params.env,
+    logPath: params.logPath,
+    timeoutMs: 2 * 60 * 1000,
+  });
+  await runInstalledCli({
+    cliPath: params.cliPath,
     args: ["config", "set", "agents.defaults.skipBootstrap", "true", "--strict-json"],
     cwd: params.cwd,
     env: params.env,
@@ -1815,6 +1893,8 @@ async function runInstalledAgentTurn(params) {
       sessionId,
       "--message",
       "Reply with exact ASCII text OK only.",
+      "--thinking",
+      "minimal",
       "--json",
     ],
     cwd: params.cwd,
@@ -2550,6 +2630,19 @@ async function runModelsSet(params) {
   await runOpenClaw({
     lane: params.lane,
     env: params.env,
+    args: [
+      "config",
+      "set",
+      "plugins.allow",
+      JSON.stringify(buildCrossOsReleaseSmokePluginAllowlist(params.providerConfig)),
+      "--strict-json",
+    ],
+    logPath: params.logPath,
+    timeoutMs: 2 * 60 * 1000,
+  });
+  await runOpenClaw({
+    lane: params.lane,
+    env: params.env,
     args: ["config", "set", "agents.defaults.skipBootstrap", "true", "--strict-json"],
     logPath: params.logPath,
     timeoutMs: 2 * 60 * 1000,
@@ -2572,6 +2665,8 @@ async function runAgentTurn(params) {
           sessionId,
           "--message",
           "Reply with exact ASCII text OK only.",
+          "--thinking",
+          "minimal",
           "--json",
         ],
         logPath: params.logPath,
@@ -2781,6 +2876,10 @@ async function runOpenClaw(params) {
 
 function readInstalledPackageManifest(prefixDir) {
   const packageRoot = installedPackageRoot(prefixDir);
+  return readInstalledPackageManifestFromPackageRoot(packageRoot);
+}
+
+function readInstalledPackageManifestFromPackageRoot(packageRoot) {
   const packageJsonPath = join(packageRoot, "package.json");
   if (!existsSync(packageJsonPath)) {
     throw new Error(`Installed package manifest missing: ${packageJsonPath}`);
@@ -2798,6 +2897,15 @@ export function readInstalledVersion(prefixDir) {
 
 function readInstalledMetadata(prefixDir) {
   const { packageJson, packageRoot } = readInstalledPackageManifest(prefixDir);
+  return readInstalledMetadataFromManifest(packageJson, packageRoot);
+}
+
+function readInstalledMetadataFromPackageRoot(packageRoot) {
+  const { packageJson } = readInstalledPackageManifestFromPackageRoot(packageRoot);
+  return readInstalledMetadataFromManifest(packageJson, packageRoot);
+}
+
+function readInstalledMetadataFromManifest(packageJson, packageRoot) {
   const buildInfoPath = join(packageRoot, "dist", "build-info.json");
   if (!existsSync(buildInfoPath)) {
     throw new Error(`Installed build info missing: ${buildInfoPath}`);
@@ -2824,8 +2932,55 @@ function verifyInstalledCandidate(installed, build) {
   }
 }
 
-function installedPackageRoot(prefixDir) {
-  return process.platform === "win32"
+export function resolveInstalledPackageRootFromCliPath(
+  cliPath,
+  platform = process.platform,
+  env = process.env,
+) {
+  const prefixDir = resolveInstalledPrefixDirFromCliPath(cliPath, platform);
+  const candidates = [installedPackageRoot(prefixDir, platform)];
+
+  if (platform !== "win32") {
+    const resolvedCliPath = String(cliPath ?? "").trim();
+    if (resolvedCliPath) {
+      try {
+        const realCliPath = realpathSync(resolvedCliPath);
+        candidates.push(dirname(realCliPath));
+        candidates.push(dirname(dirname(realCliPath)));
+      } catch {
+        // Some installer shims are shell wrappers, not symlinks. Fall through to
+        // common user-local npm prefixes below.
+      }
+    }
+
+    for (const prefix of [
+      env.NPM_CONFIG_PREFIX,
+      env.npm_config_prefix,
+      env.HOME && join(env.HOME, ".npm-global"),
+      env.HOME && join(env.HOME, ".local"),
+    ]) {
+      if (typeof prefix === "string" && prefix.trim()) {
+        candidates.push(installedPackageRoot(prefix, platform));
+      }
+    }
+  }
+
+  const checked: string[] = [];
+  for (const candidate of candidates) {
+    if (!candidate || checked.includes(candidate)) {
+      continue;
+    }
+    checked.push(candidate);
+    if (existsSync(join(candidate, "package.json"))) {
+      return candidate;
+    }
+  }
+
+  throw new Error(`Installed package manifest missing. Checked: ${checked.join(", ")}`);
+}
+
+function installedPackageRoot(prefixDir, platform = process.platform) {
+  return platform === "win32"
     ? join(prefixDir, "node_modules", "openclaw")
     : join(prefixDir, "lib", "node_modules", "openclaw");
 }

@@ -11,6 +11,7 @@ import {
   resolveSubagentToolPolicyForSession,
 } from "./pi-tools.policy.js";
 import { createStubTool } from "./test-helpers/pi-tool-stubs.js";
+import { providerAliasCases } from "./test-helpers/provider-alias-cases.js";
 
 describe("pi-tools.policy", () => {
   it("treats * in allow as allow-all", () => {
@@ -240,6 +241,136 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
 });
 
 describe("resolveEffectiveToolPolicy", () => {
+  it.each(providerAliasCases)(
+    "matches provider alias %s to canonical tools.byProvider key %s",
+    (alias, canonical) => {
+      const cfg = {
+        tools: {
+          byProvider: {
+            [canonical]: { deny: ["exec"] },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveEffectiveToolPolicy({ config: cfg, modelProvider: alias });
+
+      expect(result.globalProviderPolicy).toEqual({ deny: ["exec"] });
+    },
+  );
+
+  it.each(providerAliasCases)(
+    "matches provider alias %s to canonical model-scoped tools.byProvider key %s",
+    (alias, canonical) => {
+      const cfg = {
+        tools: {
+          byProvider: {
+            [`${canonical}/claude-sonnet`]: { deny: ["exec"] },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveEffectiveToolPolicy({
+        config: cfg,
+        modelProvider: alias,
+        modelId: "claude-sonnet",
+      });
+
+      expect(result.globalProviderPolicy).toEqual({ deny: ["exec"] });
+    },
+  );
+
+  it("prefers canonical tools.byProvider policy when alias keys collide after normalization", () => {
+    const aliasFirst = {
+      tools: {
+        byProvider: {
+          bedrock: { deny: ["read"] },
+          "amazon-bedrock": { deny: ["exec"] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const canonicalFirst = {
+      tools: {
+        byProvider: {
+          "amazon-bedrock": { deny: ["exec"] },
+          bedrock: { deny: ["read"] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveEffectiveToolPolicy({ config: aliasFirst, modelProvider: "bedrock" })
+        .globalProviderPolicy,
+    ).toEqual({ deny: ["exec"] });
+    expect(
+      resolveEffectiveToolPolicy({ config: canonicalFirst, modelProvider: "bedrock" })
+        .globalProviderPolicy,
+    ).toEqual({ deny: ["exec"] });
+  });
+
+  it("prefers canonical model-scoped tools.byProvider policy when alias keys collide", () => {
+    const aliasFirst = {
+      tools: {
+        byProvider: {
+          "bedrock/claude-sonnet": { deny: ["read"] },
+          "amazon-bedrock/claude-sonnet": { deny: ["exec"] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const canonicalFirst = {
+      tools: {
+        byProvider: {
+          "amazon-bedrock/claude-sonnet": { deny: ["exec"] },
+          "bedrock/claude-sonnet": { deny: ["read"] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const params = { modelProvider: "bedrock", modelId: "claude-sonnet" };
+
+    expect(
+      resolveEffectiveToolPolicy({ config: aliasFirst, ...params }).globalProviderPolicy,
+    ).toEqual({ deny: ["exec"] });
+    expect(
+      resolveEffectiveToolPolicy({ config: canonicalFirst, ...params }).globalProviderPolicy,
+    ).toEqual({ deny: ["exec"] });
+  });
+
+  it("keeps slash-containing modelId scoped to the selected provider", () => {
+    const cfg = {
+      tools: {
+        byProvider: {
+          "anthropic/claude-sonnet": { deny: ["exec"] },
+          "openrouter/anthropic/claude-sonnet": { deny: ["read"] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveEffectiveToolPolicy({
+        config: cfg,
+        modelProvider: "openrouter",
+        modelId: "anthropic/claude-sonnet",
+      }).globalProviderPolicy,
+    ).toEqual({ deny: ["read"] });
+  });
+
+  it("does not let slash-containing modelId select another provider policy", () => {
+    const cfg = {
+      tools: {
+        byProvider: {
+          "anthropic/claude-sonnet": { deny: ["exec"] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveEffectiveToolPolicy({
+        config: cfg,
+        modelProvider: "openrouter",
+        modelId: "anthropic/claude-sonnet",
+      }).globalProviderPolicy,
+    ).toBeUndefined();
+  });
+
   it("implicitly re-exposes exec and process when tools.exec is configured", () => {
     const cfg = {
       tools: {

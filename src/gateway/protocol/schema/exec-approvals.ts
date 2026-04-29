@@ -132,6 +132,7 @@ export const ExecApprovalRequestParamsSchema = Type.Object(
     host: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     security: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     ask: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    warningText: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     agentId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     resolvedPath: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     sessionKey: Type.Optional(Type.Union([Type.String(), Type.Null()])),

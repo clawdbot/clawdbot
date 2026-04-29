@@ -90,10 +90,14 @@ export type MediaUnderstandingConfig = MediaProviderRequestConfig & {
   maxChars?: number;
   /** Default prompt. */
   prompt?: string;
+  /** Internal request-scoped prompt override injected by CLI/runtime wrappers. */
+  _requestPromptOverride?: string;
   /** Default timeout (seconds). */
   timeoutSeconds?: number;
   /** Default language hint (audio). */
   language?: string;
+  /** Internal request-scoped language override injected by CLI/runtime wrappers. */
+  _requestLanguageOverride?: string;
   /** Attachment selection policy. */
   attachments?: MediaUnderstandingAttachmentsConfig;
   /** Ordered model list (fallbacks in order). */

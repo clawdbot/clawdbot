@@ -91,4 +91,25 @@ describe("plugin-sdk/command-auth", () => {
     expect(result.senderAllowedForCommands).toBe(true);
     expect(result.commandAuthorized).toBeUndefined();
   });
+
+  it("does not treat open DM policy as an allowlist bypass", async () => {
+    const result = await resolveSenderCommandAuthorization({
+      cfg: baseCfg,
+      rawBody: "hello",
+      isGroup: false,
+      dmPolicy: "open",
+      configuredAllowFrom: [],
+      configuredGroupAllowFrom: [],
+      senderId: "paired-user",
+      isSenderAllowed: (senderId, allowFrom) => allowFrom.includes(senderId),
+      readAllowFromStore: async () => ["paired-user"],
+      shouldComputeCommandAuthorized: (rawBody) => rawBody.startsWith("/"),
+      resolveCommandAuthorizedFromAuthorizers: ({ useAccessGroups, authorizers }) =>
+        useAccessGroups && authorizers.some((entry) => entry.configured && entry.allowed),
+    });
+
+    expect(result.effectiveAllowFrom).toEqual([]);
+    expect(result.senderAllowedForCommands).toBe(false);
+    expect(result.commandAuthorized).toBeUndefined();
+  });
 });

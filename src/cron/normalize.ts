@@ -170,13 +170,17 @@ function coercePayload(payload: UnknownRecord) {
     next.kind = kindRaw;
   }
   if (!next.kind) {
-    const hasMessage = Boolean(normalizeOptionalString(next.message));
-    const hasText = Boolean(normalizeOptionalString(next.text));
-    if (hasMessage) {
+    const message = normalizeOptionalString(next.message);
+    const text = normalizeOptionalString(next.text);
+    const hasAgentTurnHint = hasAgentTurnPayloadHint(next);
+    if (message) {
       next.kind = "agentTurn";
-    } else if (hasText) {
+    } else if (text && hasAgentTurnHint) {
+      next.kind = "agentTurn";
+      next.message = text;
+    } else if (text) {
       next.kind = "systemEvent";
-    } else if (hasAgentTurnPayloadHint(next)) {
+    } else if (hasAgentTurnHint) {
       // Accept partial agentTurn payload patches that only tweak agent-turn-only fields.
       next.kind = "agentTurn";
     }
@@ -311,6 +315,9 @@ function inferTopLevelPayload(next: UnknownRecord) {
 
   const text = normalizeOptionalString(next.text) ?? "";
   if (text) {
+    if (hasAgentTurnPayloadHint(next)) {
+      return { kind: "agentTurn", message: text } satisfies UnknownRecord;
+    }
     return { kind: "systemEvent", text } satisfies UnknownRecord;
   }
 

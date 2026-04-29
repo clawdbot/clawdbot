@@ -30,7 +30,7 @@ function makeAccount(
     dangerouslyAllowNameMatching: false,
     dangerouslyAllowInheritedWebhookPath: false,
     dmPolicy: "open",
-    allowedUserIds: [],
+    allowedUserIds: ["*"],
     rateLimitPerMinute: 30,
     botName: "TestBot",
     allowInsecureSsl: true,

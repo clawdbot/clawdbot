@@ -94,6 +94,62 @@ describe("startQaLiveLaneGateway", () => {
     expect(mockStop).toHaveBeenCalledTimes(1);
   });
 
+  it("disables memory search for transport-only live lanes", async () => {
+    await startQaLiveLaneGateway({
+      repoRoot: "/tmp/openclaw-repo",
+      transport: createStubTransport(),
+      transportBaseUrl: "http://127.0.0.1:43123",
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.5",
+      alternateModel: "mock-openai/gpt-5.5-alt",
+      controlUiEnabled: false,
+    });
+
+    const [{ mutateConfig }] = startQaGatewayChild.mock.calls[0] ?? [];
+    expect(typeof mutateConfig).toBe("function");
+    const cfg = mutateConfig?.({
+      plugins: {
+        allow: ["acpx", "memory-core", "qa-channel"],
+        entries: {
+          acpx: { enabled: true },
+          "memory-core": { enabled: true },
+          "qa-channel": { enabled: true },
+        },
+        slots: {
+          memory: "memory-core",
+          contextEngine: "qmd",
+        },
+      },
+      agents: {
+        defaults: {
+          memorySearch: {
+            enabled: true,
+            sync: {
+              onSearch: true,
+              onSessionStart: true,
+              watch: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(cfg?.plugins?.allow).toEqual(["acpx", "qa-channel"]);
+    expect(cfg?.plugins?.entries).not.toHaveProperty("memory-core");
+    expect(cfg?.plugins?.slots).toMatchObject({
+      memory: "none",
+      contextEngine: "qmd",
+    });
+    expect(cfg?.agents?.defaults?.memorySearch).toMatchObject({
+      enabled: false,
+      sync: {
+        onSearch: false,
+        onSessionStart: false,
+        watch: false,
+      },
+    });
+  });
+
   it("forwards gateway stop options to the child harness", async () => {
     const harness = await startQaLiveLaneGateway({
       repoRoot: "/tmp/openclaw-repo",

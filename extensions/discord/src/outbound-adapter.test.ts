@@ -72,6 +72,26 @@ describe("discordOutbound", () => {
     });
   });
 
+  it("sanitizes internal runtime scaffolding before Discord delivery", () => {
+    expect(
+      discordOutbound.sanitizeText?.({
+        text: "<previous_response>null</previous_response>visible",
+        payload: { text: "<previous_response>null</previous_response>visible" },
+      }),
+    ).toBe("visible");
+  });
+
+  it("preserves Discord-native angle markup while stripping internal scaffolding", () => {
+    expect(
+      discordOutbound.sanitizeText?.({
+        text: "soon <t:1710000000:R> run </deploy:123> <previous_response>null</previous_response>",
+        payload: {
+          text: "soon <t:1710000000:R> run </deploy:123> <previous_response>null</previous_response>",
+        },
+      }),
+    ).toBe("soon <t:1710000000:R> run </deploy:123> ");
+  });
+
   it("forwards explicit formatting options to Discord text sends", async () => {
     await discordOutbound.sendText?.({
       cfg: {},

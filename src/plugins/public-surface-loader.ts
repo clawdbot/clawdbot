@@ -144,6 +144,7 @@ function getSharedBundledPublicSurfaceJiti(modulePath: string, tryNative: boolea
 export function loadBundledPluginPublicArtifactModuleSync<T extends object>(params: {
   dirName: string;
   artifactBasename: string;
+  installRuntimeDeps?: boolean;
 }): T {
   const location = resolvePublicSurfaceLocation(params);
   if (!location) {
@@ -154,6 +155,7 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
   const preparedLocation = prepareBuiltBundledPluginPublicSurfaceLocation({
     location,
     pluginId: params.dirName,
+    installRuntimeDeps: params.installRuntimeDeps,
   });
   const cached =
     loadedPublicSurfaceModules.get(location.modulePath) ??

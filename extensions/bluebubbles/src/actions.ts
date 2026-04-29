@@ -17,9 +17,11 @@ import {
   type ChannelMessageActionAdapter,
   type ChannelMessageActionName,
 } from "./actions-api.js";
+import type { BlueBubblesChatContext } from "./monitor-reply-cache.js";
 import { getCachedBlueBubblesPrivateApiStatus, isMacOS26OrHigher } from "./probe.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import {
+  buildBlueBubblesChatContextFromTarget,
   normalizeBlueBubblesHandle,
   normalizeBlueBubblesMessagingTarget,
   parseBlueBubblesTarget,
@@ -48,6 +50,32 @@ function mapTarget(raw: string): BlueBubblesSendTarget {
     kind: "handle",
     address: normalizeBlueBubblesHandle(parsed.to),
     service: parsed.service,
+  };
+}
+
+/**
+ * Collect any chat-identifying hints the action caller supplied, so short
+ * message id resolution can reject cross-chat collisions. The order of
+ * precedence mirrors resolveChatGuid: explicit chat* params first, then the
+ * `to`/`target` param, then the current session channel as a last resort.
+ */
+function buildChatContextFromActionParams(params: {
+  actionParams: Record<string, unknown>;
+  currentChannelId?: string;
+}): BlueBubblesChatContext {
+  const explicitChatGuid = readStringParam(params.actionParams, "chatGuid")?.trim();
+  const explicitChatIdentifier = readStringParam(params.actionParams, "chatIdentifier")?.trim();
+  const explicitChatId = readNumberParam(params.actionParams, "chatId", { integer: true });
+  const rawTarget =
+    readStringParam(params.actionParams, "to") ??
+    readStringParam(params.actionParams, "target") ??
+    params.currentChannelId ??
+    undefined;
+  const targetContext = buildBlueBubblesChatContextFromTarget(rawTarget);
+  return {
+    chatGuid: explicitChatGuid || targetContext.chatGuid,
+    chatIdentifier: explicitChatIdentifier || targetContext.chatIdentifier,
+    chatId: typeof explicitChatId === "number" ? explicitChatId : targetContext.chatId,
   };
 }
 
@@ -201,9 +229,15 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
             "Use action=react with messageId=<message_id>, emoji=<emoji>, and to/chatGuid to identify the chat.",
         );
       }
-      // Resolve short ID (e.g., "1", "2") to full UUID
+      // Resolve short ID (e.g., "1", "2") to full UUID, scoped to the chat the
+      // caller is acting on so a short ID from a different chat cannot be
+      // silently accepted (see cross-chat guard in resolveBlueBubblesMessageId).
       const messageId = runtime.resolveBlueBubblesMessageId(rawMessageId, {
         requireKnownShortId: true,
+        chatContext: buildChatContextFromActionParams({
+          actionParams: params,
+          currentChannelId: toolContext?.currentChannelId,
+        }),
       });
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
       const resolvedChatGuid = await resolveChatGuid();
@@ -248,9 +282,14 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
             `Use action=edit with messageId=<message_id>, text=<new_content>.`,
         );
       }
-      // Resolve short ID (e.g., "1", "2") to full UUID
+      // Resolve short ID (e.g., "1", "2") to full UUID, scoped to the chat
+      // the caller is acting on (cross-chat guard).
       const messageId = runtime.resolveBlueBubblesMessageId(rawMessageId, {
         requireKnownShortId: true,
+        chatContext: buildChatContextFromActionParams({
+          actionParams: params,
+          currentChannelId: toolContext?.currentChannelId,
+        }),
       });
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
       const backwardsCompatMessage = readStringParam(params, "backwardsCompatMessage");
@@ -274,9 +313,14 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
             "Use action=unsend with messageId=<message_id>.",
         );
       }
-      // Resolve short ID (e.g., "1", "2") to full UUID
+      // Resolve short ID (e.g., "1", "2") to full UUID, scoped to the chat
+      // the caller is acting on (cross-chat guard).
       const messageId = runtime.resolveBlueBubblesMessageId(rawMessageId, {
         requireKnownShortId: true,
+        chatContext: buildChatContextFromActionParams({
+          actionParams: params,
+          currentChannelId: toolContext?.currentChannelId,
+        }),
       });
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
 
@@ -310,9 +354,14 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
             `Use action=reply with messageId=<message_id>, message=<your reply>, target=<chat_target>.`,
         );
       }
-      // Resolve short ID (e.g., "1", "2") to full UUID
+      // Resolve short ID (e.g., "1", "2") to full UUID, scoped to the chat
+      // the caller is acting on (cross-chat guard).
       const messageId = runtime.resolveBlueBubblesMessageId(rawMessageId, {
         requireKnownShortId: true,
+        chatContext: buildChatContextFromActionParams({
+          actionParams: params,
+          currentChannelId: toolContext?.currentChannelId,
+        }),
       });
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
 

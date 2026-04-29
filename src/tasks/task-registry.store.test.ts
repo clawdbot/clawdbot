@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
-import os from "node:os";
+import { mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createManagedTaskFlow, resetTaskFlowRegistryForTests } from "./task-flow-registry.js";
 import {
   createTaskRecord,
@@ -18,6 +18,8 @@ import {
   type TaskRegistryObserverEvent,
 } from "./task-registry.store.js";
 import type { TaskRecord } from "./task-registry.types.js";
+
+const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
 function createStoredTask(): TaskRecord {
   return {
@@ -40,7 +42,11 @@ function createStoredTask(): TaskRecord {
 
 describe("task-registry store runtime", () => {
   afterEach(() => {
-    delete process.env.OPENCLAW_STATE_DIR;
+    if (ORIGINAL_STATE_DIR === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
+    }
     resetTaskRegistryForTests();
     resetTaskFlowRegistryForTests({ persist: false });
   });
@@ -273,42 +279,42 @@ describe("task-registry store runtime", () => {
     });
   });
 
-  it("hardens the sqlite task store directory and file modes", () => {
+  it("hardens the sqlite task store directory and file modes", async () => {
     if (process.platform === "win32") {
       return;
     }
-    const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-task-store-"));
-    process.env.OPENCLAW_STATE_DIR = stateDir;
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-store-" },
+      async () => {
+        createTaskRecord({
+          runtime: "cron",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          sourceId: "job-456",
+          runId: "run-perms",
+          task: "Run secured cron",
+          status: "running",
+          deliveryStatus: "not_applicable",
+          notifyPolicy: "silent",
+        });
 
-    createTaskRecord({
-      runtime: "cron",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      sourceId: "job-456",
-      runId: "run-perms",
-      task: "Run secured cron",
-      status: "running",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-    });
-
-    const registryDir = resolveTaskRegistryDir(process.env);
-    const sqlitePath = resolveTaskRegistrySqlitePath(process.env);
-    expect(statSync(registryDir).mode & 0o777).toBe(0o700);
-    expect(statSync(sqlitePath).mode & 0o777).toBe(0o600);
-
-    resetTaskRegistryForTests();
-    rmSync(stateDir, { recursive: true, force: true });
+        const registryDir = resolveTaskRegistryDir(process.env);
+        const sqlitePath = resolveTaskRegistrySqlitePath(process.env);
+        expect(statSync(registryDir).mode & 0o777).toBe(0o700);
+        expect(statSync(sqlitePath).mode & 0o777).toBe(0o600);
+      },
+    );
   });
 
-  it("migrates legacy ownerless cron rows to system scope", () => {
-    const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-task-store-legacy-"));
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-    const sqlitePath = resolveTaskRegistrySqlitePath(process.env);
-    mkdirSync(path.dirname(sqlitePath), { recursive: true });
-    const { DatabaseSync } = requireNodeSqlite();
-    const db = new DatabaseSync(sqlitePath);
-    db.exec(`
+  it("migrates legacy ownerless cron rows to system scope", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-store-legacy-" },
+      async () => {
+        const sqlitePath = resolveTaskRegistrySqlitePath(process.env);
+        mkdirSync(path.dirname(sqlitePath), { recursive: true });
+        const { DatabaseSync } = requireNodeSqlite();
+        const db = new DatabaseSync(sqlitePath);
+        db.exec(`
       CREATE TABLE task_runs (
         task_id TEXT PRIMARY KEY,
         runtime TEXT NOT NULL,
@@ -334,14 +340,14 @@ describe("task-registry store runtime", () => {
         terminal_outcome TEXT
       );
     `);
-    db.exec(`
+        db.exec(`
       CREATE TABLE task_delivery_state (
         task_id TEXT PRIMARY KEY,
         requester_origin_json TEXT,
         last_notified_event_at INTEGER
       );
     `);
-    db.prepare(`
+        db.prepare(`
       INSERT INTO task_runs (
         task_id,
         runtime,
@@ -357,40 +363,43 @@ describe("task-registry store runtime", () => {
         last_event_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      "legacy-cron-task",
-      "cron",
-      "nightly-digest",
-      "",
-      "agent:main:cron:nightly-digest",
-      "legacy-cron-run",
-      "Nightly digest",
-      "running",
-      "not_applicable",
-      "silent",
-      100,
-      100,
+          "legacy-cron-task",
+          "cron",
+          "nightly-digest",
+          "",
+          "agent:main:cron:nightly-digest",
+          "legacy-cron-run",
+          "Nightly digest",
+          "running",
+          "not_applicable",
+          "silent",
+          100,
+          100,
+        );
+        db.close();
+
+        resetTaskRegistryForTests({ persist: false });
+
+        expect(findTaskByRunId("legacy-cron-run")).toMatchObject({
+          taskId: "legacy-cron-task",
+          ownerKey: "system:cron:nightly-digest",
+          scopeKind: "system",
+          deliveryStatus: "not_applicable",
+          notifyPolicy: "silent",
+        });
+      },
     );
-    db.close();
-
-    resetTaskRegistryForTests({ persist: false });
-
-    expect(findTaskByRunId("legacy-cron-run")).toMatchObject({
-      taskId: "legacy-cron-task",
-      ownerKey: "system:cron:nightly-digest",
-      scopeKind: "system",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-    });
   });
 
-  it("keeps legacy requester_session_key rows writable after restore", () => {
-    const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-task-store-legacy-write-"));
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-    const sqlitePath = resolveTaskRegistrySqlitePath(process.env);
-    mkdirSync(path.dirname(sqlitePath), { recursive: true });
-    const { DatabaseSync } = requireNodeSqlite();
-    const db = new DatabaseSync(sqlitePath);
-    db.exec(`
+  it("keeps legacy requester_session_key rows writable after restore", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-store-legacy-write-" },
+      async () => {
+        const sqlitePath = resolveTaskRegistrySqlitePath(process.env);
+        mkdirSync(path.dirname(sqlitePath), { recursive: true });
+        const { DatabaseSync } = requireNodeSqlite();
+        const db = new DatabaseSync(sqlitePath);
+        db.exec(`
       CREATE TABLE task_runs (
         task_id TEXT PRIMARY KEY,
         runtime TEXT NOT NULL,
@@ -416,14 +425,14 @@ describe("task-registry store runtime", () => {
         terminal_outcome TEXT
       );
     `);
-    db.exec(`
+        db.exec(`
       CREATE TABLE task_delivery_state (
         task_id TEXT PRIMARY KEY,
         requester_origin_json TEXT,
         last_notified_event_at INTEGER
       );
     `);
-    db.prepare(`
+        db.prepare(`
       INSERT INTO task_runs (
         task_id,
         runtime,
@@ -437,33 +446,35 @@ describe("task-registry store runtime", () => {
         last_event_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      "legacy-session-task",
-      "acp",
-      "agent:main:main",
-      "legacy-session-run",
-      "Legacy session task",
-      "running",
-      "pending",
-      "done_only",
-      100,
-      100,
+          "legacy-session-task",
+          "acp",
+          "agent:main:main",
+          "legacy-session-run",
+          "Legacy session task",
+          "running",
+          "pending",
+          "done_only",
+          100,
+          100,
+        );
+        db.close();
+
+        resetTaskRegistryForTests({ persist: false });
+
+        expect(() =>
+          markTaskLostById({
+            taskId: "legacy-session-task",
+            endedAt: 200,
+            lastEventAt: 200,
+            error: "session missing",
+          }),
+        ).not.toThrow();
+        expect(findTaskByRunId("legacy-session-run")).toMatchObject({
+          taskId: "legacy-session-task",
+          status: "lost",
+          error: "session missing",
+        });
+      },
     );
-    db.close();
-
-    resetTaskRegistryForTests({ persist: false });
-
-    expect(() =>
-      markTaskLostById({
-        taskId: "legacy-session-task",
-        endedAt: 200,
-        lastEventAt: 200,
-        error: "session missing",
-      }),
-    ).not.toThrow();
-    expect(findTaskByRunId("legacy-session-run")).toMatchObject({
-      taskId: "legacy-session-task",
-      status: "lost",
-      error: "session missing",
-    });
   });
 });

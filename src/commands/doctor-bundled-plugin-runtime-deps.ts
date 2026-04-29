@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -9,12 +10,83 @@ import {
   scanBundledPluginRuntimeDeps,
   type BundledRuntimeDepsInstallParams,
 } from "../plugins/bundled-runtime-deps.js";
-import { resolveEffectivePluginIds } from "../plugins/effective-plugin-ids.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const RUNTIME_DEPS_INSTALL_HEARTBEAT_MS = 15_000;
+
+function collectPackagedRuntimeDepsRepairPluginIds(params: {
+  bundledPluginsDir: string;
+  config: OpenClawConfig;
+  includeConfiguredChannels?: boolean;
+}): string[] {
+  if (!fs.existsSync(params.bundledPluginsDir)) {
+    return [];
+  }
+  const plugins = normalizePluginsConfig(params.config.plugins);
+  const ids = new Set<string>();
+  for (const entry of fs.readdirSync(params.bundledPluginsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const pluginDir = path.join(params.bundledPluginsDir, entry.name);
+    let manifest: Record<string, unknown>;
+    try {
+      manifest = JSON.parse(
+        fs.readFileSync(path.join(pluginDir, "openclaw.plugin.json"), "utf-8"),
+      ) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    const pluginId = typeof manifest.id === "string" && manifest.id ? manifest.id : entry.name;
+    if (
+      !passesManifestOwnerBasePolicy({
+        plugin: { id: pluginId },
+        normalizedConfig: plugins,
+        allowRestrictiveAllowlistBypass: true,
+      })
+    ) {
+      continue;
+    }
+    if (plugins.allow.includes(pluginId) || plugins.entries[pluginId]?.enabled === true) {
+      ids.add(pluginId);
+      continue;
+    }
+    const channels = Array.isArray(manifest.channels)
+      ? manifest.channels.filter((channel): channel is string => typeof channel === "string")
+      : [];
+    if (
+      channels.some((channelId) => {
+        const channelConfig = (params.config.channels as Record<string, unknown> | undefined)?.[
+          channelId
+        ];
+        if (!channelConfig || typeof channelConfig !== "object" || Array.isArray(channelConfig)) {
+          return false;
+        }
+        if ((channelConfig as { enabled?: unknown }).enabled === false) {
+          return false;
+        }
+        return (
+          (channelConfig as { enabled?: unknown }).enabled === true ||
+          params.includeConfiguredChannels === true
+        );
+      })
+    ) {
+      ids.add(pluginId);
+      continue;
+    }
+    const providers = Array.isArray(manifest.providers)
+      ? manifest.providers.filter((provider): provider is string => typeof provider === "string")
+      : [];
+    if (manifest.enabledByDefault === true && providers.length === 0 && channels.length === 0) {
+      ids.add(pluginId);
+    }
+  }
+  return [...ids].toSorted((left, right) => left.localeCompare(right));
+}
 
 function formatElapsedMs(elapsedMs: number): string {
   if (elapsedMs < 1000) {
@@ -56,12 +128,10 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
   const env = params.env ?? process.env;
   const bundledPluginsDir = path.join(packageRoot, "dist", "extensions");
   const effectivePluginIds = params.config
-    ? resolveEffectivePluginIds({
+    ? collectPackagedRuntimeDepsRepairPluginIds({
+        bundledPluginsDir,
         config: params.config,
-        env: {
-          ...env,
-          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
-        },
+        includeConfiguredChannels: params.includeConfiguredChannels,
       })
     : undefined;
   const { deps, missing, conflicts } = scanBundledPluginRuntimeDeps({

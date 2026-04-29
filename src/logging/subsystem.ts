@@ -98,6 +98,9 @@ function getColorForConsole(): ChalkInstance {
     typeof process.env.FORCE_COLOR === "string" &&
     process.env.FORCE_COLOR.trim().length > 0 &&
     process.env.FORCE_COLOR.trim() !== "0";
+  if (hasForceColor) {
+    return new Chalk({ level: 1 });
+  }
   if (process.env.NO_COLOR && !hasForceColor) {
     return new Chalk({ level: 0 });
   }

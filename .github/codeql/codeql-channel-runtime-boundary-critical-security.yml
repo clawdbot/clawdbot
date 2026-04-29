@@ -1,0 +1,50 @@
+name: openclaw-codeql-channel-runtime-boundary-critical-security
+
+disable-default-queries: true
+
+queries:
+  - uses: security-extended
+
+query-filters:
+  - include:
+      precision:
+        - high
+        - very-high
+  - exclude:
+      problem.severity:
+        - recommendation
+        - warning
+
+paths:
+  - src/channels
+  - src/config/channel-*.ts
+  - src/config/types.channel*.ts
+  - src/gateway/server-channel*.ts
+  - src/gateway/server-methods/channels.ts
+  - src/gateway/protocol/schema/channels.ts
+  - src/infra/channel-*.ts
+  - src/infra/exec-approval-channel-runtime.ts
+  - src/infra/outbound/channel-*.ts
+  - src/plugin-sdk/channel-*.ts
+  - src/plugins/channel-*.ts
+  - src/plugins/bundled-channel-*.ts
+  - src/plugins/runtime/*channel*.ts
+  - src/secrets/channel-*.ts
+  - src/secrets/runtime-config-collectors-channels.ts
+  - src/security/audit-channel*.ts
+
+paths-ignore:
+  - "**/node_modules"
+  - "**/coverage"
+  - "**/*.generated.ts"
+  - "**/*.bundle.js"
+  - "**/*-runtime.js"
+  - "**/*.test.ts"
+  - "**/*.test.tsx"
+  - "**/*.e2e.test.ts"
+  - "**/*.e2e.test.tsx"
+  - "**/*test-support*"
+  - "**/*test-helper*"
+  - "**/*mock*"
+  - "**/*fixture*"
+  - "**/*bench*"

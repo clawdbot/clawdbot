@@ -111,6 +111,11 @@ function createMessageEndContext(
         final: false,
         inlineCode: createInlineCodeState(),
       },
+      partialBlockState: {
+        thinking: false,
+        final: false,
+        inlineCode: createInlineCodeState(),
+      },
       lastStreamedAssistant: undefined,
       lastStreamedAssistantCleaned: undefined,
       lastReasoningSent: undefined,

@@ -21,4 +21,8 @@ export const whatsAppChannelConfigUiHints = {
     label: "WhatsApp Config Writes",
     help: "Allow WhatsApp to write config in response to channel events/commands (default: true).",
   },
+  exposeErrorText: {
+    label: "WhatsApp Error Text",
+    help: "Deliver user-visible agent/provider error text into WhatsApp (default: true). Disable to keep failures quiet on WhatsApp.",
+  },
 } satisfies Record<string, ChannelConfigUiHint>;

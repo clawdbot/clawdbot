@@ -58,7 +58,7 @@ steps:
         value:
           expr: splitModelRef(env.primaryModel)
       - assert:
-          expr: "env.providerMode !== 'live-frontier' || (selected?.provider === config.requiredLiveProvider && selected?.model === config.requiredLiveModel)"
+          expr: "env.providerMode !== 'live-frontier' || (selected?.provider === config.requiredProvider && selected?.model === config.requiredModel)"
           message:
             expr: "`expected live GPT-5.5, got ${env.primaryModel}`"
       - call: state.addInboundMessage

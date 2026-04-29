@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { clearPluginManifestRegistryCache } from "../../plugins/manifest-registry.js";
 import { writePluginWithSkill } from "../test-helpers/skill-plugin-fixtures.js";
 import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
 
@@ -42,14 +41,12 @@ async function setupBundledDiffsPlugin() {
 async function resolveBundledDiffsSkillEntries(config?: OpenClawConfig) {
   const { bundledPluginsDir, workspaceDir } = await setupBundledDiffsPlugin();
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
-  clearPluginManifestRegistryCache();
 
   return resolveEmbeddedRunSkillEntries({ workspaceDir, ...(config ? { config } : {}) });
 }
 
 afterEach(async () => {
   restoreBundledPluginsDir();
-  clearPluginManifestRegistryCache();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 

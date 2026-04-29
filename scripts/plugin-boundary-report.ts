@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   pluginSdkEntrypoints,
   publicPluginOwnedSdkEntrypoints,
@@ -46,6 +47,12 @@ type CompatDebtRecord = {
   codeReferenceFiles: string[];
   docReferenceFiles: string[];
   eligibleForRemoval: boolean;
+};
+
+type WorkspaceTextFile = {
+  file: string;
+  relativeFile: string;
+  source: string;
 };
 
 type ReservedSdkImport = {
@@ -114,6 +121,12 @@ type BoundaryReportSummary = {
   };
 };
 
+export type PluginBoundaryReportResult = {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+};
+
 function collectTextFiles(dir: string): string[] {
   const files: string[] = [];
   if (!existsSync(dir)) {
@@ -143,6 +156,14 @@ function collectWorkspaceTextFiles(): string[] {
 
 function repoRelative(file: string): string {
   return relative(REPO_ROOT, file).replaceAll("\\", "/");
+}
+
+function collectWorkspaceTextFileSources(): WorkspaceTextFile[] {
+  return collectWorkspaceTextFiles().map((file) => ({
+    file,
+    relativeFile: repoRelative(file),
+    source: readFileSync(file, "utf8"),
+  }));
 }
 
 function isDocsFile(file: string): boolean {
@@ -243,15 +264,13 @@ function extractCompatTokens(record: PluginCompatRecord): string[] {
   return [...tokens].toSorted();
 }
 
-function collectReferenceFiles(files: readonly string[], tokens: readonly string[]) {
+function collectReferenceFiles(files: readonly WorkspaceTextFile[], tokens: readonly string[]) {
   const codeReferenceFiles = new Set<string>();
   const docReferenceFiles = new Set<string>();
-  for (const file of files) {
-    const relativeFile = repoRelative(file);
+  for (const { relativeFile, source } of files) {
     if (relativeFile === "src/plugins/compat/registry.ts") {
       continue;
     }
-    const source = readFileSync(file, "utf8");
     if (!tokens.some((token) => source.includes(token))) {
       continue;
     }
@@ -267,11 +286,18 @@ function collectReferenceFiles(files: readonly string[], tokens: readonly string
   };
 }
 
-function collectCompatDebt(files: readonly string[], today = new Date()): CompatDebtRecord[] {
+function collectCompatDebt(
+  files: readonly WorkspaceTextFile[],
+  today = new Date(),
+  options: { includeReferenceFiles?: boolean } = {},
+): CompatDebtRecord[] {
   return PLUGIN_COMPAT_RECORDS.filter((record) => record.status === "deprecated")
     .map((record) => {
       const tokens = extractCompatTokens(record);
-      const references = collectReferenceFiles(files, tokens);
+      const references =
+        options.includeReferenceFiles === false
+          ? { codeReferenceFiles: [], docReferenceFiles: [] }
+          : collectReferenceFiles(files, tokens);
       const eligibleForRemoval = record.removeAfter
         ? new Date(`${record.removeAfter}T00:00:00Z`) <= today
         : false;
@@ -297,13 +323,11 @@ function collectCompatDebt(files: readonly string[], today = new Date()): Compat
     );
 }
 
-function collectReservedSdkImports(files: readonly string[]): ReservedSdkImport[] {
+function collectReservedSdkImports(files: readonly WorkspaceTextFile[]): ReservedSdkImport[] {
   const reserved = new Set<string>(reservedBundledPluginSdkEntrypoints);
   const pluginIds = collectBundledPluginIds();
   const imports: ReservedSdkImport[] = [];
-  for (const file of files) {
-    const relativeFile = repoRelative(file);
-    const source = readFileSync(file, "utf8");
+  for (const { relativeFile, source } of files) {
     for (const match of source.matchAll(PLUGIN_SDK_SPECIFIER_PATTERN)) {
       const specifier = match[1];
       const subpath = match[2];
@@ -325,18 +349,18 @@ function collectReservedSdkImports(files: readonly string[]): ReservedSdkImport[
   );
 }
 
-function collectMemoryHostBoundary(files: readonly string[]): BoundaryReport["memoryHostSdk"] {
+function collectMemoryHostBoundary(
+  files: readonly WorkspaceTextFile[],
+): BoundaryReport["memoryHostSdk"] {
   const packageJson = JSON.parse(
     readFileSync(resolve(REPO_ROOT, "packages/memory-host-sdk/package.json"), "utf8"),
   ) as { private?: boolean; exports?: Record<string, string> };
   const sourceBridgeFiles: string[] = [];
   const packageCoreReferenceFiles = new Set<string>();
-  for (const file of files) {
-    const relativeFile = repoRelative(file);
+  for (const { relativeFile, source } of files) {
     if (!relativeFile.startsWith("packages/memory-host-sdk/src/")) {
       continue;
     }
-    const source = readFileSync(file, "utf8");
     if (source.includes("src/memory-host-sdk/")) {
       sourceBridgeFiles.push(relativeFile);
     }
@@ -419,12 +443,12 @@ function buildSummary(report: BoundaryReport, owner?: string): BoundaryReportSum
   };
 }
 
-function buildReport(options: Pick<CliOptions, "owner"> = {}): BoundaryReport {
-  const files = collectWorkspaceTextFiles();
+function buildReport(options: Pick<CliOptions, "owner" | "summary"> = {}): BoundaryReport {
+  const files = collectWorkspaceTextFileSources();
   const pluginIds = collectBundledPluginIds();
-  const compatRecords = collectCompatDebt(files).filter((record) =>
-    matchesOwner(options.owner, record.owner),
-  );
+  const compatRecords = collectCompatDebt(files, new Date(), {
+    includeReferenceFiles: !options.summary,
+  }).filter((record) => matchesOwner(options.owner, record.owner));
   const reservedImports = collectReservedSdkImports(files).filter(
     (entry) =>
       matchesOwner(options.owner, entry.owner) || matchesOwner(options.owner, entry.consumerOwner),
@@ -539,35 +563,51 @@ function collectFailures(report: BoundaryReport, options: CliOptions): string[] 
   return failures;
 }
 
-let options: CliOptions;
-try {
-  options = parseArgs(process.argv.slice(2));
-} catch (error) {
-  const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`${message}\n\n${renderHelp()}\n`);
-  process.exitCode = 2;
-  process.exit();
+export function createPluginBoundaryReport(args: readonly string[]): PluginBoundaryReportResult {
+  const options = parseArgs(args);
+  if (options.help) {
+    return {
+      stdout: `${renderHelp()}\n`,
+      stderr: "",
+      exitCode: 0,
+    };
+  }
+
+  const report = buildReport(options);
+  const summary = buildSummary(report, options.owner);
+  const body = options.json
+    ? JSON.stringify(options.summary ? summary : report, null, 2)
+    : options.summary
+      ? renderSummaryText(summary)
+      : renderText(report, options.owner);
+  const failures = collectFailures(report, options);
+  return {
+    stdout: `${body}\n`,
+    stderr:
+      failures.length > 0
+        ? `${failures.map((failure) => `plugin-boundary-report: ${failure}`).join("\n")}\n`
+        : "",
+    exitCode: failures.length > 0 ? 1 : 0,
+  };
 }
 
-if (options.help) {
-  process.stdout.write(`${renderHelp()}\n`);
-  process.exit();
+function runPluginBoundaryReportCli(args: readonly string[]): void {
+  let result: PluginBoundaryReportResult;
+  try {
+    result = createPluginBoundaryReport(args);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`${message}\n\n${renderHelp()}\n`);
+    process.exitCode = 2;
+    return;
+  }
+  process.stdout.write(result.stdout);
+  if (result.stderr) {
+    process.stderr.write(result.stderr);
+  }
+  process.exitCode = result.exitCode;
 }
 
-const report = buildReport(options);
-const summary = buildSummary(report, options.owner);
-if (options.json) {
-  process.stdout.write(`${JSON.stringify(options.summary ? summary : report, null, 2)}\n`);
-} else if (options.summary) {
-  process.stdout.write(`${renderSummaryText(summary)}\n`);
-} else {
-  process.stdout.write(`${renderText(report, options.owner)}\n`);
-}
-
-const failures = collectFailures(report, options);
-if (failures.length > 0) {
-  process.stderr.write(
-    `${failures.map((failure) => `plugin-boundary-report: ${failure}`).join("\n")}\n`,
-  );
-  process.exitCode = 1;
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  runPluginBoundaryReportCli(process.argv.slice(2));
 }

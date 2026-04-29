@@ -18,7 +18,9 @@ vi.mock("../cli/plugins-registry-refresh.js", () => ({
 }));
 
 const resolveBundledPluginSources = vi.hoisted(() => vi.fn(() => new Map()));
-const findBundledPluginSourceInMap = vi.hoisted(() => vi.fn(() => null));
+const findBundledPluginSourceInMap = vi.hoisted(() =>
+  vi.fn<(...args: unknown[]) => { localPath: string } | undefined>(() => undefined),
+);
 vi.mock("../plugins/bundled-sources.js", () => ({
   resolveBundledPluginSources,
   findBundledPluginSourceInMap,
@@ -126,7 +128,7 @@ describe("ensureOnboardingPluginInstalled", () => {
         timeoutMs: 300_000,
       }),
     );
-    expect(update).toHaveBeenCalledWith("Downloading demo-plugin…");
+    expect(update).toHaveBeenCalledWith("Downloading");
     expect(stop).toHaveBeenCalledWith("Installed WeCom plugin");
     expect(buildNpmResolutionInstallFields).toHaveBeenCalledWith(npmResolution);
     expect(recordPluginInstall).toHaveBeenCalledWith(
@@ -479,6 +481,68 @@ describe("ensureOnboardingPluginInstalled", () => {
         },
       });
     });
+  });
+
+  it("hides the npm download option for bundled plugins so the menu matches non-npm channels", async () => {
+    await withTempDir(
+      { prefix: "openclaw-onboarding-install-bundled-prompt-" },
+      async (temp) => {
+        const bundledDir = path.join(temp, "dist", "extensions", "tlon");
+        await fs.mkdir(bundledDir, { recursive: true });
+        const realBundledDir = await fs.realpath(bundledDir);
+        // Both code paths that surface a bundled plugin to the install
+        // pipeline must agree on the local path: the catalog-driven
+        // resolver (used when an npm spec is present) and the pluginId
+        // fallback. We stub both so the prompt sees a stable bundled path.
+        resolveBundledInstallPlanForCatalogEntry.mockReturnValue({
+          bundledSource: { localPath: realBundledDir },
+        });
+        findBundledPluginSourceInMap.mockReturnValue({ localPath: realBundledDir });
+
+        let captured:
+          | {
+              message: string;
+              options: Array<{ value: "npm" | "local" | "skip"; label: string; hint?: string }>;
+              initialValue: "npm" | "local" | "skip";
+            }
+          | undefined;
+
+        await ensureOnboardingPluginInstalled({
+          cfg: {},
+          entry: {
+            pluginId: "tlon",
+            label: "Tlon",
+            install: {
+              npmSpec: "@openclaw/tlon",
+              defaultChoice: "npm",
+            },
+          },
+          prompter: {
+            select: vi.fn(async (input) => {
+              captured = input;
+              return "skip";
+            }),
+          } as never,
+          runtime: {} as never,
+        });
+
+        expect(captured).toBeDefined();
+        // "Download from npm (@openclaw/tlon)" must NOT appear: the bundled
+        // copy is what gets enabled, so the npm hint would only confuse
+        // users into thinking the plugin is missing.
+        expect(captured?.options).toEqual([
+          {
+            value: "local",
+            label: "Use local plugin path",
+            hint: realBundledDir,
+          },
+          { value: "skip", label: "Skip for now" },
+        ]);
+        expect(captured?.initialValue).toBe("local");
+        findBundledPluginSourceInMap.mockReset();
+        resolveBundledInstallPlanForCatalogEntry.mockReset();
+      },
+    );
   });
 
   it("enables bundled plugins without adding their bundled directory as a local install", async () => {

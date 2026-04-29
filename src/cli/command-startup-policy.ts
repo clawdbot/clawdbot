@@ -17,10 +17,18 @@ export function shouldSkipRouteConfigGuardForCommandPath(params: {
 }
 
 export function shouldLoadPluginsForCommandPath(params: {
+  argv?: string[];
   commandPath: string[];
   jsonOutputMode: boolean;
 }): boolean {
   const loadPlugins = resolveCliCommandPathPolicy(params.commandPath).loadPlugins;
+  if (typeof loadPlugins === "function") {
+    return loadPlugins({
+      argv: params.argv ?? [],
+      commandPath: params.commandPath,
+      jsonOutputMode: params.jsonOutputMode,
+    });
+  }
   return loadPlugins === "always" || (loadPlugins === "text-only" && !params.jsonOutputMode);
 }
 
@@ -39,6 +47,7 @@ export function shouldEnsureCliPathForCommandPath(commandPath: string[]): boolea
 }
 
 export function resolveCliStartupPolicy(params: {
+  argv?: string[];
   commandPath: string[];
   jsonOutputMode: boolean;
   env?: NodeJS.ProcessEnv;
@@ -55,6 +64,7 @@ export function resolveCliStartupPolicy(params: {
         })
       : false,
     loadPlugins: shouldLoadPluginsForCommandPath({
+      argv: params.argv,
       commandPath: params.commandPath,
       jsonOutputMode: params.jsonOutputMode,
     }),

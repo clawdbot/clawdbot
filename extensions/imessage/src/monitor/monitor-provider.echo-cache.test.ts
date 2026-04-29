@@ -17,6 +17,36 @@ describe("iMessage sent-message echo cache", () => {
     expect(cache.has("acct:imessage:+1666", { text: "Reasoning:\n_step_" })).toBe(false);
   });
 
+  it("matches delayed reflected echoes with leading attributedBody corruption markers", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
+    const cache = createSentMessageCache();
+
+    cache.remember("acct:imessage:+1555", { text: "Delayed echo reply" });
+
+    expect(
+      cache.has("acct:imessage:+1555", {
+        text: "\uFFFD\uFFFE\uFFFF\uFEFFDelayed echo reply",
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps attributedBody corruption cleanup leading-only", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
+    const cache = createSentMessageCache();
+
+    cache.remember("acct:imessage:+1555", { text: "Delayed echo reply" });
+
+    expect(
+      cache.has("acct:imessage:+1555", {
+        text: "Delayed \uFFFD echo reply",
+      }),
+    ).toBe(false);
+    expect(cache.has("acct:imessage:+1555", { text: "Delayed\techo reply" })).toBe(false);
+    expect(cache.has("acct:imessage:+1555", { text: "Delayed\necho reply" })).toBe(false);
+  });
+
   it("matches by outbound message id and ignores placeholder ids", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));

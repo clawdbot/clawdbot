@@ -1,30 +1,15 @@
-import { execFileSync } from "node:child_process";
-import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-
-const REPO_ROOT = resolve(import.meta.dirname, "../..");
-
-function runBoundaryReport(...args: string[]): string {
-  return execFileSync(
-    process.execPath,
-    ["--import", "tsx", "scripts/plugin-boundary-report.ts", ...args],
-    {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-    },
-  );
-}
+import { createPluginBoundaryReport } from "../../scripts/plugin-boundary-report.js";
 
 describe("plugin-boundary-report", () => {
   it("emits compact CI-safe summary JSON", () => {
-    const output = runBoundaryReport(
+    const result = createPluginBoundaryReport([
       "--summary",
       "--json",
       "--fail-on-cross-owner",
       "--fail-on-unclassified-unused-reserved",
-    );
-    const summary = JSON.parse(output) as {
+    ]);
+    const summary = JSON.parse(result.stdout) as {
       pluginSdk?: {
         crossOwnerReservedImportCount?: unknown;
         unusedReservedCount?: unknown;
@@ -34,6 +19,7 @@ describe("plugin-boundary-report", () => {
       };
     };
 
+    expect(result).toMatchObject({ exitCode: 0, stderr: "" });
     expect(summary.pluginSdk?.crossOwnerReservedImportCount).toBe(0);
     expect(summary.pluginSdk?.unusedReservedCount).toBe(0);
     expect(["private-core-bridge", "private-package-core-integrated"]).toContain(

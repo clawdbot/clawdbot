@@ -1,12 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveCompatibilityHostVersion } from "../version.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
-import { normalizePluginsConfig } from "./config-state.js";
+import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import {
   inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
-  resolveInstalledPluginIndexStorePath,
   refreshPersistedInstalledPluginIndex,
   type InstalledPluginIndexStoreInspection,
   type InstalledPluginIndexStoreOptions,
@@ -23,7 +21,6 @@ import {
   type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
-import { resolvePluginCacheInputs } from "./roots.js";
 
 export type PluginRegistrySnapshot = InstalledPluginIndex;
 export type PluginRegistryRecord = InstalledPluginIndexRecord;
@@ -46,16 +43,6 @@ export type PluginRegistrySnapshotResult = {
   source: PluginRegistrySnapshotSource;
   diagnostics: readonly PluginRegistrySnapshotDiagnostic[];
 };
-
-const DERIVED_SNAPSHOT_CACHE_MS = 1000;
-const derivedSnapshotCache = new Map<
-  string,
-  { expiresAt: number; result: PluginRegistrySnapshotResult }
->();
-
-export function clearPluginRegistrySnapshotCache(): void {
-  derivedSnapshotCache.clear();
-}
 
 export const DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV = "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY";
 
@@ -85,7 +72,7 @@ function hasMissingPersistedPluginSource(index: InstalledPluginIndex): boolean {
     }
     return (
       !fs.existsSync(plugin.rootDir) ||
-      !fs.existsSync(plugin.manifestPath) ||
+      (!hasOptionalMissingPluginManifestFile(plugin) && !fs.existsSync(plugin.manifestPath)) ||
       (plugin.source ? !fs.existsSync(plugin.source) : false) ||
       (plugin.setupSource ? !fs.existsSync(plugin.setupSource) : false)
     );
@@ -122,40 +109,6 @@ function hasMismatchedPersistedBundledPluginRoot(
   );
 }
 
-function resolveDerivedSnapshotCacheKey(
-  params: LoadPluginRegistryParams,
-  env: NodeJS.ProcessEnv,
-): string | null {
-  if (
-    params.cache === false ||
-    params.preferPersisted === false ||
-    params.pluginIndexFilePath ||
-    params.installRecords ||
-    params.candidates ||
-    params.diagnostics ||
-    params.now
-  ) {
-    return null;
-  }
-
-  const normalizedPlugins = normalizePluginsConfig(params.config?.plugins);
-  const { roots, loadPaths } = resolvePluginCacheInputs({
-    workspaceDir: params.workspaceDir,
-    loadPaths: normalizedPlugins.loadPaths,
-    env,
-  });
-  return JSON.stringify({
-    persistedStore: resolveInstalledPluginIndexStorePath(params),
-    roots,
-    loadPaths,
-    policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
-    hostContractVersion: resolveCompatibilityHostVersion(env),
-    disablePersisted: env[DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV] ?? "",
-    disableBundled: env.OPENCLAW_DISABLE_BUNDLED_PLUGINS ?? "",
-    vitest: env.VITEST ?? "",
-  });
-}
-
 export function loadPluginRegistrySnapshotWithMetadata(
   params: LoadPluginRegistryParams = {},
 ): PluginRegistrySnapshotResult {
@@ -173,15 +126,6 @@ export function loadPluginRegistrySnapshotWithMetadata(
   const disabledByEnv = hasEnvFlag(env, DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV);
   const persistedReadsEnabled = !disabledByCaller && !disabledByEnv;
   const persistedInstallRecordReadsEnabled = !disabledByEnv;
-  const derivedCacheKey = persistedReadsEnabled
-    ? resolveDerivedSnapshotCacheKey(params, env)
-    : null;
-  if (derivedCacheKey) {
-    const cached = derivedSnapshotCache.get(derivedCacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.result;
-    }
-  }
   let persistedIndex: InstalledPluginIndex | null = null;
   if (persistedInstallRecordReadsEnabled) {
     persistedIndex = readPersistedInstalledPluginIndexSync(params);
@@ -234,7 +178,7 @@ export function loadPluginRegistrySnapshotWithMetadata(
     });
   }
 
-  const result: PluginRegistrySnapshotResult = {
+  return {
     snapshot: loadInstalledPluginIndex({
       ...params,
       installRecords:
@@ -244,13 +188,6 @@ export function loadPluginRegistrySnapshotWithMetadata(
     source: "derived",
     diagnostics,
   };
-  if (derivedCacheKey) {
-    derivedSnapshotCache.set(derivedCacheKey, {
-      expiresAt: Date.now() + DERIVED_SNAPSHOT_CACHE_MS,
-      result,
-    });
-  }
-  return result;
 }
 
 function resolveSnapshot(params: LoadPluginRegistryParams = {}): PluginRegistrySnapshot {

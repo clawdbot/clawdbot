@@ -362,6 +362,15 @@ describe("handshake auth helpers", () => {
     expect(
       shouldSkipLocalBackendSelfPairing({
         connectParams,
+        locality: "shared_secret_loopback_local",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "token",
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
         locality: "remote",
         hasBrowserOriginHeader: false,
         sharedAuthOk: true,

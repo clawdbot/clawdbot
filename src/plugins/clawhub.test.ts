@@ -249,6 +249,47 @@ describe("installPluginFromClawHub", () => {
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
   });
 
+  it("resolves explicit ClawHub dist tags before fetching version metadata", async () => {
+    parseClawHubPluginSpecMock.mockReturnValueOnce({ name: "demo", version: "latest" });
+    fetchClawHubPackageDetailMock.mockResolvedValueOnce({
+      package: {
+        name: "demo",
+        displayName: "Demo",
+        family: "code-plugin",
+        channel: "official",
+        isOfficial: true,
+        createdAt: 0,
+        updatedAt: 0,
+        tags: {
+          latest: "2026.3.22",
+        },
+        compatibility: {
+          pluginApiRange: ">=2026.3.22",
+          minGatewayVersion: "2026.3.0",
+        },
+      },
+    });
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo@latest",
+      baseUrl: "https://clawhub.ai",
+    });
+
+    expectSuccessfulClawHubInstall(result);
+    expect(fetchClawHubPackageVersionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "demo",
+        version: "2026.3.22",
+      }),
+    );
+    expect(downloadClawHubPackageArchiveMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "demo",
+        version: "2026.3.22",
+      }),
+    );
+  });
+
   it("installs when ClawHub advertises a wildcard plugin API range", async () => {
     fetchClawHubPackageVersionMock.mockResolvedValueOnce({
       version: {

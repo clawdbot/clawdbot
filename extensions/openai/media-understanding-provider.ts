@@ -35,6 +35,7 @@ export const openaiCodexMediaUnderstandingProvider: MediaUnderstandingProvider =
   id: "openai-codex",
   capabilities: ["image"],
   defaultModels: { image: "gpt-5.5" },
+  autoPriority: { image: 20 },
   describeImage: describeImageWithModel,
   describeImages: describeImagesWithModel,
 };

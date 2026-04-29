@@ -80,8 +80,31 @@ describe("enforceTelegramDmAccess", () => {
     vi.clearAllMocks();
   });
 
-  it("allows DMs when policy is open", async () => {
-    const { allowed, bot } = await enforceDefaultDmAccess({ dmPolicy: "open" });
+  it("allows DMs when policy is open with wildcard allowFrom", async () => {
+    const { allowed, bot } = await enforceDefaultDmAccess({
+      dmPolicy: "open",
+      allow: ["*"],
+    });
+
+    expect(allowed).toBe(true);
+    expect(bot.api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("blocks non-allowlisted DMs when open policy has no wildcard", async () => {
+    const { allowed, bot } = await enforceDefaultDmAccess({
+      dmPolicy: "open",
+      allow: ["99999"],
+    });
+
+    expect(allowed).toBe(false);
+    expect(bot.api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("allows allowlisted DMs when open policy was constrained by a restrictive allowFrom", async () => {
+    const { allowed, bot } = await enforceDefaultDmAccess({
+      dmPolicy: "open",
+      allow: ["12345"],
+    });
 
     expect(allowed).toBe(true);
     expect(bot.api.sendMessage).not.toHaveBeenCalled();

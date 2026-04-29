@@ -225,12 +225,10 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
   };
 
   const discovery = discoverOpenClawPlugins({
-    cache: false,
     env,
   });
   const manifestRegistry = loadPluginManifestRegistry({
     config: buildBundledCapabilityRuntimeConfig(params.pluginIds, env),
-    cache: false,
     env,
     candidates: discovery.candidates,
     diagnostics: discovery.diagnostics,

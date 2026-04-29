@@ -23,6 +23,7 @@ function createQaChannelTransportParams(baseUrl = "http://127.0.0.1:43124") {
       messages: {
         groupChat: {
           mentionPatterns: ["\\b@?openclaw\\b"],
+          visibleReplies: "automatic",
         },
       },
     } satisfies QaTransportGatewayConfig,
@@ -77,7 +78,10 @@ describe("buildQaGatewayConfig", () => {
       baseUrl: "http://127.0.0.1:43124",
       pollTimeoutMs: 250,
     });
-    expect(cfg.messages?.groupChat?.mentionPatterns).toEqual(["\\b@?openclaw\\b"]);
+    expect(cfg.messages?.groupChat).toMatchObject({
+      mentionPatterns: ["\\b@?openclaw\\b"],
+      visibleReplies: "automatic",
+    });
   });
 
   it("maps provider-qualified openai and anthropic refs through the mock provider lane", () => {
@@ -103,6 +107,22 @@ describe("buildQaGatewayConfig", () => {
       "claude-opus-4-6",
     );
     expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core"]);
+  });
+
+  it("falls back to provider defaults for blank model refs", () => {
+    const cfg = buildQaGatewayConfig({
+      bind: "loopback",
+      gatewayPort: 18789,
+      gatewayToken: "token",
+      providerBaseUrl: "http://127.0.0.1:44080/v1",
+      workspaceDir: "/tmp/qa-workspace",
+      providerMode: "mock-openai",
+      primaryModel: " ",
+      alternateModel: "",
+    });
+
+    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("mock-openai/gpt-5.5");
+    expect(cfg.agents?.defaults?.models).toHaveProperty("mock-openai/gpt-5.5-alt");
   });
 
   it("can wire AIMock as a separate mock provider lane", () => {

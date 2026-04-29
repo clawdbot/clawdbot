@@ -16,7 +16,11 @@ export type ReplyPayload = {
   presentation?: MessagePresentation;
   /** Channel-agnostic delivery preferences, e.g. pin the sent message when supported. */
   delivery?: ReplyPayloadDelivery;
-  /** Internal legacy representation used by existing approval/reply helpers during migration. */
+  /**
+   * @deprecated Use presentation.
+   *
+   * Internal legacy representation used by existing approval/reply helpers during migration.
+   */
   interactive?: InteractiveReply;
   btw?: {
     question: string;

@@ -67,6 +67,15 @@ describe("command-path-policy", () => {
   });
 
   it("keeps config-only agent commands on config-only startup", () => {
+    expect(resolveCliCommandPathPolicy(["agent"])).toEqual({
+      bypassConfigGuard: false,
+      routeConfigGuard: "never",
+      loadPlugins: expect.any(Function),
+      hideBanner: false,
+      ensureCliPath: true,
+      networkProxy: expect.any(Function),
+    });
+
     for (const commandPath of [
       ["agents", "bind"],
       ["agents", "bindings"],

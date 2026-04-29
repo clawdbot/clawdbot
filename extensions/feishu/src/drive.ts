@@ -733,19 +733,16 @@ export async function deliverCommentThreadText(
 
 export function registerFeishuDriveTools(api: OpenClawPluginApi) {
   if (!api.config) {
-    api.logger.debug?.("feishu_drive: No config available, skipping drive tools");
     return;
   }
 
   const accounts = listEnabledFeishuAccounts(api.config);
   if (accounts.length === 0) {
-    api.logger.debug?.("feishu_drive: No Feishu accounts configured, skipping drive tools");
     return;
   }
 
   const toolsCfg = resolveAnyEnabledFeishuToolsConfig(accounts);
   if (!toolsCfg.drive) {
-    api.logger.debug?.("feishu_drive: drive tool disabled in config");
     return;
   }
 
@@ -829,6 +826,4 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
     },
     { name: "feishu_drive" },
   );
-
-  api.logger.debug?.(`feishu_drive: Registered feishu_drive tool`);
 }

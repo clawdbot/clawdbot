@@ -58,7 +58,11 @@ import {
   normalizeAgentId,
 } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
+import {
+  annotateInterSessionPromptText,
+  normalizeInputProvenance,
+  type InputProvenance,
+} from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import {
   normalizeOptionalLowercaseString,
@@ -486,6 +490,9 @@ export const agentHandlers: GatewayRequestHandlers = {
       typeof request.bestEffortDeliver === "boolean" ? request.bestEffortDeliver : undefined;
 
     let message = (request.message ?? "").trim();
+    if (!isRawModelRun) {
+      message = annotateInterSessionPromptText(message, inputProvenance);
+    }
     let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
     let imageOrder: PromptImageOrderEntry[] = [];
     if (normalizedAttachments.length > 0) {
@@ -774,7 +781,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     // Channel messages (Discord, Telegram, etc.) get timestamps via envelope
     // formatting in a separate code path — they never reach this handler.
     // See: https://github.com/openclaw/openclaw/issues/3658
-    if (!skipTimestampInjection && !isRawModelRun) {
+    if (!skipTimestampInjection && !isRawModelRun && inputProvenance?.kind !== "inter_session") {
       message = injectTimestamp(message, timestampOptsFromConfig(cfg));
     }
 
@@ -1146,6 +1153,9 @@ export const agentHandlers: GatewayRequestHandlers = {
         if (startupContextPrelude) {
           message = `${startupContextPrelude}\n\n${message}`;
         }
+      }
+      if (!isRawModelRun) {
+        message = annotateInterSessionPromptText(message, inputProvenance);
       }
 
       const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;

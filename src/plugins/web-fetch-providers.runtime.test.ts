@@ -13,7 +13,6 @@ let webFetchProvidersSharedModule: WebFetchProvidersSharedModule;
 let loadOpenClawPluginsMock: ReturnType<typeof vi.fn>;
 let setActivePluginRegistry: RuntimeModule["setActivePluginRegistry"];
 let resolvePluginWebFetchProviders: WebFetchProvidersRuntimeModule["resolvePluginWebFetchProviders"];
-let resetWebFetchProviderSnapshotCacheForTests: WebFetchProvidersRuntimeModule["__testing"]["resetWebFetchProviderSnapshotCacheForTests"];
 
 const DEFAULT_WORKSPACE = "/tmp/workspace";
 
@@ -100,14 +99,10 @@ describe("resolvePluginWebFetchProviders", () => {
     manifestRegistryModule = await import("./manifest-registry.js");
     webFetchProvidersSharedModule = await import("./web-fetch-providers.shared.js");
     ({ setActivePluginRegistry } = await import("./runtime.js"));
-    ({
-      resolvePluginWebFetchProviders,
-      __testing: { resetWebFetchProviderSnapshotCacheForTests },
-    } = await import("./web-fetch-providers.runtime.js"));
+    ({ resolvePluginWebFetchProviders } = await import("./web-fetch-providers.runtime.js"));
   });
 
   beforeEach(() => {
-    resetWebFetchProviderSnapshotCacheForTests();
     vi.spyOn(manifestRegistryModule, "loadPluginManifestRegistry").mockReturnValue(
       createManifestRegistryFixture() as ManifestRegistryModule["loadPluginManifestRegistry"] extends (
         ...args: unknown[]
@@ -250,7 +245,7 @@ describe("resolvePluginWebFetchProviders", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
-  it("uses the active registry workspace for candidate discovery and snapshot loads when workspaceDir is omitted", () => {
+  it("uses the active registry workspace for candidate discovery when workspaceDir is omitted", () => {
     const env = createWebFetchEnv();
     const rawConfig = createFirecrawlAllowConfig();
 
@@ -280,7 +275,7 @@ describe("resolvePluginWebFetchProviders", () => {
     );
   });
 
-  it("invalidates web-fetch snapshot memoization when the active registry workspace changes", () => {
+  it("resolves web-fetch providers for each active registry workspace", () => {
     const env = createWebFetchEnv();
     const config = createFirecrawlAllowConfig();
 

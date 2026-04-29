@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getBrowserTestFetch } from "./test-fetch.js";
 import { getFreePort } from "./test-port.js";
+import { getBrowserTestFetch } from "./test-support/fetch.js";
 
 let testPort = 0;
 let prevGatewayPort: string | undefined;

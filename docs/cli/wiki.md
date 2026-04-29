@@ -68,9 +68,17 @@ Inspect current vault mode, health, and Obsidian CLI availability.
 Use this first when you are unsure whether the vault is initialized, bridge mode
 is healthy, or Obsidian integration is available.
 
+When bridge mode is active and configured to read memory artifacts, this command
+queries the running Gateway so it sees the same active memory plugin context as
+agent/runtime memory.
+
 ### `wiki doctor`
 
 Run wiki health checks and surface configuration or vault problems.
+
+When bridge mode is active and configured to read memory artifacts, this command
+queries the running Gateway before building the report. Disabled bridge imports
+and bridge configs that do not read memory artifacts remain local/offline.
 
 Typical issues include:
 
@@ -167,6 +175,11 @@ source pages.
 
 Use this in `bridge` mode when you want the latest exported memory artifacts
 pulled into the wiki vault.
+
+For active bridge artifact reads, the CLI routes the import through Gateway RPC
+so the import uses the runtime memory plugin context. If bridge imports are
+disabled or artifact reads are turned off, the command keeps the local/offline
+zero-import behavior.
 
 ### `wiki unsafe-local import`
 

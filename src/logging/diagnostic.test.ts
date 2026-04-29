@@ -125,16 +125,20 @@ describe("stuck session diagnostics threshold", () => {
 
   it("uses the configured diagnostics.stuckSessionWarnMs threshold", () => {
     const events: Array<{ type: string }> = [];
+    const recoverStuckSession = vi.fn();
     const unsubscribe = onDiagnosticEvent((event) => {
       events.push({ type: event.type });
     });
     try {
-      startDiagnosticHeartbeat({
-        diagnostics: {
-          enabled: true,
-          stuckSessionWarnMs: 30_000,
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+          },
         },
-      });
+        { recoverStuckSession },
+      );
       logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
       vi.advanceTimersByTime(61_000);
     } finally {
@@ -142,6 +146,12 @@ describe("stuck session diagnostics threshold", () => {
     }
 
     expect(events.filter((event) => event.type === "session.stuck")).toHaveLength(1);
+    expect(recoverStuckSession).toHaveBeenCalledWith({
+      sessionId: "s1",
+      sessionKey: "main",
+      ageMs: expect.any(Number),
+      queueDepth: 0,
+    });
   });
 
   it("starts and stops the stability recorder with the heartbeat lifecycle", () => {

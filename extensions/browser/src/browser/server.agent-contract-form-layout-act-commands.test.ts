@@ -12,7 +12,7 @@ import {
   getBrowserControlServerTestState,
   getPwMocks,
 } from "./server.control-server.test-harness.js";
-import { getBrowserTestFetch, type BrowserTestFetch } from "./test-fetch.js";
+import { getBrowserTestFetch, type BrowserTestFetch } from "./test-support/fetch.js";
 
 const state = getBrowserControlServerTestState();
 const pwMocks = getPwMocks();

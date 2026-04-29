@@ -247,6 +247,16 @@ async function runCronRunAndCaptureExit(params: {
 }
 
 describe("cron cli", () => {
+  it("documents the gateway-host timezone default for cron --tz help", () => {
+    const program = buildProgram();
+    const cronCommand = program.commands.find((command) => command.name() === "cron");
+    const addCommand = cronCommand?.commands.find((command) => command.name() === "add");
+    const editCommand = cronCommand?.commands.find((command) => command.name() === "edit");
+
+    expect(addCommand?.helpInformation()).toContain("Gateway host local timezone");
+    expect(editCommand?.helpInformation()).toContain("Gateway host local timezone");
+  });
+
   it.each([
     {
       name: "exits 0 for cron run when job executes successfully",

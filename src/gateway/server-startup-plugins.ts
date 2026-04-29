@@ -5,6 +5,7 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import {
+  pruneUnknownBundledRuntimeDepsRoots,
   repairBundledRuntimeDepsInstallRootAsync,
   resolveBundledRuntimeDependencyPackageInstallRoot,
   scanBundledPluginRuntimeDeps,
@@ -53,6 +54,15 @@ async function prestageGatewayBundledRuntimeDeps(params: {
   });
   if (!packageRoot) {
     return;
+  }
+  const pruned = pruneUnknownBundledRuntimeDepsRoots({
+    env: process.env,
+    warn: (message) => params.log.warn(`[plugins] ${message}`),
+  });
+  if (pruned.removed > 0) {
+    params.log.info(
+      `[plugins] pruned stale bundled runtime deps roots (${pruned.removed} removed, ${pruned.skippedLocked} locked, ${pruned.scanned} scanned)`,
+    );
   }
   let scanResult: ReturnType<typeof scanBundledPluginRuntimeDeps>;
   try {

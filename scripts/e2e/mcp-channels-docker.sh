@@ -18,12 +18,12 @@ cleanup() {
 trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" mcp-channels
-docker_e2e_harness_mount_args
+OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 mcp-channels empty)"
 
 echo "Running in-container gateway + MCP smoke..."
 # Harness files are mounted read-only; the app under test comes from /app/dist.
 set +e
-docker run --rm \
+docker_e2e_run_with_harness \
   --name "$CONTAINER_NAME" \
   -e "OPENCLAW_GATEWAY_TOKEN=$TOKEN" \
   -e "OPENCLAW_SKIP_CHANNELS=1" \
@@ -32,70 +32,40 @@ docker run --rm \
   -e "OPENCLAW_SKIP_CANVAS_HOST=1" \
   -e "OPENCLAW_SKIP_ACPX_RUNTIME=1" \
   -e "OPENCLAW_SKIP_ACPX_RUNTIME_PROBE=1" \
-  -e "OPENCLAW_STATE_DIR=/tmp/openclaw-state" \
-  -e "OPENCLAW_CONFIG_PATH=/tmp/openclaw-state/openclaw.json" \
+  -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   -e "GW_URL=ws://127.0.0.1:$PORT" \
   -e "GW_TOKEN=$TOKEN" \
   -e "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1" \
-  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   "$IMAGE_NAME" \
   bash -lc "set -euo pipefail
-    entry=dist/index.mjs
-    [ -f \"\$entry\" ] || entry=dist/index.js
+    source scripts/lib/openclaw-e2e-instance.sh
+    openclaw_e2e_eval_test_state_from_b64 \"\${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}\"
+    entry=\"\$(openclaw_e2e_resolve_entrypoint)\"
     mock_port=44081
     export OPENCLAW_DOCKER_OPENAI_BASE_URL=\"http://127.0.0.1:\$mock_port/v1\"
-    MOCK_PORT=\"\$mock_port\" node scripts/e2e/mock-openai-server.mjs >/tmp/mcp-channels-mock-openai.log 2>&1 &
-    mock_pid=\$!
-    for _ in \$(seq 1 80); do
-      if node -e \"fetch('http://127.0.0.1:' + process.argv[1] + '/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\" \"\$mock_port\"; then
-        break
-      fi
-      sleep 0.1
-    done
-    node -e \"fetch('http://127.0.0.1:' + process.argv[1] + '/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\" \"\$mock_port\"
-    tsx scripts/e2e/mcp-channels-seed.ts >/tmp/mcp-channels-seed.log
-    node \"\$entry\" gateway --port $PORT --bind loopback --allow-unconfigured >/tmp/mcp-channels-gateway.log 2>&1 &
-    gateway_pid=\$!
-    stop_process() {
-      pid=\"\$1\"
-      kill \"\$pid\" >/dev/null 2>&1 || true
-      for _ in \$(seq 1 40); do
-        if ! kill -0 \"\$pid\" >/dev/null 2>&1; then
-          wait \"\$pid\" >/dev/null 2>&1 || true
-          return
-        fi
-        sleep 0.25
-      done
-      kill -9 \"\$pid\" >/dev/null 2>&1 || true
-      wait \"\$pid\" >/dev/null 2>&1 || true
-    }
+    mock_pid=\"\$(openclaw_e2e_start_mock_openai \"\$mock_port\" /tmp/mcp-channels-mock-openai.log)\"
+    gateway_pid=
     cleanup_inner() {
-      stop_process \"\$gateway_pid\"
-      stop_process \"\$mock_pid\"
+      openclaw_e2e_stop_process \"\${gateway_pid:-}\"
+      openclaw_e2e_stop_process \"\${mock_pid:-}\"
     }
     dump_gateway_log_on_error() {
       status=\$?
       if [ \"\$status\" -ne 0 ]; then
-        tail -n 80 /tmp/mcp-channels-gateway.log 2>/dev/null || true
+        openclaw_e2e_dump_logs \
+          /tmp/mcp-channels-gateway.log \
+          /tmp/mcp-channels-seed.log \
+          /tmp/mcp-channels-mock-openai.log
       fi
       cleanup_inner
       exit \"\$status\"
     }
     trap cleanup_inner EXIT
     trap dump_gateway_log_on_error ERR
-    gateway_ready=0
-    for _ in \$(seq 1 160); do
-      if grep -q '\[gateway\] ready' /tmp/mcp-channels-gateway.log 2>/dev/null; then
-        gateway_ready=1
-        break
-      fi
-      sleep 0.25
-    done
-    if [ \"\$gateway_ready\" -ne 1 ]; then
-      echo \"Gateway did not become ready\"
-      tail -n 120 /tmp/mcp-channels-gateway.log 2>/dev/null || true
-      exit 1
-    fi
+    openclaw_e2e_wait_mock_openai \"\$mock_port\"
+    tsx scripts/e2e/mcp-channels-seed.ts >/tmp/mcp-channels-seed.log
+    gateway_pid=\"\$(openclaw_e2e_start_gateway \"\$entry\" $PORT /tmp/mcp-channels-gateway.log)\"
+    openclaw_e2e_wait_gateway_ready \"\$gateway_pid\" /tmp/mcp-channels-gateway.log 480
     tsx scripts/e2e/mcp-channels-docker-client.ts
   " >"$CLIENT_LOG" 2>&1
 status=${PIPESTATUS[0]}

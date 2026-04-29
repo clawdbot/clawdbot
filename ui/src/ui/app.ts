@@ -212,6 +212,7 @@ export class OpenClawApp extends LitElement {
   @state() chatModelsLoading = false;
   @state() chatModelCatalog: ModelCatalogEntry[] = [];
   @state() chatQueue: ChatQueueItem[] = [];
+  @state() chatQueueBySession: Record<string, ChatQueueItem[]> = {};
   @state() chatAttachments: ChatAttachment[] = [];
   @state() realtimeTalkActive = false;
   @state() realtimeTalkStatus: RealtimeTalkStatus = "idle";

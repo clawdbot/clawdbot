@@ -28,6 +28,7 @@ import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolveBundledPluginSources } from "../plugins/bundled-sources.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -40,7 +41,9 @@ import {
 } from "./channel-setup.prompts.js";
 import {
   collectChannelStatus,
+  findBundledSourceForCatalogChannel,
   noteChannelPrimer,
+  resolveCatalogChannelSelectionHint,
   resolveChannelSelectionNoteLines,
   resolveChannelSetupSelectionContributions,
   resolveQuickstartDefault,
@@ -315,6 +318,43 @@ export async function setupChannels(
     };
   };
 
+  // Decorates the runtime status map with synthetic `selectionHint` entries for
+  // installable catalog channels (e.g. WeCom shipped via npm). In QuickStart we
+  // run with `deferStatusUntilSelection`, which leaves `statusByChannel` empty
+  // until the user picks a channel — without this overlay the selection menu
+  // would render those options without any "download from <npm-spec>" hint.
+  //
+  // Bundled channels (Signal / Tlon / Twitch / Slack ...) reach this code path
+  // too whenever their plugin is not yet enabled, because they share the same
+  // "installable catalog" bucket. For those we must NOT show "download from
+  // <npm-spec>" — the plugin already lives under `extensions/<id>` and the
+  // hint would mislead users into thinking the plugin is missing.
+  const buildStatusByChannelForSelection = (
+    catalogById: ReturnType<typeof getChannelEntries>["catalogById"],
+  ): Map<ChannelChoice, ChannelSetupStatus> => {
+    const decorated = new Map(statusByChannel);
+    if (catalogById.size === 0) {
+      return decorated;
+    }
+    const bundledSources = resolveBundledPluginSources({
+      workspaceDir: resolveWorkspaceDir(),
+    });
+    for (const [channel, entry] of catalogById) {
+      if (decorated.has(channel)) {
+        continue;
+      }
+      const bundledLocalPath =
+        findBundledSourceForCatalogChannel({ bundled: bundledSources, entry })?.localPath ?? null;
+      decorated.set(channel, {
+        channel,
+        configured: false,
+        statusLines: [],
+        selectionHint: resolveCatalogChannelSelectionHint(entry, { bundledLocalPath }),
+      });
+    }
+    return decorated;
+  };
+
   const refreshStatus = async (channel: ChannelChoice) => {
     const adapter = getVisibleSetupFlowAdapter(channel);
     if (!adapter) {
@@ -538,6 +578,7 @@ export async function setupChannels(
         prompter,
         runtime,
         workspaceDir,
+        autoConfirmSingleSource: true,
       });
       next = result.cfg;
       if (!result.installed) {
@@ -591,13 +632,13 @@ export async function setupChannels(
 
   if (options?.quickstartDefaults) {
     while (true) {
-      const { entries } = getChannelEntries();
+      const { entries, catalogById } = getChannelEntries();
       const choice = await prompter.select({
         message: "Select channel (QuickStart)",
         options: [
           ...resolveChannelSetupSelectionContributions({
             entries,
-            statusByChannel,
+            statusByChannel: buildStatusByChannelForSelection(catalogById),
             resolveDisabledHint,
           }).map((contribution) => contribution.option),
           {
@@ -620,13 +661,13 @@ export async function setupChannels(
     const doneValue = "__done__" as const;
     const initialValue = options?.initialSelection?.[0] ?? quickstartDefault;
     while (true) {
-      const { entries } = getChannelEntries();
+      const { entries, catalogById } = getChannelEntries();
       const choice = await prompter.select({
         message: "Select a channel",
         options: [
           ...resolveChannelSetupSelectionContributions({
             entries,
-            statusByChannel,
+            statusByChannel: buildStatusByChannelForSelection(catalogById),
             resolveDisabledHint,
           }).map((contribution) => contribution.option),
           {

@@ -276,8 +276,12 @@ export function isScopeLimitedProbeFailure(probe: GatewayProbeResult): boolean {
   return MISSING_SCOPE_PATTERN.test(probe.error ?? "");
 }
 
+export function isPostConnectProbeFailure(probe: GatewayProbeResult): boolean {
+  return !probe.ok && probe.connectLatencyMs != null;
+}
+
 export function isProbeReachable(probe: GatewayProbeResult): boolean {
-  return probe.ok || isScopeLimitedProbeFailure(probe);
+  return probe.ok || probe.connectLatencyMs != null;
 }
 
 function getGatewayProbeCapability(probe: GatewayProbeResult): GatewayProbeCapability {

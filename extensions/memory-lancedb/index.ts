@@ -149,6 +149,7 @@ function resolveAutoCaptureStartIndex(
 // ============================================================================
 
 const TABLE_NAME = "memories";
+const DEFAULT_AUTO_RECALL_TIMEOUT_MS = 15_000;
 
 class MemoryDB {
   private db: LanceDB.Connection | null = null;
@@ -262,7 +263,7 @@ class MemoryDB {
 // ============================================================================
 
 type Embeddings = {
-  embed(text: string): Promise<number[]>;
+  embed(text: string, options?: { timeoutMs?: number }): Promise<number[]>;
 };
 
 class OpenAiCompatibleEmbeddings implements Embeddings {
@@ -277,7 +278,7 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
     this.client = new OpenAI({ apiKey, baseURL: baseUrl });
   }
 
-  async embed(text: string): Promise<number[]> {
+  async embed(text: string, options?: { timeoutMs?: number }): Promise<number[]> {
     const params: OpenAI.EmbeddingCreateParams = {
       model: this.model,
       input: text,
@@ -292,6 +293,7 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
     // transport and normalize the response ourselves.
     const response = await this.client.post<EmbeddingCreateResponse>("/embeddings", {
       body: params,
+      ...(options?.timeoutMs ? { timeout: options.timeoutMs, maxRetries: 0 } : {}),
     });
     return normalizeEmbeddingVector(response.data?.[0]?.embedding);
   }
@@ -350,6 +352,32 @@ class ProviderAdapterEmbeddings implements Embeddings {
 
   async embed(text: string): Promise<number[]> {
     return await (await this.getProvider()).embedQuery(text);
+  }
+}
+
+async function runWithTimeout<T>(params: {
+  timeoutMs: number;
+  task: () => Promise<T>;
+}): Promise<{ status: "ok"; value: T } | { status: "timeout" }> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const TIMEOUT = Symbol("timeout");
+  const timeoutPromise = new Promise<typeof TIMEOUT>((resolve) => {
+    timeout = setTimeout(() => resolve(TIMEOUT), params.timeoutMs);
+    timeout.unref?.();
+  });
+  const taskPromise = params.task();
+  taskPromise.catch(() => undefined);
+
+  try {
+    const result = await Promise.race([taskPromise, timeoutPromise]);
+    if (result === TIMEOUT) {
+      return { status: "timeout" };
+    }
+    return { status: "ok", value: result };
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
   }
 }
 
@@ -503,7 +531,19 @@ export default definePluginEntry({
   configSchema: memoryConfigSchema,
 
   register(api: OpenClawPluginApi) {
-    const cfg = memoryConfigSchema.parse(api.pluginConfig);
+    let cfg: MemoryConfig;
+    try {
+      cfg = memoryConfigSchema.parse(api.pluginConfig);
+    } catch (error) {
+      api.registerService({
+        id: "memory-lancedb",
+        start: () => {
+          const message = error instanceof Error ? error.message : String(error);
+          api.logger.warn(`memory-lancedb: disabled until configured (${message})`);
+        },
+      });
+      return;
+    }
     const dbPath = cfg.dbPath!;
     const resolvedDbPath = dbPath.includes("://") ? dbPath : api.resolvePath(dbPath);
     const { model, dimensions } = cfg.embedding;
@@ -806,8 +846,22 @@ export default definePluginEntry({
             event.prompt,
           currentCfg.recallMaxChars,
         );
-        const vector = await embeddings.embed(recallQuery);
-        const results = await db.search(vector, 3, 0.3);
+        const recall = await runWithTimeout({
+          timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
+          task: async () => {
+            const vector = await embeddings.embed(recallQuery, {
+              timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
+            });
+            return await db.search(vector, 3, 0.3);
+          },
+        });
+        if (recall.status === "timeout") {
+          api.logger.warn?.(
+            `memory-lancedb: auto-recall timed out after ${DEFAULT_AUTO_RECALL_TIMEOUT_MS}ms; skipping memory injection to avoid stalling agent startup`,
+          );
+          return undefined;
+        }
+        const results = recall.value;
 
         if (results.length === 0) {
           return undefined;

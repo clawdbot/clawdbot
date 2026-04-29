@@ -4,6 +4,7 @@ import { colorize, theme } from "../../terminal/theme.js";
 import { serializeGatewayDiscoveryBeacon } from "./discovery.js";
 import {
   isProbeReachable,
+  isPostConnectProbeFailure,
   isScopeLimitedProbeFailure,
   summarizeGatewayProbeCapability,
   renderProbeSummaryLine,
@@ -38,6 +39,9 @@ export function buildGatewayStatusWarnings(params: {
   const reachable = params.probed.filter((entry) => isProbeReachable(entry.probe));
   const degradedScopeLimited = params.probed.filter((entry) =>
     isScopeLimitedProbeFailure(entry.probe),
+  );
+  const degradedDetailFailed = params.probed.filter(
+    (entry) => isPostConnectProbeFailure(entry.probe) && !isScopeLimitedProbeFailure(entry.probe),
   );
   const warnings: GatewayStatusWarning[] = [];
   if (params.sshTarget && !params.sshTunnelStarted) {
@@ -83,6 +87,14 @@ export function buildGatewayStatusWarnings(params: {
       targetIds: [result.target.id],
     });
   }
+  for (const result of degradedDetailFailed) {
+    const detail = result.probe.error ? `: ${result.probe.error}` : ".";
+    warnings.push({
+      code: "probe_detail_failed",
+      message: `Gateway accepted the WebSocket connection, but follow-up read diagnostics failed${detail}`,
+      targetIds: [result.target.id],
+    });
+  }
   return warnings;
 }
 
@@ -98,7 +110,7 @@ export function writeGatewayStatusJson(params: {
   primaryTargetId: string | null;
 }) {
   const reachable = params.probed.filter((entry) => isProbeReachable(entry.probe));
-  const degraded = params.probed.some((entry) => isScopeLimitedProbeFailure(entry.probe));
+  const degraded = params.probed.some((entry) => isPostConnectProbeFailure(entry.probe));
   const capability = summarizeGatewayProbeCapability(reachable.map((entry) => entry.probe));
   writeRuntimeJson(params.runtime, {
     ok: reachable.length > 0,

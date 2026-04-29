@@ -110,7 +110,7 @@ export function resolveUninstallDirectoryTarget(params: {
     return null;
   }
 
-  if (params.installRecord?.source === "path") {
+  if (isLinkedPathInstallRecord(params.installRecord)) {
     return null;
   }
 
@@ -165,6 +165,19 @@ function resolveRecordedManagedInstallPath(params: {
   } catch {
     return null;
   }
+}
+
+function isLinkedPathInstallRecord(installRecord: PluginInstallRecord | undefined): boolean {
+  if (installRecord?.source !== "path") {
+    return false;
+  }
+  if (!installRecord.sourcePath || !installRecord.installPath) {
+    return true;
+  }
+  return (
+    resolveComparablePath(installRecord.sourcePath) ===
+    resolveComparablePath(installRecord.installPath)
+  );
 }
 
 const SHARED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
@@ -369,7 +382,8 @@ export type UninstallPluginParams = {
 
 /**
  * Plan a plugin uninstall by removing it from config and resolving a safe file-removal target.
- * Linked plugins (source === "path") never have their source directory deleted.
+ * Linked path plugins never have their source directory deleted. Copied path installs still remove
+ * their managed install directory.
  */
 export function planPluginUninstall(params: UninstallPluginParams): PluginUninstallPlanResult {
   const { config, pluginId, channelIds, deleteFiles = true, extensionsDir } = params;
@@ -383,7 +397,7 @@ export function planPluginUninstall(params: UninstallPluginParams): PluginUninst
   }
 
   const installRecord = config.plugins?.installs?.[pluginId];
-  const isLinked = installRecord?.source === "path";
+  const isLinked = isLinkedPathInstallRecord(installRecord);
 
   // Remove from config
   const { config: newConfig, actions: configActions } = removePluginFromConfig(config, pluginId, {

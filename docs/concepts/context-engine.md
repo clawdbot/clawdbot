@@ -122,7 +122,7 @@ A plugin can register a context engine using the plugin API:
 import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
 
 export default function register(api) {
-  api.registerContextEngine("my-engine", () => ({
+  api.registerContextEngine("my-engine", (ctx) => ({
     info: {
       id: "my-engine",
       name: "My Context Engine",
@@ -153,6 +153,10 @@ export default function register(api) {
   }));
 }
 ```
+
+The factory `ctx` includes optional `config`, `agentDir`, and `workspaceDir`
+values so plugins can initialize per-agent or per-workspace state before the
+first lifecycle hook runs.
 
 Then enable it in config:
 

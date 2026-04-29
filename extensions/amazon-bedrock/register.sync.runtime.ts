@@ -144,15 +144,27 @@ function resolvedModelSupportsCaching(modelArn: string): boolean {
   return matchesPiAiPromptCachingModelId(modelArn);
 }
 
+function isOpus47BedrockModelRef(modelRef: string): boolean {
+  return /(?:^|[/.:])(?:(?:us|eu|ap|apac|au|jp|global)\.)?anthropic\.claude-opus-4[.-]7(?:$|[-.:/])/i.test(
+    modelRef,
+  );
+}
+
 /**
  * Resolve the underlying foundation model for an application inference profile
  * via GetInferenceProfile. Results are cached so we only call the API once per
- * profile ARN. Returns true if the underlying model supports prompt caching.
+ * profile ARN. Returns traits needed for request shaping when the model id is
+ * otherwise opaque.
  *
  * Region is extracted from the profile ARN itself to avoid mismatches when
  * the OpenClaw config region differs from the profile's home region.
  */
-const appProfileCacheEligibleCache = new Map<string, boolean>();
+type BedrockAppProfileTraits = {
+  cacheEligible: boolean;
+  omitTemperature: boolean;
+};
+
+const appProfileTraitsCache = new Map<string, BedrockAppProfileTraits>();
 
 type BedrockGetInferenceProfileResponse = {
   models?: Array<{ modelArn?: string }>;
@@ -169,7 +181,7 @@ type BedrockControlPlaneFactory = (region: string | undefined) => BedrockControl
 let bedrockControlPlaneOverride: BedrockControlPlaneFactory | undefined;
 
 export function resetBedrockAppProfileCacheEligibilityForTest(): void {
-  appProfileCacheEligibleCache.clear();
+  appProfileTraitsCache.clear();
 }
 
 export function setBedrockAppProfileControlPlaneForTest(
@@ -190,27 +202,34 @@ async function createBedrockControlPlane(region: string | undefined): Promise<Be
   };
 }
 
-async function resolveAppProfileCacheEligible(
+async function resolveAppProfileTraits(
   modelId: string,
   fallbackRegion: string | undefined,
-): Promise<boolean> {
-  if (appProfileCacheEligibleCache.has(modelId)) {
-    return appProfileCacheEligibleCache.get(modelId)!;
+): Promise<BedrockAppProfileTraits> {
+  const cached = appProfileTraitsCache.get(modelId);
+  if (cached) {
+    return cached;
   }
   try {
     const region = extractRegionFromArn(modelId) ?? fallbackRegion;
     const controlPlane = await createBedrockControlPlane(region);
     const resp = await controlPlane.getInferenceProfile({ inferenceProfileIdentifier: modelId });
     const models = resp.models ?? [];
-    const eligible =
-      models.length > 0 &&
-      models.every((m: { modelArn?: string }) => resolvedModelSupportsCaching(m.modelArn ?? ""));
-    appProfileCacheEligibleCache.set(modelId, eligible);
-    return eligible;
+    const modelArns = models.map((m: { modelArn?: string }) => m.modelArn ?? "");
+    const traits = {
+      cacheEligible:
+        models.length > 0 && modelArns.every((modelArn) => resolvedModelSupportsCaching(modelArn)),
+      omitTemperature: modelArns.some(isOpus47BedrockModelRef),
+    };
+    appProfileTraitsCache.set(modelId, traits);
+    return traits;
   } catch {
     // Transient failures (throttling, network, IAM) should not be cached —
     // return the heuristic fallback but allow retry on the next request.
-    return isAnthropicBedrockModel(modelId);
+    return {
+      cacheEligible: isAnthropicBedrockModel(modelId),
+      omitTemperature: isOpus47BedrockModelRef(modelId),
+    };
   }
 }
 
@@ -279,6 +298,8 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     /ValidationException.*(?:exceeds? the (?:maximum|max) (?:number of )?(?:input )?tokens)/i,
     /ModelStreamErrorException.*(?:Input is too long|too many input tokens)/i,
   ] as const;
+  const deprecatedTemperatureValidationRe =
+    /ValidationException[\s\S]*(?:invalid_request_error[\s\S]*)?temperature[\s\S]*deprecated|ValidationException[\s\S]*deprecated[\s\S]*temperature/i;
   const anthropicByModelReplayHooks = ANTHROPIC_BY_MODEL_REPLAY_HOOKS;
   const startupPluginConfig = (api.pluginConfig ?? {}) as AmazonBedrockPluginConfig;
 
@@ -305,6 +326,26 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     }
     return createBedrockNoCacheWrapper(streamFn);
   };
+
+  function omitDeprecatedOpus47Temperature<TOptions extends object>(
+    modelId: string,
+    options: TOptions,
+  ): TOptions {
+    if (!isOpus47BedrockModelRef(modelId) || !("temperature" in options)) {
+      return options;
+    }
+    const next = { ...options } as typeof options & { temperature?: unknown };
+    delete next.temperature;
+    return next;
+  }
+
+  function omitDeprecatedOpus47PayloadTemperature(payload: Record<string, unknown>): void {
+    const inferenceConfig = payload.inferenceConfig;
+    if (!inferenceConfig || typeof inferenceConfig !== "object") {
+      return;
+    }
+    delete (inferenceConfig as Record<string, unknown>).temperature;
+  }
 
   /** Extract the AWS region from a bedrock-runtime baseUrl. */
   function extractRegionFromBaseUrl(baseUrl: string | undefined): string | undefined {
@@ -386,12 +427,13 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
       const region = resolveBedrockRegion(config) ?? extractRegionFromBaseUrl(model?.baseUrl);
       const mayNeedCacheInjection =
         isBedrockAppInferenceProfile(modelId) && !piAiWouldInjectCachePoints(modelId);
+      const shouldOmitTemperature = isOpus47BedrockModelRef(modelId);
 
       // For known Anthropic models (heuristic match), enable injection immediately.
       // For opaque profile IDs, we'll resolve via GetInferenceProfile on first call.
       const heuristicMatch = needsCachePointInjection(modelId);
 
-      if (!region && !mayNeedCacheInjection) {
+      if (!region && !mayNeedCacheInjection && !shouldOmitTemperature) {
         return wrapped;
       }
 
@@ -400,7 +442,10 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         return wrapped;
       }
       return (streamModel, context, options) => {
-        const merged = Object.assign({}, options, region ? { region } : {});
+        const merged = omitDeprecatedOpus47Temperature(
+          modelId,
+          Object.assign({}, options, region ? { region } : {}),
+        );
 
         if (!mayNeedCacheInjection) {
           return underlying(streamModel, context, merged);
@@ -416,25 +461,46 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         // want caching enabled, so defaulting to "short" is the safer behavior.
         const cacheRetention =
           typeof merged.cacheRetention === "string" ? merged.cacheRetention : "short";
+        const originalOnPayload = merged.onPayload as
+          | ((payload: unknown, model: unknown) => unknown)
+          | undefined;
 
         if (heuristicMatch) {
-          // Fast path: ARN heuristic already identified this as Claude.
-          return streamWithPayloadPatch(underlying, streamModel, context, merged, (payload) => {
-            injectBedrockCachePoints(payload, cacheRetention);
+          // Fast path: ARN heuristic already identified this as Claude, but the
+          // concrete target may still need profile traits for Opus 4.7 payloads.
+          const mayNeedTemperatureTrait = "temperature" in merged;
+          return underlying(streamModel, context, {
+            ...merged,
+            onPayload: async (payload: unknown, payloadModel: unknown) => {
+              if (payload && typeof payload === "object") {
+                const payloadRecord = payload as Record<string, unknown>;
+                injectBedrockCachePoints(payloadRecord, cacheRetention);
+                if (mayNeedTemperatureTrait) {
+                  const traits = await resolveAppProfileTraits(modelId, region);
+                  if (traits.omitTemperature) {
+                    omitDeprecatedOpus47PayloadTemperature(payloadRecord);
+                  }
+                }
+              }
+              return originalOnPayload?.(payload, payloadModel);
+            },
           });
         }
 
         // Slow path: opaque profile ID — resolve underlying model via API (cached).
         // pi-ai's onPayload supports async, so we await the resolution inline.
-        const originalOnPayload = merged.onPayload as
-          | ((payload: unknown, model: unknown) => unknown)
-          | undefined;
         return underlying(streamModel, context, {
           ...merged,
           onPayload: async (payload: unknown, payloadModel: unknown) => {
-            const eligible = await resolveAppProfileCacheEligible(modelId, region);
-            if (eligible && payload && typeof payload === "object") {
-              injectBedrockCachePoints(payload as Record<string, unknown>, cacheRetention);
+            const traits = await resolveAppProfileTraits(modelId, region);
+            if (payload && typeof payload === "object") {
+              const payloadRecord = payload as Record<string, unknown>;
+              if (traits.cacheEligible) {
+                injectBedrockCachePoints(payloadRecord, cacheRetention);
+              }
+              if (traits.omitTemperature) {
+                omitDeprecatedOpus47PayloadTemperature(payloadRecord);
+              }
             }
             return originalOnPayload?.(payload, payloadModel);
           },
@@ -449,6 +515,9 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
       }
       if (/ModelNotReadyException/i.test(errorMessage)) {
         return "overloaded";
+      }
+      if (deprecatedTemperatureValidationRe.test(errorMessage)) {
+        return "format";
       }
       return undefined;
     },

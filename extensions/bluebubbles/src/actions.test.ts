@@ -530,7 +530,15 @@ describe("bluebubblesMessageActions", () => {
         accountId: null,
       });
 
-      expect(resolveBlueBubblesMessageId).toHaveBeenCalledWith("1", { requireKnownShortId: true });
+      expect(resolveBlueBubblesMessageId).toHaveBeenCalledWith(
+        "1",
+        expect.objectContaining({
+          requireKnownShortId: true,
+          chatContext: expect.objectContaining({
+            chatGuid: "iMessage;-;+15551234567",
+          }),
+        }),
+      );
       expect(sendBlueBubblesReaction).toHaveBeenCalledWith(
         expect.objectContaining({
           messageGuid: "resolved-uuid",

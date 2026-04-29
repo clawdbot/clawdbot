@@ -393,7 +393,7 @@ function resolveEntryRunOptions(params: {
   return { maxBytes, maxChars, timeoutMs, prompt };
 }
 
-function resolveAudioRequestOverrides(config: MediaUnderstandingConfig | undefined): {
+function resolveMediaRequestOverrides(config: MediaUnderstandingConfig | undefined): {
   prompt?: string;
   language?: string;
 } {
@@ -571,6 +571,7 @@ export async function runProviderEntry(params: {
       maxBytes,
       timeoutMs,
     });
+    const requestOverrides = resolveMediaRequestOverrides(params.config);
     const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
     const imageInput = {
       buffer: media.buffer,
@@ -578,7 +579,7 @@ export async function runProviderEntry(params: {
       mime: media.mime,
       model: modelId,
       provider: providerId,
-      prompt,
+      prompt: requestOverrides.prompt ?? prompt,
       timeoutMs,
       profile: entry.profile,
       preferredProfile: entry.preferredProfile,
@@ -610,7 +611,7 @@ export async function runProviderEntry(params: {
       throw new Error(`Audio transcription provider "${providerId}" not available.`);
     }
     const transcribeAudio = provider.transcribeAudio;
-    const requestOverrides = resolveAudioRequestOverrides(params.config);
+    const requestOverrides = resolveMediaRequestOverrides(params.config);
     const media = await params.cache.getBuffer({
       attachmentIndex: params.attachmentIndex,
       maxBytes,
@@ -736,7 +737,7 @@ export async function runCliEntry(params: {
   if (!command) {
     throw new Error(`CLI entry missing command for ${capability}`);
   }
-  const requestOverrides = resolveAudioRequestOverrides(params.config);
+  const requestOverrides = resolveMediaRequestOverrides(params.config);
   const { maxBytes, maxChars, timeoutMs, prompt } = resolveEntryRunOptions({
     capability,
     entry,
