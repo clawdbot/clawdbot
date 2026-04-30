@@ -50,6 +50,43 @@ Disable all flags:
 OPENCLAW_DIAGNOSTICS=0
 ```
 
+## Timeline artifacts
+
+The `timeline` flag writes structured startup and runtime timing events for
+external QA harnesses:
+
+```bash
+OPENCLAW_DIAGNOSTICS=timeline \
+OPENCLAW_DIAGNOSTICS_TIMELINE_PATH=/tmp/openclaw-timeline.jsonl \
+openclaw gateway run
+```
+
+You can also enable it in config:
+
+```json
+{
+  "diagnostics": {
+    "flags": ["timeline"]
+  }
+}
+```
+
+The timeline file path still comes from
+`OPENCLAW_DIAGNOSTICS_TIMELINE_PATH`. When `timeline` is enabled only from
+config, the earliest config-loading spans are not emitted because OpenClaw has
+not read config yet; subsequent startup spans use the config flag.
+
+`OPENCLAW_DIAGNOSTICS=1`, `OPENCLAW_DIAGNOSTICS=all`, and
+`OPENCLAW_DIAGNOSTICS=*` also enable the timeline because they enable every
+diagnostics flag. Prefer `timeline` when you only want the JSONL timing
+artifact.
+
+Timeline records use the `openclaw.diagnostics.v1` envelope. Events can include
+process ids, phase names, span names, durations, plugin ids, dependency counts,
+event-loop delay samples, provider operation names, child-process exit state,
+and startup error names/messages. Treat timeline files as local diagnostics
+artifacts; review them before sharing outside your machine.
+
 ## Where logs go
 
 Flags emit logs into the standard diagnostics log file. By default:

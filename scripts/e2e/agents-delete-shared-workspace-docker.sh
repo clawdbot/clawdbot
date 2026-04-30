@@ -48,74 +48,9 @@ output_file="$HOME/delete.json"
 trap '\''rm -rf "$HOME"'\'' EXIT
 
 mkdir -p "$OPENCLAW_STATE_DIR" "$SHARED_WORKSPACE"
-node --input-type=module - <<'\''NODE'\''
-import fs from "node:fs";
-import path from "node:path";
-
-const stateDir = process.env.OPENCLAW_STATE_DIR;
-const sharedWorkspace = process.env.SHARED_WORKSPACE;
-if (!stateDir || !sharedWorkspace) {
-  throw new Error("missing OPENCLAW_STATE_DIR or SHARED_WORKSPACE");
-}
-fs.mkdirSync(stateDir, { recursive: true });
-fs.mkdirSync(sharedWorkspace, { recursive: true });
-fs.writeFileSync(
-  path.join(stateDir, "openclaw.json"),
-  `${JSON.stringify(
-    {
-      agents: {
-        list: [
-          { id: "main", workspace: sharedWorkspace },
-          { id: "ops", workspace: sharedWorkspace },
-        ],
-      },
-    },
-    null,
-    2,
-  )}\n`,
-);
-NODE
+node scripts/e2e/lib/fixture.mjs agents-delete-config
 
 run_openclaw agents delete ops --force --json > "$output_file"
 
-node --input-type=module - "$output_file" <<'\''NODE'\''
-import fs from "node:fs";
-import path from "node:path";
-
-const outputPath = process.argv[2];
-const raw = fs.readFileSync(outputPath, "utf8").trim();
-let parsed;
-try {
-  parsed = JSON.parse(raw);
-} catch (error) {
-  console.error("agents delete --json did not emit valid JSON:");
-  console.error(raw);
-  throw error;
-}
-
-function assert(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
-
-assert(parsed.agentId === "ops", `unexpected agentId: ${JSON.stringify(parsed.agentId)}`);
-assert(parsed.workspace === process.env.SHARED_WORKSPACE, "deleted agent workspace mismatch");
-assert(parsed.workspaceRetained === true, "shared workspace was not marked retained");
-assert(parsed.workspaceRetainedReason === "shared", "missing shared retained reason");
-assert(
-  Array.isArray(parsed.workspaceSharedWith) && parsed.workspaceSharedWith.includes("main"),
-  "missing shared-with main marker",
-);
-assert(fs.existsSync(process.env.SHARED_WORKSPACE), "shared workspace was removed");
-
-const configPath = path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json");
-const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-const remaining = config?.agents?.list ?? [];
-assert(Array.isArray(remaining), "agents list missing after delete");
-assert(!remaining.some((entry) => entry?.id === "ops"), "deleted agent remained in config");
-assert(remaining.some((entry) => entry?.id === "main"), "main agent missing after delete");
-
-console.log("agents delete shared workspace smoke ok");
-NODE
+node scripts/e2e/lib/fixture.mjs agents-delete-assert "$output_file"
 '

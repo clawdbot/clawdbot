@@ -206,6 +206,14 @@ describe("memory plugin state", () => {
     ]);
   });
 
+  it("ignores malformed prompt builder output", () => {
+    registerMemoryPromptSection(() => ["primary", 1, undefined] as never);
+    registerMemoryPromptSupplement("async-helper", () => Promise.resolve(["async"]) as never);
+    registerMemoryPromptSupplement("valid-helper", () => ["valid", false] as never);
+
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["primary", "valid"]);
+  });
+
   it("stores memory corpus supplements", async () => {
     const supplement = {
       search: async () => [{ corpus: "wiki", path: "sources/alpha.md", score: 1, snippet: "x" }],

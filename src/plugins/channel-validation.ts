@@ -50,6 +50,19 @@ export function normalizeRegisteredChannelPlugin(params: {
     });
     return null;
   }
+  if (
+    typeof params.plugin.config?.listAccountIds !== "function" ||
+    typeof params.plugin.config?.resolveAccount !== "function"
+  ) {
+    pushPluginValidationDiagnostic({
+      level: "error",
+      pluginId: params.pluginId,
+      source: params.source,
+      message: `channel "${id}" registration missing required config helpers`,
+      pushDiagnostic: params.pushDiagnostic,
+    });
+    return null;
+  }
 
   const rawMeta = params.plugin.meta as Partial<ChannelMeta> | undefined;
   const rawMetaId = normalizeOptionalString(rawMeta?.id);

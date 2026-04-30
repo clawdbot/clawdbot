@@ -2,13 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import {
-  __setModelCatalogImportForTest,
-  resetModelCatalogCacheForTest,
-} from "../agents/model-catalog.js";
-import { buildModelsProviderData } from "../auto-reply/reply/commands-models.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { drainSystemEvents } from "../infra/system-events.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -25,7 +19,7 @@ import {
   rpcReq,
   startServerWithClient,
   testState,
-  withGatewayServer,
+  withGatewayServer as withMinimalGatewayServer,
 } from "./test-helpers.js";
 
 const hoisted = vi.hoisted(() => {
@@ -165,10 +159,12 @@ const hoisted = vi.hoisted(() => {
     reloaderStop,
     getOnHotReload: () => onHotReload,
     getOnRestart: () => onRestart,
+    resetReloadCallbacks: () => {
+      onHotReload = null;
+      onRestart = null;
+    },
   };
 });
-
-type PiDiscoveryRuntimeModule = typeof import("../agents/pi-model-discovery-runtime.js");
 
 vi.mock("../cron/service.js", () => ({
   CronService: hoisted.CronService,
@@ -310,6 +306,7 @@ describe("gateway hot reload", () => {
     hoisted.resetModelCatalogCache.mockReset();
     hoisted.disposeAllSessionMcpRuntimes.mockReset();
     hoisted.disposeAllSessionMcpRuntimes.mockResolvedValue(undefined);
+    hoisted.resetReloadCallbacks();
   });
 
   afterEach(() => {
@@ -430,10 +427,10 @@ describe("gateway hot reload", () => {
   }
 
   async function withNonMinimalGatewayServer(
-    fn: Parameters<typeof withGatewayServer>[0],
-  ): ReturnType<typeof withGatewayServer> {
+    fn: Parameters<typeof withMinimalGatewayServer>[0],
+  ): ReturnType<typeof withMinimalGatewayServer> {
     return await withEnvAsync({ OPENCLAW_TEST_MINIMAL_GATEWAY: undefined }, async () =>
-      withGatewayServer(fn),
+      withMinimalGatewayServer(fn),
     );
   }
 
@@ -819,7 +816,7 @@ describe("gateway hot reload", () => {
   });
 
   it("clears the model catalog cache on model-related hot reloads", async () => {
-    await withGatewayServer(async () => {
+    await withNonMinimalGatewayServer(async () => {
       const onHotReload = hoisted.getOnHotReload();
       expect(onHotReload).toBeTypeOf("function");
 
@@ -852,7 +849,7 @@ describe("gateway hot reload", () => {
   });
 
   it("disposes cached MCP runtimes on MCP config hot reloads", async () => {
-    await withGatewayServer(async () => {
+    await withNonMinimalGatewayServer(async () => {
       const onHotReload = hoisted.getOnHotReload();
       expect(onHotReload).toBeTypeOf("function");
 
@@ -880,98 +877,6 @@ describe("gateway hot reload", () => {
 
       expect(hoisted.disposeAllSessionMcpRuntimes).toHaveBeenCalledTimes(1);
     });
-  });
-
-  it("makes newly available catalog models visible in-process after hot reload", async () => {
-    type TestRegistryEntry = { provider: string; id: string; name: string };
-    let registryEntries: TestRegistryEntry[] = [
-      { provider: "ollama", id: "existing", name: "Existing" },
-    ];
-    __setModelCatalogImportForTest(
-      async () =>
-        ({
-          discoverAuthStorage: () => ({}),
-          ModelRegistry: class {
-            getAll() {
-              return registryEntries;
-            }
-          },
-        }) as unknown as PiDiscoveryRuntimeModule,
-    );
-    resetModelCatalogCacheForTest();
-
-    try {
-      await withGatewayServer(async () => {
-        const onHotReload = hoisted.getOnHotReload();
-        expect(onHotReload).toBeTypeOf("function");
-
-        const baseConfig: OpenClawConfig = {
-          agents: {
-            defaults: {
-              model: {
-                primary: "ollama/existing",
-              },
-            },
-          },
-          models: {
-            providers: {
-              ollama: {
-                baseUrl: "http://127.0.0.1:11434",
-                api: "ollama",
-                apiKey: "ollama-local",
-                models: [],
-              },
-            },
-          },
-        };
-
-        const before = await buildModelsProviderData(baseConfig);
-        expect([...(before.byProvider.get("ollama") ?? new Set()).values()]).toEqual(["existing"]);
-
-        registryEntries = [
-          ...registryEntries,
-          { provider: "ollama", id: "glm-5.1:cloud", name: "GLM 5.1 Cloud" },
-        ];
-
-        const nextConfig = structuredClone(baseConfig);
-        await onHotReload?.(
-          {
-            changedPaths: ["models.providers.ollama.models"],
-            restartGateway: false,
-            restartReasons: [],
-            hotReasons: ["models.providers.ollama.models"],
-            reloadHooks: false,
-            restartGmailWatcher: false,
-            restartCron: false,
-            restartHeartbeat: false,
-            restartChannels: new Set(),
-            noopPaths: [],
-          },
-          nextConfig,
-        );
-
-        __setModelCatalogImportForTest(
-          async () =>
-            ({
-              discoverAuthStorage: () => ({}),
-              ModelRegistry: class {
-                getAll() {
-                  return registryEntries;
-                }
-              },
-            }) as unknown as PiDiscoveryRuntimeModule,
-        );
-        const after = await buildModelsProviderData(nextConfig);
-        expect([...(after.byProvider.get("ollama") ?? new Set()).values()]).toEqual([
-          "existing",
-          "glm-5.1:cloud",
-        ]);
-        expect(hoisted.resetModelCatalogCache).toHaveBeenCalledTimes(1);
-      });
-    } finally {
-      __setModelCatalogImportForTest();
-      resetModelCatalogCacheForTest();
-    }
   });
 
   it("serves secrets.reload immediately after startup without race failures", async () => {

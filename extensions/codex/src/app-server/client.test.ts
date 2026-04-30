@@ -327,6 +327,44 @@ describe("CodexAppServerClient", () => {
     });
   });
 
+  it("fails closed when a dynamic tool server request handler hangs", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    harness.client.addRequestHandler((request) => {
+      if (request.method === "item/tool/call") {
+        return new Promise<never>(() => undefined);
+      }
+      return undefined;
+    });
+
+    harness.send({ id: "srv-timeout", method: "item/tool/call", params: { tool: "message" } });
+    await vi.advanceTimersByTimeAsync(__testing.CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS);
+    await vi.waitFor(() => expect(harness.writes.length).toBe(1));
+
+    expect(JSON.parse(harness.writes[0] ?? "{}")).toEqual({
+      id: "srv-timeout",
+      result: {
+        success: false,
+        contentItems: [
+          {
+            type: "inputText",
+            text: `OpenClaw dynamic tool call timed out after ${__testing.CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS}ms before sending a response to Codex.`,
+          },
+        ],
+      },
+    });
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server server request timed out",
+      expect.objectContaining({
+        id: "srv-timeout",
+        method: "item/tool/call",
+        timeoutMs: __testing.CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
+      }),
+    );
+  });
+
   it("fails closed for unhandled native app-server approvals", async () => {
     const harness = createClientHarness();
     clients.push(harness.client);

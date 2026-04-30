@@ -143,7 +143,7 @@ jobs:
   run_mock_parity:
     name: Run QA Lab parity gate
     needs: [validate_selected_ref]
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 30
     env:
       QA_PARITY_CONCURRENCY: "1"
@@ -215,7 +215,7 @@ jobs:
     name: Run Matrix live QA lane
     needs: [authorize_actor, validate_selected_ref]
     if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.matrix_profile == 'all') }}
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     environment: qa-live-shared
     steps:
@@ -290,7 +290,7 @@ jobs:
     name: Run Matrix live QA lane (${{ matrix.profile }})
     needs: [authorize_actor, validate_selected_ref]
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.matrix_profile == 'all' }}
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     environment: qa-live-shared
     strategy:
@@ -372,7 +372,7 @@ jobs:
   run_live_telegram:
     name: Run Telegram live QA lane with Convex leases
     needs: [authorize_actor, validate_selected_ref]
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     environment: qa-live-shared
     steps:
@@ -465,7 +465,7 @@ jobs:
   run_live_discord:
     name: Run Discord live QA lane with Convex leases
     needs: [authorize_actor, validate_selected_ref]
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     environment: qa-live-shared
     steps:

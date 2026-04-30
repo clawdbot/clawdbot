@@ -225,6 +225,9 @@ export const AgentDefaultsSchema = z
       ])
       .optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),
+    reasoningDefault: z
+      .union([z.literal("off"), z.literal("on"), z.literal("stream")])
+      .optional(),
     elevatedDefault: z
       .union([z.literal("off"), z.literal("on"), z.literal("ask"), z.literal("full")])
       .optional(),

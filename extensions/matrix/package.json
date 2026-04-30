@@ -11,7 +11,7 @@
     "markdown-it": "14.1.1",
     "matrix-js-sdk": "41.4.0-rc.0",
     "music-metadata": "^11.12.3",
-    "typebox": "1.1.33"
+    "typebox": "1.1.34"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

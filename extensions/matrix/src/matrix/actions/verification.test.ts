@@ -38,10 +38,12 @@ let getMatrixVerificationStatus: typeof import("./verification.js").getMatrixVer
 let restoreMatrixRoomKeyBackup: typeof import("./verification.js").restoreMatrixRoomKeyBackup;
 let runMatrixSelfVerification: typeof import("./verification.js").runMatrixSelfVerification;
 let startMatrixVerification: typeof import("./verification.js").startMatrixVerification;
+let confirmMatrixVerificationSas: typeof import("./verification.js").confirmMatrixVerificationSas;
 
 describe("matrix verification actions", () => {
   beforeAll(async () => {
     ({
+      confirmMatrixVerificationSas,
       getMatrixEncryptionStatus,
       getMatrixRoomKeyBackupStatus,
       getMatrixVerificationStatus,
@@ -1000,5 +1002,75 @@ describe("matrix verification actions", () => {
       code: "m.user",
       reason: "OpenClaw self-verification did not complete",
     });
+  });
+
+  it("confirmMatrixVerificationSas calls trustOwnIdentityAfterSelfVerification on a self-verification", async () => {
+    const crypto = {
+      confirmVerificationSas: vi.fn(async () => ({
+        completed: true,
+        hasSas: true,
+        id: "verification-self",
+        isSelfVerification: true,
+        phaseName: "done",
+        transactionId: "tx-self",
+      })),
+    };
+    const trustOwnIdentityAfterSelfVerification = vi.fn(async () => {});
+    withStartedActionClientMock.mockImplementation(async (_opts, run) => {
+      return await run({ crypto, trustOwnIdentityAfterSelfVerification });
+    });
+
+    const summary = await confirmMatrixVerificationSas("verification-self");
+
+    expect(crypto.confirmVerificationSas).toHaveBeenCalledWith("verification-self");
+    expect(trustOwnIdentityAfterSelfVerification).toHaveBeenCalledTimes(1);
+    expect(summary.isSelfVerification).toBe(true);
+  });
+
+  it("confirmMatrixVerificationSas does not call trustOwnIdentityAfterSelfVerification on a non-self verification", async () => {
+    const crypto = {
+      confirmVerificationSas: vi.fn(async () => ({
+        completed: true,
+        hasSas: true,
+        id: "verification-remote",
+        isSelfVerification: false,
+        phaseName: "done",
+        transactionId: "tx-remote",
+      })),
+    };
+    const trustOwnIdentityAfterSelfVerification = vi.fn(async () => {});
+    withStartedActionClientMock.mockImplementation(async (_opts, run) => {
+      return await run({ crypto, trustOwnIdentityAfterSelfVerification });
+    });
+
+    const summary = await confirmMatrixVerificationSas("verification-remote");
+
+    expect(crypto.confirmVerificationSas).toHaveBeenCalledWith("verification-remote");
+    expect(trustOwnIdentityAfterSelfVerification).not.toHaveBeenCalled();
+    expect(summary.isSelfVerification).toBe(false);
+  });
+
+  it("confirmMatrixVerificationSas does not trust own identity when self-verification failed", async () => {
+    const crypto = {
+      confirmVerificationSas: vi.fn(async () => ({
+        completed: false,
+        error: "verifier rejected mid-protocol",
+        hasSas: true,
+        id: "verification-self",
+        isSelfVerification: true,
+        phaseName: "started",
+        transactionId: "tx-self",
+      })),
+    };
+    const trustOwnIdentityAfterSelfVerification = vi.fn(async () => {});
+    withStartedActionClientMock.mockImplementation(async (_opts, run) => {
+      return await run({ crypto, trustOwnIdentityAfterSelfVerification });
+    });
+
+    const summary = await confirmMatrixVerificationSas("verification-self");
+
+    expect(crypto.confirmVerificationSas).toHaveBeenCalledWith("verification-self");
+    expect(trustOwnIdentityAfterSelfVerification).not.toHaveBeenCalled();
+    expect(summary.error).toMatch(/verifier rejected mid-protocol/);
   });
 });

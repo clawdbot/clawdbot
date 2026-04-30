@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
@@ -10,6 +10,7 @@ import {
   writeFakeClaudeCli,
   writeFakeClaudeLiveCli,
 } from "./bundle-mcp.test-harness.js";
+import { __testing as cliBackendsTesting } from "./cli-backends.js";
 
 vi.mock("./cli-runner/helpers.js", async () => {
   const original =
@@ -28,6 +29,43 @@ vi.mock("./cli-runner/helpers.js", async () => {
 // also reaches this test after several gateway/plugin restart exercises.
 const E2E_TIMEOUT_MS = 90_000;
 
+function installTestClaudeBackend(params: { commandPath: string; liveSession?: "claude-stdio" }) {
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [],
+    resolvePluginSetupCliBackend: ({ backend }) =>
+      backend === "claude-cli"
+        ? {
+            pluginId: "anthropic",
+            backend: {
+              id: "claude-cli",
+              bundleMcp: true,
+              bundleMcpMode: "claude-config-file",
+              config: {
+                command: "node",
+                args: [params.commandPath],
+                input: "stdin",
+                output: "jsonl",
+                clearEnv: [],
+                ...(params.liveSession ? { liveSession: params.liveSession } : {}),
+              },
+            },
+          }
+        : undefined,
+  });
+}
+
+async function resetBundleMcpPluginState() {
+  const { resetPluginLoaderTestStateForTest } = await import("../plugins/loader.test-fixtures.js");
+  const { clearPluginSetupRegistryCache } = await import("../plugins/setup-registry.js");
+  resetPluginLoaderTestStateForTest();
+  clearPluginSetupRegistryCache();
+}
+
+afterEach(async () => {
+  cliBackendsTesting.resetDepsForTest();
+  await resetBundleMcpPluginState();
+});
+
 describe("runCliAgent bundle MCP e2e", () => {
   it(
     "routes enabled bundle MCP config into the claude-cli backend and executes the tool",
@@ -35,9 +73,20 @@ describe("runCliAgent bundle MCP e2e", () => {
     async () => {
       const { runCliAgent } = await import("./cli-runner.js");
       const { resetGlobalHookRunner } = await import("../plugins/hook-runner-global.js");
-      const envSnapshot = captureEnv(["HOME"]);
+      await resetBundleMcpPluginState();
+      const envSnapshot = captureEnv([
+        "HOME",
+        "USERPROFILE",
+        "OPENCLAW_HOME",
+        "OPENCLAW_STATE_DIR",
+        "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY",
+      ]);
       const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-bundle-mcp-"));
       process.env.HOME = tempHome;
+      process.env.USERPROFILE = tempHome;
+      delete process.env.OPENCLAW_HOME;
+      delete process.env.OPENCLAW_STATE_DIR;
+      process.env.OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY = "1";
       resetGlobalHookRunner();
 
       const workspaceDir = path.join(tempHome, "workspace");
@@ -50,21 +99,16 @@ describe("runCliAgent bundle MCP e2e", () => {
       await writeBundleProbeMcpServer(serverScriptPath);
       await writeFakeClaudeCli(fakeClaudePath);
       await writeClaudeBundle({ pluginRoot, serverScriptPath });
+      installTestClaudeBackend({ commandPath: fakeClaudePath });
 
       const config: OpenClawConfig = {
         agents: {
           defaults: {
             workspace: workspaceDir,
-            cliBackends: {
-              "claude-cli": {
-                command: "node",
-                args: [fakeClaudePath],
-                clearEnv: [],
-              },
-            },
           },
         },
         plugins: {
+          load: { paths: [pluginRoot] },
           entries: {
             "bundle-probe": { enabled: true },
           },
@@ -102,9 +146,20 @@ describe("runCliAgent bundle MCP e2e", () => {
       const { closeMcpLoopbackServer, getActiveMcpLoopbackRuntime } =
         await import("../gateway/mcp-http.js");
       const { resetGlobalHookRunner } = await import("../plugins/hook-runner-global.js");
-      const envSnapshot = captureEnv(["HOME"]);
+      await resetBundleMcpPluginState();
+      const envSnapshot = captureEnv([
+        "HOME",
+        "USERPROFILE",
+        "OPENCLAW_HOME",
+        "OPENCLAW_STATE_DIR",
+        "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY",
+      ]);
       const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-live-cleanup-"));
       process.env.HOME = tempHome;
+      process.env.USERPROFILE = tempHome;
+      delete process.env.OPENCLAW_HOME;
+      delete process.env.OPENCLAW_STATE_DIR;
+      process.env.OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY = "1";
       resetGlobalHookRunner();
       await closeMcpLoopbackServer();
 
@@ -119,22 +174,16 @@ describe("runCliAgent bundle MCP e2e", () => {
       await writeBundleProbeMcpServer(serverScriptPath);
       await writeFakeClaudeLiveCli({ filePath: fakeClaudePath, pidPath: fakeClaudePidPath });
       await writeClaudeBundle({ pluginRoot, serverScriptPath });
+      installTestClaudeBackend({ commandPath: fakeClaudePath, liveSession: "claude-stdio" });
 
       const config: OpenClawConfig = {
         agents: {
           defaults: {
             workspace: workspaceDir,
-            cliBackends: {
-              "claude-cli": {
-                command: "node",
-                args: [fakeClaudePath],
-                clearEnv: [],
-                liveSession: "claude-stdio",
-              },
-            },
           },
         },
         plugins: {
+          load: { paths: [pluginRoot] },
           entries: {
             "bundle-probe": { enabled: true },
           },

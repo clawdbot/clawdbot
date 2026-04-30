@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
-import type { GatewayPlugin } from "@buape/carbon/gateway";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import type { GatewayPlugin } from "../internal/gateway.js";
 import type { WaitForDiscordGatewayStopParams } from "../monitor.gateway.js";
 import {
   DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT,
@@ -519,7 +519,7 @@ describe("runDiscordGatewayLifecycle", () => {
     }
   });
 
-  it("pushes disconnected status when Carbon closes after startup", async () => {
+  it("pushes disconnected status when the gateway closes after startup", async () => {
     const { emitter, gateway } = createGatewayHarness();
     gateway.isConnected = true;
     getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
@@ -539,7 +539,7 @@ describe("runDiscordGatewayLifecycle", () => {
     );
   });
 
-  it("pushes disconnected status when Carbon schedules a reconnect", async () => {
+  it("pushes disconnected status when the gateway schedules a reconnect", async () => {
     const { emitter, gateway } = createGatewayHarness();
     gateway.isConnected = true;
     getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);

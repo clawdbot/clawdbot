@@ -56,6 +56,7 @@ describe("startGatewayDiscovery", () => {
   const prevEnv = { ...process.env };
 
   afterEach(() => {
+    vi.useRealTimers();
     for (const key of Object.keys(process.env)) {
       if (!(key in prevEnv)) {
         delete process.env[key];
@@ -118,6 +119,42 @@ describe("startGatewayDiscovery", () => {
 
     await result.bonjourStop?.();
     expect(stopped).toEqual(["peer", "bonjour"]);
+  });
+
+  it("continues startup when a local discovery service never settles", async () => {
+    vi.useFakeTimers();
+    process.env.NODE_ENV = "development";
+    delete process.env.VITEST;
+    process.env.OPENCLAW_GATEWAY_DISCOVERY_ADVERTISE_TIMEOUT_MS = "10";
+
+    const service = makeDiscoveryService({
+      id: "stuck-discovery",
+      advertise: vi.fn(() => new Promise<void>(() => {})),
+    });
+    const logs = makeLogs();
+
+    const resultPromise = startGatewayDiscovery({
+      machineDisplayName: "Lab Mac",
+      port: 18789,
+      wideAreaDiscoveryEnabled: false,
+      tailscaleMode: "off",
+      mdnsMode: "full",
+      gatewayDiscoveryServices: [service],
+      logDiscovery: logs,
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+    const result = await resultPromise;
+
+    expect(result.bonjourStop).toBeTypeOf("function");
+    await result.bonjourStop?.();
+    expect(logs.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "gateway discovery service timed out after 10ms (stuck-discovery, plugin=stuck-discovery)",
+      ),
+    );
+
+    vi.useRealTimers();
   });
 
   it("skips local discovery services when mDNS mode is off", async () => {

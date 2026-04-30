@@ -166,7 +166,7 @@ function buildLiveCases(params: {
       providerId: params.providerId,
       modelRef: params.modelRef,
       prompt: editPrompt,
-      resolution: "2K",
+      resolution: "1K",
       inputImages: [
         {
           buffer: createEditReferencePng(),

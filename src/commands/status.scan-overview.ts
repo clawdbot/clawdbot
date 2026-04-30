@@ -135,6 +135,8 @@ export async function collectStatusScanOverview(params: {
   allowMissingConfigFastPath?: boolean;
   resolveHasConfiguredChannels?: (cfg: OpenClawConfig, sourceConfig: OpenClawConfig) => boolean;
   includeChannelsData?: boolean;
+  includeLiveChannelStatus?: boolean;
+  includeChannelSetupRuntimeFallback?: boolean;
   useGatewayCallOverridesForChannelsStatus?: boolean;
   progress?: {
     setLabel(label: string): void;
@@ -227,18 +229,21 @@ export async function collectStatusScanOverview(params: {
 
   const tailscaleHttpsUrl = await bootstrap.resolveTailscaleHttpsUrl();
   const includeChannelsData = params.includeChannelsData !== false;
+  const includeLiveChannelStatus = params.includeLiveChannelStatus !== false;
   const { channelsStatus, channelIssues, channels } = includeChannelsData
     ? await (async () => {
         if (params.labels?.queryingChannelStatus) {
           params.progress?.setLabel(params.labels.queryingChannelStatus);
         }
-        const channelsStatus = await resolveStatusChannelsStatus({
-          cfg,
-          gatewayReachable: gatewaySnapshot.gatewayReachable,
-          opts: params.opts,
-          gatewayCallOverrides: gatewaySnapshot.gatewayCallOverrides,
-          useGatewayCallOverrides: params.useGatewayCallOverridesForChannelsStatus,
-        });
+        const channelsStatus = includeLiveChannelStatus
+          ? await resolveStatusChannelsStatus({
+              cfg,
+              gatewayReachable: gatewaySnapshot.gatewayReachable,
+              opts: params.opts,
+              gatewayCallOverrides: gatewaySnapshot.gatewayCallOverrides,
+              useGatewayCallOverrides: params.useGatewayCallOverridesForChannelsStatus,
+            })
+          : null;
         params.progress?.tick();
         const { collectChannelStatusIssues, buildChannelsTable } =
           await loadStatusScanRuntimeModule().then(({ statusScanRuntime }) => statusScanRuntime);
@@ -249,6 +254,7 @@ export async function collectStatusScanOverview(params: {
         const channels = await buildChannelsTable(cfg, {
           showSecrets: params.showSecrets,
           sourceConfig,
+          includeSetupRuntimeFallback: params.includeChannelSetupRuntimeFallback !== false,
         });
         params.progress?.tick();
         return { channelsStatus, channelIssues, channels };

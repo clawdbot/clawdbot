@@ -51,6 +51,19 @@ function isNonInteractiveShell(shellPath: string): boolean {
   return NON_INTERACTIVE_SHELLS.has(path.basename(shellPath));
 }
 
+function getPosixShellArgs(shellPath: string): string[] {
+  switch (path.basename(shellPath)) {
+    case "bash":
+      return ["--noprofile", "--norc", "-c"];
+    case "zsh":
+      return ["-f", "-c"];
+    case "fish":
+      return ["--no-config", "-c"];
+    default:
+      return ["-c"];
+  }
+}
+
 export function getShellConfig(): { shell: string; args: string[] } {
   if (process.platform === "win32") {
     // Use PowerShell instead of cmd.exe on Windows.
@@ -71,20 +84,20 @@ export function getShellConfig(): { shell: string; args: string[] } {
   if (shellName === "fish") {
     const bash = resolveShellFromPath("bash");
     if (bash) {
-      return { shell: bash, args: ["-c"] };
+      return { shell: bash, args: getPosixShellArgs(bash) };
     }
     const sh = resolveShellFromPath("sh");
     if (sh) {
-      return { shell: sh, args: ["-c"] };
+      return { shell: sh, args: getPosixShellArgs(sh) };
     }
   }
   if (envShell) {
-    return { shell: envShell, args: ["-c"] };
+    return { shell: envShell, args: getPosixShellArgs(envShell) };
   }
   // Placeholder SHELL (or unset): prefer a resolved sh/bash on PATH so we do not
   // re-invoke the placeholder and get a spurious exitCode=1.
-  const sh = resolveShellFromPath("sh") ?? resolveShellFromPath("bash");
-  return { shell: sh ?? "sh", args: ["-c"] };
+  const shell = resolveShellFromPath("sh") ?? resolveShellFromPath("bash") ?? "sh";
+  return { shell, args: getPosixShellArgs(shell) };
 }
 
 export function resolveShellFromPath(name: string): string | undefined {

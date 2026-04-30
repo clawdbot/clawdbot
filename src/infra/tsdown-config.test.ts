@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import tsdownConfig from "../../tsdown.config.ts";
@@ -41,6 +42,13 @@ function entryKeys(config: TsdownConfigEntry): string[] {
   return Object.keys(config.entry);
 }
 
+function entrySources(config: TsdownConfigEntry): Record<string, string> {
+  if (!config.entry || Array.isArray(config.entry)) {
+    return {};
+  }
+  return config.entry;
+}
+
 function hasBundledPluginRuntimeEntry(config: TsdownConfigEntry): boolean {
   const keys = entryKeys(config);
   return keys.includes("index") || keys.includes("runtime-api");
@@ -56,6 +64,10 @@ function unifiedDistGraph(): TsdownConfigEntry | undefined {
   );
 }
 
+function readGatewayRunLoopSource(): string {
+  return readFileSync(new URL("../cli/gateway-cli/run-loop.ts", import.meta.url), "utf8");
+}
+
 describe("tsdown config", () => {
   it("keeps core, plugin runtime, plugin-sdk, bundled root plugins, and bundled hooks in one dist graph", () => {
     const distGraph = unifiedDistGraph();
@@ -66,6 +78,7 @@ describe("tsdown config", () => {
         "agents/auth-profiles.runtime",
         "agents/model-catalog.runtime",
         "agents/models-config.runtime",
+        "cli/gateway-lifecycle.runtime",
         "plugins/memory-state",
         "subagent-registry.runtime",
         "task-registry-control.runtime",
@@ -83,6 +96,24 @@ describe("tsdown config", () => {
         "bundled/boot-md/handler",
       ]),
     );
+  });
+
+  it("keeps gateway lifecycle lazy runtime behind one stable dist entry", () => {
+    const distGraph = unifiedDistGraph();
+
+    expect(entrySources(distGraph as TsdownConfigEntry)).toEqual(
+      expect.objectContaining({
+        "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
+      }),
+    );
+  });
+
+  it("routes gateway run-loop lifecycle imports through the stable runtime boundary", () => {
+    const importSpecifiers = [
+      ...readGatewayRunLoopSource().matchAll(/import\(["']([^"']+)["']\)/gu),
+    ].map((match) => match[1]);
+
+    expect(new Set(importSpecifiers)).toEqual(new Set(["./lifecycle.runtime.js"]));
   });
 
   it("emits staged bundled plugins as separate extension graphs", () => {

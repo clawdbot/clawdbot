@@ -97,6 +97,7 @@ export async function applyInlineDirectiveOverrides(params: {
   cfg: OpenClawConfig;
   agentId: string;
   agentDir: string;
+  workspaceDir: string;
   agentCfg: AgentDefaults;
   agentEntry?: AgentEntry;
   sessionEntry: SessionEntry;
@@ -131,6 +132,7 @@ export async function applyInlineDirectiveOverrides(params: {
     cfg,
     agentId,
     agentDir,
+    workspaceDir,
     agentCfg,
     agentEntry,
     sessionEntry,
@@ -342,6 +344,7 @@ export async function applyInlineDirectiveOverrides(params: {
       surface: ctx.Surface,
       gatewayClientScopes: ctx.GatewayClientScopes,
       senderIsOwner: command.senderIsOwner,
+      workspaceDir,
     });
     let statusReply: ReplyPayload | undefined;
     if (directives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender) {
@@ -358,6 +361,7 @@ export async function applyInlineDirectiveOverrides(params: {
         provider,
         model,
         contextTokens,
+        workspaceDir,
         resolvedThinkLevel: resolvedDefaultThinkLevel,
         resolvedVerboseLevel: currentVerboseLevel ?? "off",
         resolvedReasoningLevel: currentReasoningLevel ?? "off",
@@ -386,6 +390,7 @@ export async function applyInlineDirectiveOverrides(params: {
       commandAuthorized: command.isAuthorizedSender,
       senderIsOwner: command.senderIsOwner,
       ctx,
+      workspaceDir,
       cfg,
       agentId,
       isGroup,

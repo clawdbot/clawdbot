@@ -1988,6 +1988,7 @@ export function createConfigIO(
         sourceConfig: snapshot.resolved,
         nextConfig: cfg,
         rootAuthoredConfig: snapshot.parsed,
+        unsetPaths,
       });
       try {
         const resolvedIncludes = resolveConfigIncludes(snapshot.parsed, configPath, {

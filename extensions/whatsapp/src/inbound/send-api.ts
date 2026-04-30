@@ -1,11 +1,17 @@
 import type {
   AnyMessageContent,
   MiscMessageGenerationOptions,
+  WAMessage,
   WAPresence,
 } from "@whiskeysockets/baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { buildQuotedMessageOptions } from "../quoted-message.js";
 import { toWhatsappJid } from "../text-runtime.js";
+import {
+  combineWhatsAppSendResults,
+  normalizeWhatsAppSendResult,
+  type WhatsAppSendResult,
+} from "./send-result.js";
 import type { ActiveWebSendOptions } from "./types.js";
 
 function recordWhatsAppOutbound(accountId: string) {
@@ -16,19 +22,13 @@ function recordWhatsAppOutbound(accountId: string) {
   });
 }
 
-function resolveOutboundMessageId(result: unknown): string {
-  return typeof result === "object" && result && "key" in result
-    ? ((result as { key?: { id?: string } }).key?.id ?? "unknown")
-    : "unknown";
-}
-
 export function createWebSendApi(params: {
   sock: {
     sendMessage: (
       jid: string,
       content: AnyMessageContent,
       options?: MiscMessageGenerationOptions,
-    ) => Promise<unknown>;
+    ) => Promise<WAMessage | undefined>;
     sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
   };
   defaultAccountId: string;
@@ -40,7 +40,7 @@ export function createWebSendApi(params: {
       mediaBuffer?: Buffer,
       mediaType?: string,
       sendOptions?: ActiveWebSendOptions,
-    ): Promise<{ messageId: string }> => {
+    ): Promise<WhatsAppSendResult> => {
       const jid = toWhatsappJid(to);
       let payload: AnyMessageContent;
       if (mediaBuffer) {
@@ -85,23 +85,22 @@ export function createWebSendApi(params: {
       const result = quotedOpts
         ? await params.sock.sendMessage(jid, payload, quotedOpts)
         : await params.sock.sendMessage(jid, payload);
+      const results = [normalizeWhatsAppSendResult(result, mediaBuffer ? "media" : "text")];
       if (mediaBuffer && mediaType?.startsWith("audio/") && text.trim()) {
         const textPayload: AnyMessageContent = { text };
-        if (quotedOpts) {
-          await params.sock.sendMessage(jid, textPayload, quotedOpts);
-        } else {
-          await params.sock.sendMessage(jid, textPayload);
-        }
+        const textResult = quotedOpts
+          ? await params.sock.sendMessage(jid, textPayload, quotedOpts)
+          : await params.sock.sendMessage(jid, textPayload);
+        results.push(normalizeWhatsAppSendResult(textResult, "text"));
       }
       const accountId = sendOptions?.accountId ?? params.defaultAccountId;
       recordWhatsAppOutbound(accountId);
-      const messageId = resolveOutboundMessageId(result);
-      return { messageId };
+      return combineWhatsAppSendResults(mediaBuffer ? "media" : "text", results);
     },
     sendPoll: async (
       to: string,
       poll: { question: string; options: string[]; maxSelections?: number },
-    ): Promise<{ messageId: string }> => {
+    ): Promise<WhatsAppSendResult> => {
       const jid = toWhatsappJid(to);
       const result = await params.sock.sendMessage(jid, {
         poll: {
@@ -111,8 +110,7 @@ export function createWebSendApi(params: {
         },
       } as AnyMessageContent);
       recordWhatsAppOutbound(params.defaultAccountId);
-      const messageId = resolveOutboundMessageId(result);
-      return { messageId };
+      return normalizeWhatsAppSendResult(result, "poll");
     },
     sendReaction: async (
       chatJid: string,
@@ -120,9 +118,9 @@ export function createWebSendApi(params: {
       emoji: string,
       fromMe: boolean,
       participant?: string,
-    ): Promise<void> => {
+    ): Promise<WhatsAppSendResult> => {
       const jid = toWhatsappJid(chatJid);
-      await params.sock.sendMessage(jid, {
+      const result = await params.sock.sendMessage(jid, {
         react: {
           text: emoji,
           key: {
@@ -133,6 +131,7 @@ export function createWebSendApi(params: {
           },
         },
       } as AnyMessageContent);
+      return normalizeWhatsAppSendResult(result, "reaction");
     },
     sendComposingTo: async (to: string): Promise<void> => {
       const jid = toWhatsappJid(to);

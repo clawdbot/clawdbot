@@ -74,6 +74,10 @@ Truncate output to this many characters.
         maxRedirects: 3,
         readability: true, // use Readability extraction
         userAgent: "Mozilla/5.0 ...", // override User-Agent
+        ssrfPolicy: {
+          allowRfc2544BenchmarkRange: true, // opt-in for trusted fake-IP proxies using 198.18.0.0/15
+          allowIpv6UniqueLocalRange: true, // opt-in for trusted fake-IP proxies using fc00::/7
+        },
       },
     },
   },
@@ -140,6 +144,10 @@ Current runtime behavior:
 - Response body is capped at `maxResponseBytes` before parsing; oversized
   responses are truncated with a warning
 - Private/internal hostnames are blocked
+- `tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange` and
+  `tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange` are narrow opt-ins
+  for trusted fake-IP proxy stacks; leave them unset unless your proxy owns
+  those synthetic ranges and enforces its own destination policy
 - Redirects are checked and limited by `maxRedirects`
 - `web_fetch` is best-effort -- some sites need the [Web Browser](/tools/browser)
 

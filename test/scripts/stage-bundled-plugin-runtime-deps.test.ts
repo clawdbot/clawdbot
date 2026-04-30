@@ -574,6 +574,55 @@ describe("stageBundledPluginRuntimeDeps", () => {
     ).toBe("module.exports = 'second';\n");
   });
 
+  it("restages when plugin-local installed runtime dependency contents change", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { direct: "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const rootDirectDir = path.join(repoRoot, "node_modules", "direct");
+    const sourcePluginDir = path.join(repoRoot, "extensions", "fixture-plugin");
+    const pluginDirectDir = path.join(sourcePluginDir, "node_modules", "direct");
+    fs.mkdirSync(rootDirectDir, { recursive: true });
+    fs.mkdirSync(pluginDirectDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sourcePluginDir, "package.json"),
+      '{ "name": "@openclaw/fixture-plugin", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(rootDirectDir, "package.json"),
+      '{ "name": "direct", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(rootDirectDir, "index.js"), "module.exports = 'root';\n", "utf8");
+    fs.writeFileSync(
+      path.join(pluginDirectDir, "package.json"),
+      '{ "name": "direct", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(pluginDirectDir, "index.js"), "module.exports = 'first';\n", "utf8");
+
+    stageBundledPluginRuntimeDeps({ cwd: repoRoot });
+    expect(
+      fs.readFileSync(path.join(pluginDir, "node_modules", "direct", "index.js"), "utf8"),
+    ).toBe("module.exports = 'first';\n");
+
+    fs.writeFileSync(
+      path.join(pluginDirectDir, "index.js"),
+      "module.exports = 'second';\n",
+      "utf8",
+    );
+    stageBundledPluginRuntimeDeps({ cwd: repoRoot });
+
+    expect(
+      fs.readFileSync(path.join(pluginDir, "node_modules", "direct", "index.js"), "utf8"),
+    ).toBe("module.exports = 'second';\n");
+  });
+
   it("fingerprints regular files when readdir reports symlink-like entries", () => {
     const { pluginDir, repoRoot } = createBundledPluginFixture({
       packageJson: {

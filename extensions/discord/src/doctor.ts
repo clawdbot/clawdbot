@@ -300,7 +300,7 @@ function collectDiscordMutableAllowlistWarnings(cfg: OpenClawConfig): string[] {
 }
 
 export const discordDoctor: ChannelDoctorAdapter = {
-  dmAllowFromMode: "topOrNested",
+  dmAllowFromMode: "topOnly",
   groupModel: "route",
   groupAllowFromFallbackToAllowFrom: false,
   warnOnEmptyGroupSenderAllowlist: false,

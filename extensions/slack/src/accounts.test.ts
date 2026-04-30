@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it } from "vitest";
-import { resolveSlackAccount } from "./accounts.js";
+import {
+  resolveSlackAccount,
+  resolveSlackAccountAllowFrom,
+  resolveSlackAccountDmPolicy,
+} from "./accounts.js";
 
 describe("resolveSlackAccount allowFrom precedence", () => {
   it("uses configured defaultAccount when accountId is omitted", () => {
@@ -106,6 +110,84 @@ describe("resolveSlackAccount allowFrom precedence", () => {
 
     expect(resolved.config.allowFrom).toBeUndefined();
     expect(resolved.config.dm?.allowFrom).toEqual(["U123"]);
+  });
+
+  it("resolves account legacy dm.allowFrom before inherited root allowFrom", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          allowFrom: ["root"],
+          accounts: {
+            work: {
+              botToken: "xoxb-work",
+              appToken: "xapp-work",
+              dm: { allowFrom: ["account-legacy"] },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(resolveSlackAccountAllowFrom({ cfg, accountId: "work" })).toEqual(["account-legacy"]);
+  });
+
+  it("coerces numeric allowFrom entries at the config boundary", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          accounts: {
+            work: {
+              botToken: "xoxb-work",
+              appToken: "xapp-work",
+              allowFrom: [12345],
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolveSlackAccountAllowFrom({ cfg, accountId: "work" })).toEqual(["12345"]);
+  });
+
+  it("resolves account legacy dm policy before inherited root policy", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          dmPolicy: "open",
+          accounts: {
+            work: {
+              botToken: "xoxb-work",
+              appToken: "xapp-work",
+              dm: { policy: "allowlist" },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(resolveSlackAccountDmPolicy({ cfg, accountId: "work" })).toBe("allowlist");
+  });
+
+  it("resolves mixed-case account keys for DM access settings", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          dmPolicy: "open",
+          allowFrom: ["root"],
+          accounts: {
+            Work: {
+              botToken: "xoxb-work",
+              appToken: "xapp-work",
+              dm: { policy: "allowlist" },
+              allowFrom: ["U123"],
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(resolveSlackAccountDmPolicy({ cfg, accountId: "work" })).toBe("allowlist");
+    expect(resolveSlackAccountAllowFrom({ cfg, accountId: "work" })).toEqual(["U123"]);
   });
 });
 

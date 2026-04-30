@@ -248,6 +248,45 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
   });
 
+  it("accepts browser.tabCleanup overrides", () => {
+    const res = validateConfigObject({
+      browser: {
+        tabCleanup: {
+          enabled: true,
+          idleMinutes: 10,
+          maxTabsPerSession: 10,
+          sweepMinutes: 5,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects browser.tabCleanup.sweepMinutes when not positive", () => {
+    const res = validateConfigObject({
+      browser: {
+        tabCleanup: {
+          sweepMinutes: 0,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects unknown keys under browser.tabCleanup", () => {
+    const res = validateConfigObject({
+      browser: {
+        tabCleanup: {
+          unknownKey: true as unknown,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
   it("accepts tools.media.asyncCompletion.directSend", () => {
     const res = validateConfigObject({
       tools: {

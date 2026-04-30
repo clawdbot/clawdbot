@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { toModelRow } from "./list.model-row.js";
 
 const OPENROUTER_MODEL = {
@@ -33,23 +32,11 @@ describe("toModelRow", () => {
   });
 
   it("marks models available from auth profiles without loading model discovery", () => {
-    const authStore: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openrouter:default": {
-          type: "api_key",
-          provider: "openrouter",
-          key: "sk-or-v1-regression-test",
-        },
-      },
-    };
-
     const row = toModelRow({
       model: OPENROUTER_MODEL as never,
       key: "openrouter/openai/gpt-5.4",
       tags: [],
-      cfg: {},
-      authStore,
+      hasAuthForProvider: (provider) => provider === "openrouter",
     });
 
     expect(row.available).toBe(true);

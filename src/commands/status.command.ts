@@ -130,7 +130,7 @@ export async function statusCommand(
   }
 
   const scan = await loadStatusScanModule().then(({ scanStatus }) =>
-    scanStatus({ json: false, timeoutMs: opts.timeoutMs, all: opts.all }, runtime),
+    scanStatus({ json: false, timeoutMs: opts.timeoutMs, all: opts.all, deep: opts.deep }, runtime),
   );
 
   const {

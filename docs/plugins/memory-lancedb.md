@@ -221,6 +221,19 @@ openclaw ltm search "project preferences"
 openclaw ltm stats
 ```
 
+The plugin also extends `openclaw memory` with a non-vector `query` subcommand
+that runs against the LanceDB table directly:
+
+```bash
+openclaw memory query --cols id,text,createdAt --limit 20
+openclaw memory query --filter "category = 'preference'" --order-by createdAt:desc
+```
+
+- `--cols <columns>`: comma-separated column allowlist (defaults to `id`, `text`, `importance`, `category`, `createdAt`).
+- `--filter <condition>`: SQL-style WHERE clause; capped at 200 characters and restricted to alphanumerics, comparison operators, quotes, parentheses, and a small set of safe punctuation.
+- `--limit <n>`: positive integer; default `10`.
+- `--order-by <column>:<asc|desc>`: in-memory sort applied after the filter; the sort column is auto-included in the projection.
+
 Agents also get LanceDB memory tools from the active memory plugin:
 
 - `memory_recall` for LanceDB-backed recall

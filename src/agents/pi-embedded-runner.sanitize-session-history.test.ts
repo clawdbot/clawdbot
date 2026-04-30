@@ -1131,6 +1131,59 @@ describe("sanitizeSessionHistory", () => {
     ]);
   });
 
+  it("drops metadata-only assistant replay turns before provider validation", async () => {
+    setNonGoogleModelApi();
+
+    const metadataOnlyText = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"chat_id":"channel:123","sender":"OpenClaw"}',
+      "```",
+    ].join("\n");
+    const messages = castAgentMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "First" }],
+        timestamp: nextTimestamp(),
+      },
+      makeAssistantMessage([{ type: "text", text: metadataOnlyText }]),
+      {
+        role: "user",
+        content: [{ type: "text", text: "Second" }],
+        timestamp: nextTimestamp(),
+      },
+    ]);
+
+    const sanitized = await sanitizeSessionHistory({
+      messages,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      sessionManager: makeMockSessionManager(),
+      sessionId: TEST_SESSION_ID,
+    });
+    expect(sanitized.map((msg) => msg.role)).toEqual(["user", "user"]);
+    expect(JSON.stringify(sanitized)).not.toContain("assistant copied inbound metadata omitted");
+
+    const validated = await validateReplayTurns({
+      messages: sanitized,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      sessionId: TEST_SESSION_ID,
+    });
+    expect(validated).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "First" },
+          { type: "text", text: "Second" },
+        ],
+        timestamp: expect.any(Number),
+      },
+    ]);
+  });
+
   it("strips prior assistant reasoning for Gemma 4 OpenAI-compatible replay", async () => {
     setNonGoogleModelApi();
 

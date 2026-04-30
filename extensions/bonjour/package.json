@@ -4,7 +4,7 @@
   "description": "OpenClaw Bonjour/mDNS gateway discovery",
   "type": "module",
   "dependencies": {
-    "@homebridge/ciao": "^1.3.6"
+    "@homebridge/ciao": "^1.3.7"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

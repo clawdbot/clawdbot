@@ -16,6 +16,11 @@ const OPTIONAL_UNDECLARED_RUNTIME_IMPORTS = new Map<string, Set<string>>([
 ]);
 const INDIRECT_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
   [
+    "extensions/browser",
+    // The MCP SDK loads zod through its server/zod-compat runtime path.
+    new Set(["zod"]),
+  ],
+  [
     "extensions/whatsapp",
     // Baileys loads jimp as an optional peer when it needs media thumbnails.
     new Set(["jimp"]),
@@ -163,7 +168,6 @@ function allDependencyNames(manifest: PackageManifest): string[] {
 
 function isDiscordPackageDependency(dependencyName: string): boolean {
   return (
-    dependencyName === "@buape/carbon" ||
     dependencyName === "discord-api-types" ||
     dependencyName === "opusscript" ||
     dependencyName.startsWith("@discordjs/") ||

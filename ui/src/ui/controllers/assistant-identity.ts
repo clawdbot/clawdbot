@@ -90,6 +90,7 @@ export function setAssistantAvatarOverride(
     state.assistantAvatarStatus = "data";
     state.assistantAvatarReason = null;
   } else {
+    state.assistantAvatar = null;
     state.assistantAvatarSource = null;
     state.assistantAvatarStatus = null;
     state.assistantAvatarReason = null;

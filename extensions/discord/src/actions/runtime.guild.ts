@@ -32,6 +32,7 @@ import {
   resolveEventCoverImage,
 } from "../send.js";
 import {
+  createDiscordActionOptions,
   readDiscordChannelCreateParams,
   readDiscordChannelEditParams,
   readDiscordChannelMoveParams,
@@ -70,7 +71,7 @@ type DiscordRoleMutation = (
 ) => Promise<unknown>;
 
 async function runRoleMutation(params: {
-  cfgOptions: { cfg: OpenClawConfig };
+  cfg: OpenClawConfig;
   accountId?: string;
   values: Record<string, unknown>;
   mutate: DiscordRoleMutation;
@@ -80,10 +81,7 @@ async function runRoleMutation(params: {
   const roleId = readStringParam(params.values, "roleId", { required: true });
   await params.mutate(
     { guildId, userId, roleId },
-    {
-      ...params.cfgOptions,
-      ...(params.accountId ? { accountId: params.accountId } : {}),
-    },
+    createDiscordActionOptions({ cfg: params.cfg, accountId: params.accountId }),
   );
 }
 
@@ -105,12 +103,8 @@ export async function handleDiscordGuildAction(
   if (!cfg) {
     throw new Error("Discord guild actions require a resolved runtime config.");
   }
-  const cfgOptions = { cfg };
-  const withOpts = (extra?: Record<string, unknown>) => ({
-    ...cfgOptions,
-    ...(accountId ? { accountId } : {}),
-    ...extra,
-  });
+  const withOpts = (extra?: Record<string, unknown>) =>
+    createDiscordActionOptions({ cfg, accountId, extra });
   switch (action) {
     case "memberInfo": {
       if (!isActionEnabled("memberInfo")) {
@@ -123,12 +117,11 @@ export async function handleDiscordGuildAction(
         required: true,
       });
       const effectiveAccountId = accountId ?? resolveDefaultDiscordAccountId(cfg);
-      const member = effectiveAccountId
-        ? await discordGuildActionRuntime.fetchMemberInfoDiscord(guildId, userId, {
-            ...cfgOptions,
-            accountId: effectiveAccountId,
-          })
-        : await discordGuildActionRuntime.fetchMemberInfoDiscord(guildId, userId, cfgOptions);
+      const member = await discordGuildActionRuntime.fetchMemberInfoDiscord(
+        guildId,
+        userId,
+        createDiscordActionOptions({ cfg, accountId: effectiveAccountId }),
+      );
       const presence = getPresence(effectiveAccountId, userId);
       const activities = presence?.activities ?? undefined;
       const status = presence?.status ?? undefined;
@@ -209,7 +202,7 @@ export async function handleDiscordGuildAction(
         throw new Error("Discord role changes are disabled.");
       }
       await runRoleMutation({
-        cfgOptions,
+        cfg,
         accountId,
         values: params,
         mutate: discordGuildActionRuntime.addRoleDiscord,
@@ -221,7 +214,7 @@ export async function handleDiscordGuildAction(
         throw new Error("Discord role changes are disabled.");
       }
       await runRoleMutation({
-        cfgOptions,
+        cfg,
         accountId,
         values: params,
         mutate: discordGuildActionRuntime.removeRoleDiscord,

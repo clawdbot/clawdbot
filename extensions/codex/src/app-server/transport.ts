@@ -1,6 +1,6 @@
 export type CodexAppServerTransport = {
   stdin: {
-    write: (data: string) => unknown;
+    write: (data: string, callback?: (error?: Error | null) => void) => unknown;
     end?: () => unknown;
     destroy?: () => unknown;
     unref?: () => unknown;

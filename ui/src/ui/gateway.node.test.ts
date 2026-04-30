@@ -38,6 +38,7 @@ class MockWebSocket {
   };
 
   readonly sent: string[] = [];
+  lastClose: { code?: number; reason?: string } | null = null;
   readyState = MockWebSocket.OPEN;
 
   constructor(_url: string) {
@@ -52,7 +53,8 @@ class MockWebSocket {
     this.sent.push(data);
   }
 
-  close() {
+  close(code?: number, reason?: string) {
+    this.lastClose = { code, reason };
     this.readyState = 3;
   }
 
@@ -353,6 +355,47 @@ describe("GatewayBrowserClient", () => {
     expect(wsInstances).toHaveLength(2);
 
     vi.useRealTimers();
+  });
+
+  it("retries startup-unavailable connect responses without terminal callbacks", async () => {
+    vi.useFakeTimers();
+    const onClose = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      onClose,
+    });
+    try {
+      const { ws, connectFrame } = await startConnect(client);
+
+      ws.emitMessage({
+        type: "res",
+        id: connectFrame.id,
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          message: "gateway starting; retry shortly",
+          details: { reason: "startup-sidecars" },
+          retryable: true,
+          retryAfterMs: 250,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      await expectSocketClosed(ws);
+      expect(ws.lastClose).toEqual({ code: 4013, reason: "gateway starting" });
+      ws.emitClose(4013, "gateway starting");
+      expect(onClose).not.toHaveBeenCalled();
+      expect(wsInstances).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(249);
+      expect(wsInstances).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(wsInstances).toHaveLength(2);
+    } finally {
+      client.stop();
+      vi.useRealTimers();
+    }
   });
 
   it("treats IPv6 loopback as trusted for bounded device-token retry", async () => {

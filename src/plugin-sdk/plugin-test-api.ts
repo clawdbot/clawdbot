@@ -23,6 +23,7 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     registerGatewayDiscoveryService() {},
     registerReload() {},
     registerNodeHostCommand() {},
+    registerNodeInvokePolicy() {},
     registerSecurityAuditCollector() {},
     registerConfigMigration() {},
     registerMigrationProvider() {},

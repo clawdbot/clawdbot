@@ -36,7 +36,7 @@ function setMockFetch(
 
 function createWebFetchToolForTest(params?: {
   firecrawlApiKey?: string;
-  ssrfPolicy?: { allowRfc2544BenchmarkRange?: boolean };
+  ssrfPolicy?: { allowRfc2544BenchmarkRange?: boolean; allowIpv6UniqueLocalRange?: boolean };
   cacheTtlMinutes?: number;
 }) {
   return createWebFetchTool({
@@ -175,6 +175,30 @@ describe("web_fetch SSRF protection", () => {
       extractor: "raw",
     });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const stricterTool = createWebFetchToolForTest({ cacheTtlMinutes: 1 });
+    await expectBlockedUrl(stricterTool, url, /private|internal|blocked/i);
+  });
+
+  it("allows IPv6 unique-local DNS answers only when web_fetch ssrfPolicy opts in", async () => {
+    const url = "https://fake-ip.test/file";
+    lookupMock.mockResolvedValue([{ address: "fc00::153", family: 6 }]);
+
+    const deniedTool = createWebFetchToolForTest({ cacheTtlMinutes: 1 });
+    await expectBlockedUrl(deniedTool, url, /private|internal|blocked/i);
+
+    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("ipv6 ula ok"));
+    const allowedTool = createWebFetchToolForTest({
+      ssrfPolicy: { allowIpv6UniqueLocalRange: true },
+      cacheTtlMinutes: 1,
+    });
+
+    const allowed = await allowedTool?.execute?.("call", { url });
+    expect(allowed?.details).toMatchObject({
+      status: 200,
+      extractor: "raw",
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
     const stricterTool = createWebFetchToolForTest({ cacheTtlMinutes: 1 });
     await expectBlockedUrl(stricterTool, url, /private|internal|blocked/i);
   });

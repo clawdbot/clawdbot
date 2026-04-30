@@ -1,7 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
-import ts from "typescript";
+
+const nodeRequire = createRequire(import.meta.url);
+
+function loadTypeScript(): typeof import("typescript") {
+  return nodeRequire("typescript") as typeof import("typescript");
+}
 
 const JITI_EXTENSIONS = [
   ".ts",
@@ -79,6 +85,7 @@ function resolveLocalModulePath(filePath: string, specifier: string): string | n
 }
 
 function collectSourceModuleRefs(filePath: string): SourceModuleRef[] {
+  const ts = loadTypeScript();
   const sourceText = readFileSync(filePath, "utf8");
   const sourceFile = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true);
   const refs: SourceModuleRef[] = [];

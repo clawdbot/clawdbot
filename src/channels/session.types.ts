@@ -22,4 +22,5 @@ export type RecordInboundSession = (params: {
   createIfMissing?: boolean;
   updateLastRoute?: InboundLastRouteUpdate;
   onRecordError: (err: unknown) => void;
+  trackSessionMetaTask?: (task: Promise<unknown>) => void;
 }) => Promise<void>;

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import dotenv from "dotenv";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveConfigDir } from "../utils.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
 import {
@@ -9,6 +10,8 @@ import {
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
 } from "./host-env-security.js";
+
+const logger = createSubsystemLogger("infra:dotenv");
 
 const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "ALL_PROXY",
@@ -138,7 +141,7 @@ function readDotEnvFile(params: {
       const code =
         error && typeof error === "object" && "code" in error ? String(error.code) : undefined;
       if (code !== "ENOENT") {
-        console.warn(`[dotenv] Failed to read ${params.filePath}: ${String(error)}`);
+        logger.warn(`Failed to read ${params.filePath}: ${String(error)}`, { error });
       }
     }
     return null;
@@ -149,7 +152,7 @@ function readDotEnvFile(params: {
     parsed = dotenv.parse(content);
   } catch (error) {
     if (!params.quiet) {
-      console.warn(`[dotenv] Failed to parse ${params.filePath}: ${String(error)}`);
+      logger.warn(`Failed to parse ${params.filePath}: ${String(error)}`, { error });
     }
     return null;
   }
@@ -237,8 +240,9 @@ function loadParsedDotEnvFiles(files: LoadedDotEnvFile[]) {
     if (keys.length === 0) {
       continue;
     }
-    console.warn(
-      `[dotenv] Conflicting values in ${conflict.keptPath} and ${conflict.ignoredPath} for ${keys.join(", ")}; keeping ${conflict.keptPath}.`,
+    logger.warn(
+      `Conflicting values in ${conflict.keptPath} and ${conflict.ignoredPath} for ${keys.join(", ")}; keeping ${conflict.keptPath}.`,
+      { keptPath: conflict.keptPath, ignoredPath: conflict.ignoredPath, keys },
     );
   }
 }

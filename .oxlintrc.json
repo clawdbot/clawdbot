@@ -25,6 +25,7 @@
     "eslint/no-sequences": "error",
     "eslint/no-self-compare": "error",
     "eslint/no-shadow": "off",
+    "eslint/no-underscore-dangle": "off",
     "eslint/no-var": "error",
     "eslint/no-useless-call": "error",
     "eslint/no-useless-computed-key": "error",

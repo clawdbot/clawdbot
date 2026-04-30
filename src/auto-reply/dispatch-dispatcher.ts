@@ -1,5 +1,17 @@
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
 
+export async function settleReplyDispatcher(params: {
+  dispatcher: ReplyDispatcher;
+  onSettled?: () => void | Promise<void>;
+}): Promise<void> {
+  params.dispatcher.markComplete();
+  try {
+    await params.dispatcher.waitForIdle();
+  } finally {
+    await params.onSettled?.();
+  }
+}
+
 export async function withReplyDispatcher<T>(params: {
   dispatcher: ReplyDispatcher;
   run: () => Promise<T>;
@@ -8,12 +20,6 @@ export async function withReplyDispatcher<T>(params: {
   try {
     return await params.run();
   } finally {
-    // Ensure dispatcher reservations are always released on every exit path.
-    params.dispatcher.markComplete();
-    try {
-      await params.dispatcher.waitForIdle();
-    } finally {
-      await params.onSettled?.();
-    }
+    await settleReplyDispatcher(params);
   }
 }

@@ -64,6 +64,31 @@ function makeRuntime(): GatewayPluginRuntime {
         resolveEffectiveMessagesConfig: vi.fn(() => ({})),
         resolveEnvelopeFormatOptions: vi.fn(() => ({})),
       },
+      session: {
+        resolveStorePath: vi.fn(() => "/tmp/openclaw/qqbot-sessions.json"),
+        recordInboundSession: vi.fn(async () => undefined),
+      },
+      turn: {
+        run: vi.fn(async (rawParams: unknown) => {
+          const params = rawParams as {
+            raw: unknown;
+            adapter: {
+              ingest: (raw: unknown) => unknown;
+              resolveTurn: (...args: unknown[]) => unknown;
+            };
+          };
+          const input = await params.adapter.ingest(params.raw);
+          const turn = (await params.adapter.resolveTurn(
+            input,
+            {
+              kind: "message",
+              canStartAgentTurn: true,
+            },
+            {},
+          )) as { runDispatch: () => Promise<unknown> };
+          return { dispatchResult: await turn.runDispatch() };
+        }),
+      },
       text: {
         chunkMarkdownText: (text: string) => [text],
       },

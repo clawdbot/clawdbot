@@ -100,9 +100,13 @@ export type BundledChannelEntryContract<TPlugin = ChannelPlugin> = {
   configSchema: ChannelEntryConfigSchema<TPlugin>;
   features?: BundledChannelEntryFeatures;
   register: (api: OpenClawPluginApi) => void;
-  loadChannelPlugin: () => TPlugin;
-  loadChannelSecrets?: () => ChannelPlugin["secrets"] | undefined;
-  loadChannelAccountInspector?: () => NonNullable<ChannelPlugin["config"]["inspectAccount"]>;
+  loadChannelPlugin: (options?: BundledEntryModuleLoadOptions) => TPlugin;
+  loadChannelSecrets?: (
+    options?: BundledEntryModuleLoadOptions,
+  ) => ChannelPlugin["secrets"] | undefined;
+  loadChannelAccountInspector?: (
+    options?: BundledEntryModuleLoadOptions,
+  ) => NonNullable<ChannelPlugin["config"]["inspectAccount"]>;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
 };
 
@@ -448,15 +452,22 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
     typeof configSchema === "function"
       ? configSchema()
       : ((configSchema ?? emptyChannelConfigSchema()) as ChannelEntryConfigSchema<TPlugin>);
-  const loadChannelPlugin = () => loadBundledEntryExportSync<TPlugin>(importMetaUrl, plugin);
+  const loadChannelPlugin = (options?: BundledEntryModuleLoadOptions) =>
+    loadBundledEntryExportSync<TPlugin>(importMetaUrl, plugin, options);
   const loadChannelSecrets = secrets
-    ? () => loadBundledEntryExportSync<ChannelPlugin["secrets"] | undefined>(importMetaUrl, secrets)
+    ? (options?: BundledEntryModuleLoadOptions) =>
+        loadBundledEntryExportSync<ChannelPlugin["secrets"] | undefined>(
+          importMetaUrl,
+          secrets,
+          options,
+        )
     : undefined;
   const loadChannelAccountInspector = accountInspect
-    ? () =>
+    ? (options?: BundledEntryModuleLoadOptions) =>
         loadBundledEntryExportSync<NonNullable<ChannelPlugin["config"]["inspectAccount"]>>(
           importMetaUrl,
           accountInspect,
+          options,
         )
     : undefined;
   const setChannelRuntime = runtime

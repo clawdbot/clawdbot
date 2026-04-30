@@ -823,7 +823,7 @@ export default definePluginEntry({
             return;
           }
           const rt = await ensureRuntime();
-          respond(true, rt.speak(sessionId, normalizeOptionalString(params?.message)));
+          respond(true, await rt.speak(sessionId, normalizeOptionalString(params?.message)));
         } catch (err) {
           sendError(respond, err);
         }

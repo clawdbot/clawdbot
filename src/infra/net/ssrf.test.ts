@@ -157,6 +157,26 @@ describe("isBlockedHostnameOrIp", () => {
     expect(isBlockedHostnameOrIp(value, policy)).toBe(expected);
   });
 
+  // #74351: fake-ip proxy stacks (sing-box / Clash / Surge) resolve foreign
+  // domains to BOTH IPv4 198.18.0.0/15 AND IPv6 fc00::/7 simultaneously.
+  // The policy must let operators opt into the IPv6 ULA range
+  // independently of the IPv4 benchmark exemption.
+  it.each([
+    ["fc00::1", undefined, true],
+    ["fc00::1", { allowIpv6UniqueLocalRange: true }, false],
+    ["fdff::dead:beef", { allowIpv6UniqueLocalRange: true }, false],
+    // Other reserved IPv6 ranges stay blocked even with the new flag set —
+    // the exemption is scoped to ULA, not "any reserved IPv6".
+    ["::1", { allowIpv6UniqueLocalRange: true }, true],
+    ["fec0::1", { allowIpv6UniqueLocalRange: true }, true],
+    // The flag is independent of the IPv4 benchmark flag — neither
+    // implies the other.
+    ["198.18.0.1", { allowIpv6UniqueLocalRange: true }, true],
+    ["fc00::1", { allowRfc2544BenchmarkRange: true }, true],
+  ] as const)("applies IPv6 unique-local policy for %s", (value, policy, expected) => {
+    expect(isBlockedHostnameOrIp(value, policy)).toBe(expected);
+  });
+
   it.each(["0177.0.0.1", "8.8.2056", "127.1", "2130706433"])(
     "blocks legacy IPv4 literal %s",
     (address) => {
@@ -194,5 +214,19 @@ describe("isSameSsrFPolicy", () => {
         { dangerouslyAllowPrivateNetwork: true, allowRfc2544BenchmarkRange: true },
       ),
     ).toBe(false);
+
+    // #74351: the new `allowIpv6UniqueLocalRange` flag must participate in
+    // semantic equality. Otherwise consumers caching policy objects keyed by
+    // `isSameSsrFPolicy` would silently reuse a stale fc00::/7-blocking
+    // policy after the flag was flipped on.
+    expect(
+      isSameSsrFPolicy(
+        { allowPrivateNetwork: true },
+        { allowPrivateNetwork: true, allowIpv6UniqueLocalRange: true },
+      ),
+    ).toBe(false);
+    expect(
+      isSameSsrFPolicy({ allowIpv6UniqueLocalRange: true }, { allowIpv6UniqueLocalRange: true }),
+    ).toBe(true);
   });
 });

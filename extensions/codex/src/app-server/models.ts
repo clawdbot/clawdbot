@@ -28,6 +28,7 @@ export type CodexAppServerListModelsOptions = {
   timeoutMs?: number;
   startOptions?: CodexAppServerStartOptions;
   authProfileId?: string;
+  agentDir?: string;
   sharedClient?: boolean;
 };
 
@@ -77,11 +78,13 @@ async function withCodexAppServerModelClient<T>(
         startOptions: options.startOptions,
         timeoutMs,
         authProfileId: options.authProfileId,
+        agentDir: options.agentDir,
       })
     : await createIsolatedCodexAppServerClient({
         startOptions: options.startOptions,
         timeoutMs,
         authProfileId: options.authProfileId,
+        agentDir: options.agentDir,
       });
   try {
     return await run({ client, timeoutMs });

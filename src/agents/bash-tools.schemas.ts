@@ -1,4 +1,7 @@
 import { Type } from "typebox";
+import { optionalStringEnum } from "./schema/typebox.js";
+
+const EXEC_TOOL_HOST_VALUES = ["auto", "sandbox", "gateway", "node"] as const;
 
 export const execSchema = Type.Object({
   command: Type.String({ description: "Shell command to execute" }),
@@ -26,11 +29,9 @@ export const execSchema = Type.Object({
       description: "Run on the host with elevated permissions (if allowed)",
     }),
   ),
-  host: Type.Optional(
-    Type.String({
-      description: "Exec host/target (auto|sandbox|gateway|node).",
-    }),
-  ),
+  host: optionalStringEnum(EXEC_TOOL_HOST_VALUES, {
+    description: "Exec host/target (auto|sandbox|gateway|node).",
+  }),
   security: Type.Optional(
     Type.String({
       description: "Exec security mode (deny|allowlist|full).",

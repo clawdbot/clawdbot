@@ -7,6 +7,15 @@ import {
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.types.js";
 import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
+import {
+  hasFinalChannelTurnDispatch,
+  hasVisibleChannelTurnDispatch,
+  resolveChannelTurnDispatchCounts,
+  runChannelTurn,
+  runPreparedChannelTurn,
+} from "../channels/turn/kernel.js";
+import type { PreparedChannelTurn, RunChannelTurnParams } from "../channels/turn/types.js";
+export type { ChannelTurnRecordOptions } from "../channels/turn/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 import { createNormalizedOutboundDeliverer, type OutboundReplyPayload } from "./reply-payload.js";
@@ -18,6 +27,26 @@ type ReplyOptionsWithoutModelSelected = Omit<
 type RecordInboundSessionFn = typeof import("../channels/session.js").recordInboundSession;
 
 type ReplyDispatchFromConfigOptions = Omit<GetReplyOptions, "onBlockReply">;
+
+/** Run an already assembled channel turn through shared session-record + dispatch ordering. */
+export async function runPreparedInboundReplyTurn<TDispatchResult>(
+  params: PreparedChannelTurn<TDispatchResult>,
+) {
+  return await runPreparedChannelTurn(params);
+}
+
+/** Run a channel turn through shared ingest, record, dispatch, and finalize ordering. */
+export async function runInboundReplyTurn<TRaw, TDispatchResult = DispatchFromConfigResult>(
+  params: RunChannelTurnParams<TRaw, TDispatchResult>,
+) {
+  return await runChannelTurn(params);
+}
+
+export {
+  hasFinalChannelTurnDispatch as hasFinalInboundReplyDispatch,
+  hasVisibleChannelTurnDispatch as hasVisibleInboundReplyDispatch,
+  resolveChannelTurnDispatchCounts as resolveInboundReplyDispatchCounts,
+};
 
 /** Run `dispatchReplyFromConfig` with a dispatcher that always gets its settled callback. */
 export async function dispatchReplyFromConfigWithSettledDispatcher(params: {
@@ -117,13 +146,6 @@ export async function recordInboundSessionAndDispatchReply(params: {
   onDispatchError: (err: unknown, info: { kind: string }) => void;
   replyOptions?: ReplyOptionsWithoutModelSelected;
 }): Promise<void> {
-  await params.recordInboundSession({
-    storePath: params.storePath,
-    sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
-    ctx: params.ctxPayload,
-    onRecordError: params.onRecordError,
-  });
-
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -132,17 +154,29 @@ export async function recordInboundSessionAndDispatchReply(params: {
   });
   const deliver = createNormalizedOutboundDeliverer(params.deliver);
 
-  await params.dispatchReplyWithBufferedBlockDispatcher({
-    ctx: params.ctxPayload,
-    cfg: params.cfg,
-    dispatcherOptions: {
-      ...replyPipeline,
-      deliver,
-      onError: params.onDispatchError,
+  await runPreparedChannelTurn({
+    channel: params.channel,
+    accountId: params.accountId,
+    routeSessionKey: params.routeSessionKey,
+    storePath: params.storePath,
+    ctxPayload: params.ctxPayload,
+    recordInboundSession: params.recordInboundSession,
+    record: {
+      onRecordError: params.onRecordError,
     },
-    replyOptions: {
-      ...params.replyOptions,
-      onModelSelected,
-    },
+    runDispatch: async () =>
+      await params.dispatchReplyWithBufferedBlockDispatcher({
+        ctx: params.ctxPayload,
+        cfg: params.cfg,
+        dispatcherOptions: {
+          ...replyPipeline,
+          deliver,
+          onError: params.onDispatchError,
+        },
+        replyOptions: {
+          ...params.replyOptions,
+          onModelSelected,
+        },
+      }),
   });
 }

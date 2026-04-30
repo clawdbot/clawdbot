@@ -1,12 +1,10 @@
 import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner/lanes.js";
 import {
-  abortEmbeddedPiRun,
-  forceClearEmbeddedPiRun,
+  abortAndDrainEmbeddedPiRun,
   isEmbeddedPiRunActive,
   isEmbeddedPiRunHandleActive,
   resolveActiveEmbeddedRunSessionId,
   resolveActiveEmbeddedRunHandleSessionId,
-  waitForEmbeddedPiRunEnd,
 } from "../agents/pi-embedded-runner/runs.js";
 import { getCommandLaneSnapshot, resetCommandLane } from "../process/command-queue.js";
 import { diagnosticLogger as diag } from "./diagnostic-runtime.js";
@@ -24,6 +22,31 @@ export type StuckSessionRecoveryParams = {
 
 function recoveryKey(params: StuckSessionRecoveryParams): string | undefined {
   return params.sessionKey?.trim() || params.sessionId?.trim() || undefined;
+}
+
+function formatRecoveryContext(
+  params: StuckSessionRecoveryParams,
+  extra?: { activeSessionId?: string; lane?: string; activeCount?: number; queuedCount?: number },
+): string {
+  const fields = [
+    `sessionId=${params.sessionId ?? extra?.activeSessionId ?? "unknown"}`,
+    `sessionKey=${params.sessionKey ?? "unknown"}`,
+    `age=${Math.round(params.ageMs / 1000)}s`,
+    `queueDepth=${params.queueDepth ?? 0}`,
+  ];
+  if (extra?.activeSessionId) {
+    fields.push(`activeSessionId=${extra.activeSessionId}`);
+  }
+  if (extra?.lane) {
+    fields.push(`lane=${extra.lane}`);
+  }
+  if (extra?.activeCount !== undefined) {
+    fields.push(`laneActive=${extra.activeCount}`);
+  }
+  if (extra?.queuedCount !== undefined) {
+    fields.push(`laneQueued=${extra.queuedCount}`);
+  }
+  return fields.join(" ");
 }
 
 export async function recoverStuckDiagnosticSession(
@@ -53,29 +76,31 @@ export async function recoverStuckDiagnosticSession(
 
     if (activeSessionId) {
       if (params.allowActiveAbort !== true) {
-        diag.debug(
-          `stuck session recovery skipped active abort: sessionId=${
-            params.sessionId ?? activeSessionId
-          } sessionKey=${params.sessionKey ?? "unknown"} age=${Math.round(
-            params.ageMs / 1000,
-          )}s queueDepth=${params.queueDepth ?? 0}`,
+        diag.warn(
+          `stuck session recovery skipped: reason=active_embedded_run action=observe_only ${formatRecoveryContext(
+            params,
+            { activeSessionId },
+          )}`,
         );
         return;
       }
-      aborted = abortEmbeddedPiRun(activeSessionId);
-      if (aborted) {
-        drained = await waitForEmbeddedPiRunEnd(activeSessionId, STUCK_SESSION_ABORT_SETTLE_MS);
-      }
-      if (!aborted || !drained) {
-        forceClearEmbeddedPiRun(activeSessionId, params.sessionKey, "stuck_recovery");
-      }
+      const result = await abortAndDrainEmbeddedPiRun({
+        sessionId: activeSessionId,
+        sessionKey: params.sessionKey,
+        settleMs: STUCK_SESSION_ABORT_SETTLE_MS,
+        forceClear: true,
+        reason: "stuck_recovery",
+      });
+      aborted = result.aborted;
+      drained = result.drained;
     }
 
     if (!activeSessionId && activeWorkSessionId && isEmbeddedPiRunActive(activeWorkSessionId)) {
-      diag.debug(
-        `stuck session recovery skipped lane reset: active reply work sessionId=${activeWorkSessionId} sessionKey=${
-          params.sessionKey ?? "unknown"
-        } age=${Math.round(params.ageMs / 1000)}s queueDepth=${params.queueDepth ?? 0}`,
+      diag.warn(
+        `stuck session recovery skipped: reason=active_reply_work action=keep_lane ${formatRecoveryContext(
+          params,
+          { activeSessionId: activeWorkSessionId },
+        )}`,
       );
       return;
     }
@@ -83,10 +108,15 @@ export async function recoverStuckDiagnosticSession(
     if (!activeSessionId && sessionLane) {
       const laneSnapshot = getCommandLaneSnapshot(sessionLane);
       if (laneSnapshot.activeCount > 0) {
-        diag.debug(
-          `stuck session recovery skipped lane reset: active lane task lane=${sessionLane} active=${laneSnapshot.activeCount} queued=${laneSnapshot.queuedCount} sessionId=${
-            params.sessionId ?? "unknown"
-          } sessionKey=${params.sessionKey ?? "unknown"} age=${Math.round(params.ageMs / 1000)}s`,
+        diag.warn(
+          `stuck session recovery skipped: reason=active_lane_task action=keep_lane ${formatRecoveryContext(
+            params,
+            {
+              lane: sessionLane,
+              activeCount: laneSnapshot.activeCount,
+              queuedCount: laneSnapshot.queuedCount,
+            },
+          )}`,
         );
         return;
       }
@@ -100,6 +130,15 @@ export async function recoverStuckDiagnosticSession(
         `stuck session recovery: sessionId=${params.sessionId ?? activeSessionId ?? "unknown"} sessionKey=${
           params.sessionKey ?? "unknown"
         } age=${Math.round(params.ageMs / 1000)}s aborted=${aborted} drained=${drained} released=${released}`,
+      );
+    } else {
+      diag.warn(
+        `stuck session recovery no-op: reason=no_active_work action=none ${formatRecoveryContext(
+          params,
+          {
+            lane: sessionLane ?? undefined,
+          },
+        )}`,
       );
     }
   } catch (err) {

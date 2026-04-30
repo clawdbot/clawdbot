@@ -3,8 +3,10 @@ import { resolveTelegramRequestTimeoutMs } from "./request-timeouts.js";
 
 describe("resolveTelegramRequestTimeoutMs", () => {
   it("bounds Telegram startup control-plane methods", () => {
+    expect(resolveTelegramRequestTimeoutMs("deletemycommands")).toBe(15_000);
     expect(resolveTelegramRequestTimeoutMs("deletewebhook")).toBe(15_000);
     expect(resolveTelegramRequestTimeoutMs("getme")).toBe(15_000);
+    expect(resolveTelegramRequestTimeoutMs("setmycommands")).toBe(15_000);
     expect(resolveTelegramRequestTimeoutMs("setwebhook")).toBe(15_000);
   });
 

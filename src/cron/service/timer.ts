@@ -1,6 +1,10 @@
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
+import {
+  HEARTBEAT_SKIP_CRON_IN_PROGRESS,
+  isRetryableHeartbeatBusySkipReason,
+} from "../../infra/heartbeat-wake.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import {
@@ -13,6 +17,7 @@ import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { createCronExecutionId } from "../run-id.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
+  CronAgentExecutionStarted,
   CronDeliveryStatus,
   CronDeliveryTrace,
   CronJob,
@@ -41,6 +46,7 @@ import { DEFAULT_JOB_TIMEOUT_MS, resolveCronJobTimeoutMs } from "./timeout-polic
 export { DEFAULT_JOB_TIMEOUT_MS } from "./timeout-policy.js";
 
 const MAX_TIMER_DELAY_MS = 60_000;
+const CRON_TIMEOUT_CLEANUP_GUARD_MS = 20_000;
 
 /**
  * Minimum gap between consecutive fires of the same cron job.  This is a
@@ -104,34 +110,79 @@ export async function executeJobCoreWithTimeout(
 
   const runAbortController = new AbortController();
   let timeoutId: NodeJS.Timeout | undefined;
-  let rejectTimeout: ((reason?: unknown) => void) | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    rejectTimeout = reject;
+  let activeExecution: CronAgentExecutionStarted | undefined;
+  const timeoutMarker = Symbol("cron-timeout");
+  let resolveTimeout: ((value: typeof timeoutMarker) => void) | undefined;
+  const timeoutPromise = new Promise<typeof timeoutMarker>((resolve) => {
+    resolveTimeout = resolve;
   });
-  const startTimeout = () => {
-    if (timeoutId) {
-      return;
-    }
-    timeoutId = setTimeout(() => {
-      runAbortController.abort(timeoutErrorMessage());
-      rejectTimeout?.(new Error(timeoutErrorMessage()));
-    }, jobTimeoutMs);
-  };
+
   const deferTimeoutUntilExecutionStart =
     job.sessionTarget !== "main" && job.payload.kind === "agentTurn";
+  const startTimeout = () => {
+    if (!timeoutId) {
+      timeoutId = setTimeout(() => {
+        runAbortController.abort(timeoutErrorMessage());
+        resolveTimeout?.(timeoutMarker);
+      }, jobTimeoutMs);
+    }
+  };
+  const onExecutionStarted = (info?: CronAgentExecutionStarted) => {
+    activeExecution = info ?? activeExecution;
+    startTimeout();
+  };
+  const corePromise = executeJobCore(state, job, runAbortController.signal, {
+    onExecutionStarted: deferTimeoutUntilExecutionStart ? onExecutionStarted : undefined,
+  });
   if (!deferTimeoutUntilExecutionStart) {
     startTimeout();
   }
+  void corePromise.catch((err) => {
+    if (runAbortController.signal.aborted) {
+      state.deps.log.warn(
+        { jobId: job.id, err: String(err) },
+        "cron: job core rejected after timeout abort",
+      );
+    }
+  });
   try {
-    return await Promise.race([
-      executeJobCore(state, job, runAbortController.signal, {
-        onExecutionStarted: deferTimeoutUntilExecutionStart ? startTimeout : undefined,
-      }),
-      timeoutPromise,
-    ]);
+    const first = await Promise.race([corePromise, timeoutPromise]);
+    if (first !== timeoutMarker) {
+      return first;
+    }
+    await cleanupTimedOutCronAgentRun(state, job, jobTimeoutMs, activeExecution);
+    return { status: "error", error: timeoutErrorMessage() };
   } finally {
     if (timeoutId) {
       clearTimeout(timeoutId);
+    }
+  }
+}
+
+async function cleanupTimedOutCronAgentRun(
+  state: CronServiceState,
+  job: CronJob,
+  timeoutMs: number,
+  execution?: CronAgentExecutionStarted,
+): Promise<void> {
+  if (!state.deps.cleanupTimedOutAgentRun) {
+    return;
+  }
+  let settleTimer: NodeJS.Timeout | undefined;
+  const cleanupPromise = state.deps.cleanupTimedOutAgentRun({ job, timeoutMs, execution });
+  const settleTimeout = new Promise<void>((resolve) => {
+    settleTimer = setTimeout(resolve, CRON_TIMEOUT_CLEANUP_GUARD_MS);
+  });
+  try {
+    await Promise.race([cleanupPromise, settleTimeout]);
+  } catch (err) {
+    state.deps.log.warn(
+      { jobId: job.id, err: String(err) },
+      "cron: timed-out agent cleanup failed",
+    );
+  } finally {
+    if (settleTimer) {
+      clearTimeout(settleTimer);
     }
   }
 }
@@ -1256,7 +1307,7 @@ export async function executeJobCore(
   job: CronJob,
   abortSignal?: AbortSignal,
   options?: {
-    onExecutionStarted?: () => void;
+    onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   },
 ): Promise<
   CronRunOutcome &
@@ -1350,13 +1401,17 @@ async function executeMainSessionCronJob(
         sessionKey: targetMainSessionKey,
         heartbeat: { target: "last" },
       });
-      if (heartbeatResult.status !== "skipped" || heartbeatResult.reason !== "requests-in-flight") {
+      if (
+        heartbeatResult.status !== "skipped" ||
+        !isRetryableHeartbeatBusySkipReason(heartbeatResult.reason)
+      ) {
         break;
       }
-      if (isRecurringJob) {
+      if (isRecurringJob || heartbeatResult.reason === HEARTBEAT_SKIP_CRON_IN_PROGRESS) {
         // Recurring main-session cron jobs should not hold the cron lane open
-        // while the main lane is busy, or their measured duration starts to
-        // reflect queue wait instead of cron bookkeeping (#58833).
+        // while runtime lanes are busy. A cron-in-progress skip is caused by
+        // this job's own active marker, so direct wake-now cannot succeed until
+        // the cron job returns and clears it (#50773).
         state.deps.requestHeartbeatNow({
           reason,
           agentId: job.agentId,
@@ -1410,7 +1465,7 @@ async function executeDetachedCronJob(
   abortSignal: AbortSignal | undefined,
   resolveAbortError: () => { status: "error"; error: string },
   options?: {
-    onExecutionStarted?: () => void;
+    onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   },
 ): Promise<
   CronRunOutcome &

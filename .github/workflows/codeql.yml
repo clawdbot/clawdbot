@@ -11,12 +11,20 @@ on:
         options:
           - all
           - security
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - ".github/actions/**"
+      - ".github/codeql/**"
+      - ".github/workflows/**"
+      - "packages/**"
+      - "src/**"
   schedule:
     - cron: "0 6 * * *"
 
 concurrency:
-  group: codeql-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.sha }}
-  cancel-in-progress: false
+  group: codeql-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event_name == 'pull_request' && github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -27,9 +35,9 @@ permissions:
   security-events: write
 
 jobs:
-  critical-security:
-    name: Critical Security (${{ matrix.category }})
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'security' }}
+  security-high:
+    name: Security High (${{ matrix.category }})
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'security') }}
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
@@ -37,15 +45,30 @@ jobs:
       matrix:
         include:
           - language: javascript-typescript
-            category: javascript-typescript
+            category: core-auth-secrets
             runs_on: blacksmith-8vcpu-ubuntu-2404
             timeout_minutes: 25
-            config_file: ./.github/codeql/codeql-javascript-typescript-critical-security.yml
+            config_file: ./.github/codeql/codeql-core-auth-secrets-critical-security.yml
           - language: javascript-typescript
             category: channel-runtime-boundary
             runs_on: blacksmith-8vcpu-ubuntu-2404
             timeout_minutes: 25
             config_file: ./.github/codeql/codeql-channel-runtime-boundary-critical-security.yml
+          - language: javascript-typescript
+            category: network-ssrf-boundary
+            runs_on: blacksmith-4vcpu-ubuntu-2404
+            timeout_minutes: 25
+            config_file: ./.github/codeql/codeql-network-ssrf-boundary-critical-security.yml
+          - language: javascript-typescript
+            category: mcp-process-tool-boundary
+            runs_on: blacksmith-4vcpu-ubuntu-2404
+            timeout_minutes: 25
+            config_file: ./.github/codeql/codeql-mcp-process-tool-boundary-critical-security.yml
+          - language: javascript-typescript
+            category: plugin-trust-boundary
+            runs_on: blacksmith-4vcpu-ubuntu-2404
+            timeout_minutes: 25
+            config_file: ./.github/codeql/codeql-plugin-trust-boundary-critical-security.yml
           - language: actions
             category: actions
             runs_on: blacksmith-8vcpu-ubuntu-2404
@@ -66,4 +89,4 @@ jobs:
       - name: Analyze
         uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
         with:
-          category: "/codeql-critical-security/${{ matrix.category }}"
+          category: "/codeql-security-high/${{ matrix.category }}"

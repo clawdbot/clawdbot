@@ -260,6 +260,61 @@ describe("Cron issue regressions", () => {
     cron.stop();
   });
 
+  it("rejects invalid cron schedule updates without mutating disabled jobs", async () => {
+    const store = cronIssueRegressionFixtures.makeStorePath();
+    const cron = await startCronForStore({ storePath: store.storePath, cronEnabled: false });
+
+    const disabledJob = await cron.add({
+      name: "disabled-cron",
+      enabled: false,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+
+    await expect(
+      cron.update(disabledJob.id, {
+        schedule: { kind: "cron", expr: "* * * 13 *", tz: "UTC" },
+      }),
+    ).rejects.toThrow("CronPattern");
+
+    let persisted = await loadCronStore(store.storePath);
+    let storedJob = persisted.jobs.find((job) => job.id === disabledJob.id);
+    expect(storedJob?.enabled).toBe(false);
+    expect(storedJob?.schedule).toEqual(
+      expect.objectContaining({ kind: "cron", expr: "0 * * * *", tz: "UTC" }),
+    );
+
+    await writeCronStoreSnapshot(store.storePath, [
+      {
+        id: "invalid-disabled-job",
+        name: "invalid disabled job",
+        createdAtMs: Date.parse("2026-02-06T10:00:00.000Z"),
+        updatedAtMs: Date.parse("2026-02-06T10:00:00.000Z"),
+        enabled: false,
+        schedule: { kind: "cron", expr: "* * * 13 *", tz: "UTC" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "tick" },
+        state: {},
+      },
+    ]);
+
+    const invalidCron = await startCronForStore({ storePath: store.storePath, cronEnabled: false });
+    await expect(invalidCron.update("invalid-disabled-job", { enabled: true })).rejects.toThrow(
+      "CronPattern",
+    );
+
+    persisted = await loadCronStore(store.storePath);
+    storedJob = persisted.jobs.find((job) => job.id === "invalid-disabled-job");
+    expect(storedJob?.enabled).toBe(false);
+    expect(storedJob?.state.nextRunAtMs).toBeUndefined();
+
+    invalidCron.stop();
+    cron.stop();
+  });
+
   it("keeps telegram delivery target writeback after manual cron.run", async () => {
     const store = cronIssueRegressionFixtures.makeStorePath();
     const originalTarget = "https://t.me/obviyus";

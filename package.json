@@ -57,6 +57,7 @@
     "skills/",
     "scripts/npm-runner.mjs",
     "scripts/preinstall-package-manager-warning.mjs",
+    "scripts/lib/bundled-runtime-deps-install.mjs",
     "scripts/lib/package-dist-imports.mjs",
     "scripts/postinstall-bundled-plugins.mjs",
     "scripts/windows-cmd-helpers.mjs"
@@ -1233,6 +1234,10 @@
       "types": "./dist/plugin-sdk/web-media.d.ts",
       "default": "./dist/plugin-sdk/web-media.js"
     },
+    "./plugin-sdk/zalouser": {
+      "types": "./dist/plugin-sdk/zalouser.d.ts",
+      "default": "./dist/plugin-sdk/zalouser.js"
+    },
     "./plugin-sdk/zod": {
       "types": "./dist/plugin-sdk/zod.d.ts",
       "default": "./dist/plugin-sdk/zod.js"
@@ -1281,6 +1286,7 @@
     "check:madge-import-cycles": "node --import tsx scripts/check-madge-import-cycles.ts",
     "check:no-conflict-markers": "node scripts/check-no-conflict-markers.mjs",
     "check:no-runtime-action-load-config": "node scripts/check-no-runtime-action-load-config.mjs",
+    "check:opengrep-rule-metadata": "node security/opengrep/check-rule-metadata.mjs",
     "check:runtime-sidecar-loaders": "node --import tsx scripts/check-runtime-sidecar-loaders.mjs",
     "check:static-import-sccs": "pnpm check:madge-import-cycles",
     "check:temp-path-guardrails": "node --import tsx scripts/check-temp-path-guardrails.ts",
@@ -1308,6 +1314,7 @@
     "deadcode:report:ci:ts-unused": "mkdir -p .artifacts/deadcode && pnpm deadcode:ts-unused > .artifacts/deadcode/ts-unused-exports.txt 2>&1 || true",
     "deadcode:ts-prune": "pnpm dlx ts-prune src extensions scripts",
     "deadcode:ts-unused": "pnpm dlx ts-unused-exports tsconfig.json --ignoreTestFiles --exitWithCount",
+    "deadcode:unused-files": "node scripts/check-deadcode-unused-files.mjs",
     "deps:root-ownership": "node scripts/root-dependency-ownership-audit.mjs",
     "deps:root-ownership:check": "node scripts/root-dependency-ownership-audit.mjs --check",
     "deps:sbom-risk": "node scripts/sbom-risk-report.mjs",
@@ -1322,8 +1329,9 @@
     "docs:list": "node scripts/docs-list.js",
     "docs:spellcheck": "bash scripts/docs-spellcheck.sh",
     "docs:spellcheck:fix": "bash scripts/docs-spellcheck.sh --write",
-    "dup:check": "jscpd src extensions scripts --format typescript,javascript --pattern \"**/*.{ts,tsx,js,mjs,cjs}\" --gitignore --noSymlinks --ignore \"**/*.test.ts,**/*.test.tsx,**/*.test.js,extensions/qa-matrix/src/shared/**,extensions/qa-matrix/src/report.ts,extensions/qa-matrix/src/docker-runtime.ts,extensions/qa-matrix/src/cli-paths.ts,**/node_modules/**,**/dist/**,**/.git/**,**/coverage/**,**/build/**,**/.build/**,**/.artifacts/**\" --min-lines 50 --min-tokens 300 --reporters console",
-    "dup:check:json": "jscpd src extensions scripts --format typescript,javascript --pattern \"**/*.{ts,tsx,js,mjs,cjs}\" --gitignore --noSymlinks --ignore \"**/*.test.ts,**/*.test.tsx,**/*.test.js,extensions/qa-matrix/src/shared/**,extensions/qa-matrix/src/report.ts,extensions/qa-matrix/src/docker-runtime.ts,extensions/qa-matrix/src/cli-paths.ts,**/node_modules/**,**/dist/**,**/.git/**,**/coverage/**,**/build/**,**/.build/**,**/.artifacts/**\" --min-lines 50 --min-tokens 300 --reporters json --output .artifacts/jscpd",
+    "dup:check": "node scripts/check-duplicates.mjs",
+    "dup:check:coverage": "node scripts/check-duplicates.mjs --coverage",
+    "dup:check:json": "node scripts/check-duplicates.mjs --json",
     "format": "oxfmt --write --threads=1",
     "format:all": "pnpm format && pnpm format:swift",
     "format:check": "oxfmt --check --threads=1",
@@ -1601,13 +1609,13 @@
     "ui:install": "node scripts/ui.js install"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "0.20.0",
+    "@agentclientprotocol/sdk": "0.21.0",
     "@clack/prompts": "^1.2.0",
     "@lydell/node-pty": "1.2.0-beta.12",
-    "@mariozechner/pi-agent-core": "0.70.5",
-    "@mariozechner/pi-ai": "0.70.5",
-    "@mariozechner/pi-coding-agent": "0.70.5",
-    "@mariozechner/pi-tui": "0.70.5",
+    "@mariozechner/pi-agent-core": "0.70.6",
+    "@mariozechner/pi-ai": "0.70.6",
+    "@mariozechner/pi-coding-agent": "0.70.6",
+    "@mariozechner/pi-tui": "0.70.6",
     "@modelcontextprotocol/sdk": "1.29.0",
     "ajv": "^8.20.0",
     "chalk": "^5.6.2",
@@ -1630,7 +1638,7 @@
     "sqlite-vec": "0.1.9",
     "tar": "7.5.13",
     "tslog": "^4.10.2",
-    "typebox": "1.1.33",
+    "typebox": "1.1.34",
     "undici": "8.1.0",
     "web-push": "^3.6.7",
     "ws": "^8.20.0",
@@ -1647,14 +1655,14 @@
     "@types/markdown-it": "^14.1.2",
     "@types/node": "25.6.0",
     "@types/ws": "^8.18.1",
-    "@typescript/native-preview": "7.0.0-dev.20260427.1",
+    "@typescript/native-preview": "7.0.0-dev.20260429.1",
     "@vitest/coverage-v8": "^4.1.5",
     "jscpd": "4.0.9",
-    "jsdom": "^29.0.2",
+    "jsdom": "^29.1.0",
     "lit": "^3.3.2",
-    "oxfmt": "0.46.0",
-    "oxlint": "^1.61.0",
-    "oxlint-tsgolint": "^0.22.0",
+    "oxfmt": "0.47.0",
+    "oxlint": "^1.62.0",
+    "oxlint-tsgolint": "^0.22.1",
     "signal-utils": "0.21.1",
     "tsdown": "0.21.10",
     "tsx": "^4.21.0",
@@ -1670,7 +1678,7 @@
   "engines": {
     "node": ">=22.14.0"
   },
-  "packageManager": "pnpm@10.33.0",
+  "packageManager": "pnpm@10.33.2+sha512.a90faf6feeab71ad6c6e57f94e0fe1a12f5dcc22cd754db40ae9593eb6a3e0b6b12e3540218bb37ae083404b1f2ce6db2a4121e979829b4aff94b99f49da1cf8",
   "pnpm": {
     "overrides": {
       "@anthropic-ai/sdk": "0.91.1",
@@ -1689,7 +1697,7 @@
       "path-to-regexp": "8.4.0",
       "qs": "6.14.2",
       "node-domexception": "npm:@nolyfill/domexception@1.0.28",
-      "typebox": "1.1.33",
+      "typebox": "1.1.34",
       "tar": "7.5.13",
       "tough-cookie": "4.1.3",
       "yauzl": "3.2.1",
@@ -1725,7 +1733,41 @@
     },
     "patchedDependencies": {
       "@whiskeysockets/baileys@7.0.0-rc.9": "patches/@whiskeysockets__baileys@7.0.0-rc.9.patch",
-      "@agentclientprotocol/claude-agent-acp@0.31.0": "patches/@agentclientprotocol__claude-agent-acp@0.31.0.patch"
+      "@agentclientprotocol/claude-agent-acp@0.31.1": "patches/@agentclientprotocol__claude-agent-acp@0.31.1.patch"
+    }
+  },
+  "openclaw": {
+    "bundle": {
+      "mirroredRootRuntimeDependencies": [
+        "@agentclientprotocol/sdk",
+        "@clack/prompts",
+        "@lydell/node-pty",
+        "@mariozechner/pi-ai",
+        "@mariozechner/pi-coding-agent",
+        "@modelcontextprotocol/sdk",
+        "ajv",
+        "chokidar",
+        "commander",
+        "croner",
+        "dotenv",
+        "global-agent",
+        "https-proxy-agent",
+        "jiti",
+        "json5",
+        "jszip",
+        "markdown-it",
+        "openai",
+        "semver",
+        "sqlite-vec",
+        "tar",
+        "tslog",
+        "typebox",
+        "undici",
+        "web-push",
+        "ws",
+        "yaml",
+        "zod"
+      ]
     }
   }
 }

@@ -1,4 +1,5 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { abortAndDrainEmbeddedPiRun } from "../agents/pi-embedded.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -306,6 +307,29 @@ export function buildGatewayCronService(params: {
           onWarn: (msg) => cronLogger.warn({ jobId: job.id }, msg),
         });
       }
+    },
+    cleanupTimedOutAgentRun: async ({ job, execution }) => {
+      if (!execution?.sessionId) {
+        return;
+      }
+      const result = await abortAndDrainEmbeddedPiRun({
+        sessionId: execution.sessionId,
+        sessionKey: execution.sessionKey,
+        settleMs: 15_000,
+        forceClear: true,
+        reason: "cron_timeout",
+      });
+      cronLogger.warn(
+        {
+          jobId: job.id,
+          sessionId: execution.sessionId,
+          sessionKey: execution.sessionKey,
+          aborted: result.aborted,
+          drained: result.drained,
+          forceCleared: result.forceCleared,
+        },
+        "cron: cleaned up timed-out agent run",
+      );
     },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) =>
       await sendGatewayCronFailureAlert({

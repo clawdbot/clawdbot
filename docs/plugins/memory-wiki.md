@@ -150,15 +150,89 @@ Each claim can include:
 
 Evidence entries can include:
 
+- `kind`
 - `sourceId`
 - `path`
 - `lines`
 - `weight`
+- `confidence`
+- `privacyTier`
 - `note`
 - `updatedAt`
 
 This is what makes the wiki act more like a belief layer than a passive note
 dump. Claims can be tracked, scored, contested, and resolved back to sources.
+
+## Agent-facing entity metadata
+
+Entity pages can also carry routing metadata for agent use. This is generic
+frontmatter, so it works for people, teams, systems, projects, or any other
+entity type.
+
+Common fields include:
+
+- `entityType`: for example `person`, `team`, `system`, or `project`
+- `canonicalId`: stable identity key used across aliases and imports
+- `aliases`: names, handles, or labels that should resolve to the same page
+- `privacyTier`: `public`, `local-private`, `sensitive`, or `confirm-before-use`
+- `bestUsedFor` / `notEnoughFor`: compact routing hints
+- `lastRefreshedAt`: source-refresh timestamp separate from page edit time
+- `personCard`: optional person-specific routing card with handles, socials,
+  emails, timezone, lane, ask-for, avoid-asking-for, confidence, and privacy
+- `relationships`: typed edges to related pages with target, kind, weight,
+  confidence, evidence kind, privacy tier, and note
+
+For a people wiki, the agent should usually start with
+`reports/person-agent-directory.md`, then open the person page with `wiki_get`
+before using contact details or inferred facts.
+
+Example:
+
+```yaml
+pageType: entity
+entityType: person
+id: entity.brad-groux
+canonicalId: maintainer.brad-groux
+aliases:
+  - Brad
+  - bgroux
+privacyTier: local-private
+bestUsedFor:
+  - Microsoft Teams and Azure routing
+notEnoughFor:
+  - legal approval
+lastRefreshedAt: "2026-04-29T00:00:00.000Z"
+personCard:
+  handles:
+    - "@bgroux"
+  socials:
+    - "https://x.example/bgroux"
+  emails:
+    - brad@example.com
+  timezone: America/Chicago
+  lane: Microsoft ecosystem
+  askFor:
+    - Teams rollout questions
+  avoidAskingFor:
+    - unrelated billing decisions
+  confidence: 0.8
+  privacyTier: confirm-before-use
+relationships:
+  - targetId: entity.alice
+    targetTitle: Alice
+    kind: collaborates-with
+    confidence: 0.7
+    evidenceKind: discrawl-stat
+claims:
+  - id: claim.brad.teams
+    text: Brad is useful for Microsoft Teams routing.
+    status: supported
+    confidence: 0.9
+    evidence:
+      - kind: maintainer-whois
+        sourceId: source.maintainers
+        privacyTier: local-private
+```
 
 ## Compile pipeline
 
@@ -190,6 +264,10 @@ Built-in reports include:
 - `reports/low-confidence.md`
 - `reports/claim-health.md`
 - `reports/stale-pages.md`
+- `reports/person-agent-directory.md`
+- `reports/relationship-graph.md`
+- `reports/provenance-coverage.md`
+- `reports/privacy-review.md`
 
 These reports track things like:
 
@@ -199,6 +277,10 @@ These reports track things like:
 - low-confidence pages and claims
 - stale or unknown freshness
 - pages with unresolved questions
+- person/entity routing cards
+- structured relationship edges
+- evidence class coverage
+- non-public privacy tiers that need review before use
 
 ## Search and retrieval
 
@@ -219,12 +301,30 @@ Important behavior:
 - claim ids can resolve back to the owning page
 - contested/stale/fresh claims influence ranking
 - provenance labels can survive into results
+- search mode can bias ranking for person lookup, question routing, source
+  evidence, or raw claims
 
 Practical rule:
 
 - use `memory_search corpus=all` for one broad recall pass
 - use `wiki_search` + `wiki_get` when you care about wiki-specific ranking,
   provenance, or page-level belief structure
+
+Search modes:
+
+- `auto`: balanced default
+- `find-person`: boost person-like entities, aliases, handles, socials, and
+  canonical IDs
+- `route-question`: boost agent cards, ask-for hints, best-used-for hints, and
+  relationship context
+- `source-evidence`: boost source pages and structured evidence metadata
+- `raw-claim`: boost matching structured claims and return claim/evidence
+  metadata in results
+
+When a result matches a structured claim, `wiki_search` can return
+`matchedClaimId`, `matchedClaimStatus`, `matchedClaimConfidence`,
+`evidenceKinds`, and `evidenceSourceIds` in its details payload. Text output
+also includes compact `Claim:` and `Evidence:` lines when available.
 
 ## Agent tools
 
@@ -239,7 +339,9 @@ The plugin registers these tools:
 What they do:
 
 - `wiki_status`: current vault mode, health, Obsidian CLI availability
-- `wiki_search`: search wiki pages and, when configured, shared memory corpora
+- `wiki_search`: search wiki pages and, when configured, shared memory corpora;
+  accepts `mode` for person lookup, question routing, source evidence, or raw
+  claim drilldown
 - `wiki_get`: read a wiki page by id/path or fall back to shared memory corpus
 - `wiki_apply`: narrow synthesis/metadata mutations without freeform page surgery
 - `wiki_lint`: structural checks, provenance gaps, contradictions, open questions

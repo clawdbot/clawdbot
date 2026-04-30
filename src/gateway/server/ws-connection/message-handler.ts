@@ -96,6 +96,10 @@ import {
   validateConnectParams,
   validateRequestFrame,
 } from "../../protocol/index.js";
+import {
+  gatewayStartupUnavailableDetails,
+  GATEWAY_STARTUP_RETRY_AFTER_MS,
+} from "../../protocol/startup-unavailable.js";
 import { parseGatewayRole } from "../../role-policy.js";
 import {
   MAX_BUFFERED_BYTES,
@@ -191,6 +195,7 @@ export function attachGatewayWsMessageHandler(params: {
   rateLimiter?: AuthRateLimiter;
   /** Browser-origin fallback limiter (loopback is never exempt). */
   browserRateLimiter?: AuthRateLimiter;
+  isStartupPending?: () => boolean;
   gatewayMethods: string[];
   events: string[];
   extraHandlers: GatewayRequestHandlers;
@@ -230,6 +235,7 @@ export function attachGatewayWsMessageHandler(params: {
     getRequiredSharedGatewaySessionGeneration,
     rateLimiter,
     browserRateLimiter,
+    isStartupPending,
     gatewayMethods,
     events,
     extraHandlers,
@@ -446,6 +452,22 @@ export function attachGatewayWsMessageHandler(params: {
             error: errorShape(code, message, options),
           });
         };
+
+        if (isStartupPending?.()) {
+          markHandshakeFailure("startup-sidecars-pending");
+          await sendFrame({
+            type: "res",
+            id: frame.id,
+            ok: false,
+            error: errorShape(ErrorCodes.UNAVAILABLE, "gateway starting; retry shortly", {
+              retryable: true,
+              retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
+              details: gatewayStartupUnavailableDetails(),
+            }),
+          }).catch(() => {});
+          queueMicrotask(() => close(1013, "gateway starting"));
+          return;
+        }
 
         // protocol negotiation
         const { minProtocol, maxProtocol } = connectParams;

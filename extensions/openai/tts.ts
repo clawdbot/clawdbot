@@ -1,4 +1,7 @@
-import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
+import {
+  assertOkOrThrowProviderError,
+  resolveProviderRequestHeaders,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   captureHttpExchange,
   isDebugProxyGlobalFetchPatchInstalled,
@@ -97,7 +100,16 @@ export async function openaiTTS(params: {
     throw new Error(`Invalid voice: ${voice}`);
   }
 
-  const requestHeaders = {
+  const requestHeaders = resolveProviderRequestHeaders({
+    provider: "openai",
+    baseUrl,
+    capability: "audio",
+    transport: "http",
+    defaultHeaders: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+  }) ?? {
     Authorization: `Bearer ${apiKey}`,
     "Content-Type": "application/json",
   };

@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { SsrFBlockedError, type LookupFn } from "../../infra/net/ssrf.js";
+import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import type { RuntimeWebFetchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
@@ -274,6 +274,7 @@ type WebFetchRuntimeParams = {
   config?: OpenClawConfig;
   ssrfPolicy?: {
     allowRfc2544BenchmarkRange?: boolean;
+    allowIpv6UniqueLocalRange?: boolean;
   };
   lookupFn?: LookupFn;
   resolveProviderFallback: () => Promise<WebFetchProviderFallback>;
@@ -389,8 +390,16 @@ async function maybeFetchProviderWebFetchPayload(
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
   const allowRfc2544BenchmarkRange = params.ssrfPolicy?.allowRfc2544BenchmarkRange === true;
+  const allowIpv6UniqueLocalRange = params.ssrfPolicy?.allowIpv6UniqueLocalRange === true;
+  const ssrfPolicy: SsrFPolicy | undefined =
+    allowRfc2544BenchmarkRange || allowIpv6UniqueLocalRange
+      ? {
+          ...(allowRfc2544BenchmarkRange ? { allowRfc2544BenchmarkRange } : {}),
+          ...(allowIpv6UniqueLocalRange ? { allowIpv6UniqueLocalRange } : {}),
+        }
+      : undefined;
   const cacheKey = normalizeCacheKey(
-    `fetch:${params.url}:${params.extractMode}:${params.maxChars}${allowRfc2544BenchmarkRange ? ":allow-rfc2544" : ""}`,
+    `fetch:${params.url}:${params.extractMode}:${params.maxChars}${allowRfc2544BenchmarkRange ? ":allow-rfc2544" : ""}${allowIpv6UniqueLocalRange ? ":allow-ipv6-ula" : ""}`,
   );
   const cached = readCache(FETCH_CACHE, cacheKey);
   if (cached) {
@@ -418,7 +427,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
       lookupFn: params.lookupFn,
-      policy: allowRfc2544BenchmarkRange ? { allowRfc2544BenchmarkRange } : undefined,
+      policy: ssrfPolicy,
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",

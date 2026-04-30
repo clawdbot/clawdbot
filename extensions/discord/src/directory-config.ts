@@ -3,7 +3,11 @@ import {
   createResolvedDirectoryEntriesLister,
   type DirectoryConfigParams,
 } from "openclaw/plugin-sdk/directory-config-runtime";
-import { mergeDiscordAccountConfig, resolveDefaultDiscordAccountId } from "./accounts.js";
+import {
+  mergeDiscordAccountConfig,
+  resolveDefaultDiscordAccountId,
+  resolveDiscordAccountAllowFrom,
+} from "./accounts.js";
 
 function resolveDiscordDirectoryConfigAccount(
   cfg: DirectoryConfigParams["cfg"],
@@ -14,6 +18,7 @@ function resolveDiscordDirectoryConfigAccount(
   return {
     accountId: resolvedAccountId,
     config,
+    allowFrom: resolveDiscordAccountAllowFrom({ cfg, accountId: resolvedAccountId }) ?? [],
     dm: config.dm,
   };
 }
@@ -24,13 +29,12 @@ export const listDiscordDirectoryPeersFromConfig = createResolvedDirectoryEntrie
   kind: "user",
   resolveAccount: (cfg, accountId) => resolveDiscordDirectoryConfigAccount(cfg, accountId),
   resolveSources: (account) => {
-    const allowFrom = account.config.allowFrom ?? account.config.dm?.allowFrom ?? [];
     const guildUsers = Object.values(account.config.guilds ?? {}).flatMap((guild) =>
       (guild.users ?? []).concat(
         Object.values(guild.channels ?? {}).flatMap((channel) => channel.users ?? []),
       ),
     );
-    return [allowFrom, Object.keys(account.config.dms ?? {}), guildUsers];
+    return [account.allowFrom, Object.keys(account.config.dms ?? {}), guildUsers];
   },
   normalizeId: (raw) => {
     const mention = raw.match(/^<@!?(\d+)>$/);

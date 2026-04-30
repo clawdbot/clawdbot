@@ -66,6 +66,7 @@ vi.mock("../config/paths.js", () => ({
   get isNixMode() {
     return configMocks.isNixMode.value;
   },
+  resolveStateDir: vi.fn(() => "/tmp/openclaw-state"),
 }));
 
 vi.mock("../config/runtime-overrides.js", () => ({

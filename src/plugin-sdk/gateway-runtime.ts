@@ -18,6 +18,7 @@ export { ensureGatewayStartupAuth } from "../gateway/startup-auth.js";
 export { resolveGatewayAuth } from "../gateway/auth.js";
 export { rawDataToString } from "../infra/ws.js";
 export { GatewayClient } from "../gateway/client.js";
+export { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 export {
   createOperatorApprovalsGatewayClient,
   withOperatorApprovalsGatewayClient,

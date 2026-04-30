@@ -1,0 +1,87 @@
+name: openclaw-codeql-plugin-trust-boundary-critical-security
+
+disable-default-queries: true
+
+queries:
+  - uses: security-extended
+
+query-filters:
+  - include:
+      precision:
+        - high
+        - very-high
+      tags contain: security
+      security-severity: /([7-9]|10)\.(\d)+/
+
+paths:
+  - src/cli/plugin-install-config-policy.ts
+  - src/cli/plugin-registry-loader.ts
+  - src/cli/plugins-command-helpers.ts
+  - src/cli/plugins-install-command.ts
+  - src/cli/plugins-install-record-commit.ts
+  - src/plugins/activation-planner.ts
+  - src/plugins/bundle-manifest.ts
+  - src/plugins/bundled-compat.ts
+  - src/plugins/bundled-dir.ts
+  - src/plugins/bundled-plugin-metadata.ts
+  - src/plugins/bundled-plugin-scan.ts
+  - src/plugins/bundled-runtime-deps*.ts
+  - src/plugins/bundled-runtime-root.ts
+  - src/plugins/cli-registry-loader.ts
+  - src/plugins/config-activation-shared.ts
+  - src/plugins/config-contracts.ts
+  - src/plugins/config-policy.ts
+  - src/plugins/config-schema.ts
+  - src/plugins/dependency-denylist.ts
+  - src/plugins/discovery.ts
+  - src/plugins/effective-plugin-ids.ts
+  - src/plugins/externalized-bundled-plugins.ts
+  - src/plugins/install.runtime.ts
+  - src/plugins/install-source-info.ts
+  - src/plugins/installed-plugin-index*.ts
+  - src/plugins/loader*.ts
+  - src/plugins/manifest*.ts
+  - src/plugins/marketplace.ts
+  - src/plugins/module-export.ts
+  - src/plugins/package-entrypoints.ts
+  - src/plugins/plugin-config-trust.ts
+  - src/plugins/plugin-origin.types.ts
+  - src/plugins/plugin-registry*.ts
+  - src/plugins/public-surface*.ts
+  - src/plugins/registry*.ts
+  - src/plugins/runtime
+  - src/plugins/runtime-state.ts
+  - src/plugins/runtime.ts
+  - src/plugins/source-loader.ts
+  - src/plugins/update.ts
+  - src/plugins/validation-diagnostics.ts
+  - src/plugin-sdk/*entry*.ts
+  - src/plugin-sdk/*facade*.ts
+  - src/plugin-sdk/api-baseline.ts
+  - src/plugin-sdk/config-schema.ts
+  - src/plugin-sdk/config-types.ts
+  - src/plugin-sdk/core.ts
+  - src/plugin-sdk/extension-shared.ts
+  - packages/plugin-package-contract/src
+  - packages/plugin-sdk/src/plugin-entry.ts
+  - packages/plugin-sdk/src/plugin-runtime.ts
+  - packages/plugin-sdk/src/runtime-env.ts
+  - packages/plugin-sdk/src/security-runtime.ts
+
+paths-ignore:
+  - "**/node_modules"
+  - "**/coverage"
+  - "**/*.generated.ts"
+  - "**/*.bundle.js"
+  - "**/*-runtime.js"
+  - "**/*.test.ts"
+  - "**/*.test.tsx"
+  - "**/*.spec.ts"
+  - "**/*.spec.tsx"
+  - "**/*.e2e.test.ts"
+  - "**/*.e2e.test.tsx"
+  - "**/*test-support*"
+  - "**/*test-helper*"
+  - "**/*mock*"
+  - "**/*fixture*"
+  - "**/*bench*"

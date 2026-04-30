@@ -87,6 +87,7 @@ describe("setAssistantAvatarOverride", () => {
 
     setAssistantAvatarOverride(state, null);
 
+    expect(state.assistantAvatar).toBeNull();
     expect(state.assistantAvatarSource).toBeNull();
     expect(state.assistantAvatarStatus).toBeNull();
     expect(state.assistantAvatarReason).toBeNull();

@@ -6,6 +6,7 @@ import {
   sendWebDirectInboundAndCollectSessionKeys,
 } from "./auto-reply.broadcast-groups.test-harness.js";
 import {
+  createAcceptedWhatsAppSendResult,
   installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
   resetLoadConfigMock,
@@ -202,8 +203,8 @@ describe("broadcast groups", () => {
       },
     } satisfies OpenClawConfig);
 
-    const sendMedia = vi.fn();
-    const reply = vi.fn().mockResolvedValue(undefined);
+    const sendMedia = vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("media", "m1"));
+    const reply = vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("text", "r1"));
     const sendComposing = vi.fn();
 
     let started = 0;

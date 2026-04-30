@@ -48,6 +48,7 @@ export function terminateManagedChild(child, signal = "SIGTERM") {
  *   env?: NodeJS.ProcessEnv;
  *   stdio?: import("node:child_process").StdioOptions;
  *   shell?: boolean;
+ *   onReady?: (child: import("node:child_process").ChildProcess) => void;
  * }} options
  * @returns {Promise<number>}
  */
@@ -58,6 +59,7 @@ export async function runManagedCommand({
   env,
   stdio = "inherit",
   shell = process.platform === "win32",
+  onReady,
 }) {
   const child = spawn(bin, args, {
     cwd,
@@ -81,6 +83,7 @@ export async function runManagedCommand({
   for (const signal of FORWARDED_SIGNALS) {
     process.once(signal, forwardSignal);
   }
+  onReady?.(child);
 
   try {
     return await new Promise((resolve, reject) => {

@@ -145,17 +145,22 @@ function buildAgentFollowupArgs(params: {
   resultText: string;
   deliveryTarget: ExternalBestEffortDeliveryTarget;
   sessionOnlyOriginChannel?: string;
+  turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
 }) {
   const { deliveryTarget, sessionOnlyOriginChannel } = params;
+  // When the followup run has no deliverable route and no gateway-internal channel,
+  // preserve the raw turnSourceChannel so the spawned agent inherits messageProvider.
+  // Without this, tools.elevated.allowFrom.<provider> checks fail with provider=null.
+  const fallbackChannel = sessionOnlyOriginChannel ?? params.turnSourceChannel;
   return {
     sessionKey: params.sessionKey,
     message: buildExecApprovalFollowupPrompt(params.resultText),
     deliver: deliveryTarget.deliver,
     ...(deliveryTarget.deliver ? { bestEffortDeliver: true as const } : {}),
-    channel: deliveryTarget.deliver ? deliveryTarget.channel : sessionOnlyOriginChannel,
+    channel: deliveryTarget.deliver ? deliveryTarget.channel : fallbackChannel,
     to: deliveryTarget.deliver
       ? deliveryTarget.to
       : sessionOnlyOriginChannel
@@ -241,6 +246,7 @@ export async function sendExecApprovalFollowup(
           resultText,
           deliveryTarget,
           sessionOnlyOriginChannel,
+          turnSourceChannel: params.turnSourceChannel,
           turnSourceTo: params.turnSourceTo,
           turnSourceAccountId: params.turnSourceAccountId,
           turnSourceThreadId: params.turnSourceThreadId,

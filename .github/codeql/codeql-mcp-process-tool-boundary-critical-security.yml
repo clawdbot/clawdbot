@@ -1,0 +1,56 @@
+name: openclaw-codeql-mcp-process-tool-boundary-critical-security
+
+disable-default-queries: true
+
+queries:
+  - uses: security-extended
+
+query-filters:
+  - include:
+      precision:
+        - high
+        - very-high
+      tags contain: security
+      security-severity: /([7-9]|10)\.(\d)+/
+
+paths:
+  - src/mcp
+  - src/process
+  - src/infra/outbound
+  - src/agents/bash-tools.exec*.ts
+  - src/agents/bash-tools.process*.ts
+  - src/agents/exec-*.ts
+  - src/agents/execution-contract.ts
+  - src/agents/openclaw-plugin-tools.ts
+  - src/agents/openclaw-tools.runtime.ts
+  - src/agents/openclaw-tools.registration.ts
+  - src/agents/pi-tool-definition-adapter.ts
+  - src/agents/pi-tools.abort.ts
+  - src/agents/pi-tools.before-tool-call*.ts
+  - src/agents/pi-tools.host-edit.ts
+  - src/agents/pi-tools-parameter-schema.ts
+  - src/agents/pi-embedded-runner/effective-tool-policy.ts
+  - src/agents/pi-embedded-runner/tool-name-allowlist.ts
+  - src/agents/pi-embedded-runner/tool-schema-runtime.ts
+  - src/agents/tools/gateway-tool.ts
+  - src/agents/tools/message-tool.ts
+  - src/agents/tools/sessions-send-tool.ts
+  - src/agents/tools/sessions-spawn-tool.ts
+  - src/agents/tools/subagents-tool.ts
+  - src/agents/tools/tool-runtime.helpers.ts
+
+paths-ignore:
+  - "**/node_modules"
+  - "**/coverage"
+  - "**/*.generated.ts"
+  - "**/*.bundle.js"
+  - "**/*-runtime.js"
+  - "**/*.test.ts"
+  - "**/*.test.tsx"
+  - "**/*.e2e.test.ts"
+  - "**/*.e2e.test.tsx"
+  - "**/*test-support*"
+  - "**/*test-helper*"
+  - "**/*mock*"
+  - "**/*fixture*"
+  - "**/*bench*"

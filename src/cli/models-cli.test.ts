@@ -20,35 +20,6 @@ const {
   modelsStatusCommand,
 } = mocks;
 
-vi.mock("../commands/models.js", () => ({
-  modelsStatusCommand: mocks.modelsStatusCommand,
-  modelsAliasesAddCommand: mocks.noopAsync,
-  modelsAliasesListCommand: mocks.noopAsync,
-  modelsAliasesRemoveCommand: mocks.noopAsync,
-  modelsAuthAddCommand: mocks.noopAsync,
-  modelsAuthLoginCommand: mocks.modelsAuthLoginCommand,
-  modelsAuthOrderClearCommand: mocks.noopAsync,
-  modelsAuthOrderGetCommand: mocks.noopAsync,
-  modelsAuthOrderSetCommand: mocks.noopAsync,
-  modelsAuthPasteTokenCommand: mocks.noopAsync,
-  modelsAuthSetupTokenCommand: mocks.noopAsync,
-  modelsFallbacksAddCommand: mocks.noopAsync,
-  modelsFallbacksClearCommand: mocks.noopAsync,
-  modelsFallbacksListCommand: mocks.noopAsync,
-  modelsFallbacksRemoveCommand: mocks.noopAsync,
-  modelsImageFallbacksAddCommand: mocks.noopAsync,
-  modelsImageFallbacksClearCommand: mocks.noopAsync,
-  modelsImageFallbacksListCommand: mocks.noopAsync,
-  modelsImageFallbacksRemoveCommand: mocks.noopAsync,
-  modelsListCommand: mocks.noopAsync,
-  modelsScanCommand: mocks.noopAsync,
-  modelsSetCommand: mocks.noopAsync,
-  modelsSetImageCommand: mocks.noopAsync,
-}));
-vi.mock("../commands/models/list.js", () => ({
-  modelsListCommand: mocks.noopAsync,
-  modelsStatusCommand: mocks.modelsStatusCommand,
-}));
 vi.mock("../commands/models/list.list-command.js", () => ({
   modelsListCommand: mocks.noopAsync,
 }));

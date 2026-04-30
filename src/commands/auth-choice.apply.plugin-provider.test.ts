@@ -354,7 +354,15 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     });
     expect(resolvePluginSetupProvider).toHaveBeenCalledWith({
       provider: LOCAL_PROVIDER_ID,
-      config: {},
+      config: {
+        plugins: {
+          entries: {
+            "local-provider-plugin": {
+              enabled: true,
+            },
+          },
+        },
+      },
       workspaceDir: "/tmp/workspace",
       env: undefined,
       pluginIds: ["local-provider-plugin"],

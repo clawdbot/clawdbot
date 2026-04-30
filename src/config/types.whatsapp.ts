@@ -105,8 +105,6 @@ type WhatsAppSharedConfig = {
   debounceMs?: number;
   /** Reply threading mode for auto-replies (off|first|all|batched). */
   replyToMode?: ReplyToMode;
-  /** Whether WhatsApp should deliver user-visible error text. Default: true. */
-  exposeErrorText?: boolean;
   /** Heartbeat visibility settings. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Channel health monitor overrides for this channel/account. */

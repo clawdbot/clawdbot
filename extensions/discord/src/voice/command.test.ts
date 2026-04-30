@@ -1,5 +1,5 @@
-import type { CommandInteraction, CommandWithSubcommands } from "@buape/carbon";
 import { describe, expect, it, vi } from "vitest";
+import type { CommandInteraction, CommandWithSubcommands } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
 import { createDiscordVoiceCommand } from "./command.js";
 import type { DiscordVoiceManager } from "./manager.js";
@@ -37,19 +37,58 @@ function createVoiceCommandHarness(manager: DiscordVoiceManager | null = null) {
 function createInteraction(overrides?: Partial<CommandInteraction>): {
   interaction: CommandInteraction;
   reply: ReturnType<typeof vi.fn>;
+  defer: ReturnType<typeof vi.fn>;
 } {
   const reply = vi.fn(async () => undefined);
+  const defer = vi.fn(async () => undefined);
   const interaction = {
     guild: undefined,
     user: { id: "u1", username: "tester" },
     rawData: { member: { roles: [] } },
+    defer,
     reply,
     ...overrides,
   } as unknown as CommandInteraction;
-  return { interaction, reply };
+  return { interaction, reply, defer };
 }
 
 describe("createDiscordVoiceCommand", () => {
+  it("serializes subcommands without top-level command-only fields", () => {
+    const { command } = createVoiceCommandHarness(null);
+    const serialized = command.serialize();
+    const firstOption = serialized.options?.[0] as Record<string, unknown> | undefined;
+
+    expect(firstOption).toMatchObject({
+      name: "join",
+      type: 1,
+      description: expect.any(String),
+    });
+    expect(firstOption).not.toHaveProperty("contexts");
+    expect(firstOption).not.toHaveProperty("integration_types");
+    expect(firstOption).not.toHaveProperty("default_member_permissions");
+  });
+
+  it("dispatches slash-command subcommand interactions", async () => {
+    const { command } = createVoiceCommandHarness(null);
+    const { interaction, reply, defer } = createInteraction({
+      guild: { id: "g1", name: "Guild" } as CommandInteraction["guild"],
+      rawData: {
+        data: {
+          options: [{ name: "status", type: 1 }],
+        },
+        member: { roles: [] },
+      } as unknown as CommandInteraction["rawData"],
+    });
+
+    await command.run(interaction);
+
+    expect(defer).toHaveBeenCalledWith({ ephemeral: true });
+    expect(reply).toHaveBeenCalledWith({
+      content: "Voice manager is not available yet.",
+      ephemeral: true,
+    });
+  });
+
   it("vc leave reports missing guild before manager lookup", async () => {
     const { leave } = createVoiceCommandHarness(null);
     const { interaction, reply } = createInteraction();

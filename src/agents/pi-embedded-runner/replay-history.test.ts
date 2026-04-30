@@ -3,6 +3,10 @@ import { describe, expect, it } from "vitest";
 import { normalizeAssistantReplayContent } from "./replay-history.js";
 
 const FALLBACK_TEXT = "[assistant turn failed before producing content]";
+const COPIED_INBOUND_METADATA_ONLY_TEXT = `Conversation info (untrusted metadata):
+\`\`\`json
+{"message_id":"msg-abc","sender":"+1555000"}
+\`\`\``;
 
 function bedrockAssistant(
   content: unknown,
@@ -132,6 +136,33 @@ describe("normalizeAssistantReplayContent", () => {
     const out = normalizeAssistantReplayContent(messages);
     const wrapped = out[1] as AgentMessage & { content: { type: string; text: string }[] };
     expect(wrapped.content).toEqual([{ type: "text", text: "plain string content" }]);
+  });
+
+  it("drops metadata-only legacy string assistant content from replay", () => {
+    const messages = [
+      userMessage("first"),
+      bedrockAssistant(COPIED_INBOUND_METADATA_ONLY_TEXT),
+      userMessage("second"),
+    ];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).toEqual([messages[0], messages[2]]);
+    expect(JSON.stringify(out)).not.toContain("assistant copied inbound metadata omitted");
+  });
+
+  it("drops metadata-only assistant text blocks without fabricating placeholder output", () => {
+    const toolCall = { type: "toolCall", id: "call_1", name: "read", arguments: {} };
+    const messages = [
+      userMessage("hi"),
+      bedrockAssistant([
+        { type: "text", text: COPIED_INBOUND_METADATA_ONLY_TEXT },
+        { type: "text", text: `${COPIED_INBOUND_METADATA_ONLY_TEXT}\n\nVisible reply` },
+        toolCall,
+      ]),
+    ];
+    const out = normalizeAssistantReplayContent(messages);
+    const normalized = out[1] as AgentMessage & { content: unknown[] };
+    expect(normalized.content).toEqual([{ type: "text", text: "Visible reply" }, toolCall]);
+    expect(JSON.stringify(out)).not.toContain("assistant copied inbound metadata omitted");
   });
 
   it("filters openclaw delivery-mirror and gateway-injected assistant messages from replay", () => {

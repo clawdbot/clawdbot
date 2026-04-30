@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import type { Model } from "@mariozechner/pi-ai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildOpenAIResponsesParams,
   buildOpenAICompletionsParams,
@@ -21,6 +21,72 @@ import {
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
 describe("openai transport stream", () => {
+  it("adds OpenClaw attribution to native OpenAI transport headers and protects it from pi", () => {
+    vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
+    const headers = __testing.buildOpenAIClientHeaders(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        headers: {
+          originator: "pi",
+          "User-Agent": "pi",
+          "X-Provider": "model",
+        },
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      { systemPrompt: "", messages: [] } as never,
+      {
+        originator: "pi",
+        "User-Agent": "pi",
+        "X-Caller": "request",
+      },
+    );
+
+    expect(headers).toMatchObject({
+      originator: "openclaw",
+      version: "2026.3.22",
+      "User-Agent": "openclaw/2026.3.22",
+      "X-Provider": "model",
+      "X-Caller": "request",
+    });
+  });
+
+  it("adds OpenClaw attribution to native OpenAI Codex transport headers", () => {
+    vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
+    const headers = __testing.buildOpenAIClientHeaders(
+      {
+        id: "gpt-5.4-codex",
+        name: "GPT-5.4 Codex",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        headers: {
+          originator: "pi",
+          "User-Agent": "pi",
+        },
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      { systemPrompt: "", messages: [] } as never,
+    );
+
+    expect(headers).toMatchObject({
+      originator: "openclaw",
+      version: "2026.3.22",
+      "User-Agent": "openclaw/2026.3.22",
+    });
+  });
+
   it("moves Azure OpenAI completions api-version headers into default query params", () => {
     const config = __testing.buildOpenAICompletionsClientConfig(
       {
@@ -963,6 +1029,40 @@ describe("openai transport stream", () => {
     expect(params.max_output_tokens).toBe(1024);
     expect(params.temperature).toBe(0.2);
     expect(params.service_tier).toBe("auto");
+  });
+
+  it("adds minimal user input for Codex responses when only the system prompt is present", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as {
+      input?: Array<{ role?: string; content?: Array<{ type?: string; text?: string }> }>;
+      instructions?: string;
+    };
+
+    expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
+    expect(params.input).toEqual([
+      {
+        role: "user",
+        content: [{ type: "input_text", text: " " }],
+      },
+    ]);
   });
 
   it("does not infer high reasoning when Pi passes thinking off", () => {

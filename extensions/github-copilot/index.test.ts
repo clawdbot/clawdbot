@@ -8,12 +8,15 @@ import {
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const resolveCopilotApiTokenMock = vi.hoisted(() => vi.fn());
+const mocks = vi.hoisted(() => ({
+  githubCopilotLoginCommand: vi.fn(),
+  resolveCopilotApiToken: vi.fn(),
+}));
 
 vi.mock("./register.runtime.js", () => ({
   DEFAULT_COPILOT_API_BASE_URL: "https://api.githubcopilot.test",
-  resolveCopilotApiToken: resolveCopilotApiTokenMock,
-  githubCopilotLoginCommand: vi.fn(),
+  resolveCopilotApiToken: mocks.resolveCopilotApiToken,
+  githubCopilotLoginCommand: mocks.githubCopilotLoginCommand,
   fetchCopilotUsage: vi.fn(),
 }));
 
@@ -22,6 +25,7 @@ import plugin from "./index.js";
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  vi.clearAllMocks();
   clearRuntimeAuthProfileStoreSnapshots();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
@@ -98,11 +102,11 @@ describe("github-copilot plugin", () => {
     } as never);
 
     expect(result).toBeNull();
-    expect(resolveCopilotApiTokenMock).not.toHaveBeenCalled();
+    expect(mocks.resolveCopilotApiToken).not.toHaveBeenCalled();
   });
 
   it("uses live plugin config to re-enable discovery after startup disable", async () => {
-    resolveCopilotApiTokenMock.mockResolvedValueOnce({
+    mocks.resolveCopilotApiToken.mockResolvedValueOnce({
       token: "copilot_api_token",
       baseUrl: "https://api.githubcopilot.live",
     });
@@ -125,7 +129,7 @@ describe("github-copilot plugin", () => {
       resolveProviderApiKey: () => ({ apiKey: "gh_test_token" }),
     } as never);
 
-    expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({
+    expect(mocks.resolveCopilotApiToken).toHaveBeenCalledWith({
       githubToken: "gh_test_token",
       env: { GH_TOKEN: "gh_test_token" },
     });
@@ -135,6 +139,156 @@ describe("github-copilot plugin", () => {
         models: [],
       },
     });
+  });
+
+  it("offers to reuse an existing token profile during interactive onboarding", async () => {
+    const provider = registerProviderWithPluginConfig({});
+    const method = provider.auth[0];
+    const agentDir = await createAgentDir();
+    await fs.writeFile(
+      path.join(agentDir, "auth-profiles.json"),
+      JSON.stringify({
+        version: 1,
+        profiles: {
+          "github-copilot:github": {
+            type: "token",
+            provider: "github-copilot",
+            token: "existing-token",
+          },
+        },
+      }),
+    );
+    const prompter = {
+      confirm: vi.fn(async () => false),
+      note: vi.fn(),
+    };
+
+    const result = await method.run({
+      config: {},
+      env: {},
+      agentDir,
+      workspaceDir: "/tmp/workspace",
+      prompter,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      opts: {},
+      secretInputMode: "plaintext",
+      allowSecretRefPrompt: false,
+      isRemote: false,
+      openUrl: vi.fn(),
+      oauth: { createVpsAwareHandlers: vi.fn() },
+    } as never);
+
+    expect(prompter.confirm).toHaveBeenCalledWith({
+      message: "GitHub Copilot auth already exists. Re-run login?",
+      initialValue: false,
+    });
+    expect(mocks.githubCopilotLoginCommand).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      profiles: [
+        {
+          profileId: "github-copilot:github",
+          credential: {
+            type: "token",
+            provider: "github-copilot",
+            token: "existing-token",
+          },
+        },
+      ],
+      defaultModel: "github-copilot/claude-opus-4.7",
+    });
+  });
+
+  it("can refresh an existing token profile during interactive onboarding", async () => {
+    const provider = registerProviderWithPluginConfig({});
+    const method = provider.auth[0];
+    const agentDir = await createAgentDir();
+    await fs.writeFile(
+      path.join(agentDir, "auth-profiles.json"),
+      JSON.stringify({
+        version: 1,
+        profiles: {
+          "github-copilot:github": {
+            type: "token",
+            provider: "github-copilot",
+            token: "existing-token",
+          },
+        },
+      }),
+    );
+    const fetchMock = vi.fn(async (input: unknown) => {
+      const target =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input instanceof Request
+              ? input.url
+              : String(input);
+      if (target === "https://github.com/login/device/code") {
+        return new Response(
+          JSON.stringify({
+            device_code: "device-code-stub",
+            user_code: "ABCD-1234",
+            verification_uri: "https://github.com/login/device",
+            expires_in: 900,
+            interval: 0,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (target === "https://github.com/login/oauth/access_token") {
+        return new Response(
+          JSON.stringify({ access_token: "refreshed-token", token_type: "bearer" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      throw new Error(`unexpected fetch in github-copilot refresh test: ${target}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const prompter = {
+      confirm: vi.fn(async () => true),
+      note: vi.fn(),
+    };
+    const isTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+    Object.defineProperty(process.stdin, "isTTY", {
+      configurable: true,
+      value: true,
+    });
+
+    try {
+      const result = await method.run({
+        config: {},
+        env: {},
+        agentDir,
+        workspaceDir: "/tmp/workspace",
+        prompter,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        opts: {},
+        secretInputMode: "plaintext",
+        allowSecretRefPrompt: false,
+        isRemote: false,
+        openUrl: vi.fn(),
+        oauth: { createVpsAwareHandlers: vi.fn() },
+      } as never);
+
+      expect(prompter.confirm).toHaveBeenCalledWith({
+        message: "GitHub Copilot auth already exists. Re-run login?",
+        initialValue: false,
+      });
+      expect(mocks.githubCopilotLoginCommand).not.toHaveBeenCalled();
+      expect(result.profiles[0]?.credential).toEqual({
+        type: "token",
+        provider: "github-copilot",
+        token: "refreshed-token",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      if (isTtyDescriptor) {
+        Object.defineProperty(process.stdin, "isTTY", isTtyDescriptor);
+      } else {
+        delete (process.stdin as { isTTY?: boolean }).isTTY;
+      }
+    }
   });
 
   it("stores GitHub Copilot token from non-interactive onboarding", async () => {

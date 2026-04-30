@@ -601,7 +601,6 @@ export function resolveProviderRequestPolicy(
   const policy = resolveProviderAttributionPolicy(provider, env);
   const endpointResolution = resolveProviderEndpoint(input.baseUrl);
   const endpointClass = endpointResolution.endpointClass;
-  const api = normalizeOptionalLowercaseString(input.api);
   const usesConfiguredBaseUrl = endpointClass !== "default";
   const usesKnownNativeOpenAIEndpoint =
     endpointClass === "openai-public" ||
@@ -614,19 +613,9 @@ export function resolveProviderRequestPolicy(
   const usesExplicitProxyLikeEndpoint = usesConfiguredBaseUrl && !usesKnownNativeOpenAIEndpoint;
 
   let attributionProvider: string | undefined;
-  if (
-    provider === "openai" &&
-    (api === "openai-completions" ||
-      api === "openai-responses" ||
-      (input.capability === "audio" && api === "openai-audio-transcriptions")) &&
-    usesOpenAIPublicAttributionHost
-  ) {
+  if (provider === "openai" && usesOpenAIPublicAttributionHost) {
     attributionProvider = "openai";
-  } else if (
-    provider === "openai-codex" &&
-    (api === "openai-codex-responses" || api === "openai-responses") &&
-    usesOpenAICodexAttributionHost
-  ) {
+  } else if (provider === "openai-codex" && usesOpenAICodexAttributionHost) {
     attributionProvider = "openai-codex";
   } else if (provider === "openrouter" && policy?.enabledByDefault) {
     // OpenRouter attribution is documented, but only apply it to known

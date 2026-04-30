@@ -15,48 +15,12 @@ const UPDATE_RESPAWN_HEALTH_POLL_MS = 200;
 type GatewayRunSignalAction = "stop" | "restart";
 type RestartDrainTimeoutMs = number | undefined;
 
-type EmbeddedRunsModule = typeof import("../../agents/pi-embedded-runner/runs.js");
-type RuntimeConfigModule = typeof import("../../config/config.js");
-type ProcessRespawnModule = typeof import("../../infra/process-respawn.js");
-type RestartSentinelModule = typeof import("../../infra/restart-sentinel.js");
-type RestartModule = typeof import("../../infra/restart.js");
-type SupervisorMarkersModule = typeof import("../../infra/supervisor-markers.js");
-type DiagnosticStabilityBundleModule =
-  typeof import("../../logging/diagnostic-stability-bundle.js");
-type BundledRuntimeDepsActivityModule =
-  typeof import("../../plugins/bundled-runtime-deps-activity.js");
-type CommandQueueModule = typeof import("../../process/command-queue.js");
-type RuntimeInternalModule = typeof import("../../tasks/runtime-internal.js");
+type GatewayLifecycleRuntimeModule = typeof import("./lifecycle.runtime.js");
 
-let embeddedRunsModule: Promise<EmbeddedRunsModule> | undefined;
-let runtimeConfigModule: Promise<RuntimeConfigModule> | undefined;
-let processRespawnModule: Promise<ProcessRespawnModule> | undefined;
-let restartSentinelModule: Promise<RestartSentinelModule> | undefined;
-let restartModule: Promise<RestartModule> | undefined;
-let supervisorMarkersModule: Promise<SupervisorMarkersModule> | undefined;
-let diagnosticStabilityBundleModule: Promise<DiagnosticStabilityBundleModule> | undefined;
-let bundledRuntimeDepsActivityModule: Promise<BundledRuntimeDepsActivityModule> | undefined;
-let commandQueueModule: Promise<CommandQueueModule> | undefined;
-let runtimeInternalModule: Promise<RuntimeInternalModule> | undefined;
+let gatewayLifecycleRuntimeModule: Promise<GatewayLifecycleRuntimeModule> | undefined;
 
-const loadEmbeddedRunsModule = () =>
-  (embeddedRunsModule ??= import("../../agents/pi-embedded-runner/runs.js"));
-const loadRuntimeConfigModule = () => (runtimeConfigModule ??= import("../../config/config.js"));
-const loadProcessRespawnModule = () =>
-  (processRespawnModule ??= import("../../infra/process-respawn.js"));
-const loadRestartSentinelModule = () =>
-  (restartSentinelModule ??= import("../../infra/restart-sentinel.js"));
-const loadRestartModule = () => (restartModule ??= import("../../infra/restart.js"));
-const loadSupervisorMarkersModule = () =>
-  (supervisorMarkersModule ??= import("../../infra/supervisor-markers.js"));
-const loadDiagnosticStabilityBundleModule = () =>
-  (diagnosticStabilityBundleModule ??= import("../../logging/diagnostic-stability-bundle.js"));
-const loadBundledRuntimeDepsActivityModule = () =>
-  (bundledRuntimeDepsActivityModule ??= import("../../plugins/bundled-runtime-deps-activity.js"));
-const loadCommandQueueModule = () =>
-  (commandQueueModule ??= import("../../process/command-queue.js"));
-const loadRuntimeInternalModule = () =>
-  (runtimeInternalModule ??= import("../../tasks/runtime-internal.js"));
+const loadGatewayLifecycleRuntimeModule = () =>
+  (gatewayLifecycleRuntimeModule ??= import("./lifecycle.runtime.js"));
 
 function createRestartIterationHook(onRestart: () => Promise<void> | void): () => Promise<boolean> {
   let isFirstIteration = true;
@@ -137,7 +101,7 @@ export async function runGatewayLoop(params: {
   };
   const writeStabilityBundle = async (reason: string, error?: unknown) => {
     const { writeDiagnosticStabilityBundleForFailureSync } =
-      await loadDiagnosticStabilityBundleModule();
+      await loadGatewayLifecycleRuntimeModule();
     const result = writeDiagnosticStabilityBundleForFailureSync(reason, error);
     if ("message" in result) {
       gatewayLog.warn(result.message);
@@ -165,10 +129,12 @@ export async function runGatewayLoop(params: {
   const handleRestartAfterServerClose = async (restartReason?: string) => {
     const hadLock = await releaseLockIfHeld();
     const isUpdateRestart = restartReason === "update.run";
-    const { respawnGatewayProcessForUpdate, restartGatewayProcessWithFreshPid } =
-      await loadProcessRespawnModule();
-    const { detectRespawnSupervisor } = await loadSupervisorMarkersModule();
-    const { markUpdateRestartSentinelFailure } = await loadRestartSentinelModule();
+    const {
+      detectRespawnSupervisor,
+      markUpdateRestartSentinelFailure,
+      respawnGatewayProcessForUpdate,
+      restartGatewayProcessWithFreshPid,
+    } = await loadGatewayLifecycleRuntimeModule();
 
     if (isUpdateRestart) {
       const respawn = respawnGatewayProcessForUpdate();
@@ -279,10 +245,8 @@ export async function runGatewayLoop(params: {
   const SHUTDOWN_TIMEOUT_MS = SUPERVISOR_STOP_TIMEOUT_MS - 5_000;
   const resolveRestartDrainTimeoutMs = async (): Promise<RestartDrainTimeoutMs> => {
     try {
-      const [{ getRuntimeConfig }, { resolveGatewayRestartDeferralTimeoutMs }] = await Promise.all([
-        loadRuntimeConfigModule(),
-        loadRestartModule(),
-      ]);
+      const { getRuntimeConfig, resolveGatewayRestartDeferralTimeoutMs } =
+        await loadGatewayLifecycleRuntimeModule();
       const timeoutMs = getRuntimeConfig().gateway?.reload?.deferralTimeoutMs;
       return resolveGatewayRestartDeferralTimeoutMs(timeoutMs);
     } catch {
@@ -351,15 +315,16 @@ export async function runGatewayLoop(params: {
         // On restart, wait for in-flight agent turns to finish before
         // tearing down the server so buffered messages are delivered.
         if (isRestart) {
-          const [
-            { abortEmbeddedPiRun, getActiveEmbeddedRunCount, waitForActiveEmbeddedRuns },
-            { getActiveBundledRuntimeDepsInstallCount, waitForBundledRuntimeDepsInstallIdle },
-            { getActiveTaskCount, markGatewayDraining, waitForActiveTasks },
-          ] = await Promise.all([
-            loadEmbeddedRunsModule(),
-            loadBundledRuntimeDepsActivityModule(),
-            loadCommandQueueModule(),
-          ]);
+          const {
+            abortEmbeddedPiRun,
+            getActiveBundledRuntimeDepsInstallCount,
+            getActiveEmbeddedRunCount,
+            getActiveTaskCount,
+            markGatewayDraining,
+            waitForActiveEmbeddedRuns,
+            waitForActiveTasks,
+            waitForBundledRuntimeDepsInstallIdle,
+          } = await loadGatewayLifecycleRuntimeModule();
           const createStillPendingDrainLogger = () =>
             setInterval(() => {
               gatewayLog.warn(
@@ -429,7 +394,7 @@ export async function runGatewayLoop(params: {
   const onSigterm = () => {
     gatewayLog.info("signal SIGTERM received");
     void (async () => {
-      const { consumeGatewayRestartIntentSync } = await loadRestartModule();
+      const { consumeGatewayRestartIntentSync } = await loadGatewayLifecycleRuntimeModule();
       request(consumeGatewayRestartIntentSync() ? "restart" : "stop", "SIGTERM");
     })();
   };
@@ -446,7 +411,7 @@ export async function runGatewayLoop(params: {
         markGatewaySigusr1RestartHandled,
         peekGatewaySigusr1RestartReason,
         scheduleGatewaySigusr1Restart,
-      } = await loadRestartModule();
+      } = await loadGatewayLifecycleRuntimeModule();
       const authorized = consumeGatewaySigusr1RestartAuthorization();
       if (!authorized) {
         if (!isGatewaySigusr1RestartExternallyAllowed()) {
@@ -482,15 +447,11 @@ export async function runGatewayLoop(params: {
       // new work from draining. The same boundary also discards stale restart
       // deferral timers and reloads the task registry from durable state so
       // cancelled/completed work is not kept alive by old in-memory maps.
-      const [
-        { resetAllLanes },
-        { resetGatewayRestartStateForInProcessRestart },
-        { reloadTaskRegistryFromStore },
-      ] = await Promise.all([
-        loadCommandQueueModule(),
-        loadRestartModule(),
-        loadRuntimeInternalModule(),
-      ]);
+      const {
+        reloadTaskRegistryFromStore,
+        resetAllLanes,
+        resetGatewayRestartStateForInProcessRestart,
+      } = await loadGatewayLifecycleRuntimeModule();
       resetAllLanes();
       resetGatewayRestartStateForInProcessRestart();
       reloadTaskRegistryFromStore();

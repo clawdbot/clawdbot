@@ -106,12 +106,18 @@ describe("buildQaSuiteSummaryJson", () => {
         wallMs: 12_000,
         gatewayProcessCpuMs: 3_400,
         gatewayCpuCoreRatio: 0.283,
+        gatewayProcessRssStartBytes: 100_000_000,
+        gatewayProcessRssEndBytes: 125_000_000,
+        gatewayProcessRssDeltaBytes: 25_000_000,
       },
     });
     expect(json.metrics).toEqual({
       wallMs: 12_000,
       gatewayProcessCpuMs: 3_400,
       gatewayCpuCoreRatio: 0.283,
+      gatewayProcessRssStartBytes: 100_000_000,
+      gatewayProcessRssEndBytes: 125_000_000,
+      gatewayProcessRssDeltaBytes: 25_000_000,
     });
   });
 });

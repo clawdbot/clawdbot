@@ -63,20 +63,6 @@ describe("whatsapp config schema", () => {
     }
   });
 
-  it("accepts exposeErrorText at channel and account scope", () => {
-    const res = expectWhatsAppConfigValid({
-      exposeErrorText: false,
-      accounts: {
-        work: { exposeErrorText: true },
-      },
-    });
-
-    if (res.success) {
-      expect(res.data.exposeErrorText).toBe(false);
-      expect(res.data.accounts?.work?.exposeErrorText).toBe(true);
-    }
-  });
-
   it("accepts enabled", () => {
     expectWhatsAppConfigValid({
       enabled: true,

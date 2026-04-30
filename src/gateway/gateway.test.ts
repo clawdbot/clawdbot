@@ -298,7 +298,12 @@ module.exports = {
         expect(afterCount).toBe(beforeCount);
       } finally {
         await server.close({ reason: "http tools workspace test complete" });
-        await fs.rm(tempHome, { recursive: true, force: true });
+        await fs.rm(tempHome, {
+          recursive: true,
+          force: true,
+          maxRetries: 10,
+          retryDelay: 50,
+        });
         envSnapshot.restore();
       }
     },
@@ -505,7 +510,12 @@ module.exports = {
         expect(parsed.plugins?.entries?.discord).toBeUndefined();
       } finally {
         await server.close({ reason: "minimal gateway auto-enable verify" });
-        await fs.rm(tempHome, { recursive: true, force: true });
+        await fs.rm(tempHome, {
+          recursive: true,
+          force: true,
+          maxRetries: 10,
+          retryDelay: 50,
+        });
         envSnapshot.restore();
       }
     },

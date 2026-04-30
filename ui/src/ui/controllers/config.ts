@@ -359,6 +359,38 @@ export function ensureAgentConfigEntry(state: ConfigState, agentId: string): num
   return nextIndex;
 }
 
+export function stageDefaultAgentConfigEntry(state: ConfigState, agentId: string): boolean {
+  const normalizedAgentId = agentId.trim();
+  if (!normalizedAgentId) {
+    return false;
+  }
+  const source =
+    state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
+  const targetIndex = findAgentConfigEntryIndex(source, normalizedAgentId);
+  if (targetIndex < 0) {
+    return false;
+  }
+  mutateConfigForm(state, (draft) => {
+    const list = (draft as { agents?: { list?: unknown[] } } | null)?.agents?.list;
+    if (!Array.isArray(list)) {
+      return;
+    }
+    for (let i = 0; i < list.length; i++) {
+      const entry = list[i];
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        continue;
+      }
+      const record = entry as Record<string, unknown>;
+      if (i === targetIndex) {
+        record.default = true;
+      } else {
+        delete record.default;
+      }
+    }
+  });
+  return true;
+}
+
 export async function openConfigFile(state: ConfigState): Promise<void> {
   if (!state.client || !state.connected) {
     return;

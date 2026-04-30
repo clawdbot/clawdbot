@@ -5,20 +5,26 @@ class FakeWebSocket {
   public readonly sent: string[] = [];
   private readonly openListeners: Array<() => void> = [];
   private readonly messageListeners: Array<(data: Buffer) => void | Promise<void>> = [];
+  private readonly pongListeners: Array<(data: Buffer) => void> = [];
   private readonly closeListeners: Array<(code: number, reason: Buffer) => void> = [];
   private readonly errorListeners: Array<(err: unknown) => void> = [];
 
   on(event: "open", listener: () => void): void;
   on(event: "message", listener: (data: Buffer) => void | Promise<void>): void;
+  on(event: "pong", listener: (data: Buffer) => void): void;
   on(event: "close", listener: (code: number, reason: Buffer) => void): void;
   on(event: "error", listener: (err: unknown) => void): void;
-  on(event: "open" | "message" | "close" | "error", listener: unknown): void {
+  on(event: "open" | "message" | "pong" | "close" | "error", listener: unknown): void {
     if (event === "open") {
       this.openListeners.push(listener as () => void);
       return;
     }
     if (event === "message") {
       this.messageListeners.push(listener as (data: Buffer) => void | Promise<void>);
+      return;
+    }
+    if (event === "pong") {
+      this.pongListeners.push(listener as (data: Buffer) => void);
       return;
     }
     if (event === "close") {
@@ -31,6 +37,8 @@ class FakeWebSocket {
   send(data: string): void {
     this.sent.push(data);
   }
+
+  ping(): void {}
 
   close(): void {}
 
@@ -132,6 +140,63 @@ vi.mock("./runtime-api.js", async () => {
 });
 
 function createRuntimeCore(cfg: OpenClawConfig) {
+  const runPrepared = vi.fn(
+    async (turn: {
+      storePath: string;
+      routeSessionKey: string;
+      ctxPayload: { SessionKey?: string };
+      recordInboundSession: (params: unknown) => Promise<void>;
+      record?: {
+        groupResolution?: unknown;
+        createIfMissing?: boolean;
+        updateLastRoute?: unknown;
+        onRecordError?: (err: unknown) => void;
+      };
+      runDispatch: () => Promise<{
+        queuedFinal: boolean;
+        counts: { tool: number; block: number; final: number };
+      }>;
+    }) => {
+      await turn.recordInboundSession({
+        storePath: turn.storePath,
+        sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
+        ctx: turn.ctxPayload,
+        groupResolution: turn.record?.groupResolution,
+        createIfMissing: turn.record?.createIfMissing,
+        updateLastRoute: turn.record?.updateLastRoute,
+        onRecordError: turn.record?.onRecordError ?? (() => undefined),
+      });
+      const dispatchResult = await turn.runDispatch();
+      return {
+        admission: { kind: "dispatch" as const },
+        dispatched: true,
+        ctxPayload: turn.ctxPayload,
+        routeSessionKey: turn.routeSessionKey,
+        dispatchResult,
+      };
+    },
+  );
+  const run = vi.fn(
+    async (params: {
+      raw: unknown;
+      adapter: {
+        ingest: (raw: unknown) => unknown;
+        resolveTurn: (
+          input: unknown,
+          eventClass: { kind: "message"; canStartAgentTurn: true },
+          preflight: Record<string, never>,
+        ) => Parameters<typeof runPrepared>[0];
+      };
+    }) => {
+      const input = params.adapter.ingest(params.raw);
+      const turn = params.adapter.resolveTurn(
+        input,
+        { kind: "message", canStartAgentTurn: true },
+        {},
+      );
+      return await runPrepared(turn);
+    },
+  );
   return {
     config: {
       current: () => cfg,
@@ -212,7 +277,12 @@ function createRuntimeCore(cfg: OpenClawConfig) {
       },
       session: {
         resolveStorePath: () => "/tmp/openclaw-test-sessions.json",
+        recordInboundSession: vi.fn(async () => {}),
         updateLastRoute: vi.fn(async () => {}),
+      },
+      turn: {
+        run,
+        runPrepared,
       },
       text: {
         chunkMarkdownTextWithMode: (text: string) => [text],

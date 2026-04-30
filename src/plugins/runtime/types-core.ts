@@ -227,6 +227,9 @@ export type PluginRuntimeCore = {
   };
   state: {
     resolveStateDir: typeof import("../../config/paths.js").resolveStateDir;
+    openKeyedStore: <T>(
+      options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
+    ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateKeyedStore<T>;
   };
   tasks: {
     runs: PluginRuntimeTaskRuns;
@@ -238,10 +241,11 @@ export type PluginRuntimeCore = {
   /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
   taskFlow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   modelAuth: {
-    /** Resolve auth for a model. Only provider/model and optional cfg are used. */
+    /** Resolve auth for a model. Only provider/model, optional cfg, and workspaceDir are used. */
     getApiKeyForModel: (params: {
       model: import("@mariozechner/pi-ai").Model<import("@mariozechner/pi-ai").Api>;
       cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
+      workspaceDir?: string;
     }) => Promise<import("../../agents/model-auth-runtime-shared.js").ResolvedProviderAuth>;
     /** Resolve request-ready auth for a model, including provider runtime exchanges. */
     getRuntimeAuthForModel: (params: {
@@ -249,10 +253,11 @@ export type PluginRuntimeCore = {
       cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
       workspaceDir?: string;
     }) => Promise<import("./model-auth-types.js").ResolvedProviderRuntimeAuth>;
-    /** Resolve auth for a provider by name. Only provider and optional cfg are used. */
+    /** Resolve auth for a provider by name. Only provider, optional cfg, and workspaceDir are used. */
     resolveApiKeyForProvider: (params: {
       provider: string;
       cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
+      workspaceDir?: string;
     }) => Promise<import("../../agents/model-auth-runtime-shared.js").ResolvedProviderAuth>;
   };
 };

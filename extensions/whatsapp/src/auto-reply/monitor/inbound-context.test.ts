@@ -1,10 +1,21 @@
 import { describe, expect, it } from "vitest";
+import type { WhatsAppSendResult } from "../../inbound/send-result.js";
 import {
   resolveVisibleWhatsAppGroupHistory,
   resolveVisibleWhatsAppReplyContext,
 } from "./inbound-context.js";
 
 type ReplyContextParams = Parameters<typeof resolveVisibleWhatsAppReplyContext>[0];
+
+function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendResult {
+  return {
+    kind,
+    messageId: id,
+    messageIds: [id],
+    keys: [{ id }],
+    providerAccepted: true,
+  };
+}
 
 const makeBlockedQuotedReplyMessage = (id: string): ReplyContextParams["msg"] => ({
   id,
@@ -24,8 +35,8 @@ const makeBlockedQuotedReplyMessage = (id: string): ReplyContextParams["msg"] =>
   replyToSender: "Mallory (+999)",
   replyToSenderJid: "999@s.whatsapp.net",
   sendComposing: async () => {},
-  reply: async () => {},
-  sendMedia: async () => {},
+  reply: async () => acceptedSendResult("text", "r1"),
+  sendMedia: async () => acceptedSendResult("media", "m1"),
 });
 
 describe("whatsapp inbound context visibility", () => {

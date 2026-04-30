@@ -18,26 +18,11 @@ jobs:
       issues: write
       pull-requests: write
     env:
-      CLOWNFISH_APP_ID: ${{ vars.CLOWNFISH_APP_ID || secrets.CLOWNFISH_APP_ID }}
-      CLOWNFISH_APP_AUTH_ENABLED: ${{ secrets.CLOWNFISH_APP_PRIVATE_KEY != '' && (vars.CLOWNFISH_APP_ID != '' || secrets.CLOWNFISH_APP_ID != '') && '1' || '0' }}
-      MAINTAINER_COMMAND_REACTIONS: ${{ vars.MAINTAINER_COMMAND_REACTIONS || '/autoclose,/clownfish autoclose,/clownfish automerge,/merge,/land,/landpr' }}
+      MAINTAINER_COMMAND_REACTIONS: ${{ vars.MAINTAINER_COMMAND_REACTIONS || '/autoclose,/clawsweeper autoclose,/clawsweeper automerge,/merge,/land,/landpr' }}
     steps:
-      - name: Create Clownfish reaction token
-        id: clownfish-token
-        if: ${{ env.CLOWNFISH_APP_AUTH_ENABLED == '1' }}
-        continue-on-error: true
-        uses: actions/create-github-app-token@v3
-        with:
-          app-id: ${{ env.CLOWNFISH_APP_ID }}
-          private-key: ${{ secrets.CLOWNFISH_APP_PRIVATE_KEY }}
-          owner: openclaw
-          repositories: openclaw
-          permission-issues: write
-
       - name: React to maintainer slash command
         uses: actions/github-script@v9
         with:
-          github-token: ${{ steps.clownfish-token.outputs.token || github.token }}
           script: |
             const comment = context.payload.comment;
             const issue = context.payload.issue;
@@ -59,13 +44,8 @@ jobs:
             const isAutocloseCommand =
               commandLine === "/autoclose" ||
               commandLine.startsWith("/autoclose ") ||
-              commandLine === "/clownfish autoclose" ||
-              commandLine.startsWith("/clownfish autoclose ");
-            const isClownfishCommand =
-              isAutocloseCommand ||
-              commandLine === "/clownfish automerge" ||
-              commandLine.startsWith("/clownfish automerge ");
-
+              commandLine === "/clawsweeper autoclose" ||
+              commandLine.startsWith("/clawsweeper autoclose ");
             if (!issue.pull_request && !isAutocloseCommand) {
               core.info("Skipping non-autoclose command reaction because the comment is not on a pull request.");
               return;
@@ -90,12 +70,6 @@ jobs:
               core.info(
                 `Skipping non-maintainer command reaction for ${comment.user.login}; repository permission is ${permission}.`,
               );
-              return;
-            }
-
-            const tokenIsClownfishApp = "${{ steps.clownfish-token.outputs.token != '' }}" === "true";
-            if (isClownfishCommand && !tokenIsClownfishApp) {
-              core.info("Skipping Clownfish command reaction because the Clownfish App token is unavailable.");
               return;
             }
 

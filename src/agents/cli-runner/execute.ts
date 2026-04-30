@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { shouldLogVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
@@ -164,6 +165,44 @@ function buildCliEnvMcpLog(childEnv: Record<string, string>): string {
   ].join(" ");
 }
 
+function fingerprintCliSessionId(sessionId?: string): string {
+  const trimmed = sessionId?.trim();
+  if (!trimmed) {
+    return "none";
+  }
+  return crypto.createHash("sha256").update(trimmed).digest("hex").slice(0, 12);
+}
+
+export function buildCliExecLogLine(params: {
+  provider: string;
+  model: string;
+  promptChars: number;
+  trigger?: string;
+  useResume: boolean;
+  cliSessionId?: string;
+  resolvedSessionId?: string;
+  reusableSessionId?: string;
+  invalidatedReason?: string;
+  hasHistoryPrompt: boolean;
+}): string {
+  const reuseState = params.reusableSessionId
+    ? "reusable"
+    : params.invalidatedReason
+      ? `invalidated:${params.invalidatedReason}`
+      : "none";
+  return [
+    `cli exec: provider=${params.provider}`,
+    `model=${params.model}`,
+    `promptChars=${params.promptChars}`,
+    `trigger=${params.trigger ?? "unknown"}`,
+    `useResume=${params.useResume ? "true" : "false"}`,
+    `session=${params.cliSessionId ? "present" : "none"}`,
+    `resumeSession=${params.useResume ? fingerprintCliSessionId(params.resolvedSessionId) : "none"}`,
+    `reuse=${reuseState}`,
+    `historyPrompt=${params.hasHistoryPrompt ? "present" : "none"}`,
+  ].join(" ");
+}
+
 export function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
   const hostKeys = listPresentCliAuthEnvKeys(process.env);
   const childKeys = listPresentCliAuthEnvKeys(childEnv);
@@ -273,7 +312,18 @@ export async function executePreparedCliRun(
         : undefined;
       try {
         cliBackendLog.info(
-          `cli exec: provider=${params.provider} model=${context.normalizedModel} promptChars=${basePrompt.length}`,
+          buildCliExecLogLine({
+            provider: params.provider,
+            model: context.normalizedModel,
+            promptChars: basePrompt.length,
+            trigger: params.trigger,
+            useResume,
+            cliSessionId: cliSessionIdToUse,
+            resolvedSessionId,
+            reusableSessionId: context.reusableCliSession.sessionId,
+            invalidatedReason: context.reusableCliSession.invalidatedReason,
+            hasHistoryPrompt: Boolean(context.openClawHistoryPrompt),
+          }),
         );
         const logOutputText =
           isTruthyEnvValue(process.env[CLI_BACKEND_LOG_OUTPUT_ENV]) ||

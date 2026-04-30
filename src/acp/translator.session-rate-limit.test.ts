@@ -675,7 +675,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
     const sessionUpdate = connection.__sessionUpdateMock;
-    const request = vi.fn(async (method: string, params?: unknown) => {
+    const request = vi.fn(async (method: string, _params?: unknown) => {
       if (method === "sessions.list") {
         return {
           ts: Date.now(),
@@ -700,7 +700,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
         };
       }
       if (method === "sessions.patch") {
-        expect(params).toEqual({
+        expect(_params).toEqual({
           key: "fast-session",
           fastMode: true,
         });
@@ -738,6 +738,56 @@ describe("acp setSessionConfigOption bridge behavior", () => {
         ]),
       },
     });
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("accepts forwarded timeout config options without failing OpenClaw ACP bridge turns", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const connection = createAcpConnection();
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          ts: Date.now(),
+          path: "/tmp/sessions.json",
+          count: 1,
+          defaults: {
+            modelProvider: null,
+            model: null,
+            contextTokens: null,
+          },
+          sessions: [
+            {
+              key: "timeout-session",
+              kind: "direct",
+              updatedAt: Date.now(),
+              thinkingLevel: "minimal",
+              modelProvider: "openai",
+              model: "gpt-5.4",
+            },
+          ],
+        };
+      }
+      expect(method).not.toBe("sessions.patch");
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+      sessionStore,
+    });
+
+    await agent.loadSession(createLoadSessionRequest("timeout-session"));
+
+    await expect(
+      agent.setSessionConfigOption(
+        createSetSessionConfigOptionRequest("timeout-session", "timeout", "180"),
+      ),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        configOptions: expect.any(Array),
+      }),
+    );
+
+    expect(request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
 
     sessionStore.clearAllSessionsForTest();
   });

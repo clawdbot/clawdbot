@@ -236,6 +236,34 @@ describe("ensureSandboxBrowser create args", () => {
     expect(result?.noVncUrl).toBeUndefined();
   });
 
+  it("fails before creating a browser container when Docker daemon is unavailable", async () => {
+    dockerMocks.execDocker.mockImplementation(async (args: string[]) => {
+      if (args[0] === "network" && args[1] === "inspect") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (args[0] === "image" && args[1] === "inspect") {
+        return {
+          stdout: "",
+          stderr:
+            "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?",
+          code: 1,
+        };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    });
+
+    await expect(
+      ensureTestSandboxBrowser({
+        scopeKey: "session:test",
+        workspaceDir: "/tmp/workspace",
+        agentWorkspaceDir: "/tmp/workspace",
+        cfg: buildConfig(false),
+      }),
+    ).rejects.toThrow("Docker daemon is not available");
+
+    expect(findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create")).toBeUndefined();
+  });
+
   it("passes the browser SSRF policy to the sandbox bridge", async () => {
     await ensureTestSandboxBrowser({
       scopeKey: "session:test",

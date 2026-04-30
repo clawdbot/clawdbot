@@ -78,6 +78,20 @@ export { writeFileWithinRoot } from "../../../../src/infra/fs-safe.js";
 export { fetchWithSsrFGuard } from "../../../../src/infra/net/fetch-guard.js";
 export { shouldUseEnvHttpProxyForUrl } from "../../../../src/infra/net/proxy-env.js";
 export { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "../../../../src/infra/net/ssrf.js";
+export {
+  DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES,
+  DEFAULT_SQLITE_WAL_TRUNCATE_INTERVAL_MS,
+  configureSqliteWalMaintenance,
+} from "../../../../src/infra/sqlite-wal.js";
+export type {
+  SqliteWalMaintenance,
+  SqliteWalMaintenanceOptions,
+} from "../../../../src/infra/sqlite-wal.js";
+export {
+  installProcessWarningFilter,
+  shouldIgnoreWarning,
+} from "../../../../src/infra/warning-filter.js";
+export type { ProcessWarning } from "../../../../src/infra/warning-filter.js";
 export { redactSensitiveText } from "../../../../src/logging/redact.js";
 export { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
 export { detectMime } from "../../../../src/media/mime.js";
@@ -136,4 +150,20 @@ export {
   shortenHomePath,
   truncateUtf16Safe,
 } from "../../../../src/utils.js";
+export {
+  applyWindowsSpawnProgramPolicy,
+  materializeWindowsSpawnProgram,
+  resolveWindowsExecutablePath,
+  resolveWindowsSpawnProgram,
+  resolveWindowsSpawnProgramCandidate,
+} from "../../../../src/plugin-sdk/windows-spawn.js";
+export type {
+  ResolveWindowsSpawnProgramCandidateParams,
+  ResolveWindowsSpawnProgramParams,
+  WindowsSpawnCandidateResolution,
+  WindowsSpawnInvocation,
+  WindowsSpawnProgram,
+  WindowsSpawnProgramCandidate,
+  WindowsSpawnResolution,
+} from "../../../../src/plugin-sdk/windows-spawn.js";
 export { resolveGlobalSingleton } from "../../../../src/shared/global-singleton.js";

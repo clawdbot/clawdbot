@@ -438,10 +438,6 @@ vi.mock("node:fs/promises", () => ({
   },
 }));
 
-vi.mock("../channel-web.js", () => ({
-  loginWeb: vi.fn(async () => {}),
-}));
-
 vi.mock("../channels/plugins/catalog.js", async () => {
   const actual = await vi.importActual<typeof import("../channels/plugins/catalog.js")>(
     "../channels/plugins/catalog.js",

@@ -242,72 +242,68 @@ export async function getMemorySearchManager(params: {
       return { entry: cacheEntry };
     };
 
-    while (true) {
-      const cached = QMD_MANAGER_CACHE.get(scopeKey);
-      const cachedMatchesIdentity = cached?.identityKey === identityKey;
-      if (cachedMatchesIdentity) {
-        if (params.purpose === "status") {
-          // Status callers often close the manager they receive. Wrap the live
-          // full manager with a no-op close so health/status probes do not tear
-          // down the active QMD manager for the process.
-          return { manager: new BorrowedMemoryManager(cached.manager) };
-        }
-        if (params.purpose !== "cli") {
-          return { manager: cached.manager };
-        }
+    const cached = QMD_MANAGER_CACHE.get(scopeKey);
+    const cachedMatchesIdentity = cached?.identityKey === identityKey;
+    if (cachedMatchesIdentity) {
+      if (params.purpose === "status") {
+        // Status callers often close the manager they receive. Wrap the live
+        // full manager with a no-op close so health/status probes do not tear
+        // down the active QMD manager for the process.
+        return { manager: new BorrowedMemoryManager(cached.manager) };
       }
-
-      if (transient) {
-        const { manager } = await createPrimaryQmdManager(
-          params.purpose === "cli" ? "cli" : "status",
-        );
-        return manager ? { manager } : await getBuiltinMemorySearchManager(params);
+      if (params.purpose !== "cli") {
+        return { manager: cached.manager };
       }
+    }
 
-      const recentFailure = getActiveQmdManagerOpenFailure(scopeKey, identityKey);
-      if (recentFailure) {
-        log.debug?.(
-          `qmd memory unavailable; using builtin during cooldown: ${recentFailure.reason}`,
-        );
-        return await getBuiltinMemorySearchManager(params);
-      }
-
-      const pending = PENDING_QMD_MANAGER_CREATES.get(scopeKey);
-      if (pending) {
-        await pending.promise;
-        continue;
-      }
-
-      const pendingCreate: PendingQmdManagerCreate = {
-        identityKey,
-        promise: (async () => {
-          const created = await createFullQmdManager(identityKey);
-          if (!created.entry) {
-            recordQmdManagerOpenFailure(
-              scopeKey,
-              identityKey,
-              created.failureReason ?? "qmd memory unavailable",
-            );
-            return null;
-          }
-          QMD_MANAGER_CACHE.set(scopeKey, created.entry);
-          if (cached) {
-            await closeQmdManagerForReplacement(cached.manager).catch((err) => {
-              log.warn(`failed to retire replaced qmd memory manager: ${formatErrorMessage(err)}`);
-            });
-          }
-          return created.entry.manager;
-        })().finally(() => {
-          const currentPending = PENDING_QMD_MANAGER_CREATES.get(scopeKey);
-          if (currentPending === pendingCreate) {
-            PENDING_QMD_MANAGER_CREATES.delete(scopeKey);
-          }
-        }),
-      };
-      PENDING_QMD_MANAGER_CREATES.set(scopeKey, pendingCreate);
-      const manager = await pendingCreate.promise;
+    if (transient) {
+      const { manager } = await createPrimaryQmdManager(
+        params.purpose === "cli" ? "cli" : "status",
+      );
       return manager ? { manager } : await getBuiltinMemorySearchManager(params);
     }
+
+    const recentFailure = getActiveQmdManagerOpenFailure(scopeKey, identityKey);
+    if (recentFailure) {
+      log.debug?.(`qmd memory unavailable; using builtin during cooldown: ${recentFailure.reason}`);
+      return await getBuiltinMemorySearchManager(params);
+    }
+
+    const pending = PENDING_QMD_MANAGER_CREATES.get(scopeKey);
+    if (pending) {
+      await pending.promise;
+      return await getMemorySearchManager(params);
+    }
+
+    const pendingCreate: PendingQmdManagerCreate = {
+      identityKey,
+      promise: (async () => {
+        const created = await createFullQmdManager(identityKey);
+        if (!created.entry) {
+          recordQmdManagerOpenFailure(
+            scopeKey,
+            identityKey,
+            created.failureReason ?? "qmd memory unavailable",
+          );
+          return null;
+        }
+        QMD_MANAGER_CACHE.set(scopeKey, created.entry);
+        if (cached) {
+          await closeQmdManagerForReplacement(cached.manager).catch((err) => {
+            log.warn(`failed to retire replaced qmd memory manager: ${formatErrorMessage(err)}`);
+          });
+        }
+        return created.entry.manager;
+      })().finally(() => {
+        const currentPending = PENDING_QMD_MANAGER_CREATES.get(scopeKey);
+        if (currentPending === pendingCreate) {
+          PENDING_QMD_MANAGER_CREATES.delete(scopeKey);
+        }
+      }),
+    };
+    PENDING_QMD_MANAGER_CREATES.set(scopeKey, pendingCreate);
+    const manager = await pendingCreate.promise;
+    return manager ? { manager } : await getBuiltinMemorySearchManager(params);
   }
 
   return await getBuiltinMemorySearchManager(params);

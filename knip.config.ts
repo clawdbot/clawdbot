@@ -107,7 +107,6 @@ const config = {
     bundledPluginFile("msteams", "src/conversation-store-memory.ts"),
     bundledPluginFile("msteams", "src/polls-store-memory.ts"),
     bundledPluginFile("voice-call", "src/providers/index.ts"),
-    bundledPluginFile("voice-call", "src/providers/tts-openai.ts"),
   ],
   workspaces: {
     ".": {

@@ -202,6 +202,12 @@ Dangerous or privacy-heavy commands such as `camera.snap`, `camera.clip`, and
 `gateway.nodes.allowCommands`. `gateway.nodes.denyCommands` always wins over
 defaults and extra allowlist entries.
 
+Plugin-owned node commands can add a Gateway node-invoke policy. That policy
+runs after the allowlist check and before forwarding to the node, so raw
+`node.invoke`, CLI helpers, and dedicated agent tools share the same plugin
+permission boundary. Dangerous plugin node commands still require explicit
+`gateway.nodes.allowCommands` opt-in.
+
 After a node changes its declared command list, reject the old device pairing
 and approve the new request so the gateway stores the updated command snapshot.
 

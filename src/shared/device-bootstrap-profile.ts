@@ -36,6 +36,26 @@ export function resolveBootstrapProfileScopesForRole(
   return [];
 }
 
+export function resolveBootstrapProfileScopesForRoles(
+  roles: readonly string[],
+  scopes: readonly string[],
+): string[] {
+  return normalizeDeviceAuthScopes(
+    roles.flatMap((role) => resolveBootstrapProfileScopesForRole(role, scopes)),
+  );
+}
+
+export function normalizeDeviceBootstrapHandoffProfile(
+  input: DeviceBootstrapProfileInput | undefined,
+): DeviceBootstrapProfile {
+  const profile = normalizeDeviceBootstrapProfile(input);
+  // Bootstrap handoff profiles can only carry the documented handoff allowlist.
+  return {
+    roles: profile.roles,
+    scopes: resolveBootstrapProfileScopesForRoles(profile.roles, profile.scopes),
+  };
+}
+
 function normalizeBootstrapRoles(roles: readonly string[] | undefined): string[] {
   if (!Array.isArray(roles)) {
     return [];

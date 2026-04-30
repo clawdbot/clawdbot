@@ -343,7 +343,8 @@ troubleshooting, see the main [FAQ](/help/faq).
     Fix options:
 
     - Run `openclaw agents add <id>` and configure auth during the wizard.
-    - Or copy `auth-profiles.json` from the main agent's `agentDir` into the new agent's `agentDir`.
+    - Or copy only portable static `api_key` / `token` profiles from the main agent's auth store into the new agent's auth store.
+    - For OAuth profiles, sign in from the new agent when it needs its own account; otherwise OpenClaw can read through to the default/main agent without cloning refresh tokens.
 
     Do **not** reuse `agentDir` across agents; it causes auth/session collisions.
 

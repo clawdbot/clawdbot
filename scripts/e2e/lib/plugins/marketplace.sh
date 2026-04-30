@@ -14,40 +14,7 @@ run_plugins_marketplace_scenario() {
     "0.0.1" \
     "demo.marketplace.direct.v1" \
     "Marketplace Direct"
-  cat >"$marketplace_root/.claude-plugin/marketplace.json" <<'JSON'
-{
-  "name": "Fixture Marketplace",
-  "version": "1.0.0",
-  "plugins": [
-    {
-      "name": "marketplace-shortcut",
-      "version": "0.0.1",
-      "description": "Shortcut install fixture",
-      "source": "./plugins/marketplace-shortcut"
-    },
-    {
-      "name": "marketplace-direct",
-      "version": "0.0.1",
-      "description": "Explicit marketplace fixture",
-      "source": {
-        "type": "path",
-        "path": "./plugins/marketplace-direct"
-      }
-    }
-  ]
-}
-JSON
-  cat >"$HOME/.claude/plugins/known_marketplaces.json" <<JSON
-{
-  "claude-fixtures": {
-    "installLocation": "$marketplace_root",
-    "source": {
-      "type": "github",
-      "repo": "openclaw/fixture-marketplace"
-    }
-  }
-}
-JSON
+  node scripts/e2e/lib/fixture.mjs marketplace "$marketplace_root"
 
   node "$OPENCLAW_ENTRY" plugins marketplace list claude-fixtures --json >/tmp/marketplace-list.json
 

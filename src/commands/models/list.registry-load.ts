@@ -10,7 +10,12 @@ import { modelKey } from "./shared.js";
 
 export async function loadListModelRegistry(
   cfg: OpenClawConfig,
-  opts?: { providerFilter?: string; normalizeModels?: boolean },
+  opts?: {
+    providerFilter?: string;
+    normalizeModels?: boolean;
+    loadAvailability?: boolean;
+    workspaceDir?: string;
+  },
 ) {
   const loaded = await loadModelRegistry(cfg, opts);
   return {
@@ -44,10 +49,14 @@ function findConfiguredRegistryModel(params: {
 export function loadConfiguredListModelRegistry(
   cfg: OpenClawConfig,
   entries: ConfiguredEntry[],
-  opts?: { providerFilter?: string },
+  opts?: { providerFilter?: string; workspaceDir?: string },
 ) {
   const agentDir = resolveOpenClawAgentDir();
-  const authStorage = discoverAuthStorage(agentDir, { readOnly: true });
+  const authStorage = discoverAuthStorage(agentDir, {
+    readOnly: true,
+    config: cfg,
+    workspaceDir: opts?.workspaceDir,
+  });
   const registry = discoverModels(authStorage, agentDir, {
     providerFilter: opts?.providerFilter,
   });

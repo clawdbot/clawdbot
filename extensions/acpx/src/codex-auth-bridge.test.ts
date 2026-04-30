@@ -177,10 +177,10 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain('"@agentclientprotocol/claude-agent-acp@0.31.0"');
+    expect(wrapper).toContain('"@agentclientprotocol/claude-agent-acp@0.31.1"');
     expect(wrapper).toContain('"--", "claude-agent-acp"');
     expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@^0.31.0");
-    expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@0.31.1");
+    expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@0.31.0");
   });
 
   it("uses the bundled Codex ACP dependency by default when it is installed", async () => {
@@ -379,7 +379,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
       rawConfig: {
         agents: {
           claude: {
-            command: "npx -y @agentclientprotocol/claude-agent-acp@0.31.0 --permission-mode bypass",
+            command: "npx -y @agentclientprotocol/claude-agent-acp@0.31.1 --permission-mode bypass",
           },
         },
       },
@@ -425,7 +425,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     const root = await makeTempDir();
     const stateDir = path.join(root, "state");
     const command =
-      "node ./custom-claude-wrapper.mjs @agentclientprotocol/claude-agent-acp@0.31.0 --flag";
+      "node ./custom-claude-wrapper.mjs @agentclientprotocol/claude-agent-acp@0.31.1 --flag";
     const pluginConfig = resolveAcpxPluginConfig({
       rawConfig: {
         agents: {

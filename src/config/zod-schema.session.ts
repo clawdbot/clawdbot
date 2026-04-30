@@ -145,6 +145,7 @@ export const SessionSchema = z
 export const MessagesSchema = z
   .object({
     messagePrefix: z.string().optional(),
+    visibleReplies: z.enum(["automatic", "message_tool"]).optional(),
     responsePrefix: z.string().optional(),
     groupChat: GroupChatSchema,
     queue: QueueSchema,

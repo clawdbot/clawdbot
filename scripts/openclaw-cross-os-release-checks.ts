@@ -55,6 +55,16 @@ const providerConfig = {
   },
 };
 
+export function resolveProviderConfig(provider, env = process.env) {
+  const config = providerConfig[provider];
+  if (!config) {
+    return null;
+  }
+  const providerEnvKey = `OPENCLAW_CROSS_OS_${provider.toUpperCase().replace(/[^A-Z0-9]+/gu, "_")}_MODEL`;
+  const model = env[providerEnvKey]?.trim() || env.OPENCLAW_CROSS_OS_MODEL?.trim() || config.model;
+  return { ...config, model };
+}
+
 const RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE = [
   "acpx",
   "bonjour",
@@ -81,6 +91,7 @@ export const CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS =
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS + 45_000;
 export const CROSS_OS_GATEWAY_READY_TIMEOUT_MS = 3 * 60_000;
 export const CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS = 5 * 60_000;
+export const CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS = 180;
 
 if (isMainModule()) {
   try {
@@ -304,7 +315,7 @@ async function main(argv) {
     throw new Error(`Unsupported provider "${provider}".`);
   }
 
-  const selectedProvider = providerConfig[provider];
+  const selectedProvider = resolveProviderConfig(provider);
   const providerSecretValue = process.env[selectedProvider.secretEnv]?.trim();
   if (!providerSecretValue) {
     throw new Error(`Missing ${selectedProvider.secretEnv}.`);
@@ -1882,30 +1893,36 @@ async function runInstalledModelsSet(params) {
 }
 
 async function runInstalledAgentTurn(params) {
-  const sessionId = `cross-os-release-check-${params.label}-${Date.now()}`;
-  const result = await runInstalledCli({
-    cliPath: params.cliPath,
-    args: [
-      "agent",
-      "--agent",
-      "main",
-      "--session-id",
-      sessionId,
-      "--message",
-      "Reply with exact ASCII text OK only.",
-      "--thinking",
-      "minimal",
-      "--json",
-    ],
-    cwd: params.cwd,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 10 * 60 * 1000,
-  });
-  if (!agentOutputHasExpectedOkMarker(result.stdout, { logPath: params.logPath })) {
-    throw new Error("Agent output did not contain the expected OK marker.");
+  let lastError;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const sessionId = `cross-os-release-check-${params.label}-${Date.now()}-${attempt}`;
+    try {
+      const result = await runInstalledCli({
+        cliPath: params.cliPath,
+        args: buildReleaseAgentTurnArgs(sessionId),
+        cwd: params.cwd,
+        env: params.env,
+        logPath: params.logPath,
+        timeoutMs: 10 * 60 * 1000,
+      });
+      if (!agentOutputHasExpectedOkMarker(result.stdout, { logPath: params.logPath })) {
+        throw new Error("Agent output did not contain the expected OK marker.");
+      }
+      return result;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= 2 || !shouldRetryCrossOsAgentTurnError(error)) {
+        throw error;
+      }
+      appendFileSync(
+        params.logPath,
+        `\n[release-checks] retrying installed agent turn after retryable live failure: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      );
+    }
   }
-  return result;
+  throw lastError;
 }
 
 export function verifyDevUpdateStatus(stdout, options = {}) {
@@ -2657,18 +2674,7 @@ async function runAgentTurn(params) {
       const result = await runOpenClaw({
         lane: params.lane,
         env: params.env,
-        args: [
-          "agent",
-          "--agent",
-          "main",
-          "--session-id",
-          sessionId,
-          "--message",
-          "Reply with exact ASCII text OK only.",
-          "--thinking",
-          "minimal",
-          "--json",
-        ],
+        args: buildReleaseAgentTurnArgs(sessionId),
         logPath: params.logPath,
         timeoutMs: 10 * 60 * 1000,
       });
@@ -2683,7 +2689,7 @@ async function runAgentTurn(params) {
       }
       appendFileSync(
         params.logPath,
-        `\n[release-checks] retrying agent turn after bundled runtime deps staging failure: ${
+        `\n[release-checks] retrying agent turn after retryable live failure: ${
           error instanceof Error ? error.message : String(error)
         }\n`,
       );
@@ -2692,9 +2698,26 @@ async function runAgentTurn(params) {
   throw lastError;
 }
 
+function buildReleaseAgentTurnArgs(sessionId) {
+  return [
+    "agent",
+    "--agent",
+    "main",
+    "--session-id",
+    sessionId,
+    "--message",
+    "Reply with exact ASCII text OK only.",
+    "--thinking",
+    "minimal",
+    "--timeout",
+    String(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS),
+    "--json",
+  ];
+}
+
 export function shouldRetryCrossOsAgentTurnError(error) {
   const message = error instanceof Error ? error.message : String(error);
-  return /failed to (?:install|stage) bundled runtime deps|failed to stage bundled runtime deps after/u.test(
+  return /failed to (?:install|stage) bundled runtime deps|failed to stage bundled runtime deps after|Agent output did not contain the expected OK marker|model idle timeout|did not produce a response before the model idle timeout|gateway request timeout for agent|Command timed out|timed out and could not be terminated cleanly/u.test(
     message,
   );
 }

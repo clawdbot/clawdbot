@@ -1,13 +1,4 @@
-import {
-  Button,
-  Row,
-  Separator,
-  TextDisplay,
-  serializePayload,
-  type MessagePayloadObject,
-  type TopLevelComponents,
-} from "@buape/carbon";
-import { ButtonStyle, Routes } from "discord-api-types/v10";
+import { ButtonStyle } from "discord-api-types/v10";
 import type {
   ChannelApprovalCapabilityHandlerContext,
   ExecApprovalExpiredView,
@@ -25,6 +16,19 @@ import type { DiscordExecApprovalConfig, OpenClawConfig } from "openclaw/plugin-
 import { logDebug, logError, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { shouldHandleDiscordApprovalRequest } from "./approval-shared.js";
 import { isDiscordExecApprovalClientEnabled } from "./exec-approvals.js";
+import {
+  Button,
+  createChannelMessage,
+  createUserDmChannel,
+  deleteChannelMessage,
+  editChannelMessage,
+  Row,
+  Separator,
+  TextDisplay,
+  serializePayload,
+  type MessagePayloadObject,
+  type TopLevelComponents,
+} from "./internal/discord.js";
 import { createDiscordClient, stripUndefinedFields } from "./send.shared.js";
 import { DiscordUiContainer } from "./ui.js";
 
@@ -364,7 +368,7 @@ async function updateMessage(params: {
     const payload = buildExecApprovalPayload(params.container);
     await discordRequest(
       () =>
-        rest.patch(Routes.channelMessage(params.channelId, params.messageId), {
+        editChannelMessage(rest, params.channelId, params.messageId, {
           body: stripUndefinedFields(serializePayload(payload)),
         }),
       "update-approval",
@@ -394,7 +398,7 @@ async function finalizeMessage(params: {
       accountId: params.accountId,
     });
     await discordRequest(
-      () => rest.delete(Routes.channelMessage(params.channelId, params.messageId)) as Promise<void>,
+      () => deleteChannelMessage(rest, params.channelId, params.messageId),
       "delete-approval",
     );
   } catch (err) {
@@ -524,10 +528,7 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
       });
       const userId = plannedTarget.target.to;
       const dmChannel = (await discordRequest(
-        () =>
-          rest.post(Routes.userChannels(), {
-            body: { recipient_id: userId },
-          }) as Promise<{ id: string }>,
+        () => createUserDmChannel(rest, userId),
         "dm-channel",
       )) as { id: string };
       if (!dmChannel?.id) {
@@ -561,9 +562,13 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
       });
       const message = (await discordRequest(
         () =>
-          rest.post(Routes.channelMessages(preparedTarget.discordChannelId), {
-            body: pendingPayload.body,
-          }) as Promise<{ id: string; channel_id: string }>,
+          createChannelMessage<{ id: string; channel_id: string }>(
+            rest,
+            preparedTarget.discordChannelId,
+            {
+              body: pendingPayload.body,
+            },
+          ),
         plannedTarget.surface === "origin" ? "send-approval-channel" : "send-approval",
       )) as { id: string; channel_id: string };
       if (!message?.id) {

@@ -3285,21 +3285,9 @@ td.data-table-key-col {
    Exec Approval Modal
    =========================================== */
 
-.exec-approval-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.8);
-  backdrop-filter: blur(4px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  z-index: 200;
-}
-
 .exec-approval-card {
-  width: min(540px, 100%);
-  max-height: calc(100dvh - 48px);
+  width: 100%;
+  max-height: inherit;
   display: flex;
   flex-direction: column;
   background: var(--card);
@@ -4860,12 +4848,27 @@ td.data-table-key-col {
   position: fixed;
   inset: 0;
   z-index: 1000;
+  width: 100vw;
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+  margin: 0;
+  border: 0;
+  box-sizing: border-box;
   display: flex;
   align-items: flex-start;
   justify-content: center;
   padding-top: min(20vh, 160px);
+  padding-right: 0;
+  padding-bottom: 0;
+  padding-left: 0;
   background: rgba(0, 0, 0, 0.5);
+  color: var(--text);
   animation: fade-in 0.12s ease-out;
+}
+
+.cmd-palette-overlay::backdrop {
+  background: transparent;
 }
 
 .cmd-palette {
@@ -4876,6 +4879,19 @@ td.data-table-key-col {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   animation: scale-in 0.15s ease-out;
+}
+
+.cmd-palette__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .cmd-palette__input {
@@ -5415,14 +5431,8 @@ details[open] > .ov-expandable-toggle::after {
     gap: 8px;
   }
 
-  .exec-approval-overlay {
-    padding: 12px;
-    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
-  }
-
   .exec-approval-card {
     padding: 16px;
-    max-height: 90dvh;
     display: flex;
     flex-direction: column;
   }

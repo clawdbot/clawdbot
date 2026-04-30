@@ -2,7 +2,10 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Model } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { createOpenAIThinkingLevelWrapper } from "./openai-stream-wrappers.js";
+import {
+  createOpenAIAttributionHeadersWrapper,
+  createOpenAIThinkingLevelWrapper,
+} from "./openai-stream-wrappers.js";
 
 function createPayloadCapture(opts?: { initialReasoning?: unknown }) {
   const payloads: Array<Record<string, unknown>> = [];
@@ -204,5 +207,46 @@ describe("createOpenAIThinkingLevelWrapper", () => {
     void wrapped(model as Model<typeof model.api>, { messages: [] }, {});
 
     expect(payloads[0]?.reasoning).toEqual({ effort: "xhigh" });
+  });
+});
+
+describe("createOpenAIAttributionHeadersWrapper", () => {
+  it("routes native Codex traffic through the OpenClaw transport instead of pi upstream", () => {
+    let upstreamCalls = 0;
+    let codexCalls = 0;
+    let capturedHeaders: Record<string, string> | undefined;
+    const upstream: StreamFn = () => {
+      upstreamCalls += 1;
+      return createAssistantMessageEventStream();
+    };
+    const codexTransport: StreamFn = (_model, _context, options) => {
+      codexCalls += 1;
+      capturedHeaders = options?.headers;
+      return createAssistantMessageEventStream();
+    };
+    const wrapped = createOpenAIAttributionHeadersWrapper(upstream, {
+      codexNativeTransportStreamFn: codexTransport,
+    });
+
+    void wrapped(
+      {
+        ...codexModel,
+        baseUrl: "https://chatgpt.com/backend-api",
+      } as Model<"openai-codex-responses">,
+      { messages: [] },
+      {
+        headers: {
+          originator: "pi",
+          "User-Agent": "pi",
+        },
+      },
+    );
+
+    expect(upstreamCalls).toBe(0);
+    expect(codexCalls).toBe(1);
+    expect(capturedHeaders).toMatchObject({
+      originator: "openclaw",
+      "User-Agent": expect.stringMatching(/^openclaw\//),
+    });
   });
 });

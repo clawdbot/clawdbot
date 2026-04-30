@@ -42,6 +42,7 @@ export const HeartbeatSchema = z
     timeoutSeconds: z.number().int().positive().optional(),
     lightContext: z.boolean().optional(),
     isolatedSession: z.boolean().optional(),
+    skipWhenBusy: z.boolean().optional(),
   })
   .strict()
   .superRefine((val, ctx) => {
@@ -353,6 +354,7 @@ export const ToolsWebFetchSchema = z
     ssrfPolicy: z
       .object({
         allowRfc2544BenchmarkRange: z.boolean().optional(),
+        allowIpv6UniqueLocalRange: z.boolean().optional(),
       })
       .strict()
       .optional(),

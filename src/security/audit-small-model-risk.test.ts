@@ -45,4 +45,27 @@ describe("security audit small-model risk findings", () => {
       }
     }
   });
+
+  it("resolves configured aliases before parameter-size classification", () => {
+    const [finding] = collectSmallModelRiskFindings({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "tiny" },
+            models: {
+              "ollama/mistral-8b": { alias: "tiny" },
+            },
+          },
+        },
+        tools: { web: { search: { enabled: true }, fetch: { enabled: true } } },
+        browser: { enabled: true },
+      } satisfies OpenClawConfig,
+      env: {},
+    });
+
+    expect(finding?.checkId).toBe("models.small_params");
+    expect(finding?.detail).toContain("ollama/mistral-8b");
+    expect(finding?.detail).toContain("@ agents.defaults.model.primary");
+    expect(finding?.detail).not.toContain("- tiny");
+  });
 });

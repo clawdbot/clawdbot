@@ -601,6 +601,51 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("channel override");
   });
 
+  it("uses the channel override model context window instead of stale persisted context", () => {
+    const text = buildStatusMessage({
+      config: {
+        channels: {
+          modelByChannel: {
+            discord: {
+              "123": "minimax-portal/MiniMax-M2.7",
+            },
+          },
+        },
+        models: {
+          providers: {
+            "minimax-portal": {
+              models: [{ id: "MiniMax-M2.7", contextWindow: 200_000 }],
+            },
+            anthropic: {
+              models: [{ id: "claude-opus-4-6", contextWindow: 1_048_576 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "minimax-portal/MiniMax-M2.7",
+        contextTokens: 1_048_576,
+      },
+      sessionEntry: {
+        sessionId: "channel-context-window",
+        updatedAt: 0,
+        channel: "discord",
+        groupId: "123",
+        totalTokens: 49_000,
+        contextTokens: 1_048_576,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+    const normalized = normalizeTestText(text);
+
+    expect(normalized).toContain("Model: minimax-portal/MiniMax-M2.7");
+    expect(normalized).toContain("channel override");
+    expect(normalized).toContain("Context: 49k/200k");
+    expect(normalized).not.toContain("Context: 49k/1.0m");
+  });
+
   it("shows 1M context window when anthropic context1m is enabled", () => {
     const text = buildStatusMessage({
       config: {

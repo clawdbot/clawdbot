@@ -504,7 +504,11 @@ export class MatrixVerificationManager {
         return;
       }
       session.sasAutoConfirmStarted = true;
-      void this.confirmSasForSession(session, callbacks, { trustOwnDevice: false })
+      // For self-verifications, trustOwnDeviceAfterConfirmedSas is gated on
+      // isSelfVerification, so non-self requests remain unaffected. Without
+      // this, the bot's own device never gets cross-signed when SAS lands
+      // via the auto-confirm timer (initiated remotely).
+      void this.confirmSasForSession(session, callbacks, { trustOwnDevice: true })
         .then(() => {
           this.touchVerificationSession(session);
         })
@@ -732,6 +736,15 @@ export class MatrixVerificationManager {
     session.sasCallbacks = callbacks;
     session.sasAutoConfirmStarted = true;
     await this.confirmSasForSession(session, callbacks);
+    // Wait for the rust-crypto verifier to fully resolve (done-exchange + any
+    // pending cross-signing uploads triggered by trustOwnDeviceAfterSas) so
+    // the operator's client sees a settled state on the next /keys/query.
+    // verifyPromise is set inside ensureVerificationStarted and already
+    // funnels its own rejection into session.error, so awaiting it here
+    // cannot double-throw.
+    if (session.verifyPromise) {
+      await session.verifyPromise;
+    }
     this.touchVerificationSession(session);
     return this.buildVerificationSummary(session);
   }

@@ -110,6 +110,11 @@ Notes:
 - Passing any explicit add flags switches the command into the non-interactive path.
 - Non-interactive mode requires both an agent name and `--workspace`.
 - `main` is reserved and cannot be used as the new agent id.
+- In interactive mode, auth seeding copies only portable static profiles
+  (`api_key` and static `token` by default). OAuth refresh-token profiles remain
+  available only by read-through inheritance from the real `main` agent store.
+  If the configured default agent is not `main`, sign in separately for OAuth
+  profiles on the new agent.
 
 ### `agents bindings`
 

@@ -48,6 +48,26 @@ vi.mock("../media.js", () => ({
 let deliverWebReply: typeof import("./deliver-reply.js").deliverWebReply;
 let whatsappOutbound: typeof import("../outbound-adapter.js").whatsappOutbound;
 
+function acceptedSendResult(kind: "media" | "text", id: string) {
+  return {
+    kind,
+    messageId: id,
+    messageIds: [id],
+    keys: [{ id }],
+    providerAccepted: true,
+  };
+}
+
+function unacceptedSendResult(kind: "media" | "text") {
+  return {
+    kind,
+    messageId: "unknown",
+    messageIds: [],
+    keys: [],
+    providerAccepted: false,
+  };
+}
+
 function makeMsg(): WebInboundMsg {
   return {
     from: "+10000000000",
@@ -58,8 +78,8 @@ function makeMsg(): WebInboundMsg {
     id: "msg-1",
     body: "latest batch body",
     senderJid: "222@s.whatsapp.net",
-    reply: vi.fn(async () => undefined),
-    sendMedia: vi.fn(async () => undefined),
+    reply: vi.fn(async () => acceptedSendResult("text", "reply-sent-1")),
+    sendMedia: vi.fn(async () => acceptedSendResult("media", "media-sent-1")),
   } as unknown as WebInboundMsg;
 }
 
@@ -99,7 +119,7 @@ function expectFirstSendMediaPayload(msg: WebInboundMsg) {
 
 function mockSecondReplySuccess(msg: WebInboundMsg) {
   (msg.reply as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce(
-    undefined,
+    acceptedSendResult("text", "reply-retry-2"),
   );
 }
 
@@ -162,7 +182,7 @@ describe("deliverWebReply", () => {
   it("sends chunked text replies and logs a summary", async () => {
     const msg = makeMsg();
 
-    await deliverWebReply({
+    const delivery = await deliverWebReply({
       replyResult: { text: "aaaaaa" },
       msg,
       maxMediaBytes: 1024 * 1024,
@@ -175,6 +195,32 @@ describe("deliverWebReply", () => {
     expect(msg.reply).toHaveBeenNthCalledWith(1, "aaa", undefined);
     expect(msg.reply).toHaveBeenNthCalledWith(2, "aaa", undefined);
     expect(replyLogger.info).toHaveBeenCalledWith(expect.any(Object), "auto-reply sent (text)");
+    expect(delivery.providerAccepted).toBe(true);
+    expect(delivery.messageIds).toEqual(["reply-sent-1"]);
+  });
+
+  it("reports text replies that Baileys did not accept", async () => {
+    const msg = makeMsg();
+    vi.mocked(msg.reply).mockResolvedValueOnce(unacceptedSendResult("text"));
+
+    const delivery = await deliverWebReply({
+      replyResult: { text: "hello" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).toHaveBeenCalledTimes(1);
+    expect(delivery).toMatchObject({
+      messageIds: [],
+      providerAccepted: false,
+    });
+    expect(replyLogger.warn).toHaveBeenCalledWith(
+      expect.any(Object),
+      "auto-reply text was not accepted by WhatsApp provider",
+    );
   });
 
   it("strips raw XML tool-call blocks before WhatsApp text delivery", async () => {
@@ -421,7 +467,7 @@ describe("deliverWebReply", () => {
     mockFirstSendMediaFailure(msg, "socket reset");
     (
       msg.sendMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
-    ).mockResolvedValueOnce(undefined);
+    ).mockResolvedValueOnce(acceptedSendResult("media", "media-retry-2"));
 
     await deliverWebReply({
       replyResult: { text: "caption", mediaUrl: "http://example.com/img.jpg" },
@@ -484,7 +530,7 @@ describe("deliverWebReply", () => {
     mockFirstSendMediaFailure(msg, "boom");
     (
       msg.sendMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
-    ).mockResolvedValueOnce(undefined);
+    ).mockResolvedValueOnce(acceptedSendResult("media", "media-second-1"));
 
     await deliverWebReply({
       replyResult: {

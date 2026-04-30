@@ -27,6 +27,25 @@ describe("discord target normalization", () => {
     }
   });
 
+  it("treats bare outbound IDs listed in allowFrom as DM targets", () => {
+    expect(normalizeDiscordOutboundTarget("1234567890", ["1234567890"])).toEqual({
+      ok: true,
+      to: "user:1234567890",
+    });
+    expect(normalizeDiscordOutboundTarget("2345678901", ["user:2345678901"])).toEqual({
+      ok: true,
+      to: "user:2345678901",
+    });
+    expect(normalizeDiscordOutboundTarget("3456789012", ["<@3456789012>"])).toEqual({
+      ok: true,
+      to: "user:3456789012",
+    });
+    expect(normalizeDiscordOutboundTarget("4567890123", ["*"])).toEqual({
+      ok: true,
+      to: "channel:4567890123",
+    });
+  });
+
   it("detects Discord-style target identifiers", () => {
     expect(looksLikeDiscordTargetId("<@!123456>")).toBe(true);
     expect(looksLikeDiscordTargetId("user:123456")).toBe(true);

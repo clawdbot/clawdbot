@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { access } from "node:fs/promises";
 import module from "node:module";
+import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const MIN_NODE_MAJOR = 22;
@@ -45,7 +47,42 @@ const isSourceCheckoutLauncher = () =>
 
 const isNodeCompileCacheDisabled = () => process.env.NODE_DISABLE_COMPILE_CACHE !== undefined;
 const isNodeCompileCacheRequested = () =>
-  process.env.NODE_COMPILE_CACHE !== undefined && !isNodeCompileCacheDisabled();
+  Boolean(process.env.NODE_COMPILE_CACHE) && !isNodeCompileCacheDisabled();
+const sanitizeCompileCachePathSegment = (value) => {
+  const normalized = value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
+  return normalized.length > 0 ? normalized : "unknown";
+};
+const readPackageVersion = () => {
+  try {
+    const parsed = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
+    if (typeof parsed?.version === "string" && parsed.version.trim().length > 0) {
+      return parsed.version;
+    }
+  } catch {
+    // Fall through to an install-metadata-only cache key.
+  }
+  return "unknown";
+};
+const resolvePackagedCompileCacheDirectory = () => {
+  const packageJsonUrl = new URL("./package.json", import.meta.url);
+  const version = sanitizeCompileCachePathSegment(readPackageVersion());
+  let installMarker = "no-package-json";
+  try {
+    const stat = statSync(packageJsonUrl);
+    installMarker = `${Math.trunc(stat.mtimeMs)}-${stat.size}`;
+  } catch {
+    // Package archives should always have package.json, but keep startup best-effort.
+  }
+  const baseDirectory = isNodeCompileCacheRequested()
+    ? process.env.NODE_COMPILE_CACHE
+    : path.join(os.tmpdir(), "node-compile-cache");
+  return path.join(
+    baseDirectory,
+    "openclaw",
+    version,
+    sanitizeCompileCachePathSegment(installMarker),
+  );
+};
 
 const respawnWithoutCompileCacheIfNeeded = () => {
   if (!isSourceCheckoutLauncher()) {
@@ -79,10 +116,46 @@ const respawnWithoutCompileCacheIfNeeded = () => {
 
 respawnWithoutCompileCacheIfNeeded();
 
+const respawnWithPackagedCompileCacheIfNeeded = () => {
+  if (isSourceCheckoutLauncher() || isNodeCompileCacheDisabled()) {
+    return false;
+  }
+  if (process.env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED === "1") {
+    return false;
+  }
+  const currentDirectory = module.getCompileCacheDir?.();
+  if (!currentDirectory) {
+    return false;
+  }
+  const desiredDirectory = resolvePackagedCompileCacheDirectory();
+  if (path.resolve(currentDirectory) === path.resolve(desiredDirectory)) {
+    return false;
+  }
+  const env = {
+    ...process.env,
+    NODE_COMPILE_CACHE: desiredDirectory,
+    OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: "1",
+  };
+  const result = spawnSync(
+    process.execPath,
+    [...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)],
+    {
+      stdio: "inherit",
+      env,
+    },
+  );
+  if (result.error) {
+    throw result.error;
+  }
+  process.exit(result.status ?? 1);
+};
+
+respawnWithPackagedCompileCacheIfNeeded();
+
 // https://nodejs.org/api/module.html#module-compile-cache
 if (module.enableCompileCache && !isNodeCompileCacheDisabled() && !isSourceCheckoutLauncher()) {
   try {
-    module.enableCompileCache();
+    module.enableCompileCache(resolvePackagedCompileCacheDirectory());
   } catch {
     // Ignore errors
   }

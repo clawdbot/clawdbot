@@ -20,6 +20,7 @@ COPY packages ./packages
 COPY extensions ./extensions
 COPY patches ./patches
 COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/npm-runner.mjs scripts/windows-cmd-helpers.mjs ./scripts/
+COPY scripts/lib/bundled-runtime-deps-install.mjs ./scripts/lib/bundled-runtime-deps-install.mjs
 COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
   corepack enable \

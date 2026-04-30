@@ -145,6 +145,33 @@ describe("shared Codex app-server client", () => {
     );
   });
 
+  it("uses the selected agent dir for shared app-server auth bridging", async () => {
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+
+    const listPromise = listCodexAppServerModels({
+      timeoutMs: 1000,
+      authProfileId: "openai-codex:work",
+      agentDir: "/tmp/openclaw-agent-nova",
+    });
+    await sendInitializeResult(harness, "openclaw/0.125.0 (macOS; test)");
+    await sendEmptyModelList(harness);
+
+    await expect(listPromise).resolves.toEqual({ models: [] });
+    expect(mocks.bridgeCodexAppServerStartOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: "/tmp/openclaw-agent-nova",
+        authProfileId: "openai-codex:work",
+      }),
+    );
+    expect(mocks.applyCodexAppServerAuthProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: "/tmp/openclaw-agent-nova",
+        authProfileId: "openai-codex:work",
+      }),
+    );
+  });
+
   it("resolves the managed binary before bridging and spawning the shared client", async () => {
     const harness = createClientHarness();
     const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);

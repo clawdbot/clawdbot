@@ -150,6 +150,19 @@ function hasRecentDiagnosticActivity(now: number): boolean {
   return lastActivityAt > 0 && now - lastActivityAt <= RECENT_DIAGNOSTIC_ACTIVITY_MS;
 }
 
+function resolveStuckSessionReason(state: {
+  state: SessionStateValue;
+  queueDepth: number;
+}): string {
+  if (state.queueDepth > 0) {
+    return "processing_with_queued_work";
+  }
+  if (state.state === "processing") {
+    return "processing_without_queue";
+  }
+  return "stale_session_state";
+}
+
 function roundDiagnosticMetric(value: number, digits = 3): number {
   if (!Number.isFinite(value)) {
     return 0;
@@ -514,10 +527,13 @@ export function logSessionStuck(params: SessionRef & { state: SessionStateValue;
     return;
   }
   const state = getDiagnosticSessionState(params);
+  const reason = resolveStuckSessionReason(state);
   diag.warn(
     `stuck session: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
       state.sessionKey ?? "unknown"
-    } state=${params.state} age=${Math.round(params.ageMs / 1000)}s queueDepth=${state.queueDepth}`,
+    } state=${params.state} age=${Math.round(params.ageMs / 1000)}s queueDepth=${
+      state.queueDepth
+    } reason=${reason} recovery=checking`,
   );
   emitDiagnosticEvent({
     type: "session.stuck",
@@ -526,6 +542,7 @@ export function logSessionStuck(params: SessionRef & { state: SessionStateValue;
     state: params.state,
     ageMs: params.ageMs,
     queueDepth: state.queueDepth,
+    reason,
   });
   markActivity();
 }

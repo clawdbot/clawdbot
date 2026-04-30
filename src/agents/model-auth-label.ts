@@ -15,6 +15,7 @@ export function resolveModelAuthLabel(params: {
   cfg?: OpenClawConfig;
   sessionEntry?: Partial<Pick<SessionEntry, "authProfileOverride">>;
   agentDir?: string;
+  workspaceDir?: string;
   includeExternalProfiles?: boolean;
 }): string | undefined {
   const resolvedProvider = params.provider?.trim();
@@ -57,7 +58,10 @@ export function resolveModelAuthLabel(params: {
     return `api-key${label ? ` (${label})` : ""}`;
   }
 
-  const envKey = resolveEnvApiKey(providerKey);
+  const envKey = resolveEnvApiKey(providerKey, process.env, {
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
   if (envKey?.apiKey) {
     if (envKey.source.includes("OAUTH_TOKEN")) {
       return `oauth (${envKey.source})`;

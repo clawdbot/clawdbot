@@ -1,4 +1,4 @@
-import { type Message, MessageType } from "@buape/carbon";
+import { type Message, MessageType } from "../internal/discord.js";
 import { formatDiscordUserTag } from "./format.js";
 
 export function resolveDiscordSystemEvent(message: Message, location: string): string | null {

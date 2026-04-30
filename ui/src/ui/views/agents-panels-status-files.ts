@@ -34,17 +34,19 @@ function countLines(text: string) {
 
 function estimateReadingTimeLabel(wordCount: number) {
   if (wordCount <= 0) {
-    return "Empty draft";
+    return t("agents.files.emptyDraft");
   }
-  return `${Math.max(1, Math.round(wordCount / 220))} min read`;
+  return t("agents.files.minRead", { count: String(Math.max(1, Math.round(wordCount / 220))) });
 }
 
 function getExtensionLabel(fileName: string) {
   const ext = fileName.split(".").pop()?.trim().toLowerCase();
   if (ext === "md" || ext === "markdown") {
-    return "Markdown Preview";
+    return t("agents.files.markdownPreview");
   }
-  return ext ? `${ext.toUpperCase()} Preview` : "Preview";
+  return ext
+    ? t("agents.files.extensionPreview", { ext: ext.toUpperCase() })
+    : t("agents.files.preview");
 }
 
 function formatWorkspaceRelativePath(filePath: string, workspace: string | null | undefined) {
@@ -78,7 +80,7 @@ function setPreviewExpandButtonState(button: Element | null | undefined, isFulls
   if (!(button instanceof HTMLElement)) {
     return;
   }
-  const label = isFullscreen ? "Collapse preview" : "Expand preview";
+  const label = isFullscreen ? t("agents.files.collapsePreview") : t("agents.files.expandPreview");
   button.classList.toggle("is-fullscreen", isFullscreen);
   button.setAttribute("aria-pressed", String(isFullscreen));
   button.setAttribute("aria-label", label);
@@ -92,45 +94,45 @@ function renderAgentContextCard(
 ) {
   return html`
     <section class="card">
-      <div class="card-title">Agent Context</div>
+      <div class="card-title">${t("agents.context.title")}</div>
       <div class="card-sub">${subtitle}</div>
       <div class="agents-overview-grid" style="margin-top: 16px;">
         <div class="agent-kv">
-          <div class="label">Workspace</div>
+          <div class="label">${t("agents.context.workspace")}</div>
           <div>
             <button
               type="button"
               class="workspace-link mono"
               @click=${() => onSelectPanel("files")}
-              title="Open Files tab"
+              title=${t("agents.context.openFilesTab")}
             >
               ${context.workspace}
             </button>
           </div>
         </div>
         <div class="agent-kv">
-          <div class="label">Primary Model</div>
+          <div class="label">${t("agents.context.primaryModel")}</div>
           <div class="mono">${context.model}</div>
         </div>
         <div class="agent-kv">
-          <div class="label">Runtime</div>
+          <div class="label">${t("agents.context.runtime")}</div>
           <div class="mono">${context.runtime}</div>
         </div>
         <div class="agent-kv">
-          <div class="label">Identity Name</div>
+          <div class="label">${t("agents.context.identityName")}</div>
           <div>${context.identityName}</div>
         </div>
         <div class="agent-kv">
-          <div class="label">Identity Avatar</div>
+          <div class="label">${t("agents.context.identityAvatar")}</div>
           <div>${context.identityAvatar}</div>
         </div>
         <div class="agent-kv">
-          <div class="label">Skills Filter</div>
+          <div class="label">${t("agents.context.skillsFilter")}</div>
           <div>${context.skillsLabel}</div>
         </div>
         <div class="agent-kv">
-          <div class="label">Default</div>
-          <div>${context.isDefault ? "yes" : "no"}</div>
+          <div class="label">${t("agents.context.default")}</div>
+          <div>${context.isDefault ? t("common.yes") : t("common.no")}</div>
         </div>
       </div>
     </section>
@@ -227,48 +229,55 @@ export function renderAgentChannels(params: {
   const entries = resolveChannelEntries(params.snapshot);
   const lastSuccessLabel = params.lastSuccess
     ? formatRelativeTimestamp(params.lastSuccess)
-    : "never";
+    : t("common.never");
   return html`
     <section class="grid grid-cols-2">
       ${renderAgentContextCard(
         params.context,
-        "Workspace, identity, and model configuration.",
+        t("agents.context.configurationSubtitle"),
         params.onSelectPanel,
       )}
       <section class="card">
         <div class="row" style="justify-content: space-between;">
           <div>
-            <div class="card-title">Channels</div>
-            <div class="card-sub">Gateway-wide channel status snapshot.</div>
+            <div class="card-title">${t("agents.channels.title")}</div>
+            <div class="card-sub">${t("agents.channels.subtitle")}</div>
           </div>
           <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
             ${params.loading ? t("common.refreshing") : t("common.refresh")}
           </button>
         </div>
-        <div class="muted" style="margin-top: 8px;">Last refresh: ${lastSuccessLabel}</div>
+        <div class="muted" style="margin-top: 8px;">
+          ${t("agents.channels.lastRefresh", { time: lastSuccessLabel })}
+        </div>
         ${params.error
           ? html`<div class="callout danger" style="margin-top: 12px;">${params.error}</div>`
           : nothing}
         ${!params.snapshot
           ? html`
               <div class="callout info" style="margin-top: 12px">
-                Load channels to see live status.
+                ${t("agents.channels.loadHint")}
               </div>
             `
           : nothing}
         ${entries.length === 0
-          ? html` <div class="muted" style="margin-top: 16px">No channels found.</div> `
+          ? html` <div class="muted" style="margin-top: 16px">${t("agents.channels.empty")}</div>`
           : html`
               <div class="list" style="margin-top: 16px;">
                 ${entries.map((entry) => {
                   const summary = summarizeChannelAccounts(entry.accounts);
                   const status = summary.total
-                    ? `${summary.connected}/${summary.total} connected`
-                    : "no accounts";
+                    ? t("agents.channels.connectedCount", {
+                        connected: String(summary.connected),
+                        total: String(summary.total),
+                      })
+                    : t("agents.channels.noAccounts");
                   const configLabel = summary.configured
-                    ? `${summary.configured} configured`
-                    : "not configured";
-                  const enabled = summary.total ? `${summary.enabled} enabled` : "disabled";
+                    ? t("agents.channels.configuredCount", { count: String(summary.configured) })
+                    : t("agents.channels.notConfigured");
+                  const enabled = summary.total
+                    ? t("agents.channels.enabledCount", { count: String(summary.enabled) })
+                    : t("common.disabled");
                   const extras = resolveChannelExtrasFromConfig({
                     configForm: params.configForm,
                     channelId: entry.id,
@@ -292,7 +301,7 @@ export function renderAgentChannels(params: {
                                   target="_blank"
                                   rel="noopener"
                                   style="color: var(--accent); font-size: 12px"
-                                  >Setup guide</a
+                                  >${t("agents.channels.setupGuide")}</a
                                 >
                               </div>
                             `
@@ -327,14 +336,14 @@ export function renderAgentCron(params: {
     <section class="grid grid-cols-2">
       ${renderAgentContextCard(
         params.context,
-        "Workspace and scheduling targets.",
+        t("agents.context.schedulingSubtitle"),
         params.onSelectPanel,
       )}
       <section class="card">
         <div class="row" style="justify-content: space-between;">
           <div>
-            <div class="card-title">Scheduler</div>
-            <div class="card-sub">Gateway cron status.</div>
+            <div class="card-title">${t("agents.cronPanel.schedulerTitle")}</div>
+            <div class="card-sub">${t("agents.cronPanel.schedulerSubtitle")}</div>
           </div>
           <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
             ${params.loading ? t("common.refreshing") : t("common.refresh")}
@@ -352,11 +361,11 @@ export function renderAgentCron(params: {
             </div>
           </div>
           <div class="stat">
-            <div class="stat-label">Jobs</div>
+            <div class="stat-label">${t("agents.cronPanel.jobs")}</div>
             <div class="stat-value">${params.status?.jobs ?? t("common.na")}</div>
           </div>
           <div class="stat">
-            <div class="stat-label">Next wake</div>
+            <div class="stat-label">${t("agents.cronPanel.nextWake")}</div>
             <div class="stat-value">${formatNextRun(params.status?.nextWakeAtMs ?? null)}</div>
           </div>
         </div>
@@ -366,10 +375,10 @@ export function renderAgentCron(params: {
       </section>
     </section>
     <section class="card">
-      <div class="card-title">Agent Cron Jobs</div>
-      <div class="card-sub">Scheduled jobs targeting this agent.</div>
+      <div class="card-title">${t("agents.cronPanel.agentJobsTitle")}</div>
+      <div class="card-sub">${t("agents.cronPanel.agentJobsSubtitle")}</div>
       ${jobs.length === 0
-        ? html` <div class="muted" style="margin-top: 16px">No jobs assigned.</div> `
+        ? html` <div class="muted" style="margin-top: 16px">${t("agents.cronPanel.noJobs")}</div>`
         : html`
             <div class="list" style="margin-top: 16px;">
               ${jobs.map(
@@ -383,7 +392,7 @@ export function renderAgentCron(params: {
                       <div class="chip-row" style="margin-top: 6px;">
                         <span class="chip">${formatCronSchedule(job)}</span>
                         <span class="chip ${job.enabled ? "chip-ok" : "chip-warn"}">
-                          ${job.enabled ? "enabled" : "disabled"}
+                          ${job.enabled ? t("common.enabled") : t("common.disabled")}
                         </span>
                         <span class="chip">${job.sessionTarget}</span>
                       </div>
@@ -397,7 +406,7 @@ export function renderAgentCron(params: {
                         ?disabled=${!job.enabled}
                         @click=${() => params.onRunNow(job.id)}
                       >
-                        Run Now
+                        ${t("agents.cronPanel.runNow")}
                       </button>
                     </div>
                   </div>
@@ -444,27 +453,27 @@ export function renderAgentFiles(params: {
     : "";
   const previewTitleId = activeEntry ? `agent-file-preview-title-${toDomId(activeEntry.name)}` : "";
   const previewStatusLabel = activeEntry?.missing
-    ? "Will Create on Save"
+    ? t("agents.files.willCreateOnSave")
     : isDirty
-      ? "Live Draft Preview"
-      : "Saved Preview";
+      ? t("agents.files.liveDraftPreview")
+      : t("agents.files.savedPreview");
   const previewStatusClass = activeEntry?.missing
     ? "is-missing"
     : isDirty
       ? "is-dirty"
       : "is-synced";
   const previewUpdatedLabel = activeEntry?.updatedAtMs
-    ? `Updated ${formatRelativeTimestamp(activeEntry.updatedAtMs)}`
+    ? t("agents.files.updated", { time: formatRelativeTimestamp(activeEntry.updatedAtMs) })
     : activeEntry?.missing
-      ? "Not Created Yet"
-      : "Updated Unknown";
+      ? t("agents.files.notCreatedYet")
+      : t("agents.files.updatedUnknown");
 
   return html`
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Core Files</div>
-          <div class="card-sub">Bootstrap persona, identity, and tool guidance.</div>
+          <div class="card-title">${t("agents.files.coreFilesTitle")}</div>
+          <div class="card-sub">${t("agents.files.coreFilesSubtitle")}</div>
         </div>
         <button
           class="btn btn--sm"
@@ -476,7 +485,7 @@ export function renderAgentFiles(params: {
       </div>
       ${list
         ? html`<div class="muted mono" style="margin-top: 8px;">
-            Workspace: <span>${list.workspace}</span>
+            ${t("agents.files.workspace")}: <span>${list.workspace}</span>
           </div>`
         : nothing}
       ${params.agentFilesError
@@ -486,12 +495,10 @@ export function renderAgentFiles(params: {
         : nothing}
       ${!list
         ? html`
-            <div class="callout info" style="margin-top: 12px">
-              Load the agent workspace files to edit core instructions.
-            </div>
+            <div class="callout info" style="margin-top: 12px">${t("agents.files.loadHint")}</div>
           `
         : files.length === 0
-          ? html` <div class="muted" style="margin-top: 16px">No files found.</div> `
+          ? html` <div class="muted" style="margin-top: 16px">${t("agents.files.empty")}</div> `
           : html`
               <div class="agent-tabs" style="margin-top: 14px;">
                 ${files.map((file) => {
@@ -505,14 +512,16 @@ export function renderAgentFiles(params: {
                       @click=${() => params.onSelectFile(file.name)}
                     >
                       ${label}${file.missing
-                        ? html` <span class="agent-tab-badge">missing</span> `
+                        ? html` <span class="agent-tab-badge">${t("agents.files.missing")}</span> `
                         : nothing}
                     </button>
                   `;
                 })}
               </div>
               ${!activeEntry
-                ? html` <div class="muted" style="margin-top: 16px">Select a file to edit.</div> `
+                ? html` <div class="muted" style="margin-top: 16px">
+                    ${t("agents.files.selectFile")}
+                  </div>`
                 : html`
                     <div class="agent-file-header" style="margin-top: 14px;">
                       <div>
@@ -521,7 +530,7 @@ export function renderAgentFiles(params: {
                       <div class="agent-file-actions">
                         <button
                           class="btn btn--sm"
-                          title="Preview rendered markdown"
+                          title=${t("agents.files.previewMarkdownTitle")}
                           @click=${(e: Event) => {
                             const btn = e.currentTarget as HTMLElement;
                             const dialog = btn.closest(".card")?.querySelector("dialog");
@@ -530,33 +539,33 @@ export function renderAgentFiles(params: {
                             }
                           }}
                         >
-                          ${icons.eye} Preview
+                          ${icons.eye} ${t("agents.files.preview")}
                         </button>
                         <button
                           class="btn btn--sm"
                           ?disabled=${!isDirty}
                           @click=${() => params.onFileReset(activeEntry.name)}
                         >
-                          Reset
+                          ${t("common.reset")}
                         </button>
                         <button
                           class="btn btn--sm primary"
                           ?disabled=${params.agentFileSaving || !isDirty}
                           @click=${() => params.onFileSave(activeEntry.name)}
                         >
-                          ${params.agentFileSaving ? "Saving…" : "Save"}
+                          ${params.agentFileSaving ? t("common.saving") : t("common.save")}
                         </button>
                       </div>
                     </div>
                     ${activeEntry.missing
                       ? html`
                           <div class="callout info" style="margin-top: 10px">
-                            This file is missing. Saving will create it in the agent workspace.
+                            ${t("agents.files.missingHint")}
                           </div>
                         `
                       : nothing}
                     <label class="field agent-file-field" style="margin-top: 12px;">
-                      <span>Content</span>
+                      <span>${t("agents.files.content")}</span>
                       <textarea
                         class="agent-file-textarea"
                         .value=${draft}
@@ -611,8 +620,8 @@ export function renderAgentFiles(params: {
                             <button
                               type="button"
                               class="btn btn--sm md-preview-icon-btn md-preview-expand-btn"
-                              title="Expand preview"
-                              aria-label="Expand preview"
+                              title=${t("agents.files.expandPreview")}
+                              aria-label=${t("agents.files.expandPreview")}
                               aria-pressed="false"
                               @click=${(e: Event) => {
                                 const btn = e.currentTarget as HTMLElement;
@@ -632,8 +641,8 @@ export function renderAgentFiles(params: {
                             <button
                               type="button"
                               class="btn btn--sm md-preview-icon-btn"
-                              title="Edit file"
-                              aria-label="Edit file"
+                              title=${t("agents.files.editFile")}
+                              aria-label=${t("agents.files.editFile")}
                               @click=${(e: Event) => {
                                 (e.currentTarget as HTMLElement).closest("dialog")?.close();
                                 const textarea =
@@ -646,8 +655,8 @@ export function renderAgentFiles(params: {
                             <button
                               type="button"
                               class="btn btn--sm md-preview-icon-btn"
-                              title="Close preview"
-                              aria-label="Close preview"
+                              title=${t("agents.files.closePreview")}
+                              aria-label=${t("agents.files.closePreview")}
                               @click=${(e: Event) => {
                                 (e.currentTarget as HTMLElement).closest("dialog")?.close();
                               }}
@@ -662,11 +671,13 @@ export function renderAgentFiles(params: {
                           </div>
                           <div class="md-preview-dialog__chip">
                             <strong>${estimateReadingTimeLabel(draftWordCount)}</strong>
-                            <span>${draftWordCount} words</span>
+                            <span
+                              >${t("agents.files.words", { count: String(draftWordCount) })}</span
+                            >
                           </div>
                           <div class="md-preview-dialog__chip">
                             <strong>${draftLineCount}</strong>
-                            <span>lines</span>
+                            <span>${t("agents.files.lines")}</span>
                           </div>
                           <div class="md-preview-dialog__chip">
                             <strong>${draftByteSize}</strong>

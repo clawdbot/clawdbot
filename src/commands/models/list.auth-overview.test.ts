@@ -1,14 +1,24 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
 import { withEnv } from "../../test-utils/env.js";
 import { resolveProviderAuthOverview } from "./list.auth-overview.js";
+
+const persistedStores = vi.hoisted(() => new Map<string, { profiles: Record<string, unknown> }>());
 
 vi.mock("../../agents/auth-profiles/display.js", () => ({
   resolveAuthProfileDisplayLabel: vi.fn(({ profileId }: { profileId: string }) => profileId),
 }));
 
+vi.mock("../../agents/auth-profiles/persisted.js", () => ({
+  loadPersistedAuthProfileStore: vi.fn((agentDir?: string) =>
+    persistedStores.get(agentDir ?? "__main__"),
+  ),
+}));
+
 vi.mock("../../agents/auth-profiles/paths.js", () => ({
-  resolveAuthStorePathForDisplay: vi.fn(() => "/tmp/auth-profiles.json"),
+  resolveAuthStorePathForDisplay: vi.fn((agentDir?: string) =>
+    agentDir ? `${agentDir}/auth-profiles.json` : "/tmp/auth-profiles.json",
+  ),
 }));
 
 vi.mock("../../agents/auth-profiles/profiles.js", () => ({
@@ -82,6 +92,10 @@ function resolveOpenAiOverview(apiKey: string) {
 }
 
 describe("resolveProviderAuthOverview", () => {
+  beforeEach(() => {
+    persistedStores.clear();
+  });
+
   it("does not throw when token profile only has tokenRef", () => {
     const overview = resolveProviderAuthOverview({
       provider: "github-copilot",
@@ -100,6 +114,68 @@ describe("resolveProviderAuthOverview", () => {
     });
 
     expect(overview.profiles.labels[0]).toContain("token:ref(env:GITHUB_TOKEN)");
+  });
+
+  it("reports the selected agent auth store when profiles are effective", () => {
+    persistedStores.set("/tmp/openclaw-agent-custom", {
+      profiles: {
+        "openai-codex:peter@example.test": {},
+      },
+    });
+    const overview = resolveProviderAuthOverview({
+      provider: "openai-codex",
+      cfg: {},
+      store: {
+        version: 1,
+        profiles: {
+          "openai-codex:peter@example.test": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 60_000,
+          },
+        },
+      } as never,
+      modelsPath: "/tmp/openclaw-agent-custom/models.json",
+      agentDir: "/tmp/openclaw-agent-custom",
+    });
+
+    expect(overview.effective).toEqual({
+      kind: "profiles",
+      detail: "/tmp/openclaw-agent-custom/auth-profiles.json",
+    });
+  });
+
+  it("reports the main auth store for inherited profiles", () => {
+    persistedStores.set("__main__", {
+      profiles: {
+        "openai-codex:peter@example.test": {},
+      },
+    });
+    const overview = resolveProviderAuthOverview({
+      provider: "openai-codex",
+      cfg: {},
+      store: {
+        version: 1,
+        profiles: {
+          "openai-codex:peter@example.test": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 60_000,
+          },
+        },
+      } as never,
+      modelsPath: "/tmp/openclaw-agent-custom/models.json",
+      agentDir: "/tmp/openclaw-agent-custom",
+    });
+
+    expect(overview.effective).toEqual({
+      kind: "profiles",
+      detail: "/tmp/auth-profiles.json",
+    });
   });
 
   it("renders marker-backed models.json auth as marker detail", () => {

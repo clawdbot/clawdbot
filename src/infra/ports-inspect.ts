@@ -250,7 +250,20 @@ async function resolveWindowsImageName(pid: number): Promise<string | undefined>
 }
 
 async function resolveWindowsCommandLine(pid: number): Promise<string | undefined> {
-  const res = await runCommandSafe([
+  const powershell = await runCommandSafe([
+    "powershell",
+    "-NoProfile",
+    "-Command",
+    `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" | Select-Object -ExpandProperty CommandLine)`,
+  ]);
+  if (powershell.code === 0) {
+    const value = powershell.stdout.trim();
+    if (value) {
+      return value;
+    }
+  }
+
+  const wmic = await runCommandSafe([
     "wmic",
     "process",
     "where",
@@ -259,10 +272,10 @@ async function resolveWindowsCommandLine(pid: number): Promise<string | undefine
     "CommandLine",
     "/value",
   ]);
-  if (res.code !== 0) {
+  if (wmic.code !== 0) {
     return undefined;
   }
-  for (const rawLine of res.stdout.split(/\r?\n/)) {
+  for (const rawLine of wmic.stdout.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!normalizeLowercaseStringOrEmpty(line).startsWith("commandline=")) {
       continue;

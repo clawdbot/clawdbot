@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -16,6 +17,7 @@ import {
   failTaskRunByRunId,
 } from "../../tasks/task-executor.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { buildStatusReply, buildStatusText } from "./commands-status.js";
 import {
   baseCommandTestConfig,
@@ -519,6 +521,83 @@ describe("buildStatusReply subagent summary", () => {
     expect(normalized).toContain("Runtime: OpenAI Codex");
     expect(normalized).toContain("Fast");
     expect(normalized).not.toContain("Fast · codex");
+  });
+
+  it("uses workspace-scoped auth evidence in /status auth labels", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-status-auth-label-"));
+    const workspaceDir = path.join(tempRoot, "workspace");
+    const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", "workspace-auth-label");
+    const bundledDir = path.join(tempRoot, "bundled");
+    const stateDir = path.join(tempRoot, "state");
+    const credentialPath = path.join(tempRoot, "credentials.json");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.mkdirSync(bundledDir, { recursive: true });
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(pluginDir, "index.ts"), "export default {}\n", "utf8");
+    fs.writeFileSync(credentialPath, "{}", "utf8");
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "workspace-auth-label",
+        configSchema: { type: "object" },
+        setup: {
+          providers: [
+            {
+              id: "anthropic",
+              authEvidence: [
+                {
+                  type: "local-file-with-env",
+                  fileEnvVar: "WORKSPACE_STATUS_CREDENTIALS",
+                  credentialMarker: "workspace-status-local-credentials",
+                  source: "workspace status credentials",
+                },
+              ],
+            },
+          ],
+        },
+      }),
+      "utf8",
+    );
+
+    try {
+      await withEnvAsync(
+        {
+          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+          OPENCLAW_STATE_DIR: stateDir,
+          WORKSPACE_STATUS_CREDENTIALS: credentialPath,
+        },
+        async () => {
+          const text = await buildStatusText({
+            cfg: {
+              ...baseCfg,
+              plugins: { allow: ["workspace-auth-label"] },
+            },
+            sessionEntry: {
+              sessionId: "sess-status-workspace-auth",
+              updatedAt: 0,
+            },
+            sessionKey: "agent:main:main",
+            parentSessionKey: "agent:main:main",
+            sessionScope: "per-sender",
+            statusChannel: "mobilechat",
+            workspaceDir,
+            provider: "anthropic",
+            model: "claude-opus-4-5",
+            contextTokens: 32_000,
+            resolvedFastMode: false,
+            resolvedVerboseLevel: "off",
+            resolvedReasoningLevel: "off",
+            resolveDefaultThinkingLevel: async () => undefined,
+            isGroup: false,
+            defaultGroupActivation: () => "mention",
+          });
+
+          expect(normalizeTestText(text)).toContain("workspace status credentials");
+        },
+      );
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("keeps /status on a session-pinned PI harness after config changes", async () => {

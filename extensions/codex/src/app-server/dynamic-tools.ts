@@ -23,7 +23,10 @@ import {
 
 export type CodexDynamicToolBridge = {
   specs: CodexDynamicToolSpec[];
-  handleToolCall: (params: CodexDynamicToolCallParams) => Promise<CodexDynamicToolCallResponse>;
+  handleToolCall: (
+    params: CodexDynamicToolCallParams,
+    options?: { signal?: AbortSignal },
+  ) => Promise<CodexDynamicToolCallResponse>;
   telemetry: {
     didSendViaMessagingTool: boolean;
     messagingToolSentTexts: string[];
@@ -74,7 +77,7 @@ export function createCodexDynamicToolBridge(params: {
       inputSchema: toJsonValue(tool.parameters),
     })),
     telemetry,
-    handleToolCall: async (call) => {
+    handleToolCall: async (call, options) => {
       const tool = toolMap.get(call.tool);
       if (!tool) {
         return {
@@ -84,9 +87,10 @@ export function createCodexDynamicToolBridge(params: {
       }
       const args = jsonObjectToRecord(call.arguments);
       const startedAt = Date.now();
+      const signal = composeAbortSignals(params.signal, options?.signal);
       try {
         const preparedArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
-        const rawResult = await tool.execute(call.callId, preparedArgs, params.signal);
+        const rawResult = await tool.execute(call.callId, preparedArgs, signal);
         const rawIsError = isToolResultError(rawResult);
         const middlewareResult = await middlewareRunner.applyToolResultMiddleware({
           threadId: call.threadId,
@@ -159,6 +163,17 @@ export function createCodexDynamicToolBridge(params: {
       }
     },
   };
+}
+
+function composeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal {
+  const activeSignals = signals.filter((signal): signal is AbortSignal => Boolean(signal));
+  if (activeSignals.length === 0) {
+    return new AbortController().signal;
+  }
+  if (activeSignals.length === 1) {
+    return activeSignals[0];
+  }
+  return AbortSignal.any(activeSignals);
 }
 
 function collectToolTelemetry(params: {

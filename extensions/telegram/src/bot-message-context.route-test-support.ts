@@ -40,16 +40,23 @@ export const telegramRouteTestSessionRuntime = {
 export async function loadTelegramMessageContextRouteHarness() {
   const { buildTelegramMessageContextForTest } =
     await import("./bot-message-context.test-harness.js");
-  const buildTelegramMessageContextForRouteTest = (
+  const buildTelegramMessageContextForRouteTest = async (
     params: BuildTelegramMessageContextForTestParams,
-  ) =>
-    buildTelegramMessageContextForTest({
+  ) => {
+    const ctx = await buildTelegramMessageContextForTest({
       ...params,
       sessionRuntime: {
         ...telegramRouteTestSessionRuntime,
         ...params.sessionRuntime,
       },
     });
+    if (ctx) {
+      await recordInboundSessionMock({
+        updateLastRoute: ctx.turn.record.updateLastRoute,
+      });
+    }
+    return ctx;
+  };
   return {
     clearRuntimeConfigSnapshot,
     setRuntimeConfigSnapshot,

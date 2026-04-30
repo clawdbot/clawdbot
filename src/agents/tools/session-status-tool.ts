@@ -564,6 +564,7 @@ export function createSessionStatusTool(opts?: {
           statusSessionEntry.lastChannel ??
           statusSessionEntry.origin?.provider ??
           "unknown",
+        workspaceDir: statusSessionEntry.spawnedWorkspaceDir,
         provider: providerForCard,
         model: defaultModelForCard,
         resolvedThinkLevel: statusSessionEntry.thinkingLevel as ThinkLevel | undefined,

@@ -489,6 +489,57 @@ const formatVoiceModeLine = (
   return parts.join(" · ");
 };
 
+function resolveChannelModelNote(params: {
+  config?: OpenClawConfig;
+  entry?: SessionEntry;
+  selectedProvider: string;
+  selectedModel: string;
+  parentSessionKey?: string;
+}): string | undefined {
+  if (!params.config || !params.entry) {
+    return undefined;
+  }
+  if (
+    normalizeOptionalString(params.entry.modelOverride) ||
+    normalizeOptionalString(params.entry.providerOverride)
+  ) {
+    return undefined;
+  }
+  const channelOverride = resolveChannelModelOverride({
+    cfg: params.config,
+    channel: params.entry.channel ?? params.entry.origin?.provider,
+    groupId: params.entry.groupId,
+    groupChatType: params.entry.chatType ?? params.entry.origin?.chatType,
+    groupChannel: params.entry.groupChannel,
+    groupSubject: params.entry.subject,
+    parentSessionKey: params.parentSessionKey,
+  });
+  if (!channelOverride) {
+    return undefined;
+  }
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.config,
+    defaultProvider: DEFAULT_PROVIDER,
+    allowPluginNormalization: false,
+  });
+  const resolvedOverride = resolveModelRefFromString({
+    raw: channelOverride.model,
+    defaultProvider: DEFAULT_PROVIDER,
+    aliasIndex,
+    allowPluginNormalization: false,
+  });
+  if (!resolvedOverride) {
+    return undefined;
+  }
+  if (
+    resolvedOverride.ref.provider !== params.selectedProvider ||
+    resolvedOverride.ref.model !== params.selectedModel
+  ) {
+    return undefined;
+  }
+  return "channel override";
+}
+
 export function buildStatusMessage(args: StatusArgs): string {
   const now = args.now ?? Date.now();
   const entry = args.sessionEntry;
@@ -650,9 +701,20 @@ export function buildStatusMessage(args: StatusArgs): string {
     model: contextLookupModel,
     allowAsyncLoad: false,
   });
+  const channelModelNote = resolveChannelModelNote({
+    config: args.config,
+    entry,
+    selectedProvider,
+    selectedModel,
+    parentSessionKey: args.parentSessionKey,
+  });
   const persistedContextTokens =
     typeof entry?.contextTokens === "number" && entry.contextTokens > 0
       ? entry.contextTokens
+      : undefined;
+  const agentContextTokens =
+    typeof args.agent?.contextTokens === "number" && args.agent.contextTokens > 0
+      ? args.agent.contextTokens
       : undefined;
   const explicitRuntimeContextTokens =
     typeof args.runtimeContextTokens === "number" && args.runtimeContextTokens > 0
@@ -669,6 +731,15 @@ export function buildStatusMessage(args: StatusArgs): string {
         ? Math.min(explicitConfiguredContextTokens, activeContextTokens)
         : explicitConfiguredContextTokens
       : undefined;
+  const channelOverrideContextTokens = channelModelNote
+    ? (explicitRuntimeContextTokens ??
+      cappedConfiguredContextTokens ??
+      (typeof activeContextTokens === "number"
+        ? typeof agentContextTokens === "number"
+          ? Math.min(agentContextTokens, activeContextTokens)
+          : activeContextTokens
+        : agentContextTokens))
+    : undefined;
   // When a fallback model is active, the selected-model context limit that
   // callers keep on the agent config is often stale. Prefer an explicit runtime
   // snapshot when available. Separately, callers can pass an explicit configured
@@ -715,7 +786,8 @@ export function buildStatusMessage(args: StatusArgs): string {
         cfg: contextConfig,
         ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
         model: contextLookupModel,
-        contextTokensOverride: persistedContextTokens ?? args.agent?.contextTokens,
+        contextTokensOverride:
+          channelOverrideContextTokens ?? persistedContextTokens ?? agentContextTokens,
         fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
         allowAsyncLoad: false,
       }) ?? DEFAULT_CONTEXT_TOKENS);
@@ -725,7 +797,11 @@ export function buildStatusMessage(args: StatusArgs): string {
   const verboseLevel =
     args.resolvedVerbose ?? args.sessionEntry?.verboseLevel ?? args.agent?.verboseDefault ?? "off";
   const fastMode = args.resolvedFast ?? args.sessionEntry?.fastMode ?? false;
-  const reasoningLevel = args.resolvedReasoning ?? args.sessionEntry?.reasoningLevel ?? "off";
+  const reasoningLevel =
+    args.resolvedReasoning ??
+    args.sessionEntry?.reasoningLevel ??
+    args.agent?.reasoningDefault ??
+    "off";
   const elevatedLevel =
     args.resolvedElevated ??
     args.sessionEntry?.elevatedLevel ??
@@ -850,50 +926,6 @@ export function buildStatusMessage(args: StatusArgs): string {
   const costLabel = showCost && hasUsage ? formatUsd(cost) : undefined;
 
   const selectedAuthLabel = selectedAuthLabelValue ? ` · 🔑 ${selectedAuthLabelValue}` : "";
-  const channelModelNote = (() => {
-    if (!args.config || !entry) {
-      return undefined;
-    }
-    if (
-      normalizeOptionalString(entry.modelOverride) ||
-      normalizeOptionalString(entry.providerOverride)
-    ) {
-      return undefined;
-    }
-    const channelOverride = resolveChannelModelOverride({
-      cfg: args.config,
-      channel: entry.channel ?? entry.origin?.provider,
-      groupId: entry.groupId,
-      groupChatType: entry.chatType ?? entry.origin?.chatType,
-      groupChannel: entry.groupChannel,
-      groupSubject: entry.subject,
-      parentSessionKey: args.parentSessionKey,
-    });
-    if (!channelOverride) {
-      return undefined;
-    }
-    const aliasIndex = buildModelAliasIndex({
-      cfg: args.config,
-      defaultProvider: DEFAULT_PROVIDER,
-      allowPluginNormalization: false,
-    });
-    const resolvedOverride = resolveModelRefFromString({
-      raw: channelOverride.model,
-      defaultProvider: DEFAULT_PROVIDER,
-      aliasIndex,
-      allowPluginNormalization: false,
-    });
-    if (!resolvedOverride) {
-      return undefined;
-    }
-    if (
-      resolvedOverride.ref.provider !== selectedProvider ||
-      resolvedOverride.ref.model !== selectedModel
-    ) {
-      return undefined;
-    }
-    return "channel override";
-  })();
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
   const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`;
 

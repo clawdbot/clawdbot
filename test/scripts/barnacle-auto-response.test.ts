@@ -290,20 +290,26 @@ describe("barnacle-auto-response", () => {
     );
   });
 
-  it("does not close clownfish PRs for the active PR limit", async () => {
-    for (const headRef of [
-      { head: { ref: "clownfish/clawsweeper-openclaw-openclaw-73880" } },
-      { headRefName: "clownfish/clawsweeper-openclaw-openclaw-73880" },
+  it("does not close automation PRs for the active PR limit", async () => {
+    for (const automationPullRequest of [
+      { head: { ref: "clawsweeper/openclaw-openclaw-73880" }, login: "app/openclaw-clawsweeper" },
+      { headRefName: "clawsweeper/openclaw-openclaw-73880", login: "app/openclaw-clawsweeper" },
+      {
+        head: { ref: "clownfish/ghcrawl-156993-autonomous-smoke" },
+        login: "app/openclaw-clownfish",
+      },
+      { headRefName: "clownfish/ghcrawl-156993-autonomous-smoke", login: "app/openclaw-clownfish" },
     ]) {
       const { calls, github } = barnacleGithub([]);
+      const { login, ...pullRequest } = automationPullRequest;
 
       await runBarnacleAutoResponse({
         github,
         context: barnacleContext(
           {
-            ...headRef,
+            ...pullRequest,
             user: {
-              login: "app/openclaw-clownfish",
+              login,
             },
           },
           ["r: too-many-prs"],

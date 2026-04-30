@@ -416,7 +416,9 @@ function createTestOpenAIProviderWrapper(
   if (withDefaultTransport) {
     streamFn = createOpenAIDefaultTransportWrapper(streamFn);
   }
-  streamFn = createOpenAIAttributionHeadersWrapper(streamFn);
+  streamFn = createOpenAIAttributionHeadersWrapper(streamFn, {
+    codexNativeTransportStreamFn: params.context.streamFn,
+  });
 
   if (resolveOpenAIFastMode(params.context.extraParams)) {
     streamFn = createOpenAIFastModeWrapper(streamFn);
@@ -466,7 +468,7 @@ describe("applyExtraParamsToAgent", () => {
     };
   }
 
-  function buildAnthropicModelConfig(modelKey: string, params: Record<string, unknown>) {
+  function buildModelConfig(modelKey: string, params: Record<string, unknown>) {
     return {
       agents: {
         defaults: {
@@ -811,6 +813,60 @@ describe("applyExtraParamsToAgent", () => {
         api: "openai-completions",
         provider: "nvidia-nim",
         id: "moonshotai/kimi-k2.5",
+      } as Model<"openai-completions">,
+    });
+
+    expect(payload.parallel_tool_calls).toBe(false);
+  });
+
+  it("uses canonical model config keys for provider-prefixed model ids", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "openrouter",
+      applyModelId: "openrouter/auto",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/auto": {
+                params: {
+                  parallel_tool_calls: false,
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-completions",
+        provider: "openrouter",
+        id: "openrouter/auto",
+      } as Model<"openai-completions">,
+    });
+
+    expect(payload.parallel_tool_calls).toBe(false);
+  });
+
+  it("keeps legacy double-prefixed model config fallback for provider-prefixed model ids", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "openrouter",
+      applyModelId: "openrouter/auto",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/openrouter/auto": {
+                params: {
+                  parallel_tool_calls: false,
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-completions",
+        provider: "openrouter",
+        id: "openrouter/auto",
       } as Model<"openai-completions">,
     });
 
@@ -2445,7 +2501,7 @@ describe("applyExtraParamsToAgent", () => {
 
   it("adds Anthropic 1M beta header when context1m is enabled for Opus/Sonnet", () => {
     const { calls, agent } = createOptionsCaptureAgent();
-    const cfg = buildAnthropicModelConfig("anthropic/claude-opus-4-6", { context1m: true });
+    const cfg = buildModelConfig("anthropic/claude-opus-4-6", { context1m: true });
 
     applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-opus-4-6");
 
@@ -2472,7 +2528,7 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("does not add Anthropic 1M beta header when context1m is not enabled", () => {
-    const cfg = buildAnthropicModelConfig("anthropic/claude-opus-4-6", {
+    const cfg = buildModelConfig("anthropic/claude-opus-4-6", {
       temperature: 0.2,
     });
     const headers = runAnthropicHeaderCase({
@@ -2529,7 +2585,7 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("merges existing anthropic-beta headers with configured betas", () => {
-    const cfg = buildAnthropicModelConfig("anthropic/claude-sonnet-4-5", {
+    const cfg = buildModelConfig("anthropic/claude-sonnet-4-5", {
       context1m: true,
       anthropicBeta: ["files-api-2025-04-14"],
     });
@@ -2549,7 +2605,7 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("ignores context1m for non-Opus/Sonnet Anthropic models", () => {
-    const cfg = buildAnthropicModelConfig("anthropic/claude-haiku-3-5", { context1m: true });
+    const cfg = buildModelConfig("anthropic/claude-haiku-3-5", { context1m: true });
     const headers = runAnthropicHeaderCase({
       cfg,
       modelId: "claude-haiku-3-5",

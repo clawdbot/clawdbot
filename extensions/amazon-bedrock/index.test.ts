@@ -253,6 +253,36 @@ describe("amazon-bedrock provider plugin", () => {
     });
   });
 
+  it("mirrors Claude Opus 4.7 thinking levels for Bedrock model refs", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+
+    for (const modelId of [
+      "us.anthropic.claude-opus-4-7",
+      "us.anthropic.claude-opus-4.7-v1:0",
+      "eu.anthropic.claude-opus-4-7",
+      "arn:aws:bedrock:us-west-2:123456789012:inference-profile/us.anthropic.claude-opus-4-7",
+    ]) {
+      expect(
+        provider.resolveThinkingProfile?.({
+          provider: "amazon-bedrock",
+          modelId,
+        } as never),
+      ).toMatchObject({
+        levels: [
+          { id: "off" },
+          { id: "minimal" },
+          { id: "low" },
+          { id: "medium" },
+          { id: "high" },
+          { id: "xhigh" },
+          { id: "adaptive" },
+          { id: "max" },
+        ],
+        defaultLevel: "off",
+      });
+    }
+  });
+
   it("owns Anthropic-style replay policy for Claude Bedrock models", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 
@@ -380,6 +410,58 @@ describe("amazon-bedrock provider plugin", () => {
         { temperature: 0.4, maxTokens: 12 },
       ),
     ).toEqual({ maxTokens: 12 });
+  });
+
+  it("preserves Bedrock Opus 4.7 max thinking in the final payload", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "amazon-bedrock",
+      modelId: "us.anthropic.claude-opus-4-7",
+      streamFn: spyStreamFn,
+      thinkingLevel: "max",
+    } as never);
+
+    const result = wrapped?.(
+      {
+        api: "bedrock-converse-stream",
+        provider: "amazon-bedrock",
+        id: "us.anthropic.claude-opus-4-7",
+      } as never,
+      { messages: [] } as never,
+      { reasoning: "xhigh" } as never,
+    ) as Record<string, unknown> | undefined;
+    const payload = {
+      additionalModelRequestFields: {
+        thinking: { type: "adaptive" },
+        output_config: { effort: "xhigh" },
+      },
+    };
+
+    await (result?.onPayload as ((p: Record<string, unknown>) => unknown) | undefined)?.(payload);
+
+    expect(payload.additionalModelRequestFields.output_config).toEqual({ effort: "max" });
+  });
+
+  it("keeps Bedrock Opus 4.7 xhigh thinking distinct from max", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "amazon-bedrock",
+      modelId: "us.anthropic.claude-opus-4-7",
+      streamFn: spyStreamFn,
+      thinkingLevel: "xhigh",
+    } as never);
+
+    const result = wrapped?.(
+      {
+        api: "bedrock-converse-stream",
+        provider: "amazon-bedrock",
+        id: "us.anthropic.claude-opus-4-7",
+      } as never,
+      { messages: [] } as never,
+      { reasoning: "xhigh" } as never,
+    ) as Record<string, unknown> | undefined;
+
+    expect(result).not.toHaveProperty("onPayload");
   });
 
   it("classifies nested Bedrock deprecated-temperature validation as format failover", async () => {

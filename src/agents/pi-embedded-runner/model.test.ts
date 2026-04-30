@@ -69,6 +69,20 @@ vi.mock("../model-suppression.js", () => {
         isQwenCodingPlanBaseUrl(baseUrl ?? resolveConfiguredQwenBaseUrl(config))
       );
     },
+    shouldUnconditionallySuppress: ({ provider, id }: { provider?: string; id?: string }) => {
+      if (
+        (provider === "openai" ||
+          provider === "azure-openai-responses" ||
+          provider === "openai-codex") &&
+        id?.trim().toLowerCase() === "gpt-5.3-codex-spark"
+      ) {
+        return true;
+      }
+      if (provider === "openai-codex" && id?.trim().toLowerCase() === "gpt-5.4-mini") {
+        return true;
+      }
+      return false;
+    },
     buildSuppressedBuiltInModelError: ({
       provider,
       id,
@@ -352,6 +366,34 @@ describe("resolveModel", () => {
     expect(result.model).toBeUndefined();
     expect(result.error).toBe(
       "Unknown model: qwen/qwen3.6-plus. qwen3.6-plus is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint or choose qwen/qwen3.5-plus.",
+    );
+  });
+
+  it("#74451: suppresses explicitly configured openai-codex/gpt-5.4-mini despite inline entry", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "openai-codex": {
+            api: "openai-codex-responses",
+            models: [
+              {
+                id: "gpt-5.4-mini",
+                name: "GPT-5.4 mini",
+                api: "openai-codex-responses",
+                contextWindow: 400_000,
+                maxTokens: 128_000,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("openai-codex", "gpt-5.4-mini", "/tmp/agent", cfg);
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: openai-codex/gpt-5.4-mini. gpt-5.4-mini is not supported by the OpenAI Codex OAuth route. Use openai/gpt-5.4-mini with an OpenAI API key or openai-codex/gpt-5.5 with Codex OAuth.",
     );
   });
 

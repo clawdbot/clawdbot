@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { sendWebhookMessageDiscord } from "./send.outbound.js";
+import { sendWebhookMessageDiscord } from "./send.webhook.js";
 
 const makeProxyFetchMock = vi.hoisted(() => vi.fn());
 

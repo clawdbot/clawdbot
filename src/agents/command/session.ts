@@ -54,7 +54,10 @@ type SessionIdMatchSet = {
   storeByKey: Map<string, SessionKeyResolution>;
 };
 
-function buildExplicitSessionIdSessionKey(params: { sessionId: string; agentId?: string }): string {
+export function buildExplicitSessionIdSessionKey(params: {
+  sessionId: string;
+  agentId?: string;
+}): string {
   return `agent:${normalizeAgentId(params.agentId)}:explicit:${params.sessionId.trim()}`;
 }
 

@@ -3,9 +3,9 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveSlackAccount } from "./accounts.js";
-import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient, getSlackWriteClient } from "./client.js";
+import { buildSlackEditTextPayload } from "./edit-text.js";
 import { resolveSlackMedia } from "./monitor/media.js";
 import type { SlackMediaResult } from "./monitor/media.js";
 import { sendMessageSlack } from "./send.js";
@@ -77,6 +77,17 @@ function normalizeEmoji(raw: string) {
   return trimmed.replace(/^:+|:+$/g, "");
 }
 
+function hasSlackPlatformError(err: unknown, code: string): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const data = (err as { data?: unknown }).data;
+  if (!data || typeof data !== "object") {
+    return false;
+  }
+  return (data as { error?: unknown }).error === code;
+}
+
 async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write" = "read") {
   if (opts.client) {
     return opts.client;
@@ -100,11 +111,18 @@ export async function reactSlackMessage(
   opts: SlackActionClientOpts = {},
 ) {
   const client = await getClient(opts, "write");
-  await client.reactions.add({
-    channel: channelId,
-    timestamp: messageId,
-    name: normalizeEmoji(emoji),
-  });
+  try {
+    await client.reactions.add({
+      channel: channelId,
+      timestamp: messageId,
+      name: normalizeEmoji(emoji),
+    });
+  } catch (err) {
+    if (hasSlackPlatformError(err, "already_reacted")) {
+      return;
+    }
+    throw err;
+  }
 }
 
 export async function removeSlackReaction(
@@ -212,11 +230,10 @@ export async function editSlackMessage(
 ) {
   const client = await getClient(opts, "write");
   const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
-  const trimmedContent = content.trim();
   await client.chat.update({
     channel: channelId,
     ts: messageId,
-    text: trimmedContent || (blocks ? buildSlackBlocksFallbackText(blocks) : " "),
+    text: buildSlackEditTextPayload(content, blocks),
     ...(blocks ? { blocks } : {}),
   });
 }

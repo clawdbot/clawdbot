@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parsePsCpuTimeMs } from "./process-tree-cpu.js";
+import { parsePsCpuTimeMs, parsePsRssBytes } from "./process-tree-cpu.js";
 
 describe("process tree CPU helpers", () => {
   it("parses ps CPU time strings", () => {
@@ -12,5 +12,16 @@ describe("process tree CPU helpers", () => {
     expect(parsePsCpuTimeMs("")).toBeNull();
     expect(parsePsCpuTimeMs("nope")).toBeNull();
     expect(parsePsCpuTimeMs("1:2:3:4")).toBeNull();
+  });
+
+  it("parses ps RSS KiB values as bytes", () => {
+    expect(parsePsRssBytes("1024")).toBe(1_048_576);
+    expect(parsePsRssBytes("1.5")).toBe(1_536);
+  });
+
+  it("rejects malformed ps RSS values", () => {
+    expect(parsePsRssBytes("")).toBeNull();
+    expect(parsePsRssBytes("nope")).toBeNull();
+    expect(parsePsRssBytes("-1")).toBeNull();
   });
 });

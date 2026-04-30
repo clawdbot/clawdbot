@@ -301,6 +301,103 @@ describe("Nested Lists - Edge Cases", () => {
 });
 
 describe("list paragraph spacing", () => {
+  it("preserves paragraph breaks inside loose bullet list items", () => {
+    const input = `- first paragraph
+
+  second paragraph
+- next`;
+
+    const result = markdownToIR(input);
+
+    expect(result.text).toBe(`• first paragraph
+
+second paragraph
+
+• next`);
+  });
+
+  it("preserves paragraph breaks inside loose ordered list items", () => {
+    const input = `1. first paragraph
+
+   second paragraph
+2. next`;
+
+    const result = markdownToIR(input);
+
+    expect(result.text).toBe(`1. first paragraph
+
+second paragraph
+
+2. next`);
+  });
+
+  it("preserves paragraph breaks inside loose blockquoted list items", () => {
+    const input = `> - first paragraph
+>
+>   second paragraph
+> - next`;
+
+    const result = markdownToIR(input);
+
+    expect(result.text).toBe(`• first paragraph
+
+second paragraph
+
+• next`);
+  });
+
+  it("does not add triple newlines before loose nested bullet lists", () => {
+    const input = `- parent
+
+  - child
+
+- next`;
+
+    const result = markdownToIR(input);
+
+    expect(result.text).toBe(`• parent
+
+  • child
+• next`);
+    expect(result.text).not.toContain("\n\n\n");
+  });
+
+  it("does not add triple newlines before loose nested ordered lists", () => {
+    const input = `1. parent
+
+   1. child
+
+2. next`;
+
+    const result = markdownToIR(input);
+
+    expect(result.text).toBe(`1. parent
+
+  1. child
+2. next`);
+    expect(result.text).not.toContain("\n\n\n");
+  });
+
+  it("keeps tight heading list items single-spaced", () => {
+    const input = `- # A
+- # B`;
+
+    const result = markdownToIR(input);
+
+    expect(result.text).toBe(`• A
+• B`);
+  });
+
+  it("keeps tight blockquote list items single-spaced", () => {
+    const input = `- > quote
+- next`;
+
+    const result = markdownToIR(input);
+
+    expect(result.text).toBe(`• quote
+• next`);
+  });
+
   it("adds blank line between bullet list and following paragraph", () => {
     const input = `- item 1
 - item 2

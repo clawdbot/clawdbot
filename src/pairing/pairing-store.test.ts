@@ -24,43 +24,6 @@ vi.mock("../infra/file-lock.js", () => ({
   withFileLock: async (_path: string, _options: unknown, fn: () => unknown) => await fn(),
 }));
 
-const jsonStoreMocks = vi.hoisted(() => ({
-  readJsonFileWithFallback: vi.fn(async <T>(filePath: string, fallback: T) => {
-    const fs = await import("node:fs/promises");
-    let raw: string;
-    try {
-      raw = await fs.readFile(filePath, "utf8");
-    } catch (err) {
-      if ((err as { code?: string }).code === "ENOENT") {
-        return { value: fallback, exists: false };
-      }
-      return { value: fallback, exists: false };
-    }
-    try {
-      const parsed = JSON.parse(raw) as T;
-      return {
-        value: parsed ?? fallback,
-        exists: true,
-      };
-    } catch {
-      return { value: fallback, exists: true };
-    }
-  }),
-  writeJsonFileAtomically: vi.fn(async (filePath: string, value: unknown) => {
-    const fs = await import("node:fs/promises");
-    const path = await import("node:path");
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-  }),
-}));
-
-vi.mock("../plugin-sdk/json-store.js", () => {
-  return {
-    readJsonFileWithFallback: jsonStoreMocks.readJsonFileWithFallback,
-    writeJsonFileAtomically: jsonStoreMocks.writeJsonFileAtomically,
-  };
-});
-
 import {
   addChannelAllowFromStoreEntry,
   clearPairingAllowFromReadCacheForTest,
@@ -77,7 +40,10 @@ import {
 let fixtureRoot = "";
 let caseId = 0;
 type RandomIntSync = (minOrMax: number, max?: number) => number;
-type ReadSpy = ReturnType<typeof vi.fn> | MockInstance;
+type FileReadSpy = {
+  readCount: () => number;
+  mockRestore: () => void;
+};
 
 let randomIntSpy: MockInstance<RandomIntSync>;
 let nextRandomInt = 0;
@@ -181,13 +147,13 @@ async function seedTelegramAllowFromFixtures(params: {
 async function assertAllowFromCacheInvalidation(params: {
   stateDir: string;
   readAllowFrom: () => Promise<string[]>;
-  readSpy: ReadSpy;
+  readSpy: FileReadSpy;
 }) {
   const first = await params.readAllowFrom();
   const second = await params.readAllowFrom();
   expect(first).toEqual(["1001"]);
   expect(second).toEqual(["1001"]);
-  expect(params.readSpy).toHaveBeenCalledTimes(1);
+  expect(params.readSpy.readCount()).toBe(1);
 
   await writeAllowFromFixture({
     stateDir: params.stateDir,
@@ -197,7 +163,7 @@ async function assertAllowFromCacheInvalidation(params: {
   });
   const third = await params.readAllowFrom();
   expect(third).toEqual(["10022"]);
-  expect(params.readSpy).toHaveBeenCalledTimes(2);
+  expect(params.readSpy.readCount()).toBe(2);
 }
 
 async function expectAccountScopedEntryIsolated(entry: string, accountId = "yy") {
@@ -209,17 +175,17 @@ async function expectAccountScopedEntryIsolated(entry: string, accountId = "yy")
 
 async function withAllowFromCacheReadSpy(params: {
   stateDir: string;
-  createReadSpy: () => ReadSpy;
-  cleanupReadSpy?: (readSpy: ReadSpy) => void;
+  createReadSpy: (filePath: string) => FileReadSpy;
   readAllowFrom: () => Promise<string[]>;
 }) {
+  const filePath = resolveAllowFromFilePath(params.stateDir, "telegram", "yy");
   await writeAllowFromFixture({
     stateDir: params.stateDir,
     channel: "telegram",
     accountId: "yy",
     allowFrom: ["1001"],
   });
-  const readSpy = params.createReadSpy();
+  const readSpy = params.createReadSpy(filePath);
   try {
     await assertAllowFromCacheInvalidation({
       stateDir: params.stateDir,
@@ -227,8 +193,12 @@ async function withAllowFromCacheReadSpy(params: {
       readSpy,
     });
   } finally {
-    params.cleanupReadSpy?.(readSpy);
+    readSpy.mockRestore();
   }
+}
+
+function countFileReads(spy: { mock: { calls: unknown[][] } }, filePath: string): number {
+  return spy.mock.calls.filter(([candidate]) => candidate === filePath).length;
 }
 
 async function seedDefaultAccountAllowFromFixture(stateDir: string) {
@@ -608,25 +578,35 @@ describe("pairing store", () => {
 
   it("reuses cached allowFrom reads and invalidates on file updates", async () => {
     await withTempStateDir(async (stateDir) => {
-      clearOAuthFixtures(stateDir);
-      await withAllowFromCacheReadSpy({
-        stateDir,
-        createReadSpy: () => {
-          jsonStoreMocks.readJsonFileWithFallback.mockClear();
-          return jsonStoreMocks.readJsonFileWithFallback;
+      for (const variant of [
+        {
+          createReadSpy: (filePath: string) => {
+            const spy = vi.spyOn(fsSync.promises, "readFile");
+            return {
+              readCount: () => countFileReads(spy, filePath),
+              mockRestore: () => spy.mockRestore(),
+            };
+          },
+          readAllowFrom: () => readChannelAllowFromStore("telegram", process.env, "yy"),
         },
-        readAllowFrom: () => readChannelAllowFromStore("telegram", process.env, "yy"),
-      });
-
-      clearOAuthFixtures(stateDir);
-      await withAllowFromCacheReadSpy({
-        stateDir,
-        createReadSpy: () => vi.spyOn(fsSync, "readFileSync"),
-        cleanupReadSpy: (readSpy) => {
-          readSpy.mockRestore();
+        {
+          createReadSpy: (filePath: string) => {
+            const spy = vi.spyOn(fsSync, "readFileSync");
+            return {
+              readCount: () => countFileReads(spy, filePath),
+              mockRestore: () => spy.mockRestore(),
+            };
+          },
+          readAllowFrom: async () => readChannelAllowFromStoreSync("telegram", process.env, "yy"),
         },
-        readAllowFrom: async () => readChannelAllowFromStoreSync("telegram", process.env, "yy"),
-      });
+      ]) {
+        clearOAuthFixtures(stateDir);
+        await withAllowFromCacheReadSpy({
+          stateDir,
+          createReadSpy: variant.createReadSpy,
+          readAllowFrom: variant.readAllowFrom,
+        });
+      }
     });
   });
 });

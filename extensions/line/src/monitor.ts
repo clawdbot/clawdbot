@@ -1,10 +1,8 @@
 import type { webhook } from "@line/bot-sdk";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import {
-  dispatchReplyWithBufferedBlockDispatcher,
-  chunkMarkdownText,
-} from "openclaw/plugin-sdk/reply-runtime";
+import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import {
   danger,
   logVerbose,
@@ -27,6 +25,7 @@ import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
 import { sendLineReplyChunks } from "./reply-chunks.js";
+import { getLineRuntime } from "./runtime.js";
 import {
   createFlexMessage,
   createImageMessage,
@@ -231,71 +230,94 @@ export async function monitorLineProvider(
           accountId: route.accountId,
         });
 
-        const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
-          ctx: ctxPayload,
-          cfg: config,
-          dispatcherOptions: {
-            ...replyPipeline,
-            deliver: async (payload, _info) => {
-              const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
+        const core = getLineRuntime();
+        const turnResult = await core.channel.turn.run({
+          channel: "line",
+          accountId: route.accountId,
+          raw: ctx,
+          adapter: {
+            ingest: () => ({
+              id: ctxPayload.MessageSid ?? `${ctxPayload.From}:${Date.now()}`,
+              rawText: ctxPayload.RawBody ?? ctxPayload.BodyForAgent ?? "",
+            }),
+            resolveTurn: () => ({
+              cfg: config,
+              channel: "line",
+              accountId: route.accountId,
+              agentId: route.agentId,
+              routeSessionKey: route.sessionKey,
+              storePath: ctx.turn.storePath,
+              ctxPayload,
+              recordInboundSession: core.channel.session.recordInboundSession,
+              dispatchReplyWithBufferedBlockDispatcher:
+                core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+              record: ctx.turn.record,
+              dispatcherOptions: {
+                ...replyPipeline,
+              },
+              replyOptions: {
+                onModelSelected,
+              },
+              delivery: {
+                deliver: async (payload) => {
+                  const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
 
-              if (ctx.userId && !ctx.isGroup) {
-                void showLoadingAnimation(ctx.userId, {
-                  cfg: config,
-                  accountId: ctx.accountId,
-                }).catch(() => {});
-              }
+                  if (ctx.userId && !ctx.isGroup) {
+                    void showLoadingAnimation(ctx.userId, {
+                      cfg: config,
+                      accountId: ctx.accountId,
+                    }).catch(() => {});
+                  }
 
-              const { replyTokenUsed: nextReplyTokenUsed } = await deliverLineAutoReply({
-                payload,
-                lineData,
-                to: ctxPayload.From,
-                replyToken,
-                replyTokenUsed,
-                accountId: ctx.accountId,
-                cfg: config,
-                textLimit,
-                deps: {
-                  buildTemplateMessageFromPayload,
-                  processLineMessage,
-                  chunkMarkdownText,
-                  sendLineReplyChunks,
-                  replyMessageLine,
-                  pushMessageLine,
-                  pushTextMessageWithQuickReplies,
-                  createQuickReplyItems,
-                  createTextMessageWithQuickReplies,
-                  pushMessagesLine,
-                  createFlexMessage,
-                  createImageMessage,
-                  createLocationMessage,
-                  onReplyError: (replyErr) => {
-                    logVerbose(
-                      `line: reply token failed, falling back to push: ${String(replyErr)}`,
-                    );
-                  },
+                  const { replyTokenUsed: nextReplyTokenUsed } = await deliverLineAutoReply({
+                    payload,
+                    lineData,
+                    to: ctxPayload.From,
+                    replyToken,
+                    replyTokenUsed,
+                    accountId: ctx.accountId,
+                    cfg: config,
+                    textLimit,
+                    deps: {
+                      buildTemplateMessageFromPayload,
+                      processLineMessage,
+                      chunkMarkdownText,
+                      sendLineReplyChunks,
+                      replyMessageLine,
+                      pushMessageLine,
+                      pushTextMessageWithQuickReplies,
+                      createQuickReplyItems,
+                      createTextMessageWithQuickReplies,
+                      pushMessagesLine,
+                      createFlexMessage,
+                      createImageMessage,
+                      createLocationMessage,
+                      onReplyError: (replyErr) => {
+                        logVerbose(
+                          `line: reply token failed, falling back to push: ${String(replyErr)}`,
+                        );
+                      },
+                    },
+                  });
+                  replyTokenUsed = nextReplyTokenUsed;
+
+                  recordChannelRuntimeState({
+                    channel: "line",
+                    accountId: resolvedAccountId,
+                    state: {
+                      lastOutboundAt: Date.now(),
+                    },
+                  });
                 },
-              });
-              replyTokenUsed = nextReplyTokenUsed;
-
-              recordChannelRuntimeState({
-                channel: "line",
-                accountId: resolvedAccountId,
-                state: {
-                  lastOutboundAt: Date.now(),
+                onError: (err, info) => {
+                  runtime.error?.(danger(`line ${info.kind} reply failed: ${String(err)}`));
                 },
-              });
-            },
-            onError: (err, info) => {
-              runtime.error?.(danger(`line ${info.kind} reply failed: ${String(err)}`));
-            },
-          },
-          replyOptions: {
-            onModelSelected,
+              },
+            }),
           },
         });
-
-        if (!queuedFinal) {
+        const dispatchResult = turnResult.dispatched ? turnResult.dispatchResult : undefined;
+        if (!hasFinalInboundReplyDispatch(dispatchResult)) {
           logVerbose(`line: no response generated for message from ${ctxPayload.From}`);
         }
       } catch (err) {

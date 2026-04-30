@@ -1,5 +1,5 @@
-import { ChannelType } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ChannelType } from "../internal/discord.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
 

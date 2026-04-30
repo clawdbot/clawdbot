@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => {
       text: params.spec.text ?? "",
     })),
     collectDiscordStatusIssues: vi.fn(() => []),
-    discordOnboardingAdapter: { kind: "legacy-onboarding" },
+    discordOnboardingAdapter: { kind: "discord-onboarding" },
     inspectDiscordAccount: vi.fn(() => ({ accountId: "default" })),
     listDiscordAccountIds: vi.fn(() => ["default"]),
     listDiscordDirectoryGroupsFromConfig: vi.fn(() => []),
@@ -74,7 +74,7 @@ vi.mock("./runtime-config-snapshot.js", () => ({
   getRuntimeConfigSnapshot: () => mocks.runtimeConfig,
 }));
 
-describe("discord plugin-sdk compatibility facade", () => {
+describe("discord plugin-sdk facade", () => {
   it("exports the @openclaw/discord 2026.3.13 import surface", async () => {
     const discordSdk = await import("./discord.js");
 
@@ -117,7 +117,7 @@ describe("discord plugin-sdk compatibility facade", () => {
     }
   });
 
-  it("forwards Discord component helpers through the compatibility facade", async () => {
+  it("forwards Discord component helpers through the facade", async () => {
     const {
       buildDiscordComponentMessage,
       editDiscordComponentMessage,
@@ -151,7 +151,7 @@ describe("discord plugin-sdk compatibility facade", () => {
     });
   });
 
-  it("keeps legacy Discord subagent auto-bind calls working without cfg", async () => {
+  it("fills runtime config for Discord subagent auto-bind calls without cfg", async () => {
     const { autoBindSpawnedDiscordSubagent } = await import("./discord.js");
 
     const binding = await autoBindSpawnedDiscordSubagent({

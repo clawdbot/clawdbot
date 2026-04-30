@@ -92,6 +92,14 @@ export type MessagesConfig = {
   /** @deprecated Use `whatsapp.messagePrefix` (WhatsApp-only inbound prefix). */
   messagePrefix?: string;
   /**
+   * Controls how source turns produce visible replies across direct, group, and
+   * channel conversations. Group/channel turns still default to
+   * `groupChat.visibleReplies` when it is set.
+   *
+   * Default: "automatic" for direct chats, "message_tool" for groups/channels.
+   */
+  visibleReplies?: "automatic" | "message_tool";
+  /**
    * Prefix auto-added to all outbound replies.
    *
    * - string: explicit prefix (may include template variables)

@@ -48,7 +48,7 @@ export const collectSlackMutableAllowlistWarnings =
   });
 
 export const slackDoctor: ChannelDoctorAdapter = {
-  dmAllowFromMode: "topOrNested",
+  dmAllowFromMode: "topOnly",
   groupModel: "route",
   groupAllowFromFallbackToAllowFrom: false,
   warnOnEmptyGroupSenderAllowlist: false,

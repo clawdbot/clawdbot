@@ -1,6 +1,4 @@
-import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { modelKey } from "../../agents/model-ref-shared.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isLocalBaseUrl } from "./list.local-url.js";
 import type { ModelRow } from "./list.types.js";
 
@@ -14,17 +12,7 @@ export type ListRowModel = {
   contextTokens?: number | null;
 };
 
-export type ModelAuthAvailabilityResolver = (params: {
-  provider: string;
-  cfg: OpenClawConfig;
-  authStore: AuthProfileStore;
-}) => boolean;
-
-function authStoreHasProviderProfile(authStore: AuthProfileStore, provider: string): boolean {
-  return Object.values(authStore.profiles ?? {}).some(
-    (credential) => credential.provider === provider,
-  );
-}
+export type ModelAuthAvailabilityResolver = (provider: string) => boolean;
 
 export function toModelRow(params: {
   model?: ListRowModel;
@@ -32,8 +20,6 @@ export function toModelRow(params: {
   tags: string[];
   aliases?: string[];
   availableKeys?: Set<string>;
-  cfg?: OpenClawConfig;
-  authStore?: AuthProfileStore;
   allowProviderAvailabilityFallback?: boolean;
   hasAuthForProvider?: ModelAuthAvailabilityResolver;
 }): ModelRow {
@@ -43,8 +29,6 @@ export function toModelRow(params: {
     tags,
     aliases = [],
     availableKeys,
-    cfg,
-    authStore,
     allowProviderAvailabilityFallback = false,
   } = params;
   if (!model) {
@@ -69,17 +53,7 @@ export function toModelRow(params: {
   const available =
     availableKeys !== undefined && !allowProviderAvailabilityFallback
       ? modelIsAvailable
-      : modelIsAvailable ||
-        (cfg && authStore
-          ? (
-              params.hasAuthForProvider ??
-              ((input) => authStoreHasProviderProfile(input.authStore, input.provider))
-            )({
-              provider: model.provider,
-              cfg,
-              authStore,
-            })
-          : false);
+      : modelIsAvailable || (params.hasAuthForProvider?.(model.provider) ?? false);
   const aliasTags = aliases.length > 0 ? [`alias:${aliases.join(",")}`] : [];
   const mergedTags = new Set(tags);
   if (aliasTags.length > 0) {

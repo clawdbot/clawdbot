@@ -59,7 +59,7 @@ describe("external CLI auth scope", () => {
           {
             id: "worker",
             model: "opencode-go/kimi-k2.6",
-            agentRuntime: { id: "codex" },
+            agentRuntime: { id: "codex-app-server" },
             subagents: { model: { primary: "z.ai/glm-4.7" } },
           },
         ],
@@ -75,11 +75,12 @@ describe("external CLI auth scope", () => {
         "openai-codex",
         "minimax-portal",
         "claude-cli",
-        "codex",
+        "codex-app-server",
         "opencode-go",
         "z.ai",
         "zai",
       ]),
     );
+    expect(scope?.profileIds).toContain("openai-codex:default");
   });
 });

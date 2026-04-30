@@ -130,7 +130,10 @@ async function printTerminalQr(qr: string): Promise<void> {
 export async function createWaSocket(
   printQr: boolean,
   verbose: boolean,
-  opts: { authDir?: string; onQr?: (qr: string) => void } & WhatsAppSocketTimingOptions = {},
+  opts: {
+    authDir?: string;
+    onQr?: (qr: string) => void;
+  } & WhatsAppSocketTimingOptions = {},
 ): Promise<ReturnType<typeof makeWASocket>> {
   const baseLogger = getChildLogger(
     { module: "baileys" },

@@ -9,6 +9,11 @@ export {
 } from "./queue/enqueue.js";
 export { resolveQueueSettings } from "./queue/settings-runtime.js";
 export { clearFollowupQueue, refreshQueuedFollowupSession } from "./queue/state.js";
+export {
+  isSteeringQueueMode,
+  resolvePiSteeringModeForQueueMode,
+  type PiSteeringMode,
+} from "./queue/steering.js";
 export type {
   FollowupRun,
   QueueDedupeMode,

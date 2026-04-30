@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveAuthStatePath, resolveAuthStorePath } from "./auth-profiles/paths.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
+  ensureAuthProfileStoreForLocalUpdate,
   ensureAuthProfileStore,
   replaceRuntimeAuthProfileStoreSnapshots,
   saveAuthProfileStore,
@@ -181,6 +182,228 @@ describe("saveAuthProfileStore", () => {
       expect(authState.usageStats?.["anthropic:default"]?.lastUsed).toBe(123);
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not persist unchanged inherited main OAuth when saving secondary local updates", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-inherited-"));
+    const stateDir = path.join(root, ".openclaw");
+    const childAgentDir = path.join(stateDir, "agents", "worker", "agent");
+    const childAuthPath = resolveAuthStorePath(childAgentDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_AGENT_DIR", "");
+    try {
+      saveAuthProfileStore({
+        version: 1,
+        profiles: {
+          "openai-codex:default": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "main-access-token",
+            refresh: "main-refresh-token",
+            expires: Date.now() + 60_000,
+          },
+        },
+      });
+
+      const localUpdateStore = ensureAuthProfileStoreForLocalUpdate(childAgentDir);
+      expect(localUpdateStore.profiles["openai-codex:default"]).toMatchObject({
+        type: "oauth",
+        refresh: "main-refresh-token",
+      });
+      localUpdateStore.profiles["openai:default"] = {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-child-local",
+      };
+
+      saveAuthProfileStore(localUpdateStore, childAgentDir, {
+        filterExternalAuthProfiles: false,
+      });
+
+      const child = JSON.parse(await fs.readFile(childAuthPath, "utf8")) as {
+        profiles: Record<string, unknown>;
+      };
+      expect(child.profiles["openai:default"]).toMatchObject({
+        type: "api_key",
+        provider: "openai",
+      });
+      expect(child.profiles["openai-codex:default"]).toBeUndefined();
+
+      saveAuthProfileStore({
+        version: 1,
+        profiles: {
+          "openai-codex:default": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "main-refreshed-access-token",
+            refresh: "main-refreshed-refresh-token",
+            expires: Date.now() + 120_000,
+          },
+        },
+      });
+
+      expect(ensureAuthProfileStore(childAgentDir).profiles["openai-codex:default"]).toMatchObject({
+        type: "oauth",
+        access: "main-refreshed-access-token",
+        refresh: "main-refreshed-refresh-token",
+      });
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      vi.unstubAllEnvs();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not persist stale inherited main OAuth after main refreshes", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-stale-inherited-"));
+    const stateDir = path.join(root, ".openclaw");
+    const childAgentDir = path.join(stateDir, "agents", "worker", "agent");
+    const childAuthPath = resolveAuthStorePath(childAgentDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_AGENT_DIR", "");
+    try {
+      saveAuthProfileStore({
+        version: 1,
+        profiles: {
+          "openai-codex:default": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "main-old-access-token",
+            refresh: "main-old-refresh-token",
+            expires: Date.now() + 60_000,
+            accountId: "acct-shared",
+            email: "codex@example.test",
+          },
+        },
+      });
+
+      const localUpdateStore = ensureAuthProfileStoreForLocalUpdate(childAgentDir);
+      expect(localUpdateStore.profiles["openai-codex:default"]).toMatchObject({
+        type: "oauth",
+        refresh: "main-old-refresh-token",
+      });
+
+      saveAuthProfileStore({
+        version: 1,
+        profiles: {
+          "openai-codex:default": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "main-refreshed-access-token",
+            refresh: "main-refreshed-refresh-token",
+            expires: Date.now() + 120_000,
+            accountId: "acct-shared",
+            email: "codex@example.test",
+          },
+        },
+      });
+
+      localUpdateStore.profiles["openai:default"] = {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-child-local",
+      };
+      saveAuthProfileStore(localUpdateStore, childAgentDir, {
+        filterExternalAuthProfiles: false,
+      });
+
+      const child = JSON.parse(await fs.readFile(childAuthPath, "utf8")) as {
+        profiles: Record<string, unknown>;
+      };
+      expect(child.profiles["openai:default"]).toMatchObject({
+        type: "api_key",
+        provider: "openai",
+      });
+      expect(child.profiles["openai-codex:default"]).toBeUndefined();
+      expect(ensureAuthProfileStore(childAgentDir).profiles["openai-codex:default"]).toMatchObject({
+        type: "oauth",
+        access: "main-refreshed-access-token",
+        refresh: "main-refreshed-refresh-token",
+      });
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      vi.unstubAllEnvs();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves inherited main OAuth in active secondary runtime snapshots", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-snapshot-"));
+    const stateDir = path.join(root, ".openclaw");
+    const childAgentDir = path.join(stateDir, "agents", "worker", "agent");
+    const childAuthPath = resolveAuthStorePath(childAgentDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_AGENT_DIR", "");
+    try {
+      saveAuthProfileStore({
+        version: 1,
+        profiles: {
+          "openai-codex:default": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "main-access-token",
+            refresh: "main-refresh-token",
+            expires: Date.now() + 60_000,
+          },
+        },
+      });
+
+      const localUpdateStore = ensureAuthProfileStoreForLocalUpdate(childAgentDir);
+      localUpdateStore.profiles["openai:default"] = {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-child-local",
+      };
+      replaceRuntimeAuthProfileStoreSnapshots([
+        {
+          agentDir: childAgentDir,
+          store: localUpdateStore,
+        },
+      ]);
+
+      saveAuthProfileStore(localUpdateStore, childAgentDir, {
+        filterExternalAuthProfiles: false,
+      });
+
+      const child = JSON.parse(await fs.readFile(childAuthPath, "utf8")) as {
+        profiles: Record<string, unknown>;
+      };
+      expect(child.profiles["openai-codex:default"]).toBeUndefined();
+
+      const runtime = ensureAuthProfileStore(childAgentDir);
+      expect(runtime.profiles["openai:default"]).toMatchObject({
+        type: "api_key",
+        provider: "openai",
+      });
+      expect(runtime.profiles["openai-codex:default"]).toMatchObject({
+        type: "oauth",
+        access: "main-access-token",
+        refresh: "main-refresh-token",
+      });
+
+      saveAuthProfileStore({
+        version: 1,
+        profiles: {
+          "openai-codex:default": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "main-refreshed-access-token",
+            refresh: "main-refreshed-refresh-token",
+            expires: Date.now() + 120_000,
+          },
+        },
+      });
+
+      expect(ensureAuthProfileStore(childAgentDir).profiles["openai-codex:default"]).toMatchObject({
+        type: "oauth",
+        access: "main-refreshed-access-token",
+        refresh: "main-refreshed-refresh-token",
+      });
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      vi.unstubAllEnvs();
+      await fs.rm(root, { recursive: true, force: true });
     }
   });
 });

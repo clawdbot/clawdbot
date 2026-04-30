@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { withEnvAsync } from "../test-utils/env.js";
-import { MIN_AUDIO_FILE_BYTES } from "./defaults.js";
+import { MIN_AUDIO_FILE_BYTES } from "./defaults.constants.js";
 import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
 
 type MediaFixtureParams = {

@@ -7,6 +7,7 @@ import type {
   CronJobCreate,
   CronJobPatch,
   CronMessageChannel,
+  CronAgentExecutionStarted,
   CronRunOutcome,
   CronRunStatus,
   CronRunTelemetry,
@@ -93,7 +94,7 @@ export type CronServiceDeps = {
     job: CronJob;
     message: string;
     abortSignal?: AbortSignal;
-    onExecutionStarted?: () => void;
+    onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   }) => Promise<
     {
       summary?: string;
@@ -114,6 +115,11 @@ export type CronServiceDeps = {
     } & CronRunOutcome &
       CronRunTelemetry
   >;
+  cleanupTimedOutAgentRun?: (params: {
+    job: CronJob;
+    timeoutMs: number;
+    execution?: CronAgentExecutionStarted;
+  }) => Promise<void>;
   sendCronFailureAlert?: (params: {
     job: CronJob;
     text: string;

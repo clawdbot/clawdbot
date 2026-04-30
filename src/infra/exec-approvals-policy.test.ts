@@ -14,6 +14,7 @@ import {
   hasDurableExecApproval,
   maxAsk,
   minSecurity,
+  requireValidExecTarget,
   type ExecApprovalsFile,
   normalizeExecAsk,
   normalizeExecHost,
@@ -71,6 +72,18 @@ describe("exec approvals policy helpers", () => {
     { raw: "ssh", expected: null },
   ])("normalizes exec target value %j", ({ raw, expected }) => {
     expect(normalizeExecTarget(raw)).toBe(expected);
+  });
+
+  it("requires direct exec target requests to use the closed host set", () => {
+    expect(requireValidExecTarget(" gateway ")).toBe("gateway");
+    expect(requireValidExecTarget("")).toBe(null);
+    expect(requireValidExecTarget(undefined)).toBe(null);
+    expect(() => requireValidExecTarget("spark-ff13")).toThrow(
+      'Invalid exec host "spark-ff13". Allowed values: auto, sandbox, gateway, node.',
+    );
+    expect(() => requireValidExecTarget(42)).toThrow(
+      "Invalid exec host value type number. Allowed values: auto, sandbox, gateway, node.",
+    );
   });
 
   it.each([

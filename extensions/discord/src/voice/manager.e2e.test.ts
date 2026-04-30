@@ -1,5 +1,5 @@
-import { ChannelType } from "@buape/carbon";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { ChannelType } from "../internal/discord.js";
 import { createVoiceCaptureState } from "./capture-state.js";
 import { createVoiceReceiveRecoveryState } from "./receive-recovery.js";
 
@@ -591,19 +591,21 @@ describe("DiscordVoiceManager", () => {
 
     const cache = (
       manager as unknown as {
-        speakerContextCache: Map<
-          string,
-          {
-            id?: string;
-            label: string;
-            name?: string;
-            tag?: string;
-            senderIsOwner: boolean;
-            expiresAt: number;
-          }
-        >;
+        speakerContext: {
+          cache: Map<
+            string,
+            {
+              id?: string;
+              label: string;
+              name?: string;
+              tag?: string;
+              senderIsOwner: boolean;
+              expiresAt: number;
+            }
+          >;
+        };
       }
-    ).speakerContextCache;
+    ).speakerContext.cache;
     const cached = cache.get("g1:u-role");
 
     expect(cached).toEqual(

@@ -35,29 +35,7 @@ source scripts/lib/openclaw-e2e-instance.sh
 openclaw_e2e_eval_test_state_from_b64 \"\${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}\"
 openclaw_e2e_write_state_env
 entry=\"\$(openclaw_e2e_resolve_entrypoint)\"
-cat > \"\$OPENCLAW_CONFIG_PATH\" <<'JSON'
-{
-  \"gateway\": {
-    \"port\": $PORT,
-    \"auth\": {
-      \"mode\": \"token\",
-      \"token\": {
-        \"source\": \"env\",
-        \"provider\": \"default\",
-        \"id\": \"GATEWAY_AUTH_TOKEN_REF\"
-      }
-    },
-    \"channelHealthCheckMinutes\": 1,
-    \"controlUi\": {
-      \"enabled\": false
-    },
-    \"reload\": {
-      \"mode\": \"hybrid\",
-      \"debounceMs\": 0
-    }
-  }
-}
-JSON
+PORT=$PORT node scripts/e2e/lib/fixture.mjs config-reload
 openclaw_e2e_exec_gateway \"\$entry\" $PORT loopback /tmp/config-reload-e2e.log" >/dev/null
 
 echo "Waiting for gateway..."

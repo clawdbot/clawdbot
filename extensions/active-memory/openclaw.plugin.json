@@ -66,6 +66,8 @@
       "persistTranscripts": { "type": "boolean" },
       "transcriptDir": { "type": "string" },
       "cacheTtlMs": { "type": "integer", "minimum": 1000, "maximum": 120000 },
+      "circuitBreakerMaxTimeouts": { "type": "integer", "minimum": 1, "maximum": 20 },
+      "circuitBreakerCooldownMs": { "type": "integer", "minimum": 5000, "maximum": 600000 },
       "qmd": {
         "type": "object",
         "additionalProperties": false,
@@ -97,7 +99,7 @@
     },
     "modelFallbackPolicy": {
       "label": "Model Fallback Policy",
-      "help": "Deprecated compatibility field. Active Memory no longer uses a built-in fallback model; set modelFallback explicitly if you want a fallback."
+      "help": "Deprecated compatibility field. modelFallback is only the chain-resolution last resort when no explicit plugin model, session model, or agent primary model resolves; it is not runtime failover."
     },
     "allowedChatTypes": {
       "label": "Allowed Chat Types",
@@ -141,6 +143,14 @@
     "logging": {
       "label": "Enable Logging",
       "help": "Emit active memory timing and result logs."
+    },
+    "circuitBreakerMaxTimeouts": {
+      "label": "Circuit Breaker Max Timeouts",
+      "help": "Skip recall after this many consecutive timeouts for the same agent/model. Resets on a successful recall or after the cooldown expires. Default: 3."
+    },
+    "circuitBreakerCooldownMs": {
+      "label": "Circuit Breaker Cooldown (ms)",
+      "help": "How long to skip recall after the circuit breaker trips, in milliseconds. Default: 60000 (1 minute)."
     },
     "persistTranscripts": {
       "label": "Persist Transcripts",

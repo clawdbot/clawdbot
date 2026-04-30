@@ -105,7 +105,7 @@ export function getCachedPluginJitiLoader(params: {
   // async-module fallbacks `tryNativeRequireJavaScriptModule` declines to
   // handle.
   const loader = ((target: string, ...rest: unknown[]) => {
-    const native = tryNativeRequireJavaScriptModule(target);
+    const native = tryNativeRequireJavaScriptModule(target, { allowWindows: true });
     if (native.ok) {
       return native.moduleExport;
     }

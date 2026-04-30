@@ -130,6 +130,7 @@ vi.mock("../agents/model-selection.js", () => {
         allowAny: Object.keys(modelConfig).length === 0,
       };
     }),
+    buildConfiguredModelCatalog: vi.fn(() => []),
     isCliProvider: vi.fn(() => false),
     modelKey,
     normalizeModelRef,

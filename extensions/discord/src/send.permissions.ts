@@ -1,7 +1,13 @@
-import type { RequestClient } from "@buape/carbon";
-import type { APIChannel, APIGuild, APIGuildMember, APIRole } from "discord-api-types/v10";
-import { ChannelType, PermissionFlagsBits, Routes } from "discord-api-types/v10";
+import type { APIRole } from "discord-api-types/v10";
+import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
 import { resolveDiscordRest } from "./client.js";
+import {
+  getChannel,
+  getCurrentUser,
+  getGuild,
+  getGuildMember,
+  type RequestClient,
+} from "./internal/discord.js";
 import type { DiscordPermissionsSummary, DiscordReactOpts } from "./send.types.js";
 
 const PERMISSION_ENTRIES = Object.entries(PermissionFlagsBits).filter(
@@ -47,7 +53,7 @@ export function isThreadChannelType(channelType?: number) {
 }
 
 async function fetchBotUserId(rest: RequestClient) {
-  const me = (await rest.get(Routes.user("@me"))) as { id?: string };
+  const me = await getCurrentUser(rest);
   if (!me?.id) {
     throw new Error("Failed to resolve bot user id");
   }
@@ -65,8 +71,8 @@ export async function fetchMemberGuildPermissionsDiscord(
   const rest = resolveDiscordRest(opts);
   try {
     const [guild, member] = await Promise.all([
-      rest.get(Routes.guild(guildId)) as Promise<APIGuild>,
-      rest.get(Routes.guildMember(guildId, userId)) as Promise<APIGuildMember>,
+      getGuild(rest, guildId),
+      getGuildMember(rest, guildId, userId),
     ]);
     const rolesById = new Map<string, APIRole>((guild.roles ?? []).map((role) => [role.id, role]));
     const everyoneRole = rolesById.get(guildId);
@@ -156,7 +162,7 @@ export async function fetchChannelPermissionsDiscord(
   opts: DiscordReactOpts,
 ): Promise<DiscordPermissionsSummary> {
   const rest = resolveDiscordRest(opts);
-  const channel = (await rest.get(Routes.channel(channelId))) as APIChannel;
+  const channel = await getChannel(rest, channelId);
   const channelType = "type" in channel ? channel.type : undefined;
   const guildId = "guild_id" in channel ? channel.guild_id : undefined;
   if (!guildId) {
@@ -171,8 +177,8 @@ export async function fetchChannelPermissionsDiscord(
 
   const botId = await fetchBotUserId(rest);
   const [guild, member] = await Promise.all([
-    rest.get(Routes.guild(guildId)) as Promise<APIGuild>,
-    rest.get(Routes.guildMember(guildId, botId)) as Promise<APIGuildMember>,
+    getGuild(rest, guildId),
+    getGuildMember(rest, guildId, botId),
   ]);
 
   const rolesById = new Map<string, APIRole>((guild.roles ?? []).map((role) => [role.id, role]));

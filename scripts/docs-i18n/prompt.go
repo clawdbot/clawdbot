@@ -15,14 +15,40 @@ func prettyLanguageLabel(lang string) string {
 		return "English"
 	case strings.EqualFold(trimmed, "zh-CN"):
 		return "Simplified Chinese"
+	case strings.EqualFold(trimmed, "zh-TW"):
+		return "Traditional Chinese"
 	case strings.EqualFold(trimmed, "ja-JP"):
 		return "Japanese"
+	case strings.EqualFold(trimmed, "es"):
+		return "Spanish"
+	case strings.EqualFold(trimmed, "pt-BR"):
+		return "Brazilian Portuguese"
+	case strings.EqualFold(trimmed, "ko"):
+		return "Korean"
+	case strings.EqualFold(trimmed, "fr"):
+		return "French"
+	case strings.EqualFold(trimmed, "ar"):
+		return "Arabic"
+	case strings.EqualFold(trimmed, "it"):
+		return "Italian"
+	case strings.EqualFold(trimmed, "vi"):
+		return "Vietnamese"
+	case strings.EqualFold(trimmed, "nl"):
+		return "Dutch"
+	case strings.EqualFold(trimmed, "fa"):
+		return "Persian"
+	case strings.EqualFold(trimmed, "tr"):
+		return "Turkish"
 	case strings.EqualFold(trimmed, "de"):
 		return "German"
 	case strings.EqualFold(trimmed, "th"):
 		return "Thai"
 	case strings.EqualFold(trimmed, "uk"):
 		return "Ukrainian"
+	case strings.EqualFold(trimmed, "id"):
+		return "Indonesian"
+	case strings.EqualFold(trimmed, "pl"):
+		return "Polish"
 	default:
 		return trimmed
 	}

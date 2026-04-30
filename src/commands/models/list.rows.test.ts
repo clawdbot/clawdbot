@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import type { ModelRow } from "./list.types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -17,7 +16,6 @@ const mocks = vi.hoisted(() => ({
       input: ["text"],
     },
   ]),
-  listProfilesForProvider: vi.fn().mockReturnValue(["codex:synthetic"]),
 }));
 
 vi.mock("../../agents/model-suppression.js", () => ({
@@ -29,36 +27,15 @@ vi.mock("./list.provider-catalog.js", () => ({
   loadProviderCatalogModelsForList: mocks.loadProviderCatalogModelsForList,
 }));
 
-vi.mock("../../agents/auth-profiles/profile-list.js", () => ({
-  listProfilesForProvider: mocks.listProfilesForProvider,
-}));
-
-vi.mock("../../agents/model-auth.js", () => ({
-  resolveAwsSdkEnvVarName: vi.fn().mockReturnValue(undefined),
-  resolveEnvApiKey: vi.fn().mockReturnValue(null),
-  hasUsableCustomProviderApiKey: vi.fn().mockReturnValue(false),
-}));
-
-vi.mock("../../plugins/synthetic-auth.runtime.js", () => ({
-  resolveRuntimeSyntheticAuthProviderRefs: vi.fn().mockReturnValue([]),
-}));
-
 import { appendProviderCatalogRows } from "./list.rows.js";
+
+const authIndex = {
+  hasProviderAuth: (provider: string) => provider === "codex",
+};
 
 describe("appendProviderCatalogRows", () => {
   it("can skip runtime model-suppression hooks for provider-catalog fast paths", async () => {
     const rows: ModelRow[] = [];
-    const authStore: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "codex:synthetic": {
-          type: "token",
-          provider: "codex",
-          token: "codex-app-server",
-        },
-      },
-      order: {},
-    };
 
     await appendProviderCatalogRows({
       rows,
@@ -69,7 +46,7 @@ describe("appendProviderCatalogRows", () => {
           models: { providers: {} },
         },
         agentDir: "/tmp/openclaw-agent",
-        authStore,
+        authIndex,
         configuredByKey: new Map(),
         discoveredKeys: new Set(),
         filter: { provider: "codex", local: false },
@@ -118,7 +95,7 @@ describe("appendProviderCatalogRows", () => {
           models: { providers: {} },
         },
         agentDir: "/tmp/openclaw-agent",
-        authStore: { version: 1, profiles: {}, order: {} },
+        authIndex: { hasProviderAuth: () => false },
         configuredByKey: new Map(),
         discoveredKeys: new Set(),
         filter: { provider: "openai", local: false },

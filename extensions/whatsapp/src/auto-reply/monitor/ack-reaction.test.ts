@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { WhatsAppSendResult } from "../../inbound/send-result.js";
 import type { WebInboundMessage } from "../../inbound/types.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 
@@ -10,6 +11,16 @@ const hoisted = vi.hoisted(() => ({
 vi.mock("../../send.js", () => ({
   sendReactionWhatsApp: hoisted.sendReactionWhatsApp,
 }));
+
+function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendResult {
+  return {
+    kind,
+    messageId: id,
+    messageIds: [id],
+    keys: [{ id }],
+    providerAccepted: true,
+  };
+}
 
 function createMessage(overrides: Partial<WebInboundMessage> = {}): WebInboundMessage {
   return {
@@ -22,8 +33,8 @@ function createMessage(overrides: Partial<WebInboundMessage> = {}): WebInboundMe
     chatType: "direct",
     chatId: "15551234567@s.whatsapp.net",
     sendComposing: async () => {},
-    reply: async () => {},
-    sendMedia: async () => {},
+    reply: async () => acceptedSendResult("text", "r1"),
+    sendMedia: async () => acceptedSendResult("media", "m1"),
     ...overrides,
   };
 }

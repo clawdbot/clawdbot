@@ -4,6 +4,8 @@ import {
   resolveAgentDir,
   resolveAgentExplicitModelPrimary,
   resolveAgentModelFallbacksOverride,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import {
   buildAuthHealthSummary,
@@ -14,7 +16,11 @@ import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths
 import { ensureAuthProfileStoreWithoutExternalProfiles as ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
-import { resolveProviderEnvApiKeyCandidates } from "../../agents/model-auth-env-vars.js";
+import {
+  listProviderEnvAuthLookupKeys,
+  resolveProviderEnvApiKeyCandidates,
+  resolveProviderEnvAuthEvidence,
+} from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import {
   buildModelAliasIndex,
@@ -24,6 +30,7 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { createConfigIO } from "../../config/config.js";
 import {
   resolveAgentModelFallbackValues,
@@ -161,6 +168,9 @@ export async function modelsStatusCommand(
   const cfg = await loadModelsConfig({ commandName: "models status", runtime });
   const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
   const agentDir = agentId ? resolveAgentDir(cfg, agentId) : resolveOpenClawAgentDir();
+  const workspaceAgentId = agentId ?? resolveDefaultAgentId(cfg);
+  const workspaceDir =
+    resolveAgentWorkspaceDir(cfg, workspaceAgentId) ?? resolveDefaultAgentWorkspaceDir();
   const agentModelPrimary = agentId ? resolveAgentExplicitModelPrimary(cfg, agentId) : undefined;
   const agentFallbacksOverride = agentId
     ? resolveAgentModelFallbacksOverride(cfg, agentId)
@@ -241,8 +251,21 @@ export async function modelsStatusCommand(
   const providersFromEnv = new Set<string>();
   // Use the shared provider-env registry so `models status` stays aligned with
   // env-backed providers beyond the text-model defaults (for example image-gen).
-  for (const provider of Object.keys(resolveProviderEnvApiKeyCandidates()).toSorted()) {
-    if (resolveEnvApiKey(provider)) {
+  const envLookupParams = {
+    config: cfg,
+    workspaceDir,
+  };
+  const envCandidateMap = resolveProviderEnvApiKeyCandidates(envLookupParams);
+  const authEvidenceMap = resolveProviderEnvAuthEvidence(envLookupParams);
+  for (const provider of listProviderEnvAuthLookupKeys({ envCandidateMap, authEvidenceMap })) {
+    if (
+      resolveEnvApiKey(provider, process.env, {
+        config: cfg,
+        workspaceDir,
+        candidateMap: envCandidateMap,
+        authEvidenceMap,
+      })
+    ) {
       providersFromEnv.add(provider);
     }
   }
@@ -295,6 +318,8 @@ export async function modelsStatusCommand(
         cfg,
         store,
         modelsPath,
+        agentDir,
+        workspaceDir,
         syntheticAuth: syntheticAuthByProvider.get(provider),
       }),
     )
@@ -372,6 +397,9 @@ export async function modelsStatusCommand(
       async (update) => {
         return await runAuthProbes({
           cfg,
+          agentId: workspaceAgentId,
+          agentDir,
+          workspaceDir,
           providers,
           modelCandidates,
           options: {

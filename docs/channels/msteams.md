@@ -174,7 +174,7 @@ Example:
 **Teams + channel allowlist**
 
 - Scope group/channel replies by listing teams and channels under `channels.msteams.teams`.
-- Keys should use stable team IDs and channel conversation IDs.
+- Keys should use stable Teams conversation IDs from Teams links, not mutable display names.
 - When `groupPolicy="allowlist"` and a teams allowlist is present, only listed teams/channels are accepted (mention‑gated).
 - The configure wizard accepts `Team/Channel` entries and stores them for you.
 - On startup, OpenClaw resolves team/channel and user allowlist names to IDs (when Graph permissions allow)
@@ -944,7 +944,7 @@ The `groupId` query parameter in Teams URLs is **NOT** the team ID used for conf
 ```
 https://teams.microsoft.com/l/team/19%3ABk4j...%40thread.tacv2/conversations?groupId=...
                                     └────────────────────────────┘
-                                    Team ID (URL-decode this)
+                                    Team conversation ID (URL-decode this)
 ```
 
 **Channel URL:**
@@ -957,9 +957,9 @@ https://teams.microsoft.com/l/channel/19%3A15bc...%40thread.tacv2/ChannelName?gr
 
 **For config:**
 
-- Team ID = path segment after `/team/` (URL-decoded, e.g., `19:Bk4j...@thread.tacv2`)
-- Channel ID = path segment after `/channel/` (URL-decoded)
-- **Ignore** the `groupId` query parameter
+- Team key = path segment after `/team/` (URL-decoded, e.g., `19:Bk4j...@thread.tacv2`; older tenants may show `@thread.skype`, which is also valid)
+- Channel key = path segment after `/channel/` (URL-decoded)
+- **Ignore** the `groupId` query parameter for OpenClaw routing. It is the Microsoft Entra group ID, not the Bot Framework conversation ID used in incoming Teams activities.
 
 ## Private channels
 

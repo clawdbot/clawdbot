@@ -76,6 +76,12 @@ function mockIsolatedRunOk(): void {
   });
 }
 
+async function waitForCronIsolatedRuns(count: number, timeoutMs = 2_000): Promise<void> {
+  await expect
+    .poll(() => cronIsolatedRun.mock.calls.length, { timeout: timeoutMs, interval: 10 })
+    .toBe(count);
+}
+
 async function postAgentHookWithIdempotency(
   port: number,
   idempotencyKey: string,
@@ -309,6 +315,86 @@ describe("gateway server hooks", () => {
       expect(targetEvents.some((event) => event.includes("Hook Email: done"))).toBe(true);
       expect(peekSystemEventEntries(resolveMainKey())).toEqual([]);
       drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
+    });
+  });
+
+  test("hook announcement policy keeps no-deliver success silent without hiding failures", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      mappings: [
+        {
+          match: { path: "mapped-silent" },
+          action: "agent",
+          messageTemplate: "Mapped: {{payload.subject}}",
+          deliver: false,
+        },
+      ],
+    };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "ok",
+        summary: "done",
+        delivered: false,
+      });
+      const directSilent = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        name: "Email",
+        deliver: false,
+      });
+      expect(directSilent.status).toBe(200);
+      await waitForCronIsolatedRuns(1);
+      expect(peekSystemEventEntries(resolveMainKey())).toEqual([]);
+
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "ok",
+        summary: "mapped done",
+        delivered: false,
+      });
+      const mappedSilent = await postHook(port, "/hooks/mapped-silent", { subject: "Email" });
+      expect(mappedSilent.status).toBe(200);
+      await waitForCronIsolatedRuns(2);
+      expect(peekSystemEventEntries(resolveMainKey())).toEqual([]);
+
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "error",
+        summary: "boom",
+        delivered: false,
+      });
+      const directFailure = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        name: "Email",
+        deliver: false,
+      });
+      expect(directFailure.status).toBe(200);
+      const failureEvents = await waitForSystemEventTexts(resolveMainKey());
+      expect(failureEvents).toContain("Hook Email (error): boom");
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
+  test("hook announcement policy suppresses fallback after attempted delivery", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "ok",
+        summary: "done",
+        delivered: false,
+        deliveryAttempted: true,
+      });
+      const response = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        name: "Email",
+      });
+      expect(response.status).toBe(200);
+      await waitForCronIsolatedRuns(1);
+      expect(peekSystemEventEntries(resolveMainKey())).toEqual([]);
     });
   });
 

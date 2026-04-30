@@ -99,6 +99,7 @@ describe("shouldEnsureCliPath", () => {
     expect(shouldEnsureCliPath(["node", "openclaw", "sessions", "--json"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "config", "get", "update"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "models", "status", "--json"])).toBe(false);
+    expect(shouldEnsureCliPath(["node", "openclaw", "tools", "effective"])).toBe(false);
   });
 
   it("keeps path bootstrap for mutating or unknown commands", () => {
@@ -156,6 +157,7 @@ describe("shouldUseRootHelpFastPath", () => {
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "--help"])).toBe(true);
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "--profile", "work", "-h"])).toBe(true);
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "help", "--help"])).toBe(true);
+    expect(shouldUseRootHelpFastPath(["node", "openclaw", "tools", "--help"])).toBe(true);
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "status", "--help"])).toBe(false);
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "--help", "status"])).toBe(false);
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "help", "gateway"])).toBe(false);

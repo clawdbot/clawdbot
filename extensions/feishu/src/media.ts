@@ -76,6 +76,7 @@ type FeishuDownloadResponse =
   | Awaited<ReturnType<Lark.Client["im"]["messageResource"]["get"]>>;
 
 type FeishuHeaderMap = Record<string, string | string[]>;
+type FeishuMessageResourceDownloadType = "image" | "file" | "media";
 
 function asHeaderMap(value: object | undefined): FeishuHeaderMap | undefined {
   if (!value) {
@@ -144,6 +145,27 @@ function readHeaderValue(
     }
   }
   return undefined;
+}
+
+function readHttpStatusFromError(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+
+  const response = (error as { response?: unknown }).response;
+  if (response && typeof response === "object") {
+    const status = (response as { status?: unknown }).status;
+    if (typeof status === "number") {
+      return status;
+    }
+  }
+
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" ? status : undefined;
+}
+
+function isHttpStatusError(error: unknown, status: number): boolean {
+  return readHttpStatusFromError(error) === status;
 }
 
 function containsEastAsianScript(value: string): boolean {
@@ -304,6 +326,25 @@ export async function downloadImageFeishu(params: {
   return { buffer, contentType: meta.contentType };
 }
 
+async function downloadMessageResourceWithType(params: {
+  client: ReturnType<typeof createFeishuClient>;
+  messageId: string;
+  fileKey: string;
+  type: FeishuMessageResourceDownloadType;
+}): Promise<DownloadMessageResourceResult> {
+  const response = await params.client.im.messageResource.get({
+    path: { message_id: params.messageId, file_key: params.fileKey },
+    params: { type: params.type },
+  });
+
+  const buffer = await readFeishuResponseBuffer({
+    response,
+    tmpDirPrefix: "openclaw-feishu-resource-",
+    errorPrefix: "Feishu message resource download failed",
+  });
+  return { buffer, ...extractFeishuDownloadMetadata(response) };
+}
+
 /**
  * Download a message resource (file/image/audio/video) from Feishu.
  * Used for downloading files, audio, and video from messages.
@@ -322,17 +363,28 @@ export async function downloadMessageResourceFeishu(params: {
   }
   const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
 
-  const response = await client.im.messageResource.get({
-    path: { message_id: messageId, file_key: normalizedFileKey },
-    params: { type },
-  });
-
-  const buffer = await readFeishuResponseBuffer({
-    response,
-    tmpDirPrefix: "openclaw-feishu-resource-",
-    errorPrefix: "Feishu message resource download failed",
-  });
-  return { buffer, ...extractFeishuDownloadMetadata(response) };
+  try {
+    return await downloadMessageResourceWithType({
+      client,
+      messageId,
+      fileKey: normalizedFileKey,
+      type,
+    });
+  } catch (err) {
+    if (type !== "file" || !isHttpStatusError(err, 502)) {
+      throw err;
+    }
+    try {
+      return await downloadMessageResourceWithType({
+        client,
+        messageId,
+        fileKey: normalizedFileKey,
+        type: "media",
+      });
+    } catch {
+      throw err;
+    }
+  }
 }
 
 export type UploadImageResult = {

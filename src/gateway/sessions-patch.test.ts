@@ -186,6 +186,22 @@ describe("gateway sessions patch", () => {
     expect(entry.fastMode).toBeUndefined();
   });
 
+  test("persists verboseLevel=full", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        patch: { key: MAIN_SESSION_KEY, verboseLevel: "full" },
+      }),
+    );
+    expect(entry.verboseLevel).toBe("full");
+  });
+
+  test("rejects invalid verboseLevel values with all valid choices in the error", async () => {
+    const result = await runPatch({
+      patch: { key: MAIN_SESSION_KEY, verboseLevel: "maybe" },
+    });
+    expectPatchError(result, 'invalid verboseLevel (use "on"|"off"|"full")');
+  });
+
   test("persists elevatedLevel=off (does not clear)", async () => {
     const entry = expectPatchOk(
       await runPatch({
@@ -382,6 +398,35 @@ describe("gateway sessions patch", () => {
     );
 
     expect(entry.thinkingLevel).toBe("medium");
+  });
+
+  test("accepts xhigh thinking patches from configured catalog compat", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "gmn/gpt-5.4" },
+            },
+          },
+        } as OpenClawConfig,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          thinkingLevel: "xhigh",
+        },
+        loadGatewayModelCatalog: async () => [
+          {
+            provider: "gmn",
+            id: "gpt-5.4",
+            name: "GPT 5.4 via GMN",
+            reasoning: true,
+            compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+          },
+        ],
+      }),
+    );
+
+    expect(entry.thinkingLevel).toBe("xhigh");
   });
 
   test("sets spawnedBy for ACP sessions", async () => {

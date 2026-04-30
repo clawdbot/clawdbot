@@ -90,8 +90,62 @@ describe("scanStatus", () => {
     expect(mocks.buildChannelsTable).toHaveBeenCalledWith(
       expect.objectContaining({ marker: "resolved" }),
       expect.objectContaining({
+        includeSetupRuntimeFallback: false,
         sourceConfig: expect.objectContaining({ marker: "source" }),
       }),
+    );
+  });
+
+  it("keeps default text status off live channel status and setup runtime fallback", async () => {
+    configureScanStatus({ hasConfiguredChannels: true });
+    mocks.probeGateway.mockResolvedValue({
+      ok: true,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: 12,
+      error: null,
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    await scanStatus({ json: false }, {} as never);
+
+    expect(mocks.callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "channels.status" }),
+    );
+    expect(mocks.buildChannelsTable).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ includeSetupRuntimeFallback: false }),
+    );
+  });
+
+  it("uses live channel status and setup fallback for deep text status", async () => {
+    configureScanStatus({ hasConfiguredChannels: true });
+    mocks.probeGateway.mockResolvedValue({
+      ok: true,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: 12,
+      error: null,
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    await scanStatus({ json: false, deep: true, timeoutMs: 5000 }, {} as never);
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "channels.status",
+        timeoutMs: 2500,
+      }),
+    );
+    expect(mocks.buildChannelsTable).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ includeSetupRuntimeFallback: true }),
     );
   });
 

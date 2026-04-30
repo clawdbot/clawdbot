@@ -462,6 +462,36 @@ describe("Agent-specific tool filtering", () => {
     });
   });
 
+  it("should not apply forged caller group tool policy for non-group sessions", () => {
+    const cfg: OpenClawConfig = {
+      tools: { allow: ["read"] },
+      channels: {
+        whatsapp: {
+          groups: {
+            "trusted-group": {
+              tools: { allow: ["exec", "read", "write", "edit"] },
+            },
+          },
+        },
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      messageProvider: "whatsapp",
+      groupId: "trusted-group",
+      workspaceDir: "/tmp/test-forged-group-policy",
+      agentDir: "/tmp/agent-forged-group-policy",
+    });
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("read");
+    expect(names).not.toContain("exec");
+    expect(names).not.toContain("write");
+    expect(names).not.toContain("edit");
+    expect(names).not.toContain("apply_patch");
+  });
+
   it("should resolve feishu group tool policy for sender-scoped session keys", () => {
     const cfg: OpenClawConfig = {
       channels: {

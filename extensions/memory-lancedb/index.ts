@@ -256,6 +256,11 @@ class MemoryDB {
     await this.ensureInitialized();
     return this.table!.countRows();
   }
+
+  async getTable(): Promise<LanceDB.Table> {
+    await this.ensureInitialized();
+    return this.table!;
+  }
 }
 
 // ============================================================================
@@ -433,6 +438,7 @@ const MEMORY_TRIGGERS = [
   /my\s+\w+\s+is|is\s+my/i,
   /i (like|prefer|hate|love|want|need)/i,
   /always|never|important/i,
+  /记住|记下|我(喜欢|偏好|讨厌|爱|想要|需要)|我的.*是|决定|总是|从不|重要/i,
 ];
 
 const PROMPT_INJECTION_PATTERNS = [
@@ -749,7 +755,7 @@ export default definePluginEntry({
             }
 
             const list = results
-              .map((r) => `- [${r.entry.id.slice(0, 8)}] ${r.entry.text.slice(0, 60)}...`)
+              .map((r) => `- [${r.entry.id}] ${r.entry.text.slice(0, 60)}...`)
               .join("\n");
 
             // Strip vector data for serialization
@@ -813,6 +819,74 @@ export default definePluginEntry({
               score: r.score,
             }));
             console.log(JSON.stringify(output, null, 2));
+          });
+
+        memory
+          .command("query")
+          .description("Query memories (non-vector search)")
+          .option("--cols <columns>", "Columns to select, comma-separated")
+          .option("--filter <condition>", "Filter condition")
+          .option("--limit <n>", "Limit number of results", "10")
+          .option("--order-by <order>", "Order by column and direction (e.g., createdAt:desc)")
+          .action(async (opts) => {
+            const table = await db.getTable();
+            let query = table.query();
+            let sortColAdded = false;
+            let sortColName: string | undefined;
+            if (opts.cols) {
+              const columns = (opts.cols as string).split(",").map((c: string) => c.trim());
+              if (opts.orderBy) {
+                const [sortCol] = opts.orderBy.split(":");
+                sortColName = sortCol;
+                if (!columns.includes(sortCol)) {
+                  columns.push(sortCol);
+                  sortColAdded = true;
+                }
+              }
+              query = query.select(columns);
+            } else {
+              query = query.select(["id", "text", "importance", "category", "createdAt"]);
+            }
+            if (opts.filter) {
+              const filterCondition = String(opts.filter);
+              if (filterCondition.length > 200) {
+                throw new Error("Filter condition exceeds maximum length of 200 characters");
+              }
+              if (!/^[a-zA-Z0-9_\-\s='"><!.,()%*]+$/.test(filterCondition)) {
+                throw new Error("Filter condition contains invalid characters");
+              }
+              query = query.where(filterCondition);
+            }
+            const limit = Number.parseInt(opts.limit, 10);
+            if (Number.isNaN(limit) || limit <= 0) {
+              throw new Error("Invalid limit: must be a positive integer");
+            }
+
+            // Fetch all filtered rows first if we need to order them in memory
+            if (!opts.orderBy) {
+              query = query.limit(limit);
+            }
+            let rows = await query.toArray();
+            if (opts.orderBy) {
+              const [col, dir] = opts.orderBy.split(":");
+              const direction = dir?.toLowerCase() === "desc" ? -1 : 1;
+              rows.sort((a, b) => {
+                if (a[col] < b[col]) {
+                  return -1 * direction;
+                }
+                if (a[col] > b[col]) {
+                  return 1 * direction;
+                }
+                return 0;
+              });
+              rows = rows.slice(0, limit);
+              if (sortColAdded && sortColName) {
+                for (const row of rows) {
+                  delete row[sortColName];
+                }
+              }
+            }
+            console.log(JSON.stringify(rows, null, 2));
           });
 
         memory

@@ -7,7 +7,7 @@ import {
   type ResolvedMemoryWikiConfig,
 } from "./config.js";
 import { lintMemoryWikiVault } from "./lint.js";
-import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
+import { getMemoryWikiPage, searchMemoryWiki, WIKI_SEARCH_MODES } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { renderMemoryWikiStatus, resolveMemoryWikiStatus } from "./status.js";
 
@@ -17,12 +17,14 @@ const WikiSearchBackendSchema = Type.Union(
   WIKI_SEARCH_BACKENDS.map((value) => Type.Literal(value)),
 );
 const WikiSearchCorpusSchema = Type.Union(WIKI_SEARCH_CORPORA.map((value) => Type.Literal(value)));
+const WikiSearchModeSchema = Type.Union(WIKI_SEARCH_MODES.map((value) => Type.Literal(value)));
 const WikiSearchSchema = Type.Object(
   {
     query: Type.String({ minLength: 1 }),
     maxResults: Type.Optional(Type.Number({ minimum: 1 })),
     backend: Type.Optional(WikiSearchBackendSchema),
     corpus: Type.Optional(WikiSearchCorpusSchema),
+    mode: Type.Optional(WikiSearchModeSchema),
   },
   { additionalProperties: false },
 );
@@ -38,11 +40,14 @@ const WikiGetSchema = Type.Object(
 );
 const WikiClaimEvidenceSchema = Type.Object(
   {
+    kind: Type.Optional(Type.String({ minLength: 1 })),
     sourceId: Type.Optional(Type.String({ minLength: 1 })),
     path: Type.Optional(Type.String({ minLength: 1 })),
     lines: Type.Optional(Type.String({ minLength: 1 })),
     weight: Type.Optional(Type.Number({ minimum: 0 })),
     note: Type.Optional(Type.String({ minLength: 1 })),
+    confidence: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
+    privacyTier: Type.Optional(Type.String({ minLength: 1 })),
     updatedAt: Type.Optional(Type.String({ minLength: 1 })),
   },
   { additionalProperties: false },
@@ -126,6 +131,7 @@ export function createWikiSearchTool(
         maxResults?: number;
         backend?: ResolvedMemoryWikiConfig["search"]["backend"];
         corpus?: ResolvedMemoryWikiConfig["search"]["corpus"];
+        mode?: (typeof WIKI_SEARCH_MODES)[number];
       };
       await syncImportedSourcesIfNeeded(config, appConfig);
       const results = await searchMemoryWiki({
@@ -137,6 +143,7 @@ export function createWikiSearchTool(
         maxResults: params.maxResults,
         ...(params.backend ? { searchBackend: params.backend } : {}),
         ...(params.corpus ? { searchCorpus: params.corpus } : {}),
+        ...(params.mode ? { mode: params.mode } : {}),
       });
       const text =
         results.length === 0
@@ -144,7 +151,7 @@ export function createWikiSearchTool(
           : results
               .map(
                 (result, index) =>
-                  `${index + 1}. ${result.title} (${result.corpus}/${result.kind})\nPath: ${result.path}${typeof result.startLine === "number" && typeof result.endLine === "number" ? `\nLines: ${result.startLine}-${result.endLine}` : ""}${result.provenanceLabel ? `\nProvenance: ${result.provenanceLabel}` : ""}\nSnippet: ${result.snippet}`,
+                  `${index + 1}. ${result.title} (${result.corpus}/${result.kind})\nPath: ${result.path}${typeof result.startLine === "number" && typeof result.endLine === "number" ? `\nLines: ${result.startLine}-${result.endLine}` : ""}${result.provenanceLabel ? `\nProvenance: ${result.provenanceLabel}` : ""}${result.matchedClaimId ? `\nClaim: ${result.matchedClaimId}` : ""}${result.evidenceKinds && result.evidenceKinds.length > 0 ? `\nEvidence: ${result.evidenceKinds.join(", ")}` : ""}\nSnippet: ${result.snippet}`,
               )
               .join("\n\n");
       return {

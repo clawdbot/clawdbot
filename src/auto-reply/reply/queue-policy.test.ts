@@ -36,13 +36,15 @@ describe("resolveActiveRunQueueAction", () => {
   });
 
   it("enqueues steer mode runs while active", () => {
-    expect(
-      resolveActiveRunQueueAction({
-        isActive: true,
-        isHeartbeat: false,
-        shouldFollowup: false,
-        queueMode: "steer",
-      }),
-    ).toBe("enqueue-followup");
+    for (const queueMode of ["steer", "queue"] as const) {
+      expect(
+        resolveActiveRunQueueAction({
+          isActive: true,
+          isHeartbeat: false,
+          shouldFollowup: false,
+          queueMode,
+        }),
+      ).toBe("enqueue-followup");
+    }
   });
 });

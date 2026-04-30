@@ -4,6 +4,7 @@ import {
   buildStaticVercelAiGatewayProvider,
   buildVercelAiGatewayProvider,
 } from "./provider-catalog.js";
+import { resolveVercelAiGatewayThinkingProfile } from "./thinking.js";
 
 const PROVIDER_ID = "vercel-ai-gateway";
 
@@ -35,5 +36,6 @@ export default defineSingleProviderPluginEntry({
       buildProvider: buildVercelAiGatewayProvider,
       buildStaticProvider: buildStaticVercelAiGatewayProvider,
     },
+    resolveThinkingProfile: ({ modelId }) => resolveVercelAiGatewayThinkingProfile(modelId),
   },
 });

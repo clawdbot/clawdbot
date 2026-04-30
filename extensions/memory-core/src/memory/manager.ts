@@ -380,7 +380,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           boostFallbackRanking: true,
         },
         sourceFilterList,
-      ).catch(() => []);
+      ).catch((err) => {
+        log.warn(`memory search: FTS keyword query failed: ${formatErrorMessage(err)}`);
+        return [];
+      });
       const resultSets =
         fullQueryResults.length > 0
           ? [fullQueryResults]
@@ -398,7 +401,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
                     candidates,
                     { boostFallbackRanking: true },
                     sourceFilterList,
-                  ).catch(() => []),
+                  ).catch((err) => {
+                    log.warn(
+                      `memory search: FTS per-keyword query failed for "${term}": ${formatErrorMessage(err)}`,
+                    );
+                    return [];
+                  }),
                 );
               })(),
             );
@@ -427,13 +435,23 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     // If FTS isn't available, hybrid mode cannot use keyword search; degrade to vector-only.
     const keywordResults =
       hybrid.enabled && this.fts.enabled && this.fts.available
-        ? await this.searchKeyword(cleaned, candidates, undefined, sourceFilterList).catch(() => [])
+        ? await this.searchKeyword(cleaned, candidates, undefined, sourceFilterList).catch(
+            (err) => {
+              log.warn(
+                `memory search: FTS hybrid keyword query failed: ${formatErrorMessage(err)}`,
+              );
+              return [];
+            },
+          )
         : [];
 
     const queryVec = await this.embedQueryWithTimeout(cleaned);
     const hasVector = queryVec.some((v) => v !== 0);
     const vectorResults = hasVector
-      ? await this.searchVector(queryVec, candidates, sourceFilterList).catch(() => [])
+      ? await this.searchVector(queryVec, candidates, sourceFilterList).catch((err) => {
+          log.warn(`memory search: vector query failed: ${formatErrorMessage(err)}`);
+          return [];
+        })
       : [];
 
     if (!hybrid.enabled || !this.fts.enabled || !this.fts.available) {

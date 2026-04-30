@@ -5,6 +5,7 @@ import { cleanupTempDirs, makeTempDir } from "../test/helpers/temp-dir.js";
 import {
   buildOpenClawCompileCacheRespawnPlan,
   isSourceCheckoutInstallRoot,
+  resolveOpenClawCompileCacheDirectory,
   resolveEntryInstallRoot,
   shouldEnableOpenClawCompileCache,
 } from "./entry.compile-cache.js";
@@ -52,6 +53,21 @@ describe("entry compile cache", () => {
         installRoot: root,
       }),
     ).toBe(false);
+  });
+
+  it("scopes packaged compile cache by package install metadata", async () => {
+    const root = makeTempDir(tempDirs, "openclaw-compile-cache-package-key-");
+    const packageJsonPath = path.join(root, "package.json");
+    await fs.writeFile(packageJsonPath, '{"version":"2026.4.29"}\n', "utf8");
+
+    const directory = resolveOpenClawCompileCacheDirectory({
+      env: { NODE_COMPILE_CACHE: path.join(root, ".node-cache") },
+      installRoot: root,
+    });
+
+    expect(directory).toContain(path.join(".node-cache", "openclaw"));
+    expect(directory).toContain("2026.4.29");
+    expect(path.basename(directory)).toMatch(/^\d+-\d+$/);
   });
 
   it("builds a one-shot no-cache respawn plan when source checkout inherits NODE_COMPILE_CACHE", async () => {

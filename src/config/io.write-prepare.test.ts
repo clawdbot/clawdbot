@@ -86,6 +86,78 @@ describe("config io write prepare", () => {
     expect(persisted.plugins?.installs).toBeUndefined();
   });
 
+  it("preserves authored agent provider params during narrowed agent-list writes", () => {
+    const sourceConfig = {
+      agents: {
+        defaults: {
+          params: { transport: "sse", openaiWsWarmup: false },
+          models: {
+            "openai/gpt-5.4": {
+              alias: "GPT",
+              params: { transport: "sse", openaiWsWarmup: false },
+            },
+          },
+        },
+        list: [{ id: "main" }],
+      },
+      gateway: { mode: "local" },
+    };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: {
+        ...sourceConfig,
+        agents: {
+          ...sourceConfig.agents,
+          defaults: {
+            ...sourceConfig.agents.defaults,
+            maxConcurrent: 4,
+          },
+        },
+      },
+      sourceConfig,
+      nextConfig: {
+        agents: { list: [{ id: "main" }, { id: "ops" }] },
+        gateway: { mode: "local" },
+      },
+    }) as OpenClawConfig;
+
+    expect(persisted.agents?.defaults?.params).toEqual({
+      transport: "sse",
+      openaiWsWarmup: false,
+    });
+    expect(persisted.agents?.defaults?.models?.["openai/gpt-5.4"]).toEqual({
+      alias: "GPT",
+      params: { transport: "sse", openaiWsWarmup: false },
+    });
+    expect(persisted.agents?.list).toEqual([{ id: "main" }, { id: "ops" }]);
+  });
+
+  it("allows explicit unsets to remove authored agent provider params", () => {
+    const sourceConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          params: { transport: "sse", openaiWsWarmup: false },
+          models: {
+            "openai/gpt-5.4": {
+              params: { transport: "sse", openaiWsWarmup: false },
+            },
+          },
+        },
+      },
+    };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: sourceConfig,
+      sourceConfig,
+      nextConfig: { agents: { defaults: { models: { "openai/gpt-5.4": {} } } } },
+      unsetPaths: [
+        ["agents", "defaults", "params"],
+        ["agents", "defaults", "models", "openai/gpt-5.4", "params"],
+      ],
+    }) as OpenClawConfig;
+
+    expect(persisted.agents?.defaults).not.toHaveProperty("params");
+    expect(persisted.agents?.defaults?.models?.["openai/gpt-5.4"]).not.toHaveProperty("params");
+  });
+
   it("preserves untouched include-owned subtrees during unrelated writes", () => {
     const persisted = resolvePersistCandidateForWrite({
       runtimeConfig: {

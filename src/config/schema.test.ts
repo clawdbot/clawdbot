@@ -315,6 +315,7 @@ describe("config schema", () => {
         fetch: {
           ssrfPolicy: {
             allowRfc2544BenchmarkRange: true,
+            allowIpv6UniqueLocalRange: true,
           },
         },
       },
@@ -322,6 +323,7 @@ describe("config schema", () => {
 
     expect(parsed?.web?.fetch?.ssrfPolicy).toEqual({
       allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
     });
   });
 

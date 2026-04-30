@@ -38,6 +38,7 @@ openclaw wiki ingest ./notes/alpha.md
 openclaw wiki compile
 openclaw wiki lint
 openclaw wiki search "alpha"
+openclaw wiki search "who should I ask about Teams?" --mode route-question
 openclaw wiki get entity.alpha --from 1 --lines 80
 
 openclaw wiki apply synthesis "Alpha Summary" \
@@ -135,10 +136,33 @@ Behavior depends on config:
 
 - `search.backend`: `shared` or `local`
 - `search.corpus`: `wiki`, `memory`, or `all`
+- `--mode`: `auto`, `find-person`, `route-question`, `source-evidence`, or
+  `raw-claim`
 
 Use `wiki search` when you want wiki-specific ranking or provenance details.
 For one broad shared recall pass, prefer `openclaw memory search` when the
 active memory plugin exposes shared search.
+
+Search modes help the agent choose the right surface:
+
+- `find-person`: aliases, handles, socials, canonical IDs, and person pages
+- `route-question`: ask-for/best-used-for hints and relationship context
+- `source-evidence`: source pages and structured evidence fields
+- `raw-claim`: structured claim text with claim/evidence metadata
+
+Examples:
+
+```bash
+openclaw wiki search "bgroux" --mode find-person
+openclaw wiki search "who knows Teams rollout?" --mode route-question
+openclaw wiki search "maintainer-whois" --mode source-evidence
+openclaw wiki search "strong route Teams" --mode raw-claim --json
+```
+
+Text output includes `Claim:` and `Evidence:` lines when a result matches a
+structured claim. JSON output additionally exposes `matchedClaimId`,
+`matchedClaimStatus`, `matchedClaimConfidence`, `evidenceKinds`, and
+`evidenceSourceIds` for agent-side drilldown.
 
 ### `wiki get <lookup>`
 

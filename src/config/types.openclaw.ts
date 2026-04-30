@@ -10,6 +10,7 @@ import type { DiagnosticsConfig, LoggingConfig, SessionConfig, WebConfig } from 
 import type { BrowserConfig } from "./types.browser.js";
 import type { ChannelsConfig } from "./types.channels.js";
 import type { CliConfig } from "./types.cli.js";
+import type { CommitmentsConfig } from "./types.commitments.js";
 import type { CrestodianConfig } from "./types.crestodian.js";
 import type { CronConfig } from "./types.cron.js";
 import type {
@@ -129,6 +130,7 @@ export type OpenClawConfig = {
   web?: WebConfig;
   channels?: ChannelsConfig;
   cron?: CronConfig;
+  commitments?: CommitmentsConfig;
   hooks?: HooksConfig;
   discovery?: DiscoveryConfig;
   canvasHost?: CanvasHostConfig;

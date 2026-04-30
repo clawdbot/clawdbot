@@ -10,6 +10,24 @@ export type HeartbeatRunResult =
   | { status: "skipped"; reason: string }
   | { status: "failed"; reason: string };
 
+export const HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT = "requests-in-flight";
+export const HEARTBEAT_SKIP_CRON_IN_PROGRESS = "cron-in-progress";
+export const HEARTBEAT_SKIP_LANES_BUSY = "lanes-busy";
+export type RetryableHeartbeatBusySkipReason =
+  | typeof HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT
+  | typeof HEARTBEAT_SKIP_CRON_IN_PROGRESS
+  | typeof HEARTBEAT_SKIP_LANES_BUSY;
+
+const RETRYABLE_BUSY_SKIP_REASONS = new Set([
+  HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+  HEARTBEAT_SKIP_CRON_IN_PROGRESS,
+  HEARTBEAT_SKIP_LANES_BUSY,
+]);
+
+export function isRetryableHeartbeatBusySkipReason(reason: string): boolean {
+  return RETRYABLE_BUSY_SKIP_REASONS.has(reason);
+}
+
 export type HeartbeatWakeRequest = {
   reason?: string;
   agentId?: string;
@@ -175,8 +193,8 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
           ...(pendingWake.heartbeat ? { heartbeat: pendingWake.heartbeat } : {}),
         };
         const res = await active(wakeOpts);
-        if (res.status === "skipped" && res.reason === "requests-in-flight") {
-          // The main lane is busy; retry this wake target soon.
+        if (res.status === "skipped" && isRetryableHeartbeatBusySkipReason(res.reason)) {
+          // The target runtime is busy; retry this wake target soon.
           queuePendingWakeReason({
             reason: pendingWake.reason ?? "retry",
             agentId: pendingWake.agentId,

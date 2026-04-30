@@ -128,7 +128,13 @@ function extractTelegramApiMethod(input: TelegramFetchInput): string | null {
   }
 }
 
-const TELEGRAM_TIMEOUT_FALLBACK_METHODS = new Set(["deletewebhook", "getme", "setwebhook"]);
+const TELEGRAM_TIMEOUT_FALLBACK_METHODS = new Set([
+  "deletemycommands",
+  "deletewebhook",
+  "getme",
+  "setmycommands",
+  "setwebhook",
+]);
 
 function shouldRetryTimedOutTelegramControlRequest(method: string | null): boolean {
   return method !== null && TELEGRAM_TIMEOUT_FALLBACK_METHODS.has(method);

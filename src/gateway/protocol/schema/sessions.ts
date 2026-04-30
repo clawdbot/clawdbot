@@ -123,7 +123,7 @@ export const SessionsMessagesUnsubscribeParamsSchema = Type.Object(
 
 export const SessionsAbortParamsSchema = Type.Object(
   {
-    key: NonEmptyString,
+    key: Type.Optional(NonEmptyString),
     runId: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },

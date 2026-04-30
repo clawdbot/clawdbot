@@ -78,10 +78,12 @@ The Control UI fetches its runtime settings from `/__openclaw/control-ui-config.
 
 The Control UI can localize itself on first load based on your browser locale. To override it later, open **Overview -> Gateway Access -> Language**. The locale picker lives in the Gateway Access card, not under Appearance.
 
-- Supported locales: `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `tr`, `uk`, `id`, `pl`, `th`
+- Supported locales: `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `ar`, `it`, `tr`, `uk`, `id`, `pl`, `th`, `vi`, `nl`, `fa`
 - Non-English translations are lazy-loaded in the browser.
 - The selected locale is saved in browser storage and reused on future visits.
 - Missing translation keys fall back to English.
+
+Docs translations are generated for the same non-English locale set, but the docs site's built-in Mintlify language picker is limited to the locale codes Mintlify accepts. Thai (`th`) and Persian (`fa`) docs are still generated in the publish repo; they may not appear in that picker until Mintlify supports those codes.
 
 ## Appearance themes
 
@@ -155,7 +157,7 @@ Imported themes are stored only in the current browser profile. They are not wri
     - During an active send and the final history refresh, the chat view keeps local optimistic user/assistant messages visible if `chat.history` briefly returns an older snapshot; the canonical transcript replaces those local messages once the Gateway history catches up.
     - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
     - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options.
-    - The chat model picker requests the Gateway's configured model view. If `agents.defaults.models` is present, that allowlist drives the picker. Otherwise the picker shows explicit `models.providers.*.models` entries before falling back to the full catalog for fresh installs.
+    - The chat model picker requests the Gateway's configured model view. If `agents.defaults.models` is present, that allowlist drives the picker. Otherwise the picker shows explicit `models.providers.*.models` entries plus providers with usable auth. The full catalog stays available through the debug `models.list` RPC with `view: "all"`.
     - When fresh Gateway session usage reports show high context pressure, the chat composer area shows a context notice and, at recommended compaction levels, a compact button that runs the normal session compaction path. Stale token snapshots are hidden until the Gateway reports fresh usage again.
 
   </Accordion>

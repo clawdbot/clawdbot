@@ -53,6 +53,13 @@ export type PluginRegistryOptions = {
   refresh?: boolean;
 };
 
+export type PluginsDepsCliOptions = {
+  json?: boolean;
+  packageRoot?: string;
+  prune?: boolean;
+  repair?: boolean;
+};
+
 const quietPluginJsonLogger: PluginLogger = {
   debug: () => undefined,
   info: () => undefined,
@@ -250,6 +257,21 @@ export function registerPluginsCli(program: Command) {
         lines.push("");
       }
       defaultRuntime.log(lines.join("\n").trim());
+    });
+
+  plugins
+    .command("deps")
+    .description("Inspect or repair bundled plugin runtime dependencies")
+    .option("--json", "Print JSON")
+    .option("--package-root <path>", "OpenClaw package root to inspect")
+    .option("--prune", "Prune stale unknown external runtime dependency roots", false)
+    .option("--repair", "Install missing bundled runtime dependencies", false)
+    .action(async (opts: PluginsDepsCliOptions) => {
+      const { runPluginsDepsCommand } = await import("./plugins-deps-command.js");
+      await runPluginsDepsCommand({
+        config: getRuntimeConfig(),
+        options: opts,
+      });
     });
 
   plugins

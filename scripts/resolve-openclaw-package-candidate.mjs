@@ -93,6 +93,16 @@ function run(command, args, options = {}) {
       cwd: options.cwd ?? ROOT_DIR,
       stdio: options.capture ? ["ignore", "pipe", "pipe"] : ["ignore", "inherit", "inherit"],
     });
+    let timedOut = false;
+    const timeout =
+      options.timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            timedOut = true;
+            child.kill("SIGTERM");
+            setTimeout(() => child.kill("SIGKILL"), 5_000).unref?.();
+          }, options.timeoutMs);
+    timeout?.unref?.();
     let stdout = "";
     let stderr = "";
     if (options.capture) {
@@ -105,6 +115,13 @@ function run(command, args, options = {}) {
     }
     child.on("error", reject);
     child.on("close", (status, signal) => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      if (timedOut) {
+        reject(new Error(`${command} ${args.join(" ")} timed out after ${options.timeoutMs}ms`));
+        return;
+      }
       if (status === 0) {
         resolve(stdout);
         return;
@@ -406,7 +423,14 @@ async function resolveCandidate(options) {
   }
 
   const digest = await assertExpectedSha256(target, options.packageSha256);
-  await run("node", ["scripts/check-openclaw-package-tarball.mjs", target]);
+  console.error(`Checking OpenClaw package tarball: ${target}`);
+  const checkStartedAt = Date.now();
+  await run("node", ["scripts/check-openclaw-package-tarball.mjs", target], {
+    timeoutMs: 5 * 60 * 1000,
+  });
+  console.error(
+    `OpenClaw package tarball check finished in ${Math.round((Date.now() - checkStartedAt) / 1000)}s`,
+  );
   const pkg = await readPackageJson(target);
   const metadata = {
     name: pkg.name,

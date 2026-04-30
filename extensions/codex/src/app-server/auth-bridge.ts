@@ -3,6 +3,7 @@ import {
   loadAuthProfileStoreForSecretsRuntime,
   resolveProviderIdForAuth,
   resolveApiKeyForProfile,
+  resolvePersistedAuthProfileOwnerAgentDir,
   saveAuthProfileStore,
   type AuthProfileCredential,
   type OAuthCredential,
@@ -178,17 +179,26 @@ async function resolveOAuthCredentialForCodexAppServer(
   credential: OAuthCredential,
   params: { agentDir: string; forceRefresh: boolean },
 ): Promise<OAuthCredential> {
-  const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
+  const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
+    agentDir: params.agentDir,
+    profileId,
+  });
+  const store = ensureAuthProfileStore(ownerAgentDir, { allowKeychainPrompt: false });
+  const ownerCredential = store.profiles[profileId];
+  const credentialForOwner =
+    ownerCredential?.type === "oauth" && isCodexAppServerAuthProvider(ownerCredential.provider)
+      ? ownerCredential
+      : credential;
   if (params.forceRefresh) {
-    store.profiles[profileId] = { ...credential, expires: 0 };
-    saveAuthProfileStore(store, params.agentDir);
+    store.profiles[profileId] = { ...credentialForOwner, expires: 0 };
+    saveAuthProfileStore(store, ownerAgentDir);
   }
   const resolved = await resolveApiKeyForProfile({
     store,
     profileId,
-    agentDir: params.agentDir,
+    agentDir: ownerAgentDir,
   });
-  const refreshed = loadAuthProfileStoreForSecretsRuntime(params.agentDir).profiles[profileId];
+  const refreshed = loadAuthProfileStoreForSecretsRuntime(ownerAgentDir).profiles[profileId];
   const storedCredential = store.profiles[profileId];
   const candidate =
     refreshed?.type === "oauth" && isCodexAppServerAuthProvider(refreshed.provider)

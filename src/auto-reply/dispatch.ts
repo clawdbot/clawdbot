@@ -96,7 +96,7 @@ function buildMessageSendingBeforeDeliver(
 }
 
 export type DispatchInboundResult = DispatchFromConfigResult;
-export { withReplyDispatcher } from "./dispatch-dispatcher.js";
+export { settleReplyDispatcher, withReplyDispatcher } from "./dispatch-dispatcher.js";
 
 function finalizeDispatchResult(
   result: DispatchFromConfigResult,

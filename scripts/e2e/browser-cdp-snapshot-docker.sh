@@ -61,31 +61,7 @@ openclaw_e2e_write_state_env
 entry=\"\$(openclaw_e2e_resolve_entrypoint)\"
 mkdir -p /tmp/openclaw-browser-cdp/chrome
 find dist -maxdepth 1 -type f -name 'pw-ai-*.js' ! -name 'pw-ai-state-*' -exec mv {} /tmp/openclaw-browser-cdp/ \;
-cat > \"\$OPENCLAW_CONFIG_PATH\" <<'JSON'
-{
-  \"gateway\": {
-    \"port\": $PORT,
-    \"auth\": {
-      \"mode\": \"token\",
-      \"token\": \"$TOKEN\"
-    },
-    \"controlUi\": { \"enabled\": false }
-  },
-  \"browser\": {
-    \"enabled\": true,
-    \"defaultProfile\": \"docker-cdp\",
-    \"ssrfPolicy\": {
-      \"allowedHostnames\": [\"127.0.0.1\"]
-    },
-    \"profiles\": {
-      \"docker-cdp\": {
-        \"cdpUrl\": \"http://127.0.0.1:$CDP_PORT\",
-        \"color\": \"#FF4500\"
-      }
-    }
-  }
-}
-JSON
+PORT=$PORT CDP_PORT=$CDP_PORT node scripts/e2e/lib/fixture.mjs browser-cdp
 chromium --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \\
   --remote-debugging-address=127.0.0.1 \\
   --remote-debugging-port=$CDP_PORT \\

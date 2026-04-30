@@ -183,6 +183,7 @@ function createCommandsStatusRuntimeModuleMock() {
       statusChannel: string;
       provider?: string;
       model: string;
+      workspaceDir?: string;
       primaryModelLabelOverride?: string;
       includeTranscriptUsage?: boolean;
       taskLineOverride?: string;
@@ -225,6 +226,7 @@ function createCommandsStatusRuntimeModuleMock() {
         sessionEntry: params.sessionEntry,
         modelAuth,
         includeTranscriptUsage: params.includeTranscriptUsage,
+        workspaceDir: params.workspaceDir,
       });
       return ["OpenClaw", `🧠 Model: ${primary}`, params.taskLineOverride]
         .filter(Boolean)
@@ -423,6 +425,28 @@ describe("session_status tool", () => {
     expect(buildStatusMessageMock).toHaveBeenCalledWith(
       expect.objectContaining({
         includeTranscriptUsage: true,
+      }),
+    );
+  });
+
+  it("passes spawned workspace to session_status auth labels", async () => {
+    resetSessionStore({
+      "agent:main:spawned": {
+        sessionId: "spawned-status",
+        updatedAt: 10,
+        spawnedWorkspaceDir: "/tmp/openclaw-spawned-workspace",
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-6",
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:spawned");
+
+    await tool.execute("call-spawned-workspace-status", {});
+
+    expect(buildStatusMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/openclaw-spawned-workspace",
       }),
     );
   });

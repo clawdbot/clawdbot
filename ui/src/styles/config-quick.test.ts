@@ -1,8 +1,15 @@
-import { readFileSync } from "node:fs";
-import path from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const css = readFileSync(path.join(process.cwd(), "ui/src/styles/config-quick.css"), "utf8");
+const cssPath = [
+  resolve(process.cwd(), "ui/src/styles/config-quick.css"),
+  resolve(process.cwd(), "..", "ui/src/styles/config-quick.css"),
+].find((candidate) => existsSync(candidate));
+if (!cssPath) {
+  throw new Error(`config-quick.css not found from cwd: ${process.cwd()}`);
+}
+const css = readFileSync(cssPath, "utf8");
 
 describe("config-quick styles", () => {
   it("includes the local user identity quick-settings styles", () => {

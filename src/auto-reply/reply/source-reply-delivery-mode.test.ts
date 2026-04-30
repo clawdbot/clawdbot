@@ -13,6 +13,11 @@ const automaticGroupReplyConfig = {
     },
   },
 } as const satisfies OpenClawConfig;
+const globalToolOnlyReplyConfig = {
+  messages: {
+    visibleReplies: "message_tool",
+  },
+} as const satisfies OpenClawConfig;
 
 describe("resolveSourceReplyDeliveryMode", () => {
   it("defaults groups and channels to message-tool-only delivery", () => {
@@ -39,6 +44,28 @@ describe("resolveSourceReplyDeliveryMode", () => {
         cfg: emptyConfig,
         ctx: { ChatType: "channel" },
         requested: "automatic",
+      }),
+    ).toBe("automatic");
+  });
+
+  it("allows message-tool-only delivery for any source chat via global config", () => {
+    for (const ChatType of ["direct", "group", "channel"] as const) {
+      expect(
+        resolveSourceReplyDeliveryMode({ cfg: globalToolOnlyReplyConfig, ctx: { ChatType } }),
+      ).toBe("message_tool_only");
+    }
+  });
+
+  it("lets group/channel config override the global visible reply mode", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: {
+          messages: {
+            visibleReplies: "message_tool",
+            groupChat: { visibleReplies: "automatic" },
+          },
+        },
+        ctx: { ChatType: "channel" },
       }),
     ).toBe("automatic");
   });

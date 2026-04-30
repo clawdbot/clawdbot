@@ -27,6 +27,8 @@ describe("fetchCodexUsage", () => {
     const mockFetch = createProviderUsageFetch(async (_url, init) => {
       const headers = (init?.headers as Record<string, string> | undefined) ?? {};
       expect(headers["ChatGPT-Account-Id"]).toBe("acct-1");
+      expect(headers.originator).toBe("openclaw");
+      expect(headers["User-Agent"]).toMatch(/^openclaw\//);
       return makeResponse(200, {
         rate_limit: {
           primary_window: {

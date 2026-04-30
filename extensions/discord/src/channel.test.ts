@@ -489,6 +489,8 @@ describe("discordPlugin security", () => {
 
     expect(result.policy).toBe("allowlist");
     expect(result.allowFrom).toEqual(["  discord:<@!123456789>  "]);
+    expect(result.policyPath).toBe("channels.discord.dmPolicy");
+    expect(result.allowFromPath).toBe("channels.discord.");
     expect(result.normalizeEntry?.("  discord:<@!123456789>  ")).toBe("123456789");
     expect(result.normalizeEntry?.("  user:987654321  ")).toBe("987654321");
   });

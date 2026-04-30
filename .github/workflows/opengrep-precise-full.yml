@@ -1,0 +1,67 @@
+name: OpenGrep — Full
+
+# Manual repository-wide scan for the high-precision OpenGrep rule super-config.
+# This is intentionally separate from PR scanning so broad/backlog findings do
+# not block unrelated pull requests.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: opengrep-full-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  scan:
+    name: Scan full repository (precise)
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install opengrep
+        env:
+          # Pin both the install script (by commit SHA) and the binary version.
+          # The script SHA must match the v1.19.0 release tag in opengrep/opengrep
+          # so a compromised or force-pushed `main` cannot RCE in our CI runner.
+          # Bump both together when upgrading.
+          OPENGREP_VERSION: v1.19.0
+          OPENGREP_INSTALL_SHA: 9a4c0a68220618441608cd2bad4ff2eddccf8113
+        run: |
+          curl -fsSL "https://raw.githubusercontent.com/opengrep/opengrep/${OPENGREP_INSTALL_SHA}/install.sh" \
+            | bash -s -- -v "$OPENGREP_VERSION"
+          echo "$HOME/.opengrep/cli/latest" >> "$GITHUB_PATH"
+
+      - name: Verify opengrep
+        run: opengrep --version
+
+      - name: Run full opengrep scan
+        # Manual full scans cover all first-party source paths so maintainers can
+        # audit the complete rulepack without making PRs inherit unrelated backlog.
+        run: |
+          mkdir -p .opengrep-out
+          scripts/run-opengrep.sh --sarif --error
+
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        # Only upload if the scan actually produced a SARIF file.
+        if: always() && hashFiles('.opengrep-out/precise.sarif') != ''
+        with:
+          sarif_file: .opengrep-out/precise.sarif
+          category: opengrep-full
+
+      - name: Upload SARIF as workflow artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opengrep-full-sarif
+          path: .opengrep-out/precise.sarif
+          if-no-files-found: warn
+          retention-days: 30

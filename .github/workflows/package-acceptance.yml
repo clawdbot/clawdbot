@@ -254,7 +254,7 @@ env:
 jobs:
   resolve_package:
     name: Resolve package candidate
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     outputs:
       docker_lanes: ${{ steps.profile.outputs.docker_lanes }}
@@ -282,8 +282,15 @@ jobs:
           install-bun: ${{ inputs.source == 'ref' && 'true' || 'false' }}
           install-deps: "false"
 
-      - name: Download package artifact input
-        if: inputs.source == 'artifact'
+      - name: Download current-run package artifact input
+        if: inputs.source == 'artifact' && inputs.artifact_run_id == ''
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: .artifacts/package-candidate-input
+
+      - name: Download previous-run package artifact input
+        if: inputs.source == 'artifact' && inputs.artifact_run_id != ''
         env:
           GH_TOKEN: ${{ github.token }}
           ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
@@ -291,10 +298,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "${ARTIFACT_RUN_ID// }" ]]; then
-            echo "artifact_run_id is required when source=artifact." >&2
-            exit 1
-          fi
           if [[ -z "${ARTIFACT_NAME// }" ]]; then
             echo "artifact_name is required when source=artifact." >&2
             exit 1
@@ -506,7 +509,7 @@ jobs:
     name: Verify package acceptance
     needs: [resolve_package, docker_acceptance, package_telegram]
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Verify package acceptance results

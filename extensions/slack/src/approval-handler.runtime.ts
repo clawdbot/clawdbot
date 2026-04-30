@@ -19,6 +19,7 @@ import {
 } from "./exec-approvals.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 import { sendMessageSlack } from "./send.js";
+import { truncateSlackText } from "./truncate.js";
 
 type SlackBlock = Block | KnownBlock;
 type SlackPendingApproval = {
@@ -29,6 +30,10 @@ type SlackPendingDelivery = {
   text: string;
   blocks: SlackBlock[];
 };
+
+const SLACK_CONTEXT_ELEMENTS_MAX = 10;
+const SLACK_CHAT_UPDATE_TEXT_LIMIT = 4000;
+const SLACK_TEXT_OBJECT_MAX = 3000;
 
 type SlackExecApprovalConfig = NonNullable<
   NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>["execApprovals"]
@@ -80,6 +85,21 @@ function buildSlackMetadataLines(metadata: readonly { label: string; value: stri
   return metadata.map((item) => formatSlackMetadataLine(item.label, item.value));
 }
 
+function buildSlackMetadataContextElements(metadata: readonly { label: string; value: string }[]) {
+  const lines = buildSlackMetadataLines(metadata);
+  const visibleLines =
+    lines.length > SLACK_CONTEXT_ELEMENTS_MAX
+      ? [
+          ...lines.slice(0, SLACK_CONTEXT_ELEMENTS_MAX - 1),
+          `…+${lines.length - (SLACK_CONTEXT_ELEMENTS_MAX - 1)} more`,
+        ]
+      : lines;
+  return visibleLines.map((line) => ({
+    type: "mrkdwn" as const,
+    text: truncateSlackMrkdwn(line, SLACK_TEXT_OBJECT_MAX),
+  }));
+}
+
 function resolveSlackApprovalDecisionLabel(
   decision: "allow-once" | "allow-always" | "deny",
 ): string {
@@ -104,7 +124,7 @@ function buildSlackPendingApprovalText(view: ExecApprovalPendingView): string {
 }
 
 function buildSlackPendingApprovalBlocks(view: ExecApprovalPendingView): SlackBlock[] {
-  const metadataLines = buildSlackMetadataLines(view.metadata);
+  const metadataElements = buildSlackMetadataContextElements(view.metadata);
   const interactiveBlocks =
     resolveSlackReplyBlocks({
       text: "",
@@ -125,14 +145,11 @@ function buildSlackPendingApprovalBlocks(view: ExecApprovalPendingView): SlackBl
         text: `*Command*\n${buildSlackCodeBlock(truncateSlackMrkdwn(view.commandText, 2600))}`,
       },
     },
-    ...(metadataLines.length > 0
+    ...(metadataElements.length > 0
       ? [
           {
             type: "context",
-            elements: metadataLines.map((line) => ({
-              type: "mrkdwn" as const,
-              text: line,
-            })),
+            elements: metadataElements,
           } satisfies SlackBlock,
         ]
       : []),
@@ -214,7 +231,7 @@ async function updateMessage(params: {
     await params.app.client.chat.update({
       channel: params.channelId,
       ts: params.messageTs,
-      text: params.text,
+      text: truncateSlackText(params.text, SLACK_CHAT_UPDATE_TEXT_LIMIT),
       blocks: params.blocks,
     });
   } catch (err) {

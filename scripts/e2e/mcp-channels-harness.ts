@@ -33,7 +33,7 @@ export const ClaudePermissionNotificationSchema = z.object({
 export type ClaudeChannelNotification = z.infer<typeof ClaudeChannelNotificationSchema>["params"];
 
 export type GatewayRpcClient = {
-  request<T>(method: string, params?: unknown): Promise<T>;
+  request<T>(method: string, params?: unknown, opts?: { timeoutMs?: number }): Promise<T>;
   events: Array<{ event: string; payload: Record<string, unknown> }>;
   close(): Promise<void>;
 };
@@ -266,8 +266,12 @@ async function connectGatewayOnce(params: {
   await sendGatewayRequest("sessions.subscribe", {}, GATEWAY_RPC_TIMEOUT_MS);
 
   return {
-    request(method, requestParams) {
-      return sendGatewayRequest(method, requestParams, GATEWAY_REQUEST_TIMEOUT_MS);
+    request(method, requestParams, opts) {
+      return sendGatewayRequest(
+        method,
+        requestParams,
+        opts?.timeoutMs ?? GATEWAY_REQUEST_TIMEOUT_MS,
+      );
     },
     events,
     async close() {

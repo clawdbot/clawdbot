@@ -138,6 +138,36 @@ describe("createTelegramBot fetch abort", () => {
     vi.useRealTimers();
   });
 
+  it.each(["deleteMyCommands", "setMyCommands"])(
+    "retries timed-out command sync call %s once after forcing transport fallback",
+    async (method) => {
+      vi.useFakeTimers();
+      const forceFallback = vi.fn(() => true);
+      const fetchSpy = vi
+        .fn()
+        .mockImplementationOnce(
+          (_input: RequestInfo | URL, init?: RequestInit) =>
+            new Promise((_resolve, reject) => {
+              const signal = init?.signal as AbortSignal;
+              signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+            }),
+        )
+        .mockResolvedValueOnce({ ok: true } as Response);
+      const { clientFetch } = createWrappedTelegramClientFetchWithTransport({
+        fetch: fetchSpy as unknown as typeof fetch,
+        forceFallback,
+      });
+
+      const resultPromise = clientFetch(`https://api.telegram.org/bot123456:ABC/${method}`);
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await expect(resultPromise).resolves.toEqual({ ok: true });
+      expect(forceFallback).toHaveBeenCalledWith("request-timeout");
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      vi.useRealTimers();
+    },
+  );
+
   it("preserves the original fetch error when tagging cannot attach metadata", async () => {
     const frozenError = Object.freeze(
       Object.assign(new TypeError("fetch failed"), {

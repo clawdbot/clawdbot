@@ -86,10 +86,37 @@ export function resolveActiveErrorContext(params: {
   provider: string;
   model: string;
 } {
+  return resolveReportedModelRef(params);
+}
+
+function isEmbeddedHarnessProvider(provider: string): boolean {
+  return provider.trim().toLowerCase() === "pi";
+}
+
+export function resolveReportedModelRef(params: {
+  provider: string;
+  model: string;
+  assistant?: { provider?: string; model?: string } | null;
+}): {
+  provider: string;
+  model: string;
+} {
   const assistantProvider = params.assistant?.provider?.trim();
   const assistantModel = params.assistant?.model?.trim();
+  if (!assistantProvider) {
+    return {
+      provider: params.provider,
+      model: assistantModel || params.model,
+    };
+  }
+  if (isEmbeddedHarnessProvider(assistantProvider)) {
+    return {
+      provider: params.provider,
+      model: params.model,
+    };
+  }
   return {
-    provider: assistantProvider || params.provider,
+    provider: assistantProvider,
     model: assistantModel || params.model,
   };
 }

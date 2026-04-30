@@ -727,6 +727,49 @@ describe("gateway bonjour advertiser", () => {
     expect(shutdown).toHaveBeenCalledTimes(1);
   });
 
+  it("disables bonjour when the advertiser flaps within a sliding window", async () => {
+    enableAdvertiserUnitMode();
+    vi.useFakeTimers();
+
+    const stateRef = { value: "announced" };
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy, stateRef });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    for (let cycle = 0; cycle < 12; cycle += 1) {
+      stateRef.value = "announced";
+      await vi.advanceTimersByTimeAsync(5_000);
+      stateRef.value = "probing";
+      await vi.advanceTimersByTimeAsync(25_000);
+      if (
+        logger.warn.mock.calls.some(
+          (call) => typeof call[0] === "string" && call[0].includes("disabling advertiser after"),
+        )
+      ) {
+        break;
+      }
+    }
+
+    const disableLog = logger.warn.mock.calls.find(
+      (call) => typeof call[0] === "string" && call[0].includes("disabling advertiser after"),
+    );
+    expect(disableLog).toBeDefined();
+    expect(String(disableLog?.[0])).toMatch(/restarts within \d+ minutes/);
+
+    const advertiseCallsAtDisable = advertise.mock.calls.length;
+    const createServiceCallsAtDisable = createService.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(advertise).toHaveBeenCalledTimes(advertiseCallsAtDisable);
+    expect(createService).toHaveBeenCalledTimes(createServiceCallsAtDisable);
+
+    await started.stop();
+  });
+
   it("normalizes hostnames with domains for service names", async () => {
     // Allow advertiser to run in unit tests.
     delete process.env.VITEST;

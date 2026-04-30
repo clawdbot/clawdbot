@@ -1,10 +1,14 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { projectSafeChannelAccountSnapshotFields } from "../channels/account-snapshot-fields.js";
+import { inspectChannelAccount } from "../channels/account-inspection.js";
+import {
+  resolveChannelAccountConfigured,
+  resolveChannelAccountEnabled,
+} from "../channels/account-summary.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
+import { buildChannelAccountSnapshotFromAccount } from "../channels/plugins/status.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
-import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
 import { withProgress } from "../cli/progress.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
@@ -176,17 +180,6 @@ function buildPluginHealthSummary(): PluginHealthSummary | undefined {
   return { loaded, errors };
 }
 
-async function inspectHealthAccount(plugin: ChannelPlugin, cfg: OpenClawConfig, accountId: string) {
-  return (
-    plugin.config.inspectAccount?.(cfg, accountId) ??
-    (await inspectReadOnlyChannelAccount({
-      channelId: plugin.id,
-      cfg,
-      accountId,
-    }))
-  );
-}
-
 function readBooleanField(value: unknown, key: string): boolean | undefined {
   const record = asNullableRecord(value);
   if (!record) {
@@ -195,12 +188,60 @@ function readBooleanField(value: unknown, key: string): boolean | undefined {
   return typeof record[key] === "boolean" ? record[key] : undefined;
 }
 
+const hasAccountValue = (account: unknown): boolean => account !== null && account !== undefined;
+
+function resolveProbeAccountEnabled(params: {
+  plugin: ChannelPlugin;
+  cfg: OpenClawConfig;
+  accountId: string;
+  account: unknown;
+  diagnostics: string[];
+}): boolean {
+  const fallback = readBooleanField(params.account, "enabled") ?? true;
+  try {
+    return resolveChannelAccountEnabled({
+      plugin: params.plugin,
+      account: params.account,
+      cfg: params.cfg,
+    });
+  } catch (error) {
+    params.diagnostics.push(
+      `${params.plugin.id}:${params.accountId}: failed to evaluate enabled state (${formatErrorMessage(error)}).`,
+    );
+    return fallback;
+  }
+}
+
+async function resolveProbeAccountConfigured(params: {
+  plugin: ChannelPlugin;
+  cfg: OpenClawConfig;
+  accountId: string;
+  account: unknown;
+  diagnostics: string[];
+}): Promise<boolean> {
+  const fallback = readBooleanField(params.account, "configured") ?? true;
+  try {
+    return await resolveChannelAccountConfigured({
+      plugin: params.plugin,
+      account: params.account,
+      cfg: params.cfg,
+      readAccountConfiguredField: true,
+    });
+  } catch (error) {
+    params.diagnostics.push(
+      `${params.plugin.id}:${params.accountId}: failed to evaluate configured state (${formatErrorMessage(error)}).`,
+    );
+    return fallback;
+  }
+}
+
 async function resolveHealthAccountContext(params: {
   plugin: ChannelPlugin;
   cfg: OpenClawConfig;
   accountId: string;
 }): Promise<{
-  account: unknown;
+  probeAccount: unknown;
+  snapshotAccount: unknown;
   enabled: boolean;
   configured: boolean;
   diagnostics: string[];
@@ -213,45 +254,50 @@ async function resolveHealthAccountContext(params: {
     diagnostics.push(
       `${params.plugin.id}:${params.accountId}: failed to resolve account (${formatErrorMessage(error)}).`,
     );
-    account = await inspectHealthAccount(params.plugin, params.cfg, params.accountId);
+  }
+  let inspectedAccount: unknown;
+  try {
+    inspectedAccount = await inspectChannelAccount(params);
+  } catch (error) {
+    diagnostics.push(
+      `${params.plugin.id}:${params.accountId}: failed to inspect account (${formatErrorMessage(error)}).`,
+    );
   }
 
-  if (!account) {
+  const probeAccount = hasAccountValue(account) ? account : inspectedAccount;
+  if (!hasAccountValue(probeAccount)) {
     return {
-      account: {},
+      probeAccount: {},
+      snapshotAccount: {},
       enabled: false,
       configured: false,
       diagnostics,
     };
   }
+  const snapshotAccount = hasAccountValue(inspectedAccount) ? inspectedAccount : probeAccount;
 
-  const enabledFallback = readBooleanField(account, "enabled") ?? true;
-  let enabled = enabledFallback;
-  if (params.plugin.config.isEnabled) {
-    try {
-      enabled = params.plugin.config.isEnabled(account, params.cfg);
-    } catch (error) {
-      enabled = enabledFallback;
-      diagnostics.push(
-        `${params.plugin.id}:${params.accountId}: failed to evaluate enabled state (${formatErrorMessage(error)}).`,
-      );
-    }
-  }
+  const enabled = resolveProbeAccountEnabled({
+    plugin: params.plugin,
+    cfg: params.cfg,
+    accountId: params.accountId,
+    account: probeAccount,
+    diagnostics,
+  });
+  const configured = await resolveProbeAccountConfigured({
+    plugin: params.plugin,
+    cfg: params.cfg,
+    accountId: params.accountId,
+    account: probeAccount,
+    diagnostics,
+  });
 
-  const configuredFallback = readBooleanField(account, "configured") ?? true;
-  let configured = configuredFallback;
-  if (params.plugin.config.isConfigured) {
-    try {
-      configured = await params.plugin.config.isConfigured(account, params.cfg);
-    } catch (error) {
-      configured = configuredFallback;
-      diagnostics.push(
-        `${params.plugin.id}:${params.accountId}: failed to evaluate configured state (${formatErrorMessage(error)}).`,
-      );
-    }
-  }
-
-  return { account, enabled, configured, diagnostics };
+  return {
+    probeAccount,
+    snapshotAccount,
+    enabled,
+    configured,
+    diagnostics,
+  };
 }
 
 export async function getHealthSnapshot(params?: {
@@ -332,11 +378,12 @@ export async function getHealthSnapshot(params?: {
     const accountSummaries: Record<string, ChannelAccountHealthSummary> = {};
 
     for (const accountId of accountIdsToProbe) {
-      const { account, enabled, configured, diagnostics } = await resolveHealthAccountContext({
-        plugin,
-        cfg,
-        accountId,
-      });
+      const { probeAccount, snapshotAccount, enabled, configured, diagnostics } =
+        await resolveHealthAccountContext({
+          plugin,
+          cfg,
+          accountId,
+        });
       if (diagnostics.length > 0) {
         debugHealth("account.diagnostics", { channel: plugin.id, accountId, diagnostics });
       }
@@ -346,7 +393,7 @@ export async function getHealthSnapshot(params?: {
       if (enabled && configured && doProbe && plugin.status?.probeAccount) {
         try {
           probe = await plugin.status.probeAccount({
-            account,
+            account: probeAccount,
             timeoutMs: cappedTimeout,
             cfg,
           });
@@ -370,22 +417,23 @@ export async function getHealthSnapshot(params?: {
       const runtimeSnapshot =
         params?.runtimeSnapshot?.channelAccounts[plugin.id]?.[accountId] ??
         (accountId === defaultAccountId ? params?.runtimeSnapshot?.channels[plugin.id] : undefined);
-      const snapshot: ChannelAccountSnapshot = {
-        ...projectSafeChannelAccountSnapshotFields(runtimeSnapshot),
+      const snapshot: ChannelAccountSnapshot = await buildChannelAccountSnapshotFromAccount({
+        plugin,
+        cfg,
         accountId,
-        enabled,
-        configured,
-      };
-      if (includeSensitive && probe !== undefined) {
-        snapshot.probe = probe;
-      }
+        account: snapshotAccount,
+        runtime: runtimeSnapshot,
+        probe: includeSensitive ? probe : undefined,
+        enabledFallback: enabled,
+        configuredFallback: configured,
+      });
       if (lastProbeAt) {
         snapshot.lastProbeAt = lastProbeAt;
       }
 
       const summary = plugin.status?.buildChannelSummary
         ? await plugin.status.buildChannelSummary({
-            account,
+            account: probeAccount,
             cfg,
             defaultAccountId: accountId,
             snapshot,
@@ -530,12 +578,12 @@ export async function healthCommand(
           `  ${plugin.id}: accounts=${accountIds.join(", ") || "(none)"} default=${defaultAccountId}`,
         );
         for (const accountId of accountIds) {
-          const { account, configured, diagnostics } = await resolveHealthAccountContext({
+          const { snapshotAccount, configured, diagnostics } = await resolveHealthAccountContext({
             plugin,
             cfg,
             accountId,
           });
-          const record = asNullableRecord(account);
+          const record = asNullableRecord(snapshotAccount);
           const tokenSource =
             record && typeof record.tokenSource === "string" ? record.tokenSource : undefined;
           runtime.log(
@@ -650,7 +698,7 @@ export async function healthCommand(
       }
       try {
         plugin.status.logSelfId({
-          account: accountContext.account,
+          account: accountContext.probeAccount,
           cfg,
           runtime,
           includeChannelPrefix: true,

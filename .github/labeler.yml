@@ -9,6 +9,12 @@
           - "extensions/azure-speech/**"
           - "docs/providers/azure-speech.md"
           - "docs/tools/tts.md"
+"plugin: file-transfer":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/file-transfer/**"
+          - "docs/nodes/index.md"
+          - "docs/plugins/sdk-runtime.md"
 "channel: discord":
   - changed-files:
       - any-glob-to-any-file:
@@ -238,8 +244,11 @@
 "security":
   - changed-files:
       - any-glob-to-any-file:
+          - ".github/workflows/opengrep-*.yml"
+          - ".semgrepignore"
           - "docs/cli/security.md"
           - "docs/gateway/security.md"
+          - "security/**"
 
 "extensions: copilot-proxy":
   - changed-files:

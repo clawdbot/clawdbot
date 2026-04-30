@@ -9,6 +9,7 @@ import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
 import type { WebChannelStatus } from "./auto-reply/types.js";
 import type { WebInboundMessage, WebListenerCloseReason } from "./inbound.js";
+import type { WhatsAppSendKind, WhatsAppSendResult } from "./inbound/send-result.js";
 import {
   resetBaileysMocks as _resetBaileysMocks,
   resetLoadConfigMock as _resetLoadConfigMock,
@@ -27,9 +28,9 @@ type MockWebListener = {
   close: () => Promise<void>;
   onClose: Promise<WebListenerCloseReason>;
   signalClose: () => void;
-  sendMessage: () => Promise<{ messageId: string }>;
-  sendPoll: () => Promise<{ messageId: string }>;
-  sendReaction: () => Promise<void>;
+  sendMessage: () => Promise<WhatsAppSendResult>;
+  sendPoll: () => Promise<WhatsAppSendResult>;
+  sendReaction: () => Promise<WhatsAppSendResult>;
   sendComposingTo: () => Promise<void>;
 };
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -253,10 +254,23 @@ export function createMockWebListener(): MockWebListener {
     close: vi.fn(async () => undefined),
     onClose: new Promise<WebListenerCloseReason>(() => {}),
     signalClose: vi.fn(),
-    sendMessage: vi.fn(async () => ({ messageId: "msg-1" })),
-    sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
-    sendReaction: vi.fn(async () => undefined),
+    sendMessage: vi.fn(async () => createAcceptedWhatsAppSendResult("text", "msg-1")),
+    sendPoll: vi.fn(async () => createAcceptedWhatsAppSendResult("poll", "poll-1")),
+    sendReaction: vi.fn(async () => createAcceptedWhatsAppSendResult("reaction", "reaction-1")),
     sendComposingTo: vi.fn(async () => undefined),
+  };
+}
+
+export function createAcceptedWhatsAppSendResult(
+  kind: WhatsAppSendKind,
+  id: string,
+): WhatsAppSendResult {
+  return {
+    kind,
+    messageId: id,
+    messageIds: [id],
+    keys: [{ id }],
+    providerAccepted: true,
   };
 }
 
@@ -294,8 +308,8 @@ export function createScriptedWebListenerFactory(): AnyExport {
 
 export function createWebInboundDeliverySpies(): AnyExport {
   return {
-    sendMedia: vi.fn(),
-    reply: vi.fn().mockResolvedValue(undefined),
+    sendMedia: vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("media", "m1")),
+    reply: vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("text", "r1")),
     sendComposing: vi.fn(),
   };
 }

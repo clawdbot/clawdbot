@@ -190,6 +190,13 @@ export function collectRootDistBundledRuntimeMirrors(params) {
 export function collectBundledPluginRootRuntimeMirrorErrors(params) {
   const errors = [];
   const declaredRootRuntimeDeps = collectRuntimeDependencySpecs(params.rootPackageJson);
+  const declaredMirrorDeps =
+    params.rootPackageJson?.openclaw?.bundle?.mirroredRootRuntimeDependencies ?? [];
+  const declaredMirrorDepNames = new Set(
+    Array.isArray(declaredMirrorDeps)
+      ? declaredMirrorDeps.filter((dependencyName) => typeof dependencyName === "string")
+      : [],
+  );
 
   for (const [dependencyName, record] of params.bundledRuntimeDependencySpecs) {
     for (const conflict of record.conflicts) {
@@ -201,6 +208,14 @@ export function collectBundledPluginRootRuntimeMirrorErrors(params) {
 
   for (const [dependencyName, record] of params.requiredRootMirrors) {
     if (declaredRootRuntimeDeps.has(dependencyName)) {
+      if (!declaredMirrorDepNames.has(dependencyName)) {
+        const importerList = Array.from(record.importers)
+          .toSorted((left, right) => left.localeCompare(right))
+          .join(", ");
+        errors.push(
+          `installed package root mirror '${dependencyName}' for dist importers: ${importerList} is missing from package.json openclaw.bundle.mirroredRootRuntimeDependencies. Add it there so packaged runtime installs the mirrored dependency, or keep imports under dist/extensions/${record.pluginIds[0]}/.`,
+        );
+      }
       continue;
     }
     const importerList = Array.from(record.importers)
@@ -211,5 +226,30 @@ export function collectBundledPluginRootRuntimeMirrorErrors(params) {
     );
   }
 
+  return errors.toSorted((left, right) => left.localeCompare(right));
+}
+
+export function collectDeclaredRootRuntimeDependencyMetadataErrors(rootPackageJson) {
+  const declaredRootRuntimeDeps = collectRuntimeDependencySpecs(rootPackageJson);
+  const declaredMirrorDeps =
+    rootPackageJson?.openclaw?.bundle?.mirroredRootRuntimeDependencies ?? [];
+  if (!Array.isArray(declaredMirrorDeps)) {
+    return ["package.json openclaw.bundle.mirroredRootRuntimeDependencies must be an array."];
+  }
+
+  const errors = [];
+  for (const dependencyName of declaredMirrorDeps) {
+    if (typeof dependencyName !== "string" || dependencyName.trim().length === 0) {
+      errors.push(
+        "package.json openclaw.bundle.mirroredRootRuntimeDependencies entries must be non-empty strings.",
+      );
+      continue;
+    }
+    if (!declaredRootRuntimeDeps.has(dependencyName)) {
+      errors.push(
+        `package.json openclaw.bundle.mirroredRootRuntimeDependencies declares '${dependencyName}' but package.json dependencies/optionalDependencies do not include it.`,
+      );
+    }
+  }
   return errors.toSorted((left, right) => left.localeCompare(right));
 }

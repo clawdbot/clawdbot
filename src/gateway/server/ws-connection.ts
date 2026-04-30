@@ -132,6 +132,7 @@ export type GatewayWsSharedHandlerParams = {
   /** Browser-origin fallback limiter (loopback is never exempt). */
   browserRateLimiter?: AuthRateLimiter;
   preauthHandshakeTimeoutMs?: number;
+  isStartupPending?: () => boolean;
   gatewayMethods: string[];
   events: string[];
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
@@ -168,6 +169,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       resolveSharedGatewaySessionGeneration(getResolvedAuth()),
     rateLimiter,
     browserRateLimiter,
+    isStartupPending,
     gatewayMethods,
     events,
     refreshHealthSnapshot,
@@ -403,6 +405,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       getRequiredSharedGatewaySessionGeneration,
       rateLimiter,
       browserRateLimiter,
+      isStartupPending,
       gatewayMethods,
       events,
       extraHandlers,

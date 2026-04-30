@@ -357,7 +357,16 @@ before runtime loads.
       {
         "id": "openai",
         "authMethods": ["api-key"],
-        "envVars": ["OPENAI_API_KEY"]
+        "envVars": ["OPENAI_API_KEY"],
+        "authEvidence": [
+          {
+            "type": "local-file-with-env",
+            "fileEnvVar": "OPENAI_CREDENTIALS_FILE",
+            "requiresAllEnv": ["OPENAI_PROJECT"],
+            "credentialMarker": "openai-local-credentials",
+            "source": "openai local credentials"
+          }
+        ]
       }
     ],
     "cliBackends": ["openai-cli"],
@@ -408,11 +417,29 @@ registration. These diagnostics are additive and do not reject legacy plugins.
 
 ### setup.providers reference
 
-| Field         | Required | Type       | What it means                                                                        |
-| ------------- | -------- | ---------- | ------------------------------------------------------------------------------------ |
-| `id`          | Yes      | `string`   | Provider id exposed during setup or onboarding. Keep normalized ids globally unique. |
-| `authMethods` | No       | `string[]` | Setup/auth method ids this provider supports without loading full runtime.           |
-| `envVars`     | No       | `string[]` | Env vars that generic setup/status surfaces can check before plugin runtime loads.   |
+| Field          | Required | Type       | What it means                                                                                    |
+| -------------- | -------- | ---------- | ------------------------------------------------------------------------------------------------ |
+| `id`           | Yes      | `string`   | Provider id exposed during setup or onboarding. Keep normalized ids globally unique.             |
+| `authMethods`  | No       | `string[]` | Setup/auth method ids this provider supports without loading full runtime.                       |
+| `envVars`      | No       | `string[]` | Env vars that generic setup/status surfaces can check before plugin runtime loads.               |
+| `authEvidence` | No       | `object[]` | Cheap local auth evidence checks for providers that can authenticate through non-secret markers. |
+
+`authEvidence` is for provider-owned local credential markers that can be
+verified without loading runtime code. These checks must stay cheap and local:
+no network calls, no keychain or secret-manager reads, no shell commands, and no
+provider API probes.
+
+Supported evidence entries:
+
+| Field              | Required | Type       | What it means                                                                                                  |
+| ------------------ | -------- | ---------- | -------------------------------------------------------------------------------------------------------------- |
+| `type`             | Yes      | `string`   | Currently `local-file-with-env`.                                                                               |
+| `fileEnvVar`       | No       | `string`   | Env var containing an explicit credential file path.                                                           |
+| `fallbackPaths`    | No       | `string[]` | Local credential file paths checked when `fileEnvVar` is absent or empty. Supports `${HOME}` and `${APPDATA}`. |
+| `requiresAnyEnv`   | No       | `string[]` | At least one listed env var must be non-empty before the evidence is valid.                                    |
+| `requiresAllEnv`   | No       | `string[]` | Every listed env var must be non-empty before the evidence is valid.                                           |
+| `credentialMarker` | Yes      | `string`   | Non-secret marker returned when the evidence is present.                                                       |
+| `source`           | No       | `string`   | User-facing source label for auth/status output.                                                               |
 
 ### setup fields
 

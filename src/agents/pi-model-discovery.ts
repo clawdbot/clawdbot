@@ -222,7 +222,8 @@ export function discoverAuthStorage(
   agentDir: string,
   options?: DiscoverAuthStorageOptions,
 ): PiAuthStorage {
-  const credentials = resolvePiCredentialsForDiscovery(agentDir, options);
+  const credentials =
+    options?.skipCredentials === true ? {} : resolvePiCredentialsForDiscovery(agentDir, options);
   const authPath = path.join(agentDir, "auth.json");
   if (options?.readOnly !== true) {
     scrubLegacyStaticAuthJsonEntriesForDiscovery(authPath);

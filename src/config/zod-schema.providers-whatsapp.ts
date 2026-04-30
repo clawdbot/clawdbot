@@ -48,6 +48,18 @@ const WhatsAppAckReactionSchema = z
   .strict()
   .optional();
 
+function stripDeprecatedWhatsAppNoopKeys(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+  if (!Object.hasOwn(value, "exposeErrorText")) {
+    return value;
+  }
+  const next = { ...(value as Record<string, unknown>) };
+  delete next.exposeErrorText;
+  return next;
+}
+
 function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
   return {
     enabled: z.boolean().optional(),
@@ -83,7 +95,6 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
       ? z.number().int().nonnegative().optional().default(0)
       : z.number().int().nonnegative().optional(),
     replyToMode: ReplyToModeSchema.optional(),
-    exposeErrorText: z.boolean().optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,
   };
@@ -131,7 +142,7 @@ function enforceAllowlistDmPolicyAllowFrom(params: {
   });
 }
 
-export const WhatsAppAccountSchema = z
+const WhatsAppAccountObjectSchema = z
   .object({
     ...buildWhatsAppCommonShape({ useDefaults: false }),
     name: z.string().optional(),
@@ -142,7 +153,12 @@ export const WhatsAppAccountSchema = z
   })
   .strict();
 
-export const WhatsAppConfigSchema = z
+export const WhatsAppAccountSchema = z.preprocess(
+  stripDeprecatedWhatsAppNoopKeys,
+  WhatsAppAccountObjectSchema,
+);
+
+const WhatsAppConfigObjectSchema = z
   .object({
     ...buildWhatsAppCommonShape({ useDefaults: true }),
     accounts: z.record(z.string(), WhatsAppAccountSchema.optional()).optional(),
@@ -207,3 +223,8 @@ export const WhatsAppConfigSchema = z
       });
     }
   });
+
+export const WhatsAppConfigSchema = z.preprocess(
+  stripDeprecatedWhatsAppNoopKeys,
+  WhatsAppConfigObjectSchema,
+);

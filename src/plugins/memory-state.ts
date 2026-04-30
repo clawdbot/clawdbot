@@ -208,15 +208,23 @@ export function buildMemoryPromptSection(params: {
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
 }): string[] {
-  const primary =
+  const primary = normalizeMemoryPromptLines(
     memoryPluginState.capability?.capability.promptBuilder?.(params) ??
-    memoryPluginState.promptBuilder?.(params) ??
-    [];
+      memoryPluginState.promptBuilder?.(params) ??
+      [],
+  );
   const supplements = memoryPluginState.promptSupplements
     // Keep supplement order stable even if plugin registration order changes.
     .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId))
-    .flatMap((registration) => registration.builder(params));
+    .flatMap((registration) => normalizeMemoryPromptLines(registration.builder(params)));
   return [...primary, ...supplements];
+}
+
+function normalizeMemoryPromptLines(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((line): line is string => typeof line === "string");
 }
 
 export function getMemoryPromptSectionBuilder(): MemoryPromptSectionBuilder | undefined {

@@ -1,18 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as translate from "../lib/translate.ts";
+import { ar } from "../locales/ar.ts";
 import { de } from "../locales/de.ts";
 import { en } from "../locales/en.ts";
 import { es } from "../locales/es.ts";
+import { fa } from "../locales/fa.ts";
 import { fr } from "../locales/fr.ts";
 import { id } from "../locales/id.ts";
+import { it as itLocale } from "../locales/it.ts";
 import { ja_JP } from "../locales/ja-JP.ts";
 import { ko } from "../locales/ko.ts";
+import { nl } from "../locales/nl.ts";
 import { pl } from "../locales/pl.ts";
 import { pt_BR } from "../locales/pt-BR.ts";
 import { th } from "../locales/th.ts";
 import { tr } from "../locales/tr.ts";
 import { uk } from "../locales/uk.ts";
+import { vi as viLocale } from "../locales/vi.ts";
 import { zh_CN } from "../locales/zh-CN.ts";
 import { zh_TW } from "../locales/zh-TW.ts";
 
@@ -101,35 +106,58 @@ describe("i18n", () => {
   });
 
   it("keeps the version label available in shipped locales", () => {
+    expect((ar.common as { version?: string }).version).toBeTruthy();
     expect((de.common as { version?: string }).version).toBeTruthy();
     expect((es.common as { version?: string }).version).toBeTruthy();
+    expect((fa.common as { version?: string }).version).toBeTruthy();
     expect((fr.common as { version?: string }).version).toBeTruthy();
     expect((id.common as { version?: string }).version).toBeTruthy();
+    expect((itLocale.common as { version?: string }).version).toBeTruthy();
     expect((ja_JP.common as { version?: string }).version).toBeTruthy();
     expect((ko.common as { version?: string }).version).toBeTruthy();
+    expect((nl.common as { version?: string }).version).toBeTruthy();
     expect((pl.common as { version?: string }).version).toBeTruthy();
     expect((pt_BR.common as { version?: string }).version).toBeTruthy();
     expect((th.common as { version?: string }).version).toBeTruthy();
     expect((tr.common as { version?: string }).version).toBeTruthy();
     expect((uk.common as { version?: string }).version).toBeTruthy();
+    expect((viLocale.common as { version?: string }).version).toBeTruthy();
     expect((zh_CN.common as { version?: string }).version).toBeTruthy();
     expect((zh_TW.common as { version?: string }).version).toBeTruthy();
+  });
+
+  it("keeps newly exposed locales from shipping as English fallback bundles", () => {
+    const englishHealth = (en.common as { health: string }).health;
+    for (const [locale, value] of Object.entries({
+      ar,
+      fa,
+      it: itLocale,
+      nl,
+      vi: viLocale,
+    })) {
+      expect((value.common as { health: string }).health, locale).not.toBe(englishHealth);
+    }
   });
 
   it("keeps shipped locales structurally aligned with English", () => {
     const englishKeys = flatten(en);
     for (const [locale, value] of Object.entries({
+      ar,
       de,
       es,
+      fa,
       fr,
       id,
+      it: itLocale,
       ja_JP,
       ko,
+      nl,
       pl,
       pt_BR,
       th,
       tr,
       uk,
+      vi: viLocale,
       zh_CN,
       zh_TW,
     })) {

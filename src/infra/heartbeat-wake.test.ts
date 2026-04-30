@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  HEARTBEAT_SKIP_CRON_IN_PROGRESS,
+  HEARTBEAT_SKIP_LANES_BUSY,
+  HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   hasHeartbeatWakeHandler,
   hasPendingHeartbeatWake,
   requestHeartbeatNow,
@@ -11,7 +14,7 @@ describe("heartbeat-wake", () => {
   function setRetryOnceHeartbeatHandler() {
     const handler = vi
       .fn()
-      .mockResolvedValueOnce({ status: "skipped", reason: "requests-in-flight" })
+      .mockResolvedValueOnce({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT })
       .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
     setHeartbeatWakeHandler(handler);
     return handler;
@@ -72,7 +75,7 @@ describe("heartbeat-wake", () => {
     vi.useFakeTimers();
     const handler = vi
       .fn()
-      .mockResolvedValueOnce({ status: "skipped", reason: "requests-in-flight" })
+      .mockResolvedValueOnce({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT })
       .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
     await expectRetryAfterDefaultDelay({
       handler,
@@ -80,6 +83,22 @@ describe("heartbeat-wake", () => {
       expectedRetryReason: "interval",
     });
   });
+
+  it.each([HEARTBEAT_SKIP_CRON_IN_PROGRESS, HEARTBEAT_SKIP_LANES_BUSY])(
+    "retries %s after the default retry delay",
+    async (reason) => {
+      vi.useFakeTimers();
+      const handler = vi
+        .fn()
+        .mockResolvedValueOnce({ status: "skipped", reason })
+        .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
+      await expectRetryAfterDefaultDelay({
+        handler,
+        initialReason: "interval",
+        expectedRetryReason: "interval",
+      });
+    },
+  );
 
   it("keeps retry cooldown even when a sooner request arrives", async () => {
     vi.useFakeTimers();
@@ -219,7 +238,9 @@ describe("heartbeat-wake", () => {
 
   it("clears stale retry cooldown when a new handler is registered", async () => {
     vi.useFakeTimers();
-    const handlerA = vi.fn().mockResolvedValue({ status: "skipped", reason: "requests-in-flight" });
+    const handlerA = vi
+      .fn()
+      .mockResolvedValue({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
     setHeartbeatWakeHandler(handlerA);
 
     requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });

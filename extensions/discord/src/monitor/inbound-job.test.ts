@@ -1,5 +1,5 @@
-import { Message } from "@buape/carbon";
 import { describe, expect, it } from "vitest";
+import { Message } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
 import {
   buildDiscordInboundJob,
@@ -134,7 +134,7 @@ describe("buildDiscordInboundJob", () => {
     expect(job.replayKeys).toEqual(["default:ch-1:m-1"]);
   });
 
-  it("preserves Carbon message getters across queued jobs", async () => {
+  it("preserves Discord message getters across queued jobs", async () => {
     const ctx = await createBaseDiscordMessageContext();
     const message = new Message(
       ctx.client as never,

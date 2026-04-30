@@ -517,8 +517,10 @@ For npm-sourced installs, `openclaw plugins install` runs project-local `npm ins
 </Info>
 
 <Note>
-Bundled OpenClaw-owned plugins are the only startup repair exception: when a packaged install sees one enabled by plugin config, legacy channel config, or its bundled default-enabled manifest, startup installs that plugin's missing runtime dependencies before import. Third-party plugins should not rely on startup installs; keep using the explicit plugin installer.
+Bundled OpenClaw-owned plugins are the only startup repair exception: when a packaged install sees one enabled by plugin config, legacy channel config, or its bundled default-enabled manifest, startup installs that plugin's missing runtime dependencies before import. Operators can inspect or repair that stage with `openclaw plugins deps`. Third-party plugins should not rely on startup installs; keep using the explicit plugin installer.
 </Note>
+
+Bundled package-level runtime deps are explicit metadata, not inferred from built JavaScript at gateway startup. If a shared OpenClaw root dependency must be available inside the external bundled-plugin runtime mirror, declare it in `openclaw.bundle.mirroredRootRuntimeDependencies` in the root package manifest.
 
 ## Related
 

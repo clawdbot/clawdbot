@@ -1,8 +1,8 @@
-import type { ChannelType, Client, User } from "@buape/carbon";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-types";
 import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import type { ChannelType, Client, User } from "../internal/discord.js";
 import type { DiscordChannelConfigResolved, DiscordGuildEntryResolved } from "./allow-list.js";
 import type { DiscordChannelInfo } from "./message-utils.js";
 import type { DiscordThreadBindingLookup } from "./reply-delivery.js";
@@ -97,6 +97,7 @@ export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields 
   dmEnabled: boolean;
   groupDmEnabled: boolean;
   groupDmChannels?: string[];
+  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
   allowFrom?: string[];
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
   ackReactionScope: DiscordMessagePreflightContext["ackReactionScope"];

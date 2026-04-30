@@ -18,7 +18,7 @@ export {
   requireSandboxBackendFactory,
 } from "./sandbox/backend.js";
 
-export { buildSandboxCreateArgs } from "./sandbox/docker.js";
+export { buildSandboxCreateArgs, isDockerDaemonUnavailable } from "./sandbox/docker.js";
 export {
   listSandboxBrowsers,
   listSandboxContainers,

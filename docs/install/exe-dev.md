@@ -113,6 +113,71 @@ with `openclaw config get gateway.auth.token` (or generate one with `openclaw do
 If you changed the gateway to password auth, use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` instead.
 Approve devices with `openclaw devices list` and `openclaw devices approve <requestId>`. When in doubt, use Shelley from your browser!
 
+## Remote channel setup
+
+For remote hosts, prefer one `config patch` call over many SSH calls to `config set`. Keep real tokens in the VM environment or `~/.openclaw/.env`, and put only SecretRefs in `openclaw.json`.
+
+On the VM, make the service environment contain the secrets it needs:
+
+```bash
+cat >> ~/.openclaw/.env <<'EOF'
+SLACK_BOT_TOKEN=xoxb-...
+SLACK_APP_TOKEN=xapp-...
+DISCORD_BOT_TOKEN=...
+OPENAI_API_KEY=sk-...
+EOF
+```
+
+From your local machine, create a patch file and pipe it to the VM:
+
+```json5
+// openclaw.remote.patch.json5
+{
+  secrets: {
+    providers: {
+      default: { source: "env" },
+    },
+  },
+  channels: {
+    slack: {
+      enabled: true,
+      mode: "socket",
+      botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+      appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+      groupPolicy: "open",
+      requireMention: false,
+    },
+    discord: {
+      enabled: true,
+      token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+      dmPolicy: "disabled",
+      dm: { enabled: false },
+      groupPolicy: "allowlist",
+    },
+  },
+  agents: {
+    defaults: {
+      model: { primary: "openai/gpt-5.5" },
+      models: {
+        "openai/gpt-5.5": { params: { fastMode: true } },
+      },
+    },
+  },
+}
+```
+
+```bash
+ssh <vm-name>.exe.xyz 'openclaw config patch --stdin --dry-run' < ./openclaw.remote.patch.json5
+ssh <vm-name>.exe.xyz 'openclaw config patch --stdin' < ./openclaw.remote.patch.json5
+ssh <vm-name>.exe.xyz 'openclaw gateway restart && openclaw health'
+```
+
+Use `--replace-path` when a nested allowlist should become exactly the patch value, for example when replacing a Discord channel allowlist:
+
+```bash
+ssh <vm-name>.exe.xyz 'openclaw config patch --stdin --replace-path "channels.discord.guilds[\"123\"].channels"' < ./discord.patch.json5
+```
+
 ## Remote access
 
 Remote access is handled by [exe.dev](https://exe.dev)'s authentication. By

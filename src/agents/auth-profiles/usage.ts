@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeProviderId } from "../provider-id.js";
+import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
@@ -161,14 +162,21 @@ export async function probeWhamForCooldown(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), WHAM_TIMEOUT_MS);
   try {
-    const headers: Record<string, string> = {
+    const defaultHeaders: Record<string, string> = {
       Authorization: `Bearer ${profile.access}`,
       Accept: "application/json",
-      "User-Agent": "CodexBar",
     };
     if (profile.accountId) {
-      headers["ChatGPT-Account-Id"] = profile.accountId;
+      defaultHeaders["ChatGPT-Account-Id"] = profile.accountId;
     }
+    const headers =
+      resolveProviderRequestHeaders({
+        provider: "openai-codex",
+        baseUrl: WHAM_USAGE_URL,
+        capability: "other",
+        transport: "http",
+        defaultHeaders,
+      }) ?? defaultHeaders;
 
     const res = await fetch(WHAM_USAGE_URL, {
       method: "GET",

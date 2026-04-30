@@ -360,12 +360,13 @@ function buildAccountAllowlistAdapter<ResolvedAccount>(params: {
   resolvePaths: (scope: "dm" | "group") => AllowlistConfigPaths | null;
   readConfig: (
     account: ResolvedAccount,
+    context: { cfg: OpenClawConfig; accountId?: string | null },
   ) => Awaited<ReturnType<NonNullable<ChannelAllowlistAdapter["readConfig"]>>>;
 }): Pick<ChannelAllowlistAdapter, "supportsScope" | "readConfig" | "applyConfigEdit"> {
   return {
     supportsScope: params.supportsScope,
     readConfig: ({ cfg, accountId }) =>
-      params.readConfig(params.resolveAccount({ cfg, accountId })),
+      params.readConfig(params.resolveAccount({ cfg, accountId }), { cfg, accountId }),
     applyConfigEdit: buildAccountScopedAllowlistConfigEditor({
       channelId: params.channelId,
       normalize: params.normalize,
@@ -379,7 +380,10 @@ export function buildDmGroupAccountAllowlistAdapter<ResolvedAccount>(params: {
   channelId: ChannelId;
   resolveAccount: AllowlistAccountResolver<ResolvedAccount>;
   normalize: AllowlistNormalizer;
-  resolveDmAllowFrom: (account: ResolvedAccount) => Array<string | number> | null | undefined;
+  resolveDmAllowFrom: (
+    account: ResolvedAccount,
+    context: { cfg: OpenClawConfig; accountId?: string | null },
+  ) => Array<string | number> | null | undefined;
   resolveGroupAllowFrom: (account: ResolvedAccount) => Array<string | number> | null | undefined;
   resolveDmPolicy?: (account: ResolvedAccount) => string | null | undefined;
   resolveGroupPolicy?: (account: ResolvedAccount) => string | null | undefined;
@@ -391,8 +395,8 @@ export function buildDmGroupAccountAllowlistAdapter<ResolvedAccount>(params: {
     normalize: params.normalize,
     supportsScope: ({ scope }) => scope === "dm" || scope === "group" || scope === "all",
     resolvePaths: resolveDmGroupAllowlistConfigPaths,
-    readConfig: (account) => ({
-      dmAllowFrom: readConfiguredAllowlistEntries(params.resolveDmAllowFrom(account)),
+    readConfig: (account, context) => ({
+      dmAllowFrom: readConfiguredAllowlistEntries(params.resolveDmAllowFrom(account, context)),
       groupAllowFrom: readConfiguredAllowlistEntries(params.resolveGroupAllowFrom(account)),
       dmPolicy: params.resolveDmPolicy?.(account) ?? undefined,
       groupPolicy: params.resolveGroupPolicy?.(account) ?? undefined,
@@ -406,7 +410,10 @@ export function buildLegacyDmAccountAllowlistAdapter<ResolvedAccount>(params: {
   channelId: ChannelId;
   resolveAccount: AllowlistAccountResolver<ResolvedAccount>;
   normalize: AllowlistNormalizer;
-  resolveDmAllowFrom: (account: ResolvedAccount) => Array<string | number> | null | undefined;
+  resolveDmAllowFrom: (
+    account: ResolvedAccount,
+    context: { cfg: OpenClawConfig; accountId?: string | null },
+  ) => Array<string | number> | null | undefined;
   resolveGroupPolicy?: (account: ResolvedAccount) => string | null | undefined;
   resolveGroupOverrides?: (account: ResolvedAccount) => AllowlistGroupOverride[] | undefined;
 }): Pick<ChannelAllowlistAdapter, "supportsScope" | "readConfig" | "applyConfigEdit"> {
@@ -416,8 +423,8 @@ export function buildLegacyDmAccountAllowlistAdapter<ResolvedAccount>(params: {
     normalize: params.normalize,
     supportsScope: ({ scope }) => scope === "dm",
     resolvePaths: resolveLegacyDmAllowlistConfigPaths,
-    readConfig: (account) => ({
-      dmAllowFrom: readConfiguredAllowlistEntries(params.resolveDmAllowFrom(account)),
+    readConfig: (account, context) => ({
+      dmAllowFrom: readConfiguredAllowlistEntries(params.resolveDmAllowFrom(account, context)),
       groupPolicy: params.resolveGroupPolicy?.(account) ?? undefined,
       groupOverrides: params.resolveGroupOverrides?.(account),
     }),

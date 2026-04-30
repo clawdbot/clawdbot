@@ -55,11 +55,16 @@ describeWhenUiI18nPresent("ui i18n locale registry", () => {
       "ja-JP",
       "ko",
       "fr",
+      "ar",
+      "it",
       "tr",
       "uk",
       "id",
       "pl",
       "th",
+      "vi",
+      "nl",
+      "fa",
     ]);
     expect(localeRegistry.DEFAULT_LOCALE).toBe("en");
   });
@@ -76,11 +81,16 @@ describeWhenUiI18nPresent("ui i18n locale registry", () => {
     expect(localeRegistry.resolveNavigatorLocale("ja-JP")).toBe("ja-JP");
     expect(localeRegistry.resolveNavigatorLocale("ko-KR")).toBe("ko");
     expect(localeRegistry.resolveNavigatorLocale("fr-CA")).toBe("fr");
+    expect(localeRegistry.resolveNavigatorLocale("ar-EG")).toBe("ar");
+    expect(localeRegistry.resolveNavigatorLocale("it-IT")).toBe("it");
     expect(localeRegistry.resolveNavigatorLocale("tr-TR")).toBe("tr");
     expect(localeRegistry.resolveNavigatorLocale("uk-UA")).toBe("uk");
     expect(localeRegistry.resolveNavigatorLocale("id-ID")).toBe("id");
     expect(localeRegistry.resolveNavigatorLocale("pl-PL")).toBe("pl");
     expect(localeRegistry.resolveNavigatorLocale("th-TH")).toBe("th");
+    expect(localeRegistry.resolveNavigatorLocale("vi-VN")).toBe("vi");
+    expect(localeRegistry.resolveNavigatorLocale("nl-NL")).toBe("nl");
+    expect(localeRegistry.resolveNavigatorLocale("fa-IR")).toBe("fa");
   });
 
   it("loads lazy locale translations from the registry", async () => {

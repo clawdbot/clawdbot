@@ -13,10 +13,18 @@ import {
   promptDefaultModel,
   promptModelAllowlist,
 } from "./model-picker.js";
+import { loadStaticManifestCatalogRowsForList } from "./models/list.manifest-catalog.js";
 import { promptCustomApiConfig } from "./onboard-custom.js";
 import { randomToken } from "./onboard-helpers.js";
 
 type GatewayAuthChoice = "token" | "password" | "trusted-proxy";
+type ProviderChoiceModelPrompt = {
+  provider?: string;
+  allowedKeys?: string[];
+  initialSelections?: string[];
+  message?: string;
+  loadCatalog?: boolean;
+};
 
 /** Reject undefined, empty, and common JS string-coercion artifacts for token auth. */
 function sanitizeTokenValue(value: unknown): string | undefined {
@@ -35,16 +43,7 @@ async function resolveProviderChoiceModelPrompt(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-}): Promise<
-  | {
-      provider?: string;
-      allowedKeys?: string[];
-      initialSelections?: string[];
-      message?: string;
-      loadCatalog?: boolean;
-    }
-  | undefined
-> {
+}): Promise<ProviderChoiceModelPrompt | undefined> {
   const { resolvePluginProviders, resolveProviderPluginChoice } =
     await import("../plugins/provider-auth-choice.runtime.js");
   const providers = resolvePluginProviders({
@@ -58,12 +57,11 @@ async function resolveProviderChoiceModelPrompt(params: {
     choice: params.authChoice,
   });
   const wizard = resolved?.provider.wizard?.setup;
-  const provider = resolved?.provider.id;
   if (!wizard) {
-    return provider ? { provider } : undefined;
+    return resolved?.provider.id ? { provider: resolved.provider.id } : undefined;
   }
   return {
-    provider,
+    provider: resolved.provider.id,
     ...wizard.modelAllowlist,
     ...(wizard.modelSelection?.promptWhenAuthChoiceProvided === true ? { loadCatalog: true } : {}),
   };
@@ -73,7 +71,25 @@ function hasConfiguredProviderModels(cfg: OpenClawConfig, provider: string | und
   if (!provider) {
     return false;
   }
-  return (cfg.models?.providers?.[provider]?.models?.length ?? 0) > 0;
+  if ((cfg.models?.providers?.[provider]?.models?.length ?? 0) > 0) {
+    return true;
+  }
+  const providerPrefix = `${provider}/`;
+  return Object.keys(cfg.agents?.defaults?.models ?? {}).some((key) =>
+    key.trim().startsWith(providerPrefix),
+  );
+}
+
+function hasStaticManifestCatalogRows(cfg: OpenClawConfig, provider: string | undefined): boolean {
+  if (!provider) {
+    return false;
+  }
+  return (
+    loadStaticManifestCatalogRowsForList({
+      cfg,
+      providerFilter: provider,
+    }).length > 0
+  );
 }
 
 function listConfiguredModelProviders(cfg: OpenClawConfig): string[] {
@@ -108,7 +124,10 @@ function resolveConfiguredProviderFromAuthChange(params: {
     return changedProviders[0];
   }
 
-  return configuredProviders.length === 1 ? configuredProviders[0] : params.preferredProvider;
+  return (
+    params.preferredProvider ??
+    (configuredProviders.length === 1 ? configuredProviders[0] : undefined)
+  );
 }
 
 export function buildGatewayAuthConfig(params: {
@@ -235,12 +254,16 @@ export async function promptAuthConfig(
     const allowlistSelection = await promptModelAllowlist({
       config: next,
       prompter,
+      workspaceDir: resolveDefaultAgentWorkspaceDir(),
+      env: process.env,
       allowedKeys: modelPrompt?.allowedKeys,
       initialSelections: modelPrompt?.initialSelections,
       message: modelPrompt?.message,
       preferredProvider: promptProvider,
       loadCatalog:
-        modelPrompt?.loadCatalog ?? hasConfiguredProviderModels(next, promptProvider) ?? false,
+        modelPrompt?.loadCatalog ??
+        (hasConfiguredProviderModels(next, promptProvider) ||
+          hasStaticManifestCatalogRows(next, promptProvider)),
     });
     if (allowlistSelection.models) {
       next = applyModelFallbacksFromSelection(next, allowlistSelection.models, {

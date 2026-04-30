@@ -1,12 +1,12 @@
-import type { Client, Plugin } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Client, Plugin } from "../internal/discord.js";
 
 const { registerVoiceClientSpy, waitForDiscordGatewayPluginRegistrationMock } = vi.hoisted(() => ({
   registerVoiceClientSpy: vi.fn(),
   waitForDiscordGatewayPluginRegistrationMock: vi.fn(),
 }));
 
-vi.mock("@buape/carbon/voice", () => ({
+vi.mock("../internal/voice.js", () => ({
   VoicePlugin: class VoicePlugin {
     id = "voice";
 
@@ -19,7 +19,7 @@ vi.mock("@buape/carbon/voice", () => ({
       if (!client.getPlugin("gateway")) {
         throw new Error("gateway plugin missing");
       }
-      client.registerListener({ type: "legacy-voice-listener" });
+      client.registerListener({ type: "voice-listener" });
     }
   },
 }));
@@ -43,7 +43,14 @@ vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
 }));
 
 vi.mock("../proxy-request-client.js", () => ({
-  createDiscordRequestClient: vi.fn(),
+  DISCORD_REST_TIMEOUT_MS: 15_000,
+  createDiscordRequestClient: vi.fn(() => ({
+    get: vi.fn(),
+    post: vi.fn(),
+    put: vi.fn(),
+    patch: vi.fn(),
+    delete: vi.fn(),
+  })),
 }));
 
 vi.mock("./auto-presence.js", () => ({
@@ -73,12 +80,14 @@ vi.mock("./presence.js", () => ({
   resolveDiscordPresenceUpdate: vi.fn(() => undefined),
 }));
 
+import { createDiscordRequestClient, DISCORD_REST_TIMEOUT_MS } from "../proxy-request-client.js";
 import { createDiscordMonitorClient } from "./provider.startup.js";
 
 describe("createDiscordMonitorClient", () => {
   beforeEach(() => {
     registerVoiceClientSpy.mockReset();
     waitForDiscordGatewayPluginRegistrationMock.mockReset().mockReturnValue(undefined);
+    vi.mocked(createDiscordRequestClient).mockClear();
   });
 
   function createRuntime() {
@@ -90,16 +99,29 @@ describe("createDiscordMonitorClient", () => {
   }
 
   function createClientWithPlugins(
-    _options: ConstructorParameters<typeof import("@buape/carbon").Client>[0],
-    handlers: ConstructorParameters<typeof import("@buape/carbon").Client>[1],
+    _options: ConstructorParameters<typeof import("../internal/discord.js").Client>[0],
+    handlers: ConstructorParameters<typeof import("../internal/discord.js").Client>[1],
     plugins: Plugin[] = [],
   ) {
     const pluginRegistry = plugins.map((plugin) => ({ id: plugin.id, plugin }));
+    const listeners = [...(handlers.listeners ?? [])];
     return {
-      listeners: [...(handlers.listeners ?? [])],
+      listeners,
       plugins: pluginRegistry,
+      registerListener: (listener: never) => {
+        listeners.push(listener);
+        return listener;
+      },
+      unregisterListener: (listener: never) => {
+        const index = listeners.indexOf(listener);
+        if (index < 0) {
+          return false;
+        }
+        listeners.splice(index, 1);
+        return true;
+      },
       getPlugin: (id: string) => pluginRegistry.find((entry) => entry.id === id)?.plugin,
-    } as Client;
+    } as unknown as Client;
   }
 
   function createAutoPresenceController() {
@@ -112,7 +134,7 @@ describe("createDiscordMonitorClient", () => {
     };
   }
 
-  it("adds listener compat for legacy voice plugins", async () => {
+  it("registers voice plugin listeners after gateway setup", async () => {
     const gatewayPlugin = {
       id: "gateway",
       registerClient: vi.fn(),
@@ -138,7 +160,7 @@ describe("createDiscordMonitorClient", () => {
 
     expect(registerVoiceClientSpy).toHaveBeenCalledTimes(1);
     expect(result.client.listeners).toEqual(
-      expect.arrayContaining([expect.objectContaining({ type: "legacy-voice-listener" })]),
+      expect.arrayContaining([expect.objectContaining({ type: "voice-listener" })]),
     );
   });
 
@@ -178,6 +200,68 @@ describe("createDiscordMonitorClient", () => {
 
     expect(createGatewaySupervisor).toHaveBeenCalledTimes(1);
     expect(result.gatewaySupervisor).toBe(gatewaySupervisor);
+  });
+
+  it("configures internal Discord REST options explicitly", async () => {
+    const createClient = vi.fn(createClientWithPlugins);
+
+    await createDiscordMonitorClient({
+      accountId: "default",
+      applicationId: "app-1",
+      token: "token-1",
+      commands: [],
+      components: [],
+      modals: [],
+      voiceEnabled: false,
+      discordConfig: {},
+      runtime: createRuntime(),
+      createClient,
+      createGatewayPlugin: () => ({ id: "gateway" }) as never,
+      createGatewaySupervisor: () => ({ shutdown: vi.fn(), handleError: vi.fn() }) as never,
+      createAutoPresenceController: () => createAutoPresenceController() as never,
+      isDisallowedIntentsError: () => false,
+    });
+
+    expect(createClient).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestOptions: {
+          timeout: DISCORD_REST_TIMEOUT_MS,
+          runtimeProfile: "persistent",
+          maxQueueSize: 1000,
+        },
+      }),
+      expect.any(Object),
+      expect.any(Array),
+    );
+  });
+
+  it("passes REST timeout options to proxied Discord fetch", async () => {
+    const proxyFetch = vi.fn();
+
+    await createDiscordMonitorClient({
+      accountId: "default",
+      applicationId: "app-1",
+      token: "token-1",
+      proxyFetch,
+      commands: [],
+      components: [],
+      modals: [],
+      voiceEnabled: false,
+      discordConfig: {},
+      runtime: createRuntime(),
+      createClient: createClientWithPlugins,
+      createGatewayPlugin: () => ({ id: "gateway" }) as never,
+      createGatewaySupervisor: () => ({ shutdown: vi.fn(), handleError: vi.fn() }) as never,
+      createAutoPresenceController: () => createAutoPresenceController() as never,
+      isDisallowedIntentsError: () => false,
+    });
+
+    expect(createDiscordRequestClient).toHaveBeenCalledWith("token-1", {
+      fetch: proxyFetch,
+      timeout: DISCORD_REST_TIMEOUT_MS,
+      runtimeProfile: "persistent",
+      maxQueueSize: 1000,
+    });
   });
 
   it("propagates gateway registration failures before supervisor startup", async () => {

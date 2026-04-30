@@ -26,7 +26,12 @@ import {
   runObsidianOpen,
   runObsidianSearch,
 } from "./obsidian.js";
-import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
+import {
+  getMemoryWikiPage,
+  searchMemoryWiki,
+  WIKI_SEARCH_MODES,
+  type WikiSearchMode,
+} from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import type { MemoryWikiImportedSourceSyncResult } from "./source-sync.js";
 import {
@@ -81,6 +86,7 @@ type WikiSearchCommandOptions = {
   maxResults?: number;
   backend?: ResolvedMemoryWikiConfig["search"]["backend"];
   corpus?: ResolvedMemoryWikiConfig["search"]["corpus"];
+  mode?: WikiSearchMode;
 };
 
 type WikiGetCommandOptions = {
@@ -567,9 +573,13 @@ export async function runWikiSearch(params: {
   maxResults?: number;
   searchBackend?: ResolvedMemoryWikiConfig["search"]["backend"];
   searchCorpus?: ResolvedMemoryWikiConfig["search"]["corpus"];
+  mode?: WikiSearchMode;
   json?: boolean;
   stdout?: Pick<NodeJS.WriteStream, "write">;
 }) {
+  if (params.mode && !(WIKI_SEARCH_MODES as readonly string[]).includes(params.mode)) {
+    throw new Error(`wiki search --mode must be one of: ${WIKI_SEARCH_MODES.join(", ")}.`);
+  }
   await syncMemoryWikiImportedSources({ config: params.config, appConfig: params.appConfig });
   const results = await searchMemoryWiki({
     config: params.config,
@@ -578,6 +588,7 @@ export async function runWikiSearch(params: {
     maxResults: params.maxResults,
     searchBackend: params.searchBackend,
     searchCorpus: params.searchCorpus,
+    mode: params.mode,
   });
   const summary = params.json
     ? JSON.stringify(results, null, 2)
@@ -586,7 +597,7 @@ export async function runWikiSearch(params: {
       : results
           .map(
             (result, index) =>
-              `${index + 1}. ${result.title} (${result.corpus}/${result.kind})\nPath: ${result.path}${typeof result.startLine === "number" && typeof result.endLine === "number" ? `\nLines: ${result.startLine}-${result.endLine}` : ""}${result.provenanceLabel ? `\nProvenance: ${result.provenanceLabel}` : ""}\nSnippet: ${result.snippet}`,
+              `${index + 1}. ${result.title} (${result.corpus}/${result.kind})\nPath: ${result.path}${typeof result.startLine === "number" && typeof result.endLine === "number" ? `\nLines: ${result.startLine}-${result.endLine}` : ""}${result.provenanceLabel ? `\nProvenance: ${result.provenanceLabel}` : ""}${result.matchedClaimId ? `\nClaim: ${result.matchedClaimId}` : ""}${result.evidenceKinds && result.evidenceKinds.length > 0 ? `\nEvidence: ${result.evidenceKinds.join(", ")}` : ""}\nSnippet: ${result.snippet}`,
           )
           .join("\n\n");
   writeOutput(summary, params.stdout);
@@ -935,7 +946,8 @@ export function registerWikiCli(
       .command("search")
       .description("Search wiki pages and, when configured, the active memory corpus")
       .argument("<query>", "Search query")
-      .option("--max-results <n>", "Maximum results", (value: string) => Number(value)),
+      .option("--max-results <n>", "Maximum results", (value: string) => Number(value))
+      .option("--mode <mode>", `Search mode (${WIKI_SEARCH_MODES.join(", ")})`),
   )
     .option("--json", "Print JSON")
     .action(async (query: string, opts: WikiSearchCommandOptions) => {
@@ -946,6 +958,7 @@ export function registerWikiCli(
         maxResults: opts.maxResults,
         searchBackend: opts.backend,
         searchCorpus: opts.corpus,
+        mode: opts.mode,
         json: opts.json,
       });
     });

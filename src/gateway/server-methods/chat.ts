@@ -2519,15 +2519,17 @@ export const chatHandlers: GatewayRequestHandlers = {
           } else {
             void emitUserTranscriptUpdate();
           }
-          setGatewayDedupeEntry({
-            dedupe: context.dedupe,
-            key: `chat:${clientRunId}`,
-            entry: {
-              ts: Date.now(),
-              ok: true,
-              payload: { runId: clientRunId, status: "ok" as const },
-            },
-          });
+          if (!context.chatAbortedRuns.has(clientRunId)) {
+            setGatewayDedupeEntry({
+              dedupe: context.dedupe,
+              key: `chat:${clientRunId}`,
+              entry: {
+                ts: Date.now(),
+                ok: true,
+                payload: { runId: clientRunId, status: "ok" as const },
+              },
+            });
+          }
         })
         .catch((err) => {
           void rewriteUserTranscriptMedia().catch((rewriteErr) => {

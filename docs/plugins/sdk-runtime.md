@@ -178,7 +178,9 @@ Provider and channel execution paths must use the active runtime config snapshot
     });
     ```
 
-    Inside the Gateway this runtime is in-process. In plugin CLI commands it calls the configured Gateway over RPC, so commands such as `openclaw googlemeet recover-tab` can inspect paired nodes from the terminal. Node commands still go through normal Gateway node pairing, command allowlists, and node-local command handling.
+    Inside the Gateway this runtime is in-process. In plugin CLI commands it calls the configured Gateway over RPC, so commands such as `openclaw googlemeet recover-tab` can inspect paired nodes from the terminal. Node commands still go through normal Gateway node pairing, command allowlists, plugin node-invoke policies, and node-local command handling.
+
+    Plugins that expose dangerous node-host commands should register a node-invoke policy with `api.registerNodeInvokePolicy(...)`. The policy runs in the Gateway after command allowlist checks and before the command is forwarded to the node, so direct `node.invoke` calls and higher-level plugin tools share the same enforcement path.
 
   </Accordion>
   <Accordion title="api.runtime.tasks.managedFlows">
@@ -394,11 +396,27 @@ Provider and channel execution paths must use the active runtime config snapshot
 
   </Accordion>
   <Accordion title="api.runtime.state">
-    State directory resolution.
+    State directory resolution and SQLite-backed keyed storage.
 
     ```typescript
-    const stateDir = api.runtime.state.resolveStateDir();
+    const stateDir = api.runtime.state.resolveStateDir(process.env);
+    const store = api.runtime.state.openKeyedStore<MyRecord>({
+      namespace: "my-feature",
+      maxEntries: 200,
+      defaultTtlMs: 15 * 60_000,
+    });
+
+    await store.register("key-1", { value: "hello" });
+    const value = await store.lookup("key-1");
+    await store.consume("key-1");
+    await store.clear();
     ```
+
+    Keyed stores survive restarts and are isolated by the runtime-bound plugin id. Limits: `maxEntries` per namespace, 1,000 live rows per plugin, JSON values under 64KB, and optional TTL expiry.
+
+    <Warning>
+    Bundled plugins only in this release.
+    </Warning>
 
   </Accordion>
   <Accordion title="api.runtime.tools">

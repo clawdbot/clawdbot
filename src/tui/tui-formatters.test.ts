@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import {
   extractContentFromMessage,
   extractTextFromMessage,
@@ -40,6 +41,17 @@ describe("extractTextFromMessage", () => {
     expect(text).toContain("HTTP 429");
     expect(text).toContain("rate_limit_error");
     expect(text).toContain("This request would exceed your account's rate limit.");
+  });
+
+  it("renders malformed streaming fragment errors with friendly text", () => {
+    const text = extractTextFromMessage({
+      role: "assistant",
+      content: [],
+      stopReason: "error",
+      errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
+    });
+
+    expect(text).toBe("LLM streaming response contained a malformed fragment. Please try again.");
   });
 
   it("falls back to a generic message when errorMessage is missing", () => {
@@ -274,6 +286,16 @@ describe("extractContentFromMessage", () => {
     });
 
     expect(text).toContain("HTTP 429");
+  });
+
+  it("formats malformed streaming fragment errors when content is not an array", () => {
+    const text = extractContentFromMessage({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
+    });
+
+    expect(text).toBe("LLM streaming response contained a malformed fragment. Please try again.");
   });
 });
 

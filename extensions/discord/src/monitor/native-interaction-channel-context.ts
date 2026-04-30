@@ -1,4 +1,5 @@
-import { ChannelType, type Client } from "@buape/carbon";
+import { ChannelType } from "../internal/discord.js";
+import type { DiscordChannelInfoClient } from "./message-utils.js";
 import { resolveDiscordThreadLikeChannelContext } from "./thread-channel-context.js";
 
 type DiscordInteractionChannel = {
@@ -21,7 +22,7 @@ export type DiscordNativeInteractionChannelContext = {
 
 export async function resolveDiscordNativeInteractionChannelContext(params: {
   channel: DiscordInteractionChannel | null | undefined;
-  client: Client;
+  client: DiscordChannelInfoClient;
   hasGuild: boolean;
   channelIdFallback: string;
 }): Promise<DiscordNativeInteractionChannelContext> {

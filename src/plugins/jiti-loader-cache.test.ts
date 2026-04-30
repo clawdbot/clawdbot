@@ -208,13 +208,14 @@ describe("getCachedPluginJitiLoader", () => {
     const jitiLoader = vi.fn();
     const createJiti = vi.fn(() => jitiLoader);
     vi.doMock("jiti", () => ({ createJiti }));
+    const nativeStub = vi.fn((target: string) => ({
+      ok: true as const,
+      moduleExport: { loadedFrom: target },
+    }));
     vi.doMock("./native-module-require.js", () => ({
       isJavaScriptModulePath: (p: string) =>
         p.endsWith(".js") || p.endsWith(".mjs") || p.endsWith(".cjs"),
-      tryNativeRequireJavaScriptModule: (target: string) => ({
-        ok: true,
-        moduleExport: { loadedFrom: target },
-      }),
+      tryNativeRequireJavaScriptModule: nativeStub,
     }));
     const { getCachedPluginJitiLoader } = await importFreshModule<
       typeof import("./jiti-loader-cache.js")
@@ -233,6 +234,10 @@ describe("getCachedPluginJitiLoader", () => {
     // jiti is created eagerly, but its loader must NOT be invoked for .js
     // targets that `tryNativeRequireJavaScriptModule` resolves.
     expect(jitiLoader).not.toHaveBeenCalled();
+    // allowWindows must be passed so the native fast path works on Windows too.
+    expect(nativeStub).toHaveBeenCalledWith("/repo/dist/extensions/demo/api.js", {
+      allowWindows: true,
+    });
   });
 
   it("falls back to jiti when the native-require helper declines", async () => {

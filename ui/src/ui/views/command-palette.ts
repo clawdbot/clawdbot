@@ -135,16 +135,40 @@ function groupItems(items: PaletteItem[]): Array<[string, PaletteItem[]]> {
 }
 
 let previouslyFocused: Element | null = null;
+let activeDialog: HTMLDialogElement | null = null;
+
+const FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "summary",
+  "[tabindex]:not([tabindex='-1'])",
+].join(",");
+
+const paletteDialogLabelId = "cmd-palette-label";
+const paletteInputId = "cmd-palette-input";
+const paletteListboxId = "cmd-palette-listbox";
 
 function saveFocus() {
+  if (previouslyFocused) {
+    return;
+  }
   previouslyFocused = document.activeElement;
 }
 
 function restoreFocus() {
-  if (previouslyFocused && previouslyFocused instanceof HTMLElement) {
-    requestAnimationFrame(() => previouslyFocused && (previouslyFocused as HTMLElement).focus());
-  }
+  const target = previouslyFocused;
   previouslyFocused = null;
+  activeDialog = null;
+  if (target instanceof HTMLElement && target.isConnected) {
+    requestAnimationFrame(() => {
+      if (target.isConnected) {
+        target.focus();
+      }
+    });
+  }
 }
 
 function selectItem(item: PaletteItem, props: CommandPaletteProps) {
@@ -157,6 +181,14 @@ function selectItem(item: PaletteItem, props: CommandPaletteProps) {
   restoreFocus();
 }
 
+function closePalette(props: CommandPaletteProps) {
+  if (!activeDialog) {
+    return;
+  }
+  props.onToggle();
+  restoreFocus();
+}
+
 function scrollActiveIntoView() {
   requestAnimationFrame(() => {
     const el = document.querySelector(".cmd-palette__item--active");
@@ -164,7 +196,41 @@ function scrollActiveIntoView() {
   });
 }
 
+function trapFocus(event: KeyboardEvent, root: HTMLElement) {
+  const focusable = [...root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)].filter(
+    (element) => element.isConnected && element.tabIndex >= 0 && !element.closest("[hidden]"),
+  );
+  if (focusable.length === 0) {
+    event.preventDefault();
+    root.focus();
+    return;
+  }
+
+  const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  const focusInside = active ? focusable.includes(active) : false;
+
+  if (event.shiftKey && (!focusInside || active === first)) {
+    event.preventDefault();
+    last.focus();
+    return;
+  }
+  if (!event.shiftKey && (!focusInside || active === last)) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
 function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
+  if (e.key === "Tab") {
+    const dialog = (e.currentTarget as HTMLElement | null)?.closest("dialog");
+    if (dialog instanceof HTMLElement) {
+      trapFocus(e, dialog);
+    }
+    return;
+  }
+
   const items = filteredItems(props.query);
   if (items.length === 0 && (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter")) {
     return;
@@ -188,8 +254,8 @@ function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
       break;
     case "Escape":
       e.preventDefault();
-      props.onToggle();
-      restoreFocus();
+      e.stopPropagation();
+      closePalette(props);
       break;
   }
 }
@@ -207,10 +273,44 @@ function getCategoryLabel(category: string): string {
   }
 }
 
-function focusInput(el: Element | undefined) {
-  if (el) {
+function getOptionId(item: PaletteItem): string {
+  return `cmd-palette-option-${item.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+}
+
+function syncDialog(el: Element | undefined) {
+  if (!(el instanceof HTMLDialogElement)) {
+    if (activeDialog) {
+      restoreFocus();
+    }
+    return;
+  }
+  if (activeDialog !== el) {
     saveFocus();
-    requestAnimationFrame(() => (el as HTMLInputElement).focus());
+    activeDialog = el;
+  }
+  if (el.open) {
+    return;
+  }
+  if (typeof el.showModal === "function") {
+    try {
+      el.removeAttribute("aria-modal");
+      el.showModal();
+      return;
+    } catch {
+      // Fall through to the open attribute fallback below.
+    }
+  }
+  el.setAttribute("aria-modal", "true");
+  el.setAttribute("open", "");
+}
+
+function focusInput(el: Element | undefined) {
+  if (el instanceof HTMLInputElement) {
+    requestAnimationFrame(() => {
+      if (el.isConnected) {
+        el.focus();
+      }
+    });
   }
 }
 
@@ -221,13 +321,23 @@ export function renderCommandPalette(props: CommandPaletteProps) {
 
   const items = filteredItems(props.query);
   const grouped = groupItems(items);
+  const activeItem = items[props.activeIndex];
+  const activeOptionId = activeItem ? getOptionId(activeItem) : nothing;
+  const paletteLabel = t("overview.palette.placeholder");
 
   return html`
-    <div
+    <dialog
+      ${ref(syncDialog)}
       class="cmd-palette-overlay"
-      @click=${() => {
-        props.onToggle();
-        restoreFocus();
+      aria-labelledby=${paletteDialogLabelId}
+      @cancel=${(e: Event) => {
+        e.preventDefault();
+        closePalette(props);
+      }}
+      @click=${(e: Event) => {
+        if (e.target === e.currentTarget) {
+          closePalette(props);
+        }
       }}
     >
       <div
@@ -235,17 +345,26 @@ export function renderCommandPalette(props: CommandPaletteProps) {
         @click=${(e: Event) => e.stopPropagation()}
         @keydown=${(e: KeyboardEvent) => handleKeydown(e, props)}
       >
+        <label id=${paletteDialogLabelId} class="cmd-palette__label" for=${paletteInputId}
+          >${paletteLabel}</label
+        >
         <input
           ${ref(focusInput)}
+          id=${paletteInputId}
           class="cmd-palette__input"
-          placeholder="${t("overview.palette.placeholder")}"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-controls=${paletteListboxId}
+          aria-activedescendant=${activeOptionId}
+          aria-expanded="true"
+          placeholder=${paletteLabel}
           .value=${props.query}
           @input=${(e: Event) => {
             props.onQueryChange((e.target as HTMLInputElement).value);
             props.onActiveIndexChange(0);
           }}
         />
-        <div class="cmd-palette__results">
+        <div id=${paletteListboxId} class="cmd-palette__results" role="listbox">
           ${grouped.length === 0
             ? html`<div class="cmd-palette__empty">
                 <span class="nav-item__icon" style="opacity:0.3;width:20px;height:20px"
@@ -261,7 +380,10 @@ export function renderCommandPalette(props: CommandPaletteProps) {
                     const isActive = globalIndex === props.activeIndex;
                     return html`
                       <div
+                        id=${getOptionId(item)}
                         class="cmd-palette__item ${isActive ? "cmd-palette__item--active" : ""}"
+                        role="option"
+                        aria-selected=${isActive ? "true" : "false"}
                         @click=${(e: Event) => {
                           e.stopPropagation();
                           selectItem(item, props);
@@ -287,6 +409,6 @@ export function renderCommandPalette(props: CommandPaletteProps) {
           <span><kbd>esc</kbd> ${t("overview.palette.footer.close")}</span>
         </div>
       </div>
-    </div>
+    </dialog>
   `;
 }

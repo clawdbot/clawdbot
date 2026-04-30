@@ -200,6 +200,31 @@ describe("gateway session utils", () => {
     expect(row.thinkingDefault).toBe("medium");
   });
 
+  test("session defaults and rows expose xhigh from configured catalog compat", () => {
+    const cfg = createModelDefaultsConfig({ primary: "gmn/gpt-5.4" });
+    const catalog = [
+      {
+        provider: "gmn",
+        id: "gpt-5.4",
+        name: "GPT 5.4 via GMN",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+      },
+    ];
+
+    const defaults = getSessionDefaults(cfg, catalog);
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "main",
+      modelCatalog: catalog,
+    });
+
+    expect(defaults.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
+    expect(row.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
+  });
+
   test("session defaults use configured thinking default", () => {
     const defaults = getSessionDefaults({
       agents: {

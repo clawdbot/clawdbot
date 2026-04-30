@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderExternalAuthProfile } from "../../plugins/provider-external-auth.types.js";
 import { resolveExternalAuthProfilesWithPlugins } from "../../plugins/provider-runtime.js";
 import * as externalCliSync from "./external-cli-sync.js";
@@ -12,6 +13,7 @@ type ExternalAuthProfileMap = Map<string, ProviderExternalAuthProfile>;
 type ResolveExternalAuthProfiles = typeof resolveExternalAuthProfilesWithPlugins;
 type ExternalCliOverlayOptions = {
   allowKeychainPrompt?: boolean;
+  config?: OpenClawConfig;
   externalCliProviderIds?: Iterable<string>;
   externalCliProfileIds?: Iterable<string>;
 };
@@ -50,8 +52,9 @@ function resolveExternalAuthProfileMap(params: {
     resolveExternalAuthProfilesForRuntime ?? resolveExternalAuthProfilesWithPlugins;
   const profiles = resolveProfiles({
     env,
+    config: params.externalCli?.config,
     context: {
-      config: undefined,
+      config: params.externalCli?.config,
       agentDir: params.agentDir,
       workspaceDir: undefined,
       env,
@@ -118,6 +121,7 @@ export function shouldPersistExternalAuthProfile(params: {
   credential: OAuthCredential;
   agentDir?: string;
   env?: NodeJS.ProcessEnv;
+  config?: OpenClawConfig;
   externalCliProviderIds?: Iterable<string>;
   externalCliProfileIds?: Iterable<string>;
 }): boolean {
@@ -126,6 +130,7 @@ export function shouldPersistExternalAuthProfile(params: {
     agentDir: params.agentDir,
     env: params.env,
     externalCli: {
+      config: params.config,
       externalCliProviderIds: params.externalCliProviderIds,
       externalCliProfileIds: params.externalCliProfileIds,
     },

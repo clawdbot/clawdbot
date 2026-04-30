@@ -487,7 +487,7 @@ describe("ensureAuthProfileStore", () => {
 
       const store = loadAuthProfileStoreForRuntime(agentDir, { readOnly: true });
 
-      expect(store.order?.["openai-codex"]).toEqual([freshProfileId]);
+      expect(store.order?.["openai-codex"]).toEqual([freshProfileId, defaultProfileId]);
       expect(store.profiles[defaultProfileId]).toMatchObject({
         type: "oauth",
         provider: "openai-codex",
@@ -830,6 +830,53 @@ describe("ensureAuthProfileStore", () => {
       expect(store.profiles["openai:default"]).toMatchObject({
         type: "api_key",
         provider: "openai",
+      });
+      expect(fs.existsSync(workerStorePath)).toBe(false);
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      restoreEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not clone inherited auth stores during normal agent reads", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-read-through-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    try {
+      const stateDir = path.join(root, ".openclaw");
+      const mainAgentDir = path.join(stateDir, "agents", "main", "agent");
+      const workerAgentDir = path.join(stateDir, "agents", "worker", "agent");
+      const workerStorePath = path.join(workerAgentDir, "auth-profiles.json");
+      fs.mkdirSync(mainAgentDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(mainAgentDir, "auth-profiles.json"),
+        `${JSON.stringify(
+          {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              "openai-codex:default": {
+                type: "oauth",
+                provider: "openai-codex",
+                access: "main-access",
+                refresh: "main-refresh",
+                expires: Date.now() + 60_000,
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      clearRuntimeAuthProfileStoreSnapshots();
+
+      const store = ensureAuthProfileStore(workerAgentDir);
+
+      expect(store.profiles["openai-codex:default"]).toMatchObject({
+        type: "oauth",
+        provider: "openai-codex",
+        access: "main-access",
       });
       expect(fs.existsSync(workerStorePath)).toBe(false);
     } finally {

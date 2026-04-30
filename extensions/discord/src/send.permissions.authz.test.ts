@@ -1,6 +1,6 @@
-import type { RequestClient } from "@buape/carbon";
 import { PermissionFlagsBits, Routes } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RequestClient } from "./internal/discord.js";
 import { EMPTY_DISCORD_TEST_OPTS } from "./test-support/config.js";
 
 const mockRest = vi.hoisted(() => ({

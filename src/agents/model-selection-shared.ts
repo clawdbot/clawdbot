@@ -51,6 +51,23 @@ function sanitizeModelWarningValue(value: string): string {
   return sanitizeForLog(stripped.slice(0, controlBoundary));
 }
 
+function mergeModelCatalogEntries(params: {
+  primary: readonly ModelCatalogEntry[];
+  secondary: readonly ModelCatalogEntry[];
+}): ModelCatalogEntry[] {
+  const merged = [...params.primary];
+  const seen = new Set(merged.map((entry) => modelKey(entry.provider, entry.id)));
+  for (const entry of params.secondary) {
+    const key = modelKey(entry.provider, entry.id);
+    if (seen.has(key)) {
+      continue;
+    }
+    merged.push(entry);
+    seen.add(key);
+  }
+  return merged;
+}
+
 export function inferUniqueProviderFromConfiguredModels(params: {
   cfg: OpenClawConfig;
   model: string;
@@ -405,6 +422,7 @@ function applyModelCatalogMetadata(params: {
   const nextContextWindow = configuredEntry?.contextWindow ?? params.entry.contextWindow;
   const nextReasoning = configuredEntry?.reasoning ?? params.entry.reasoning;
   const nextInput = configuredEntry?.input ?? params.entry.input;
+  const nextCompat = configuredEntry?.compat ?? params.entry.compat;
 
   return {
     ...params.entry,
@@ -413,6 +431,7 @@ function applyModelCatalogMetadata(params: {
     ...(nextContextWindow !== undefined ? { contextWindow: nextContextWindow } : {}),
     ...(nextReasoning !== undefined ? { reasoning: nextReasoning } : {}),
     ...(nextInput ? { input: nextInput } : {}),
+    ...(nextCompat ? { compat: nextCompat } : {}),
   };
 }
 
@@ -426,6 +445,7 @@ function buildSyntheticAllowedCatalogEntry(params: {
   const nextContextWindow = configuredEntry?.contextWindow;
   const nextReasoning = configuredEntry?.reasoning;
   const nextInput = configuredEntry?.input;
+  const nextCompat = configuredEntry?.compat;
 
   return {
     id: params.parsed.model,
@@ -435,6 +455,7 @@ function buildSyntheticAllowedCatalogEntry(params: {
     ...(nextContextWindow !== undefined ? { contextWindow: nextContextWindow } : {}),
     ...(nextReasoning !== undefined ? { reasoning: nextReasoning } : {}),
     ...(nextInput ? { input: nextInput } : {}),
+    ...(nextCompat ? { compat: nextCompat } : {}),
   };
 }
 
@@ -561,7 +582,11 @@ export function buildAllowedModelSetWithFallbacks(params: {
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
   });
-  const catalog = params.catalog.map((entry) => applyModelCatalogMetadata({ entry, metadata }));
+  const configuredCatalog = buildConfiguredModelCatalog({ cfg: params.cfg });
+  const catalog = mergeModelCatalogEntries({
+    primary: params.catalog,
+    secondary: configuredCatalog,
+  }).map((entry) => applyModelCatalogMetadata({ entry, metadata }));
   const rawAllowlist = (() => {
     const modelMap = params.cfg.agents?.defaults?.models ?? {};
     return Object.keys(modelMap);
@@ -788,6 +813,7 @@ export function buildConfiguredModelCatalog(params: { cfg: OpenClawConfig }): Mo
           : undefined;
       const reasoning = typeof model?.reasoning === "boolean" ? model.reasoning : undefined;
       const input = Array.isArray(model?.input) ? model.input : undefined;
+      const compat = model?.compat && typeof model.compat === "object" ? model.compat : undefined;
       catalog.push({
         provider: providerId,
         id,
@@ -795,6 +821,7 @@ export function buildConfiguredModelCatalog(params: { cfg: OpenClawConfig }): Mo
         contextWindow,
         reasoning,
         input,
+        compat,
       });
     }
   }

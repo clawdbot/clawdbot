@@ -40,6 +40,7 @@ function createAutoReplyReplySplitShards() {
     "auto-reply-reply-agent-runner": [],
     "auto-reply-reply-commands": [],
     "auto-reply-reply-dispatch": [],
+    "auto-reply-reply-session": [],
     "auto-reply-reply-state-routing": [],
   };
 
@@ -62,21 +63,14 @@ function createAutoReplyReplySplitShards() {
       name.startsWith("get-reply")
     ) {
       groups["auto-reply-reply-dispatch"].push(file);
+    } else if (name.startsWith("session")) {
+      groups["auto-reply-reply-session"].push(file);
     } else {
       groups["auto-reply-reply-state-routing"].push(file);
     }
   }
 
-  const mergedGroups = {
-    "auto-reply-reply-agent-runner": groups["auto-reply-reply-agent-runner"],
-    "auto-reply-reply-dispatch": groups["auto-reply-reply-dispatch"],
-    "auto-reply-reply-commands-state-routing": [
-      ...groups["auto-reply-reply-commands"],
-      ...groups["auto-reply-reply-state-routing"],
-    ],
-  };
-
-  return Object.entries(mergedGroups)
+  return Object.entries(groups)
     .map(([groupName, includePatterns]) => ({
       configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
       includePatterns,
@@ -262,11 +256,21 @@ const SPLIT_NODE_SHARDS = new Map([
         requiresDist: false,
       },
       {
-        shardName: "agentic-plugin-sdk",
+        shardName: "agentic-gateway-core",
         configs: [
           "test/vitest/vitest.gateway-core.config.ts",
           "test/vitest/vitest.gateway-client.config.ts",
-          "test/vitest/vitest.gateway-methods.config.ts",
+        ],
+        requiresDist: false,
+      },
+      {
+        shardName: "agentic-gateway-methods",
+        configs: ["test/vitest/vitest.gateway-methods.config.ts"],
+        requiresDist: false,
+      },
+      {
+        shardName: "agentic-plugin-sdk",
+        configs: [
           "test/vitest/vitest.plugin-sdk-light.config.ts",
           "test/vitest/vitest.plugin-sdk.config.ts",
         ],

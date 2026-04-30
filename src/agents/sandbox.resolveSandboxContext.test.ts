@@ -101,6 +101,58 @@ describe("resolveSandboxContext", () => {
     expect(result).toBeNull();
   }, 15_000);
 
+  it("does not touch sandbox backends for cron or sub-agent sessions when sandbox mode is off", async () => {
+    const backendFactory = vi.fn(async () => ({
+      id: "test-off-backend",
+      runtimeId: "unexpected-runtime",
+      runtimeLabel: "Unexpected Runtime",
+      workdir: "/workspace",
+      buildExecSpec: async () => ({
+        argv: ["unexpected"],
+        env: process.env,
+        stdinMode: "pipe-closed" as const,
+      }),
+      runShellCommand: async () => ({
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      }),
+    }));
+    const restore = registerSandboxBackend("test-off-backend", backendFactory);
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "off",
+              backend: "test-off-backend",
+              scope: "session",
+            },
+          },
+        },
+      };
+
+      await expect(
+        resolveSandboxContext({
+          config: cfg,
+          sessionKey: "agent:main:cron:job:run:uuid",
+          workspaceDir: "/tmp/openclaw-test",
+        }),
+      ).resolves.toBeNull();
+      await expect(
+        resolveSandboxContext({
+          config: cfg,
+          sessionKey: "agent:main:subagent:child",
+          workspaceDir: "/tmp/openclaw-test",
+        }),
+      ).resolves.toBeNull();
+
+      expect(backendFactory).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  }, 15_000);
+
   it("treats main session aliases as main in non-main mode", async () => {
     const cfg: OpenClawConfig = {
       session: { mainKey: "work" },

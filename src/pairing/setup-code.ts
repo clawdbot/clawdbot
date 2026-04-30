@@ -128,13 +128,34 @@ type ResolveAuthLabelResult = {
   error?: string;
 };
 
+const GATEWAY_SCHEME_WITHOUT_AUTHORITY_RE = /^(?:https?|wss?):(?!\/\/)/i;
+const SCHEME_LIKE_PATH_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\//;
+
 function normalizeUrl(raw: string, schemeFallback: "ws" | "wss"): string | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
   }
+  if (GATEWAY_SCHEME_WITHOUT_AUTHORITY_RE.test(trimmed)) {
+    return null;
+  }
+  const parsedUrl = parseNormalizedGatewayUrl(trimmed);
+  if (parsedUrl) {
+    return parsedUrl;
+  }
+  if (trimmed.includes("://") || SCHEME_LIKE_PATH_RE.test(trimmed)) {
+    return null;
+  }
+  const withoutPath = normalizeOptionalString(trimmed.split("/", 1)[0]) ?? "";
+  return withoutPath ? parseNormalizedGatewayUrl(`${schemeFallback}://${withoutPath}`) : null;
+}
+
+function parseNormalizedGatewayUrl(raw: string): string | null {
   try {
-    const parsed = new URL(trimmed);
+    const parsed = new URL(raw);
+    if (parsed.username || parsed.password) {
+      return null;
+    }
     const scheme = parsed.protocol.replace(":", "");
     if (!scheme) {
       return null;
@@ -150,14 +171,8 @@ function normalizeUrl(raw: string, schemeFallback: "ws" | "wss"): string | null 
     const port = parsed.port ? `:${parsed.port}` : "";
     return `${resolvedScheme}://${host}${port}`;
   } catch {
-    // Fall through to host:port parsing.
-  }
-
-  const withoutPath = trimmed.split("/")[0] ?? "";
-  if (!withoutPath) {
     return null;
   }
-  return `${schemeFallback}://${withoutPath}`;
 }
 
 function resolveScheme(
@@ -270,10 +285,11 @@ async function resolveGatewayUrl(
   }
 
   const remoteUrlRaw = cfg.gateway?.remote?.url;
-  const remoteUrl =
-    typeof remoteUrlRaw === "string" && remoteUrlRaw.trim()
-      ? normalizeUrl(remoteUrlRaw, scheme)
-      : null;
+  const hasRemoteUrl = typeof remoteUrlRaw === "string" && remoteUrlRaw.trim();
+  const remoteUrl = hasRemoteUrl ? normalizeUrl(remoteUrlRaw, scheme) : null;
+  if (hasRemoteUrl && !remoteUrl) {
+    return { error: "Configured gateway.remote.url is invalid." };
+  }
   if (opts.preferRemoteUrl && remoteUrl) {
     return { url: remoteUrl, source: "gateway.remote.url" };
   }

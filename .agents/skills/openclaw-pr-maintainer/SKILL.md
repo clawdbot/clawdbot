@@ -41,6 +41,28 @@ gitcrawl cluster-detail openclaw/openclaw --id <cluster-id> --member-limit 20 --
   - `invalid`
   - `dirty` for PRs only
 
+## Select small high-confidence triage candidates
+
+When asked for `X` issues or PRs to triage, `X` means qualified candidates, not sampled threads.
+
+Only list candidates that pass all gates:
+
+- small owner/surface, with a likely narrow fix and focused regression test
+- symptom is reproducible or provable with logs, failing test, live command, dependency contract, or current-main behavior
+- root cause is traceable to code with file/line and the proposed fix touches that path
+- no strong smell that a broader refactor, ownership rethink, migration, or product decision is the better fix
+- dependency-backed behavior checked against upstream docs/source/types; live or web proof used when local proof is insufficient
+
+Loop:
+
+1. Use `gitcrawl` / `gh` to gather candidate clusters.
+2. Read issue/PR body, comments, current code, adjacent tests, and dependency contracts.
+3. Try focused repro or proof.
+4. Reject unclear, stale, speculative, broad-refactor, or owner-ambiguous items.
+5. Continue until `X` qualified candidates or the bounded search is exhausted.
+
+Output only qualifying candidates, with: ref, surface, proof, cause, fix sketch, why small, expected test/gate. If none qualify, say so; do not pad.
+
 ## Enforce the bug-fix evidence bar
 
 - Never merge a bug-fix PR based only on issue text, PR text, or AI rationale.

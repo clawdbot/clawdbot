@@ -92,14 +92,6 @@ struct DebugSettings: View {
                             self.launchAgentWriteDisabled = GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()
                             return
                         }
-                        if newValue {
-                            Task {
-                                _ = await GatewayLaunchAgentManager.set(
-                                    enabled: false,
-                                    bundlePath: Bundle.main.bundlePath,
-                                    port: GatewayEnvironment.gatewayPort())
-                            }
-                        }
                     }
 
                 Text(

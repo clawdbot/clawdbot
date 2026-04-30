@@ -202,6 +202,14 @@ describe("isSafeToRetrySendError", () => {
     const wrapped = new MockHttpError("Network request for 'sendMessage' failed!", fetchError);
     expect(isSafeToRetrySendError(wrapped)).toBe(true);
   });
+
+  it("does not infer safe send retry from a plain grammY network envelope", () => {
+    const wrapped = new MockHttpError(
+      "Network request for 'sendMessage' failed!",
+      new TypeError("fetch failed"),
+    );
+    expect(isSafeToRetrySendError(wrapped)).toBe(false);
+  });
 });
 
 describe("isTelegramServerError", () => {

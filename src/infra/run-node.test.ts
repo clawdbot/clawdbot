@@ -697,6 +697,56 @@ describe("run-node script", () => {
     });
   });
 
+  it("runs QA parity report from source without rebuilding private QA dist", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          "extensions/qa-lab/src/cli.runtime.ts": "export {};\n",
+        },
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+
+      const spawnCalls: string[][] = [];
+      const spawn = (cmd: string, args: string[]) => {
+        spawnCalls.push([cmd, ...args]);
+        return createExitedProcess(0);
+      };
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: [
+          "qa",
+          "parity-report",
+          "--candidate-summary",
+          ".artifacts/qa-e2e/gpt54/qa-suite-summary.json",
+          "--baseline-summary",
+          ".artifacts/qa-e2e/opus46/qa-suite-summary.json",
+        ],
+        env: {
+          ...process.env,
+          OPENCLAW_RUNNER_LOG: "0",
+        },
+        spawn,
+        execPath: process.execPath,
+        platform: process.platform,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([
+        [
+          process.execPath,
+          "--import",
+          "tsx",
+          path.join(tmp, "scripts", "qa-parity-report.ts"),
+          "--candidate-summary",
+          ".artifacts/qa-e2e/gpt54/qa-suite-summary.json",
+          "--baseline-summary",
+          ".artifacts/qa-e2e/opus46/qa-suite-summary.json",
+        ],
+      ]);
+    });
+  });
+
   it("skips runtime postbuild restaging when the runtime stamp is current", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {

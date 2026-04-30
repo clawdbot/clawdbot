@@ -437,7 +437,16 @@ export async function confirmMatrixVerificationSas(
   return await withStartedActionClient(opts, async (client) => {
     const crypto = requireCrypto(client, opts);
     await ensureMatrixVerificationDmTracked(crypto, opts);
-    return await crypto.confirmVerificationSas(resolveVerificationId(requestId));
+    const summary = await crypto.confirmVerificationSas(resolveVerificationId(requestId));
+    // For self-verifications, mirror the trust-own-identity step that the
+    // higher-level runMatrixSelfVerification path already performs at
+    // completeMatrixSelfVerification: cross-sign the operator's master key
+    // from the bot side so Element X clears the "Verify" prompt without
+    // waiting for a passive sync tick. Non-self verifications are a no-op.
+    if (summary.isSelfVerification && summary.completed && !summary.error) {
+      await client.trustOwnIdentityAfterSelfVerification?.();
+    }
+    return summary;
   });
 }
 

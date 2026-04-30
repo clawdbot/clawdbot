@@ -105,6 +105,15 @@ configuration. OpenClaw resolves the canonical form automatically.
     MoonshotAI. Your single `AI_GATEWAY_API_KEY` handles authentication for all
     upstream providers.
   </Accordion>
+  <Accordion title="Thinking levels">
+    `/think` options follow trusted upstream model prefixes when OpenClaw knows
+    the upstream provider contract. `vercel-ai-gateway/anthropic/...` uses the
+    Claude thinking profile, including adaptive defaults for Claude 4.6 models.
+    `vercel-ai-gateway/openai/gpt-5.4`, `gpt-5.5`, and Codex-style refs expose
+    `/think xhigh` just like the direct OpenAI/OpenAI Codex providers. Other
+    namespaced refs keep the normal reasoning levels unless their catalog
+    metadata declares more.
+  </Accordion>
 </AccordionGroup>
 
 ## Related

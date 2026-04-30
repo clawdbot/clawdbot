@@ -94,6 +94,20 @@ describe("resolveCurrentDirectiveLevels", () => {
     expect(result.currentReasoningLevel).toBe("stream");
   });
 
+  it("falls back to agentCfg reasoningDefault when agent entry is absent", async () => {
+    const resolveDefaultThinkingLevel = vi.fn().mockResolvedValue("off");
+
+    const result = await resolveCurrentDirectiveLevels({
+      sessionEntry: {},
+      agentCfg: {
+        reasoningDefault: "stream",
+      },
+      resolveDefaultThinkingLevel,
+    });
+
+    expect(result.currentReasoningLevel).toBe("stream");
+  });
+
   it("applies agent reasoningDefault even when thinking is active", async () => {
     const resolveDefaultThinkingLevel = vi.fn().mockResolvedValue("high");
 
@@ -134,6 +148,20 @@ describe("resolveCurrentDirectiveLevels", () => {
     });
 
     // Agent explicitly setting "off" should be respected, not overridden by model default
+    expect(result.currentReasoningLevel).toBe("off");
+  });
+
+  it("respects agentCfg reasoningDefault: off as explicit override", async () => {
+    const resolveDefaultThinkingLevel = vi.fn().mockResolvedValue("off");
+
+    const result = await resolveCurrentDirectiveLevels({
+      sessionEntry: {},
+      agentCfg: {
+        reasoningDefault: "off",
+      },
+      resolveDefaultThinkingLevel,
+    });
+
     expect(result.currentReasoningLevel).toBe("off");
   });
 });

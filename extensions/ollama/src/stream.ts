@@ -758,7 +758,14 @@ function normalizeOllamaToolSchema(schema: unknown, isRoot = false): Record<stri
   return normalized;
 }
 
-function extractToolCalls(content: unknown): OllamaToolCall[] {
+type OllamaToolCallNameOptions = {
+  availableToolNames?: ReadonlySet<string>;
+};
+
+function extractToolCalls(
+  content: unknown,
+  options: OllamaToolCallNameOptions = {},
+): OllamaToolCall[] {
   if (!Array.isArray(content)) {
     return [];
   }
@@ -766,17 +773,69 @@ function extractToolCalls(content: unknown): OllamaToolCall[] {
   const result: OllamaToolCall[] = [];
   for (const part of parts) {
     if (part.type === "toolCall") {
-      result.push({ function: { name: part.name, arguments: ensureArgsObject(part.arguments) } });
+      result.push({
+        function: {
+          name: normalizeOllamaToolCallName(part.name, options),
+          arguments: ensureArgsObject(part.arguments),
+        },
+      });
     } else if (part.type === "tool_use") {
-      result.push({ function: { name: part.name, arguments: ensureArgsObject(part.input) } });
+      result.push({
+        function: {
+          name: normalizeOllamaToolCallName(part.name, options),
+          arguments: ensureArgsObject(part.input),
+        },
+      });
     }
   }
   return result;
 }
 
+function buildOllamaToolNameSet(tools: Tool[] | undefined): ReadonlySet<string> | undefined {
+  if (!tools || !Array.isArray(tools)) {
+    return undefined;
+  }
+  const names = new Set<string>();
+  for (const tool of tools) {
+    if (typeof tool.name === "string" && tool.name.trim()) {
+      names.add(tool.name.trim());
+    }
+  }
+  return names.size > 0 ? names : undefined;
+}
+
+function normalizeOllamaToolCallName(
+  rawName: string,
+  options: OllamaToolCallNameOptions = {},
+): string {
+  const trimmed = rawName.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  const availableToolNames = options.availableToolNames;
+  if (availableToolNames?.has(trimmed)) {
+    return trimmed;
+  }
+
+  const strippedAnySeparator = trimmed.replace(/^(?:functions?|tools?)[./_-]+/iu, "").trim();
+  if (
+    availableToolNames &&
+    strippedAnySeparator !== trimmed &&
+    availableToolNames.has(strippedAnySeparator)
+  ) {
+    return strippedAnySeparator;
+  }
+  if (availableToolNames) {
+    return trimmed;
+  }
+
+  return trimmed.replace(/^(?:functions?|tools?)[./]+/iu, "").trim();
+}
+
 export function convertToOllamaMessages(
   messages: Array<{ role: string; content: unknown }>,
   system?: string,
+  options: OllamaToolCallNameOptions = {},
 ): OllamaChatMessage[] {
   const result: OllamaChatMessage[] = [];
 
@@ -798,7 +857,7 @@ export function convertToOllamaMessages(
 
     if (msg.role === "assistant") {
       const text = extractTextContent(msg.content);
-      const toolCalls = extractToolCalls(msg.content);
+      const toolCalls = extractToolCalls(msg.content, options);
       result.push({
         role: "assistant",
         content: text,
@@ -849,6 +908,7 @@ export function buildAssistantMessage(
   response: OllamaChatResponse,
   modelInfo: StreamModelDescriptor,
   usageFallback?: OllamaUsageFallback,
+  options: OllamaToolCallNameOptions = {},
 ): AssistantMessage {
   const content: (TextContent | ThinkingContent | ToolCall)[] = [];
   const thinking = response.message.thinking ?? response.message.reasoning ?? "";
@@ -866,7 +926,7 @@ export function buildAssistantMessage(
       content.push({
         type: "toolCall",
         id: `ollama_call_${randomUUID()}`,
-        name: toolCall.function.name,
+        name: normalizeOllamaToolCallName(toolCall.function.name, options),
         arguments: normalizeOllamaToolCallArguments(toolCall.function.arguments),
       });
     }
@@ -958,9 +1018,14 @@ export function createOllamaStreamFn(
 
     const run = async () => {
       try {
+        const availableToolNames = buildOllamaToolNameSet(context.tools);
+        const toolCallNameOptions: OllamaToolCallNameOptions = availableToolNames
+          ? { availableToolNames }
+          : {};
         const ollamaMessages = convertToOllamaMessages(
           context.messages ?? [],
           context.systemPrompt,
+          toolCallNameOptions,
         );
         const ollamaTools = extractOllamaTools(context.tools);
 
@@ -1196,7 +1261,12 @@ export function createOllamaStreamFn(
             input: estimateOllamaPromptTokens({ messages: ollamaMessages, tools: ollamaTools }),
             output: estimateOllamaCompletionTokens(finalResponse),
           };
-          const assistantMessage = buildAssistantMessage(finalResponse, modelInfo, usageFallback);
+          const assistantMessage = buildAssistantMessage(
+            finalResponse,
+            modelInfo,
+            usageFallback,
+            toolCallNameOptions,
+          );
           closeThinkingBlock();
           closeTextBlock();
 

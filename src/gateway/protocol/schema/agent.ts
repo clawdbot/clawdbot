@@ -30,6 +30,7 @@ export const AgentEventSchema = Type.Object(
     seq: Type.Integer({ minimum: 0 }),
     stream: NonEmptyString,
     ts: Type.Integer({ minimum: 0 }),
+    spawnedBy: Type.Optional(NonEmptyString),
     data: Type.Record(Type.String(), Type.Unknown()),
   },
   { additionalProperties: false },

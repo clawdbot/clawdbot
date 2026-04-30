@@ -255,10 +255,15 @@ dual-format packages from being partially installed as bundles.
 
 ## Runtime dependencies and cleanup
 
-- Bundled plugin runtime dependencies ship inside the OpenClaw package under
-  `dist/*`. OpenClaw does **not** run `npm install` at startup for bundled
-  plugins; the release pipeline is responsible for shipping a complete bundled
-  dependency payload (see the postpublish verification rule in
+- Third-party compatible bundles do not get startup `npm install` repair. They
+  should be installed through `openclaw plugins install` and ship everything
+  they need in the installed plugin directory.
+- OpenClaw-owned packaged bundled plugins have a narrow exception: when one is
+  enabled, Gateway startup can repair missing declared runtime dependencies
+  before import. Operators can inspect or repair that stage with
+  `openclaw plugins deps`.
+- The release pipeline is still responsible for shipping a complete bundled
+  dependency payload when possible (see the postpublish verification rule in
   [Releasing](/reference/RELEASING)).
 
 ## Security

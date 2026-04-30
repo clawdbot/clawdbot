@@ -320,6 +320,30 @@ describe("cron model formatting and precedence edge cases", () => {
     it("falls through to default when no override is present", async () => {
       await expectDefaultSelectedModel();
     });
+
+    it("does not treat another chat session /model override as a global cron default", async () => {
+      const chatSessionAfterModelDirective = {
+        providerOverride: "openai",
+        modelOverride: "gpt-4.1-mini",
+      };
+
+      await expectSelectedModel(
+        { sessionEntry: chatSessionAfterModelDirective },
+        { provider: "openai", model: "gpt-4.1-mini" },
+      );
+      await expectDefaultSelectedModel({ sessionEntry: {} });
+      await expectSelectedModel(
+        {
+          sessionEntry: {},
+          payload: {
+            kind: "agentTurn",
+            message: DEFAULT_MESSAGE,
+            model: "anthropic/claude-sonnet-4-6",
+          },
+        },
+        { provider: "anthropic", model: "claude-sonnet-4-6" },
+      );
+    });
   });
 
   describe("sequential model switches (CI failure regression)", () => {

@@ -77,6 +77,29 @@ describe("Discord directory contract", () => {
     await expectDirectoryIds(listDiscordDirectoryGroupsFromConfig, cfg, ["channel:555"]);
   });
 
+  it("uses account legacy dm.allowFrom before inherited root allowFrom", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          allowFrom: ["<@111>"],
+          accounts: {
+            work: {
+              dm: { allowFrom: ["<@222>"] },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const entries = await listDiscordDirectoryPeersFromConfig({
+      cfg,
+      accountId: "work",
+      query: null,
+      limit: null,
+    });
+    expect(entries.map((entry) => entry.id)).toEqual(["user:222"]);
+  });
+
   it("applies query and limit filtering for config-backed directories", async () => {
     const cfg = {
       channels: {

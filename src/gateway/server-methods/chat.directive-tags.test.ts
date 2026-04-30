@@ -998,6 +998,36 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
+  it("chat.send broadcasts final replies for telegram-shaped session keys", async () => {
+    createTranscriptFixture("openclaw-chat-send-telegram-final-");
+    mockState.finalText = "telegram ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+    const sessionKey = "agent:main:telegram:direct:123456";
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-telegram-final",
+      sessionKey,
+    });
+
+    expect(payload).toEqual(
+      expect.objectContaining({
+        runId: "idem-telegram-final",
+        sessionKey,
+        state: "final",
+        message: expect.any(Object),
+      }),
+    );
+    expect(extractFirstTextBlock(payload)).toBe("telegram ok");
+    expect(context.nodeSendToSession).toHaveBeenCalledWith(
+      sessionKey,
+      "chat",
+      expect.objectContaining({ sessionKey, state: "final" }),
+    );
+  });
+
   it("chat.send keeps explicit delivery routes for channel-scoped sessions", async () => {
     createTranscriptFixture("openclaw-chat-send-origin-routing-");
     mockState.finalText = "ok";

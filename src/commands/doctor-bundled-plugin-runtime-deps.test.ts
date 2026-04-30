@@ -38,6 +38,23 @@ function writeBundledChannelOwnerPlugin(
   });
 }
 
+function writeBundledProviderPlugin(
+  root: string,
+  id: string,
+  providers: string[],
+  dependencies: Record<string, string>,
+) {
+  writeJson(path.join(root, "dist", "extensions", id, "package.json"), {
+    dependencies,
+  });
+  writeJson(path.join(root, "dist", "extensions", id, "openclaw.plugin.json"), {
+    id,
+    providers,
+    enabledByDefault: true,
+    configSchema: { type: "object" },
+  });
+}
+
 function writeDefaultEnabledBundledChannelPlugin(
   root: string,
   id: string,
@@ -56,12 +73,54 @@ function createInstalledRuntimeDeps(): InstalledRuntimeDeps {
   return [];
 }
 
-function readRetainedRuntimeDepsManifest(installRoot: string): string[] {
-  const manifestPath = path.join(installRoot, ".openclaw-runtime-deps.json");
-  const parsed = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as { specs?: unknown };
-  return Array.isArray(parsed.specs)
-    ? parsed.specs.filter((entry): entry is string => typeof entry === "string")
-    : [];
+function parseInstallSpec(spec: string): { name: string; version: string } {
+  const versionSeparator = spec.startsWith("@") ? spec.indexOf("@", 1) : spec.lastIndexOf("@");
+  if (versionSeparator <= 0) {
+    throw new Error(`Invalid install spec ${spec}`);
+  }
+  return {
+    name: spec.slice(0, versionSeparator),
+    version: spec.slice(versionSeparator + 1),
+  };
+}
+
+function materializeRuntimeDeps(params: BundledRuntimeDepsInstallParams): void {
+  for (const spec of params.installSpecs ?? params.missingSpecs) {
+    const { name, version } = parseInstallSpec(spec);
+    writeJson(path.join(params.installRoot, "node_modules", ...name.split("/"), "package.json"), {
+      name,
+      version: version.replace(/^[~^]/u, ""),
+    });
+  }
+}
+
+function readMaterializedRuntimeDepSpecs(
+  installRoot: string,
+  expectedSpecs: readonly string[],
+): string[] {
+  return expectedSpecs.flatMap((spec) => {
+    const { name } = parseInstallSpec(spec);
+    const packageJsonPath = path.join(
+      installRoot,
+      "node_modules",
+      ...name.split("/"),
+      "package.json",
+    );
+    if (!fs.existsSync(packageJsonPath)) {
+      return [];
+    }
+    const parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+      name?: unknown;
+      version?: unknown;
+    };
+    return typeof parsed.name === "string" && typeof parsed.version === "string"
+      ? [`${parsed.name}@${parsed.version}`]
+      : [];
+  });
+}
+
+function expectNoLegacyRuntimeDepsManifest(installRoot: string): void {
+  expect(fs.existsSync(path.join(installRoot, ".openclaw-runtime-deps.json"))).toBe(false);
 }
 
 function createNonInteractivePrompter(
@@ -437,6 +496,7 @@ describe("doctor bundled plugin runtime deps", () => {
       },
       installDeps: (params) => {
         installed.push(params);
+        materializeRuntimeDeps(params);
       },
     });
 
@@ -472,6 +532,88 @@ describe("doctor bundled plugin runtime deps", () => {
       },
       installDeps: (params) => {
         installed.push(params);
+        materializeRuntimeDeps(params);
+      },
+    });
+
+    expect(installed).toEqual([
+      {
+        installRoot: resolveBundledRuntimeDependencyPackageInstallRoot(root),
+        missingSpecs: ["bedrock-only@1.0.0"],
+        installSpecs: ["bedrock-only@1.0.0"],
+      },
+    ]);
+  });
+
+  it("repairs configured provider deps", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeBundledProviderPlugin(root, "anthropic-vertex", ["anthropic-vertex"], {
+      "@anthropic-ai/vertex-sdk": "^0.16.0",
+    });
+    const installed = createInstalledRuntimeDeps();
+
+    await maybeRepairBundledPluginRuntimeDeps({
+      runtime: createRuntime(),
+      prompter: createNonInteractivePrompter(),
+      packageRoot: root,
+      config: {
+        plugins: { enabled: true },
+        agents: {
+          defaults: {
+            model: "anthropic-vertex/claude-sonnet-4-6",
+          },
+        },
+      },
+      installDeps: (params) => {
+        installed.push(params);
+        materializeRuntimeDeps(params);
+      },
+    });
+
+    expect(installed).toEqual([
+      {
+        installRoot: resolveBundledRuntimeDependencyPackageInstallRoot(root),
+        missingSpecs: ["@anthropic-ai/vertex-sdk@^0.16.0"],
+        installSpecs: ["@anthropic-ai/vertex-sdk@^0.16.0"],
+      },
+    ]);
+  });
+
+  it("repairs configured provider deps from provider aliases and subagent defaults", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeBundledProviderPlugin(root, "amazon-bedrock", ["amazon-bedrock"], {
+      "bedrock-only": "1.0.0",
+    });
+    const installed = createInstalledRuntimeDeps();
+
+    await maybeRepairBundledPluginRuntimeDeps({
+      runtime: createRuntime(),
+      prompter: createNonInteractivePrompter(),
+      packageRoot: root,
+      config: {
+        plugins: { enabled: true },
+        models: {
+          providers: {
+            "aws-bedrock": {
+              baseUrl: "",
+              auth: "aws-sdk",
+              models: [],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            subagents: {
+              model: "bedrock/claude-sonnet-4-6",
+            },
+          },
+        },
+      },
+      installDeps: (params) => {
+        installed.push(params);
+        materializeRuntimeDeps(params);
       },
     });
 
@@ -500,6 +642,7 @@ describe("doctor bundled plugin runtime deps", () => {
       },
       installDeps: (params) => {
         installed.push(params);
+        materializeRuntimeDeps(params);
       },
     });
 
@@ -512,7 +655,10 @@ describe("doctor bundled plugin runtime deps", () => {
       },
     ]);
     expect(installRoot).not.toBe(root);
-    expect(readRetainedRuntimeDepsManifest(installRoot)).toEqual(["grammy@1.37.0"]);
+    expect(readMaterializedRuntimeDepSpecs(installRoot, ["grammy@1.37.0"])).toEqual([
+      "grammy@1.37.0",
+    ]);
+    expectNoLegacyRuntimeDepsManifest(installRoot);
   });
 
   it("logs runtime dependency repair progress before and after install", async () => {
@@ -534,9 +680,7 @@ describe("doctor bundled plugin runtime deps", () => {
 
     expect(logs).toEqual(
       expect.arrayContaining([
-        expect.stringContaining(
-          "Installing bundled plugin runtime deps (1 missing, 1 install specs): grammy@1.37.0",
-        ),
+        expect.stringContaining("Installing bundled plugin runtime deps (1 specs): grammy@1.37.0"),
         expect.stringContaining("Installed bundled plugin runtime deps in"),
       ]),
     );
@@ -622,6 +766,7 @@ describe("doctor bundled plugin runtime deps", () => {
       },
       installDeps: (params) => {
         installed.push(params);
+        materializeRuntimeDeps(params);
       },
     });
 
@@ -658,6 +803,7 @@ describe("doctor bundled plugin runtime deps", () => {
       },
       installDeps: (params) => {
         installed.push(params);
+        materializeRuntimeDeps(params);
       },
     });
 
@@ -740,6 +886,7 @@ describe("doctor bundled plugin runtime deps", () => {
       },
       installDeps: (params) => {
         installed.push(params);
+        materializeRuntimeDeps(params);
       },
     });
 
@@ -752,10 +899,13 @@ describe("doctor bundled plugin runtime deps", () => {
       },
     ]);
     expect(installRoot).toContain(stageDir);
-    expect(readRetainedRuntimeDepsManifest(installRoot)).toEqual(["@slack/web-api@7.15.1"]);
+    expect(readMaterializedRuntimeDepSpecs(installRoot, ["@slack/web-api@7.15.1"])).toEqual([
+      "@slack/web-api@7.15.1",
+    ]);
+    expectNoLegacyRuntimeDepsManifest(installRoot);
   });
 
-  it("repairs only missing deps into the final layered stage dir", async () => {
+  it("repairs the complete dependency plan into the final layered stage dir", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
     const baselineStageDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "openclaw-doctor-bundled-baseline-"),
@@ -797,14 +947,14 @@ describe("doctor bundled plugin runtime deps", () => {
     expect(installed).toEqual([
       {
         installRoot,
-        missingSpecs: ["grammy@1.37.0"],
-        installSpecs: ["grammy@1.37.0"],
+        missingSpecs: ["@slack/web-api@7.15.1", "grammy@1.37.0"],
+        installSpecs: ["@slack/web-api@7.15.1", "grammy@1.37.0"],
       },
     ]);
-    expect(readRetainedRuntimeDepsManifest(installRoot)).toEqual(["grammy@1.37.0"]);
+    expectNoLegacyRuntimeDepsManifest(installRoot);
   });
 
-  it("drops stale retained bundled deps when repairing a subset", async () => {
+  it("drops stale legacy bundled deps manifests when repairing a subset", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
     writeJson(path.join(root, "package.json"), { name: "openclaw" });
     writeBundledChannelPlugin(root, "telegram", { grammy: "1.37.0" });
@@ -829,6 +979,7 @@ describe("doctor bundled plugin runtime deps", () => {
       },
       installDeps: (params) => {
         installed.push(params);
+        materializeRuntimeDeps(params);
       },
     });
 
@@ -840,6 +991,9 @@ describe("doctor bundled plugin runtime deps", () => {
       },
     ]);
     expect(installRoot).not.toBe(root);
-    expect(readRetainedRuntimeDepsManifest(installRoot)).toEqual(["grammy@1.37.0"]);
+    expect(readMaterializedRuntimeDepSpecs(installRoot, ["grammy@1.37.0"])).toEqual([
+      "grammy@1.37.0",
+    ]);
+    expectNoLegacyRuntimeDepsManifest(installRoot);
   });
 });

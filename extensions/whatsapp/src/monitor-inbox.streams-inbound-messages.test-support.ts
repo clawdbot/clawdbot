@@ -3,6 +3,7 @@ import path from "node:path";
 import "./monitor-inbox.test-harness.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WhatsAppRetryableInboundError } from "./inbound/dedupe.js";
+import { WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES } from "./inbound/monitor.js";
 import {
   type InboxMonitorOptions,
   InboxOnMessage,
@@ -211,6 +212,93 @@ describe("web monitor inbox", () => {
 
     expect(sock.groupFetchAllParticipating).toHaveBeenCalledTimes(1);
     expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "available");
+
+    await listener.close();
+  });
+
+  it("keeps group inbound alive with cached metadata after reconnect-time metadata fetch failures", async () => {
+    const groupMetadataCache: NonNullable<InboxMonitorOptions["groupMetadataCache"]> = new Map();
+    const onMessage = vi.fn(async (_msg: Parameters<InboxOnMessage>[0]) => {
+      return;
+    });
+
+    const firstSock = getSock();
+    firstSock.groupFetchAllParticipating.mockResolvedValueOnce({
+      "123@g.us": {
+        id: "123@g.us",
+        subject: "Recovered Group",
+        owner: undefined,
+        participants: [{ id: "444@s.whatsapp.net" }],
+      },
+    });
+    const first = await startInboxMonitor(onMessage as InboxOnMessage, {
+      groupMetadataCache,
+    });
+    await vi.waitFor(() => {
+      expect(groupMetadataCache.get("123@g.us")?.subject).toBe("Recovered Group");
+    });
+    expect(
+      (groupMetadataCache.get("123@g.us") as Record<string, unknown>)?.participants,
+    ).toBeUndefined();
+    await first.listener.close();
+
+    const second = await startInboxMonitor(onMessage as InboxOnMessage, {
+      groupMetadataCache,
+    });
+    second.sock.groupMetadata.mockRejectedValueOnce(new Error("408 timed out"));
+    second.sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("group-reconnect-cache"),
+        remoteJid: "123@g.us",
+        participant: "444@s.whatsapp.net",
+        text: "ping",
+        timestamp: 1_700_000_000,
+      }),
+    );
+
+    await waitForMessageCalls(onMessage, 1);
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: "ping",
+        from: "123@g.us",
+        groupSubject: "Recovered Group",
+        senderE164: "+444",
+        chatType: "group",
+      }),
+    );
+    expect(onMessage.mock.calls[0]?.[0].groupParticipants).toBeUndefined();
+
+    await second.listener.close();
+  });
+
+  it("bounds cached group metadata kept across reconnects", async () => {
+    const groupMetadataCache: NonNullable<InboxMonitorOptions["groupMetadataCache"]> = new Map();
+    const groups = Object.fromEntries(
+      Array.from({ length: WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES + 2 }, (_, index) => [
+        `${index}@g.us`,
+        {
+          id: `${index}@g.us`,
+          subject: `Group ${index}`,
+          owner: undefined,
+          participants: [],
+        },
+      ]),
+    );
+    const sock = getSock();
+    sock.groupFetchAllParticipating.mockResolvedValueOnce(groups);
+
+    const { listener } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage, {
+      groupMetadataCache,
+    });
+
+    await vi.waitFor(() => {
+      expect(groupMetadataCache.size).toBe(WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES);
+    });
+    expect(groupMetadataCache.has("0@g.us")).toBe(false);
+    expect(groupMetadataCache.has(`${WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES + 1}@g.us`)).toBe(
+      true,
+    );
 
     await listener.close();
   });

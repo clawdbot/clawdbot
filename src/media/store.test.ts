@@ -308,6 +308,36 @@ describe("media store", () => {
       },
     },
     {
+      name: "rejects traversal media subdirs before saving buffers",
+      run: async () => {
+        await withTempStore(async (store, home) => {
+          const mediaDir = await store.ensureMediaDir();
+          const outsideDir = path.join(home, "outside-media");
+          const traversalSubdir = path.relative(mediaDir, outsideDir);
+
+          await expect(
+            store.saveMediaBuffer(Buffer.from("escape"), "text/plain", traversalSubdir),
+          ).rejects.toThrow("unsafe media subdir");
+          await expect(fs.stat(outsideDir)).rejects.toThrow();
+        });
+      },
+    },
+    {
+      name: "rejects traversal media subdirs before resolving IDs",
+      run: async () => {
+        await withTempStore(async (store, home) => {
+          const mediaDir = await store.ensureMediaDir();
+          const outsideDir = path.join(home, "outside-media-resolve");
+          await fs.mkdir(outsideDir, { recursive: true });
+          await fs.writeFile(path.join(outsideDir, "passwd"), "not media");
+
+          await expect(
+            store.resolveMediaBufferPath("passwd", path.relative(mediaDir, outsideDir)),
+          ).rejects.toThrow("unsafe media subdir");
+        });
+      },
+    },
+    {
       name: "retries local-source writes when cleanup prunes the target directory",
       run: async () => {
         await expectRetryAfterPrunedWriteCase({

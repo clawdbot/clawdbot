@@ -7,7 +7,9 @@ import {
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
+  type GoogleChatConfigAccessorAccount,
   listGoogleChatAccountIds,
+  resolveGoogleChatConfigAccessorAccount,
   resolveDefaultGoogleChatAccountId,
   resolveGoogleChatAccount,
   type ResolvedGoogleChatAccount,
@@ -24,10 +26,14 @@ const formatGoogleChatAllowFromEntry = (entry: string) =>
       .replace(/^users\//i, ""),
   );
 
-const googleChatConfigAdapter = createScopedChannelConfigAdapter<ResolvedGoogleChatAccount>({
+const googleChatConfigAdapter = createScopedChannelConfigAdapter<
+  ResolvedGoogleChatAccount,
+  GoogleChatConfigAccessorAccount
+>({
   sectionKey: "googlechat",
   listAccountIds: listGoogleChatAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveGoogleChatAccount),
+  resolveAccessorAccount: resolveGoogleChatConfigAccessorAccount,
   defaultAccountId: resolveDefaultGoogleChatAccountId,
   clearBaseFields: [
     "serviceAccount",

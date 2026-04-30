@@ -11,6 +11,7 @@ const mockGatewayClientRequests = vi.hoisted(() =>
   })),
 );
 const mockCreateOperatorApprovalsGatewayClient = vi.hoisted(() => vi.fn());
+const mockStartGatewayClientWhenEventLoopReady = vi.hoisted(() => vi.fn());
 const loggerMocks = vi.hoisted(() => ({
   debug: vi.fn(),
   error: vi.fn(),
@@ -18,6 +19,10 @@ const loggerMocks = vi.hoisted(() => ({
 
 vi.mock("../gateway/operator-approvals-client.js", () => ({
   createOperatorApprovalsGatewayClient: mockCreateOperatorApprovalsGatewayClient,
+}));
+
+vi.mock("../gateway/client-start-readiness.js", () => ({
+  startGatewayClientWhenEventLoopReady: mockStartGatewayClientWhenEventLoopReady,
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
@@ -97,6 +102,10 @@ beforeEach(() => {
   mockGatewayClientRequests.mockImplementation(async (method: string) =>
     method.endsWith(".approval.list") ? [] : { ok: true },
   );
+  mockStartGatewayClientWhenEventLoopReady.mockReset().mockImplementation(async (client) => {
+    client.start();
+    return { ready: true, elapsedMs: 0, maxDriftMs: 0, checks: 2, aborted: false };
+  });
   loggerMocks.debug.mockReset();
   loggerMocks.error.mockReset();
   mockCreateOperatorApprovalsGatewayClient.mockReset().mockImplementation(async (params) => ({
@@ -252,10 +261,46 @@ describe("createExecApprovalChannelRuntime", () => {
     await runtime.request("exec.approval.resolve", { id: "abc", decision: "deny" });
 
     expect(mockGatewayClientStarts).toHaveBeenCalledTimes(1);
+    expect(mockStartGatewayClientWhenEventLoopReady).toHaveBeenCalledWith(
+      expect.objectContaining({ start: expect.any(Function) }),
+      {
+        clientOptions: { preauthHandshakeTimeoutMs: undefined },
+      },
+    );
     expect(mockGatewayClientRequests).toHaveBeenCalledWith("exec.approval.resolve", {
       id: "abc",
       decision: "deny",
     });
+  });
+
+  it("fails startup when gateway client readiness times out before start", async () => {
+    mockStartGatewayClientWhenEventLoopReady.mockResolvedValueOnce({
+      ready: false,
+      elapsedMs: 30_000,
+      maxDriftMs: 1_000,
+      checks: 1,
+      aborted: false,
+    });
+    const runtime = createExecApprovalChannelRuntime({
+      label: "test/exec-approvals",
+      clientDisplayName: "Test Exec Approvals",
+      cfg: { gateway: { handshakeTimeoutMs: 30_000 } } as never,
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      deliverRequested: async () => [],
+      finalizeResolved: async () => undefined,
+    });
+
+    await expect(runtime.start()).rejects.toThrow("gateway event loop readiness timeout");
+
+    expect(mockGatewayClientStarts).not.toHaveBeenCalled();
+    expect(mockGatewayClientStops).toHaveBeenCalledTimes(1);
+    expect(mockStartGatewayClientWhenEventLoopReady).toHaveBeenCalledWith(
+      expect.objectContaining({ start: expect.any(Function) }),
+      {
+        clientOptions: { preauthHandshakeTimeoutMs: 30_000 },
+      },
+    );
   });
 
   it("can retry start after gateway client creation fails", async () => {

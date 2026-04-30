@@ -234,7 +234,6 @@ function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]
 // content and, on Bedrock or strict OpenAI-compatible providers, can also
 // trigger turn-ordering rejections.
 const TRANSCRIPT_ONLY_OPENCLAW_MODELS = new Set<string>(["delivery-mirror", "gateway-injected"]);
-const OMITTED_INBOUND_METADATA_TEXT = "[assistant copied inbound metadata omitted]";
 
 function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
   if (!message || message.role !== "user") {
@@ -282,6 +281,49 @@ function isTranscriptOnlyOpenclawAssistant(message: AgentMessage): boolean {
   );
 }
 
+function normalizeAssistantReplayTextContent(message: AgentMessage, replayContent: string) {
+  const strippedText = stripInboundMetadata(replayContent);
+  if (!strippedText.trim()) {
+    return null;
+  }
+  return {
+    ...message,
+    content: [{ type: "text", text: strippedText }],
+  } as AgentMessage;
+}
+
+function normalizeAssistantReplayBlockContent(message: AgentMessage, replayContent: unknown[]) {
+  let touched = false;
+  const sanitizedContent: unknown[] = [];
+  for (const block of replayContent) {
+    if (!block || typeof block !== "object") {
+      sanitizedContent.push(block);
+      continue;
+    }
+    const text = (block as { text?: unknown }).text;
+    if (typeof text !== "string") {
+      sanitizedContent.push(block);
+      continue;
+    }
+    const strippedText = stripInboundMetadata(text);
+    if (strippedText === text) {
+      sanitizedContent.push(block);
+      continue;
+    }
+    touched = true;
+    if (strippedText.trim()) {
+      sanitizedContent.push({ ...block, text: strippedText });
+    }
+  }
+  if (!touched) {
+    return message;
+  }
+  if (sanitizedContent.length === 0) {
+    return null;
+  }
+  return { ...message, content: sanitizedContent } as AgentMessage;
+}
+
 export function normalizeAssistantReplayContent(messages: AgentMessage[]): AgentMessage[] {
   let touched = false;
   const out: AgentMessage[] = [];
@@ -308,44 +350,19 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
     }
     const replayContent = (message as { content?: unknown }).content;
     if (typeof replayContent === "string") {
-      const strippedText = stripInboundMetadata(replayContent);
-      out.push({
-        ...message,
-        content: [
-          {
-            type: "text",
-            text: strippedText.trim() ? strippedText : OMITTED_INBOUND_METADATA_TEXT,
-          },
-        ],
-      });
+      const normalized = normalizeAssistantReplayTextContent(message, replayContent);
+      if (normalized) {
+        out.push(normalized);
+      }
       touched = true;
       continue;
     }
     if (Array.isArray(replayContent)) {
-      let contentTouched = false;
-      const sanitizedContent = replayContent.map((block) => {
-        if (!block || typeof block !== "object") {
-          return block;
+      const normalized = normalizeAssistantReplayBlockContent(message, replayContent);
+      if (normalized !== message) {
+        if (normalized) {
+          out.push(normalized);
         }
-        const text = (block as { text?: unknown }).text;
-        if (typeof text !== "string") {
-          return block;
-        }
-        const strippedText = stripInboundMetadata(text);
-        if (strippedText === text) {
-          return block;
-        }
-        contentTouched = true;
-        return {
-          ...block,
-          text: strippedText.trim() ? strippedText : OMITTED_INBOUND_METADATA_TEXT,
-        };
-      });
-      if (contentTouched) {
-        out.push({
-          ...message,
-          content: sanitizedContent,
-        });
         touched = true;
         continue;
       }

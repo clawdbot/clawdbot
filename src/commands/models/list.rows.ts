@@ -1,12 +1,6 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
-import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
-import {
-  hasUsableCustomProviderApiKey,
-  resolveAwsSdkEnvVarName,
-  resolveEnvApiKey,
-} from "../../agents/model-auth.js";
 import {
   shouldSuppressBuiltInModel,
   shouldSuppressBuiltInModelFromManifest,
@@ -15,6 +9,7 @@ import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { NormalizedModelCatalogRow } from "../../model-catalog/index.js";
+import type { ModelListAuthIndex } from "./list.auth-index.js";
 import type { ListRowModel } from "./list.model-row.js";
 import { toModelRow } from "./list.model-row.js";
 import type { ConfiguredEntry, ModelRow } from "./list.types.js";
@@ -23,9 +18,7 @@ import { isLocalBaseUrl, modelKey } from "./shared.js";
 type ConfiguredByKey = Map<string, ConfiguredEntry>;
 type ModelCatalogModule = typeof import("../../agents/model-catalog.js");
 type ModelResolverModule = typeof import("../../agents/pi-embedded-runner/model.js");
-type ProfileListModule = typeof import("../../agents/auth-profiles/profile-list.js");
 type ProviderCatalogModule = typeof import("./list.provider-catalog.js");
-type SyntheticAuthModule = typeof import("../../plugins/synthetic-auth.runtime.js");
 
 type RowFilter = {
   provider?: string;
@@ -35,7 +28,7 @@ type RowFilter = {
 export type RowBuilderContext = {
   cfg: OpenClawConfig;
   agentDir: string;
-  authStore: AuthProfileStore;
+  authIndex: ModelListAuthIndex;
   availableKeys?: Set<string>;
   configuredByKey: ConfiguredByKey;
   discoveredKeys: Set<string>;
@@ -45,9 +38,7 @@ export type RowBuilderContext = {
 
 let modelCatalogModulePromise: Promise<ModelCatalogModule> | undefined;
 let modelResolverModulePromise: Promise<ModelResolverModule> | undefined;
-let profileListModulePromise: Promise<ProfileListModule> | undefined;
 let providerCatalogModulePromise: Promise<ProviderCatalogModule> | undefined;
-let syntheticAuthModulePromise: Promise<SyntheticAuthModule> | undefined;
 
 function loadModelCatalogModule(): Promise<ModelCatalogModule> {
   modelCatalogModulePromise ??= import("../../agents/model-catalog.js");
@@ -59,19 +50,9 @@ function loadModelResolverModule(): Promise<ModelResolverModule> {
   return modelResolverModulePromise;
 }
 
-function loadProfileListModule(): Promise<ProfileListModule> {
-  profileListModulePromise ??= import("../../agents/auth-profiles/profile-list.js");
-  return profileListModulePromise;
-}
-
 function loadProviderCatalogModule(): Promise<ProviderCatalogModule> {
   providerCatalogModulePromise ??= import("./list.provider-catalog.js");
   return providerCatalogModulePromise;
-}
-
-function loadSyntheticAuthModule(): Promise<SyntheticAuthModule> {
-  syntheticAuthModulePromise ??= import("../../plugins/synthetic-auth.runtime.js");
-  return syntheticAuthModulePromise;
 }
 
 function matchesRowFilter(filter: RowFilter, model: { provider: string; baseUrl?: string }) {
@@ -84,28 +65,6 @@ function matchesRowFilter(filter: RowFilter, model: { provider: string; baseUrl?
   return true;
 }
 
-async function hasAuthForProvider(params: {
-  provider: string;
-  cfg: OpenClawConfig;
-  authStore: AuthProfileStore;
-}): Promise<boolean> {
-  const { listProfilesForProvider } = await loadProfileListModule();
-  if (listProfilesForProvider(params.authStore, params.provider).length > 0) {
-    return true;
-  }
-  if (params.provider === "amazon-bedrock" && resolveAwsSdkEnvVarName()) {
-    return true;
-  }
-  if (resolveEnvApiKey(params.provider)) {
-    return true;
-  }
-  if (hasUsableCustomProviderApiKey(params.cfg, params.provider)) {
-    return true;
-  }
-  const { resolveRuntimeSyntheticAuthProviderRefs } = await loadSyntheticAuthModule();
-  return resolveRuntimeSyntheticAuthProviderRefs().includes(params.provider);
-}
-
 async function buildRow(params: {
   model: ListRowModel;
   key: string;
@@ -115,23 +74,16 @@ async function buildRow(params: {
   const configured = params.context.configuredByKey.get(params.key);
   const shouldResolveProviderAuth =
     params.context.availableKeys === undefined || params.allowProviderAvailabilityFallback === true;
-  const hasProviderAuth = shouldResolveProviderAuth
-    ? await hasAuthForProvider({
-        provider: params.model.provider,
-        cfg: params.context.cfg,
-        authStore: params.context.authStore,
-      })
-    : false;
   return toModelRow({
     model: params.model,
     key: params.key,
     tags: configured ? Array.from(configured.tags) : [],
     aliases: configured?.aliases ?? [],
     availableKeys: params.context.availableKeys,
-    cfg: params.context.cfg,
-    authStore: params.context.authStore,
     allowProviderAvailabilityFallback: params.allowProviderAvailabilityFallback ?? false,
-    hasAuthForProvider: shouldResolveProviderAuth ? () => hasProviderAuth : undefined,
+    hasAuthForProvider: shouldResolveProviderAuth
+      ? (provider) => params.context.authIndex.hasProviderAuth(provider)
+      : undefined,
   });
 }
 
@@ -503,13 +455,6 @@ export async function appendConfiguredRows(params: {
       model &&
       (params.context.availableKeys === undefined ||
         !params.context.discoveredKeys.has(modelKey(model.provider, model.id)));
-    const hasProviderAuth = shouldResolveProviderAuth
-      ? await hasAuthForProvider({
-          provider: model.provider,
-          cfg: params.context.cfg,
-          authStore: params.context.authStore,
-        })
-      : false;
     params.rows.push(
       toModelRow({
         model,
@@ -517,12 +462,12 @@ export async function appendConfiguredRows(params: {
         tags: Array.from(entry.tags),
         aliases: entry.aliases,
         availableKeys: params.context.availableKeys,
-        cfg: params.context.cfg,
-        authStore: params.context.authStore,
         allowProviderAvailabilityFallback: model
           ? !params.context.discoveredKeys.has(modelKey(model.provider, model.id))
           : false,
-        hasAuthForProvider: shouldResolveProviderAuth ? () => hasProviderAuth : undefined,
+        hasAuthForProvider: shouldResolveProviderAuth
+          ? (provider) => params.context.authIndex.hasProviderAuth(provider)
+          : undefined,
       }),
     );
   }

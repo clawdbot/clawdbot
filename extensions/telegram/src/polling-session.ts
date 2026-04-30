@@ -212,11 +212,41 @@ export class TelegramPollingSession {
       this.#webhookCleared = true;
       return "ready";
     } catch (err) {
+      if (await this.#confirmWebhookAlreadyAbsent(bot, err)) {
+        this.#webhookCleared = true;
+        this.opts.log(
+          "[telegram] deleteWebhook failed, but getWebhookInfo confirmed no webhook is set; continuing with polling.",
+        );
+        return "ready";
+      }
       const shouldRetry = await this.#waitBeforeRetryOnRecoverableSetupError(
         err,
         "Telegram webhook cleanup failed",
       );
       return shouldRetry ? "retry" : "exit";
+    }
+  }
+
+  async #confirmWebhookAlreadyAbsent(
+    bot: TelegramBot,
+    deleteWebhookError: unknown,
+  ): Promise<boolean> {
+    if (!isRecoverableTelegramNetworkError(deleteWebhookError, { context: "unknown" })) {
+      return false;
+    }
+    try {
+      const webhookInfo = await withTelegramApiErrorLogging({
+        operation: "getWebhookInfo",
+        runtime: this.opts.runtime,
+        shouldLog: (err) => !isRecoverableTelegramNetworkError(err, { context: "unknown" }),
+        fn: () => bot.api.getWebhookInfo(),
+      });
+      return typeof webhookInfo?.url === "string" && webhookInfo.url.trim().length === 0;
+    } catch (err) {
+      if (!isRecoverableTelegramNetworkError(err, { context: "unknown" })) {
+        throw err;
+      }
+      return false;
     }
   }
 

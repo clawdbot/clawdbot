@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { t } from "../../i18n/index.ts";
 import type { CompactionStatus, FallbackStatus } from "../app-tool-stream.ts";
 import {
   getChatAttachmentPreviewUrl,
@@ -1067,6 +1068,7 @@ export function renderChat(props: ChatProps) {
           ? html`
               <resizable-divider
                 .splitRatio=${splitRatio}
+                .label=${t("nav.resize")}
                 @resize=${(e: CustomEvent) => props.onSplitRatioChange?.(e.detail.splitRatio)}
               ></resizable-divider>
               <div class="chat-sidebar">

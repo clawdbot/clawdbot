@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { Command } from "commander";
 import JSON5 from "json5";
 import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
@@ -67,10 +68,26 @@ type ConfigSetOperation = {
   requestedPath: PathSegment[];
   setPath: PathSegment[];
   value: unknown;
+  mutation?: "set" | "merge" | "replace" | "delete";
   schemaValidated?: boolean;
   touchedSecretTargetPath?: string;
   touchedProviderAlias?: string;
   assignedRef?: SecretRef;
+};
+type ConfigPatchOptions = {
+  file?: string | undefined;
+  stdin?: boolean | undefined;
+  dryRun?: boolean | undefined;
+  allowExec?: boolean | undefined;
+  json?: boolean | undefined;
+  replacePath?: string[] | undefined;
+};
+type ConfigMutationOptions = {
+  dryRun?: boolean | undefined;
+  allowExec?: boolean | undefined;
+  json?: boolean | undefined;
+  merge?: boolean | undefined;
+  replace?: boolean | undefined;
 };
 
 const GATEWAY_AUTH_MODE_PATH: PathSegment[] = ["gateway", "auth", "mode"];
@@ -88,6 +105,10 @@ const CONFIG_SET_EXAMPLE_PROVIDER = formatCliCommand(
 const CONFIG_SET_EXAMPLE_BATCH = formatCliCommand(
   "openclaw config set --batch-file ./config-set.batch.json --dry-run",
 );
+const CONFIG_PATCH_EXAMPLE_FILE = formatCliCommand(
+  "openclaw config patch --file ./openclaw.patch.json5 --dry-run",
+);
+const CONFIG_PATCH_EXAMPLE_STDIN = formatCliCommand("openclaw config patch --stdin");
 const CONFIG_SET_DESCRIPTION = [
   "Set config values by path (value mode, ref/provider builder mode, or batch JSON mode).",
   "Examples:",
@@ -96,7 +117,15 @@ const CONFIG_SET_DESCRIPTION = [
   CONFIG_SET_EXAMPLE_PROVIDER,
   CONFIG_SET_EXAMPLE_BATCH,
 ].join("\n");
+const CONFIG_PATCH_DESCRIPTION = [
+  "Patch config from a JSON5 object in one validated write.",
+  "Objects merge recursively, arrays/scalars replace, and null deletes a path.",
+  "Examples:",
+  CONFIG_PATCH_EXAMPLE_FILE,
+  CONFIG_PATCH_EXAMPLE_STDIN,
+].join("\n");
 const CONFIG_SET_POLICY_ERROR_MAX_ISSUES = 5;
+const CONFIG_PATCH_STDIN_MAX_BYTES = 1024 * 1024;
 
 class ConfigSetDryRunValidationError extends Error {
   constructor(readonly result: ConfigSetDryRunResult) {
@@ -795,7 +824,8 @@ function buildRefAssignmentOperation(params: {
     requestedPath: params.requestedPath,
     setPath: params.requestedPath,
     value: params.ref,
-    schemaValidated: true,
+    // Only registry-known SecretRef targets have had their schema shape validated here.
+    ...(resolved ? { schemaValidated: true } : {}),
     touchedSecretTargetPath: resolved
       ? toDotPath(resolved.pathSegments)
       : toDotPath(params.requestedPath),
@@ -878,6 +908,176 @@ function parseBatchOperations(entries: ConfigSetBatchEntry[]): ConfigSetOperatio
     );
   }
   return operations;
+}
+
+function configPatchModeError(message: string): Error {
+  return new Error(`config patch mode error: ${message}`);
+}
+
+async function readStdinText(): Promise<string> {
+  const chunks: string[] = [];
+  let bytes = 0;
+  if (process.stdin.isTTY) {
+    throw configPatchModeError(
+      "--stdin refuses to read from an interactive terminal; pipe input or use --file <path>.",
+    );
+  }
+  process.stdin.setEncoding("utf8");
+  for await (const chunk of process.stdin) {
+    const text = String(chunk);
+    bytes += Buffer.byteLength(text, "utf8");
+    if (bytes > CONFIG_PATCH_STDIN_MAX_BYTES) {
+      throw configPatchModeError(
+        `--stdin input exceeds ${CONFIG_PATCH_STDIN_MAX_BYTES} bytes; use --file <path> for larger patches.`,
+      );
+    }
+    chunks.push(text);
+  }
+  return chunks.join("");
+}
+
+async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> {
+  const file = normalizeOptionalString(opts.file);
+  const stdin = Boolean(opts.stdin);
+  if (Boolean(file) === stdin) {
+    throw configPatchModeError("provide exactly one of --file <path> or --stdin.");
+  }
+  const sourceLabel = stdin ? "--stdin" : "--file";
+  const raw = stdin ? await readStdinText() : fs.readFileSync(file as string, "utf8");
+  try {
+    return JSON5.parse(raw);
+  } catch (err) {
+    throw new Error(`Failed to parse ${sourceLabel} as JSON5: ${String(err)}`, { cause: err });
+  }
+}
+
+function parseReplacePaths(paths: string[] | undefined): PathSegment[][] {
+  return (paths ?? []).map((path) => parseRequiredPath(path));
+}
+
+function pathKey(path: PathSegment[]): string {
+  return JSON.stringify(path);
+}
+
+function buildDeleteOperation(path: PathSegment[]): ConfigSetOperation {
+  return {
+    inputMode: "json",
+    requestedPath: path,
+    setPath: path,
+    value: undefined,
+    mutation: "delete",
+  };
+}
+
+function buildApplyValueOperation(params: {
+  path: PathSegment[];
+  value: unknown;
+  mutation?: ConfigSetOperation["mutation"];
+}): ConfigSetOperation {
+  const ref = isPlainRecord(params.value) ? coerceSecretRef(params.value) : null;
+  if (ref) {
+    return {
+      ...buildRefAssignmentOperation({
+        requestedPath: params.path,
+        ref: parseSecretRefFromUnknown(params.value, `patch.${toDotPath(params.path)}`),
+        inputMode: "json",
+      }),
+      ...(params.mutation ? { mutation: params.mutation } : {}),
+    };
+  }
+  return {
+    ...buildValueAssignmentOperation({
+      requestedPath: params.path,
+      value: params.value,
+      inputMode: "json",
+    }),
+    ...(params.mutation ? { mutation: params.mutation } : {}),
+  };
+}
+
+function buildConfigPatchOperations(params: {
+  patch: unknown;
+  replacePaths: PathSegment[][];
+}): ConfigSetOperation[] {
+  if (!isPlainRecord(params.patch)) {
+    throw configPatchModeError("input must be a JSON5 object patch.");
+  }
+  const operations: ConfigSetOperation[] = [];
+  const replacePathKeys = new Set(params.replacePaths.map(pathKey));
+  const matchedReplacePathKeys = new Set<string>();
+  const visit = (value: unknown, path: PathSegment[]) => {
+    validatePathSegments(path);
+    const replacementKey = pathKey(path);
+    if (path.length > 0 && replacePathKeys.has(replacementKey)) {
+      matchedReplacePathKeys.add(replacementKey);
+      operations.push(
+        value === null
+          ? buildDeleteOperation(path)
+          : buildApplyValueOperation({ path, value, mutation: "replace" }),
+      );
+      return;
+    }
+    if (path.length > 0 && value === null) {
+      operations.push(buildDeleteOperation(path));
+      return;
+    }
+    if (path.length > 0 && isPlainRecord(value) && coerceSecretRef(value)) {
+      operations.push(buildApplyValueOperation({ path, value }));
+      return;
+    }
+    if (isPlainRecord(value)) {
+      if (path.length > 0 && Object.keys(value).length === 0) {
+        operations.push(buildApplyValueOperation({ path, value, mutation: "merge" }));
+        return;
+      }
+      for (const [key, child] of Object.entries(value)) {
+        visit(child, [...path, key]);
+      }
+      return;
+    }
+    if (path.length === 0) {
+      throw configPatchModeError("input must contain at least one config key.");
+    }
+    operations.push(buildApplyValueOperation({ path, value }));
+  };
+
+  visit(params.patch, []);
+  const unusedReplacePath = params.replacePaths.find(
+    (path) => !matchedReplacePathKeys.has(pathKey(path)),
+  );
+  if (unusedReplacePath) {
+    throw configPatchModeError(
+      `--replace-path ${toDotPath(unusedReplacePath)} did not match any value in the input patch.`,
+    );
+  }
+  if (operations.length === 0) {
+    throw configPatchModeError("input patch did not contain any config updates.");
+  }
+  return operations;
+}
+
+function collectSecretRefsFromUnknown(value: unknown): SecretRef[] {
+  const refs: SecretRef[] = [];
+  const visit = (candidate: unknown) => {
+    const ref = coerceSecretRef(candidate);
+    if (ref) {
+      refs.push(ref);
+      return;
+    }
+    if (Array.isArray(candidate)) {
+      for (const entry of candidate) {
+        visit(entry);
+      }
+      return;
+    }
+    if (isPlainRecord(candidate)) {
+      for (const entry of Object.values(candidate)) {
+        visit(entry);
+      }
+    }
+  };
+  visit(value);
+  return refs;
 }
 
 function modeError(message: string): Error {
@@ -977,6 +1177,9 @@ function collectDryRunRefs(params: {
   for (const operation of params.operations) {
     if (operation.assignedRef) {
       refsByKey.set(secretRefKey(operation.assignedRef), operation.assignedRef);
+    }
+    for (const ref of collectSecretRefsFromUnknown(operation.value)) {
+      refsByKey.set(secretRefKey(ref), ref);
     }
     if (operation.touchedSecretTargetPath) {
       targetPaths.add(operation.touchedSecretTargetPath);
@@ -1170,6 +1373,203 @@ function formatDryRunFailureMessage(params: {
   return lines.join("\n");
 }
 
+async function runConfigOperations(params: {
+  runtime: RuntimeEnv;
+  operations: ConfigSetOperation[];
+  options: ConfigMutationOptions;
+  successMode: "set" | "patch";
+}) {
+  const { runtime, operations, options } = params;
+  if (
+    operations.some((operation) =>
+      pathStartsWith(operation.requestedPath, PLUGIN_INSTALL_RECORD_PATH_PREFIX),
+    )
+  ) {
+    throw new Error(formatPluginInstallConfigSetError());
+  }
+  const snapshot = await loadValidConfig(runtime);
+  // Use snapshot.resolved (config after $include and ${ENV} resolution, but BEFORE runtime defaults)
+  // instead of snapshot.config (runtime-merged with defaults).
+  // This prevents runtime defaults from leaking into the written config file (issue #6070)
+  const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
+  const unsetPaths: PathSegment[][] = [];
+  for (const operation of operations) {
+    if (operation.mutation === "delete") {
+      unsetAtPath(next, operation.setPath);
+      unsetPaths.push(operation.setPath);
+      continue;
+    }
+    if (operation.mutation === "merge" || (options.merge && operation.mutation !== "replace")) {
+      mergeAtPath(next, operation.setPath, operation.value);
+    } else {
+      assertNonDestructiveReplacement({
+        root: next,
+        path: operation.setPath,
+        value: operation.value,
+        allowReplace: options.replace || operation.mutation === "replace",
+      });
+      setAtPath(next, operation.setPath, operation.value);
+    }
+  }
+  const removedGatewayAuthPaths = pruneInactiveGatewayAuthCredentials({
+    root: next,
+    operations,
+  });
+  const nextConfig = next as OpenClawConfig;
+  const policyIssues = collectUnsupportedSecretRefPolicyIssues(nextConfig);
+  const policyIssueLines = formatConfigIssueLines(policyIssues, "", { normalizeRoot: true }).map(
+    (line) => line.trim(),
+  );
+
+  if (options.dryRun) {
+    const hasJsonMode = operations.some((operation) => operation.inputMode === "json");
+    const hasBuilderMode = operations.some((operation) => operation.inputMode === "builder");
+    const requiresFullSchemaValidation = operations.some(
+      (operation) => operation.inputMode === "json" && operation.schemaValidated !== true,
+    );
+    const refs =
+      hasJsonMode || hasBuilderMode
+        ? collectDryRunRefs({
+            config: nextConfig,
+            operations,
+          })
+        : [];
+    const selectedDryRunRefs = selectDryRunRefsForResolution({
+      refs,
+      allowExecInDryRun: Boolean(options.allowExec),
+    });
+    const errors: ConfigSetDryRunError[] = [];
+    if ((!hasJsonMode || !requiresFullSchemaValidation) && policyIssueLines.length > 0) {
+      errors.push(
+        ...policyIssueLines.map((message) => ({
+          kind: "schema" as const,
+          message,
+        })),
+      );
+    }
+    if (requiresFullSchemaValidation) {
+      errors.push(
+        ...collectDryRunSchemaErrors({
+          config: nextConfig,
+          operations,
+        }),
+      );
+    }
+    if (hasJsonMode || hasBuilderMode) {
+      errors.push(
+        ...collectDryRunStaticErrorsForSkippedExecRefs({
+          refs: selectedDryRunRefs.skippedExecRefs,
+          config: nextConfig,
+        }),
+      );
+      errors.push(
+        ...(await collectDryRunResolvabilityErrors({
+          refs: selectedDryRunRefs.refsToResolve,
+          config: nextConfig,
+        })),
+      );
+    }
+    const dedupedErrors = dedupeDryRunErrors(errors);
+    const dryRunResult: ConfigSetDryRunResult = {
+      ok: dedupedErrors.length === 0,
+      operations: operations.length,
+      configPath: shortenHomePath(snapshot.path),
+      inputModes: [...new Set(operations.map((operation) => operation.inputMode))],
+      checks: {
+        schema: requiresFullSchemaValidation || policyIssueLines.length > 0,
+        resolvability: hasJsonMode || hasBuilderMode,
+        resolvabilityComplete:
+          (hasJsonMode || hasBuilderMode) && selectedDryRunRefs.skippedExecRefs.length === 0,
+      },
+      refsChecked: selectedDryRunRefs.refsToResolve.length,
+      skippedExecRefs: selectedDryRunRefs.skippedExecRefs.length,
+      ...(dedupedErrors.length > 0 ? { errors: dedupedErrors } : {}),
+    };
+    if (dedupedErrors.length > 0) {
+      if (options.json) {
+        throw new ConfigSetDryRunValidationError(dryRunResult);
+      }
+      throw new Error(
+        formatDryRunFailureMessage({
+          errors: dedupedErrors,
+          skippedExecRefs: selectedDryRunRefs.skippedExecRefs.length,
+        }),
+      );
+    }
+    if (options.json) {
+      writeRuntimeJson(runtime, dryRunResult);
+    } else {
+      if (!dryRunResult.checks.schema && !dryRunResult.checks.resolvability) {
+        runtime.log(
+          info(
+            "Dry run note: value mode does not run schema/resolvability checks. Use --strict-json, builder flags, or batch mode to enable validation checks.",
+          ),
+        );
+      }
+      if (dryRunResult.skippedExecRefs > 0) {
+        runtime.log(
+          info(
+            `Dry run note: skipped ${dryRunResult.skippedExecRefs} exec SecretRef resolvability check(s). Re-run with --allow-exec to execute exec providers during dry-run.`,
+          ),
+        );
+      }
+      runtime.log(
+        info(
+          `Dry run successful: ${operations.length} update(s) validated against ${shortenHomePath(snapshot.path)}.`,
+        ),
+      );
+    }
+    return;
+  }
+  if (policyIssueLines.length > 0) {
+    throw new Error(formatUnsupportedSecretRefPolicyFailureMessage(policyIssueLines));
+  }
+
+  await replaceConfigFile({
+    nextConfig: next,
+    ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+    ...(unsetPaths.length > 0 ? { writeOptions: { unsetPaths } } : {}),
+  });
+  if (removedGatewayAuthPaths.length > 0) {
+    runtime.log(
+      info(
+        `Removed inactive ${removedGatewayAuthPaths.join(", ")} for gateway.auth.mode=${nextConfig.gateway?.auth?.mode ?? "<unset>"}.`,
+      ),
+    );
+  }
+  if (params.successMode === "set" && operations.length === 1) {
+    const operation = operations[0];
+    const action = operation?.mutation === "delete" ? "Removed" : "Updated";
+    runtime.log(
+      info(`${action} ${toDotPath(operation?.requestedPath ?? [])}. Restart the gateway to apply.`),
+    );
+    return;
+  }
+  if (params.successMode === "set") {
+    runtime.log(info(`Updated ${operations.length} config paths. Restart the gateway to apply.`));
+    return;
+  }
+  runtime.log(info(`Applied ${operations.length} config update(s). Restart the gateway to apply.`));
+}
+
+function handleConfigMutationError(params: {
+  err: unknown;
+  runtime: RuntimeEnv;
+  options: ConfigMutationOptions;
+}) {
+  if (
+    params.options.dryRun &&
+    params.options.json &&
+    params.err instanceof ConfigSetDryRunValidationError
+  ) {
+    writeRuntimeJson(params.runtime, params.err.result);
+    params.runtime.exit(1);
+    return;
+  }
+  params.runtime.error(danger(String(params.err)));
+  params.runtime.exit(1);
+}
+
 export async function runConfigSet(opts: {
   path?: string;
   value?: string;
@@ -1208,177 +1608,46 @@ export async function runConfigSet(opts: {
           value: opts.value,
           opts: opts.cliOptions,
         });
-    if (
-      operations.some((operation) =>
-        pathStartsWith(operation.requestedPath, PLUGIN_INSTALL_RECORD_PATH_PREFIX),
-      )
-    ) {
-      throw new Error(formatPluginInstallConfigSetError());
-    }
-    const snapshot = await loadValidConfig(runtime);
-    // Use snapshot.resolved (config after $include and ${ENV} resolution, but BEFORE runtime defaults)
-    // instead of snapshot.config (runtime-merged with defaults).
-    // This prevents runtime defaults from leaking into the written config file (issue #6070)
-    const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
-    for (const operation of operations) {
-      if (opts.cliOptions.merge) {
-        mergeAtPath(next, operation.setPath, operation.value);
-      } else {
-        assertNonDestructiveReplacement({
-          root: next,
-          path: operation.setPath,
-          value: operation.value,
-          allowReplace: opts.cliOptions.replace,
-        });
-        setAtPath(next, operation.setPath, operation.value);
-      }
-    }
-    const removedGatewayAuthPaths = pruneInactiveGatewayAuthCredentials({
-      root: next,
+    await runConfigOperations({
+      runtime,
       operations,
+      options: opts.cliOptions,
+      successMode: "set",
     });
-    const nextConfig = next as OpenClawConfig;
-    const policyIssues = collectUnsupportedSecretRefPolicyIssues(nextConfig);
-    const policyIssueLines = formatConfigIssueLines(policyIssues, "", { normalizeRoot: true }).map(
-      (line) => line.trim(),
-    );
-
-    if (opts.cliOptions.dryRun) {
-      const hasJsonMode = operations.some((operation) => operation.inputMode === "json");
-      const hasBuilderMode = operations.some((operation) => operation.inputMode === "builder");
-      const requiresFullSchemaValidation = operations.some(
-        (operation) => operation.inputMode === "json" && operation.schemaValidated !== true,
-      );
-      const refs =
-        hasJsonMode || hasBuilderMode
-          ? collectDryRunRefs({
-              config: nextConfig,
-              operations,
-            })
-          : [];
-      const selectedDryRunRefs = selectDryRunRefsForResolution({
-        refs,
-        allowExecInDryRun: Boolean(opts.cliOptions.allowExec),
-      });
-      const errors: ConfigSetDryRunError[] = [];
-      if ((!hasJsonMode || !requiresFullSchemaValidation) && policyIssueLines.length > 0) {
-        errors.push(
-          ...policyIssueLines.map((message) => ({
-            kind: "schema" as const,
-            message,
-          })),
-        );
-      }
-      if (requiresFullSchemaValidation) {
-        errors.push(
-          ...collectDryRunSchemaErrors({
-            config: nextConfig,
-            operations,
-          }),
-        );
-      }
-      if (hasJsonMode || hasBuilderMode) {
-        errors.push(
-          ...collectDryRunStaticErrorsForSkippedExecRefs({
-            refs: selectedDryRunRefs.skippedExecRefs,
-            config: nextConfig,
-          }),
-        );
-        errors.push(
-          ...(await collectDryRunResolvabilityErrors({
-            refs: selectedDryRunRefs.refsToResolve,
-            config: nextConfig,
-          })),
-        );
-      }
-      const dedupedErrors = dedupeDryRunErrors(errors);
-      const dryRunResult: ConfigSetDryRunResult = {
-        ok: dedupedErrors.length === 0,
-        operations: operations.length,
-        configPath: shortenHomePath(snapshot.path),
-        inputModes: [...new Set(operations.map((operation) => operation.inputMode))],
-        checks: {
-          schema: requiresFullSchemaValidation || policyIssueLines.length > 0,
-          resolvability: hasJsonMode || hasBuilderMode,
-          resolvabilityComplete:
-            (hasJsonMode || hasBuilderMode) && selectedDryRunRefs.skippedExecRefs.length === 0,
-        },
-        refsChecked: selectedDryRunRefs.refsToResolve.length,
-        skippedExecRefs: selectedDryRunRefs.skippedExecRefs.length,
-        ...(dedupedErrors.length > 0 ? { errors: dedupedErrors } : {}),
-      };
-      if (dedupedErrors.length > 0) {
-        if (opts.cliOptions.json) {
-          throw new ConfigSetDryRunValidationError(dryRunResult);
-        }
-        throw new Error(
-          formatDryRunFailureMessage({
-            errors: dedupedErrors,
-            skippedExecRefs: selectedDryRunRefs.skippedExecRefs.length,
-          }),
-        );
-      }
-      if (opts.cliOptions.json) {
-        writeRuntimeJson(runtime, dryRunResult);
-      } else {
-        if (!dryRunResult.checks.schema && !dryRunResult.checks.resolvability) {
-          runtime.log(
-            info(
-              "Dry run note: value mode does not run schema/resolvability checks. Use --strict-json, builder flags, or batch mode to enable validation checks.",
-            ),
-          );
-        }
-        if (dryRunResult.skippedExecRefs > 0) {
-          runtime.log(
-            info(
-              `Dry run note: skipped ${dryRunResult.skippedExecRefs} exec SecretRef resolvability check(s). Re-run with --allow-exec to execute exec providers during dry-run.`,
-            ),
-          );
-        }
-        runtime.log(
-          info(
-            `Dry run successful: ${operations.length} update(s) validated against ${shortenHomePath(snapshot.path)}.`,
-          ),
-        );
-      }
-      return;
-    }
-    if (policyIssueLines.length > 0) {
-      throw new Error(formatUnsupportedSecretRefPolicyFailureMessage(policyIssueLines));
-    }
-
-    await replaceConfigFile({
-      nextConfig: next,
-      ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-    });
-    if (removedGatewayAuthPaths.length > 0) {
-      runtime.log(
-        info(
-          `Removed inactive ${removedGatewayAuthPaths.join(", ")} for gateway.auth.mode=${nextConfig.gateway?.auth?.mode ?? "<unset>"}.`,
-        ),
-      );
-    }
-    if (operations.length === 1) {
-      runtime.log(
-        info(
-          `Updated ${toDotPath(operations[0]?.requestedPath ?? [])}. Restart the gateway to apply.`,
-        ),
-      );
-      return;
-    }
-    runtime.log(info(`Updated ${operations.length} config paths. Restart the gateway to apply.`));
   } catch (err) {
-    if (
-      opts.cliOptions.dryRun &&
-      opts.cliOptions.json &&
-      err instanceof ConfigSetDryRunValidationError
-    ) {
-      writeRuntimeJson(runtime, err.result);
-      runtime.exit(1);
-      return;
+    handleConfigMutationError({ err, runtime, options: opts.cliOptions });
+  }
+}
+
+export async function runConfigPatch(opts: {
+  cliOptions: ConfigPatchOptions;
+  runtime?: RuntimeEnv;
+}) {
+  const runtime = opts.runtime ?? defaultRuntime;
+  try {
+    if (opts.cliOptions.allowExec && !opts.cliOptions.dryRun) {
+      throw configPatchModeError("--allow-exec requires --dry-run.");
     }
-    runtime.error(danger(String(err)));
-    runtime.exit(1);
+    if (opts.cliOptions.json && !opts.cliOptions.dryRun) {
+      throw configPatchModeError("--json requires --dry-run.");
+    }
+    const patch = await readConfigPatchInput(opts.cliOptions);
+    const operations = buildConfigPatchOperations({
+      patch,
+      replacePaths: parseReplacePaths(opts.cliOptions.replacePath),
+    });
+    await runConfigOperations({
+      runtime,
+      operations,
+      options: {
+        dryRun: opts.cliOptions.dryRun,
+        allowExec: opts.cliOptions.allowExec,
+        json: opts.cliOptions.json,
+      },
+      successMode: "patch",
+    });
+  } catch (err) {
+    handleConfigMutationError({ err, runtime, options: opts.cliOptions });
   }
 }
 
@@ -1530,7 +1799,7 @@ export function registerConfigCli(program: Command) {
   const cmd = program
     .command("config")
     .description(
-      "Non-interactive config helpers (get/set/unset/file/schema/validate). Run without subcommand for guided setup.",
+      "Non-interactive config helpers (get/set/patch/unset/file/schema/validate). Run without subcommand for guided setup.",
     )
     .addHelpText(
       "after",
@@ -1639,6 +1908,32 @@ export function registerConfigCli(program: Command) {
         value,
         cliOptions: opts,
       });
+    });
+
+  cmd
+    .command("patch")
+    .description(CONFIG_PATCH_DESCRIPTION)
+    .option("--file <path>", "Read a JSON5 config patch object from file")
+    .option("--stdin", "Read a JSON5 config patch object from stdin", false)
+    .option(
+      "--dry-run",
+      "Validate changes without writing openclaw.json (checks schema and SecretRef resolvability; exec SecretRefs are skipped unless --allow-exec is set)",
+      false,
+    )
+    .option(
+      "--allow-exec",
+      "Dry-run only: allow exec SecretRef resolvability checks (may execute provider commands)",
+      false,
+    )
+    .option("--json", "Output dry-run result as JSON", false)
+    .option(
+      "--replace-path <path>",
+      "Replace the object or array at this dot/bracket path instead of recursively applying it (repeatable)",
+      (value: string, previous: string[]) => [...previous, value],
+      [] as string[],
+    )
+    .action(async (opts: ConfigPatchOptions) => {
+      await runConfigPatch({ cliOptions: opts });
     });
 
   cmd

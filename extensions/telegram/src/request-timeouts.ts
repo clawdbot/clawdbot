@@ -1,6 +1,7 @@
 const TELEGRAM_REQUEST_TIMEOUTS_MS = {
   // Bound startup/control-plane calls so the gateway cannot report Telegram as
   // healthy while provider startup is still hung on Bot API setup.
+  deletemycommands: 15_000,
   deletewebhook: 15_000,
   deletemessage: 15_000,
   editforumtopic: 15_000,
@@ -20,6 +21,7 @@ const TELEGRAM_REQUEST_TIMEOUTS_MS = {
   sendvideo: 30_000,
   sendvoice: 30_000,
   setmessagereaction: 10_000,
+  setmycommands: 15_000,
   setwebhook: 15_000,
 } as const;
 

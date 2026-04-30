@@ -97,6 +97,12 @@ Gateway → Client:
 }
 ```
 
+While the Gateway is still finishing startup sidecars, the `connect` request can
+return a retryable `UNAVAILABLE` error with `details.reason` set to
+`"startup-sidecars"` and `retryAfterMs`. Clients should retry that response
+within their overall connection budget instead of surfacing it as a terminal
+handshake failure.
+
 `server`, `features`, `snapshot`, and `policy` are all required by the schema
 (`src/gateway/protocol/schema/frames.ts`). `auth` is also required and reports
 the negotiated role/scopes. `canvasHostUrl` is optional.
@@ -396,7 +402,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `sessions.create` creates a new session entry.
     - `sessions.send` sends a message into an existing session.
     - `sessions.steer` is the interrupt-and-steer variant for an active session.
-    - `sessions.abort` aborts active work for a session.
+    - `sessions.abort` aborts active work for a session. A caller may pass `key` plus optional `runId`, or pass `runId` alone for active runs the Gateway can resolve to a session.
     - `sessions.patch` updates session metadata/overrides and reports the resolved canonical model plus effective `agentRuntime`.
     - `sessions.reset`, `sessions.delete`, and `sessions.compact` perform session maintenance.
     - `sessions.get` returns the full stored session row.

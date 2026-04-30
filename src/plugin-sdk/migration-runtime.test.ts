@@ -2,13 +2,98 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { copyMigrationFileItem, writeMigrationReport } from "./migration-runtime.js";
+import {
+  copyMigrationFileItem,
+  withCachedMigrationConfigRuntime,
+  writeMigrationReport,
+} from "./migration-runtime.js";
 import { createMigrationItem } from "./migration.js";
+import type { MigrationProviderContext } from "./plugin-entry.js";
 
 async function writeFile(filePath: string, contents: string): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, contents, "utf8");
 }
+
+describe("withCachedMigrationConfigRuntime", () => {
+  it("serves later config mutations from the same cached runtime snapshot", async () => {
+    type Runtime = NonNullable<MigrationProviderContext["runtime"]>;
+    type RuntimeConfig = MigrationProviderContext["config"];
+    type MutateConfigFileParams = Parameters<Runtime["config"]["mutateConfigFile"]>[0];
+    type ReplaceConfigFileParams = Parameters<Runtime["config"]["replaceConfigFile"]>[0];
+    type MutateConfigFileResult = Awaited<ReturnType<Runtime["config"]["mutateConfigFile"]>>;
+    type ReplaceConfigFileResult = Awaited<ReturnType<Runtime["config"]["replaceConfigFile"]>>;
+
+    const fallbackConfig = { agents: { defaults: { model: { primary: "openai/base" } } } };
+    let runtimeConfig: RuntimeConfig = structuredClone(fallbackConfig);
+    const current = vi.fn(() => runtimeConfig);
+    const mutateConfigFile = vi.fn(
+      async (params: MutateConfigFileParams): Promise<MutateConfigFileResult> => {
+        const draft = structuredClone(runtimeConfig);
+        const result = await params.mutate(draft, {
+          snapshot: {} as never,
+          previousHash: null,
+        });
+        runtimeConfig = structuredClone(draft);
+        return {
+          path: "/tmp/openclaw.json",
+          previousHash: null,
+          snapshot: {} as never,
+          nextConfig: runtimeConfig,
+          afterWrite: { mode: "auto" },
+          followUp: { mode: "auto", requiresRestart: false },
+          result,
+        };
+      },
+    );
+    const replaceConfigFile = vi.fn(
+      async (params: ReplaceConfigFileParams): Promise<ReplaceConfigFileResult> => {
+        runtimeConfig = structuredClone(params.nextConfig);
+        return {
+          path: "/tmp/openclaw.json",
+          previousHash: null,
+          snapshot: {} as never,
+          nextConfig: runtimeConfig,
+          afterWrite: { mode: "auto" },
+          followUp: { mode: "auto", requiresRestart: false },
+        };
+      },
+    );
+    const runtime = {
+      config: {
+        current,
+        mutateConfigFile,
+        replaceConfigFile,
+      },
+    } as unknown as Runtime;
+
+    const wrapped = withCachedMigrationConfigRuntime(runtime, fallbackConfig);
+    expect(wrapped?.config.current()).toEqual(fallbackConfig);
+    runtimeConfig = { agents: { defaults: { model: { primary: "openai/external" } } } };
+
+    await wrapped?.config.mutateConfigFile({
+      base: "runtime",
+      afterWrite: { mode: "auto" },
+      mutate(draft) {
+        draft.agents ??= {};
+        draft.agents.defaults ??= {};
+        draft.agents.defaults.model = { primary: "openai/mutated" };
+      },
+    });
+    expect(wrapped?.config.current()).toEqual({
+      agents: { defaults: { model: { primary: "openai/mutated" } } },
+    });
+
+    await wrapped?.config.replaceConfigFile({
+      nextConfig: { agents: { defaults: { model: { primary: "openai/replaced" } } } },
+      afterWrite: { mode: "auto" },
+    });
+    expect(wrapped?.config.current()).toEqual({
+      agents: { defaults: { model: { primary: "openai/replaced" } } },
+    });
+    expect(current).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("copyMigrationFileItem", () => {
   afterEach(() => {

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mjs";
 import { copyPluginSdkRootAlias } from "./copy-plugin-sdk-root-alias.mjs";
@@ -30,6 +31,14 @@ export const STATIC_EXTENSION_ASSETS = [
   {
     src: "extensions/acpx/src/runtime-internals/mcp-proxy.mjs",
     dest: "dist/extensions/acpx/mcp-proxy.mjs",
+  },
+  {
+    src: "extensions/acpx/src/runtime-internals/error-format.mjs",
+    dest: "dist/extensions/acpx/error-format.mjs",
+  },
+  {
+    src: "extensions/acpx/src/runtime-internals/mcp-command-line.mjs",
+    dest: "dist/extensions/acpx/mcp-command-line.mjs",
   },
   // diffs viewer runtime bundle — co-deployed inside the plugin package so the
   // built bundle can resolve `./assets/viewer-runtime.js` from dist.
@@ -96,14 +105,26 @@ export function writeLegacyCliExitCompatChunks(params = {}) {
 }
 
 export function runRuntimePostBuild(params = {}) {
-  copyPluginSdkRootAlias(params);
-  copyBundledPluginMetadata(params);
-  writeOfficialChannelCatalog(params);
-  stageBundledPluginRuntimeDeps(params);
-  stageBundledPluginRuntime(params);
-  writeStableRootRuntimeAliases(params);
-  writeLegacyCliExitCompatChunks(params);
-  copyStaticExtensionAssets(params);
+  const timingsEnabled = params.timings ?? process.env.OPENCLAW_RUNTIME_POSTBUILD_TIMINGS !== "0";
+  const runPhase = (label, action) => {
+    const startedAt = performance.now();
+    try {
+      return action();
+    } finally {
+      if (timingsEnabled) {
+        const durationMs = Math.round(performance.now() - startedAt);
+        console.error(`runtime-postbuild: ${label} completed in ${durationMs}ms`);
+      }
+    }
+  };
+  runPhase("plugin SDK root alias", () => copyPluginSdkRootAlias(params));
+  runPhase("bundled plugin metadata", () => copyBundledPluginMetadata(params));
+  runPhase("official channel catalog", () => writeOfficialChannelCatalog(params));
+  runPhase("bundled plugin runtime deps", () => stageBundledPluginRuntimeDeps(params));
+  runPhase("bundled plugin runtime overlay", () => stageBundledPluginRuntime(params));
+  runPhase("stable root runtime aliases", () => writeStableRootRuntimeAliases(params));
+  runPhase("legacy CLI exit compat chunks", () => writeLegacyCliExitCompatChunks(params));
+  runPhase("static extension assets", () => copyStaticExtensionAssets(params));
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

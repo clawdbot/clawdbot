@@ -4,7 +4,7 @@
   "description": "OpenClaw ACP runtime backend",
   "type": "module",
   "dependencies": {
-    "@agentclientprotocol/claude-agent-acp": "0.31.0",
+    "@agentclientprotocol/claude-agent-acp": "0.31.1",
     "@zed-industries/codex-acp": "0.12.0",
     "acpx": "0.6.1"
   },

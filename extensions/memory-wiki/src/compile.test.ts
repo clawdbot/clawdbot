@@ -170,6 +170,46 @@ describe("compileMemoryWikiVault", () => {
     );
   });
 
+  it("does not relate every page through a broad shared source", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha" },
+        body: "# Alpha\n",
+      }),
+      "utf8",
+    );
+
+    for (let index = 0; index < 30; index += 1) {
+      await fs.writeFile(
+        path.join(rootDir, "entities", `entity-${index}.md`),
+        renderWikiMarkdown({
+          frontmatter: {
+            pageType: "entity",
+            id: `entity.${index}`,
+            title: `Entity ${index}`,
+            sourceIds: ["source.alpha"],
+          },
+          body: `# Entity ${index}\n`,
+        }),
+        "utf8",
+      );
+    }
+
+    await compileMemoryWikiVault(config);
+
+    const firstEntity = await fs.readFile(path.join(rootDir, "entities", "entity-0.md"), "utf8");
+    const sourcePage = await fs.readFile(path.join(rootDir, "sources", "alpha.md"), "utf8");
+    expect(firstEntity).toContain("[Alpha](sources/alpha.md)");
+    expect(firstEntity).not.toContain("### Related Pages");
+    expect(sourcePage).not.toContain("### Referenced By");
+  });
+
   it("writes dashboard report pages when createDashboards is enabled", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),
@@ -311,6 +351,101 @@ describe("compileMemoryWikiVault", () => {
     await compileMemoryWikiVault(config);
 
     await expect(fs.access(path.join(rootDir, "reports", "open-questions.md"))).rejects.toThrow();
+  });
+
+  it("writes agent directory, relationship, provenance, and privacy reports", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    await fs.writeFile(
+      path.join(rootDir, "entities", "brad.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          entityType: "person",
+          id: "entity.brad",
+          title: "Brad Groux",
+          canonicalId: "maintainer.brad-groux",
+          aliases: ["brad"],
+          privacyTier: "local-private",
+          bestUsedFor: ["Microsoft routing"],
+          lastRefreshedAt: "2026-04-29T00:00:00.000Z",
+          personCard: {
+            handles: ["@bgroux"],
+            lane: "Microsoft Teams",
+            askFor: ["Teams and Azure questions"],
+            privacyTier: "confirm-before-use",
+          },
+          relationships: [
+            {
+              targetId: "entity.alice",
+              targetTitle: "Alice",
+              kind: "collaborates-with",
+              evidenceKind: "discrawl-stat",
+              privacyTier: "local-private",
+            },
+          ],
+          claims: [
+            {
+              id: "claim.brad.teams",
+              text: "Brad is useful for Microsoft Teams routing.",
+              status: "supported",
+              confidence: 0.9,
+              evidence: [
+                {
+                  kind: "maintainer-whois",
+                  sourceId: "source.maintainers",
+                  privacyTier: "local-private",
+                },
+              ],
+            },
+          ],
+        },
+        body: "# Brad Groux\n",
+      }),
+      "utf8",
+    );
+
+    await compileMemoryWikiVault(config);
+
+    await expect(
+      fs.readFile(path.join(rootDir, "reports", "person-agent-directory.md"), "utf8"),
+    ).resolves.toContain("Microsoft Teams");
+    await expect(
+      fs.readFile(path.join(rootDir, "reports", "relationship-graph.md"), "utf8"),
+    ).resolves.toContain("collaborates-with");
+    await expect(
+      fs.readFile(path.join(rootDir, "reports", "provenance-coverage.md"), "utf8"),
+    ).resolves.toContain("maintainer-whois: 1");
+    await expect(
+      fs.readFile(path.join(rootDir, "reports", "privacy-review.md"), "utf8"),
+    ).resolves.toContain("confirm-before-use");
+
+    const agentDigest = JSON.parse(
+      await fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
+    ) as {
+      pages: Array<{
+        path: string;
+        canonicalId?: string;
+        aliases?: string[];
+        personCard?: { lane?: string };
+        relationshipCount?: number;
+      }>;
+    };
+    expect(agentDigest.pages).toContainEqual(
+      expect.objectContaining({
+        path: "entities/brad.md",
+        canonicalId: "maintainer.brad-groux",
+        aliases: ["brad"],
+        personCard: expect.objectContaining({ lane: "Microsoft Teams" }),
+        relationshipCount: 1,
+      }),
+    );
+    await expect(
+      fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl"), "utf8"),
+    ).resolves.toContain('"evidenceKinds":["maintainer-whois"]');
   });
 
   it("ignores generated related links when computing backlinks on repeated compile", async () => {

@@ -1,5 +1,5 @@
-import { ChannelType } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ChannelType } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
 import { __resetDiscordChannelInfoCacheForTest } from "./message-utils.js";
 import { resolveDiscordThreadParentInfo } from "./threading.js";
@@ -31,7 +31,7 @@ describe("resolveDiscordThreadParentInfo", () => {
 
     const client = {
       fetchChannel,
-    } as unknown as import("@buape/carbon").Client;
+    } as unknown as import("../internal/discord.js").Client;
 
     const result = await resolveDiscordThreadParentInfo({
       client,
@@ -71,7 +71,7 @@ describe("resolveDiscordThreadParentInfo", () => {
       return null;
     });
 
-    const client = { fetchChannel } as unknown as import("@buape/carbon").Client;
+    const client = { fetchChannel } as unknown as import("../internal/discord.js").Client;
     const threadChannel = createPartialDiscordChannelWithThrowingGetters(
       {
         id: "thread-1",
@@ -107,7 +107,7 @@ describe("resolveDiscordThreadParentInfo", () => {
       return null;
     });
 
-    const client = { fetchChannel } as unknown as import("@buape/carbon").Client;
+    const client = { fetchChannel } as unknown as import("../internal/discord.js").Client;
     const result = await resolveDiscordThreadParentInfo({
       client,
       threadChannel: {
@@ -139,7 +139,7 @@ describe("resolveDiscordThreadParentInfo", () => {
       return null;
     });
 
-    const client = { fetchChannel } as unknown as import("@buape/carbon").Client;
+    const client = { fetchChannel } as unknown as import("../internal/discord.js").Client;
     const result = await resolveDiscordThreadParentInfo({
       client,
       threadChannel: {

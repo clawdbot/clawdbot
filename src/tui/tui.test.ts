@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
   createBackspaceDeduper,
@@ -39,6 +40,16 @@ describe("resolveFinalAssistantText", () => {
         errorMessage: '401 {"error":{"message":"Missing scopes: model.request"}}',
       }),
     ).toContain("HTTP 401");
+  });
+
+  it("formats malformed streaming fragment errors when final and streamed text are empty", () => {
+    expect(
+      resolveFinalAssistantText({
+        finalText: "",
+        streamedText: "",
+        errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
+      }),
+    ).toBe("LLM streaming response contained a malformed fragment. Please try again.");
   });
 });
 

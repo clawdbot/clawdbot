@@ -43,6 +43,7 @@ import {
   resolveOpenAIStrictToolFlagForInventory,
   resolveOpenAIStrictToolSetting,
 } from "./openai-tool-schema.js";
+import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
 import {
   buildGuardedModelFetch,
   resolveModelRequestTimeoutMs,
@@ -52,6 +53,7 @@ import { transformTransportMessages } from "./transport-message-transform.js";
 import { mergeTransportMetadata, sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview";
+const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
 const log = createSubsystemLogger("openai-transport");
 
 type BaseStreamOptions = {
@@ -630,23 +632,28 @@ function buildOpenAIClientHeaders(
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
 ): Record<string, string> {
-  const headers = { ...model.headers };
+  const providerHeaders = { ...model.headers };
   if (model.provider === "github-copilot") {
     Object.assign(
-      headers,
+      providerHeaders,
       buildCopilotDynamicHeaders({
         messages: context.messages,
         hasImages: hasCopilotVisionInput(context.messages),
       }),
     );
   }
-  if (optionHeaders) {
-    Object.assign(headers, optionHeaders);
-  }
-  if (turnHeaders) {
-    Object.assign(headers, turnHeaders);
-  }
-  return headers;
+  const callerHeaders = { ...optionHeaders, ...turnHeaders };
+  const headers = resolveProviderRequestPolicyConfig({
+    provider: model.provider,
+    api: model.api,
+    baseUrl: model.baseUrl,
+    capability: "llm",
+    transport: "stream",
+    providerHeaders,
+    callerHeaders: Object.keys(callerHeaders).length > 0 ? callerHeaders : undefined,
+    precedence: "caller-wins",
+  }).headers;
+  return headers ?? {};
 }
 
 function resolveProviderTransportTurnState(
@@ -870,6 +877,22 @@ function buildOpenAICodexResponsesInstructions(context: Context): string | undef
   return sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt));
 }
 
+function ensureOpenAICodexResponsesInput(messages: ResponseInput, context: Context): void {
+  if (messages.length > 0 || !context.systemPrompt) {
+    return;
+  }
+  const text = buildOpenAICodexResponsesInstructions(context);
+  if (!text) {
+    throw new Error(
+      "OpenAI Codex Responses requires non-empty input when only systemPrompt is provided.",
+    );
+  }
+  messages.push({
+    role: "user",
+    content: [{ type: "input_text", text: OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT }],
+  });
+}
+
 export function buildOpenAIResponsesParams(
   model: Model<Api>,
   context: Context,
@@ -886,6 +909,9 @@ export function buildOpenAIResponsesParams(
     new Set(["openai", "openai-codex", "opencode", "azure-openai-responses"]),
     { includeSystemPrompt: !isCodexResponses, supportsDeveloperRole },
   );
+  if (isCodexResponses) {
+    ensureOpenAICodexResponsesInput(messages, context);
+  }
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "disable",
@@ -1869,6 +1895,7 @@ function mapStopReason(reason: string | null) {
 }
 
 export const __testing = {
+  buildOpenAIClientHeaders,
   buildOpenAISdkClientOptions,
   buildOpenAISdkRequestOptions,
   createAzureOpenAIClient,

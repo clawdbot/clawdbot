@@ -1,6 +1,10 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
+import {
+  HEARTBEAT_SKIP_CRON_IN_PROGRESS,
+  HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+  type HeartbeatRunResult,
+} from "../infra/heartbeat-wake.js";
 import type { CronEvent, CronServiceDeps } from "./service.js";
 import { CronService } from "./service.js";
 import { createDeferred, createNoopLogger, installCronTestHooks } from "./service.test-harness.js";
@@ -524,7 +528,7 @@ describe("CronService", () => {
   it("wakeMode now falls back to queued heartbeat when main lane stays busy", async () => {
     const runHeartbeatOnce = vi.fn(async () => ({
       status: "skipped" as const,
-      reason: "requests-in-flight",
+      reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
     }));
     let now = 0;
     const nowMs = () => {
@@ -549,6 +553,38 @@ describe("CronService", () => {
     await cron.run(job.id, "force");
 
     expect(runHeartbeatOnce).toHaveBeenCalled();
+    expect(requestHeartbeatNow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: `cron:${job.id}`,
+        sessionKey,
+      }),
+    );
+    expect(job.state.lastStatus).toBe("ok");
+    expect(job.state.lastError).toBeUndefined();
+
+    await cron.list({ includeDisabled: true });
+    await stopCronAndCleanup(cron, store);
+  });
+
+  it("wakeMode now queues heartbeat when cron active marker blocks synchronous wake", async () => {
+    const runHeartbeatOnce = vi.fn(async () => ({
+      status: "skipped" as const,
+      reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS,
+    }));
+
+    const { store, cron, requestHeartbeatNow } = await createWakeModeNowMainHarness({
+      runHeartbeatOnce,
+    });
+
+    const sessionKey = "agent:main:discord:channel:ops";
+    const job = await addWakeModeNowMainSystemEventJob(cron, {
+      name: "wakeMode now cron marker fallback",
+      sessionKey,
+    });
+
+    await cron.run(job.id, "force");
+
+    expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
     expect(requestHeartbeatNow).toHaveBeenCalledWith(
       expect.objectContaining({
         reason: `cron:${job.id}`,

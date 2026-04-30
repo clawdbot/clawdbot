@@ -241,6 +241,8 @@ export type DiscordAccountConfig = {
   /** If false, do not start this Discord account. Default: true. */
   enabled?: boolean;
   token?: SecretInput;
+  /** Optional Discord application/client ID. Set this when REST application lookup is blocked. */
+  applicationId?: string;
   /** HTTP(S) proxy URL for Discord gateway WebSocket connections. */
   proxy?: string;
   /** Timeout for Discord /gateway/bot metadata lookup before falling back to the default gateway URL. Default: 30000. */
@@ -286,12 +288,12 @@ export type DiscordAccountConfig = {
   /** Thread session behavior. */
   thread?: DiscordThreadConfig;
   /**
-   * Alias for dm.policy (prefer this so it inherits cleanly via base->account shallow merge).
+   * Canonical DM policy key. Doctor migrates legacy channels.discord.dm.policy here.
    * Legacy key: channels.discord.dm.policy.
    */
   dmPolicy?: DmPolicy;
   /**
-   * Alias for dm.allowFrom (prefer this so it inherits cleanly via base->account shallow merge).
+   * Canonical DM allowlist. Doctor migrates legacy channels.discord.dm.allowFrom here.
    * Legacy key: channels.discord.dm.allowFrom.
    */
   allowFrom?: string[];
@@ -351,7 +353,7 @@ export type DiscordAccountConfig = {
     runTimeoutMs?: number;
   };
   /**
-   * Carbon EventQueue configuration. Controls how Discord gateway events are processed.
+   * Discord EventQueue configuration. Controls how Discord gateway events are processed.
    * `listenerTimeout` only covers gateway listener work such as normalization and enqueue.
    * It does not control the lifetime of queued inbound agent turns.
    */

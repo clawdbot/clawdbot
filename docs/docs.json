@@ -1142,6 +1142,7 @@
                       "concepts/memory-honcho",
                       "concepts/memory-search",
                       "concepts/active-memory",
+                      "concepts/commitments",
                       "concepts/dreaming"
                     ]
                   },
@@ -1162,7 +1163,8 @@
                   "concepts/messages",
                   "concepts/streaming",
                   "concepts/retry",
-                  "concepts/queue"
+                  "concepts/queue",
+                  "concepts/queue-steering"
                 ]
               }
             ]
@@ -1202,12 +1204,13 @@
                     ]
                   },
                   {
-                    "group": "SDK reference",
+                    "group": "Plugin SDK reference",
                     "pages": [
                       "plugins/sdk-overview",
                       "plugins/sdk-subpaths",
                       "plugins/sdk-entrypoints",
                       "plugins/sdk-runtime",
+                      "plugins/sdk-channel-turn",
                       "plugins/sdk-agent-harness",
                       "plugins/sdk-setup",
                       "plugins/sdk-testing",
@@ -1590,6 +1593,7 @@
                       "cli/hooks",
                       "cli/infer",
                       "cli/memory",
+                      "cli/commitments",
                       "cli/message",
                       "cli/models",
                       "cli/sessions",
@@ -1649,7 +1653,12 @@
               },
               {
                 "group": "RPC and API",
-                "pages": ["reference/rpc", "reference/device-models"]
+                "pages": [
+                  "reference/rpc",
+                  "concepts/openclaw-sdk",
+                  "reference/openclaw-sdk-api-design",
+                  "reference/device-models"
+                ]
               },
               {
                 "group": "Templates",

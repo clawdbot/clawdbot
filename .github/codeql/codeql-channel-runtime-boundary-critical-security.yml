@@ -10,10 +10,8 @@ query-filters:
       precision:
         - high
         - very-high
-  - exclude:
-      problem.severity:
-        - recommendation
-        - warning
+      tags contain: security
+      security-severity: /([7-9]|10)\.(\d)+/
 
 paths:
   - src/channels

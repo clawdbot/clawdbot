@@ -205,6 +205,21 @@ describe("isBillingErrorMessage", () => {
     expect(isBillingErrorMessage(sample)).toBe(false);
     expect(classifyFailoverReason(sample)).toBeNull();
   });
+  it("matches insufficient_balance snake_case error codes (#74079)", () => {
+    expect(isBillingErrorMessage("insufficient_balance")).toBe(true);
+    expect(classifyFailoverReason("insufficient_balance")).toBe("billing");
+  });
+  it("matches 'Insufficient MBT balance' with intervening words (#74079)", () => {
+    const msg = "Insufficient MBT balance. Top up or upgrade your subscription to continue.";
+    expect(isBillingErrorMessage(msg)).toBe(true);
+    expect(classifyFailoverReason(msg)).toBe("billing");
+  });
+  it("classifies flat JSON billing payloads with string error code (#74079)", () => {
+    const raw =
+      '{"error":"insufficient_balance","message":"Insufficient MBT balance. Top up or upgrade your subscription to continue.","upgradeUrl":"/settings/billing"}';
+    expect(isBillingErrorMessage(raw)).toBe(true);
+    expect(classifyFailoverReason(raw)).toBe("billing");
+  });
   it("still matches explicit 402 markers in long payloads", () => {
     const longStructuredError =
       '{"error":{"code":402,"message":"payment required","details":"' + "x".repeat(700) + '"}}';

@@ -96,6 +96,178 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
+export type MigrationConfigPatchDetails = {
+  path: string[];
+  value: unknown;
+};
+
+class MigrationConfigPatchConflictError extends Error {
+  constructor(readonly reason: string) {
+    super(reason);
+    this.name = "MigrationConfigPatchConflictError";
+  }
+}
+
+export function readMigrationConfigPath(
+  root: Record<string, unknown>,
+  path: readonly string[],
+): unknown {
+  let current: unknown = root;
+  for (const segment of path) {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[segment];
+  }
+  return current;
+}
+
+export function mergeMigrationConfigValue(left: unknown, right: unknown): unknown {
+  if (!isRecord(left) || !isRecord(right)) {
+    return structuredClone(right);
+  }
+  const next: Record<string, unknown> = { ...left };
+  for (const [key, value] of Object.entries(right)) {
+    next[key] = mergeMigrationConfigValue(next[key], value);
+  }
+  return next;
+}
+
+export function writeMigrationConfigPath(
+  root: Record<string, unknown>,
+  path: readonly string[],
+  value: unknown,
+): void {
+  let current = root;
+  for (const segment of path.slice(0, -1)) {
+    const existing = current[segment];
+    if (!isRecord(existing)) {
+      current[segment] = {};
+    }
+    current = current[segment] as Record<string, unknown>;
+  }
+  const leaf = path.at(-1);
+  if (!leaf) {
+    return;
+  }
+  current[leaf] = mergeMigrationConfigValue(current[leaf], value);
+}
+
+export function hasMigrationConfigPatchConflict(
+  config: MigrationProviderContext["config"],
+  path: readonly string[],
+  value: unknown,
+): boolean {
+  if (!isRecord(value)) {
+    return readMigrationConfigPath(config as Record<string, unknown>, path) !== undefined;
+  }
+  const existing = readMigrationConfigPath(config as Record<string, unknown>, path);
+  if (!isRecord(existing)) {
+    return false;
+  }
+  return Object.keys(value).some((key) => existing[key] !== undefined);
+}
+
+export function createMigrationConfigPatchItem(params: {
+  id: string;
+  target: string;
+  path: string[];
+  value: unknown;
+  message: string;
+  conflict?: boolean;
+  reason?: string;
+  source?: string;
+  details?: Record<string, unknown>;
+}): MigrationItem {
+  return createMigrationItem({
+    id: params.id,
+    kind: "config",
+    action: "merge",
+    source: params.source,
+    target: params.target,
+    status: params.conflict ? "conflict" : "planned",
+    reason: params.conflict ? (params.reason ?? MIGRATION_REASON_TARGET_EXISTS) : undefined,
+    message: params.message,
+    details: { ...params.details, path: params.path, value: params.value },
+  });
+}
+
+export function createMigrationManualItem(params: {
+  id: string;
+  source: string;
+  message: string;
+  recommendation: string;
+}): MigrationItem {
+  return createMigrationItem({
+    id: params.id,
+    kind: "manual",
+    action: "manual",
+    source: params.source,
+    status: "skipped",
+    message: params.message,
+    reason: params.recommendation,
+  });
+}
+
+export function readMigrationConfigPatchDetails(
+  item: MigrationItem,
+): MigrationConfigPatchDetails | undefined {
+  const path = item.details?.path;
+  if (
+    !Array.isArray(path) ||
+    !path.every((segment): segment is string => typeof segment === "string")
+  ) {
+    return undefined;
+  }
+  return { path, value: item.details?.value };
+}
+
+export async function applyMigrationConfigPatchItem(
+  ctx: MigrationProviderContext,
+  item: MigrationItem,
+): Promise<MigrationItem> {
+  if (item.status !== "planned") {
+    return item;
+  }
+  const details = readMigrationConfigPatchDetails(item);
+  if (!details) {
+    return markMigrationItemError(item, "missing config patch");
+  }
+  const configApi = ctx.runtime?.config;
+  if (!configApi?.current || !configApi.mutateConfigFile) {
+    return markMigrationItemError(item, "config runtime unavailable");
+  }
+  try {
+    const currentConfig = configApi.current() as MigrationProviderContext["config"];
+    if (
+      !ctx.overwrite &&
+      hasMigrationConfigPatchConflict(currentConfig, details.path, details.value)
+    ) {
+      return markMigrationItemConflict(item, MIGRATION_REASON_TARGET_EXISTS);
+    }
+    await configApi.mutateConfigFile({
+      base: "runtime",
+      afterWrite: { mode: "auto" },
+      mutate(draft) {
+        if (!ctx.overwrite && hasMigrationConfigPatchConflict(draft, details.path, details.value)) {
+          throw new MigrationConfigPatchConflictError(MIGRATION_REASON_TARGET_EXISTS);
+        }
+        writeMigrationConfigPath(draft as Record<string, unknown>, details.path, details.value);
+      },
+    });
+    return { ...item, status: "migrated" };
+  } catch (err) {
+    if (err instanceof MigrationConfigPatchConflictError) {
+      return markMigrationItemConflict(item, err.reason);
+    }
+    return markMigrationItemError(item, err instanceof Error ? err.message : String(err));
+  }
+}
+
+export function applyMigrationManualItem(item: MigrationItem): MigrationItem {
+  return markMigrationItemSkipped(item, item.reason ?? "manual follow-up required");
+}
+
 function isSecretReferenceLike(value: unknown): boolean {
   if (!isRecord(value)) {
     return false;

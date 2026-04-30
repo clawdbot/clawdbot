@@ -472,6 +472,8 @@ should use `resolveInboundMentionDecision({ facts, policy })`.
     });
     ```
 
+    For channels that accept both canonical top-level DM keys and legacy nested keys, use the helpers from `plugin-sdk/channel-config-helpers`: `resolveChannelDmAccess`, `resolveChannelDmPolicy`, `resolveChannelDmAllowFrom`, and `normalizeChannelDmPolicy` keep account-local values ahead of inherited root values. Pair the same resolver with doctor repair through `normalizeLegacyDmAliases` so runtime and migration read the same contract.
+
     <Accordion title="What createChatChannelPlugin does for you">
       Instead of implementing low-level adapter interfaces manually, you pass
       declarative options and the builder composes them:
@@ -678,6 +680,9 @@ Write colocated tests in `src/channel.test.ts`:
   </Card>
   <Card title="Runtime helpers" icon="settings" href="/plugins/sdk-runtime">
     TTS, STT, media, subagent via api.runtime
+  </Card>
+  <Card title="Channel turn kernel" icon="bolt" href="/plugins/sdk-channel-turn">
+    Shared inbound turn lifecycle: ingest, resolve, record, dispatch, finalize
   </Card>
 </CardGroup>
 

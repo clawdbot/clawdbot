@@ -188,6 +188,29 @@ export type PluginManifestSetupProvider = {
   authMethods?: string[];
   /** Environment variables that can satisfy setup without runtime loading. */
   envVars?: string[];
+  /**
+   * Cheap local evidence that a provider can authenticate without loading
+   * runtime code. Evidence checks must not read secrets, shell out, or call
+   * provider APIs.
+   */
+  authEvidence?: PluginManifestSetupProviderAuthEvidence[];
+};
+
+export type PluginManifestSetupProviderAuthEvidence = {
+  /** Generic local file evidence gated by required environment metadata. */
+  type: "local-file-with-env";
+  /** Optional env var containing an explicit credential file path. */
+  fileEnvVar?: string;
+  /** Optional fallback credential file paths. Supports `${HOME}` and `${APPDATA}`. */
+  fallbackPaths?: string[];
+  /** At least one of these env vars must be non-empty when provided. */
+  requiresAnyEnv?: string[];
+  /** Every env var listed here must be non-empty when provided. */
+  requiresAllEnv?: string[];
+  /** Non-secret marker returned when this evidence is present. */
+  credentialMarker: string;
+  /** Human-readable auth source label. */
+  source?: string;
 };
 
 export type PluginManifestSetup = {
@@ -982,10 +1005,48 @@ function normalizeManifestSetupProviders(
     }
     const authMethods = normalizeTrimmedStringList(entry.authMethods);
     const envVars = normalizeTrimmedStringList(entry.envVars);
+    const authEvidence = normalizeManifestSetupProviderAuthEvidence(entry.authEvidence);
     normalized.push({
       id,
       ...(authMethods.length > 0 ? { authMethods } : {}),
       ...(envVars.length > 0 ? { envVars } : {}),
+      ...(authEvidence ? { authEvidence } : {}),
+    });
+  }
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeManifestSetupProviderAuthEvidence(
+  value: unknown,
+): PluginManifestSetupProviderAuthEvidence[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized: PluginManifestSetupProviderAuthEvidence[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry) || entry.type !== "local-file-with-env") {
+      continue;
+    }
+    const credentialMarker = normalizeOptionalString(entry.credentialMarker);
+    if (!credentialMarker) {
+      continue;
+    }
+    const fileEnvVar = normalizeOptionalString(entry.fileEnvVar);
+    const fallbackPaths = normalizeTrimmedStringList(entry.fallbackPaths);
+    if (!fileEnvVar && fallbackPaths.length === 0) {
+      continue;
+    }
+    const requiresAnyEnv = normalizeTrimmedStringList(entry.requiresAnyEnv);
+    const requiresAllEnv = normalizeTrimmedStringList(entry.requiresAllEnv);
+    const source = normalizeOptionalString(entry.source);
+    normalized.push({
+      type: "local-file-with-env",
+      ...(fileEnvVar ? { fileEnvVar } : {}),
+      ...(fallbackPaths.length > 0 ? { fallbackPaths } : {}),
+      ...(requiresAnyEnv.length > 0 ? { requiresAnyEnv } : {}),
+      ...(requiresAllEnv.length > 0 ? { requiresAllEnv } : {}),
+      credentialMarker,
+      ...(source ? { source } : {}),
     });
   }
   return normalized.length > 0 ? normalized : undefined;

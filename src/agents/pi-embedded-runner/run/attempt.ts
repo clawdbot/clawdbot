@@ -9,7 +9,6 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
-import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
@@ -36,7 +35,6 @@ import {
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
-import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import {
   buildTrajectoryArtifacts,
@@ -71,7 +69,6 @@ import {
 import { createCacheTrace } from "../../cache-trace.js";
 import {
   listChannelSupportedActions,
-  resolveChannelMessageToolCapabilities,
   resolveChannelMessageToolHints,
   resolveChannelReactionGuidance,
 } from "../../channel-tools.js";
@@ -122,6 +119,8 @@ import {
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
+import { runAgentCleanupStep } from "../../run-cleanup-timeout.js";
+import { collectRuntimeChannelCapabilities } from "../../runtime-capabilities.js";
 import {
   logAgentRuntimeToolDiagnostics,
   normalizeAgentRuntimeTools,
@@ -242,6 +241,11 @@ import {
   shouldRotateCompactionTranscript,
 } from "../compaction-successor-transcript.js";
 import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
+import {
+  createEmbeddedRunStageTracker,
+  formatEmbeddedRunStageSummary,
+  shouldWarnEmbeddedRunStageSummary,
+} from "./attempt-stage-timing.js";
 import {
   assembleAttemptContextEngine,
   buildLoopPromptCacheInfo,
@@ -589,6 +593,23 @@ export async function runEmbeddedAttempt(
   log.debug(
     `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${params.provider} model=${params.modelId} thinking=${params.thinkLevel} messageChannel=${params.messageChannel ?? params.messageProvider ?? "unknown"}`,
   );
+  const prepStages = createEmbeddedRunStageTracker();
+  const emitPrepStageSummary = (phase: string) => {
+    const summary = prepStages.snapshot();
+    const shouldWarn = shouldWarnEmbeddedRunStageSummary(summary);
+    if (!shouldWarn && !log.isEnabled("trace")) {
+      return;
+    }
+    const message = formatEmbeddedRunStageSummary(
+      `[trace:embedded-run] prep stages: runId=${params.runId} sessionId=${params.sessionId} phase=${phase}`,
+      summary,
+    );
+    if (shouldWarn) {
+      log.warn(message);
+    } else {
+      log.trace(message);
+    }
+  };
 
   await fs.mkdir(resolvedWorkspace, { recursive: true });
 
@@ -610,6 +631,7 @@ export async function runEmbeddedAttempt(
     config: params.config,
     agentId: params.agentId,
   });
+  prepStages.mark("workspace-sandbox");
 
   let restoreSkillEnv: (() => void) | undefined;
   let aborted = Boolean(params.abortSignal?.aborted);
@@ -645,6 +667,7 @@ export async function runEmbeddedAttempt(
       workspaceDir: effectiveWorkspace,
       agentId: sessionAgentId,
     });
+    prepStages.mark("skills");
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const contextInjectionMode = resolveContextInjectionMode(params.config);
@@ -739,7 +762,9 @@ export async function runEmbeddedAttempt(
               modelCompat: extractModelCompat(params.model),
               modelApi: params.model.api,
               modelContextWindowTokens: params.model.contextWindow,
-              modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
+              modelAuthMode: resolveModelAuthMode(params.model.provider, params.config, undefined, {
+                workspaceDir: effectiveWorkspace,
+              }),
               currentChannelId: params.currentChannelId,
               currentThreadTs: params.currentThreadTs,
               currentMessageId: params.currentMessageId,
@@ -760,6 +785,7 @@ export async function runEmbeddedAttempt(
             });
             return applyEmbeddedAttemptToolsAllow(allTools, params.toolsAllow);
           })();
+    prepStages.mark("core-plugin-tools");
     const toolsEnabled = supportsModelTools(params.model);
     const bootstrapHasFileAccess = toolsEnabled && toolsRaw.some((tool) => tool.name === "read");
     const bootstrapRouting = await resolveAttemptWorkspaceBootstrapRouting({
@@ -803,6 +829,7 @@ export async function runEmbeddedAttempt(
           runKind: params.bootstrapContextRunKind,
         }),
     });
+    prepStages.mark("bootstrap-context");
     const remappedContextFiles = remapInjectedContextFilesToWorkspace({
       files: resolvedContextFiles,
       sourceWorkspaceDir: resolvedWorkspace,
@@ -935,6 +962,7 @@ export async function runEmbeddedAttempt(
       warn: (message) => log.warn(message),
     });
     const effectiveTools = [...tools, ...filteredBundledTools];
+    prepStages.mark("bundle-tools");
     const allowedToolNames = collectAllowedToolNames({
       tools: effectiveTools,
       clientTools,
@@ -979,35 +1007,11 @@ export async function runEmbeddedAttempt(
 
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
-    let runtimeCapabilities = runtimeChannel
-      ? (resolveChannelCapabilities({
-          cfg: params.config,
-          channel: runtimeChannel,
-          accountId: params.agentAccountId,
-        }) ?? [])
-      : undefined;
-    const promptCapabilities =
-      runtimeChannel && params.config
-        ? resolveChannelMessageToolCapabilities({
-            cfg: params.config,
-            channel: runtimeChannel,
-            accountId: params.agentAccountId,
-          })
-        : [];
-    if (promptCapabilities.length > 0) {
-      runtimeCapabilities ??= [];
-      const seenCapabilities = new Set(
-        runtimeCapabilities.map((cap) => normalizeOptionalLowercaseString(cap)).filter(Boolean),
-      );
-      for (const capability of promptCapabilities) {
-        const normalizedCapability = normalizeOptionalLowercaseString(capability);
-        if (!normalizedCapability || seenCapabilities.has(normalizedCapability)) {
-          continue;
-        }
-        seenCapabilities.add(normalizedCapability);
-        runtimeCapabilities.push(capability);
-      }
-    }
+    const runtimeCapabilities = collectRuntimeChannelCapabilities({
+      cfg: params.config,
+      channel: runtimeChannel,
+      accountId: params.agentAccountId,
+    });
     const reactionGuidance =
       runtimeChannel && params.config
         ? resolveChannelReactionGuidance({
@@ -1221,6 +1225,7 @@ export async function runEmbeddedAttempt(
       bootstrapMode,
       contextFiles: remappedContextFiles,
     });
+    prepStages.mark("system-prompt");
 
     // Keep the session lock scoped to transcript/session mutations. Cold plugin
     // and tool setup can be slow, and holding the lock there blocks CLI fallback
@@ -1345,6 +1350,7 @@ export async function runEmbeddedAttempt(
         cfg: params.config,
         contextTokenBudget: params.contextTokenBudget,
       });
+      prepStages.mark("session-resource-loader");
 
       // Get hook runner early so it's available when creating tools
       const hookRunner = getGlobalHookRunner();
@@ -1441,6 +1447,7 @@ export async function runEmbeddedAttempt(
       }
       session.setActiveToolsByName(sessionToolAllowlist);
       const activeSession = session;
+      prepStages.mark("agent-session");
       if (isRawModelRun) {
         // Raw model probes should measure exactly the requested prompt against
         // the selected provider/model. Reset clears restored transcript state
@@ -1692,6 +1699,8 @@ export async function runEmbeddedAttempt(
             `(${params.provider}/${params.modelId})`,
         );
       }
+      prepStages.mark("stream-setup");
+      emitPrepStageSummary("stream-ready");
 
       const cacheObservabilityEnabled = Boolean(cacheTrace) || log.isEnabled("debug");
       const promptCacheToolNames = collectPromptCacheToolNames(
@@ -2147,7 +2156,10 @@ export async function runEmbeddedAttempt(
         cancel: (reason?: "user_abort" | "restart" | "superseded") => void;
       } = {
         kind: "embedded",
-        queueMessage: async (text: string) => {
+        queueMessage: async (text: string, options) => {
+          if (options?.steeringMode) {
+            activeSession.agent.steeringMode = options.steeringMode;
+          }
           await activeSession.steer(text);
         },
         isStreaming: () => activeSession.isStreaming,
@@ -3293,7 +3305,15 @@ export async function runEmbeddedAttempt(
           promptError: promptError ? formatErrorMessage(promptError) : undefined,
         });
       }
-      await trajectoryRecorder?.flush();
+      await runAgentCleanupStep({
+        runId: params.runId,
+        sessionId: params.sessionId,
+        step: "pi-trajectory-flush",
+        log,
+        cleanup: async () => {
+          await trajectoryRecorder?.flush();
+        },
+      });
       // Always tear down the session (and release the lock) before we leave this attempt.
       //
       // BUGFIX: Wait for the agent to be truly idle before flushing pending tool results.

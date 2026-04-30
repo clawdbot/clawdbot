@@ -1,13 +1,21 @@
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createOpenProviderConfiguredRouteWarningCollector } from "openclaw/plugin-sdk/channel-policy";
-import type { ResolvedDiscordAccount } from "./accounts.js";
+import {
+  resolveDiscordAccountAllowFrom,
+  resolveDiscordAccountDmPolicy,
+  type ResolvedDiscordAccount,
+} from "./accounts.js";
 import type { ChannelPlugin } from "./channel-api.js";
 
 const resolveDiscordDmPolicy = createScopedDmSecurityResolver<ResolvedDiscordAccount>({
   channelKey: "discord",
-  resolvePolicy: (account) => account.config.dm?.policy,
-  resolveAllowFrom: (account) => account.config.dm?.allowFrom,
-  allowFromPathSuffix: "dm.",
+  resolvePolicy: (account) => account.config.dmPolicy,
+  resolveAllowFrom: (account) => account.config.allowFrom,
+  resolveAccess: ({ cfg, account }) => ({
+    dmPolicy: resolveDiscordAccountDmPolicy({ cfg, accountId: account.accountId }),
+    allowFrom: resolveDiscordAccountAllowFrom({ cfg, accountId: account.accountId }),
+  }),
+  policyPathSuffix: "dmPolicy",
   normalizeEntry: (raw) =>
     raw
       .trim()

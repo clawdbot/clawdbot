@@ -100,8 +100,12 @@ const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
   {
     profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
     provider: "openai-codex",
-    aliases: ["codex", "codex-cli"],
-    readCredentials: () => readCodexCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
+    aliases: ["codex", "codex-cli", "codex-app-server"],
+    readCredentials: (options) =>
+      readCodexCliCredentialsCached({
+        ttlMs: EXTERNAL_CLI_SYNC_TTL_MS,
+        allowKeychainPrompt: options?.allowKeychainPrompt,
+      }),
     bootstrapOnly: true,
   },
   {

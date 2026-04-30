@@ -18,6 +18,201 @@
       }
     }
   },
+  "modelCatalog": {
+    "providers": {
+      "github-copilot": {
+        "baseUrl": "https://api.individual.githubcopilot.com",
+        "api": "openai-responses",
+        "models": [
+          {
+            "id": "claude-haiku-4.5",
+            "name": "Claude Haiku 4.5",
+            "api": "anthropic-messages",
+            "input": ["text", "image"],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "claude-opus-4.5",
+            "name": "Claude Opus 4.5",
+            "api": "anthropic-messages",
+            "input": ["text", "image"],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "claude-opus-4.6",
+            "name": "Claude Opus 4.6",
+            "api": "anthropic-messages",
+            "input": ["text", "image"],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "claude-opus-4.7",
+            "name": "Claude Opus 4.7",
+            "api": "anthropic-messages",
+            "input": ["text", "image"],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "claude-sonnet-4",
+            "name": "Claude Sonnet 4",
+            "api": "anthropic-messages",
+            "input": ["text", "image"],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "claude-sonnet-4.5",
+            "name": "Claude Sonnet 4.5",
+            "api": "anthropic-messages",
+            "input": ["text", "image"],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "claude-sonnet-4.6",
+            "name": "Claude Sonnet 4.6",
+            "api": "anthropic-messages",
+            "input": ["text", "image"],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "gemini-2.5-pro",
+            "name": "Gemini 2.5 Pro",
+            "input": ["text", "image"],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "gemini-3-flash",
+            "name": "Gemini 3 Flash",
+            "input": ["text", "image"],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "gemini-3.1-pro",
+            "name": "Gemini 3.1 Pro",
+            "input": ["text", "image"],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "gpt-4.1",
+            "name": "GPT-4.1",
+            "input": ["text", "image"],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "gpt-5-mini",
+            "name": "GPT-5 mini",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "gpt-5.2",
+            "name": "GPT-5.2",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "gpt-5.2-codex",
+            "name": "GPT-5.2-Codex",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "gpt-5.3-codex",
+            "name": "GPT-5.3-Codex",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "gpt-5.4",
+            "name": "GPT-5.4",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "gpt-5.4-mini",
+            "name": "GPT-5.4 mini",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "gpt-5.4-nano",
+            "name": "GPT-5.4 nano",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "grok-code-fast-1",
+            "name": "Grok Code Fast 1",
+            "input": ["text"],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "raptor-mini",
+            "name": "Raptor mini",
+            "input": ["text"],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "goldeneye",
+            "name": "Goldeneye",
+            "input": ["text"],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "github-copilot": "static"
+    }
+  },
   "contracts": {
     "memoryEmbeddingProviders": ["github-copilot"]
   },

@@ -1,4 +1,4 @@
-import { request } from "node:http";
+import { request, type IncomingMessage } from "node:http";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
@@ -941,7 +941,9 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
       if (enteredReads === 8) {
         releaseReads();
       }
-      await unblockReads;
+      if (enteredReads <= 8) {
+        await unblockReads;
+      }
       return "CallSid=CA123&SpeechResult=hello";
     });
 
@@ -965,6 +967,80 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
       unblockReadBodies();
       readBodySpy.mockRestore();
       await server.stop();
+    }
+  });
+
+  it("limits missing remote addresses with a shared fallback bucket", async () => {
+    const twilioProvider: VoiceCallProvider = {
+      ...provider,
+      name: "twilio",
+      verifyWebhook: () => ({ ok: true, verifiedRequestKey: "twilio:req:test" }),
+    };
+    const { manager } = createManager([]);
+    const config = createConfig({ provider: "twilio" });
+    const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
+    const runWebhookPipeline = (
+      server as unknown as {
+        runWebhookPipeline: (
+          req: IncomingMessage,
+          webhookPath: string,
+        ) => Promise<{ statusCode: number; body: string }>;
+      }
+    ).runWebhookPipeline.bind(server);
+
+    let enteredReads = 0;
+    let releaseReads!: () => void;
+    let unblockReadBodies!: () => void;
+    const enteredEightReads = new Promise<void>((resolve) => {
+      releaseReads = resolve;
+    });
+    const unblockReads = new Promise<void>((resolve) => {
+      unblockReadBodies = resolve;
+    });
+    const readBodySpy = vi.spyOn(
+      server as unknown as {
+        readBody: (req: unknown, maxBytes: number, timeoutMs?: number) => Promise<string>;
+      },
+      "readBody",
+    );
+    readBodySpy.mockImplementation(async () => {
+      enteredReads += 1;
+      if (enteredReads === 8) {
+        releaseReads();
+      }
+      await unblockReads;
+      return "CallSid=CA123&SpeechResult=hello";
+    });
+
+    const makeRequestWithoutRemoteAddress = () =>
+      ({
+        method: "POST",
+        url: "/voice/webhook",
+        headers: { "x-twilio-signature": "sig" },
+        socket: { remoteAddress: undefined },
+      }) as unknown as IncomingMessage;
+
+    try {
+      const inFlightRequests = Array.from({ length: 8 }, () =>
+        runWebhookPipeline(makeRequestWithoutRemoteAddress(), "/voice/webhook"),
+      );
+      await enteredEightReads;
+
+      const rejected = await runWebhookPipeline(
+        makeRequestWithoutRemoteAddress(),
+        "/voice/webhook",
+      );
+      expect(rejected.statusCode).toBe(429);
+      expect(rejected.body).toBe("Too Many Requests");
+      expect(readBodySpy).toHaveBeenCalledTimes(8);
+
+      unblockReadBodies();
+
+      const settled = await Promise.all(inFlightRequests);
+      expect(settled.every((response) => response.statusCode === 200)).toBe(true);
+    } finally {
+      unblockReadBodies();
+      readBodySpy.mockRestore();
     }
   });
 });

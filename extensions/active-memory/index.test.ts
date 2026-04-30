@@ -1384,6 +1384,22 @@ describe("active-memory plugin", () => {
     expect(api.logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("config.modelFallbackPolicy is deprecated"),
     );
+    // #74587: deprecation warning must spell out the chain-resolution
+    // semantics so operators don't read it as a promise of runtime failover.
+    // The previous wording ("set config.modelFallback if you want a fallback
+    // model") cost real users hours of debug time before they hit the source
+    // and saw `getModelRef` only walks candidates once.
+    const warnCalls = (api.logger.warn as ReturnType<typeof vi.fn>).mock.calls;
+    const deprecationMessage = warnCalls
+      .map(([first]) => (typeof first === "string" ? first : ""))
+      .find((message) => message.includes("config.modelFallbackPolicy is deprecated"));
+    expect(deprecationMessage).toBeDefined();
+    // Positive: the warning describes chain-resolution last-resort behavior.
+    expect(deprecationMessage).toContain("chain-resolution");
+    expect(deprecationMessage).toContain("last-resort");
+    // Negative: the warning explicitly disclaims runtime failover, since
+    // that's the wrong mental model the previous wording invited.
+    expect(deprecationMessage).toMatch(/NOT a runtime failover/i);
   });
 
   it("does not use a built-in fallback model even when default-remote is configured", async () => {
@@ -3085,5 +3101,148 @@ describe("active-memory plugin", () => {
         }),
       ),
     ).toMatchObject({ status: "ok", summary: "memory 1" });
+  });
+
+  it("skips recall after consecutive timeouts when circuit breaker trips (#74054)", async () => {
+    __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 1,
+      logging: true,
+      circuitBreakerMaxTimeouts: 2,
+      circuitBreakerCooldownMs: 60_000,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    runEmbeddedPiAgent.mockImplementation(async () => await new Promise<never>(() => {}));
+
+    // First two calls should actually attempt the subagent (and timeout).
+    await hooks.before_prompt_build(
+      { prompt: "circuit breaker test 1", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:cb-test",
+        messageProvider: "webchat",
+      },
+    );
+    await hooks.before_prompt_build(
+      { prompt: "circuit breaker test 2", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:cb-test",
+        messageProvider: "webchat",
+      },
+    );
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(2);
+
+    // Third call should be skipped by the circuit breaker.
+    await hooks.before_prompt_build(
+      { prompt: "circuit breaker test 3", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:cb-test",
+        messageProvider: "webchat",
+      },
+    );
+    // The subagent should NOT have been called a third time.
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(2);
+
+    const infoLines = vi
+      .mocked(api.logger.info)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(infoLines.some((line: string) => line.includes("circuit breaker open"))).toBe(true);
+  });
+
+  it("resets circuit breaker after a successful recall", async () => {
+    __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 50,
+      logging: true,
+      circuitBreakerMaxTimeouts: 1,
+      circuitBreakerCooldownMs: 60_000,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    // First call: timeout (trips the breaker with max=1).
+    runEmbeddedPiAgent.mockImplementationOnce(async () => await new Promise<never>(() => {}));
+    await hooks.before_prompt_build(
+      { prompt: "cb reset test timeout", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:cb-reset",
+        messageProvider: "webchat",
+      },
+    );
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+
+    // Second call should be skipped by circuit breaker.
+    await hooks.before_prompt_build(
+      { prompt: "cb reset test skipped", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:cb-reset",
+        messageProvider: "webchat",
+      },
+    );
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+
+    // Simulate cooldown expiry by manipulating the circuit breaker entry.
+    const cbKey = __testing.buildCircuitBreakerKey("main", "github-copilot", "gpt-5.4-mini");
+    const entry = __testing.getCircuitBreakerEntry(cbKey);
+    if (entry) {
+      entry.lastTimeoutAt = Date.now() - 120_000;
+    }
+
+    // Third call should go through (cooldown expired) and succeed.
+    runEmbeddedPiAgent.mockImplementationOnce(async () => ({
+      payloads: [{ text: "- lemon pepper wings" }],
+    }));
+    await hooks.before_prompt_build(
+      { prompt: "cb reset test success", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:cb-reset",
+        messageProvider: "webchat",
+      },
+    );
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(2);
+
+    // Fourth call should also go through since the breaker was reset on success.
+    runEmbeddedPiAgent.mockImplementationOnce(async () => ({
+      payloads: [{ text: "- buffalo wings" }],
+    }));
+    await hooks.before_prompt_build(
+      { prompt: "cb reset test still ok", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:cb-reset",
+        messageProvider: "webchat",
+      },
+    );
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(3);
+  });
+
+  it("normalizes circuit breaker config with defaults", () => {
+    const config = __testing.normalizePluginConfig({});
+    expect(config.circuitBreakerMaxTimeouts).toBe(3);
+    expect(config.circuitBreakerCooldownMs).toBe(60_000);
+  });
+
+  it("clamps circuit breaker config within valid ranges", () => {
+    const config = __testing.normalizePluginConfig({
+      circuitBreakerMaxTimeouts: 0,
+      circuitBreakerCooldownMs: 1000,
+    });
+    expect(config.circuitBreakerMaxTimeouts).toBe(1);
+    expect(config.circuitBreakerCooldownMs).toBe(5000);
   });
 });

@@ -166,6 +166,7 @@ env:
   PNPM_VERSION: "10.32.1"
   OPENCLAW_REPOSITORY: openclaw/openclaw
   TSX_VERSION: "4.21.0"
+  OPENCLAW_CROSS_OS_OPENAI_MODEL: ${{ vars.OPENCLAW_CROSS_OS_OPENAI_MODEL || 'openai/gpt-5.4-mini' }}
 
 jobs:
   prepare:
@@ -346,12 +347,19 @@ jobs:
             --source-dir source \
             --output-dir "${OUTPUT_DIR}"
 
-      - name: Download provided candidate artifact
-        if: inputs.candidate_artifact_name != ''
+      - name: Download current-run candidate artifact
+        if: inputs.candidate_artifact_name != '' && inputs.candidate_artifact_run_id == ''
         uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.candidate_artifact_name }}
-          run-id: ${{ inputs.candidate_artifact_run_id || github.run_id }}
+          path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/package
+
+      - name: Download previous-run candidate artifact
+        if: inputs.candidate_artifact_name != '' && inputs.candidate_artifact_run_id != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.candidate_artifact_name }}
+          run-id: ${{ inputs.candidate_artifact_run_id }}
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/package
 

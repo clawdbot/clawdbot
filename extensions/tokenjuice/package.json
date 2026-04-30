@@ -4,7 +4,7 @@
   "description": "Bundled tokenjuice exec output compaction plugin",
   "type": "module",
   "dependencies": {
-    "tokenjuice": "0.6.4"
+    "tokenjuice": "0.7.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

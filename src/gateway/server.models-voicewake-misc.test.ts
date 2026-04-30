@@ -3,6 +3,7 @@ import { createServer } from "node:net";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
+import { resetModelCatalogCacheForTest } from "../agents/model-catalog.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveCanvasHostUrl } from "../infra/canvas-host-url.js";
@@ -153,9 +154,14 @@ describe("gateway server models + voicewake", () => {
         : await rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list"),
     );
 
-  const seedPiCatalog = () => {
+  const setPiCatalog = (entries: PiCatalogFixtureEntry[]) => {
     piSdkMock.enabled = true;
-    piSdkMock.models = buildPiCatalogFixture();
+    piSdkMock.models = entries;
+    resetModelCatalogCacheForTest();
+  };
+
+  const seedPiCatalog = () => {
+    setPiCatalog(buildPiCatalogFixture());
   };
 
   const withModelsConfig = async <T>(config: unknown, run: () => Promise<T>): Promise<T> => {
@@ -465,11 +471,11 @@ describe("gateway server models + voicewake", () => {
     });
   });
 
-  test("models.list returns model catalog", async () => {
+  test("models.list all view returns model catalog", async () => {
     seedPiCatalog();
 
-    const res1 = await listModels();
-    const res2 = await listModels();
+    const res1 = await listModels({ view: "all" });
+    const res2 = await listModels({ view: "all" });
 
     expect(res1.ok).toBe(true);
     expect(res2.ok).toBe(true);
@@ -480,7 +486,7 @@ describe("gateway server models + voicewake", () => {
     expect(piSdkMock.discoverCalls).toBe(1);
   });
 
-  test("models.list keeps default view on the full catalog when no allowlist is configured", async () => {
+  test("models.list default view uses configured providers instead of the full catalog", async () => {
     await withModelsConfig(
       {
         models: {
@@ -493,10 +499,49 @@ describe("gateway server models + voicewake", () => {
         },
       },
       async () => {
-        seedPiCatalog();
+        setPiCatalog([
+          { id: "remote-a", provider: "unauth-a", name: "Remote A" },
+          { id: "remote-b", provider: "unauth-b", name: "Remote B" },
+        ]);
         const res = await listModels();
         expect(res.ok).toBe(true);
-        expect(res.payload?.models).toEqual(expectedSortedCatalog());
+        expect(res.payload?.models).toEqual([
+          {
+            id: "MiniMax-M2.7-highspeed",
+            name: "MiniMax M2.7 Highspeed",
+            provider: "minimax",
+          },
+        ]);
+      },
+    );
+  });
+
+  test("models.list configured view includes auth-backed provider catalog entries", async () => {
+    await withEnvAsync(
+      {
+        ANTHROPIC_API_KEY: undefined,
+        ANTHROPIC_OAUTH_TOKEN: undefined,
+        OPENAI_API_KEY: "test-openai-key",
+      },
+      async () => {
+        await withModelsConfig({}, async () => {
+          seedPiCatalog();
+          const res = await listModels({ view: "configured" });
+          expect(res.ok).toBe(true);
+          expect(res.payload?.models).toEqual([
+            {
+              id: "gpt-test-a",
+              name: "A-Model",
+              provider: "openai",
+              contextWindow: 8000,
+            },
+            {
+              id: "gpt-test-z",
+              name: "gpt-test-z",
+              provider: "openai",
+            },
+          ]);
+        });
       },
     );
   });
@@ -518,7 +563,10 @@ describe("gateway server models + voicewake", () => {
         },
       },
       async () => {
-        seedPiCatalog();
+        setPiCatalog([
+          { id: "remote-a", provider: "unauth-a", name: "Remote A" },
+          { id: "remote-b", provider: "unauth-b", name: "Remote B" },
+        ]);
         const res = await listModels({ view: "configured" });
         expect(res.ok).toBe(true);
         expect(res.payload?.models).toEqual([

@@ -5,7 +5,7 @@
   "description": "OpenClaw skill workshop plugin",
   "type": "module",
   "dependencies": {
-    "typebox": "1.1.33"
+    "typebox": "1.1.34"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

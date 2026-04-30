@@ -93,7 +93,11 @@ const embeddedPiRunStreamingMock = vi.fn<typeof piEmbedded.isEmbeddedPiRunStream
   (_sessionId: string) => false,
 );
 const queueEmbeddedPiMessageMock = vi.fn<typeof piEmbedded.queueEmbeddedPiMessage>(
-  (_sessionId: string, _text: string) => false,
+  (
+    _sessionId: string,
+    _text: string,
+    _options?: Parameters<typeof piEmbedded.queueEmbeddedPiMessage>[2],
+  ) => false,
 );
 const waitForEmbeddedPiRunEndMock = vi.fn<typeof piEmbedded.waitForEmbeddedPiRunEnd>(
   async (_sessionId: string, _timeoutMs?: number) => true,
@@ -327,8 +331,11 @@ describe("subagent announce formatting", () => {
           isActive: Boolean(sessionId && embeddedRunMock.isEmbeddedPiRunActive(sessionId)),
         };
       },
-      queueEmbeddedPiMessage: (sessionId: string, text: string) =>
-        embeddedRunMock.queueEmbeddedPiMessage(sessionId, text),
+      queueEmbeddedPiMessage: (
+        sessionId: string,
+        text: string,
+        options?: Parameters<typeof piEmbedded.queueEmbeddedPiMessage>[2],
+      ) => embeddedRunMock.queueEmbeddedPiMessage(sessionId, text, options),
     });
     subagentAnnounceTesting.setDepsForTest({
       callGateway: async <T = Record<string, unknown>>(
@@ -356,8 +363,8 @@ describe("subagent announce formatting", () => {
       .mockImplementation((sessionId) => embeddedRunMock.isEmbeddedPiRunStreaming(sessionId));
     queueEmbeddedPiMessageSpy
       .mockReset()
-      .mockImplementation((sessionId, text) =>
-        embeddedRunMock.queueEmbeddedPiMessage(sessionId, text),
+      .mockImplementation((sessionId, text, options) =>
+        embeddedRunMock.queueEmbeddedPiMessage(sessionId, text, options),
       );
     waitForEmbeddedPiRunEndSpy
       .mockReset()

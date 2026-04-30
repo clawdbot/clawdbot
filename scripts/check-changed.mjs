@@ -57,6 +57,7 @@ export function createChangedCheckPlan(result, options = {}) {
   add("changelog attributions", ["check:changelog-attributions"]);
   add("guarded extension wildcard re-exports", ["lint:extensions:no-guarded-wildcard-reexports"]);
   add("plugin-sdk wildcard re-exports", ["lint:extensions:no-plugin-sdk-wildcard-reexports"]);
+  add("duplicate scan target coverage", ["dup:check:coverage"]);
 
   if (result.docsOnly) {
     return {

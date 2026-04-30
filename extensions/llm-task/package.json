@@ -6,7 +6,7 @@
   "type": "module",
   "dependencies": {
     "ajv": "^8.20.0",
-    "typebox": "1.1.33"
+    "typebox": "1.1.34"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

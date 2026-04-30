@@ -223,6 +223,27 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
   });
 
+  it("keeps quiet telegram webhooks healthy when they do not publish transport tracking", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        mode: "webhook",
+        lastStartAt: 0,
+        lastEventAt: 0,
+      },
+      {
+        channelId: "telegram",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
+
   it("does not flag stale sockets without an active connected socket", () => {
     const evaluation = evaluateDiscordHealth(
       {

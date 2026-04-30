@@ -685,6 +685,7 @@ function shouldSkipToolNonceProbeMissForLiveModel(modelKey?: string): boolean {
     provider === "minimax" ||
     provider === "opencode" ||
     provider === "opencode-go" ||
+    provider === "openrouter" ||
     provider === "xai" ||
     provider === "zai"
   ) {
@@ -703,6 +704,7 @@ describe("shouldSkipToolNonceProbeMissForLiveModel", () => {
     { modelKey: "minimax/minimax-m1", expected: true },
     { modelKey: "opencode/big-pickle", expected: true },
     { modelKey: "opencode-go/glm-5", expected: true },
+    { modelKey: "openrouter/ai21/jamba-large-1.7", expected: true },
     { modelKey: "xai/grok-4.1-fast", expected: true },
     { modelKey: "zai/glm-5.1", expected: true },
     { modelKey: "google/gemini-3-flash-preview", expected: true },

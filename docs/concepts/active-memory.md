@@ -579,14 +579,16 @@ The most important fields are:
 
 Useful tuning fields:
 
-| Key                           | Type     | Meaning                                                                            |
-| ----------------------------- | -------- | ---------------------------------------------------------------------------------- |
-| `config.maxSummaryChars`      | `number` | Maximum total characters allowed in the active-memory summary                      |
-| `config.recentUserTurns`      | `number` | Prior user turns to include when `queryMode` is `recent`                           |
-| `config.recentAssistantTurns` | `number` | Prior assistant turns to include when `queryMode` is `recent`                      |
-| `config.recentUserChars`      | `number` | Max chars per recent user turn                                                     |
-| `config.recentAssistantChars` | `number` | Max chars per recent assistant turn                                                |
-| `config.cacheTtlMs`           | `number` | Cache reuse for repeated identical queries (range: 1000-120000 ms; default: 15000) |
+| Key                                | Type     | Meaning                                                                                                                                                           |
+| ---------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config.maxSummaryChars`           | `number` | Maximum total characters allowed in the active-memory summary                                                                                                     |
+| `config.recentUserTurns`           | `number` | Prior user turns to include when `queryMode` is `recent`                                                                                                          |
+| `config.recentAssistantTurns`      | `number` | Prior assistant turns to include when `queryMode` is `recent`                                                                                                     |
+| `config.recentUserChars`           | `number` | Max chars per recent user turn                                                                                                                                    |
+| `config.recentAssistantChars`      | `number` | Max chars per recent assistant turn                                                                                                                               |
+| `config.cacheTtlMs`                | `number` | Cache reuse for repeated identical queries (range: 1000-120000 ms; default: 15000)                                                                                |
+| `config.circuitBreakerMaxTimeouts` | `number` | Skip recall after this many consecutive timeouts for the same agent/model. Resets on a successful recall or after the cooldown expires (range: 1-20; default: 3). |
+| `config.circuitBreakerCooldownMs`  | `number` | How long to skip recall after the circuit breaker trips, in ms (range: 5000-600000; default: 60000).                                                              |
 
 ## Recommended setup
 

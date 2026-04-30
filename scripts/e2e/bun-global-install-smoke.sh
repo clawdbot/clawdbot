@@ -24,34 +24,7 @@ trap cleanup EXIT
 run_with_timeout() {
   local timeout_ms="$1"
   shift
-  node - "$timeout_ms" "$@" <<'NODE'
-const { spawnSync } = require("node:child_process");
-
-const timeout = Number(process.argv[2]);
-const command = process.argv[3];
-const args = process.argv.slice(4);
-const result = spawnSync(command, args, {
-  encoding: "utf8",
-  env: process.env,
-  timeout,
-});
-
-if (result.stdout) {
-  process.stdout.write(result.stdout);
-}
-if (result.stderr) {
-  process.stderr.write(result.stderr);
-}
-if (result.error) {
-  console.error(`command failed: ${command}: ${result.error.message}`);
-  process.exit(1);
-}
-if (result.signal) {
-  console.error(`command terminated: ${command}: ${result.signal}`);
-  process.exit(1);
-}
-process.exit(result.status ?? 0);
-NODE
+  node scripts/e2e/lib/bun-global-install/assertions.mjs run-with-timeout "$timeout_ms" "$@"
 }
 
 restore_dist_from_image() {
@@ -163,29 +136,7 @@ main() {
   echo "==> OpenClaw image providers through Bun global install"
   local providers_json
   providers_json="$(run_with_timeout "$COMMAND_TIMEOUT_MS" "$openclaw_bin" infer image providers --json)"
-  OPENCLAW_IMAGE_PROVIDERS_JSON="$providers_json" node - <<'NODE'
-const raw = process.env.OPENCLAW_IMAGE_PROVIDERS_JSON ?? "";
-let parsed;
-try {
-  parsed = JSON.parse(raw);
-} catch (error) {
-  console.error(raw);
-  throw new Error(`image providers output is not JSON: ${error.message}`);
-}
-if (!Array.isArray(parsed)) {
-  throw new Error("image providers output must be a JSON array");
-}
-if (parsed.length === 0) {
-  throw new Error("image providers output is empty");
-}
-const ids = new Set(parsed.map((entry) => entry && typeof entry.id === "string" ? entry.id : ""));
-for (const expected of ["google", "openai", "xai"]) {
-  if (!ids.has(expected)) {
-    throw new Error(`image providers output is missing bundled provider '${expected}'`);
-  }
-}
-console.log(`bun-global-install-smoke: image providers OK (${parsed.length} providers)`);
-NODE
+  OPENCLAW_IMAGE_PROVIDERS_JSON="$providers_json" node scripts/e2e/lib/bun-global-install/assertions.mjs assert-image-providers
 }
 
 main "$@"

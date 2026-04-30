@@ -437,7 +437,7 @@ Look for:
 
 - Cron enabled and next wake present.
 - Job run history status (`ok`, `skipped`, `error`).
-- Heartbeat skip reasons (`quiet-hours`, `requests-in-flight`, `alerts-disabled`, `empty-heartbeat-file`, `no-tasks-due`).
+- Heartbeat skip reasons (`quiet-hours`, `requests-in-flight`, `cron-in-progress`, `lanes-busy`, `alerts-disabled`, `empty-heartbeat-file`, `no-tasks-due`).
 
 <AccordionGroup>
   <Accordion title="Common signatures">

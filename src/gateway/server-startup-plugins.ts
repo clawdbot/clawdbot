@@ -3,6 +3,7 @@ import { initSubagentRegistry } from "../agents/subagent-registry.js";
 import { runChannelPluginStartupMaintenance } from "../channels/plugins/lifecycle-startup.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import {
   pruneUnknownBundledRuntimeDepsRoots,
@@ -40,6 +41,24 @@ export function resolveGatewayStartupMaintenanceConfig(params: {
 }
 
 async function prestageGatewayBundledRuntimeDeps(params: {
+  cfg: OpenClawConfig;
+  pluginIds: readonly string[];
+  log: GatewayPluginBootstrapLog;
+}): Promise<void> {
+  await measureDiagnosticsTimelineSpan(
+    "runtimeDeps.stage",
+    () => prestageGatewayBundledRuntimeDepsImpl(params),
+    {
+      phase: "startup",
+      config: params.cfg,
+      attributes: {
+        pluginCount: params.pluginIds.length,
+      },
+    },
+  );
+}
+
+async function prestageGatewayBundledRuntimeDepsImpl(params: {
   cfg: OpenClawConfig;
   pluginIds: readonly string[];
   log: GatewayPluginBootstrapLog;
@@ -87,19 +106,18 @@ async function prestageGatewayBundledRuntimeDeps(params: {
   if (missing.length === 0) {
     return;
   }
-  const missingSpecs = missing.map((dep) => `${dep.name}@${dep.version}`);
   const installSpecs = deps.map((dep) => `${dep.name}@${dep.version}`);
   const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, {
     env: process.env,
   });
   const startedAt = Date.now();
   params.log.info(
-    `[plugins] staging bundled runtime deps before gateway startup (${missingSpecs.length} missing, ${installSpecs.length} install specs): ${missingSpecs.join(", ")}`,
+    `[plugins] staging bundled runtime deps before gateway startup (${installSpecs.length} specs): ${installSpecs.join(", ")}`,
   );
   try {
     await repairBundledRuntimeDepsInstallRootAsync({
       installRoot,
-      missingSpecs,
+      missingSpecs: installSpecs,
       installSpecs,
       env: process.env,
       warn: (message) => params.log.warn(`[plugins] ${message}`),
@@ -111,7 +129,7 @@ async function prestageGatewayBundledRuntimeDeps(params: {
     return;
   }
   params.log.info(
-    `[plugins] installed bundled runtime deps before gateway startup in ${Date.now() - startedAt}ms: ${missingSpecs.join(", ")}`,
+    `[plugins] installed bundled runtime deps before gateway startup in ${Date.now() - startedAt}ms: ${installSpecs.join(", ")}`,
   );
 }
 

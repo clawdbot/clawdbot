@@ -1617,6 +1617,36 @@ describe("applyMediaUnderstanding", () => {
     expectFileNotApplied({ ctx, result, body: "<media:file>" });
   });
 
+  it.each([
+    { fileName: "legacy.doc", mediaType: "application/msword" },
+    { fileName: "compound-file.doc", mediaType: "application/x-cfb" },
+  ])(
+    "skips legacy Word/OLE MIME $mediaType even when explicitly allowed and bytes look printable",
+    async ({ fileName, mediaType }) => {
+      const printableOlePayload = Buffer.from(
+        "Root Entry WordDocument 1Table Data Microsoft Office legacy text preview",
+        "utf8",
+      );
+      const filePath = await createTempMediaFile({
+        fileName,
+        content: printableOlePayload,
+      });
+
+      const { ctx, result } = await applyWithDisabledMedia({
+        body: "<media:file>",
+        mediaPath: filePath,
+        mediaType,
+        cfg: createMediaDisabledConfigWithAllowedMimes([
+          "text/plain",
+          "application/msword",
+          "application/x-cfb",
+        ]),
+      });
+
+      expectFileNotApplied({ ctx, result, body: "<media:file>" });
+    },
+  );
+
   it("keeps vendor +json attachments eligible for text extraction", async () => {
     const filePath = await createTempMediaFile({
       fileName: "payload.bin",

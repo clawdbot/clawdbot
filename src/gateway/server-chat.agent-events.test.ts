@@ -1013,6 +1013,27 @@ describe("agent event handler", () => {
     resetAgentRunContextForTest();
   });
 
+  it("keeps aborted chat run markers through terminal lifecycle cleanup", () => {
+    const { broadcast, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-aborted", {
+      sessionKey: "session-aborted",
+      clientRunId: "client-aborted",
+    });
+    chatRunState.abortedRuns.set("client-aborted", 1_000);
+
+    handler({
+      runId: "run-aborted",
+      seq: 2,
+      stream: "lifecycle",
+      ts: 1_500,
+      data: { phase: "end", aborted: true, stopReason: "rpc" },
+    });
+
+    expect(chatRunState.abortedRuns.has("client-aborted")).toBe(true);
+    expect(chatRunState.registry.peek("run-aborted")).toBeUndefined();
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+  });
+
   it("keeps live session setting metadata at the top level for lifecycle updates", () => {
     vi.mocked(loadGatewaySessionRow).mockReturnValue({
       key: "session-finished",
@@ -1397,7 +1418,7 @@ describe("agent event handler", () => {
     expect(agentRunSeq.has("run-chat-send")).toBe(false);
   });
 
-  it("suppresses chat and node session events for non-control-UI-visible runs", () => {
+  it("suppresses live client events but persists lifecycle for non-control-UI-visible runs", () => {
     const { broadcast, nodeSendToSession, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-hidden",
     });
@@ -1417,7 +1438,15 @@ describe("agent event handler", () => {
     emitLifecycleEnd(handler, "run-hidden", 2);
 
     expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(broadcast.mock.calls.filter(([event]) => event === "agent")).toHaveLength(0);
     expect(nodeSendToSession).not.toHaveBeenCalled();
+    expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledWith({
+      sessionKey: "session-hidden",
+      event: expect.objectContaining({
+        runId: "run-hidden",
+        data: expect.objectContaining({ phase: "end" }),
+      }),
+    });
   });
 
   it("uses agent event sessionKey when run-context lookup cannot resolve", () => {
@@ -1537,5 +1566,430 @@ describe("agent event handler", () => {
     expect(payload.message?.content?.[0]?.text).toBe(
       "Disk usage crossed 95 percent on /data and needs cleanup now.",
     );
+  });
+
+  describe("spawnedBy enrichment in chat and agent broadcasts", () => {
+    it("includes spawnedBy in chat delta broadcasts for subagent sessions", () => {
+      vi.mocked(loadGatewaySessionRow).mockReturnValue({
+        key: "agent:coder:subagent:abc",
+        kind: "direct",
+        updatedAt: null,
+        spawnedBy: "agent:conductor:task:parent-1",
+      });
+
+      const { broadcast, nodeSendToSession, handler, chatRunState } = createHarness({
+        resolveSessionKeyForRun: () => "agent:coder:subagent:abc",
+      });
+
+      chatRunState.registry.add("run-sub-1", {
+        sessionKey: "agent:coder:subagent:abc",
+        clientRunId: "client-sub-1",
+      });
+
+      handler({
+        runId: "run-sub-1",
+        seq: 1,
+        stream: "assistant",
+        ts: Date.now(),
+        data: { text: "hello from subagent" },
+      });
+
+      const chatCalls = chatBroadcastCalls(broadcast);
+      expect(chatCalls.length).toBeGreaterThanOrEqual(1);
+      const [, payload] = chatCalls[0];
+      expect(payload).toMatchObject({
+        sessionKey: "agent:coder:subagent:abc",
+        spawnedBy: "agent:conductor:task:parent-1",
+        state: "delta",
+      });
+
+      const nodeCalls = sessionChatCalls(nodeSendToSession);
+      expect(nodeCalls.length).toBeGreaterThanOrEqual(1);
+      expect(nodeCalls[0][2]).toMatchObject({
+        spawnedBy: "agent:conductor:task:parent-1",
+      });
+    });
+
+    it("includes spawnedBy in chat final broadcasts for subagent sessions", () => {
+      vi.mocked(loadGatewaySessionRow).mockReturnValue({
+        key: "agent:coder:subagent:abc",
+        kind: "direct",
+        updatedAt: null,
+        spawnedBy: "agent:conductor:task:parent-1",
+      });
+
+      const { broadcast, handler, chatRunState } = createHarness({
+        resolveSessionKeyForRun: () => "agent:coder:subagent:abc",
+      });
+
+      chatRunState.registry.add("run-sub-final", {
+        sessionKey: "agent:coder:subagent:abc",
+        clientRunId: "client-sub-final",
+      });
+
+      handler({
+        runId: "run-sub-final",
+        seq: 1,
+        stream: "assistant",
+        ts: Date.now(),
+        data: { text: "done" },
+      });
+
+      handler({
+        runId: "run-sub-final",
+        seq: 2,
+        stream: "lifecycle",
+        ts: Date.now(),
+        data: { phase: "end" },
+      });
+
+      const chatCalls = chatBroadcastCalls(broadcast);
+      const finalCall = chatCalls.find(([, p]) => p.state === "final");
+      expect(finalCall).toBeDefined();
+      expect(finalCall![1]).toMatchObject({
+        sessionKey: "agent:coder:subagent:abc",
+        spawnedBy: "agent:conductor:task:parent-1",
+        state: "final",
+      });
+    });
+
+    it("omits spawnedBy from chat broadcasts for non-subagent sessions", () => {
+      vi.mocked(loadGatewaySessionRow).mockReturnValue({
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: null,
+      });
+
+      const { broadcast, handler, chatRunState } = createHarness({
+        resolveSessionKeyForRun: () => "agent:main:main",
+      });
+
+      chatRunState.registry.add("run-main", {
+        sessionKey: "agent:main:main",
+        clientRunId: "client-main",
+      });
+
+      handler({
+        runId: "run-main",
+        seq: 1,
+        stream: "assistant",
+        ts: Date.now(),
+        data: { text: "hello from main" },
+      });
+
+      const chatCalls = chatBroadcastCalls(broadcast);
+      expect(chatCalls.length).toBeGreaterThanOrEqual(1);
+      expect(chatCalls[0][1]).not.toHaveProperty("spawnedBy");
+    });
+
+    it("skips session row load entirely for session keys that cannot carry lineage", () => {
+      const { broadcast, handler, chatRunState } = createHarness({
+        resolveSessionKeyForRun: () => "agent:main:main",
+      });
+
+      chatRunState.registry.add("run-no-lineage", {
+        sessionKey: "agent:main:main",
+        clientRunId: "client-no-lineage",
+      });
+
+      for (let seq = 1; seq <= 5; seq++) {
+        handler({
+          runId: "run-no-lineage",
+          seq,
+          stream: "assistant",
+          ts: Date.now() + seq * 200,
+          data: { text: `message ${seq}` },
+        });
+      }
+
+      // The chat delta path invokes resolveSpawnedBy only. Non-subagent,
+      // non-acp keys cannot carry spawnedBy (see supportsSpawnLineage in
+      // sessions-patch.ts), so resolveSpawnedBy must short-circuit without
+      // ever calling loadGatewaySessionRow on this hot path.
+      expect(loadGatewaySessionRow).not.toHaveBeenCalled();
+
+      const chatCalls = chatBroadcastCalls(broadcast);
+      expect(chatCalls.length).toBeGreaterThanOrEqual(1);
+      expect(chatCalls[0][1]).not.toHaveProperty("spawnedBy");
+    });
+
+    it("includes spawnedBy in non-tool agent event broadcasts for subagent sessions", () => {
+      vi.mocked(loadGatewaySessionRow).mockReturnValue({
+        key: "agent:coder:subagent:xyz",
+        kind: "direct",
+        updatedAt: null,
+        spawnedBy: "agent:conductor:task:parent-2",
+      });
+
+      const { broadcast, handler } = createHarness({
+        resolveSessionKeyForRun: () => "agent:coder:subagent:xyz",
+      });
+
+      registerAgentRunContext("run-agent-sub", { sessionKey: "agent:coder:subagent:xyz" });
+
+      handler({
+        runId: "run-agent-sub",
+        seq: 1,
+        stream: "lifecycle",
+        ts: Date.now(),
+        data: { phase: "start" },
+      });
+
+      const agentCalls = broadcast.mock.calls.filter(([event]) => event === "agent");
+      expect(agentCalls.length).toBeGreaterThanOrEqual(1);
+      expect(agentCalls[0][1]).toMatchObject({
+        sessionKey: "agent:coder:subagent:xyz",
+        spawnedBy: "agent:conductor:task:parent-2",
+      });
+
+      resetAgentRunContextForTest();
+    });
+
+    it("includes spawnedBy in chat error final broadcasts for subagent sessions", () => {
+      vi.mocked(loadGatewaySessionRow).mockReturnValue({
+        key: "agent:coder:subagent:err",
+        kind: "direct",
+        updatedAt: null,
+        spawnedBy: "agent:conductor:task:parent-err",
+      });
+
+      const { broadcast, handler, chatRunState } = createHarness({
+        resolveSessionKeyForRun: () => "agent:coder:subagent:err",
+        lifecycleErrorRetryGraceMs: 0,
+      });
+
+      chatRunState.registry.add("run-sub-err", {
+        sessionKey: "agent:coder:subagent:err",
+        clientRunId: "client-sub-err",
+      });
+
+      handler({
+        runId: "run-sub-err",
+        seq: 1,
+        stream: "assistant",
+        ts: Date.now(),
+        data: { text: "partial" },
+      });
+
+      handler({
+        runId: "run-sub-err",
+        seq: 2,
+        stream: "lifecycle",
+        ts: Date.now(),
+        data: { phase: "error", error: "provider failed" },
+      });
+
+      const chatCalls = chatBroadcastCalls(broadcast);
+      const errorCall = chatCalls.find(([, p]) => p.state === "error");
+      expect(errorCall).toBeDefined();
+      expect(errorCall![1]).toMatchObject({
+        sessionKey: "agent:coder:subagent:err",
+        spawnedBy: "agent:conductor:task:parent-err",
+        state: "error",
+      });
+    });
+
+    it("includes spawnedBy in flushed chat delta for subagent sessions", () => {
+      let now = 20_000;
+      const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+
+      vi.mocked(loadGatewaySessionRow).mockReturnValue({
+        key: "agent:coder:subagent:flush",
+        kind: "direct",
+        updatedAt: null,
+        spawnedBy: "agent:conductor:task:parent-flush",
+      });
+
+      const { broadcast, chatRunState, toolEventRecipients, handler } = createHarness({
+        resolveSessionKeyForRun: () => "agent:coder:subagent:flush",
+      });
+
+      chatRunState.registry.add("run-sub-flush", {
+        sessionKey: "agent:coder:subagent:flush",
+        clientRunId: "client-sub-flush",
+      });
+      registerAgentRunContext("run-sub-flush", {
+        sessionKey: "agent:coder:subagent:flush",
+        verboseLevel: "off",
+      });
+      toolEventRecipients.add("run-sub-flush", "conn-flush");
+
+      handler({
+        runId: "run-sub-flush",
+        seq: 1,
+        stream: "assistant",
+        ts: Date.now(),
+        data: { text: "before tool" },
+      });
+
+      now = 20_050;
+      handler({
+        runId: "run-sub-flush",
+        seq: 2,
+        stream: "assistant",
+        ts: Date.now(),
+        data: { text: "before tool expanded" },
+      });
+
+      handler({
+        runId: "run-sub-flush",
+        seq: 3,
+        stream: "tool",
+        ts: Date.now(),
+        data: { phase: "start", name: "exec", toolCallId: "tool-flush-sub" },
+      });
+
+      const chatCalls = chatBroadcastCalls(broadcast);
+      const flushedDelta = chatCalls.find(
+        ([, p]) => p.state === "delta" && p.message?.content?.[0]?.text === "before tool expanded",
+      );
+      expect(flushedDelta).toBeDefined();
+      expect(flushedDelta![1]).toMatchObject({
+        spawnedBy: "agent:conductor:task:parent-flush",
+      });
+
+      nowSpy.mockRestore();
+      resetAgentRunContextForTest();
+    });
+
+    it("includes spawnedBy in seq gap error broadcasts for subagent sessions", () => {
+      vi.mocked(loadGatewaySessionRow).mockReturnValue({
+        key: "agent:coder:subagent:gap",
+        kind: "direct",
+        updatedAt: null,
+        spawnedBy: "agent:conductor:task:parent-gap",
+      });
+
+      const { broadcast, handler } = createHarness({
+        resolveSessionKeyForRun: () => "agent:coder:subagent:gap",
+      });
+
+      registerAgentRunContext("run-sub-gap", { sessionKey: "agent:coder:subagent:gap" });
+
+      handler({
+        runId: "run-sub-gap",
+        seq: 1,
+        stream: "lifecycle",
+        ts: Date.now(),
+        data: { phase: "start" },
+      });
+
+      handler({
+        runId: "run-sub-gap",
+        seq: 5,
+        stream: "assistant",
+        ts: Date.now(),
+        data: { text: "skipped seq" },
+      });
+
+      const agentCalls = broadcast.mock.calls.filter(([event]) => event === "agent");
+      const gapError = agentCalls.find(
+        ([, p]) => p.stream === "error" && p.data?.reason === "seq gap",
+      );
+      expect(gapError).toBeDefined();
+      expect(gapError![1]).toMatchObject({
+        sessionKey: "agent:coder:subagent:gap",
+        spawnedBy: "agent:conductor:task:parent-gap",
+        data: { reason: "seq gap", expected: 2, received: 5 },
+      });
+
+      resetAgentRunContextForTest();
+    });
+
+    it("caches spawnedBy lookup so repeated events for the same subagent session only load the row once", () => {
+      vi.mocked(loadGatewaySessionRow).mockClear();
+      vi.mocked(loadGatewaySessionRow).mockReturnValue({
+        key: "agent:coder:subagent:cache-test",
+        kind: "direct",
+        updatedAt: null,
+        spawnedBy: "agent:conductor:task:parent-cache",
+      });
+
+      const { broadcast, handler, chatRunState } = createHarness({
+        resolveSessionKeyForRun: () => "agent:coder:subagent:cache-test",
+      });
+
+      chatRunState.registry.add("run-cache", {
+        sessionKey: "agent:coder:subagent:cache-test",
+        clientRunId: "client-cache",
+      });
+
+      // Fire multiple events for the same session
+      handler({
+        runId: "run-cache",
+        seq: 1,
+        stream: "assistant",
+        ts: Date.now(),
+        data: { text: "chunk 1" },
+      });
+      handler({
+        runId: "run-cache",
+        seq: 2,
+        stream: "assistant",
+        ts: Date.now(),
+        data: { text: "chunk 2" },
+      });
+      handler({
+        runId: "run-cache",
+        seq: 3,
+        stream: "lifecycle",
+        ts: Date.now(),
+        data: { phase: "end" },
+      });
+
+      // Key assertion: loadGatewaySessionRow called exactly once despite 3 events
+      expect(loadGatewaySessionRow).toHaveBeenCalledTimes(1);
+      expect(loadGatewaySessionRow).toHaveBeenCalledWith("agent:coder:subagent:cache-test");
+
+      // All broadcasts still have correct spawnedBy
+      const chatCalls = chatBroadcastCalls(broadcast);
+      for (const [, payload] of chatCalls) {
+        expect(payload).toMatchObject({
+          spawnedBy: "agent:conductor:task:parent-cache",
+        });
+      }
+    });
+
+    it("caches null spawnedBy for eligible subagent sessions that lack a spawnedBy value", () => {
+      vi.mocked(loadGatewaySessionRow).mockClear();
+      vi.mocked(loadGatewaySessionRow).mockReturnValue({
+        key: "agent:coder:subagent:no-lineage",
+        kind: "direct",
+        updatedAt: null,
+        // no spawnedBy field
+      });
+
+      const { broadcast, handler, chatRunState } = createHarness({
+        resolveSessionKeyForRun: () => "agent:coder:subagent:no-lineage",
+      });
+
+      chatRunState.registry.add("run-null", {
+        sessionKey: "agent:coder:subagent:no-lineage",
+        clientRunId: "client-null",
+      });
+
+      handler({
+        runId: "run-null",
+        seq: 1,
+        stream: "assistant",
+        ts: Date.now(),
+        data: { text: "chunk 1" },
+      });
+      handler({
+        runId: "run-null",
+        seq: 2,
+        stream: "assistant",
+        ts: Date.now(),
+        data: { text: "chunk 2" },
+      });
+
+      // null result is cached — only one DB call despite two events
+      expect(loadGatewaySessionRow).toHaveBeenCalledTimes(1);
+
+      const chatCalls = chatBroadcastCalls(broadcast);
+      for (const [, payload] of chatCalls) {
+        expect(payload).not.toHaveProperty("spawnedBy");
+      }
+    });
   });
 });

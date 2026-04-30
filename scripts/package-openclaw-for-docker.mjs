@@ -39,16 +39,33 @@ function parseArgs(argv) {
   return options;
 }
 
-function run(command, args, cwd) {
+function run(command, args, cwd, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
     });
+    let timedOut = false;
+    const timeout =
+      options.timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            timedOut = true;
+            child.kill("SIGTERM");
+            setTimeout(() => child.kill("SIGKILL"), 5_000).unref?.();
+          }, options.timeoutMs);
+    timeout?.unref?.();
     child.stdout.pipe(process.stderr, { end: false });
     child.stderr.pipe(process.stderr, { end: false });
     child.on("error", reject);
     child.on("close", (status, signal) => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      if (timedOut) {
+        reject(new Error(`${command} ${args.join(" ")} timed out after ${options.timeoutMs}ms`));
+        return;
+      }
       if (status === 0) {
         resolve();
         return;
@@ -150,10 +167,15 @@ async function main() {
   }
 
   console.error("==> Checking OpenClaw package tarball");
+  const checkStartedAt = Date.now();
   await run(
     "node",
     [path.join(ROOT_DIR, "scripts/check-openclaw-package-tarball.mjs"), tarball],
     sourceDir,
+    { timeoutMs: 5 * 60 * 1000 },
+  );
+  console.error(
+    `==> OpenClaw package tarball check finished in ${Math.round((Date.now() - checkStartedAt) / 1000)}s`,
   );
 
   process.stdout.write(`${tarball}\n`);

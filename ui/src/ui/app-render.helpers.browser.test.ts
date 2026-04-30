@@ -1,13 +1,23 @@
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { t } from "../i18n/index.ts";
-import { renderChatControls } from "./app-render.helpers.ts";
+import { renderChatControls, renderChatMobileToggle } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
+import type { SessionsListResult } from "./types.ts";
+
+type SessionRow = SessionsListResult["sessions"][number];
+
+function row(overrides: Partial<SessionRow> & { key: string }): SessionRow {
+  return { kind: "direct", updatedAt: 0, ...overrides };
+}
 
 function createState(overrides: Partial<AppViewState> = {}) {
   return {
     connected: true,
     chatLoading: false,
+    chatRunId: null,
+    chatSending: false,
+    chatStream: null,
     onboarding: false,
     sessionKey: "main",
     sessionsHideCron: true,
@@ -36,8 +46,21 @@ function createState(overrides: Partial<AppViewState> = {}) {
       chatShowToolCalls: true,
     },
     applySettings: () => undefined,
+    chatMobileControlsOpen: false,
+    setChatMobileControlsOpen: () => undefined,
     ...overrides,
   } as unknown as AppViewState;
+}
+
+function renderRefreshButton(overrides: Partial<AppViewState> = {}) {
+  const container = document.createElement("div");
+  render(renderChatControls(createState(overrides)), container);
+
+  const button = container.querySelector<HTMLButtonElement>(
+    `.chat-controls .btn--icon[data-tooltip="${t("chat.refreshTitle")}"]`,
+  );
+  expect(button).not.toBeNull();
+  return button!;
 }
 
 describe("chat header controls (browser)", () => {
@@ -65,5 +88,90 @@ describe("chat header controls (browser)", () => {
       expect(button.getAttribute("title")).toBe(button.getAttribute("data-tooltip"));
       expect(button.getAttribute("aria-label")).toBe(button.getAttribute("data-tooltip"));
     }
+  });
+
+  it.each([
+    ["connected and idle", {}, false],
+    ["chat history loading", { chatLoading: true }, true],
+    ["chat send in flight", { chatSending: true }, true],
+    ["active run", { chatRunId: "run-123" }, true],
+    ["active stream", { chatStream: "streaming" }, true],
+    ["disconnected", { connected: false }, true],
+  ] as const)("sets refresh disabled state while %s", (_name, overrides, disabled) => {
+    const button = renderRefreshButton(overrides);
+
+    expect(button.disabled).toBe(disabled);
+  });
+
+  it("renders the cron session filter in the mobile dropdown controls", async () => {
+    const state = createState({
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 2,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [row({ key: "main" }), row({ key: "agent:main:cron:daily-briefing" })],
+      },
+    });
+    const container = document.createElement("div");
+    render(renderChatMobileToggle(state), container);
+    await Promise.resolve();
+
+    const buttons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".chat-controls__thinking .btn--icon"),
+    );
+
+    expect(buttons).toHaveLength(4);
+    const cronButton = buttons.at(-1);
+    expect(cronButton?.classList.contains("active")).toBe(true);
+    expect(cronButton?.getAttribute("aria-pressed")).toBe("true");
+    expect(cronButton?.getAttribute("title")).toBe(
+      t("chat.showCronSessionsHidden", { count: "1" }),
+    );
+
+    cronButton?.click();
+
+    expect(state.sessionsHideCron).toBe(false);
+  });
+
+  it("renders the mobile dropdown from state instead of mutating DOM classes", async () => {
+    const setChatMobileControlsOpen = vi.fn();
+    const state = createState({
+      chatMobileControlsOpen: false,
+      setChatMobileControlsOpen,
+    });
+    const container = document.createElement("div");
+    render(renderChatMobileToggle(state), container);
+    await Promise.resolve();
+
+    const toggle = container.querySelector<HTMLButtonElement>(".chat-controls-mobile-toggle");
+    const dropdown = container.querySelector<HTMLElement>(".chat-controls-dropdown");
+    expect(toggle).not.toBeNull();
+    expect(dropdown).not.toBeNull();
+    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle?.getAttribute("aria-controls")).toBe("chat-mobile-controls-dropdown");
+    expect(dropdown?.id).toBe("chat-mobile-controls-dropdown");
+    expect(dropdown?.classList.contains("open")).toBe(false);
+
+    toggle?.click();
+
+    expect(setChatMobileControlsOpen).toHaveBeenCalledWith(true, { trigger: toggle });
+    expect(dropdown?.classList.contains("open")).toBe(false);
+
+    render(
+      renderChatMobileToggle(
+        createState({
+          chatMobileControlsOpen: true,
+          setChatMobileControlsOpen,
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const openToggle = container.querySelector<HTMLButtonElement>(".chat-controls-mobile-toggle");
+    const openDropdown = container.querySelector<HTMLElement>(".chat-controls-dropdown");
+    expect(openToggle?.getAttribute("aria-expanded")).toBe("true");
+    expect(openDropdown?.classList.contains("open")).toBe(true);
   });
 });

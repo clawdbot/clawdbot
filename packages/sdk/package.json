@@ -1,0 +1,21 @@
+{
+  "name": "@openclaw/sdk",
+  "version": "0.0.0-private",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "scripts": {
+    "build": "tsdown src/index.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+  }
+}

@@ -4,6 +4,7 @@ import {
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
+import { resolveDiscordAccountAllowFrom } from "./accounts.js";
 import { resolveDiscordChannelAllowlist } from "./resolve-channels.js";
 import { resolveDiscordUserAllowlist } from "./resolve-users.js";
 import {
@@ -68,10 +69,8 @@ async function promptDiscordAllowFrom(params: {
     placeholder: "@alice, 123456789012345678",
     parseId: parseDiscordAllowFromId,
     invalidWithoutTokenNote: "Bot token missing; use numeric user ids (or mention form) only.",
-    resolveExisting: (account) => {
-      const config = account.config;
-      return config.allowFrom ?? config.dm?.allowFrom ?? [];
-    },
+    resolveExisting: (account, cfg) =>
+      resolveDiscordAccountAllowFrom({ cfg, accountId: account.accountId }) ?? [],
     resolveToken: (account) =>
       resolveDiscordToken(params.cfg, { accountId: account.accountId }).token,
     resolveEntries: async ({ token, entries }) =>

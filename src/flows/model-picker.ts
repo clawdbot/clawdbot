@@ -1,13 +1,14 @@
-import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
+import { resolveVisibleModelCatalog } from "../agents/model-catalog-visibility.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   isModelPickerVisibleModelRef,
   isModelPickerVisibleProvider,
 } from "../agents/model-picker-visibility.js";
+import { createProviderAuthChecker } from "../agents/model-provider-auth.js";
+import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
 import {
-  buildAllowedModelSet,
   buildConfiguredModelCatalog,
   buildModelAliasIndex,
   type ModelAliasIndex,
@@ -16,6 +17,7 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
+import { loadStaticManifestCatalogRowsForList } from "../commands/models/list.manifest-catalog.js";
 import { formatTokenK } from "../commands/models/shared.js";
 import {
   resolveAgentModelFallbackValues,
@@ -36,6 +38,7 @@ const KEEP_VALUE = "__keep__";
 const MANUAL_VALUE = "__manual__";
 const BROWSE_VALUE = "__browse__";
 const PROVIDER_FILTER_THRESHOLD = 30;
+const EMPTY_LITERAL_PREFIX_PROVIDERS = new Set<string>();
 
 // Internal router models are valid defaults during auth/setup but not manual API targets.
 const HIDDEN_ROUTER_MODELS = new Set(["openrouter/auto"]);
@@ -69,42 +72,6 @@ const loadResolvedModelPickerRuntime = createLazyRuntimeSurface(
   ({ modelPickerRuntime }) => modelPickerRuntime,
 );
 
-function hasAuthForProvider(
-  provider: string,
-  cfg: OpenClawConfig,
-  store: ReturnType<typeof ensureAuthProfileStore>,
-) {
-  if (listProfilesForProvider(store, provider).length > 0) {
-    return true;
-  }
-  if (resolveEnvApiKey(provider)) {
-    return true;
-  }
-  if (hasUsableCustomProviderApiKey(cfg, provider)) {
-    return true;
-  }
-  return false;
-}
-
-function createProviderAuthChecker(params: {
-  cfg: OpenClawConfig;
-  agentDir?: string;
-}): (provider: string) => boolean {
-  const authStore = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-  });
-  const authCache = new Map<string, boolean>();
-  return (provider: string) => {
-    const cached = authCache.get(provider);
-    if (cached !== undefined) {
-      return cached;
-    }
-    const value = hasAuthForProvider(provider, params.cfg, authStore);
-    authCache.set(provider, value);
-    return value;
-  };
-}
-
 function resolveConfiguredModelRaw(cfg: OpenClawConfig): string {
   return resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ?? "";
 }
@@ -116,11 +83,38 @@ function resolveConfiguredModelKeys(cfg: OpenClawConfig): string[] {
     .filter((key) => key.length > 0);
 }
 
-function loadPickerModelCatalog(cfg: OpenClawConfig): ReturnType<typeof loadModelCatalog> {
+function toPickerCatalogEntry(
+  row: ReturnType<typeof loadStaticManifestCatalogRowsForList>[number],
+): ModelCatalogEntry {
+  return {
+    id: row.id,
+    name: row.name,
+    provider: row.provider,
+    ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),
+    reasoning: row.reasoning,
+    input: row.input,
+  };
+}
+
+function loadPickerModelCatalog(
+  cfg: OpenClawConfig,
+  opts: { preferredProvider?: string } = {},
+): ReturnType<typeof loadModelCatalog> {
   if (cfg.models?.mode === "replace") {
     return Promise.resolve(buildConfiguredModelCatalog({ cfg }));
   }
-  return loadModelCatalog({ config: cfg });
+  if (opts.preferredProvider) {
+    const manifestRows = loadStaticManifestCatalogRowsForList({
+      cfg,
+      providerFilter: opts.preferredProvider,
+    });
+    if (manifestRows.length > 0) {
+      return Promise.resolve(manifestRows.map(toPickerCatalogEntry));
+    }
+  }
+  return loadModelCatalog({
+    config: cfg,
+  });
 }
 
 function normalizeModelKeys(values: string[]): string[] {
@@ -190,6 +184,39 @@ function resolveModelRouteHint(provider: string): string | undefined {
   return undefined;
 }
 
+async function resolveLiteralPrefixProviderIds(params: {
+  cfg: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<Set<string>> {
+  const { resolvePluginProviders } = await loadResolvedModelPickerRuntime();
+  const providers = resolvePluginProviders({
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    activate: false,
+    cache: false,
+    includeUntrustedWorkspacePlugins: false,
+  });
+  const ids = new Set<string>();
+  for (const provider of providers) {
+    if (!provider.preserveLiteralProviderPrefix) {
+      continue;
+    }
+    const id = normalizeProviderId(provider.id);
+    if (id) {
+      ids.add(id);
+    }
+    for (const alias of provider.aliases ?? []) {
+      const aliasId = normalizeProviderId(alias);
+      if (aliasId) {
+        ids.add(aliasId);
+      }
+    }
+  }
+  return ids;
+}
+
 function addModelSelectOption(params: {
   entry: {
     provider: string;
@@ -202,6 +229,7 @@ function addModelSelectOption(params: {
   seen: Set<string>;
   aliasIndex: ReturnType<typeof buildModelAliasIndex>;
   hasAuth: (provider: string) => boolean;
+  literalPrefixProviders: Set<string>;
 }) {
   const key = modelKey(params.entry.provider, params.entry.id);
   if (
@@ -230,11 +258,14 @@ function addModelSelectOption(params: {
     hints.push(routeHint);
   }
   if (!params.hasAuth(params.entry.provider)) {
-    hints.push("auth missing");
+    return;
   }
+  const label = params.literalPrefixProviders.has(normalizeProviderId(params.entry.provider))
+    ? `${params.entry.provider}/${params.entry.id}`
+    : key;
   params.options.push({
     value: key,
-    label: key,
+    label,
     hint: hints.length > 0 ? hints.join(" · ") : undefined,
   });
   params.seen.add(key);
@@ -257,6 +288,7 @@ function addModelKeySelectOption(params: {
   seen: Set<string>;
   aliasIndex: ReturnType<typeof buildModelAliasIndex>;
   hasAuth: (provider: string) => boolean;
+  literalPrefixProviders?: Set<string>;
   fallbackHint: string;
 }) {
   const entry = splitModelKey(params.key);
@@ -270,6 +302,7 @@ function addModelKeySelectOption(params: {
     seen: params.seen,
     aliasIndex: params.aliasIndex,
     hasAuth: params.hasAuth,
+    literalPrefixProviders: params.literalPrefixProviders ?? EMPTY_LITERAL_PREFIX_PROVIDERS,
   });
   if (params.seen.size > before) {
     const option = params.options.at(-1);
@@ -534,6 +567,27 @@ export async function promptDefaultModel(
   });
   const resolvedKey = modelKey(resolved.provider, resolved.model);
   const configuredKey = configuredRaw ? resolvedKey : "";
+  let literalPrefixProvidersCache: Set<string> | undefined;
+  const resolveCachedLiteralPrefixProviders = async () => {
+    if (!literalPrefixProvidersCache) {
+      literalPrefixProvidersCache = await resolveLiteralPrefixProviderIds({
+        cfg,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      });
+    }
+    return literalPrefixProvidersCache;
+  };
+  const resolveConfiguredDisplayLabel = async () => {
+    const providerId = normalizeProviderId(resolved.provider);
+    if (!providerId) {
+      return configuredRaw || resolvedKey;
+    }
+    const literalPrefixProviders = await resolveCachedLiteralPrefixProviders();
+    return literalPrefixProviders.has(providerId)
+      ? formatLiteralProviderPrefixedModelRef(resolved.provider, resolvedKey)
+      : configuredRaw || resolvedKey;
+  };
 
   if (
     loadCatalog &&
@@ -542,11 +596,12 @@ export async function promptDefaultModel(
     allowKeep &&
     normalizeProviderId(resolved.provider) === preferredProvider
   ) {
+    const configuredLabel = await resolveConfiguredDisplayLabel();
     const options: WizardSelectOption[] = [
       {
         value: KEEP_VALUE,
         label: configuredRaw
-          ? `Keep current (${configuredRaw})`
+          ? `Keep current (${configuredLabel})`
           : `Keep current (default: ${resolvedKey})`,
         hint:
           configuredRaw && configuredRaw !== resolvedKey ? `resolves to ${resolvedKey}` : undefined,
@@ -583,12 +638,13 @@ export async function promptDefaultModel(
   }
 
   if (!loadCatalog) {
+    const configuredLabel = await resolveConfiguredDisplayLabel();
     const options: WizardSelectOption[] = [];
     if (allowKeep) {
       options.push({
         value: KEEP_VALUE,
         label: configuredRaw
-          ? `Keep current (${configuredRaw})`
+          ? `Keep current (${configuredLabel})`
           : `Keep current (default: ${resolvedKey})`,
         hint:
           configuredRaw && configuredRaw !== resolvedKey ? `resolves to ${resolvedKey}` : undefined,
@@ -651,14 +707,15 @@ export async function promptDefaultModel(
   });
   const models = ignoreAllowlist
     ? catalog
-    : (() => {
-        const { allowedCatalog } = buildAllowedModelSet({
-          cfg,
-          catalog,
-          defaultProvider: DEFAULT_PROVIDER,
-        });
-        return allowedCatalog.length > 0 ? allowedCatalog : catalog;
-      })();
+    : resolveVisibleModelCatalog({
+        cfg,
+        catalog,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: resolved.model,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      });
   if (models.length === 0) {
     return promptManualModel({
       prompter: params.prompter,
@@ -693,17 +750,28 @@ export async function promptDefaultModel(
   const hasPreferredProvider = preferredProvider
     ? filteredModels.some((entry) => matchesPreferredProvider?.(entry.provider))
     : false;
-  const hasAuth = createProviderAuthChecker({ cfg, agentDir: params.agentDir });
+  const hasAuth = createProviderAuthChecker({
+    cfg,
+    workspaceDir: params.workspaceDir,
+    agentDir: params.agentDir,
+    env: params.env,
+  });
+  const literalPrefixProviders = await resolveCachedLiteralPrefixProviders();
+
+  // Show the literal form (e.g. nvidia/nvidia/...) in the "Keep current" label
+  // for providers that set preserveLiteralProviderPrefix, so the user sees the
+  // same ref they'll pick from the catalog rows. Config itself stays canonical.
+  const configuredLabel = literalPrefixProviders.has(normalizeProviderId(resolved.provider))
+    ? formatLiteralProviderPrefixedModelRef(resolved.provider, resolvedKey)
+    : configuredRaw || resolvedKey;
 
   const options: WizardSelectOption[] = [];
   if (allowKeep) {
     options.push({
       value: KEEP_VALUE,
       label: configuredRaw
-        ? `Keep current (${configuredRaw})`
+        ? `Keep current (${configuredLabel})`
         : `Keep current (default: ${resolvedKey})`,
-      hint:
-        configuredRaw && configuredRaw !== resolvedKey ? `resolves to ${resolvedKey}` : undefined,
     });
   }
   if (includeManual) {
@@ -721,12 +789,19 @@ export async function promptDefaultModel(
 
   const seen = new Set<string>();
   for (const entry of filteredModels) {
-    addModelSelectOption({ entry, options, seen, aliasIndex, hasAuth });
+    addModelSelectOption({
+      entry,
+      options,
+      seen,
+      aliasIndex,
+      hasAuth,
+      literalPrefixProviders,
+    });
   }
   if (configuredKey && !seen.has(configuredKey)) {
     options.push({
       value: configuredKey,
-      label: configuredKey,
+      label: configuredLabel,
       hint: "current (not in catalog)",
     });
   }
@@ -793,6 +868,8 @@ export async function promptModelAllowlist(params: {
   prompter: WizardPrompter;
   message?: string;
   agentDir?: string;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
   allowedKeys?: string[];
   initialSelections?: string[];
   preferredProvider?: string;
@@ -841,7 +918,12 @@ export async function promptModelAllowlist(params: {
     fallbackKeys.length > 0 ||
     (params.initialSelections?.length ?? 0) > 0 ||
     configuredRaw.length > 0;
-  const hasAuth = createProviderAuthChecker({ cfg, agentDir: params.agentDir });
+  const hasAuth = createProviderAuthChecker({
+    cfg,
+    workspaceDir: params.workspaceDir,
+    agentDir: params.agentDir,
+    env: params.env,
+  });
   const matchesPreferredProvider = preferredProvider
     ? createPreferredProviderMatcher({
         preferredProvider,
@@ -905,7 +987,7 @@ export async function promptModelAllowlist(params: {
   const allowlistProgress = params.prompter.progress("Loading available models");
   let catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
   try {
-    catalog = await loadPickerModelCatalog(cfg);
+    catalog = await loadPickerModelCatalog(cfg, { preferredProvider });
   } finally {
     allowlistProgress.stop();
   }
@@ -941,6 +1023,12 @@ export async function promptModelAllowlist(params: {
     return { models: normalizeModelKeys(parsed) };
   }
 
+  const literalPrefixProviders = await resolveLiteralPrefixProviderIds({
+    cfg,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+
   const options: WizardSelectOption[] = [];
   const seen = new Set<string>();
   const allowedCatalog = (
@@ -968,7 +1056,14 @@ export async function promptModelAllowlist(params: {
     : selectableInitialSeeds.filter(isModelPickerVisibleModelRef);
 
   for (const entry of filteredCatalog) {
-    addModelSelectOption({ entry, options, seen, aliasIndex, hasAuth });
+    addModelSelectOption({
+      entry,
+      options,
+      seen,
+      aliasIndex,
+      hasAuth,
+      literalPrefixProviders,
+    });
   }
 
   const supplementalKeys = (allowedKeySet ? allowedKeys : selectableInitialSeeds).filter(

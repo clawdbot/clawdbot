@@ -550,7 +550,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       expect(options?.messageThreadId).toBeUndefined();
     });
   });
-  it("keeps exec-event delivery pinned to the original Telegram topic when session route drifts", async () => {
+  it("keeps output-bearing exec-event delivery pinned to the original Telegram topic when session route drifts", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
       const cfg: OpenClawConfig = {
         agents: {
@@ -586,7 +586,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       const getReplySpy = vi.fn().mockResolvedValue({
         text: "The review-worker spawn finished successfully.",
       });
-      enqueueSystemEvent("Exec completed (review-run, code 0)", {
+      enqueueSystemEvent("Exec completed (review-run, code 0) :: review-worker spawn finished", {
         sessionKey,
         trusted: false,
         deliveryContext: {
@@ -614,6 +614,72 @@ describe("Ghost reminder bug (issue #13317)", () => {
         "The review-worker spawn finished successfully.",
         expect.objectContaining({ messageThreadId: 47 }),
       );
+    });
+  });
+
+  it("suppresses metadata-only successful exec completions", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "last",
+            },
+          },
+        },
+        channels: { telegram: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = "agent:main:telegram:group:-1003774691294:topic:47";
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "sid",
+            updatedAt: Date.now(),
+            lastChannel: "telegram",
+            lastTo: "telegram:-1003774691294:topic:2175",
+            lastThreadId: 2175,
+          },
+        }),
+      );
+
+      const sendTelegram = vi.fn();
+      const getReplySpy = vi.fn().mockResolvedValue({
+        text: "HEARTBEAT_OK",
+      });
+      enqueueSystemEvent("Exec completed (review-run, code 0)", {
+        sessionKey,
+        trusted: false,
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:-1003774691294:topic:47",
+          threadId: 47,
+        },
+      });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        sessionKey,
+        reason: "exec-event",
+        deps: {
+          getReplyFromConfig: getReplySpy,
+          telegram: sendTelegram,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+      expect(getReplySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          Body: expect.stringContaining("no command output was found"),
+        }),
+        expect.anything(),
+        expect.anything(),
+      );
+      expect(sendTelegram).not.toHaveBeenCalled();
     });
   });
 

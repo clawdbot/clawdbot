@@ -1,6 +1,6 @@
-import type { ButtonInteraction, ComponentData } from "@buape/carbon";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ButtonInteraction, ComponentData } from "../internal/discord.js";
 
 const resolveApprovalOverGatewayMock = vi.hoisted(() => vi.fn());
 

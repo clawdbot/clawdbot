@@ -29,6 +29,7 @@ import { startGatewayConfigReloader, type GatewayReloadPlan } from "./config-rel
 import { resolveHooksConfig } from "./hooks.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
+import { markGatewayModelCatalogStaleForReload } from "./server-model-catalog.js";
 import {
   type GatewayChannelManager,
   startGatewayChannelHealthMonitor,
@@ -241,6 +242,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       )
     ) {
       resetModelCatalogCache();
+      markGatewayModelCatalogStaleForReload();
     }
 
     if (plan.reloadHooks) {

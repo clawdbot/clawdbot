@@ -10,6 +10,7 @@ import {
   wrapProviderStreamFn as wrapProviderStreamFnRuntime,
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { legacyModelKey, modelKey } from "../model-selection-normalize.js";
 import { supportsGptParallelToolCallsPayload } from "../provider-api-families.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
 import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
@@ -71,8 +72,11 @@ export function resolveExtraParams(params: {
   agentId?: string;
 }): Record<string, unknown> | undefined {
   const defaultParams = params.cfg?.agents?.defaults?.params ?? undefined;
-  const modelKey = `${params.provider}/${params.modelId}`;
-  const modelConfig = params.cfg?.agents?.defaults?.models?.[modelKey];
+  const canonicalKey = modelKey(params.provider, params.modelId);
+  const legacyKey = legacyModelKey(params.provider, params.modelId);
+  const configuredModels = params.cfg?.agents?.defaults?.models;
+  const modelConfig =
+    configuredModels?.[canonicalKey] ?? (legacyKey ? configuredModels?.[legacyKey] : undefined);
   const globalParams = modelConfig?.params ? { ...modelConfig.params } : undefined;
   const agentParams =
     params.agentId && params.cfg?.agents?.list

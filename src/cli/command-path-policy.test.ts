@@ -77,6 +77,8 @@ describe("command-path-policy", () => {
     });
 
     for (const commandPath of [
+      ["agents"],
+      ["agents", "list"],
       ["agents", "bind"],
       ["agents", "bindings"],
       ["agents", "unbind"],
@@ -157,6 +159,7 @@ describe("command-path-policy", () => {
     expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "googlemeet", "login"])).toBe(
       "default",
     );
+    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "tools", "effective"])).toBe("bypass");
   });
 
   it("resolves static network proxy bypass policies from the catalog", () => {

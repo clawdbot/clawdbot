@@ -1,9 +1,19 @@
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+
+function stylePath(path: string): string {
+  const cssPath = [resolve(process.cwd(), path), resolve(process.cwd(), "..", path)].find(
+    (candidate) => existsSync(candidate),
+  );
+  expect(cssPath).toBeTruthy();
+  return cssPath!;
+}
 
 describe("markdown preview styles", () => {
   it("keeps the preview dialog canvas unified", async () => {
-    const css = await readFile("ui/src/styles/components.css", "utf8");
+    const css = await readFile(stylePath("ui/src/styles/components.css"), "utf8");
 
     expect(css).toContain(".md-preview-dialog__header-main");
     expect(css).toContain(".md-preview-dialog__meta");
@@ -15,7 +25,7 @@ describe("markdown preview styles", () => {
   });
 
   it("keeps expanded previews focused on header controls and reading space", async () => {
-    const css = await readFile("ui/src/styles/components.css", "utf8");
+    const css = await readFile(stylePath("ui/src/styles/components.css"), "utf8");
 
     expect(css).toContain(".md-preview-dialog__panel.fullscreen .md-preview-dialog__header-main");
     expect(css).toContain("clip-path: inset(50%);");
@@ -27,7 +37,7 @@ describe("markdown preview styles", () => {
   });
 
   it("styles preview header controls as compact icon buttons", async () => {
-    const css = await readFile("ui/src/styles/components.css", "utf8");
+    const css = await readFile(stylePath("ui/src/styles/components.css"), "utf8");
 
     expect(css).toContain(".md-preview-icon-btn");
     expect(css).toContain("width: 36px;");
@@ -36,7 +46,7 @@ describe("markdown preview styles", () => {
   });
 
   it("keeps the sidebar reader shell in sidebar.css", async () => {
-    const css = await readFile("ui/src/styles/chat/sidebar.css", "utf8");
+    const css = await readFile(stylePath("ui/src/styles/chat/sidebar.css"), "utf8");
 
     expect(css).toContain(".sidebar-markdown-shell__toolbar");
     expect(css).toContain(".sidebar-markdown-reader");

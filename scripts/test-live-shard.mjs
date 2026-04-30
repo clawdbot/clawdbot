@@ -14,6 +14,7 @@ export const RELEASE_LIVE_TEST_SHARDS = Object.freeze([
   "native-live-test",
   "native-live-extensions-a-k",
   "native-live-extensions-l-n",
+  "native-live-extensions-moonshot",
   "native-live-extensions-openai",
   "native-live-extensions-o-z-other",
   "native-live-extensions-xai",
@@ -130,6 +131,10 @@ function isXaiLiveTest(file) {
   return file.startsWith("extensions/xai/");
 }
 
+function isMoonshotLiveTest(file) {
+  return file.startsWith("extensions/moonshot/");
+}
+
 export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
   switch (shard) {
     case "native-live-src-agents":
@@ -158,8 +163,11 @@ export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
         (file) =>
           isExtensionInRange(file, "l", "n") &&
           !file.startsWith("extensions/openai/") &&
+          !isMoonshotLiveTest(file) &&
           !isExtensionMediaLiveTest(file),
       );
+    case "native-live-extensions-moonshot":
+      return files.filter(isMoonshotLiveTest);
     case "native-live-extensions-openai":
       return files.filter(
         (file) => file.startsWith("extensions/openai/") && !isExtensionMediaLiveTest(file),

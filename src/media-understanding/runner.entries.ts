@@ -27,8 +27,7 @@ import {
   CLI_OUTPUT_MAX_BUFFER,
   DEFAULT_TIMEOUT_SECONDS,
   MIN_AUDIO_FILE_BYTES,
-  resolveDefaultMediaModel,
-} from "./defaults.js";
+} from "./defaults.constants.js";
 import { MediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
 import { describeImageWithModel } from "./image-runtime.js";
@@ -632,7 +631,7 @@ export async function runProviderEntry(params: {
     });
     const model =
       entry.model?.trim() ||
-      resolveDefaultMediaModel({
+      (await import("./defaults.js")).resolveDefaultMediaModel({
         cfg,
         providerId,
         capability: "audio",

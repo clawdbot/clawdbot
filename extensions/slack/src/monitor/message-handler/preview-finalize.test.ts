@@ -108,4 +108,41 @@ describe("finalizeSlackPreviewEdit", () => {
       }),
     ).toBe("*Done*");
   });
+
+  it("matches truncated fallback text for long blocks-only edit readback", async () => {
+    const longContextText = "a".repeat(3000);
+    const blocks = [
+      {
+        type: "context",
+        elements: [
+          { type: "mrkdwn", text: longContextText },
+          { type: "mrkdwn", text: longContextText },
+          { type: "mrkdwn", text: longContextText },
+        ],
+      },
+    ] as const;
+    const expectedText = __testing.buildExpectedSlackEditText({
+      text: "",
+      blocks: blocks as unknown as Parameters<
+        typeof __testing.buildExpectedSlackEditText
+      >[0]["blocks"],
+    });
+    const client = createClient({
+      historyMessages: [{ ts: "171234.567", text: expectedText, blocks }],
+    });
+
+    expect(expectedText).toHaveLength(8000);
+    await expect(
+      __testing.didSlackPreviewEditApplyAfterError({
+        client,
+        token: "xoxb-test",
+        channelId: "C123",
+        messageId: "171234.567",
+        text: "",
+        blocks: blocks as unknown as Parameters<
+          typeof __testing.didSlackPreviewEditApplyAfterError
+        >[0]["blocks"],
+      }),
+    ).resolves.toBe(true);
+  });
 });

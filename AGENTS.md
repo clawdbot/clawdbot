@@ -72,6 +72,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - GH comments with markdown backticks, `$`, or shell snippets: avoid inline double-quoted `--body`; use single quotes or `--body-file`.
 - PR execution artifacts/screenshots: attach them to the PR, comment, or an external artifact store. Do not add `.github/pr-assets` or other PR-only assets to the repo.
 - PR review answer must explicitly cover: what bug/behavior we are trying to fix; PR/issue URL(s) and affected endpoint/surface; whether this is the best possible fix, with high-certainty evidence from code, tests, CI, and shipped/current behavior.
+- When working on an issue or PR, always end the user-facing final answer with the full GitHub URL.
 - CI polling: exact SHA, needed fields only. Example: `gh api repos/<owner>/<repo>/actions/runs/<id> --jq '{status,conclusion,head_sha,updated_at,name,path}'`.
 - Post-land wait: minimal. Exact landed SHA only. If superseded on `main`, same-branch `cancel-in-progress` cancellations are expected; stop once local touched-surface proof exists. Never wait for newer unrelated `main` unless asked.
 - Wait matrix:
@@ -141,6 +142,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 ## Docs / Changelog
 
 - Docs change with behavior/API. Use docs list/read_when hints; docs links per `docs/AGENTS.md`.
+- Docs final answers: when doc files changed, end with the relevant full `https://docs.openclaw.ai/...` URL(s).
 - Changelog user-facing only; pure test/internal usually no entry.
 - Changelog placement: active version `### Changes`/`### Fixes`; every added entry must include at least one `Thanks @author` attribution, using credited GitHub username(s). Never add `Thanks @codex`, `Thanks @openclaw`, or `Thanks @steipete`.
 - Changelog bullets are always single-line. No wrapping/continuation across multiple lines. Long entries stay on one long line so dedupe, PR-ref, and credit-audit tooling work and so the visual style stays uniform.
@@ -182,6 +184,8 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 ## Ops / Footguns
 
 - Remote install docs: `docs/install/{exe-dev,fly,hetzner}.md`. Parallels smoke: `$openclaw-parallels-smoke`; Discord roundtrip: `parallels-discord-roundtrip`.
+- Memory wiki: keep prompt digest tiny. The prompt should only say the wiki exists, prefer `wiki_search` / `wiki_get`, start from `reports/person-agent-directory.md` for people routing, use search modes (`find-person`, `route-question`, `source-evidence`, `raw-claim`) when useful, and verify contact data before use.
+- People wiki provenance: generated identity, social, contact, and "fun detail" notes need explicit source class/confidence (`maintainer-whois`, Discrawl sample/stat, GitHub profile, maintainer repo file). Do not promote inferred details to facts.
 - Rebrand/migration/config warnings: run `openclaw doctor`.
 - Never edit `node_modules`.
 - Local-only `.agents` ignores: `.git/info/exclude`, not repo `.gitignore`.

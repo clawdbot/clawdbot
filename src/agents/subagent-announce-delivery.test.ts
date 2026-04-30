@@ -498,7 +498,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         path: "steered",
       }),
     );
-    expect(queueEmbeddedPiMessage).toHaveBeenCalledWith("requester-session-1", "child done");
+    expect(queueEmbeddedPiMessage).toHaveBeenCalledWith("requester-session-1", "child done", {
+      steeringMode: "all",
+      debounceMs: 500,
+    });
     expect(callGateway).not.toHaveBeenCalled();
   });
 
@@ -704,7 +707,14 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         path: "direct-fallback",
       }),
     );
-    expect(queueEmbeddedPiMessage).toHaveBeenCalledWith("requester-session-telegram", "child done");
+    expect(queueEmbeddedPiMessage).toHaveBeenCalledWith(
+      "requester-session-telegram",
+      "child done",
+      {
+        steeringMode: "all",
+        debounceMs: 500,
+      },
+    );
     expect(callGateway).not.toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({

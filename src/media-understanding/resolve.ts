@@ -11,7 +11,7 @@ import {
   DEFAULT_MAX_CHARS_BY_CAPABILITY,
   DEFAULT_MEDIA_CONCURRENCY,
   DEFAULT_PROMPT,
-} from "./defaults.js";
+} from "./defaults.constants.js";
 import { resolveEffectiveMediaEntryCapabilities } from "./entry-capabilities.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
 import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";

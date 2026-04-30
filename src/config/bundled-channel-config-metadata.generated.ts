@@ -789,6 +789,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             },
           ],
         },
+        applicationId: {
+          type: "string",
+        },
         proxy: {
           type: "string",
         },
@@ -2151,6 +2154,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     ],
                   },
                 ],
+              },
+              applicationId: {
+                type: "string",
               },
               proxy: {
                 type: "string",
@@ -3621,6 +3627,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         label: "Discord Bot Token",
         help: "Discord bot token used for gateway and REST API authentication for this provider account. Keep this secret out of committed config and rotate immediately after any leak.",
         sensitive: true,
+      },
+      applicationId: {
+        label: "Discord Application ID",
+        help: "Optional Discord application/client ID. Set this when hosted environments cannot reach Discord's application lookup endpoint during startup.",
       },
     },
     unsupportedSecretRefSurfacePatterns: [
@@ -15962,9 +15972,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             },
           ],
         },
-        exposeErrorText: {
-          type: "boolean",
-        },
         heartbeat: {
           type: "object",
           properties: {
@@ -16253,9 +16260,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   },
                 ],
               },
-              exposeErrorText: {
-                type: "boolean",
-              },
               heartbeat: {
                 type: "object",
                 properties: {
@@ -16343,10 +16347,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       configWrites: {
         label: "WhatsApp Config Writes",
         help: "Allow WhatsApp to write config in response to channel events/commands (default: true).",
-      },
-      exposeErrorText: {
-        label: "WhatsApp Error Text",
-        help: "Deliver user-visible agent/provider error text into WhatsApp (default: true). Disable to keep failures quiet on WhatsApp.",
       },
     },
     unsupportedSecretRefSurfacePatterns: [

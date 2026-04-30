@@ -134,4 +134,18 @@ describe("boot-md handler", () => {
       reason: "missing",
     });
   });
+
+  it("deduplicates agents sharing the same workspaceDir (#74072)", async () => {
+    const cfg = { agents: { list: [{ id: "main" }, { id: "alias" }] } };
+    listAgentIds.mockReturnValue(["main", "alias"]);
+    resolveAgentWorkspaceDir.mockReturnValue(MAIN_WORKSPACE_DIR);
+    runBootOnce.mockResolvedValue({ status: "ran" });
+
+    await runBootChecklist(makeEvent({ context: { cfg } }));
+
+    expect(runBootOnce).toHaveBeenCalledTimes(1);
+    expect(runBootOnce).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg, workspaceDir: MAIN_WORKSPACE_DIR, agentId: "main" }),
+    );
+  });
 });

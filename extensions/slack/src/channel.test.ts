@@ -372,6 +372,8 @@ describe("slackPlugin security", () => {
 
     expect(result.policy).toBe("allowlist");
     expect(result.allowFrom).toEqual(["  slack:U123  "]);
+    expect(result.policyPath).toBe("channels.slack.dmPolicy");
+    expect(result.allowFromPath).toBe("channels.slack.");
     expect(result.normalizeEntry?.("  slack:U123  ")).toBe("U123");
     expect(result.normalizeEntry?.("  user:U999  ")).toBe("U999");
   });

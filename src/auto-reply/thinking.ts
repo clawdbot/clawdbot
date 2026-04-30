@@ -68,7 +68,21 @@ function resolveThinkingPolicyContext(params: {
   const candidate = params.catalog?.find(
     (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
   );
-  return { normalizedProvider, modelId, modelKey, reasoning: candidate?.reasoning };
+  return {
+    normalizedProvider,
+    modelId,
+    modelKey,
+    reasoning: candidate?.reasoning,
+    compat: candidate?.compat,
+  };
+}
+
+function catalogSupportsXHigh(compat: ThinkingCatalogEntry["compat"]): boolean {
+  const efforts = compat?.supportedReasoningEfforts;
+  if (!Array.isArray(efforts)) {
+    return false;
+  }
+  return efforts.some((effort) => normalizeThinkLevel(effort) === "xhigh");
 }
 
 function normalizeProfileLevel(
@@ -170,11 +184,15 @@ export function resolveThinkingProfile(params: {
     binaryDecision === true
       ? buildBinaryThinkingProfile(defaultLevel)
       : buildBaseThinkingProfile(defaultLevel);
+  if (binaryDecision !== true && catalogSupportsXHigh(context.compat)) {
+    appendProfileLevel(profile, "xhigh");
+  }
   const policyContext = {
     provider: context.normalizedProvider,
     modelId: context.modelKey || context.modelId,
   };
   if (
+    binaryDecision !== true &&
     resolveProviderXHighThinking({
       provider: context.normalizedProvider,
       context: policyContext,

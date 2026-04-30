@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import vm from "node:vm";
 import { fileURLToPath } from "node:url";
+import vm from "node:vm";
 import { describe, expect, it } from "vitest";
 
 type SessionEntry = {
@@ -42,6 +42,7 @@ const LINKEDOM_MODULE = "linkedom";
 
 const exportHtmlDir = path.dirname(fileURLToPath(import.meta.url));
 const templateHtml = fs.readFileSync(path.join(exportHtmlDir, "template.html"), "utf8");
+const templateCss = fs.readFileSync(path.join(exportHtmlDir, "template.css"), "utf8");
 const templateJs = fs.readFileSync(path.join(exportHtmlDir, "template.js"), "utf8");
 const markedJs = fs.readFileSync(path.join(exportHtmlDir, "vendor", "marked.min.js"), "utf8");
 const highlightJs = fs.readFileSync(path.join(exportHtmlDir, "vendor", "highlight.min.js"), "utf8");
@@ -139,6 +140,62 @@ async function renderTemplate(sessionData: SessionData) {
 function now() {
   return new Date("2026-02-24T00:00:00.000Z").toISOString();
 }
+
+function selectorSpecificity(selector: string): [number, number, number] {
+  const ids = selector.match(/#[\w-]+/g)?.length ?? 0;
+  const classes = selector.match(/\.[\w-]+/g)?.length ?? 0;
+  const withoutIdsOrClasses = selector.replace(/#[\w-]+|\.[\w-]+/g, " ");
+  const elements = withoutIdsOrClasses
+    .split(/[\s>+~]+/)
+    .filter((part) => /^[a-z][\w-]*$/i.test(part)).length;
+  return [ids, classes, elements];
+}
+
+function compareSpecificity(left: [number, number, number], right: [number, number, number]) {
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) {
+      return left[index] - right[index];
+    }
+  }
+  return 0;
+}
+
+function firstSelectorForDisplay(css: string, display: string, startAt: number): string | null {
+  const displayRule = new RegExp(`([^{}]+)\\{[^{}]*\\bdisplay\\s*:\\s*${display}\\s*;`, "g");
+  displayRule.lastIndex = startAt;
+  const match = displayRule.exec(css);
+  return match?.[1]?.split(",").at(-1)?.trim() ?? null;
+}
+
+describe("export html sidebar trigger affordance", () => {
+  it("keeps the hamburger sidebar trigger accessible and visibly interactive", () => {
+    expect(templateHtml).toContain('id="hamburger" class="sidebar-menu-trigger"');
+    expect(templateHtml).toContain('aria-label="Open sidebar"');
+    expect(templateHtml).toContain('<line x1="4" x2="20" y1="6" y2="6" />');
+    expect(templateHtml).toContain('<line x1="4" x2="20" y1="12" y2="12" />');
+    expect(templateHtml).toContain('<line x1="4" x2="20" y1="18" y2="18" />');
+    expect(templateCss).toContain("#hamburger.sidebar-menu-trigger {");
+    expect(templateCss).toContain("cursor: pointer;");
+    expect(templateCss).toContain("#hamburger.sidebar-menu-trigger:hover {");
+    expect(templateCss).toContain("background: var(--container-bg);");
+    expect(templateCss).toContain("#hamburger.sidebar-menu-trigger:focus-visible {");
+  });
+
+  it("lets the mobile hamburger display rule win the CSS cascade", () => {
+    const baseSelector = "#hamburger.sidebar-menu-trigger";
+    const mobileMediaIndex = templateCss.indexOf("@media (max-width: 900px)");
+    const mobileSelector = firstSelectorForDisplay(templateCss, "inline-flex", mobileMediaIndex);
+
+    expect(mobileMediaIndex).toBeGreaterThan(templateCss.indexOf(`${baseSelector} {`));
+    expect(mobileSelector).toBe(baseSelector);
+    if (!mobileSelector) {
+      throw new Error("Missing mobile hamburger display rule");
+    }
+    expect(
+      compareSpecificity(selectorSpecificity(mobileSelector), selectorSpecificity(baseSelector)),
+    ).toBeGreaterThanOrEqual(0);
+  });
+});
 
 describe("export html security hardening", () => {
   it("escapes raw HTML from markdown blocks", async () => {

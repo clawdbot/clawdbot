@@ -17,12 +17,36 @@ const profiles = {
     packageJson: {
       name: packageName,
       version: "0.1.3",
+      type: "module",
+      dependencies: {
+        "is-number": "7.0.0",
+      },
+      peerDependencies: {
+        openclaw: ">=2026.4.11",
+      },
+      peerDependenciesMeta: {
+        openclaw: {
+          optional: true,
+        },
+      },
       openclaw: { extensions: ["./index.js"] },
     },
-    indexJs: `module.exports = {
+    indexJs: `import isNumber from "is-number";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+
+const dependencyUrl = import.meta.resolve("is-number");
+const expectedDependencyBaseUrl = new URL("./node_modules/is-number/", import.meta.url).href;
+if (!dependencyUrl.startsWith(expectedDependencyBaseUrl)) {
+  throw new Error(\`kitchen-sink dependency resolved outside plugin root: \${dependencyUrl}\`);
+}
+
+export default definePluginEntry({
   id: "${pluginId}",
   name: "OpenClaw Kitchen Sink",
   register(api) {
+    if (!isNumber(42)) {
+      throw new Error("kitchen-sink dependency sentinel did not load");
+    }
     api.registerProvider({
       id: "kitchen-sink-provider",
       label: "Kitchen Sink Provider",
@@ -48,7 +72,7 @@ const profiles = {
       },
     });
   },
-};
+});
 `,
     manifest: {
       id: pluginId,
@@ -124,6 +148,17 @@ const profiles = {
     packageJson: {
       name: packageName,
       version: "0.1.0",
+      dependencies: {
+        "is-number": "7.0.0",
+      },
+      peerDependencies: {
+        openclaw: ">=2026.4.11",
+      },
+      peerDependenciesMeta: {
+        openclaw: {
+          optional: true,
+        },
+      },
       openclaw: { extensions: ["./index.js"] },
     },
     indexJs: `module.exports = {

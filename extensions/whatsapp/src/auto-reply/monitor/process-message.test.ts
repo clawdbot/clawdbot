@@ -1,11 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WhatsAppSendResult } from "../../inbound/send-result.js";
 
 // Hoisted mocks used across tests so vi.mock factories can reference them.
-const { resolvePolicyMock, buildContextMock, runMessageReceivedMock } = vi.hoisted(() => ({
-  resolvePolicyMock: vi.fn(),
-  buildContextMock: vi.fn(),
-  runMessageReceivedMock: vi.fn(async () => undefined),
-}));
+const { resolvePolicyMock, buildContextMock, runMessageReceivedMock, trackBackgroundTaskMock } =
+  vi.hoisted(() => ({
+    resolvePolicyMock: vi.fn(),
+    buildContextMock: vi.fn(),
+    runMessageReceivedMock: vi.fn(async () => undefined),
+    trackBackgroundTaskMock: vi.fn(),
+  }));
+
+function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendResult {
+  return {
+    kind,
+    messageId: id,
+    messageIds: [id],
+    keys: [{ id }],
+    providerAccepted: true,
+  };
+}
 
 vi.mock("../../inbound-policy.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../inbound-policy.js")>();
@@ -89,7 +102,7 @@ vi.mock("./last-route.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./last-route.js")>();
   return {
     ...actual,
-    trackBackgroundTask: () => {},
+    trackBackgroundTask: trackBackgroundTaskMock,
     updateLastRouteInBackground: () => {},
   };
 });
@@ -167,8 +180,8 @@ const baseMsg = {
   chatType: "group" as const,
   body: "hi",
   sendComposing: async () => {},
-  reply: async () => {},
-  sendMedia: async () => {},
+  reply: async () => acceptedSendResult("text", "r1"),
+  sendMedia: async () => acceptedSendResult("media", "m1"),
 };
 
 const baseRoute = {
@@ -211,6 +224,7 @@ describe("processMessage group system prompt wiring", () => {
     buildContextMock.mockReset();
     resolvePolicyMock.mockReset();
     runMessageReceivedMock.mockClear();
+    trackBackgroundTaskMock.mockClear();
     clearInternalHooks();
     buildContextMock.mockImplementation(
       (params: { groupSystemPrompt?: string; combinedBody?: string }) => ({
@@ -319,5 +333,23 @@ describe("processMessage group system prompt wiring", () => {
 
     expect(runMessageReceivedMock).not.toHaveBeenCalled();
     expect(internalReceived).not.toHaveBeenCalled();
+  });
+
+  it("tracks session metadata writes as connection background tasks", async () => {
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    buildContextMock.mockImplementationOnce(() => ({
+      Body: "hi",
+      RawBody: "hi",
+      CommandBody: "hi",
+      SessionKey: baseRoute.sessionKey,
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+    }));
+
+    await callProcessMessage();
+
+    expect(trackBackgroundTaskMock).toHaveBeenCalledTimes(1);
+    expect(trackBackgroundTaskMock.mock.calls[0]?.[0]).toBeInstanceOf(Set);
+    expect(trackBackgroundTaskMock.mock.calls[0]?.[1]).toBeInstanceOf(Promise);
   });
 });

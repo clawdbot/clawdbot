@@ -21,6 +21,7 @@ describe("managed-child-process", () => {
     const childPath = path.join(dir, "child.mjs");
     const runnerPath = path.join(dir, "runner.mjs");
     const childPidPath = path.join(dir, "child.pid");
+    const runnerReadyPath = path.join(dir, "runner.ready");
     const helperUrl = pathToFileURL(path.resolve("scripts/lib/managed-child-process.mjs")).href;
 
     fs.writeFileSync(
@@ -39,12 +40,14 @@ setInterval(() => {}, 1_000);
     fs.writeFileSync(
       runnerPath,
       `
+import fs from "node:fs";
 import { runManagedCommand } from ${JSON.stringify(helperUrl)};
 
 process.exitCode = await runManagedCommand({
   bin: process.execPath,
   args: [${JSON.stringify(childPath)}, ${JSON.stringify(childPidPath)}],
   stdio: "ignore",
+  onReady: () => fs.writeFileSync(${JSON.stringify(runnerReadyPath)}, "1"),
 });
 `,
       "utf8",
@@ -56,6 +59,7 @@ process.exitCode = await runManagedCommand({
     let childPid = 0;
 
     try {
+      await waitFor(() => fs.existsSync(runnerReadyPath));
       await waitFor(() => fs.existsSync(childPidPath));
       childPid = Number(fs.readFileSync(childPidPath, "utf8"));
       expect(Number.isInteger(childPid)).toBe(true);

@@ -203,6 +203,7 @@ export const handleStatusCommand: CommandHandler = async (params, allowTextComma
     provider: params.provider,
     model: params.model,
     contextTokens: params.contextTokens,
+    workspaceDir: params.workspaceDir,
     resolvedThinkLevel: params.resolvedThinkLevel,
     resolvedFastMode: params.resolvedFastMode,
     resolvedVerboseLevel: params.resolvedVerboseLevel,

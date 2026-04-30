@@ -8,6 +8,7 @@ import {
   loadExecApprovals,
   maxAsk,
   minSecurity,
+  requireValidExecTarget,
 } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
@@ -38,7 +39,6 @@ import {
   applyShellPath,
   normalizeExecAsk,
   normalizeExecSecurity,
-  normalizeExecTarget,
   normalizePathPrepend,
   resolveExecTarget,
   resolveApprovalRunningNoticeMs,
@@ -1543,9 +1543,10 @@ export function createExecTool(
       if (elevatedRequested) {
         logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
       }
+      const requestedTarget = requireValidExecTarget(params.host);
       const target = resolveExecTarget({
         configuredTarget: defaults?.host,
-        requestedTarget: normalizeExecTarget(params.host),
+        requestedTarget,
         elevatedRequested,
         sandboxAvailable: Boolean(defaults?.sandbox),
       });

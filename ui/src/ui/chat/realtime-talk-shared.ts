@@ -24,6 +24,7 @@ export type RealtimeTalkWebRtcSdpSessionResult = {
   transport?: "webrtc-sdp";
   clientSecret: string;
   offerUrl?: string;
+  offerHeaders?: Record<string, string>;
   model?: string;
   voice?: string;
   expiresAt?: number;

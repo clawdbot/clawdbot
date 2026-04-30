@@ -19,7 +19,7 @@ open models for free. Authenticate with an API key from
   <Step title="Export the key and run onboarding">
     ```bash
     export NVIDIA_API_KEY="nvapi-..."
-    openclaw onboard --auth-choice skip
+    openclaw onboard --auth-choice nvidia-api-key
     ```
   </Step>
   <Step title="Set an NVIDIA model">
@@ -30,9 +30,16 @@ open models for free. Authenticate with an API key from
 </Steps>
 
 <Warning>
-If you pass `--token` instead of the env var, the value lands in shell history and
-`ps` output. Prefer the `NVIDIA_API_KEY` environment variable when possible.
+If you pass `--nvidia-api-key` instead of the env var, the value lands in shell
+history and `ps` output. Prefer the `NVIDIA_API_KEY` environment variable when
+possible.
 </Warning>
+
+For non-interactive setup, you can also pass the key directly:
+
+```bash
+openclaw onboard --auth-choice nvidia-api-key --nvidia-api-key "nvapi-..."
+```
 
 ## Config example
 

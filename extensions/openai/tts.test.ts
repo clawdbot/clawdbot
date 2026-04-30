@@ -111,6 +111,36 @@ describe("openai tts", () => {
   });
 
   describe("openaiTTS diagnostics", () => {
+    it("adds OpenClaw attribution headers to native OpenAI speech requests", async () => {
+      vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
+      const fetchMock = vi.fn(
+        async (_url: string | URL, _init?: RequestInit) =>
+          new Response(Buffer.from("audio-bytes"), { status: 200 }),
+      );
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      await openaiTTS({
+        text: "hello",
+        apiKey: "test-key",
+        baseUrl: "https://api.openai.com/v1",
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+        responseFormat: "mp3",
+        timeoutMs: 5_000,
+      });
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://api.openai.com/v1/audio/speech",
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            originator: "openclaw",
+            version: "2026.3.22",
+            "User-Agent": "openclaw/2026.3.22",
+          }),
+        }),
+      );
+    });
+
     it("sends instructions to custom OpenAI-compatible endpoints", async () => {
       const fetchMock = vi.fn(
         async (_url: string | URL, _init?: RequestInit) =>

@@ -38,6 +38,8 @@ describe("startProxy", () => {
     "https_proxy",
     "HTTP_PROXY",
     "HTTPS_PROXY",
+    "all_proxy",
+    "ALL_PROXY",
     "no_proxy",
     "NO_PROXY",
     "GLOBAL_AGENT_HTTP_PROXY",
@@ -378,7 +380,7 @@ describe("startProxy", () => {
     await stopProxy(handle);
   });
 
-  it("allows the Gateway control-plane bypass for literal loopback IPs only", () => {
+  it("allows the Gateway control-plane bypass for literal loopback IPs and localhost", () => {
     expect(
       dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane(
         "ws://127.0.0.1:18789",
@@ -388,12 +390,18 @@ describe("startProxy", () => {
     expect(
       dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane("ws://[::1]:18789", () => "ok"),
     ).toBe("ok");
-    expect(() =>
+    expect(
       dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane(
         "ws://localhost:18789",
-        () => undefined,
+        () => "ok",
       ),
-    ).toThrow("loopback-only");
+    ).toBe("ok");
+    expect(
+      dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane(
+        "ws://localhost.:18789",
+        () => "ok",
+      ),
+    ).toBe("ok");
   });
 
   it("rejects dangerous Gateway control-plane bypass for non-loopback URLs", () => {
@@ -403,6 +411,92 @@ describe("startProxy", () => {
         () => undefined,
       ),
     ).toThrow("loopback-only");
+  });
+
+  it("temporarily clears inherited proxy env for Gateway control-plane setup", () => {
+    process.env["http_proxy"] = "http://lower-http.example.com:8080";
+    process.env["https_proxy"] = "http://lower-https.example.com:8080";
+    process.env["HTTP_PROXY"] = "http://upper-http.example.com:8080";
+    process.env["HTTPS_PROXY"] = "http://upper-https.example.com:8080";
+    process.env["all_proxy"] = "http://lower-all.example.com:8080";
+    process.env["ALL_PROXY"] = "http://upper-all.example.com:8080";
+    process.env["NO_PROXY"] = "localhost";
+    process.env["no_proxy"] = "127.0.0.1";
+    process.env["GLOBAL_AGENT_HTTP_PROXY"] = "http://global-http.example.com:8080";
+    process.env["GLOBAL_AGENT_HTTPS_PROXY"] = "http://global-https.example.com:8080";
+    process.env["GLOBAL_AGENT_NO_PROXY"] = "localhost";
+    process.env["GLOBAL_AGENT_FORCE_GLOBAL_AGENT"] = "true";
+    process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
+
+    const during = dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane(
+      "ws://localhost:18789",
+      () => ({
+        httpProxy: process.env["HTTP_PROXY"],
+        httpsProxy: process.env["HTTPS_PROXY"],
+        allProxy: process.env["ALL_PROXY"],
+        lowerAllProxy: process.env["all_proxy"],
+        noProxy: process.env["NO_PROXY"],
+        globalProxy: process.env["GLOBAL_AGENT_HTTP_PROXY"],
+        proxyActive: process.env["OPENCLAW_PROXY_ACTIVE"],
+      }),
+    );
+
+    expect(during).toEqual({
+      httpProxy: undefined,
+      httpsProxy: undefined,
+      allProxy: undefined,
+      lowerAllProxy: undefined,
+      noProxy: undefined,
+      globalProxy: undefined,
+      proxyActive: undefined,
+    });
+    expect(process.env["HTTP_PROXY"]).toBe("http://upper-http.example.com:8080");
+    expect(process.env["HTTPS_PROXY"]).toBe("http://upper-https.example.com:8080");
+    expect(process.env["ALL_PROXY"]).toBe("http://upper-all.example.com:8080");
+    expect(process.env["all_proxy"]).toBe("http://lower-all.example.com:8080");
+    expect(process.env["NO_PROXY"]).toBe("localhost");
+    expect(process.env["GLOBAL_AGENT_HTTP_PROXY"]).toBe("http://global-http.example.com:8080");
+    expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBe("1");
+  });
+
+  it("temporarily clears managed proxy env while restoring the original HTTP stack", async () => {
+    const patchedHttpRequest = vi.fn() as unknown as typeof http.request;
+    mockBootstrapGlobalAgent.mockImplementationOnce(() => {
+      http.request = patchedHttpRequest;
+      (global as Record<string, unknown>)["GLOBAL_AGENT"] = {
+        HTTP_PROXY: "",
+        HTTPS_PROXY: "",
+      };
+    });
+
+    const handle = await startProxy({
+      enabled: true,
+      proxyUrl: "http://127.0.0.1:3128",
+    });
+    process.env["ALL_PROXY"] = "http://inherited-all.example.com:8080";
+
+    const during = dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane(
+      "ws://127.0.0.1:18789",
+      () => ({
+        httpRequest: http.request,
+        httpProxy: process.env["HTTP_PROXY"],
+        allProxy: process.env["ALL_PROXY"],
+        proxyActive: process.env["OPENCLAW_PROXY_ACTIVE"],
+      }),
+    );
+
+    expect(during).toEqual({
+      httpRequest: originalHttpRequest,
+      httpProxy: undefined,
+      allProxy: undefined,
+      proxyActive: undefined,
+    });
+    expect(http.request).toBe(patchedHttpRequest);
+    expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3128");
+    expect(process.env["ALL_PROXY"]).toBe("http://inherited-all.example.com:8080");
+    expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBe("1");
+
+    await stopProxy(handle);
   });
 
   it("kill restores env synchronously during hard process exit", async () => {

@@ -176,6 +176,12 @@ describe("createEmbeddedRunAuthController", () => {
 
     await controller.initializeAuthProfile();
 
+    expect(mocks.getApiKeyForModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: "/tmp/agent",
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
     expect(harness.runtimeModel.baseUrl).toBe("https://runtime.example.com/v1");
     expect(harness.runtimeModel.headers).toEqual({
       "api-key": "runtime-header-token",

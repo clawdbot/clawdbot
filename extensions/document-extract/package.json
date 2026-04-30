@@ -5,7 +5,7 @@
   "description": "OpenClaw local document extraction plugin",
   "type": "module",
   "dependencies": {
-    "pdfjs-dist": "^5.6.205"
+    "pdfjs-dist": "^5.7.284"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

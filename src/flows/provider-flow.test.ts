@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.hoisted(() => {
+  vi.resetModules();
+});
+
 type ResolveProviderInstallCatalogEntries =
   typeof import("../plugins/provider-install-catalog.js").resolveProviderInstallCatalogEntries;
 type ResolveManifestProviderAuthChoices =

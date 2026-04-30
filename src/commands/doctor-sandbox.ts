@@ -4,6 +4,7 @@ import {
   DEFAULT_SANDBOX_BROWSER_IMAGE,
   DEFAULT_SANDBOX_COMMON_IMAGE,
   DEFAULT_SANDBOX_IMAGE,
+  isDockerDaemonUnavailable,
   resolveSandboxScope,
 } from "../agents/sandbox.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -83,6 +84,9 @@ async function dockerImageExists(image: string): Promise<boolean> {
       (error as { message: string } | undefined)?.message ||
       "";
     if (stderr.includes("No such image")) {
+      return false;
+    }
+    if (isDockerDaemonUnavailable(stderr)) {
       return false;
     }
     throw error;

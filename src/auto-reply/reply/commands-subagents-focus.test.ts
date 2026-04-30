@@ -15,6 +15,7 @@ const hoisted = vi.hoisted(() => ({
   readAcpSessionEntryMock: vi.fn(),
   resolveConversationBindingContextMock: vi.fn(),
   resolveFocusTargetSessionMock: vi.fn(),
+  resolveStoredSubagentCapabilitiesMock: vi.fn(),
   sessionBindingCapabilitiesMock: vi.fn(),
   sessionBindingBindMock: vi.fn(),
   sessionBindingResolveByConversationMock: vi.fn(),
@@ -100,6 +101,11 @@ vi.mock("../../channels/thread-bindings-policy.js", () => ({
 
 vi.mock("../../infra/outbound/session-binding-service.js", () => ({
   getSessionBindingService: () => buildFocusSessionBindingService(),
+}));
+
+vi.mock("../../agents/subagent-capabilities.js", () => ({
+  resolveStoredSubagentCapabilities: (sessionKey: string, options: unknown) =>
+    hoisted.resolveStoredSubagentCapabilitiesMock(sessionKey, options),
 }));
 
 vi.mock("./conversation-binding-input.js", () => ({
@@ -195,6 +201,7 @@ function buildFocusContext(params?: {
   chatType?: string;
   senderId?: string;
   token?: string;
+  requesterKey?: string;
 }) {
   return {
     params: buildCommandParams({
@@ -203,7 +210,7 @@ function buildFocusContext(params?: {
       senderId: params?.senderId,
     }),
     handledPrefix: "/focus",
-    requesterKey: "agent:main:main",
+    requesterKey: params?.requesterKey ?? "agent:main:main",
     runs: [],
     restTokens: [params?.token ?? "codex-acp"],
   } satisfies Parameters<typeof handleSubagentsFocusAction>[0];
@@ -224,6 +231,9 @@ function buildUnfocusContext(params?: { senderId?: string }) {
 describe("focus actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    hoisted.resolveStoredSubagentCapabilitiesMock.mockReturnValue({
+      controlScope: "children",
+    });
     hoisted.sessionBindingCapabilitiesMock.mockReturnValue(createSessionBindingCapabilities());
     hoisted.sessionBindingResolveByConversationMock.mockReturnValue(null);
     hoisted.resolveFocusTargetSessionMock.mockResolvedValue({
@@ -278,6 +288,11 @@ describe("focus actions", () => {
 
     expect(result.reply?.text).toContain("bound this conversation");
     expect(result.reply?.text).toContain("(acp)");
+    expect(hoisted.resolveFocusTargetSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterKey: "agent:main:main",
+      }),
+    );
     expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
       expect.objectContaining({
         placement: "current",
@@ -289,6 +304,29 @@ describe("focus actions", () => {
         }),
       }),
     );
+  });
+
+  it("rejects /focus from a leaf subagent", async () => {
+    hoisted.resolveStoredSubagentCapabilitiesMock.mockReturnValue({
+      controlScope: "none",
+    });
+    hoisted.resolveConversationBindingContextMock.mockReturnValue({
+      channel: THREAD_CHANNEL,
+      accountId: "default",
+      conversationId: "thread-1",
+      parentConversationId: "parent-1",
+      threadId: "thread-1",
+    });
+
+    const result = await handleSubagentsFocusAction(
+      buildFocusContext({
+        requesterKey: "agent:main:subagent:leaf-a",
+      }),
+    );
+
+    expect(result.reply?.text).toContain("Leaf subagents cannot control other sessions.");
+    expect(hoisted.resolveFocusTargetSessionMock).not.toHaveBeenCalled();
+    expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
   });
 
   it("binds topic-chat topics as current conversations", async () => {

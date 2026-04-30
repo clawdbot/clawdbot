@@ -207,6 +207,140 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     expect(refreshProviderOAuthCredentialWithPluginMock).not.toHaveBeenCalled();
   });
 
+  it("answers app-server forced refresh from fresh main credentials when a sub-agent copy is expired", async () => {
+    const profileId = "openai-codex:peter@example.test";
+    const provider = "openai-codex";
+    const freshExpiry = Date.now() + 60 * 60 * 1000;
+
+    const subAgentDir = path.join(tempRoot, "agents", "sub-app-server-force", "agent");
+    await fs.mkdir(subAgentDir, { recursive: true });
+    saveAuthProfileStore(
+      createExpiredOauthStore({
+        profileId,
+        provider,
+        accountId: "acct-shared",
+        email: "peter@example.test",
+      }),
+      subAgentDir,
+    );
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider,
+            access: "main-fresh-access",
+            refresh: "main-fresh-refresh",
+            expires: freshExpiry,
+            accountId: "acct-shared",
+            email: "peter@example.test",
+          },
+        },
+      },
+      mainAgentDir,
+    );
+
+    const store = ensureAuthProfileStore(subAgentDir);
+    const credential = store.profiles[profileId];
+    if (!credential || credential.type !== "oauth") {
+      throw new Error("expected seeded OAuth profile");
+    }
+    store.profiles[profileId] = { ...credential, expires: 0 };
+    saveAuthProfileStore(store, subAgentDir);
+
+    const result = await resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
+      store,
+      profileId,
+      agentDir: subAgentDir,
+    });
+
+    expect(result?.apiKey).toBe("main-fresh-access");
+    expect(result?.provider).toBe(provider);
+    expect(refreshProviderOAuthCredentialWithPluginMock).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the main owner when a stale local OAuth clone shadows a newer main credential", async () => {
+    const profileId = "openai-codex:default";
+    const provider = "openai-codex";
+    const accountId = "acct-shared";
+    const now = Date.now();
+    const freshExpiry = now + 60 * 60 * 1000;
+
+    const subAgentDir = path.join(tempRoot, "agents", "sub-stale-clone-owner", "agent");
+    await fs.mkdir(subAgentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider,
+            access: "local-stale-access",
+            refresh: "local-stale-refresh",
+            expires: now - 120_000,
+            accountId,
+          },
+        },
+      },
+      subAgentDir,
+    );
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider,
+            access: "main-expired-access",
+            refresh: "main-owner-refresh",
+            expires: now - 60_000,
+            accountId,
+          },
+        },
+      },
+      mainAgentDir,
+    );
+
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
+      async (params?: { context?: unknown }) => {
+        const credential = params?.context as OAuthCredential | undefined;
+        expect(credential?.refresh).toBe("main-owner-refresh");
+        return {
+          access: "main-owner-refreshed-access",
+          refresh: "main-owner-refreshed-refresh",
+          expires: freshExpiry,
+        } as never;
+      },
+    );
+
+    const result = await resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
+      store: ensureAuthProfileStore(subAgentDir),
+      profileId,
+      agentDir: subAgentDir,
+    });
+
+    expect(result?.apiKey).toBe("main-owner-refreshed-access");
+    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+
+    const subRaw = JSON.parse(
+      await fs.readFile(path.join(subAgentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
+    expect(subRaw.profiles[profileId]).toMatchObject({
+      access: "local-stale-access",
+      refresh: "local-stale-refresh",
+    });
+
+    const mainRaw = JSON.parse(
+      await fs.readFile(path.join(mainAgentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
+    expect(mainRaw.profiles[profileId]).toMatchObject({
+      access: "main-owner-refreshed-access",
+      refresh: "main-owner-refreshed-refresh",
+      expires: freshExpiry,
+    });
+  });
+
   it("inherits main-agent credentials via the catch-block fallback when refresh throws after main becomes fresh", async () => {
     // Exercises the specific catch-block `if (params.agentDir) { mainStore … }`
     // branch (lines 826-848 in oauth.ts). Setup:
@@ -218,8 +352,8 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     //      completed a refresh just as ours failed".
     //   3. The catch block's loadFreshStoredOAuthCredential reads the sub
     //      store (still expired). Then the main-agent-inherit fallback
-    //      kicks in, copies main's fresh creds into the sub store, and
-    //      returns them.
+    //      kicks in and returns main's fresh creds read-through without copying
+    //      the refresh token into the sub store.
     const profileId = "openai-codex:default";
     const provider = "openai-codex";
     const freshExpiry = Date.now() + 60 * 60 * 1000;
@@ -268,13 +402,12 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     expect(result?.apiKey).toBe("main-side-refreshed-access");
     expect(result?.provider).toBe(provider);
 
-    // Sub-agent's store should now carry main's creds (inherited).
+    // Sub-agent's store keeps its local expired credential; inherited OAuth is read-through.
     const subRaw = JSON.parse(
       await fs.readFile(path.join(subAgentDir, "auth-profiles.json"), "utf8"),
     ) as AuthProfileStore;
     expect(subRaw.profiles[profileId]).toMatchObject({
-      access: "main-side-refreshed-access",
-      expires: freshExpiry,
+      access: "cached-access-token",
     });
   });
 

@@ -52,79 +52,12 @@ mkdir -p "$git_root"
 tar -xzf "$package_tgz" -C "$git_root" --strip-components=1
 # The package-derived fixture can carry patchedDependencies whose targets are
 # absent from the trimmed tarball install; that should not block update preflight.
-node - <<'"'"'NODE'"'"'
-const fs = require("node:fs");
-const path = require("node:path");
-const packageJsonPath = "/tmp/openclaw-git/package.json";
-const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
-const isLegacyPackageAcceptanceCompat = (version) => {
-  const match = /^(\d{4})\.(\d{1,2})\.(\d{1,2})(?:[-+].*)?$/.exec(version || "");
-  if (!match) return false;
-  const value = [Number(match[1]), Number(match[2]), Number(match[3])];
-  const max = [2026, 4, 25];
-  for (let i = 0; i < value.length; i += 1) {
-    if (value[i] < max[i]) return true;
-    if (value[i] > max[i]) return false;
-  }
-  return true;
-};
-const fixtureUiBuildSource = `const fs=require("node:fs");fs.mkdirSync("dist/control-ui",{recursive:true});fs.writeFileSync("dist/control-ui/index.html","<!doctype html><title>fixture</title>\\n")`;
-const fixtureUiBuildCommand = `node -e ${JSON.stringify(fixtureUiBuildSource)}`;
-const nextPnpm = { ...packageJson.pnpm, allowUnusedPatches: true };
-const patchedDependencies = nextPnpm.patchedDependencies;
-if (
-  patchedDependencies &&
-  typeof patchedDependencies === "object" &&
-  !Array.isArray(patchedDependencies)
-) {
-  const patchEntries = Object.entries(patchedDependencies);
-  const keptPatches = Object.fromEntries(
-    patchEntries.filter(([, patchFile]) => {
-      return (
-        typeof patchFile === "string" &&
-        fs.existsSync(path.resolve(path.dirname(packageJsonPath), patchFile))
-      );
-    }),
-  );
-  const missingPatches = patchEntries.filter(([dependency, patchFile]) => {
-    return (
-      typeof patchFile !== "string" ||
-      !fs.existsSync(path.resolve(path.dirname(packageJsonPath), patchFile))
-    );
-  });
-  if (missingPatches.length > 0 && !isLegacyPackageAcceptanceCompat(packageJson.version)) {
-    throw new Error(
-      `package ${packageJson.version} has missing pnpm.patchedDependencies in package fixture: ${missingPatches
-        .map(([dependency, patchFile]) => `${dependency} -> ${patchFile}`)
-        .join(", ")}`,
-    );
-  }
-  if (Object.keys(keptPatches).length > 0) {
-    nextPnpm.patchedDependencies = keptPatches;
-  } else {
-    delete nextPnpm.patchedDependencies;
-  }
-}
-packageJson.pnpm = nextPnpm;
-packageJson.scripts = {
-  ...packageJson.scripts,
-  build: "node -e \"console.log(\\\"fixture build skipped\\\")\"",
-  lint: "node -e \"console.log(\\\"fixture lint skipped\\\")\"",
-  "ui:build": fixtureUiBuildCommand,
-};
-fs.writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
-fs.mkdirSync("/tmp/openclaw-git/dist/control-ui", { recursive: true });
-fs.writeFileSync("/tmp/openclaw-git/dist/control-ui/index.html", "<!doctype html><title>fixture</title>\n");
-NODE
+node scripts/e2e/lib/update-channel-switch/assertions.mjs prepare-git-fixture "$git_root"
 (
   cd "$git_root"
   npm install --omit=optional --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1
 )
-node - <<'"'"'NODE'"'"'
-const fs = require("node:fs");
-fs.mkdirSync("/tmp/openclaw-git/dist/control-ui", { recursive: true });
-fs.writeFileSync("/tmp/openclaw-git/dist/control-ui/index.html", "<!doctype html><title>fixture</title>\n");
-NODE
+node scripts/e2e/lib/update-channel-switch/assertions.mjs write-control-ui "$git_root"
 
 git config --global user.email "docker-e2e@openclaw.local"
 git config --global user.name "OpenClaw Docker E2E"
@@ -159,41 +92,12 @@ printf "%s\n" "$dev_json"
 if [ "$dev_status" -ne 0 ]; then
   exit "$dev_status"
 fi
-DEV_JSON="$dev_json" node - <<'"'"'NODE'"'"'
-const payload = JSON.parse(process.env.DEV_JSON);
-if (payload.status !== "ok") {
-  throw new Error(`expected dev update status ok, got ${payload.status}`);
-}
-if (payload.mode !== "git") {
-  throw new Error(`expected dev update mode git, got ${payload.mode}`);
-}
-if (payload.postUpdate?.plugins && payload.postUpdate.plugins.status !== "ok") {
-  throw new Error(`expected plugin post-update ok, got ${JSON.stringify(payload.postUpdate?.plugins)}`);
-}
-NODE
-
-node - <<'"'"'NODE'"'"'
-const fs = require("node:fs");
-const path = require("node:path");
-const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
-const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-if (config.update?.channel !== "dev") {
-  if (process.env.OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT === "1") {
-    console.log(`legacy package did not persist update.channel dev; got ${JSON.stringify(config.update?.channel)}`);
-  } else {
-    throw new Error(`expected persisted update.channel dev, got ${JSON.stringify(config.update?.channel)}`);
-  }
-}
-NODE
+UPDATE_JSON="$dev_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-update dev
+node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel dev
 
 status_json="$(openclaw update status --json)"
 printf "%s\n" "$status_json"
-STATUS_JSON="$status_json" node - <<'"'"'NODE'"'"'
-const payload = JSON.parse(process.env.STATUS_JSON);
-if (payload.update?.installKind !== "git") {
-  throw new Error(`expected git install after dev switch, got ${payload.update?.installKind}`);
-}
-NODE
+STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind git
 
 echo "==> git -> package stable channel"
 set +e
@@ -204,41 +108,12 @@ printf "%s\n" "$stable_json"
 if [ "$stable_status" -ne 0 ]; then
   exit "$stable_status"
 fi
-STABLE_JSON="$stable_json" node - <<'"'"'NODE'"'"'
-const payload = JSON.parse(process.env.STABLE_JSON);
-if (payload.status !== "ok") {
-  throw new Error(`expected stable update status ok, got ${payload.status}`);
-}
-if (!["npm", "pnpm", "bun"].includes(payload.mode)) {
-  throw new Error(`expected package-manager mode after stable switch, got ${payload.mode}`);
-}
-if (payload.postUpdate?.plugins && payload.postUpdate.plugins.status !== "ok") {
-  throw new Error(`expected plugin post-update ok, got ${JSON.stringify(payload.postUpdate?.plugins)}`);
-}
-NODE
-
-node - <<'"'"'NODE'"'"'
-const fs = require("node:fs");
-const path = require("node:path");
-const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
-const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-if (config.update?.channel !== "stable") {
-  if (process.env.OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT === "1") {
-    console.log(`legacy package did not persist update.channel stable; got ${JSON.stringify(config.update?.channel)}`);
-  } else {
-    throw new Error(`expected persisted update.channel stable, got ${JSON.stringify(config.update?.channel)}`);
-  }
-}
-NODE
+UPDATE_JSON="$stable_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-update stable
+node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel stable
 
 status_json="$(openclaw update status --json)"
 printf "%s\n" "$status_json"
-STATUS_JSON="$status_json" node - <<'"'"'NODE'"'"'
-const payload = JSON.parse(process.env.STATUS_JSON);
-if (payload.update?.installKind !== "package") {
-  throw new Error(`expected package install after stable switch, got ${payload.update?.installKind}`);
-}
-NODE
+STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind package
 
 echo "OK"
 '

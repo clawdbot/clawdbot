@@ -54,101 +54,9 @@ trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
 entry="$(openclaw_e2e_resolve_entrypoint)"
 mkdir -p "$OPENCLAW_STATE_DIR"
 
-node --input-type=module <<'NODE'
-import { patchOpenAINativeWebSearchPayload } from "./dist/extensions/openai/native-web-search.js";
+node scripts/e2e/lib/openai-web-search-minimal/assertions.mjs assert-patch-behavior
 
-const injectedPayload = {
-  reasoning: { effort: "minimal", summary: "auto" },
-};
-const injectedResult = patchOpenAINativeWebSearchPayload(injectedPayload);
-if (injectedResult !== "injected") {
-  throw new Error(`expected native web_search injection, got ${injectedResult}`);
-}
-if (injectedPayload.reasoning.effort !== "low") {
-  throw new Error(
-    `expected injected native web_search to raise minimal reasoning to low, got ${JSON.stringify(injectedPayload.reasoning)}`,
-  );
-}
-if (!injectedPayload.tools?.some((tool) => tool?.type === "web_search")) {
-  throw new Error(`native web_search was not injected: ${JSON.stringify(injectedPayload)}`);
-}
-
-const existingNativePayload = {
-  tools: [{ type: "web_search" }],
-  reasoning: { effort: "minimal" },
-};
-const existingResult = patchOpenAINativeWebSearchPayload(existingNativePayload);
-if (existingResult !== "native_tool_already_present") {
-  throw new Error(`expected existing native web_search, got ${existingResult}`);
-}
-if (existingNativePayload.reasoning.effort !== "low") {
-  throw new Error(
-    `expected existing native web_search to raise minimal reasoning to low, got ${JSON.stringify(existingNativePayload.reasoning)}`,
-  );
-}
-NODE
-
-cat >"$OPENCLAW_STATE_DIR/openclaw.json" <<JSON
-{
-  "agents": {
-    "defaults": {
-      "model": { "primary": "openai/gpt-5" },
-      "models": {
-        "openai/gpt-5": {
-          "params": {
-            "transport": "sse",
-            "openaiWsWarmup": false
-          }
-        }
-      }
-    }
-  },
-  "models": {
-    "providers": {
-      "openai": {
-        "api": "openai-responses",
-        "baseUrl": "http://api.openai.com/v1",
-        "apiKey": { "source": "env", "provider": "default", "id": "OPENAI_API_KEY" },
-        "request": { "allowPrivateNetwork": true },
-        "models": [
-          {
-            "id": "gpt-5",
-            "name": "gpt-5",
-            "api": "openai-responses",
-            "reasoning": true,
-            "input": ["text"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-            "contextWindow": 128000,
-            "contextTokens": 96000,
-            "maxTokens": 4096
-          }
-        ]
-      }
-    }
-  },
-  "tools": {
-    "web": {
-      "search": {
-        "enabled": true,
-        "maxResults": 3
-      }
-    }
-  },
-  "plugins": {
-    "enabled": true,
-    "allow": ["openai"],
-    "entries": {
-      "openai": { "enabled": true }
-    }
-  },
-  "gateway": {
-    "auth": {
-      "mode": "token",
-      "token": "${TOKEN}"
-    }
-  }
-}
-JSON
+node scripts/e2e/lib/fixture.mjs openai-web-search-minimal-config
 
 MOCK_PORT="$MOCK_PORT" \
   MOCK_REQUEST_LOG="$MOCK_REQUEST_LOG" \
@@ -189,27 +97,7 @@ node "$entry" gateway health \
 
 PORT="$PORT" OPENCLAW_GATEWAY_TOKEN="$TOKEN" node scripts/e2e/lib/openai-web-search-minimal/client.mjs success >/tmp/openclaw-openai-web-search-minimal-client-success.log 2>&1
 
-node - "$MOCK_REQUEST_LOG" <<'NODE'
-const fs = require("node:fs");
-const logPath = process.argv[2];
-const entries = fs.readFileSync(logPath, "utf8").trim().split(/\n+/).filter(Boolean).map((line) => JSON.parse(line));
-const responseEntries = entries.filter((entry) => entry.path === "/v1/responses");
-if (responseEntries.length < 1) {
-  throw new Error(`mock OpenAI /v1/responses was not used. Requests: ${JSON.stringify(entries)}`);
-}
-const success = responseEntries.find((entry) => JSON.stringify(entry.body).includes("OPENCLAW_SCHEMA_E2E_OK"));
-if (!success) {
-  throw new Error(`missing success request. Requests: ${JSON.stringify(responseEntries)}`);
-}
-const tools = Array.isArray(success.body.tools) ? success.body.tools : [];
-const hasWebSearch = tools.some((tool) => tool?.type === "web_search" || (tool?.type === "function" && (tool?.name === "web_search" || tool?.function?.name === "web_search")));
-if (!hasWebSearch) {
-  throw new Error(`success request did not include web_search. Body: ${JSON.stringify(success.body)}`);
-}
-if (success.body.reasoning?.effort === "minimal") {
-  throw new Error(`expected web_search request to avoid minimal reasoning, got ${JSON.stringify(success.body.reasoning)}`);
-}
-NODE
+node scripts/e2e/lib/openai-web-search-minimal/assertions.mjs assert-success-request "$MOCK_REQUEST_LOG"
 
 PORT="$PORT" OPENCLAW_GATEWAY_TOKEN="$TOKEN" node scripts/e2e/lib/openai-web-search-minimal/client.mjs reject >/tmp/openclaw-openai-web-search-minimal-client-reject.log 2>&1
 

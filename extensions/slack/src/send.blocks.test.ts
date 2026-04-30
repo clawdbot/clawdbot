@@ -4,6 +4,7 @@ import { createSlackSendTestClient, installSlackBlockTestMocks } from "./blocks.
 installSlackBlockTestMocks();
 const { sendMessageSlack } = await import("./send.js");
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
+const SLACK_TEXT_LIMIT = 8000;
 
 describe("sendMessageSlack NO_REPLY guard", () => {
   it("suppresses NO_REPLY text before any Slack API call", async () => {
@@ -168,6 +169,36 @@ describe("sendMessageSlack blocks", () => {
         text: "Shared a file",
       }),
     );
+  });
+
+  it("caps long fallback text while preserving blocks", async () => {
+    const client = createSlackSendTestClient();
+    const longContextText = "a".repeat(3000);
+    const blocks = [
+      {
+        type: "context",
+        elements: [
+          { type: "mrkdwn", text: longContextText },
+          { type: "mrkdwn", text: longContextText },
+          { type: "mrkdwn", text: longContextText },
+        ],
+      },
+    ];
+
+    await sendMessageSlack("channel:C123", "", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      blocks,
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringMatching(/…$/),
+        blocks,
+      }),
+    );
+    expect(client.chat.postMessage.mock.calls[0]?.[0].text).toHaveLength(SLACK_TEXT_LIMIT);
   });
 
   it("rejects blocks combined with mediaUrl", async () => {

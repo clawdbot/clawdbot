@@ -1297,6 +1297,8 @@ export class AcpSessionManager {
             (acpError.code === "ACP_BACKEND_MISSING" ||
               acpError.code === "ACP_BACKEND_UNAVAILABLE" ||
               (input.discardPersistentState && acpError.code === "ACP_SESSION_INIT_FAILED") ||
+              (input.discardPersistentState &&
+                acpError.code === "ACP_BACKEND_UNSUPPORTED_CONTROL") ||
               this.isRecoverableAcpxExitError(acpError.message))
           ) {
             if (input.discardPersistentState) {

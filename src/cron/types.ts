@@ -98,6 +98,13 @@ export type CronRunOutcome = {
   sessionKey?: string;
 };
 
+export type CronAgentExecutionStarted = {
+  jobId: string;
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+};
+
 export type CronFailureAlert = {
   after?: number;
   channel?: CronMessageChannel;

@@ -5,8 +5,8 @@
   "description": "OpenClaw Ollama provider plugin",
   "type": "module",
   "dependencies": {
-    "@mariozechner/pi-ai": "0.70.5",
-    "typebox": "1.1.33"
+    "@mariozechner/pi-ai": "0.70.6",
+    "typebox": "1.1.34"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

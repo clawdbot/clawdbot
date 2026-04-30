@@ -22,11 +22,13 @@ type CommandQueueModule = typeof import("./command-queue.js");
 
 let clearCommandLane: CommandQueueModule["clearCommandLane"];
 let CommandLaneClearedError: CommandQueueModule["CommandLaneClearedError"];
+let CommandLaneTaskTimeoutError: CommandQueueModule["CommandLaneTaskTimeoutError"];
 let enqueueCommand: CommandQueueModule["enqueueCommand"];
 let enqueueCommandInLane: CommandQueueModule["enqueueCommandInLane"];
 let GatewayDrainingError: CommandQueueModule["GatewayDrainingError"];
 let getActiveTaskCount: CommandQueueModule["getActiveTaskCount"];
 let getCommandLaneSnapshot: CommandQueueModule["getCommandLaneSnapshot"];
+let getCommandLaneSnapshots: CommandQueueModule["getCommandLaneSnapshots"];
 let getQueueSize: CommandQueueModule["getQueueSize"];
 let markGatewayDraining: CommandQueueModule["markGatewayDraining"];
 let resetAllLanes: CommandQueueModule["resetAllLanes"];
@@ -62,11 +64,13 @@ describe("command queue", () => {
     ({
       clearCommandLane,
       CommandLaneClearedError,
+      CommandLaneTaskTimeoutError,
       enqueueCommand,
       enqueueCommandInLane,
       GatewayDrainingError,
       getActiveTaskCount,
       getCommandLaneSnapshot,
+      getCommandLaneSnapshots,
       getQueueSize,
       markGatewayDraining,
       resetAllLanes,
@@ -324,6 +328,42 @@ describe("command queue", () => {
     await expect(other).resolves.toBe("other");
   });
 
+  it("task timeout releases a stuck lane and drains queued work", async () => {
+    const lane = `timeout-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      const first = enqueueCommandInLane(lane, async () => new Promise<never>(() => {}), {
+        taskTimeoutMs: 25,
+      });
+      const firstRejected = expect(first).rejects.toBeInstanceOf(CommandLaneTaskTimeoutError);
+      let secondRan = false;
+      const second = enqueueCommandInLane(lane, async () => {
+        secondRan = true;
+        return "second";
+      });
+
+      expect(secondRan).toBe(false);
+      expect(getCommandLaneSnapshot(lane)).toMatchObject({
+        activeCount: 1,
+        queuedCount: 1,
+      });
+
+      await vi.advanceTimersByTimeAsync(25);
+
+      await firstRejected;
+      await expect(second).resolves.toBe("second");
+      expect(secondRan).toBe(true);
+      expect(getCommandLaneSnapshot(lane)).toMatchObject({
+        activeCount: 0,
+        queuedCount: 0,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("getCommandLaneSnapshot reports active and queued work for one lane", async () => {
     const lane = `snapshot-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setCommandLaneConcurrency(lane, 1);
@@ -347,6 +387,38 @@ describe("command queue", () => {
     blocker.resolve();
     await expect(first).resolves.toBe("first");
     await expect(second).resolves.toBe("second");
+  });
+
+  it("getCommandLaneSnapshots reports all live lanes in stable order", async () => {
+    const alphaLane = `snapshot-all-alpha-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const betaLane = `snapshot-all-beta-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(alphaLane, 1);
+    setCommandLaneConcurrency(betaLane, 1);
+
+    const alphaBlocker = createDeferred();
+    const betaBlocker = createDeferred();
+    const alpha = enqueueCommandInLane(alphaLane, async () => {
+      await alphaBlocker.promise;
+      return "alpha";
+    });
+    const beta = enqueueCommandInLane(betaLane, async () => {
+      await betaBlocker.promise;
+      return "beta";
+    });
+
+    const snapshots = getCommandLaneSnapshots().filter(
+      (snapshot) => snapshot.lane === alphaLane || snapshot.lane === betaLane,
+    );
+    expect(snapshots.map((snapshot) => snapshot.lane)).toEqual([alphaLane, betaLane]);
+    expect(snapshots).toEqual([
+      expect.objectContaining({ lane: alphaLane, activeCount: 1, queuedCount: 0 }),
+      expect.objectContaining({ lane: betaLane, activeCount: 1, queuedCount: 0 }),
+    ]);
+
+    alphaBlocker.resolve();
+    betaBlocker.resolve();
+    await expect(alpha).resolves.toBe("alpha");
+    await expect(beta).resolves.toBe("beta");
   });
 
   it("waitForActiveTasks ignores tasks that start after the call", async () => {

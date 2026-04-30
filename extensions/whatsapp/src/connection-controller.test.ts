@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
 import { WhatsAppConnectionController } from "./connection-controller.js";
+import type { WhatsAppSendKind, WhatsAppSendResult } from "./inbound/send-result.js";
 import { createWaSocket, waitForWaConnection } from "./session.js";
 
 vi.mock("./session.js", async () => {
@@ -16,11 +17,21 @@ vi.mock("./session.js", async () => {
 const createWaSocketMock = vi.mocked(createWaSocket);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
 
+function acceptedSendResult(kind: WhatsAppSendKind, id: string): WhatsAppSendResult {
+  return {
+    kind,
+    messageId: id,
+    messageIds: [id],
+    keys: [{ id }],
+    providerAccepted: true,
+  };
+}
+
 function createListenerStub(messageId = "ok") {
   return {
-    sendMessage: vi.fn(async () => ({ messageId })),
-    sendPoll: vi.fn(async () => ({ messageId })),
-    sendReaction: vi.fn(async () => {}),
+    sendMessage: vi.fn(async () => acceptedSendResult("text", messageId)),
+    sendPoll: vi.fn(async () => acceptedSendResult("poll", messageId)),
+    sendReaction: vi.fn(async () => acceptedSendResult("reaction", messageId)),
     sendComposingTo: vi.fn(async () => {}),
   };
 }

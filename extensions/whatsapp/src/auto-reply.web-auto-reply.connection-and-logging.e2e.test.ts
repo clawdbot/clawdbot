@@ -12,6 +12,7 @@ import { WhatsAppAuthUnstableError, resolveWebCredsPath } from "./auth-store.js"
 import { resolveOAuthDir } from "./auth-store.runtime.js";
 import {
   createWebInboundDeliverySpies,
+  createAcceptedWhatsAppSendResult,
   createMockWebListener,
   createScriptedWebListenerFactory,
   createWebListenerFactoryCapture,
@@ -513,6 +514,51 @@ describe("web auto-reply connection", () => {
     }
   });
 
+  it("recovers a post-408 listener when transport frames continue but app delivery stays silent", async () => {
+    vi.useFakeTimers();
+    try {
+      const { scripted, controller, run } = await startWatchdogScenario({
+        monitorWebChannel,
+      });
+
+      scripted.resolveClose(0, {
+        status: 408,
+        isLoggedOut: false,
+        error: "status=408 Request Time-out",
+      });
+      await vi.waitFor(
+        () => {
+          expect(scripted.getListenerCount()).toBe(2);
+        },
+        { timeout: 250, interval: 2 },
+      );
+
+      const reconnectedSocket = getLastWebAutoReplySessionSocket();
+      for (let elapsedMs = 0; elapsedMs < 45; elapsedMs += 5) {
+        reconnectedSocket.ws.emit("frame");
+        await vi.advanceTimersByTimeAsync(5);
+      }
+
+      await vi.waitFor(
+        () => {
+          expect(scripted.getListenerCount()).toBeGreaterThanOrEqual(3);
+        },
+        { timeout: 250, interval: 2 },
+      );
+
+      controller.abort();
+      scripted.resolveClose(scripted.getListenerCount() - 1, {
+        status: 499,
+        isLoggedOut: false,
+        error: "aborted",
+      });
+      await Promise.resolve();
+      await run;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("gives a reconnected listener a fresh watchdog window", async () => {
     vi.useFakeTimers();
     try {
@@ -668,7 +714,7 @@ describe("web auto-reply connection", () => {
 
       try {
         const sendMedia = vi.fn();
-        const reply = vi.fn().mockResolvedValue(undefined);
+        const reply = vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("text", "r1"));
         const sendComposing = vi.fn();
         const resolver = vi.fn().mockResolvedValue({ text: "ok" });
 
@@ -816,9 +862,9 @@ describe("web auto-reply connection", () => {
       markDispatchIdle,
       cleanup: vi.fn(),
     };
-    const reply = vi.fn().mockResolvedValue(undefined);
+    const reply = vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("text", "r1"));
     const sendComposing = vi.fn().mockResolvedValue(undefined);
-    const sendMedia = vi.fn().mockResolvedValue(undefined);
+    const sendMedia = vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("media", "m1"));
 
     const replyResolver = vi.fn().mockImplementation(async (ctx, opts) => {
       void ctx;

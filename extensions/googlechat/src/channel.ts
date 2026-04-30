@@ -30,6 +30,8 @@ import {
   isGoogleChatUserTarget,
   listGoogleChatAccountIds,
   normalizeGoogleChatTarget,
+  type GoogleChatConfigAccessorAccount,
+  resolveGoogleChatConfigAccessorAccount,
   resolveDefaultGoogleChatAccountId,
   resolveGoogleChatAccount,
   type ChannelMessageActionAdapter,
@@ -65,10 +67,14 @@ const meta = {
   markdownCapable: true,
 };
 
-const googleChatConfigAdapter = createScopedChannelConfigAdapter<ResolvedGoogleChatAccount>({
+const googleChatConfigAdapter = createScopedChannelConfigAdapter<
+  ResolvedGoogleChatAccount,
+  GoogleChatConfigAccessorAccount
+>({
   sectionKey: "googlechat",
   listAccountIds: listGoogleChatAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveGoogleChatAccount),
+  resolveAccessorAccount: resolveGoogleChatConfigAccessorAccount,
   defaultAccountId: resolveDefaultGoogleChatAccountId,
   clearBaseFields: [
     "serviceAccount",
@@ -80,13 +86,13 @@ const googleChatConfigAdapter = createScopedChannelConfigAdapter<ResolvedGoogleC
     "botUser",
     "name",
   ],
-  resolveAllowFrom: (account: ResolvedGoogleChatAccount) => account.config.dm?.allowFrom,
+  resolveAllowFrom: (account) => account.config.dm?.allowFrom,
   formatAllowFrom: (allowFrom) =>
     formatNormalizedAllowFromEntries({
       allowFrom,
       normalizeEntry: formatAllowFromEntry,
     }),
-  resolveDefaultTo: (account: ResolvedGoogleChatAccount) => account.config.defaultTo,
+  resolveDefaultTo: (account) => account.config.defaultTo,
 });
 
 const googlechatActions: ChannelMessageActionAdapter = {

@@ -26,6 +26,8 @@ import {
   buildSandboxCreateArgs,
   dockerContainerState,
   execDocker,
+  formatDockerDaemonUnavailableError,
+  isDockerDaemonUnavailable,
   readDockerContainerEnvVar,
   readDockerContainerLabel,
   readDockerNetworkDriver,
@@ -129,6 +131,10 @@ async function ensureSandboxBrowserImage(image: string) {
   });
   if (result.code === 0) {
     return;
+  }
+  const stderr = result.stderr.trim();
+  if (isDockerDaemonUnavailable(stderr)) {
+    throw new Error(formatDockerDaemonUnavailableError(stderr));
   }
   throw new Error(
     `Sandbox browser image not found: ${image}. Build it with scripts/sandbox-browser-setup.sh.`,

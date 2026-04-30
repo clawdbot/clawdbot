@@ -14,8 +14,11 @@ query-filters:
         - security
 
 paths:
+  - src/gateway/method-scopes.ts
   - src/gateway/protocol
   - src/gateway/server-methods
+  - src/gateway/server-methods.ts
+  - src/gateway/server-methods-list.ts
 
 paths-ignore:
   - "**/node_modules"

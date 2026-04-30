@@ -54,6 +54,7 @@ vi.mock("./obsidian.js", () => ({
 vi.mock("./query.js", () => ({
   getMemoryWikiPage: vi.fn(),
   searchMemoryWiki: vi.fn(),
+  WIKI_SEARCH_MODES: ["auto", "find-person", "route-question", "source-evidence", "raw-claim"],
 }));
 
 vi.mock("./source-sync.js", () => ({
@@ -354,6 +355,42 @@ describe("memory-wiki gateway methods", () => {
       undefined,
       expect.objectContaining({ message: "query is required." }),
     );
+  });
+
+  it("forwards wiki.search mode and corpus options over the gateway", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
+    const { api, registerGatewayMethod } = createPluginApi();
+
+    registerMemoryWikiGatewayMethods({ api, config });
+    const handler = findGatewayHandler(registerGatewayMethod, "wiki.search");
+    if (!handler) {
+      throw new Error("wiki.search handler missing");
+    }
+    const respond = vi.fn();
+
+    await handler({
+      params: {
+        query: "Teams Azure",
+        maxResults: 3,
+        corpus: "wiki",
+        backend: "local",
+        mode: "route-question",
+      },
+      respond,
+    });
+
+    expect(searchMemoryWiki).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config,
+        appConfig: undefined,
+        query: "Teams Azure",
+        maxResults: 3,
+        searchBackend: "local",
+        searchCorpus: "wiki",
+        mode: "route-question",
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(true, expect.anything());
   });
 
   it("forwards ingest requests over the gateway", async () => {

@@ -170,7 +170,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     ]);
   });
 
-  it("splits the agentic lane into control-plane, command, agent, SDK, and plugin shards", () => {
+  it("splits the agentic lane into control-plane, command, agent, gateway, SDK, and plugin shards", () => {
     const shards = createNodeTestShards();
     const controlPlaneShard = shards.find((shard) => shard.shardName === "agentic-control-plane");
     const cliShard = shards.find((shard) => shard.shardName === "agentic-cli");
@@ -179,6 +179,10 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     );
     const commandShards = shards.filter((shard) => shard.shardName.startsWith("agentic-commands-"));
     const agentShard = shards.find((shard) => shard.shardName === "agentic-agents");
+    const gatewayCoreShard = shards.find((shard) => shard.shardName === "agentic-gateway-core");
+    const gatewayMethodsShard = shards.find(
+      (shard) => shard.shardName === "agentic-gateway-methods",
+    );
     const pluginSdkShard = shards.find((shard) => shard.shardName === "agentic-plugin-sdk");
     const pluginsShard = shards.find((shard) => shard.shardName === "agentic-plugins");
 
@@ -244,12 +248,24 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       checkName: "checks-node-agentic-plugin-sdk",
       shardName: "agentic-plugin-sdk",
       configs: [
-        "test/vitest/vitest.gateway-core.config.ts",
-        "test/vitest/vitest.gateway-client.config.ts",
-        "test/vitest/vitest.gateway-methods.config.ts",
         "test/vitest/vitest.plugin-sdk-light.config.ts",
         "test/vitest/vitest.plugin-sdk.config.ts",
       ],
+      requiresDist: false,
+    });
+    expect(gatewayCoreShard).toEqual({
+      checkName: "checks-node-agentic-gateway-core",
+      shardName: "agentic-gateway-core",
+      configs: [
+        "test/vitest/vitest.gateway-core.config.ts",
+        "test/vitest/vitest.gateway-client.config.ts",
+      ],
+      requiresDist: false,
+    });
+    expect(gatewayMethodsShard).toEqual({
+      checkName: "checks-node-agentic-gateway-methods",
+      shardName: "agentic-gateway-methods",
+      configs: ["test/vitest/vitest.gateway-methods.config.ts"],
       requiresDist: false,
     });
     expect(pluginsShard).toEqual({
@@ -280,6 +296,8 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     const shards = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
 
     expect(shards.some((shard) => shard.shardName === "agentic-plugins")).toBe(false);
+    expect(shards.some((shard) => shard.shardName === "agentic-gateway-core")).toBe(true);
+    expect(shards.some((shard) => shard.shardName === "agentic-gateway-methods")).toBe(true);
     expect(shards.some((shard) => shard.shardName === "agentic-plugin-sdk")).toBe(true);
   });
 
@@ -311,16 +329,28 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         shardName: "auto-reply-reply-agent-runner",
       },
       {
+        checkName: "checks-node-auto-reply-reply-commands",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-commands",
+      },
+      {
         checkName: "checks-node-auto-reply-reply-dispatch",
         configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
         requiresDist: false,
         shardName: "auto-reply-reply-dispatch",
       },
       {
-        checkName: "checks-node-auto-reply-reply-commands-state-routing",
+        checkName: "checks-node-auto-reply-reply-session",
         configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
         requiresDist: false,
-        shardName: "auto-reply-reply-commands-state-routing",
+        shardName: "auto-reply-reply-session",
+      },
+      {
+        checkName: "checks-node-auto-reply-reply-state-routing",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-state-routing",
       },
     ]);
   });

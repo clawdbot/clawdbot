@@ -291,5 +291,6 @@
   "webhook-request-guards",
   "webhook-path",
   "web-media",
+  "zalouser",
   "zod"
 ]

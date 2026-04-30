@@ -230,6 +230,11 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/github/barnacle-auto-response.mjs", ["test/scripts/barnacle-auto-response.test.ts"]],
   ["scripts/changed-lanes.mjs", ["test/scripts/changed-lanes.test.ts"]],
   ["scripts/check-changed.mjs", ["test/scripts/changed-lanes.test.ts"]],
+  ["scripts/check-deadcode-unused-files.mjs", ["test/scripts/check-deadcode-unused-files.test.ts"]],
+  [
+    "scripts/deadcode-unused-files.allowlist.mjs",
+    ["test/scripts/check-deadcode-unused-files.test.ts"],
+  ],
   ["scripts/lib/live-docker-stage.sh", ["test/scripts/live-docker-stage.test.ts"]],
   ["scripts/lib/openclaw-test-state.mjs", ["test/scripts/openclaw-test-state.test.ts"]],
   ["scripts/lib/vitest-local-scheduling.mjs", ["test/scripts/vitest-local-scheduling.test.ts"]],
@@ -242,6 +247,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   ["scripts/run-oxlint.mjs", ["test/scripts/run-oxlint.test.ts"]],
+  ["scripts/run-node.mjs", ["src/infra/run-node.test.ts"]],
   ["scripts/ci-run-timings.mjs", ["test/scripts/ci-run-timings.test.ts"]],
   ["scripts/test-extension-batch.mjs", ["test/scripts/test-extension.test.ts"]],
   ["scripts/lib/extension-test-plan.mjs", ["test/scripts/test-extension.test.ts"]],
@@ -274,6 +280,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
 const TOOLING_TEST_TARGETS = new Map([
   ["test/scripts/barnacle-auto-response.test.ts", ["test/scripts/barnacle-auto-response.test.ts"]],
   ["test/scripts/changed-lanes.test.ts", ["test/scripts/changed-lanes.test.ts"]],
+  [
+    "test/scripts/check-deadcode-unused-files.test.ts",
+    ["test/scripts/check-deadcode-unused-files.test.ts"],
+  ],
   ["test/scripts/live-docker-stage.test.ts", ["test/scripts/live-docker-stage.test.ts"]],
   ["test/scripts/openclaw-test-state.test.ts", ["test/scripts/openclaw-test-state.test.ts"]],
   [

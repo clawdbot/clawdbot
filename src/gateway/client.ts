@@ -17,7 +17,6 @@ import { dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane } from "../
 import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { rawDataToString } from "../infra/ws.js";
 import { logDebug, logError } from "../logger.js";
-import { isLoopbackIpAddress } from "../shared/net/ip.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -50,6 +49,7 @@ import {
   validateRequestFrame,
   validateResponseFrame,
 } from "./protocol/index.js";
+import { resolveGatewayStartupRetryAfterMs } from "./protocol/startup-unavailable.js";
 
 type Pending = {
   resolve: (value: unknown) => void;
@@ -100,7 +100,7 @@ function createDirectGatewayAgent(url: string): http.Agent | https.Agent | undef
   } catch {
     return undefined;
   }
-  if (!isLoopbackIpAddress(hostname)) {
+  if (!isLoopbackHost(hostname)) {
     return undefined;
   }
   return url.startsWith("wss://") ? new https.Agent() : new http.Agent();
@@ -168,6 +168,7 @@ export const GATEWAY_CLOSE_CODE_HINTS: Readonly<Record<number, string>> = {
   1006: "abnormal closure (no close frame)",
   1008: "policy violation",
   1012: "service restart",
+  1013: "try again later",
 };
 
 export function describeGatewayCloseCode(code: number): string | undefined {
@@ -227,6 +228,7 @@ export class GatewayClient {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
+  private pendingStartupReconnectDelayMs: number | null = null;
   private pendingConnectErrorDetailCode: string | null = null;
   // Track last tick to detect silent stalls.
   private lastTick: number | null = null;
@@ -350,6 +352,10 @@ export class GatewayClient {
       }
       this.socketOpened = false;
       this.resolvePendingStop(ws);
+      if (this.pendingStartupReconnectDelayMs !== null) {
+        this.scheduleReconnect();
+        return;
+      }
       // Clear persisted device auth state only when device-token auth was active.
       // Shared token/password failures can return the same close reason but should
       // not erase a valid cached device token.
@@ -429,6 +435,7 @@ export class GatewayClient {
     this.closed = true;
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
+    this.pendingStartupReconnectDelayMs = null;
     this.pendingConnectErrorDetailCode = null;
     this.clearReconnectTimer();
     if (this.tickTimer) {
@@ -576,6 +583,7 @@ export class GatewayClient {
       .then((helloOk) => {
         this.pendingDeviceTokenRetry = false;
         this.deviceTokenRetryBudgetUsed = false;
+        this.pendingStartupReconnectDelayMs = null;
         this.pendingConnectErrorDetailCode = null;
         const authInfo = helloOk?.auth;
         if (authInfo?.deviceToken && this.opts.deviceIdentity) {
@@ -625,6 +633,13 @@ export class GatewayClient {
           this.pendingDeviceTokenRetry = true;
           this.deviceTokenRetryBudgetUsed = true;
           this.backoffMs = Math.min(this.backoffMs, 250);
+        }
+        const startupRetryAfterMs = resolveGatewayStartupRetryAfterMs(err);
+        if (startupRetryAfterMs !== null) {
+          this.pendingStartupReconnectDelayMs = startupRetryAfterMs;
+          logDebug(`gateway connect failed: ${String(err)}`);
+          this.ws?.close(1013, "gateway starting");
+          return;
         }
         this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
         const msg = `gateway connect failed: ${String(err)}`;
@@ -916,8 +931,12 @@ export class GatewayClient {
       this.tickTimer = null;
     }
     this.clearReconnectTimer();
-    const delay = this.backoffMs;
-    this.backoffMs = Math.min(this.backoffMs * 2, 30_000);
+    const startupDelay = this.pendingStartupReconnectDelayMs;
+    this.pendingStartupReconnectDelayMs = null;
+    const delay = startupDelay ?? this.backoffMs;
+    if (startupDelay === null) {
+      this.backoffMs = Math.min(this.backoffMs * 2, 30_000);
+    }
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.start();

@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  loadAuthProfileStoreForSecretsRuntime,
+} from "openclaw/plugin-sdk/agent-runtime";
 import { upsertAuthProfile } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -72,7 +76,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
         if (refreshed?.access) {
           oauthCredential = refreshed as typeof oauthCredential;
           params.store.profiles[params.profileId] = oauthCredential;
-          if (params.agentDir) {
+          if (params.agentDir || process.env.OPENCLAW_STATE_DIR) {
             actual.saveAuthProfileStore(params.store, params.agentDir);
           }
         }
@@ -92,6 +96,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  clearRuntimeAuthProfileStoreSnapshots();
   oauthMocks.refreshOpenAICodexToken.mockReset();
   providerRuntimeMocks.formatProviderAuthProfileApiKeyWithPlugin.mockReset();
   providerRuntimeMocks.refreshProviderOAuthCredentialWithPlugin.mockClear();
@@ -632,6 +637,132 @@ describe("bridgeCodexAppServerStartOptions", () => {
       expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("refresh-token");
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes inherited main Codex OAuth without cloning it into the child store", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const stateDir = path.join(root, "state");
+    const childAgentDir = path.join(stateDir, "agents", "worker", "agent");
+    const childAuthPath = path.join(childAgentDir, "auth-profiles.json");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_AGENT_DIR", "");
+    oauthMocks.refreshOpenAICodexToken.mockResolvedValueOnce({
+      access: "main-refreshed-access-token",
+      refresh: "main-refreshed-refresh-token",
+      expires: Date.now() + 60_000,
+      accountId: "account-main-refreshed",
+    });
+    try {
+      upsertAuthProfile({
+        profileId: "openai-codex:work",
+        credential: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "main-current-access-token",
+          refresh: "main-refresh-token",
+          expires: Date.now() + 60_000,
+          accountId: "account-main",
+          email: "main-codex@example.test",
+        },
+      });
+
+      await expect(
+        refreshCodexAppServerAuthTokens({
+          agentDir: childAgentDir,
+          authProfileId: "openai-codex:work",
+        }),
+      ).resolves.toEqual({
+        accessToken: "main-refreshed-access-token",
+        chatgptAccountId: "account-main-refreshed",
+        chatgptPlanType: null,
+      });
+
+      expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("main-refresh-token");
+      await expect(fs.access(childAuthPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(loadAuthProfileStoreForSecretsRuntime().profiles["openai-codex:work"]).toMatchObject({
+        type: "oauth",
+        provider: "openai-codex",
+        access: "main-refreshed-access-token",
+        refresh: "main-refreshed-refresh-token",
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("force-refreshes the owner credential instead of a stale child OAuth clone", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const stateDir = path.join(root, "state");
+    const childAgentDir = path.join(stateDir, "agents", "worker", "agent");
+    const childAuthPath = path.join(childAgentDir, "auth-profiles.json");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_AGENT_DIR", "");
+    oauthMocks.refreshOpenAICodexToken.mockResolvedValueOnce({
+      access: "main-refreshed-access-token",
+      refresh: "main-refreshed-refresh-token",
+      expires: Date.now() + 60_000,
+      accountId: "account-main-refreshed",
+    });
+    try {
+      upsertAuthProfile({
+        profileId: "openai-codex:work",
+        credential: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "main-current-access-token",
+          refresh: "main-owner-refresh-token",
+          expires: Date.now() + 60_000,
+          accountId: "account-main",
+          email: "main-codex@example.test",
+        },
+      });
+      await fs.mkdir(childAgentDir, { recursive: true });
+      await fs.writeFile(
+        childAuthPath,
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "openai-codex:work": {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "child-stale-access-token",
+              refresh: "child-stale-refresh-token",
+              expires: Date.now() - 60_000,
+              accountId: "account-main",
+              email: "main-codex@example.test",
+            },
+          },
+        }),
+      );
+
+      await expect(
+        refreshCodexAppServerAuthTokens({
+          agentDir: childAgentDir,
+          authProfileId: "openai-codex:work",
+        }),
+      ).resolves.toEqual({
+        accessToken: "main-refreshed-access-token",
+        chatgptAccountId: "account-main-refreshed",
+        chatgptPlanType: null,
+      });
+
+      expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("main-owner-refresh-token");
+      expect(loadAuthProfileStoreForSecretsRuntime().profiles["openai-codex:work"]).toMatchObject({
+        type: "oauth",
+        provider: "openai-codex",
+        access: "main-refreshed-access-token",
+        refresh: "main-refreshed-refresh-token",
+      });
+      const child = JSON.parse(await fs.readFile(childAuthPath, "utf8")) as {
+        profiles: Record<string, { access?: string; refresh?: string }>;
+      };
+      expect(child.profiles["openai-codex:work"]).toMatchObject({
+        access: "child-stale-access-token",
+        refresh: "child-stale-refresh-token",
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
     }
   });
 

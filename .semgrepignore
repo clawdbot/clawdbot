@@ -1,0 +1,95 @@
+# .semgrepignore — single source of truth for paths excluded from
+# opengrep / semgrep scans run against this repo.
+#
+# Syntax: gitignore-style globs (https://git-scm.com/docs/gitignore).
+# Consumed automatically by `opengrep scan` and `semgrep scan`. The compiled
+# detector rulepacks under security/opengrep/ and the GitHub Actions workflows
+# under .github/workflows/opengrep-*.yml all rely on this file rather than
+# duplicating exclude lists in 50+ places.
+#
+# When adding a new test naming convention, fixture directory, or QA-tooling
+# extension to the codebase, add its glob here so the security rulepacks
+# stop firing on it. Real product code should never match anything in this
+# file.
+
+# ----------------------------------------------------------------------------
+# Standard test file suffixes
+# ----------------------------------------------------------------------------
+*.test.*
+*.spec.*
+
+# ----------------------------------------------------------------------------
+# Fixture & mock file suffixes (cover both .foo and -foo styles used in repo)
+# ----------------------------------------------------------------------------
+*.fixture.*
+*-fixture.*
+*-fixtures.*
+*.mock.*
+*-mock.*
+*-mocks.*
+
+# ----------------------------------------------------------------------------
+# Test helper / harness / support / shared / utils naming conventions
+# ----------------------------------------------------------------------------
+*.test-helper.*
+*.test-helpers.*
+*-test-helpers.*
+*.test-harness.*
+*-test-harness.*
+*.test-support.*
+*-test-support.*
+*.test-shared.*
+*-test-shared.*
+*.test-mocks.*
+*-test-mocks.*
+*.test-utils.*
+*-test-utils.*
+*.test-fixtures.*
+*-test-fixtures.*
+*.e2e-test-helpers.*
+
+# Bare top-of-dir test helper files (e.g. extensions/foo/src/test-helpers.ts)
+test-helper.*
+test-helpers.*
+test-harness.*
+test-support.*
+test-shared.*
+test-utils.*
+test-mocks.*
+test-fixtures.*
+test-fetch.*
+test-manager-helpers.*
+
+# ----------------------------------------------------------------------------
+# Test / mock / fixture directories anywhere in the tree
+# ----------------------------------------------------------------------------
+__tests__/
+__mocks__/
+test/
+tests/
+test-fixtures/
+test-fixture/
+test-helpers/
+test-utils/
+test-support/
+test-mocks/
+test-harness/
+fixtures/
+mocks/
+
+# ----------------------------------------------------------------------------
+# QA tooling — entire QA-only directories and extensions, not product code
+# ----------------------------------------------------------------------------
+qa/
+qa-lab/
+extensions/qa-*/
+
+# ----------------------------------------------------------------------------
+# Top-level scripts that drive tests rather than ship product behavior
+# ----------------------------------------------------------------------------
+scripts/test-*
+scripts/run-vitest*
+scripts/run-tests*
+scripts/lib/test-*
+scripts/lib/extension-test-*
+scripts/lib/vitest-*

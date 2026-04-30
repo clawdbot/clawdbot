@@ -27,7 +27,23 @@ export const MEDIA_INVOKE_ACTIONS = {
   "camera.clip": "camera_clip",
   "photos.latest": "photos_latest",
   "screen.record": "screen_record",
+  // file-transfer commands: redirect to dedicated tools for better result
+  // formatting and media-store handling. The gateway still enforces the
+  // underlying node-invoke path policy for raw callers.
+  "file.fetch": "file_fetch",
+  "dir.list": "dir_list",
+  "dir.fetch": "dir_fetch",
+  "file.write": "file_write",
 } as const;
+
+// Subset of MEDIA_INVOKE_ACTIONS where the dedicated tool is the preferred
+// agent UX. Gateway node-invoke policy still protects raw node.invoke callers.
+export const POLICY_REDIRECT_INVOKE_COMMANDS: ReadonlySet<string> = new Set([
+  "file.fetch",
+  "dir.list",
+  "dir.fetch",
+  "file.write",
+]);
 
 export type NodeMediaAction = "camera_snap" | "photos_latest" | "camera_clip" | "screen_record";
 

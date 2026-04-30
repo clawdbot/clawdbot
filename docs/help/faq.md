@@ -1943,13 +1943,14 @@ lives on the [Models FAQ](/help/faq-models).
   <Accordion title='Why does it feel like the bot "ignores" rapid-fire messages?'>
     Queue mode controls how new messages interact with an in-flight run. Use `/queue` to change modes:
 
-    - `steer` - new messages redirect the current task
+    - `steer` - queue all pending steering for the next model boundary in the current run
+    - `queue` - legacy one-at-a-time steering
     - `followup` - run messages one at a time
-    - `collect` - batch messages and reply once (default)
+    - `collect` - batch messages and reply once
     - `steer-backlog` - steer now, then process backlog
     - `interrupt` - abort current run and start fresh
 
-    You can add options like `debounce:2s cap:25 drop:summarize` for followup modes.
+    Default mode is `steer`. You can add options like `debounce:0.5s cap:25 drop:summarize` for followup modes. See [Command queue](/concepts/queue) and [Steering queue](/concepts/queue-steering).
 
   </Accordion>
 </AccordionGroup>

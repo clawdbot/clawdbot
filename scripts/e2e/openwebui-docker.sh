@@ -75,46 +75,10 @@ docker_e2e_docker_cmd run -d \
 
     openai_api_key="${OPENAI_API_KEY:?OPENAI_API_KEY required}"
     batch_file="$(mktemp /tmp/openclaw-openwebui-config.XXXXXX.json)"
-    OPENCLAW_CONFIG_BATCH_PATH="$batch_file" node - <<'"'"'NODE'"'"' "$openai_api_key"
-const fs = require("node:fs");
-
-const openaiApiKey = process.argv[2];
-const batchPath = process.env.OPENCLAW_CONFIG_BATCH_PATH;
-const entries = [
-  { path: "models.providers.openai.apiKey", value: openaiApiKey },
-  {
-    path: "models.providers.openai.baseUrl",
-    value: (process.env.OPENAI_BASE_URL || "https://api.openai.com/v1").trim(),
-  },
-  { path: "models.providers.openai.models", value: [] },
-  { path: "gateway.controlUi.enabled", value: false },
-  { path: "gateway.mode", value: "local" },
-  { path: "gateway.bind", value: "lan" },
-  { path: "gateway.auth.mode", value: "token" },
-  { path: "gateway.auth.token", value: process.env.OPENCLAW_GATEWAY_TOKEN },
-  { path: "gateway.http.endpoints.chatCompletions.enabled", value: true },
-  { path: "agents.defaults.model.primary", value: process.env.OPENCLAW_OPENWEBUI_MODEL },
-];
-fs.writeFileSync(batchPath, `${JSON.stringify(entries, null, 2)}\n`, "utf8");
-NODE
+    OPENCLAW_CONFIG_BATCH_PATH="$batch_file" node scripts/e2e/lib/fixture.mjs openwebui-config "$openai_api_key"
     node "$entry" config set --batch-file "$batch_file" >/dev/null
     rm -f "$batch_file"
-
-    workspace="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
-    mkdir -p "$workspace/.openclaw"
-    cat > "$workspace/IDENTITY.md" <<'"'"'EOF'"'"'
-# Identity
-
-- Name: OpenClaw
-- Purpose: Open WebUI Docker compatibility smoke test assistant.
-EOF
-    cat > "$workspace/.openclaw/workspace-state.json" <<'"'"'EOF'"'"'
-{
-  "version": 1,
-  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
-}
-EOF
-    rm -f "$workspace/BOOTSTRAP.md"
+    node scripts/e2e/lib/fixture.mjs openwebui-workspace
 
     openclaw_e2e_exec_gateway "$entry" '"$PORT"' lan /tmp/openwebui-gateway.log
   ' >/dev/null

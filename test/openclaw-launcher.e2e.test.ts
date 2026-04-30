@@ -161,7 +161,7 @@ describe("openclaw launcher", () => {
     },
   );
 
-  it("does not respawn packaged launchers when NODE_COMPILE_CACHE is configured", async () => {
+  it("keeps compile cache enabled for packaged launchers when NODE_COMPILE_CACHE is configured", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     await addCompileCacheProbe(fixtureRoot);
 
@@ -175,6 +175,56 @@ describe("openclaw launcher", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("cache:enabled;respawn:0");
+  });
+
+  it("scopes packaged launcher compile cache inside configured cache roots", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    await fs.writeFile(path.join(fixtureRoot, "package.json"), '{"version":"2026.4.29"}\n');
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      [
+        'import module from "node:module";',
+        'process.stdout.write(module.getCompileCacheDir?.() ?? "cache:disabled");',
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs")], {
+      cwd: fixtureRoot,
+      env: launcherEnv({
+        NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache"),
+      }),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(path.join(".node-compile-cache", "openclaw", "2026.4.29"));
+  });
+
+  it("falls back to the default packaged launcher compile cache when NODE_COMPILE_CACHE is empty", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    const runCwd = makeTempDir(fixtureRoots, "openclaw-launcher-cwd-");
+    await fs.writeFile(path.join(fixtureRoot, "package.json"), '{"version":"2026.4.29"}\n');
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      [
+        'import module from "node:module";',
+        'process.stdout.write(module.getCompileCacheDir?.() ?? "cache:disabled");',
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs")], {
+      cwd: runCwd,
+      env: launcherEnv({
+        NODE_COMPILE_CACHE: "",
+      }),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(path.join("node-compile-cache", "openclaw", "2026.4.29"));
+    expect(result.stdout).not.toContain(path.join(runCwd, "openclaw"));
   });
 
   it("enables compile cache for packaged launchers", async () => {

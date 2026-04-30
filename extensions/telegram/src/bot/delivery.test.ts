@@ -130,6 +130,36 @@ function createQuoteNotFoundError(operation = "sendMessage") {
   );
 }
 
+function createQuoteTextInvalidError(operation = "sendMessage") {
+  return new Error(
+    `GrammyError: Call to '${operation}' failed! (400: Bad Request: QUOTE_TEXT_INVALID)`,
+  );
+}
+
+function createNormalizedQuoteTextInvalidError(operation = "sendMessage") {
+  return new Error(
+    `GrammyError: Call to '${operation}' failed! (400: Bad Request: quote text invalid)`,
+  );
+}
+
+function createWrappedPreConnectHttpError(operation = "sendMessage") {
+  const root = Object.assign(new Error("getaddrinfo ENOTFOUND api.telegram.org"), {
+    code: "ENOTFOUND",
+  });
+  const fetchError = Object.assign(new TypeError("fetch failed"), { cause: root });
+  return Object.assign(new Error(`Network request for '${operation}' failed!`), {
+    name: "HttpError",
+    error: fetchError,
+  });
+}
+
+function createPlainHttpError(operation = "sendMessage") {
+  return Object.assign(new Error(`Network request for '${operation}' failed!`), {
+    name: "HttpError",
+    error: new TypeError("fetch failed"),
+  });
+}
+
 function createVoiceFailureHarness(params: {
   voiceError: Error;
   sendMessageResult?: { message_id: number; chat: { id: string } };
@@ -671,6 +701,48 @@ describe("deliverReplies", () => {
     expect(runtime.error).toHaveBeenCalledTimes(1);
   });
 
+  it("retries final text sends for wrapped pre-connect grammY HttpError envelopes", async () => {
+    vi.useFakeTimers();
+    const runtime = createRuntime();
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(createWrappedPreConnectHttpError("sendMessage"))
+      .mockResolvedValueOnce({
+        message_id: 12,
+        chat: { id: "123" },
+      });
+    const bot = createBot({ sendMessage });
+
+    const delivered = deliverWith({
+      replies: [{ text: "hello" }],
+      runtime,
+      bot,
+    });
+    await vi.runAllTimersAsync();
+    await delivered;
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(runtime.error).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("does not retry final text sends for plain grammY envelopes without a safe cause", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockRejectedValue(createPlainHttpError("sendMessage"));
+    const bot = createBot({ sendMessage });
+
+    await expect(
+      deliverWith({
+        replies: [{ text: "hello" }],
+        runtime,
+        bot,
+      }),
+    ).rejects.toThrow(/Network request for 'sendMessage' failed!/);
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledTimes(1);
+  });
+
   it("retries media sends without message_thread_id for DM topics", async () => {
     const runtime = createRuntime();
     const sendPhoto = vi
@@ -859,42 +931,48 @@ describe("deliverReplies", () => {
   });
 
   it("retries with legacy reply id when native quote parameters are rejected", async () => {
-    const runtime = createRuntime();
-    const sendMessage = vi
-      .fn()
-      .mockRejectedValueOnce(createQuoteNotFoundError())
-      .mockResolvedValueOnce({
-        message_id: 11,
-        chat: { id: "123" },
+    for (const createError of [
+      createQuoteNotFoundError,
+      createQuoteTextInvalidError,
+      createNormalizedQuoteTextInvalidError,
+    ]) {
+      const runtime = createRuntime();
+      const sendMessage = vi
+        .fn()
+        .mockRejectedValueOnce(createError())
+        .mockResolvedValueOnce({
+          message_id: 11,
+          chat: { id: "123" },
+        });
+      const bot = createBot({ sendMessage });
+
+      await deliverWith({
+        replies: [{ text: "Hello there", replyToId: "500" }],
+        runtime,
+        bot,
+        replyToMode: "all",
+        replyQuoteMessageId: 500,
+        replyQuoteText: " quoted text\n",
       });
-    const bot = createBot({ sendMessage });
 
-    await deliverWith({
-      replies: [{ text: "Hello there", replyToId: "500" }],
-      runtime,
-      bot,
-      replyToMode: "all",
-      replyQuoteMessageId: 500,
-      replyQuoteText: " quoted text\n",
-    });
-
-    expect(sendMessage).toHaveBeenCalledTimes(2);
-    expect(sendMessage.mock.calls[0][2]).toEqual(
-      expect.objectContaining({
-        reply_parameters: {
-          message_id: 500,
-          quote: " quoted text\n",
+      expect(sendMessage).toHaveBeenCalledTimes(2);
+      expect(sendMessage.mock.calls[0][2]).toEqual(
+        expect.objectContaining({
+          reply_parameters: {
+            message_id: 500,
+            quote: " quoted text\n",
+            allow_sending_without_reply: true,
+          },
+        }),
+      );
+      expect(sendMessage.mock.calls[1][2]).toEqual(
+        expect.objectContaining({
+          reply_to_message_id: 500,
           allow_sending_without_reply: true,
-        },
-      }),
-    );
-    expect(sendMessage.mock.calls[1][2]).toEqual(
-      expect.objectContaining({
-        reply_to_message_id: 500,
-        allow_sending_without_reply: true,
-      }),
-    );
-    expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_parameters");
+        }),
+      );
+      expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_parameters");
+    }
   });
 
   it("uses legacy reply id when selected reply target differs from quote source", async () => {

@@ -1,0 +1,42 @@
+export {
+  Agent,
+  AgentsNamespace,
+  ApprovalsNamespace,
+  ArtifactsNamespace,
+  EnvironmentsNamespace,
+  ModelsNamespace,
+  OpenClaw,
+  Run,
+  RunsNamespace,
+  Session,
+  SessionsNamespace,
+  TasksNamespace,
+  ToolsNamespace,
+  type OpenClawOptions,
+} from "./client.js";
+export { EventHub, isGatewayEvent } from "./event-hub.js";
+export { normalizeGatewayEvent } from "./normalize.js";
+export { GatewayClientTransport, isConnectableTransport } from "./transport.js";
+export type {
+  AgentRunParams,
+  ApprovalMode,
+  ArtifactSummary,
+  ConnectableOpenClawTransport,
+  EnvironmentSelection,
+  GatewayEvent,
+  GatewayRequestOptions,
+  JsonObject,
+  OpenClawEvent,
+  OpenClawEventType,
+  OpenClawTransport,
+  RunCreateParams,
+  RunResult,
+  RunStatus,
+  RuntimeSelection,
+  SDKError,
+  SDKMessage,
+  SessionCreateParams,
+  SessionSendParams,
+  SessionTarget,
+  WorkspaceSelection,
+} from "./types.js";

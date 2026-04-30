@@ -527,6 +527,7 @@ export const DiscordAccountSchema = z
     commands: ProviderCommandsSchema,
     configWrites: z.boolean().optional(),
     token: SecretInputSchema.optional().register(sensitive),
+    applicationId: DiscordIdSchema.optional(),
     proxy: z.string().optional(),
     gatewayInfoTimeoutMs: z.number().int().positive().max(120_000).optional(),
     allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),

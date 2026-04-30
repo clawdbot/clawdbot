@@ -114,4 +114,26 @@ describe("normalizeRegisteredChannelPlugin", () => {
       'channel "demo" meta.id mismatch ("other-demo"); using registered channel id',
     ]);
   });
+
+  it("rejects runtime channel registrations without required config helpers", () => {
+    const { diagnostics, pushDiagnostic } = collectDiagnostics();
+
+    const normalized = normalizeRegisteredChannelPlugin({
+      pluginId: "demo-plugin",
+      source: "/tmp/demo/index.ts",
+      plugin: createChannelPlugin({
+        id: "broken-channel",
+        config: undefined as never,
+      }),
+      pushDiagnostic,
+    });
+
+    expect(normalized).toBeNull();
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        level: "error",
+        message: 'channel "broken-channel" registration missing required config helpers',
+      }),
+    ]);
+  });
 });

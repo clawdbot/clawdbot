@@ -290,6 +290,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
       reactionApi: null,
       removeAckAfterReply: false,
     } as unknown as TelegramMessageContext;
+    base.turn = {
+      storePath: "/tmp/openclaw/telegram-sessions.json",
+      recordInboundSession: vi.fn(async () => undefined),
+      record: {
+        onRecordError: vi.fn(),
+      },
+    } as unknown as TelegramMessageContext["turn"];
 
     return {
       ...base,

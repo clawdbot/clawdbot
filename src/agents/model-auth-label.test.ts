@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   resolveAuthProfileOrder: vi.fn(),
   resolveAuthProfileDisplayLabel: vi.fn(),
   resolveUsableCustomProviderApiKey: vi.fn(() => null),
-  resolveEnvApiKey: vi.fn(() => null),
+  resolveEnvApiKey: vi.fn<() => { apiKey: string; source: string } | null>(() => null),
   readCodexCliCredentialsCached: vi.fn<() => unknown>(() => null),
 }));
 
@@ -164,5 +164,30 @@ describe("resolveModelAuthLabel", () => {
     expect(label).toBe("oauth (anthropic:oauth)");
     expect(mocks.loadAuthProfileStoreWithoutExternalProfiles).toHaveBeenCalledOnce();
     expect(mocks.ensureAuthProfileStore).not.toHaveBeenCalled();
+  });
+
+  it("resolves env labels with config and workspace scope", () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {},
+    } as never);
+    mocks.resolveAuthProfileOrder.mockReturnValue([]);
+    mocks.resolveEnvApiKey.mockReturnValue({
+      apiKey: "workspace-cloud-local-credentials",
+      source: "workspace cloud credentials",
+    });
+
+    const cfg = { plugins: { allow: ["workspace-cloud"] } };
+    const label = resolveModelAuthLabel({
+      provider: "workspace-cloud",
+      cfg,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(label).toBe("api-key (workspace cloud credentials)");
+    expect(mocks.resolveEnvApiKey).toHaveBeenCalledWith("workspace-cloud", process.env, {
+      config: cfg,
+      workspaceDir: "/tmp/workspace",
+    });
   });
 });

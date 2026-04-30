@@ -134,6 +134,16 @@ function normalizeMSTeamsChannelKey(raw?: string | null): string | undefined {
   return trimmed || undefined;
 }
 
+function normalizeMSTeamsConversationTargetId(raw: string): string {
+  const trimmed = stripProviderPrefix(raw).trim();
+  return parseMSTeamsConversationId(trimmed) ?? trimmed;
+}
+
+function looksLikeMSTeamsThreadConversationId(raw: string): boolean {
+  const normalized = normalizeMSTeamsConversationTargetId(raw);
+  return /^19:.+@thread\./i.test(normalized);
+}
+
 export function parseMSTeamsTeamChannelInput(raw: string): { team?: string; channel?: string } {
   const trimmed = stripProviderPrefix(raw).trim();
   if (!trimmed) {
@@ -166,7 +176,11 @@ export async function resolveMSTeamsChannelAllowlist(params: {
   cfg: unknown;
   entries: string[];
 }): Promise<MSTeamsChannelResolution[]> {
-  const token = await resolveGraphToken(params.cfg);
+  let tokenPromise: Promise<string> | undefined;
+  const getToken = () => {
+    tokenPromise ??= resolveGraphToken(params.cfg);
+    return tokenPromise;
+  };
   return await mapAllowlistResolutionInputs({
     inputs: params.entries,
     mapInput: async (input): Promise<MSTeamsChannelResolution> => {
@@ -174,6 +188,31 @@ export async function resolveMSTeamsChannelAllowlist(params: {
       if (!team) {
         return { input, resolved: false };
       }
+      if (looksLikeMSTeamsThreadConversationId(team)) {
+        const teamId = normalizeMSTeamsConversationTargetId(team);
+        if (!channel) {
+          return { input, resolved: true, teamId, teamName: teamId };
+        }
+        if (!looksLikeMSTeamsThreadConversationId(channel)) {
+          return {
+            input,
+            resolved: false,
+            teamId,
+            teamName: teamId,
+            note: "channel id required for conversation-id team",
+          };
+        }
+        const channelId = normalizeMSTeamsConversationTargetId(channel);
+        return {
+          input,
+          resolved: true,
+          teamId,
+          teamName: teamId,
+          channelId,
+          channelName: channelId,
+        };
+      }
+      const token = await getToken();
       const teams = /^[0-9a-fA-F-]{16,}$/.test(team)
         ? [{ id: team, displayName: team }]
         : await listTeamsByName(token, team);

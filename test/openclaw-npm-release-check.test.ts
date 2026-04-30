@@ -27,6 +27,7 @@ import {
 
 const REQUIRED_PACKED_PATHS = [
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+  "scripts/lib/bundled-runtime-deps-install.mjs",
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ] as const;
 

@@ -88,11 +88,13 @@ export class OpenClawChannelBridge {
     const [
       { resolveGatewayClientBootstrap },
       { GatewayClient: GatewayClientCtor },
+      { startGatewayClientWhenEventLoopReady },
       { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE },
       { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES },
     ] = await Promise.all([
       import("../gateway/client-bootstrap.js"),
       import("../gateway/client.js"),
+      import("../gateway/client-start-readiness.js"),
       import("../gateway/method-scopes.js"),
       import("../gateway/protocol/client-info.js"),
     ]);
@@ -143,7 +145,12 @@ export class OpenClawChannelBridge {
         this.retryingInitialConnect = false;
       },
     });
-    this.gateway.start();
+    const readiness = await startGatewayClientWhenEventLoopReady(this.gateway, {
+      clientOptions: { preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs },
+    });
+    if (!readiness.ready) {
+      this.rejectReadyOnce(new Error("gateway event loop readiness timeout"));
+    }
     await this.readyPromise;
   }
 

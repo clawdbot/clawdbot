@@ -237,8 +237,14 @@ async function confirmGatewayReachable(params: {
     timeoutMs: 3_000,
     includeDetails: params.includeHealthDetails === true,
   });
+  const reachedGateway =
+    probe.ok ||
+    looksLikeAuthClose(probe.close?.code, probe.close?.reason) ||
+    (probe.connectLatencyMs != null &&
+      probe.server?.version != null &&
+      probe.auth.capability === "connected_no_operator_scope");
   return {
-    reachable: probe.ok || looksLikeAuthClose(probe.close?.code, probe.close?.reason),
+    reachable: reachedGateway,
     gatewayVersion: probe.server?.version ?? null,
     activatedPluginErrors: readActivatedPluginErrors(probe.health),
     channelProbeErrors: readChannelProbeErrors(probe.health),

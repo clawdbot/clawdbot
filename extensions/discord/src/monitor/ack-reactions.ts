@@ -1,4 +1,3 @@
-import type { RequestClient } from "@buape/carbon";
 import {
   createStatusReactionController,
   logAckFailure,
@@ -7,6 +6,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createDiscordRuntimeAccountContext } from "../client.js";
+import type { RequestClient } from "../internal/discord.js";
 import { reactMessageDiscord, removeReactionDiscord } from "../send.js";
 import type { DiscordReactionRuntimeContext } from "../send.types.js";
 

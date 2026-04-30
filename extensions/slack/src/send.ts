@@ -26,6 +26,7 @@ import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 import { parseSlackTarget } from "./targets.js";
 import { resolveSlackBotToken } from "./token.js";
+import { truncateSlackText } from "./truncate.js";
 const SLACK_UPLOAD_SSRF_POLICY = {
   allowedHostnames: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
   allowRfc2544BenchmarkRange: true,
@@ -411,7 +412,10 @@ async function sendMessageSlackQueued(params: {
     if (opts.mediaUrl) {
       throw new Error("Slack send does not support blocks with mediaUrl");
     }
-    const fallbackText = trimmedMessage || buildSlackBlocksFallbackText(blocks);
+    const fallbackText = truncateSlackText(
+      trimmedMessage || buildSlackBlocksFallbackText(blocks),
+      SLACK_TEXT_LIMIT,
+    );
     const response = await postSlackMessageBestEffort({
       client,
       channelId,

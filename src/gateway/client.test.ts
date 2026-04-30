@@ -29,6 +29,7 @@ class MockWebSocket {
   private errorHandlers: WsEventHandlers["error"][] = [];
   readonly sent: string[] = [];
   closeCalls = 0;
+  lastClose: { code?: number; reason?: string } | null = null;
   terminateCalls = 0;
   autoCloseOnClose = true;
   readyState = MockWebSocket.CONNECTING;
@@ -62,6 +63,7 @@ class MockWebSocket {
 
   close(code?: number, reason?: string): void {
     this.closeCalls += 1;
+    this.lastClose = { code, reason };
     this.readyState = MockWebSocket.CLOSING;
     if (this.autoCloseOnClose) {
       this.emitClose(code ?? 1000, reason ?? "");
@@ -334,6 +336,73 @@ describe("GatewayClient request errors", () => {
     });
 
     client.stop();
+  });
+
+  it("retries startup-unavailable connect failures without terminal callbacks", async () => {
+    vi.useFakeTimers();
+    wsInstances.length = 0;
+    logDebugMock.mockClear();
+    logErrorMock.mockClear();
+    const onClose = vi.fn();
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: null,
+      onClose,
+      onConnectError,
+    });
+    try {
+      client.start();
+      const ws = getLatestWs();
+      ws.emitOpen();
+      ws.emitMessage(
+        JSON.stringify({
+          type: "event",
+          event: "connect.challenge",
+          payload: { nonce: "nonce-1" },
+        }),
+      );
+      const connectFrame = JSON.parse(
+        ws.sent.find((frame) => frame.includes('"method":"connect"')) ?? "{}",
+      ) as { id?: string };
+
+      ws.emitMessage(
+        JSON.stringify({
+          type: "res",
+          id: connectFrame.id,
+          ok: false,
+          error: {
+            code: "UNAVAILABLE",
+            message: "gateway starting; retry shortly",
+            details: { reason: "startup-sidecars" },
+            retryable: true,
+            retryAfterMs: 250,
+          },
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(0);
+      for (let i = 0; i < 10; i += 1) {
+        await Promise.resolve();
+      }
+
+      expect(onConnectError).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
+      expect(ws.lastClose).toEqual({ code: 1013, reason: "gateway starting" });
+      expect(logDebugMock).toHaveBeenCalledWith(expect.stringContaining("gateway connect failed:"));
+      expect(logErrorMock).not.toHaveBeenCalledWith(
+        expect.stringContaining("gateway connect failed:"),
+      );
+      expect(wsInstances).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(249);
+      expect(wsInstances).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(wsInstances).toHaveLength(2);
+    } finally {
+      client.stop();
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -126,7 +126,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
       presentation,
     });
   },
-  resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
+  resolveTarget: ({ to, allowFrom }) => normalizeDiscordOutboundTarget(to, allowFrom),
   sendPayload: async (ctx) =>
     await sendDiscordOutboundPayload({
       ctx,

@@ -230,6 +230,15 @@ export type PluginNodeHostCommandRegistration = {
   rootDir?: string;
 };
 
+export type PluginNodeInvokePolicyRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  policy: import("./types.js").OpenClawPluginNodeInvokePolicy;
+  pluginConfig?: Record<string, unknown>;
+  source: string;
+  rootDir?: string;
+};
+
 export type PluginSecurityAuditCollectorRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -399,6 +408,7 @@ export type PluginRegistry = {
   cliRegistrars: PluginCliRegistration[];
   reloads?: PluginReloadRegistration[];
   nodeHostCommands?: PluginNodeHostCommandRegistration[];
+  nodeInvokePolicies?: PluginNodeInvokePolicyRegistration[];
   securityAuditCollectors?: PluginSecurityAuditCollectorRegistration[];
   services: PluginServiceRegistration[];
   gatewayDiscoveryServices: PluginGatewayDiscoveryServiceRegistration[];

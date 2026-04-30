@@ -1,5 +1,8 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
+import {
+  GatewayClient,
+  startGatewayClientWhenEventLoopReady,
+} from "openclaw/plugin-sdk/gateway-runtime";
 import type { GoogleMeetConfig } from "./config.js";
 
 type VoiceCallGatewayClient = InstanceType<typeof GatewayClient>;
@@ -20,10 +23,11 @@ async function createConnectedGatewayClient(
 ): Promise<VoiceCallGatewayClient> {
   let client: VoiceCallGatewayClient;
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error("gateway connect timeout")),
-      config.voiceCall.requestTimeoutMs,
-    );
+    const abortStart = new AbortController();
+    const timer = setTimeout(() => {
+      abortStart.abort();
+      reject(new Error("gateway connect timeout"));
+    }, config.voiceCall.requestTimeoutMs);
     client = new GatewayClient({
       url: config.voiceCall.gatewayUrl,
       token: config.voiceCall.token,
@@ -37,10 +41,24 @@ async function createConnectedGatewayClient(
       },
       onConnectError: (err) => {
         clearTimeout(timer);
+        abortStart.abort();
         reject(err);
       },
     });
-    client.start();
+    void startGatewayClientWhenEventLoopReady(client, {
+      timeoutMs: config.voiceCall.requestTimeoutMs,
+      signal: abortStart.signal,
+    })
+      .then((readiness) => {
+        if (!readiness.ready && !readiness.aborted) {
+          clearTimeout(timer);
+          reject(new Error("gateway event loop readiness timeout"));
+        }
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      });
   });
   return client!;
 }

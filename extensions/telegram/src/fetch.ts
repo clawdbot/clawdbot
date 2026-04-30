@@ -4,7 +4,8 @@ import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createPinnedLookup,
-  hasEnvHttpProxyConfigured,
+  hasEnvHttpProxyAgentConfigured,
+  resolveEnvHttpProxyAgentOptions,
   resolveFetch,
   type PinnedDispatcherPolicy,
 } from "openclaw/plugin-sdk/fetch-runtime";
@@ -225,7 +226,14 @@ function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env
 }
 
 function hasEnvHttpProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env): boolean {
-  return hasEnvHttpProxyConfigured("https", env);
+  return hasEnvHttpProxyAgentConfigured(env);
+}
+
+function resolveOpenClawProxyUrlForTelegram(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const proxyUrl = env.OPENCLAW_PROXY_URL?.trim();
+  return proxyUrl ? proxyUrl : undefined;
 }
 
 function resolveTelegramDispatcherPolicy(params: {
@@ -325,6 +333,7 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
     const proxyTlsOptions = withPinnedLookup(policy.proxyTls, policy.pinnedHostname);
     const proxyOptions = {
       ...poolOptions,
+      ...resolveEnvHttpProxyAgentOptions(),
       ...(connectOptions ? { connect: connectOptions } : {}),
       ...(proxyTlsOptions ? { proxyTls: proxyTlsOptions } : {}),
     } satisfies ConstructorParameters<typeof EnvHttpProxyAgent>[0];
@@ -580,8 +589,12 @@ export function resolveTelegramTransport(
   const explicitProxyUrl = effectiveProxyFetch
     ? getProxyUrlFromFetch(effectiveProxyFetch)
     : undefined;
+  const hasEnvProxy = !explicitProxyUrl && hasEnvHttpProxyForTelegramApi();
+  const managedProxyUrl =
+    !effectiveProxyFetch && !hasEnvProxy ? resolveOpenClawProxyUrlForTelegram() : undefined;
+  const resolvedExplicitProxyUrl = explicitProxyUrl ?? managedProxyUrl;
   const undiciSourceFetch = resolveWrappedFetch(undiciFetch as unknown as typeof fetch);
-  const sourceFetch = explicitProxyUrl
+  const sourceFetch = resolvedExplicitProxyUrl
     ? undiciSourceFetch
     : effectiveProxyFetch
       ? resolveWrappedFetch(effectiveProxyFetch)
@@ -592,13 +605,13 @@ export function resolveTelegramTransport(
     return { fetch: sourceFetch, sourceFetch, close: async () => {} };
   }
 
-  const useEnvProxy = !explicitProxyUrl && hasEnvHttpProxyForTelegramApi();
+  const useEnvProxy = !resolvedExplicitProxyUrl && hasEnvProxy;
   const defaultDispatcherResolution = resolveTelegramDispatcherPolicy({
     autoSelectFamily: autoSelectDecision.value,
     dnsResultOrder,
     useEnvProxy,
     forceIpv4: false,
-    proxyUrl: explicitProxyUrl,
+    proxyUrl: resolvedExplicitProxyUrl,
   });
   const defaultDispatcher = createTelegramDispatcher(defaultDispatcherResolution.policy);
   const shouldBypassEnvProxy = shouldBypassEnvProxyForTelegramApi();
@@ -611,7 +624,7 @@ export function resolveTelegramTransport(
         dnsResultOrder: "ipv4first",
         useEnvProxy: defaultDispatcher.mode === "env-proxy",
         forceIpv4: true,
-        proxyUrl: explicitProxyUrl,
+        proxyUrl: resolvedExplicitProxyUrl,
       }).policy
     : undefined;
   const ownedDispatchers = new Set<TelegramDispatcher>();

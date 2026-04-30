@@ -1998,6 +1998,9 @@ describe("google-meet plugin", () => {
         details: {
           manualActionRequired?: boolean;
           manualActionReason?: string;
+          speechReady?: boolean;
+          speechBlockedReason?: string;
+          spoken?: boolean;
           session?: { chrome?: { health?: { manualActionRequired?: boolean } } };
         };
       }>;
@@ -2012,15 +2015,155 @@ describe("google-meet plugin", () => {
     expect(result.details).toMatchObject({
       manualActionRequired: true,
       manualActionReason: "google-login-required",
+      spoken: false,
+      speechReady: false,
+      speechBlockedReason: "google-login-required",
       session: {
         chrome: {
           health: {
             manualActionRequired: true,
             manualActionReason: "google-login-required",
+            speechReady: false,
+            speechBlockedReason: "google-login-required",
           },
         },
       },
     });
+  });
+
+  it("refreshes browser health before blocking an explicit speech retry", async () => {
+    let openedTab = false;
+    let browserReady = false;
+    const { methods, nodesInvoke } = setup(
+      {
+        defaultTransport: "chrome-node",
+        defaultMode: "realtime",
+      },
+      {
+        nodesInvokeHandler: async ({ command, params }) => {
+          const raw = params as { path?: string; body?: { url?: string; targetId?: string } };
+          if (command === "browser.proxy") {
+            if (raw.path === "/tabs") {
+              return {
+                payload: {
+                  result: {
+                    running: true,
+                    tabs: openedTab
+                      ? [
+                          {
+                            targetId: "tab-1",
+                            title: "Meet",
+                            url: "https://meet.google.com/abc-defg-hij",
+                          },
+                        ]
+                      : [],
+                  },
+                },
+              };
+            }
+            if (raw.path === "/tabs/open") {
+              openedTab = true;
+              return {
+                payload: {
+                  result: {
+                    targetId: "tab-1",
+                    title: "Meet",
+                    url: raw.body?.url ?? "https://meet.google.com/abc-defg-hij",
+                  },
+                },
+              };
+            }
+            if (raw.path === "/tabs/focus" || raw.path === "/permissions/grant") {
+              return { payload: { result: { ok: true } } };
+            }
+            if (raw.path === "/act") {
+              return {
+                payload: {
+                  result: {
+                    ok: true,
+                    targetId: raw.body?.targetId ?? "tab-1",
+                    result: JSON.stringify(
+                      browserReady
+                        ? {
+                            inCall: true,
+                            micMuted: false,
+                            manualActionRequired: false,
+                            title: "Meet call",
+                            url: "https://meet.google.com/abc-defg-hij",
+                          }
+                        : {
+                            inCall: false,
+                            manualActionRequired: true,
+                            manualActionReason: "google-login-required",
+                            manualActionMessage:
+                              "Sign in to Google in the OpenClaw browser profile, then retry the Meet join.",
+                            title: "Sign in - Google Accounts",
+                            url: "https://accounts.google.com/signin",
+                          },
+                    ),
+                  },
+                },
+              };
+            }
+          }
+          if (command === "googlemeet.chrome") {
+            return { payload: { launched: true } };
+          }
+          throw new Error(`unexpected invoke ${command}`);
+        },
+      },
+    );
+
+    const join = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.join", {
+      url: "https://meet.google.com/abc-defg-hij",
+      message: "Say exactly: hello.",
+    })) as {
+      session: { id: string; chrome?: { health?: { speechBlockedReason?: string } } };
+      spoken: boolean;
+    };
+    expect(join.spoken).toBe(false);
+    expect(join.session.chrome?.health?.speechBlockedReason).toBe("google-login-required");
+
+    browserReady = true;
+    const retry = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.speak", {
+      sessionId: join.session.id,
+      message: "Say exactly: hello again.",
+    })) as {
+      found: boolean;
+      spoken: boolean;
+      session?: {
+        chrome?: {
+          health?: {
+            inCall?: boolean;
+            manualActionRequired?: boolean;
+            speechBlockedReason?: string;
+          };
+        };
+      };
+    };
+
+    expect(retry).toMatchObject({
+      found: true,
+      spoken: false,
+      session: {
+        chrome: {
+          health: {
+            inCall: true,
+            manualActionRequired: false,
+            speechBlockedReason: "audio-bridge-unavailable",
+          },
+        },
+      },
+    });
+    expect(nodesInvoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "browser.proxy",
+        params: expect.objectContaining({
+          path: "/tabs/focus",
+          body: { targetId: "tab-1" },
+        }),
+      }),
+    );
   });
 
   it("explains when chrome-node has no capable paired node", async () => {

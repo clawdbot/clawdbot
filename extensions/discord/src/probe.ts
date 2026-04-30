@@ -2,6 +2,7 @@ import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/text-runtime";
+import { DiscordApiError, fetchDiscord } from "./api.js";
 import { normalizeDiscordToken } from "./token.js";
 
 const DISCORD_API_BASE = "https://discord.com/api/v10";
@@ -40,31 +41,30 @@ async function fetchDiscordApplicationMe(
   fetcher: typeof fetch,
 ): Promise<{ id?: string; flags?: number } | undefined> {
   try {
-    const appResponse = await fetchDiscordApplicationMeResponse(token, timeoutMs, fetcher);
-    if (!appResponse || !appResponse.ok) {
+    const normalized = normalizeDiscordToken(token, "channels.discord.token");
+    if (!normalized) {
       return undefined;
     }
-    return (await appResponse.json()) as { id?: string; flags?: number };
+    return await fetchDiscord<{ id?: string; flags?: number }>(
+      "/oauth2/applications/@me",
+      normalized,
+      createDiscordTimeoutFetch(fetcher, timeoutMs),
+      { retry: { attempts: 1 } },
+    );
   } catch {
     return undefined;
   }
 }
 
-async function fetchDiscordApplicationMeResponse(
-  token: string,
-  timeoutMs: number,
-  fetcher: typeof fetch,
-): Promise<Response | undefined> {
-  const normalized = normalizeDiscordToken(token, "channels.discord.token");
-  if (!normalized) {
-    return undefined;
-  }
-  return await fetchWithTimeout(
-    `${DISCORD_API_BASE}/oauth2/applications/@me`,
-    { headers: { Authorization: `Bot ${normalized}` } },
-    timeoutMs,
-    getResolvedFetch(fetcher),
-  );
+function createDiscordTimeoutFetch(fetcher: typeof fetch, timeoutMs: number): typeof fetch {
+  const fetchImpl = getResolvedFetch(fetcher);
+  return ((input: RequestInfo | URL, init?: RequestInit) =>
+    fetchWithTimeout(
+      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url,
+      init ?? {},
+      timeoutMs,
+      fetchImpl,
+    )) as typeof fetch;
 }
 
 export function resolveDiscordPrivilegedIntentsFromFlags(
@@ -211,23 +211,27 @@ export async function fetchDiscordApplicationId(
   if (!normalized) {
     return undefined;
   }
+  const parsedApplicationId = parseApplicationIdFromToken(token);
+  if (parsedApplicationId) {
+    return parsedApplicationId;
+  }
   try {
-    const res = await fetchDiscordApplicationMeResponse(token, timeoutMs, fetcher);
-    if (!res) {
+    const json = await fetchDiscord<{ id?: string }>(
+      "/oauth2/applications/@me",
+      normalized,
+      createDiscordTimeoutFetch(fetcher, timeoutMs),
+    );
+    if (json?.id) {
+      return json.id;
+    }
+    return undefined;
+  } catch (error) {
+    if (error instanceof DiscordApiError) {
+      if (error.status === 429) {
+        throw error;
+      }
       return undefined;
     }
-    if (res.ok) {
-      const json = (await res.json()) as { id?: string };
-      if (json?.id) {
-        return json.id;
-      }
-    }
-    // Non-ok HTTP response (401, 403, etc.) — fail fast so credential
-    // errors surface immediately rather than being masked by the fallback.
     return undefined;
-  } catch {
-    // Transport / timeout error — fall back to extracting the application
-    // ID directly from the token to keep the bot starting.
-    return parseApplicationIdFromToken(token);
   }
 }

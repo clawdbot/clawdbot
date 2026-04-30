@@ -153,7 +153,7 @@ describe("DiscordMessageListener", () => {
 });
 
 describe("DiscordInteractionListener", () => {
-  it("returns immediately without awaiting Carbon interaction handling", async () => {
+  it("returns immediately without awaiting Discord interaction handling", async () => {
     const handlerDone = createDeferred();
     const handleInteraction = vi.fn(async () => {
       await handlerDone.promise;

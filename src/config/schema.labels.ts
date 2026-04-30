@@ -35,6 +35,9 @@ export const FIELD_LABELS: Record<string, string> = {
   "update.auto.stableDelayHours": "Auto Update Stable Delay (hours)",
   "update.auto.stableJitterHours": "Auto Update Stable Jitter (hours)",
   "update.auto.betaCheckIntervalHours": "Auto Update Beta Check Interval (hours)",
+  commitments: "Commitments",
+  "commitments.enabled": "Commitments Enabled",
+  "commitments.maxPerDay": "Commitments per Day",
   "diagnostics.enabled": "Diagnostics Enabled",
   "diagnostics.flags": "Diagnostics Flags",
   "diagnostics.stuckSessionWarnMs": "Stuck Session Warning Threshold (ms)",
@@ -300,6 +303,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.ssrfPolicy": "Web Fetch SSRF Policy",
   "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange":
     "Web Fetch Allow RFC 2544 Benchmark Range",
+  "tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange": "Web Fetch Allow IPv6 Unique Local Range",
   "gateway.controlUi.basePath": "Control UI Base Path",
   "gateway.controlUi.root": "Control UI Assets Root",
   "gateway.controlUi.embedSandbox": "Control UI Embed Sandbox Mode",
@@ -634,6 +638,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list.*.heartbeat.suppressToolErrorWarnings": "Heartbeat Suppress Tool Error Warnings",
   "agents.defaults.heartbeat.timeoutSeconds": "Heartbeat Timeout (Seconds)",
   "agents.list.*.heartbeat.timeoutSeconds": "Heartbeat Timeout (Seconds)",
+  "agents.defaults.heartbeat.skipWhenBusy": "Heartbeat Skip When Busy",
+  "agents.list.*.heartbeat.skipWhenBusy": "Heartbeat Skip When Busy",
   "agents.defaults.sandbox.browser.network": "Sandbox Browser Network",
   "agents.defaults.sandbox.browser.cdpSourceRange": "Sandbox Browser CDP Source Port Range",
   "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
@@ -825,6 +831,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "talk.silenceTimeoutMs": "Talk Silence Timeout (ms)",
   messages: "Messages",
   "messages.messagePrefix": "Inbound Message Prefix",
+  "messages.visibleReplies": "Visible Replies",
   "messages.responsePrefix": "Outbound Response Prefix",
   "messages.groupChat": "Group Chat Rules",
   "messages.groupChat.mentionPatterns": "Group Mention Patterns",
@@ -883,6 +890,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list[].heartbeat.suppressToolErrorWarnings":
     "Agent Heartbeat Suppress Tool Error Warnings",
   "agents.list[].heartbeat.timeoutSeconds": "Agent Heartbeat Timeout (Seconds)",
+  "agents.list[].heartbeat.skipWhenBusy": "Agent Heartbeat Skip When Busy",
   "agents.list[].sandbox.browser.network": "Agent Sandbox Browser Network",
   "agents.list[].sandbox.browser.cdpSourceRange": "Agent Sandbox Browser CDP Source Port Range",
   "agents.list[].sandbox.docker.dangerouslyAllowContainerNamespaceJoin":

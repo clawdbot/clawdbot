@@ -15,6 +15,7 @@ import {
   resolveOpenAIResponsesPayloadPolicy,
 } from "../openai-responses-payload-policy.js";
 import { resolveOpenAITextVerbosity, type OpenAITextVerbosity } from "../openai-text-verbosity.js";
+import { createOpenAIResponsesTransportStreamFn } from "../openai-transport-stream.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
 import { log } from "./logger.js";
 import { mapThinkingLevelToReasoningEffort } from "./reasoning-effort-utils.js";
@@ -489,6 +490,7 @@ export function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | und
 
 export function createOpenAIAttributionHeadersWrapper(
   baseStreamFn: StreamFn | undefined,
+  opts?: { codexNativeTransportStreamFn?: StreamFn },
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -496,7 +498,11 @@ export function createOpenAIAttributionHeadersWrapper(
     if (!attributionProvider) {
       return underlying(model, context, options);
     }
-    return underlying(model, context, {
+    const streamFn =
+      attributionProvider === "openai-codex"
+        ? (opts?.codexNativeTransportStreamFn ?? createOpenAIResponsesTransportStreamFn())
+        : underlying;
+    return streamFn(model, context, {
       ...options,
       headers: resolveProviderRequestPolicyConfig({
         provider: attributionProvider,

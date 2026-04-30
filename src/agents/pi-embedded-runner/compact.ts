@@ -9,7 +9,6 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   captureCompactionCheckpointSnapshot,
@@ -30,7 +29,6 @@ import {
   transformProviderSystemPrompt,
 } from "../../plugins/provider-runtime.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -44,7 +42,6 @@ import {
 } from "../bootstrap-files.js";
 import {
   listChannelSupportedActions,
-  resolveChannelMessageToolCapabilities,
   resolveChannelMessageToolHints,
   resolveChannelReactionGuidance,
 } from "../channel-tools.js";
@@ -79,6 +76,7 @@ import { applyPiCompactionSettingsFromConfig } from "../pi-settings.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
+import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
@@ -392,6 +390,7 @@ export async function compactEmbeddedPiSessionDirect(
       cfg: params.config,
       profileId: authProfileId,
       agentDir,
+      workspaceDir: resolvedWorkspace,
     });
 
     if (!apiKeyInfo.apiKey) {
@@ -574,7 +573,9 @@ export async function compactEmbeddedPiSessionDirect(
       modelCompat: extractModelCompat(effectiveModel),
       modelApi: model.api,
       modelContextWindowTokens: ctxInfo.tokens,
-      modelAuthMode: resolveModelAuthMode(model.provider, params.config),
+      modelAuthMode: resolveModelAuthMode(model.provider, params.config, undefined, {
+        workspaceDir: effectiveWorkspace,
+      }),
     });
     const toolsEnabled = supportsModelTools(runtimeModel);
     const runtimePlanModelContext = {
@@ -634,35 +635,11 @@ export async function compactEmbeddedPiSessionDirect(
     runtimePlan.tools.logDiagnostics(effectiveTools, runtimePlanModelContext);
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
-    let runtimeCapabilities = runtimeChannel
-      ? (resolveChannelCapabilities({
-          cfg: params.config,
-          channel: runtimeChannel,
-          accountId: params.agentAccountId,
-        }) ?? [])
-      : undefined;
-    const promptCapabilities =
-      runtimeChannel && params.config
-        ? resolveChannelMessageToolCapabilities({
-            cfg: params.config,
-            channel: runtimeChannel,
-            accountId: params.agentAccountId,
-          })
-        : [];
-    if (promptCapabilities.length > 0) {
-      runtimeCapabilities ??= [];
-      const seenCapabilities = new Set(
-        runtimeCapabilities.map((cap) => normalizeOptionalLowercaseString(cap)).filter(Boolean),
-      );
-      for (const capability of promptCapabilities) {
-        const normalizedCapability = normalizeOptionalLowercaseString(capability);
-        if (!normalizedCapability || seenCapabilities.has(normalizedCapability)) {
-          continue;
-        }
-        seenCapabilities.add(normalizedCapability);
-        runtimeCapabilities.push(capability);
-      }
-    }
+    const runtimeCapabilities = collectRuntimeChannelCapabilities({
+      cfg: params.config,
+      channel: runtimeChannel,
+      accountId: params.agentAccountId,
+    });
     const reactionGuidance =
       runtimeChannel && params.config
         ? resolveChannelReactionGuidance({

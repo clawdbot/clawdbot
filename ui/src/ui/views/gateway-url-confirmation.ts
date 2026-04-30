@@ -1,20 +1,29 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import type { AppViewState } from "../app-view-state.ts";
+import "../components/modal-dialog.ts";
 
 export function renderGatewayUrlConfirmation(state: AppViewState) {
   const { pendingGatewayUrl } = state;
   if (!pendingGatewayUrl) {
     return nothing;
   }
+  const titleId = "gateway-url-confirmation-title";
+  const descriptionId = "gateway-url-confirmation-description";
+  const title = t("channels.gatewayUrlConfirmation.title");
+  const description = t("channels.gatewayUrlConfirmation.subtitle");
 
   return html`
-    <div class="exec-approval-overlay" role="dialog" aria-modal="true" aria-live="polite">
+    <openclaw-modal-dialog
+      label=${title}
+      description=${description}
+      @modal-cancel=${() => state.handleGatewayUrlCancel()}
+    >
       <div class="exec-approval-card">
         <div class="exec-approval-header">
           <div>
-            <div class="exec-approval-title">${t("channels.gatewayUrlConfirmation.title")}</div>
-            <div class="exec-approval-sub">${t("channels.gatewayUrlConfirmation.subtitle")}</div>
+            <div id=${titleId} class="exec-approval-title">${title}</div>
+            <div id=${descriptionId} class="exec-approval-sub">${description}</div>
           </div>
         </div>
         <div class="exec-approval-command mono">${pendingGatewayUrl}</div>
@@ -30,6 +39,6 @@ export function renderGatewayUrlConfirmation(state: AppViewState) {
           </button>
         </div>
       </div>
-    </div>
+    </openclaw-modal-dialog>
   `;
 }

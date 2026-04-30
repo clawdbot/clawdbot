@@ -516,31 +516,58 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
     // Strip bot ship mention for CommandBody so "/status" is recognized as command-only
     const commandBody = isGroup ? stripBotMention(messageText, botShipName) : messageText;
+    const tlonConversationId = isGroup ? (groupChannel ?? channelNest ?? senderShip) : senderShip;
+    const rawTurnMessage = {
+      messageId,
+      messageText,
+      timestamp,
+    };
 
-    const ctxPayload = core.channel.reply.finalizeInboundContext({
-      Body: body,
-      RawBody: messageText,
-      CommandBody: commandBody,
-      From: isGroup ? `tlon:group:${groupChannel}` : `tlon:${senderShip}`,
-      To: `tlon:${botShipName}`,
-      SessionKey: route.sessionKey,
-      AccountId: route.accountId,
-      ChatType: isGroup ? "group" : "direct",
-      ConversationLabel: fromLabel,
-      SenderName: senderShip,
-      SenderId: senderShip,
-      SenderRole: senderRole,
-      CommandAuthorized: commandAuthorized,
-      CommandSource: "text" as const,
-      Provider: "tlon",
-      Surface: "tlon",
-      MessageSid: messageId,
-      // Include downloaded media attachments
-      ...(attachments.length > 0 && { Attachments: attachments }),
-      OriginatingChannel: "tlon",
-      OriginatingTo: `tlon:${isGroup ? groupChannel : botShipName}`,
-      // Include thread context for automatic reply routing
-      ...(parentId && { ThreadId: parentId, ReplyToId: parentId }),
+    const ctxPayload = core.channel.turn.buildContext({
+      channel: "tlon",
+      accountId: route.accountId,
+      messageId,
+      timestamp,
+      from: isGroup ? `tlon:group:${groupChannel}` : `tlon:${senderShip}`,
+      sender: {
+        id: senderShip,
+        name: senderShip,
+        roles: [senderRole],
+      },
+      conversation: {
+        kind: isGroup ? "group" : "direct",
+        id: tlonConversationId,
+        label: fromLabel,
+        routePeer: {
+          kind: isGroup ? "group" : "direct",
+          id: tlonConversationId,
+        },
+      },
+      route: {
+        agentId: route.agentId,
+        accountId: route.accountId,
+        routeSessionKey: route.sessionKey,
+      },
+      reply: {
+        to: `tlon:${botShipName}`,
+        originatingTo: `tlon:${isGroup ? groupChannel : botShipName}`,
+        replyToId: parentId ?? undefined,
+      },
+      message: {
+        body,
+        bodyForAgent: commandBody,
+        rawBody: messageText,
+        commandBody,
+        envelopeFrom: fromLabel,
+      },
+      extra: {
+        GroupSubject: undefined,
+        SenderRole: senderRole,
+        CommandAuthorized: commandAuthorized,
+        CommandSource: "text" as const,
+        ...(attachments.length > 0 && { Attachments: attachments }),
+        ...(parentId && { ThreadId: parentId }),
+      },
     });
 
     const dispatchStartTime = Date.now();
@@ -550,62 +577,100 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       route.agentId,
     ).responsePrefix;
     const humanDelay = core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId);
+    const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
+      agentId: route.agentId,
+    });
 
-    await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-      ctx: ctxPayload,
-      cfg,
-      dispatcherOptions: {
-        responsePrefix,
-        humanDelay,
-        deliver: async (payload: ReplyPayload) => {
-          let replyText = payload.text;
-          if (!replyText) {
-            return;
-          }
+    await core.channel.turn.run({
+      channel: "tlon",
+      accountId: route.accountId,
+      raw: rawTurnMessage,
+      adapter: {
+        ingest: (raw) => ({
+          id: raw.messageId,
+          timestamp: raw.timestamp,
+          rawText: raw.messageText,
+          textForAgent: commandBody,
+          textForCommands: commandBody,
+          raw,
+        }),
+        resolveTurn: () => ({
+          cfg,
+          channel: "tlon",
+          accountId: route.accountId,
+          agentId: route.agentId,
+          routeSessionKey: route.sessionKey,
+          storePath,
+          ctxPayload,
+          recordInboundSession: core.channel.session.recordInboundSession,
+          dispatchReplyWithBufferedBlockDispatcher:
+            core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+          delivery: {
+            deliver: async (payload: ReplyPayload) => {
+              let replyText = payload.text;
+              if (!replyText) {
+                return;
+              }
 
-          // Use settings store value if set, otherwise fall back to file config
-          const showSignature = effectiveShowModelSig;
-          if (showSignature) {
-            const extPayload = payload as {
-              metadata?: { model?: string };
-              model?: string;
-            };
-            const defaultModel = cfg.agents?.defaults?.model;
-            const modelInfo =
-              extPayload.metadata?.model ||
-              extPayload.model ||
-              (typeof defaultModel === "string" ? defaultModel : defaultModel?.primary);
-            replyText = `${replyText}\n\n_[Generated by ${formatModelName(modelInfo)}]_`;
-          }
+              // Use settings store value if set, otherwise fall back to file config
+              const showSignature = effectiveShowModelSig;
+              if (showSignature) {
+                const extPayload = payload as {
+                  metadata?: { model?: string };
+                  model?: string;
+                };
+                const defaultModel = cfg.agents?.defaults?.model;
+                const modelInfo =
+                  extPayload.metadata?.model ||
+                  extPayload.model ||
+                  (typeof defaultModel === "string" ? defaultModel : defaultModel?.primary);
+                replyText = `${replyText}\n\n_[Generated by ${formatModelName(modelInfo)}]_`;
+              }
 
-          if (isGroup && groupChannel) {
-            const parsed = parseChannelNest(groupChannel);
-            if (!parsed) {
-              return;
-            }
-            await sendGroupMessage({
-              api: api,
-              fromShip: botShipName,
-              hostShip: parsed.hostShip,
-              channelName: parsed.channelName,
-              text: replyText,
-              replyToId: parentId ?? undefined,
-            });
-            // Track thread participation for future replies without mention
-            if (parentId) {
-              participatedThreads.add(parentId);
-              runtime.log?.(`[tlon] Now tracking thread for future replies: ${parentId}`);
-            }
-          } else {
-            await sendDm({ api: api, fromShip: botShipName, toShip: senderShip, text: replyText });
-          }
-        },
-        onError: (err, info) => {
-          const dispatchDuration = Date.now() - dispatchStartTime;
-          runtime.error?.(
-            `[tlon] ${info.kind} reply failed after ${dispatchDuration}ms: ${String(err)}`,
-          );
-        },
+              if (isGroup && groupChannel) {
+                const parsed = parseChannelNest(groupChannel);
+                if (!parsed) {
+                  return;
+                }
+                await sendGroupMessage({
+                  api: api,
+                  fromShip: botShipName,
+                  hostShip: parsed.hostShip,
+                  channelName: parsed.channelName,
+                  text: replyText,
+                  replyToId: parentId ?? undefined,
+                });
+                // Track thread participation for future replies without mention
+                if (parentId) {
+                  participatedThreads.add(parentId);
+                  runtime.log?.(`[tlon] Now tracking thread for future replies: ${parentId}`);
+                }
+              } else {
+                await sendDm({
+                  api: api,
+                  fromShip: botShipName,
+                  toShip: senderShip,
+                  text: replyText,
+                });
+              }
+            },
+            onError: (err, info) => {
+              const dispatchDuration = Date.now() - dispatchStartTime;
+              runtime.error?.(
+                `[tlon] ${info.kind} reply failed after ${dispatchDuration}ms: ${String(err)}`,
+              );
+            },
+          },
+          dispatcherOptions: {
+            responsePrefix,
+            humanDelay,
+          },
+          record: {
+            onRecordError: (err) => {
+              runtime.error?.(`[tlon] failed updating session meta: ${String(err)}`);
+            },
+          },
+        }),
       },
     });
   };

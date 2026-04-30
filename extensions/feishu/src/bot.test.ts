@@ -175,6 +175,7 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
       session: {
         readSessionUpdatedAt: readSessionUpdatedAtMock,
         resolveStorePath: resolveStorePathMock,
+        recordInboundSession: vi.fn(async () => undefined),
       },
       reply: {
         resolveEnvelopeFormatOptions:
@@ -195,6 +196,21 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
         readAllowFromStore: vi.fn().mockResolvedValue(["ou_sender_1"]),
         upsertPairingRequest: vi.fn(),
         buildPairingReply: vi.fn(),
+      },
+      turn: {
+        run: vi.fn(async (params) => {
+          const input = await params.adapter.ingest(params.raw);
+          const turn = await params.adapter.resolveTurn(input, {
+            kind: "message",
+            canStartAgentTurn: true,
+          });
+          return {
+            dispatchResult: await turn.runDispatch(),
+          };
+        }),
+        runPrepared: vi.fn(async (params) => ({
+          dispatchResult: await params.runDispatch(),
+        })),
       },
       ...overrides.channel,
     },
@@ -2982,5 +2998,43 @@ describe("handleFeishuMessage command authorization", () => {
 
     await Promise.all([dispatchMessage({ cfg, event }), dispatchMessage({ cfg, event })]);
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips empty-text messages with no media to prevent blank user turns in session (#74634)", async () => {
+    // Feishu can deliver { "text": "" } events (empty-text or media-stripped
+    // messages). Writing blank user content to the session causes downstream
+    // LLM providers such as MiniMax to reject requests with "messages must not
+    // be empty". The handler should drop such events before queuing a reply.
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-empty-text-sender",
+        },
+      },
+      message: {
+        message_id: "msg-empty-text-74634",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        // Feishu encodes empty text as {"text":""}
+        content: JSON.stringify({ text: "" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    // No reply should be dispatched: empty message is silently skipped
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
   });
 });

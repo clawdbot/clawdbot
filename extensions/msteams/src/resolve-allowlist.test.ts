@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   listTeamsByName,
@@ -31,6 +31,14 @@ import {
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 
+beforeEach(() => {
+  listTeamsByName.mockReset();
+  listChannelsForTeam.mockReset();
+  normalizeQuery.mockImplementation((value: string) => value.trim().toLowerCase());
+  resolveGraphToken.mockReset().mockResolvedValue("graph-token");
+  searchGraphUsers.mockReset();
+});
+
 describe("resolveMSTeamsUserAllowlist", () => {
   it("marks empty input unresolved", async () => {
     const [result] = await resolveMSTeamsUserAllowlist({ cfg: {}, entries: ["  "] });
@@ -54,6 +62,39 @@ describe("resolveMSTeamsUserAllowlist", () => {
 });
 
 describe("resolveMSTeamsChannelAllowlist", () => {
+  it("keeps configured Teams conversation IDs resolved without Graph lookup", async () => {
+    const [result] = await resolveMSTeamsChannelAllowlist({
+      cfg: {},
+      entries: ["19:team-general@thread.skype/19:roadmap@thread.skype"],
+    });
+
+    expect(result).toEqual({
+      input: "19:team-general@thread.skype/19:roadmap@thread.skype",
+      resolved: true,
+      teamId: "19:team-general@thread.skype",
+      teamName: "19:team-general@thread.skype",
+      channelId: "19:roadmap@thread.skype",
+      channelName: "19:roadmap@thread.skype",
+    });
+    expect(resolveGraphToken).not.toHaveBeenCalled();
+    expect(listTeamsByName).not.toHaveBeenCalled();
+    expect(listChannelsForTeam).not.toHaveBeenCalled();
+  });
+
+  it("normalizes conversation-prefixed configured channel IDs", async () => {
+    const [result] = await resolveMSTeamsChannelAllowlist({
+      cfg: {},
+      entries: ["19:team-general@thread.tacv2/conversation:19:roadmap@thread.tacv2"],
+    });
+
+    expect(result).toMatchObject({
+      resolved: true,
+      teamId: "19:team-general@thread.tacv2",
+      channelId: "19:roadmap@thread.tacv2",
+    });
+    expect(resolveGraphToken).not.toHaveBeenCalled();
+  });
+
   it("resolves team/channel by team name + channel display name", async () => {
     // After the fix, listChannelsForTeam is called once and reused for both
     // General channel resolution and channel matching.

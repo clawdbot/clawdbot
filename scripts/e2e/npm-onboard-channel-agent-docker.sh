@@ -14,11 +14,11 @@ PACKAGE_TGZ="${OPENCLAW_CURRENT_PACKAGE_TGZ:-}"
 CHANNEL="${OPENCLAW_NPM_ONBOARD_CHANNEL:-telegram}"
 
 case "$CHANNEL" in
-  telegram | discord) ;;
-  *)
-    echo "OPENCLAW_NPM_ONBOARD_CHANNEL must be telegram or discord, got: $CHANNEL" >&2
-    exit 1
-    ;;
+telegram | discord) ;;
+*)
+  echo "OPENCLAW_NPM_ONBOARD_CHANNEL must be telegram or discord, got: $CHANNEL" >&2
+  exit 1
+  ;;
 esac
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" npm-onboard-channel-agent "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "$DOCKER_TARGET"
@@ -47,7 +47,7 @@ if ! docker_e2e_run_with_harness \
   -e OPENCLAW_NPM_ONBOARD_CHANNEL="$CHANNEL" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
-  -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
+  -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'; then
 set -euo pipefail
 
 source scripts/lib/openclaw-e2e-instance.sh
@@ -123,108 +123,14 @@ openclaw onboard --non-interactive --accept-risk \
   --skip-health \
   --json >/tmp/openclaw-onboard.json
 
-node - "$HOME" <<'NODE'
-const fs = require("node:fs");
-const path = require("node:path");
-
-const home = process.argv[2];
-const stateDir = path.join(home, ".openclaw");
-const configPath = path.join(stateDir, "openclaw.json");
-const agentDir = path.join(stateDir, "agents", "main", "agent");
-const authPath = path.join(agentDir, "auth-profiles.json");
-
-if (!fs.existsSync(configPath)) {
-  throw new Error("onboard did not write openclaw.json");
-}
-if (!fs.existsSync(agentDir)) {
-  throw new Error("onboard did not create main agent dir");
-}
-if (!fs.existsSync(authPath)) {
-  throw new Error("onboard did not create auth-profiles.json");
-}
-const authRaw = fs.readFileSync(authPath, "utf8");
-if (!authRaw.includes("OPENAI_API_KEY")) {
-  throw new Error("auth profile did not persist OPENAI_API_KEY env ref");
-}
-if (authRaw.includes("sk-openclaw-npm-onboard-e2e")) {
-  throw new Error("auth profile persisted the raw OpenAI test key");
-}
-NODE
-
-node - "$MOCK_PORT" <<'NODE'
-const fs = require("node:fs");
-const path = require("node:path");
-
-const mockPort = Number(process.argv[2]);
-const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
-const cfg = JSON.parse(fs.readFileSync(configPath, "utf8"));
-const modelRef = "openai/gpt-5.5";
-const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-
-cfg.models = {
-  ...(cfg.models || {}),
-  mode: "merge",
-  providers: {
-    ...(cfg.models?.providers || {}),
-    openai: {
-      ...(cfg.models?.providers?.openai || {}),
-      baseUrl: `http://127.0.0.1:${mockPort}/v1`,
-      apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-      api: "openai-responses",
-      request: { ...(cfg.models?.providers?.openai?.request || {}), allowPrivateNetwork: true },
-      models: [
-        {
-          id: "gpt-5.5",
-          name: "gpt-5.5",
-          api: "openai-responses",
-          reasoning: false,
-          input: ["text", "image"],
-          cost,
-          contextWindow: 128000,
-          contextTokens: 96000,
-          maxTokens: 4096,
-        },
-      ],
-    },
-  },
-};
-cfg.agents = {
-  ...(cfg.agents || {}),
-  defaults: {
-    ...(cfg.agents?.defaults || {}),
-    model: { primary: modelRef },
-    models: {
-      ...(cfg.agents?.defaults?.models || {}),
-      [modelRef]: { params: { transport: "sse", openaiWsWarmup: false } },
-    },
-  },
-};
-cfg.plugins = {
-  ...(cfg.plugins || {}),
-  enabled: true,
-};
-fs.writeFileSync(configPath, `${JSON.stringify(cfg, null, 2)}\n`);
-NODE
+node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-onboard-state "$HOME"
+node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs configure-mock-model "$MOCK_PORT"
 
 openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$package_root" "$HOME/.openclaw"
 
 echo "Configuring $CHANNEL..."
 openclaw channels add --channel "$CHANNEL" --token "$CHANNEL_TOKEN" >/tmp/openclaw-channel-add.log 2>&1
-node - "$CHANNEL" "$CHANNEL_TOKEN" <<'NODE'
-const fs = require("node:fs");
-const path = require("node:path");
-const channel = process.argv[2];
-const token = process.argv[3];
-const cfg = JSON.parse(fs.readFileSync(path.join(process.env.HOME, ".openclaw", "openclaw.json"), "utf8"));
-const entry = cfg.channels?.[channel];
-if (!entry || entry.enabled === false) {
-  throw new Error(`${channel} was not enabled`);
-}
-const serialized = JSON.stringify(entry);
-if (!serialized.includes(token)) {
-  throw new Error(`${channel} token was not persisted`);
-}
-NODE
+node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-channel-config "$CHANNEL" "$CHANNEL_TOKEN"
 
 echo "Running doctor after channel activation..."
 openclaw doctor --repair --non-interactive >/tmp/openclaw-doctor.log 2>&1
@@ -238,23 +144,10 @@ openclaw agent --local \
   --thinking off \
   --json >/tmp/openclaw-agent.combined 2>&1
 
-node - "$SUCCESS_MARKER" "$MOCK_REQUEST_LOG" <<'NODE'
-const fs = require("node:fs");
-const marker = process.argv[2];
-const logPath = process.argv[3];
-const output = fs.readFileSync("/tmp/openclaw-agent.combined", "utf8");
-if (!output.includes(marker)) {
-  throw new Error(`agent JSON did not contain success marker. Output: ${output}`);
-}
-const requestLog = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
-if (!/\/v1\/(responses|chat\/completions)/.test(requestLog)) {
-  throw new Error(`mock OpenAI server was not used. Requests: ${requestLog}`);
-}
-NODE
+node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-agent-turn "$SUCCESS_MARKER" "$MOCK_REQUEST_LOG"
 
 echo "npm tarball onboard/channel/agent Docker E2E passed for $CHANNEL"
 EOF
-then
   docker_e2e_print_log "$run_log"
   rm -f "$run_log"
   exit 1

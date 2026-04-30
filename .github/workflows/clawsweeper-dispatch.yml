@@ -37,11 +37,12 @@ jobs:
           private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
           owner: openclaw
           repositories: clawsweeper
+          permission-contents: write
 
       - name: Dispatch exact ClawSweeper review
         if: ${{ github.event_name != 'push' }}
         env:
-          GH_TOKEN: ${{ steps.token.outputs.token || secrets.OPENCLAW_GH_TOKEN }}
+          GH_TOKEN: ${{ steps.token.outputs.token }}
           TARGET_REPO: ${{ github.repository }}
           ITEM_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
           ITEM_KIND: ${{ github.event_name == 'pull_request_target' && 'pull_request' || 'issue' }}
@@ -49,7 +50,7 @@ jobs:
           SOURCE_ACTION: ${{ github.event.action }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo "::notice::Skipping ClawSweeper dispatch because no dispatch credential is configured."
+            echo "::notice::Skipping ClawSweeper dispatch because no ClawSweeper app token is configured. Not falling back to a maintainer token."
             exit 0
           fi
           payload="$(jq -nc \
@@ -71,7 +72,7 @@ jobs:
       - name: Dispatch ClawSweeper commit review
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.event.deleted != true }}
         env:
-          GH_TOKEN: ${{ steps.token.outputs.token || secrets.OPENCLAW_GH_TOKEN }}
+          GH_TOKEN: ${{ steps.token.outputs.token }}
           TARGET_REPO: ${{ github.repository }}
           BEFORE_SHA: ${{ github.event.before }}
           AFTER_SHA: ${{ github.sha }}
@@ -79,7 +80,7 @@ jobs:
           CREATE_CHECKS: ${{ vars.CLAWSWEEPER_COMMIT_REVIEW_CREATE_CHECKS || 'false' }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo "::notice::Skipping ClawSweeper commit dispatch because no dispatch credential is configured."
+            echo "::notice::Skipping ClawSweeper commit dispatch because no ClawSweeper app token is configured. Not falling back to a maintainer token."
             exit 0
           fi
           case "$CREATE_CHECKS" in

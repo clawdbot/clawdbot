@@ -23,8 +23,6 @@ wait_for_log() {
   local needle="$1"
   local timeout_s="${2:-45}"
   local quiet_on_timeout="${3:-false}"
-  local needle_compact
-  needle_compact="$(printf "%s" "$needle" | tr -cd "[:alpha:]")"
   local start_s
   start_s="$(date +%s)"
   while true; do
@@ -32,34 +30,7 @@ wait_for_log() {
       if grep -a -F -q "$needle" "$WIZARD_LOG_PATH"; then
         return 0
       fi
-      if NEEDLE=\"$needle_compact\" node --input-type=module -e "
-        import fs from \"node:fs\";
-        const file = process.env.WIZARD_LOG_PATH;
-        const needle = process.env.NEEDLE ?? \"\";
-        let text = \"\";
-        try { text = fs.readFileSync(file, \"utf8\"); } catch { process.exit(1); }
-        // Clack/script output can include lots of control sequences; keep a larger tail and strip ANSI more robustly.
-        if (text.length > 120000) text = text.slice(-120000);
-        const normalizeScriptOutput = (value) =>
-          value
-            // util-linux script can emit each byte on its own CRLF-delimited line.
-            // Collapse those first so ANSI/control stripping works on real sequences.
-            .replace(/\\r?\\n/g, \"\")
-            .replace(/\\r/g, \"\");
-        const stripAnsi = (value) =>
-          normalizeScriptOutput(value)
-            // OSC: ESC ] ... BEL or ESC \\
-            .replace(/\\x1b\\][^\\x07]*(?:\\x07|\\x1b\\\\)/g, \"\")
-            // CSI: ESC [ ... cmd
-            .replace(/\\x1b\\[[0-?]*[ -/]*[@-~]/g, \"\");
-        // Letters-only: script output sometimes fragments ANSI sequences into digits/letters that
-        // can otherwise break substring matching.
-        const compact = (value) => stripAnsi(value).toLowerCase().replace(/[^a-z]+/g, \"\");
-        const haystack = compact(text);
-        const compactNeedle = compact(needle);
-        if (!compactNeedle) process.exit(1);
-        process.exit(haystack.includes(compactNeedle) ? 0 : 1);
-      "; then
+      if node scripts/e2e/lib/onboard/log-contains.mjs "$WIZARD_LOG_PATH" "$needle"; then
         return 0
       fi
     fi
@@ -161,6 +132,13 @@ run_wizard() {
   run_wizard_cmd "$case_name" "$state_ref" "node \"$OPENCLAW_ENTRY\" onboard $ONBOARD_FLAGS" "$send_fn" true "$validate_fn"
 }
 
+assert_onboard_config() {
+  local scenario="$1"
+  shift
+  openclaw_e2e_assert_file "$OPENCLAW_CONFIG_PATH"
+  node scripts/e2e/lib/onboard/assert-config.mjs "$scenario" "$OPENCLAW_CONFIG_PATH" "$@"
+}
+
 set_isolated_openclaw_env() {
   local state_ref="$1"
   openclaw_test_state_create "$state_ref" empty
@@ -230,16 +208,14 @@ run_case_local_basic() {
 
   # Assert config + workspace scaffolding.
   workspace_dir="$OPENCLAW_STATE_DIR/workspace"
-  config_path="$OPENCLAW_CONFIG_PATH"
   sessions_dir="$OPENCLAW_STATE_DIR/agents/main/sessions"
 
-  openclaw_e2e_assert_file "$config_path"
   openclaw_e2e_assert_dir "$sessions_dir"
   for file in AGENTS.md BOOTSTRAP.md IDENTITY.md SOUL.md TOOLS.md USER.md; do
     openclaw_e2e_assert_file "$workspace_dir/$file"
   done
 
-  node scripts/e2e/lib/onboard/assert-config.mjs local-basic "$config_path" "$workspace_dir"
+  assert_onboard_config local-basic "$workspace_dir"
 
 }
 
@@ -253,25 +229,12 @@ run_case_remote_non_interactive() {
     --skip-skills \
     --skip-health
 
-  config_path="$OPENCLAW_CONFIG_PATH"
-  openclaw_e2e_assert_file "$config_path"
-
-  node scripts/e2e/lib/onboard/assert-config.mjs remote-non-interactive "$config_path"
+  assert_onboard_config remote-non-interactive
 }
 
 run_case_reset() {
   set_isolated_openclaw_env reset-config
-  # Seed a remote config to exercise reset path.
-  cat >"$OPENCLAW_CONFIG_PATH" <<'JSON'
-{
-"meta": {},
-"agents": { "defaults": { "workspace": "/root/old" } },
-"gateway": {
-  "mode": "remote",
-  "remote": { "url": "ws://old.example:18789", "token": "old-token" }
-}
-}
-JSON
+  node scripts/e2e/lib/onboard/write-config.mjs reset "$OPENCLAW_CONFIG_PATH"
 
   openclaw_e2e_run_logged reset-config node "$OPENCLAW_ENTRY" onboard \
     --non-interactive \
@@ -285,43 +248,25 @@ JSON
     --skip-ui \
     --skip-health
 
-  config_path="$OPENCLAW_CONFIG_PATH"
-  openclaw_e2e_assert_file "$config_path"
-
-  node scripts/e2e/lib/onboard/assert-config.mjs reset "$config_path"
+  assert_onboard_config reset
 }
 
 run_case_channels() {
   # Channels-only configure flow.
   run_wizard_cmd channels channels "node \"$OPENCLAW_ENTRY\" configure --section channels" send_channels_flow
 
-  config_path="$OPENCLAW_CONFIG_PATH"
-  openclaw_e2e_assert_file "$config_path"
-
-  node scripts/e2e/lib/onboard/assert-config.mjs channels "$config_path"
+  assert_onboard_config channels
 }
 
 run_case_skills() {
   local home_dir
   set_isolated_openclaw_env skills
   home_dir="$HOME"
-  # Seed skills config to ensure it survives the wizard.
-  cat >"$OPENCLAW_CONFIG_PATH" <<'JSON'
-{
-"meta": {},
-"skills": {
-  "allowBundled": ["__none__"],
-  "install": { "nodeManager": "bun" }
-}
-}
-JSON
+  node scripts/e2e/lib/onboard/write-config.mjs skills "$OPENCLAW_CONFIG_PATH"
 
   run_wizard_cmd skills "$home_dir" "node \"$OPENCLAW_ENTRY\" configure --section skills" send_skills_flow
 
-  config_path="$OPENCLAW_CONFIG_PATH"
-  openclaw_e2e_assert_file "$config_path"
-
-  node scripts/e2e/lib/onboard/assert-config.mjs skills "$config_path"
+  assert_onboard_config skills
 }
 
 validate_local_basic_log() {

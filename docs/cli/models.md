@@ -47,6 +47,11 @@ Notes:
 - `models list` is read-only: it reads config, auth profiles, existing catalog
   state, and provider-owned catalog rows, but it does not rewrite
   `models.json`.
+- The `Auth` column is provider-level and read-only. It is computed from local
+  auth profile metadata, env markers, configured provider keys, local-provider
+  markers, AWS Bedrock env/profile markers, and plugin synthetic-auth metadata;
+  it does not load provider runtime, read keychain secrets, call provider
+  APIs, or prove exact per-model execution readiness.
 - `models list --all --provider <id>` can include provider-owned static catalog
   rows from plugin manifests or bundled provider catalog metadata even when you
   have not authenticated with that provider yet. Those rows still show as

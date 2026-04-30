@@ -14,6 +14,29 @@ query-filters:
         - security
 
 paths:
+  - extensions/bluebubbles/src
+  - extensions/discord/src
+  - extensions/feishu/src
+  - extensions/googlechat/src
+  - extensions/imessage/src
+  - extensions/irc/src
+  - extensions/line/src
+  - extensions/matrix/src
+  - extensions/mattermost/src
+  - extensions/msteams/src
+  - extensions/nextcloud-talk/src
+  - extensions/nostr/src
+  - extensions/qa-channel/src
+  - extensions/qqbot/src
+  - extensions/signal/src
+  - extensions/slack/src
+  - extensions/synology-chat/src
+  - extensions/telegram/src
+  - extensions/tlon/src
+  - extensions/twitch/src
+  - extensions/whatsapp/src
+  - extensions/zalo/src
+  - extensions/zalouser/src
   - src/channels
 
 paths-ignore:

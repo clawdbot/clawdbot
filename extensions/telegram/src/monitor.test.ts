@@ -25,6 +25,7 @@ const api = {
   sendDocument: vi.fn(),
   setWebhook: vi.fn(),
   deleteWebhook: vi.fn(),
+  getWebhookInfo: vi.fn(async () => ({ url: "" })),
   getUpdates: vi.fn(async () => []),
   config: {
     use: vi.fn(),
@@ -43,24 +44,40 @@ const { initSpy, runSpy, getRuntimeConfigMock } = vi.hoisted(() => ({
   })),
 }));
 
-const { registerUnhandledRejectionHandlerMock, emitUnhandledRejection, resetUnhandledRejection } =
-  vi.hoisted(() => {
-    let handler: ((reason: unknown) => boolean) | undefined;
-    return {
-      registerUnhandledRejectionHandlerMock: vi.fn((next: (reason: unknown) => boolean) => {
-        handler = next;
-        return () => {
-          if (handler === next) {
-            handler = undefined;
-          }
-        };
-      }),
-      emitUnhandledRejection: (reason: unknown) => handler?.(reason) ?? false,
-      resetUnhandledRejection: () => {
-        handler = undefined;
-      },
-    };
-  });
+const {
+  registerUnhandledRejectionHandlerMock,
+  registerUncaughtExceptionHandlerMock,
+  emitUnhandledRejection,
+  emitUncaughtException,
+  resetProcessErrorHandlers,
+} = vi.hoisted(() => {
+  let unhandledRejectionHandler: ((reason: unknown) => boolean) | undefined;
+  let uncaughtExceptionHandler: ((error: unknown) => boolean) | undefined;
+  return {
+    registerUnhandledRejectionHandlerMock: vi.fn((next: (reason: unknown) => boolean) => {
+      unhandledRejectionHandler = next;
+      return () => {
+        if (unhandledRejectionHandler === next) {
+          unhandledRejectionHandler = undefined;
+        }
+      };
+    }),
+    registerUncaughtExceptionHandlerMock: vi.fn((next: (error: unknown) => boolean) => {
+      uncaughtExceptionHandler = next;
+      return () => {
+        if (uncaughtExceptionHandler === next) {
+          uncaughtExceptionHandler = undefined;
+        }
+      };
+    }),
+    emitUnhandledRejection: (reason: unknown) => unhandledRejectionHandler?.(reason) ?? false,
+    emitUncaughtException: (error: unknown) => uncaughtExceptionHandler?.(error) ?? false,
+    resetProcessErrorHandlers: () => {
+      unhandledRejectionHandler = undefined;
+      uncaughtExceptionHandler = undefined;
+    },
+  };
+});
 
 const { createTelegramBotErrors } = vi.hoisted(() => ({
   createTelegramBotErrors: [] as unknown[],
@@ -112,6 +129,16 @@ function makeRecoverableFetchError() {
   });
 }
 
+class MockHttpError extends Error {
+  constructor(
+    message: string,
+    public readonly error: unknown,
+  ) {
+    super(message);
+    this.name = "HttpError";
+  }
+}
+
 async function makeTaggedPollingFetchError() {
   const { tagTelegramNetworkError } = await import("./network-errors.js");
   const err = makeRecoverableFetchError();
@@ -120,6 +147,13 @@ async function makeTaggedPollingFetchError() {
     url: "https://api.telegram.org/bot123456:ABC/getUpdates",
   });
   return err;
+}
+
+async function makeTaggedPollingHttpError() {
+  return new MockHttpError(
+    "Network request for 'getUpdates' failed!",
+    await makeTaggedPollingFetchError(),
+  );
 }
 
 const createAbortTask = (
@@ -315,6 +349,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
     computeBackoff,
     sleepWithAbort,
     registerUnhandledRejectionHandler: registerUnhandledRejectionHandlerMock,
+    registerUncaughtExceptionHandler: registerUncaughtExceptionHandlerMock,
   };
 });
 
@@ -363,7 +398,8 @@ describe("monitorTelegramProvider (grammY)", () => {
       close: vi.fn(async () => undefined),
     }));
     registerUnhandledRejectionHandlerMock.mockClear();
-    resetUnhandledRejection();
+    registerUncaughtExceptionHandlerMock.mockClear();
+    resetProcessErrorHandlers();
     createTelegramBotErrors.length = 0;
     createdBotStops.length = 0;
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -463,12 +499,45 @@ describe("monitorTelegramProvider (grammY)", () => {
     const abort = new AbortController();
     const cleanupError = makeRecoverableFetchError();
     api.deleteWebhook.mockReset();
+    api.getWebhookInfo.mockReset().mockResolvedValueOnce({ url: "https://example.test/hook" });
     api.deleteWebhook.mockRejectedValueOnce(cleanupError).mockResolvedValueOnce(true);
     mockRunOnceAndAbort(abort);
 
     await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
 
     expect(api.deleteWebhook).toHaveBeenCalledTimes(2);
+    expect(api.getWebhookInfo).toHaveBeenCalledTimes(1);
+    expectRecoverableRetryState(1);
+  });
+
+  it("continues polling when deleteWebhook transiently fails but webhook is already absent", async () => {
+    const abort = new AbortController();
+    const cleanupError = makeRecoverableFetchError();
+    api.deleteWebhook.mockReset();
+    api.getWebhookInfo.mockReset().mockResolvedValueOnce({ url: "" });
+    api.deleteWebhook.mockRejectedValueOnce(cleanupError);
+    mockRunOnceAndAbort(abort);
+
+    await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+
+    expect(api.deleteWebhook).toHaveBeenCalledTimes(1);
+    expect(api.getWebhookInfo).toHaveBeenCalledTimes(1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(sleepWithAbort).not.toHaveBeenCalled();
+  });
+
+  it("retries cleanup when deleteWebhook and webhook confirmation both transiently fail", async () => {
+    const abort = new AbortController();
+    const cleanupError = makeRecoverableFetchError();
+    api.deleteWebhook.mockReset();
+    api.getWebhookInfo.mockReset().mockRejectedValueOnce(makeRecoverableFetchError());
+    api.deleteWebhook.mockRejectedValueOnce(cleanupError).mockResolvedValueOnce(true);
+    mockRunOnceAndAbort(abort);
+
+    await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+
+    expect(api.deleteWebhook).toHaveBeenCalledTimes(2);
+    expect(api.getWebhookInfo).toHaveBeenCalledTimes(1);
     expectRecoverableRetryState(1);
   });
 
@@ -625,6 +694,38 @@ describe("monitorTelegramProvider (grammY)", () => {
     expectRecoverableRetryState(2);
   });
 
+  it("force-restarts polling when uncaught network exception stalls runner", async () => {
+    const abort = new AbortController();
+    const firstCycle = mockRunOnceWithStalledPollingRunner();
+    const secondCycle = mockRunOnceWithStalledPollingRunner();
+
+    const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+    await firstCycle.waitForRunStart();
+
+    expect(emitUncaughtException(await makeTaggedPollingFetchError())).toBe(true);
+    expect(firstCycle.stop).toHaveBeenCalledTimes(1);
+    await secondCycle.waitForRunStart();
+    abort.abort();
+    await monitor;
+    expectRecoverableRetryState(2);
+  });
+
+  it("force-restarts polling when uncaught polling HttpError stalls runner", async () => {
+    const abort = new AbortController();
+    const firstCycle = mockRunOnceWithStalledPollingRunner();
+    const secondCycle = mockRunOnceWithStalledPollingRunner();
+
+    const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+    await firstCycle.waitForRunStart();
+
+    expect(emitUncaughtException(await makeTaggedPollingHttpError())).toBe(true);
+    expect(firstCycle.stop).toHaveBeenCalledTimes(1);
+    await secondCycle.waitForRunStart();
+    abort.abort();
+    await monitor;
+    expectRecoverableRetryState(2);
+  });
+
   it("rebuilds the resolved transport after a stalled polling restart", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
@@ -740,11 +841,13 @@ describe("monitorTelegramProvider (grammY)", () => {
   });
 
   it("passes configured webhookHost to webhook listener", async () => {
+    const setStatus = vi.fn();
     await monitorTelegramProvider({
       token: "tok",
       useWebhook: true,
       webhookUrl: "https://example.test/telegram",
       webhookSecret: "secret",
+      setStatus,
       config: {
         agents: { defaults: { maxConcurrent: 2 } },
         channels: {
@@ -758,6 +861,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(startTelegramWebhookSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         host: "0.0.0.0",
+        setStatus,
       }),
     );
     expect(runSpy).not.toHaveBeenCalled();

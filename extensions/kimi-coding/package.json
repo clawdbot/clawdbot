@@ -5,7 +5,7 @@
   "description": "OpenClaw Kimi provider plugin",
   "type": "module",
   "dependencies": {
-    "@mariozechner/pi-ai": "0.70.5"
+    "@mariozechner/pi-ai": "0.70.6"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

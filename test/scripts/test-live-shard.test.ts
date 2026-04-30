@@ -92,6 +92,12 @@ describe("scripts/test-live-shard", () => {
     expect(selectLiveShardFiles("native-live-extensions-openai", allFiles)).toEqual(
       expect.arrayContaining(["extensions/openai/openai-provider.live.test.ts"]),
     );
+    expect(selectLiveShardFiles("native-live-extensions-l-n", allFiles)).not.toEqual(
+      expect.arrayContaining(["extensions/moonshot/moonshot.live.test.ts"]),
+    );
+    expect(selectLiveShardFiles("native-live-extensions-moonshot", allFiles)).toEqual([
+      "extensions/moonshot/moonshot.live.test.ts",
+    ]);
   });
 
   it("rejects unknown shard names", () => {

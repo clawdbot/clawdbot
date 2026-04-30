@@ -178,6 +178,13 @@ describe("directive parsing", () => {
     expect(res.cleaned).toBe("please now");
   });
 
+  it("keeps legacy queue directive as queue mode", () => {
+    const res = extractQueueDirective("please /queue queue now");
+    expect(res.hasDirective).toBe(true);
+    expect(res.queueMode).toBe("queue");
+    expect(res.cleaned).toBe("please now");
+  });
+
   it("strips inline /model and /think directives while keeping user text", () => {
     expect(parseInlineDirectives("please sync /model openai/gpt-4.1-mini now")).toMatchObject({
       cleaned: "please sync now",

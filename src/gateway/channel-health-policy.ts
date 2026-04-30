@@ -10,6 +10,7 @@ export type ChannelHealthSnapshot = {
   activeRuns?: number;
   lastRunActivityAt?: number | null;
   lastEventAt?: number | null;
+  lastConnectedAt?: number | null;
   lastTransportActivityAt?: number | null;
   lastStartAt?: number | null;
   reconnectAttempts?: number;

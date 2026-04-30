@@ -219,14 +219,12 @@ export function normalizeCompatibilityConfig({
   const changes: string[] = [];
   let updated = rawEntry;
   let changed = false;
-  const shouldPromoteRootDmAllowFrom = !asObjectRecord(updated.accounts);
 
   const aliases = normalizeLegacyChannelAliases({
     entry: rawEntry,
     pathPrefix: "channels.discord",
     changes,
     normalizeDm: true,
-    rootDmPromoteAllowFrom: shouldPromoteRootDmAllowFrom,
     normalizeAccountDm: true,
     resolveStreamingOptions: (entry) => ({
       resolvedMode: resolveDiscordPreviewStreamMode(entry),

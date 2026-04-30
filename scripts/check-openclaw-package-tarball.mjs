@@ -6,8 +6,10 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "./lib/local-build-metadata-paths.mjs";
 import {
+  collectPackageDistImports,
   collectPackageDistImportErrors,
   expandPackageDistImportClosure,
 } from "./lib/package-dist-imports.mjs";
@@ -29,20 +31,37 @@ if (!fs.existsSync(tarball)) {
   fail(`OpenClaw package tarball does not exist: ${tarball}`);
 }
 
-const list = spawnSync("tar", ["-tf", tarball], {
-  encoding: "utf8",
-  stdio: ["ignore", "pipe", "pipe"],
-});
+const phaseTimingsEnabled = process.env.OPENCLAW_PACKAGE_TARBALL_CHECK_TIMINGS !== "0";
+function runPhase(label, action) {
+  const startedAt = performance.now();
+  try {
+    return action();
+  } finally {
+    if (phaseTimingsEnabled) {
+      const durationMs = Math.round(performance.now() - startedAt);
+      console.error(`check-openclaw-package-tarball: ${label} completed in ${durationMs}ms`);
+    }
+  }
+}
+
+const list = runPhase("tar list", () =>
+  spawnSync("tar", ["-tf", tarball], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }),
+);
 if (list.status !== 0) {
   fail(`tar -tf failed for ${tarball}: ${list.stderr || list.status}`);
 }
 
 const extractDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-tarball-"));
 try {
-  const extract = spawnSync("tar", ["-xf", tarball, "-C", extractDir], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const extract = runPhase("tar extract", () =>
+    spawnSync("tar", ["-xf", tarball, "-C", extractDir], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }),
+  );
   if (extract.status !== 0) {
     fail(`tar -xf failed for ${tarball}: ${extract.stderr || extract.status}`);
   }
@@ -181,6 +200,7 @@ for (const forbiddenEntry of FORBIDDEN_LOCAL_BUILD_METADATA_FILES) {
 if (!entrySet.has("dist/postinstall-inventory.json")) {
   errors.push("missing dist/postinstall-inventory.json");
 }
+let packageDistImports = null;
 if (entrySet.has("dist/postinstall-inventory.json")) {
   try {
     const allowLegacyPrivateQaInventoryOmissions =
@@ -191,6 +211,12 @@ if (entrySet.has("dist/postinstall-inventory.json")) {
     } else {
       const normalizedInventory = inventory.map((entry) => entry.replace(/\\/gu, "/"));
       const normalizedInventorySet = new Set(normalizedInventory);
+      packageDistImports = runPhase("dist import graph", () =>
+        collectPackageDistImports({
+          files: normalized,
+          readText: readTarEntry,
+        }),
+      );
       for (const inventoryEntry of inventory) {
         const normalizedEntry = inventoryEntry.replace(/\\/gu, "/");
         if (!entrySet.has(normalizedEntry)) {
@@ -210,6 +236,7 @@ if (entrySet.has("dist/postinstall-inventory.json")) {
         files: normalized,
         seedFiles: normalizedInventory,
         readText: readTarEntry,
+        imports: packageDistImports,
       });
       for (const importedEntry of expandedInventory) {
         if (!normalizedInventorySet.has(importedEntry)) {
@@ -230,6 +257,7 @@ errors.push(
   ...collectPackageDistImportErrors({
     files: normalized,
     readText: readTarEntry,
+    imports: packageDistImports ?? undefined,
   }),
 );
 

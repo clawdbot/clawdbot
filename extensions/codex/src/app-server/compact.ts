@@ -125,6 +125,7 @@ async function compactCodexNativeThread(
   const client = await clientFactory(
     appServer.start,
     requestedAuthProfileId ?? binding.authProfileId,
+    params.agentDir,
   );
   const waiter = createCodexNativeCompactionWaiter(client, binding.threadId);
   let completion: CodexNativeCompactionCompletion;

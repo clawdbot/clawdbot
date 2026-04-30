@@ -1,4 +1,5 @@
 import { parseAvailableTags, readNumberParam, readStringParam } from "../runtime-api.js";
+import type { OpenClawConfig } from "../runtime-api.js";
 import type {
   DiscordChannelCreate,
   DiscordChannelEdit,
@@ -22,6 +23,20 @@ function readDiscordBooleanParam(
   key: string,
 ): boolean | undefined {
   return typeof params[key] === "boolean" ? params[key] : undefined;
+}
+
+export function createDiscordActionOptions<
+  T extends Record<string, unknown> = Record<string, never>,
+>(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+  extra?: T;
+}): { cfg: OpenClawConfig; accountId?: string } & T {
+  return {
+    cfg: params.cfg,
+    ...(params.accountId ? { accountId: params.accountId } : {}),
+    ...(params.extra ?? ({} as T)),
+  };
 }
 
 export function readDiscordChannelCreateParams(

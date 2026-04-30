@@ -1,3 +1,4 @@
+import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
 import {
   createRealtimeTranscriptionWebSocketSession,
   type RealtimeTranscriptionProviderConfig,
@@ -107,7 +108,16 @@ function createOpenAIRealtimeTranscriptionSession(
     providerId: "openai",
     callbacks: config,
     url: OPENAI_REALTIME_TRANSCRIPTION_URL,
-    headers: {
+    headers: resolveProviderRequestHeaders({
+      provider: "openai",
+      baseUrl: OPENAI_REALTIME_TRANSCRIPTION_URL,
+      capability: "audio",
+      transport: "websocket",
+      defaultHeaders: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "OpenAI-Beta": "realtime=v1",
+      },
+    }) ?? {
       Authorization: `Bearer ${config.apiKey}`,
       "OpenAI-Beta": "realtime=v1",
     },

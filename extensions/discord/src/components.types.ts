@@ -1,4 +1,4 @@
-import type { TopLevelComponents } from "@buape/carbon";
+import type { TopLevelComponents } from "./internal/discord.js";
 
 export type DiscordComponentButtonStyle = "primary" | "secondary" | "success" | "danger" | "link";
 

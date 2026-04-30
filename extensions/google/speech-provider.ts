@@ -107,6 +107,25 @@ class GoogleTtsRetryableError extends Error {
   }
 }
 
+function isGoogleTtsRetryableError(err: unknown): boolean {
+  if (err instanceof GoogleTtsRetryableError) {
+    return true;
+  }
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  if (err.name === "AbortError") {
+    return true;
+  }
+  const message = err.message.toLowerCase();
+  return (
+    message.includes("aborted") ||
+    message.includes("timeout") ||
+    message.includes("fetch failed") ||
+    message.includes("network")
+  );
+}
+
 function normalizeGoogleTtsModel(model: unknown): string {
   const trimmed = normalizeOptionalString(model);
   if (!trimmed) {
@@ -509,7 +528,7 @@ async function synthesizeGoogleTtsPcm(params: {
       return await synthesizeGoogleTtsPcmOnce(params);
     } catch (err) {
       lastError = err;
-      if (!(err instanceof GoogleTtsRetryableError) || attempt > 0) {
+      if (!isGoogleTtsRetryableError(err) || attempt > 0) {
         throw err;
       }
     }

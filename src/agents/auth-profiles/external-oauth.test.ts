@@ -11,7 +11,7 @@ const resolveExternalAuthProfilesWithPluginsMock = vi.fn<
   (params: unknown) => ProviderExternalAuthProfile[]
 >(() => []);
 const readCodexCliCredentialsCachedMock = vi.hoisted(() =>
-  vi.fn<() => OAuthCredential | null>(() => null),
+  vi.fn<(_options?: unknown) => OAuthCredential | null>(() => null),
 );
 
 vi.mock("../cli-credentials.js", () => ({
@@ -68,6 +68,29 @@ describe("auth external oauth helpers", () => {
       provider: "openai-codex",
       access: "access-token",
     });
+  });
+
+  it("passes config and CLI scope through overlay resolution", () => {
+    const cfg = {
+      models: {
+        providers: { "openai-codex": { auth: "oauth" as const, baseUrl: "", models: [] } },
+      },
+    };
+    readCodexCliCredentialsCachedMock.mockReturnValueOnce(createCredential());
+
+    overlayExternalOAuthProfiles(createStore(), {
+      allowKeychainPrompt: false,
+      config: cfg,
+      externalCliProviderIds: ["openai-codex"],
+    });
+
+    expect(resolveExternalAuthProfilesWithPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: cfg,
+        context: expect.objectContaining({ config: cfg }),
+      }),
+    );
+    expect(readCodexCliCredentialsCachedMock).toHaveBeenCalledTimes(1);
   });
 
   it("omits exact runtime-only overlays from persisted store writes", () => {

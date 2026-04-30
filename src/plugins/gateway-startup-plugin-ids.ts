@@ -146,26 +146,34 @@ function shouldConsiderForGatewayStartup(params: {
 
 function hasConfiguredStartupChannel(params: {
   plugin: InstalledPluginIndexRecord;
-  manifestRegistry: PluginManifestRegistry;
+  manifestLookup: ManifestRegistryLookup;
   configuredChannelIds: ReadonlySet<string>;
 }): boolean {
-  return listManifestChannelIds(params.manifestRegistry, params.plugin.pluginId).some((channelId) =>
+  return listManifestChannelIds(params.manifestLookup, params.plugin.pluginId).some((channelId) =>
     params.configuredChannelIds.has(channelId),
   );
 }
 
-function listManifestChannelIds(
+type ManifestRegistryLookup = ReadonlyMap<string, PluginManifestRecord>;
+
+function createManifestRegistryLookup(
   manifestRegistry: PluginManifestRegistry,
+): ManifestRegistryLookup {
+  return new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin]));
+}
+
+function listManifestChannelIds(
+  manifestLookup: ManifestRegistryLookup,
   pluginId: string,
 ): readonly string[] {
-  return manifestRegistry.plugins.find((plugin) => plugin.id === pluginId)?.channels ?? [];
+  return manifestLookup.get(pluginId)?.channels ?? [];
 }
 
 function findManifestPlugin(
-  manifestRegistry: PluginManifestRegistry,
+  manifestLookup: ManifestRegistryLookup,
   pluginId: string,
 ): PluginManifestRecord | undefined {
-  return manifestRegistry.plugins.find((plugin) => plugin.id === pluginId);
+  return manifestLookup.get(pluginId);
 }
 
 function hasConfiguredActivationPath(params: {
@@ -223,7 +231,7 @@ function canStartConfiguredChannelPlugin(params: {
     plugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
     rootConfig?: OpenClawConfig;
   };
-  manifestRegistry: PluginManifestRegistry;
+  manifestLookup: ManifestRegistryLookup;
 }): boolean {
   if (!params.pluginsConfig.enabled) {
     return false;
@@ -236,7 +244,7 @@ function canStartConfiguredChannelPlugin(params: {
   }
   const explicitBundledChannelConfig =
     params.plugin.origin === "bundled" &&
-    listManifestChannelIds(params.manifestRegistry, params.plugin.pluginId).some((channelId) =>
+    listManifestChannelIds(params.manifestLookup, params.plugin.pluginId).some((channelId) =>
       hasExplicitChannelConfig({
         config: params.activationSource.rootConfig ?? params.config,
         channelId,
@@ -309,12 +317,13 @@ export function resolveConfiguredDeferredChannelPluginIdsFromRegistry(params: {
     plugins: pluginsConfig,
     rootConfig: params.config,
   };
+  const manifestLookup = createManifestRegistryLookup(params.manifestRegistry);
   return params.index.plugins
     .filter(
       (plugin) =>
         hasConfiguredStartupChannel({
           plugin,
-          manifestRegistry: params.manifestRegistry,
+          manifestLookup,
           configuredChannelIds,
         }) &&
         plugin.startup.deferConfiguredChannelFullLoadUntilAfterListen &&
@@ -323,7 +332,7 @@ export function resolveConfiguredDeferredChannelPluginIdsFromRegistry(params: {
           config: params.config,
           pluginsConfig,
           activationSource,
-          manifestRegistry: params.manifestRegistry,
+          manifestLookup,
         }),
     )
     .map((plugin) => plugin.pluginId);
@@ -385,6 +394,7 @@ export function resolveGatewayStartupPluginIdsFromRegistry(params: {
   const disableLegacyImplicitStartupSidecars = shouldDisableLegacyImplicitStartupSidecars(
     params.env,
   );
+  const manifestLookup = createManifestRegistryLookup(params.manifestRegistry);
   const memorySlotStartupPluginId = resolveMemorySlotStartupPluginId({
     activationSourceConfig,
     activationSourcePlugins,
@@ -394,11 +404,11 @@ export function resolveGatewayStartupPluginIdsFromRegistry(params: {
   });
   return params.index.plugins
     .filter((plugin) => {
-      const manifest = findManifestPlugin(params.manifestRegistry, plugin.pluginId);
+      const manifest = findManifestPlugin(manifestLookup, plugin.pluginId);
       if (
         hasConfiguredStartupChannel({
           plugin,
-          manifestRegistry: params.manifestRegistry,
+          manifestLookup,
           configuredChannelIds,
         })
       ) {
@@ -407,7 +417,7 @@ export function resolveGatewayStartupPluginIdsFromRegistry(params: {
           config: params.config,
           pluginsConfig,
           activationSource,
-          manifestRegistry: params.manifestRegistry,
+          manifestLookup,
         });
       }
       if (

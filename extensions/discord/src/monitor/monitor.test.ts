@@ -1,14 +1,14 @@
-import type {
-  ButtonInteraction,
-  ComponentData,
-  ModalInteraction,
-  StringSelectMenuInteraction,
-} from "@buape/carbon";
 import { ChannelType } from "discord-api-types/v10";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { buildPluginBindingApprovalCustomId } from "openclaw/plugin-sdk/conversation-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { type DiscordComponentEntry, type DiscordModalEntry } from "../components.js";
+import type {
+  ButtonInteraction,
+  ComponentData,
+  ModalInteraction,
+  StringSelectMenuInteraction,
+} from "../internal/discord.js";
 import {
   dispatchPluginInteractiveHandlerMock,
   dispatchReplyMock,

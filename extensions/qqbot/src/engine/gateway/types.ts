@@ -52,6 +52,13 @@ export interface GatewayPluginRuntime {
       formatInboundEnvelope: (params: unknown) => string;
       resolveEnvelopeFormatOptions: (cfg: unknown) => unknown;
     };
+    session: {
+      resolveStorePath: (store: unknown, params: { agentId: string }) => string;
+      recordInboundSession: (params: unknown) => Promise<unknown>;
+    };
+    turn: {
+      run: (params: unknown) => Promise<unknown>;
+    };
     text: {
       chunkMarkdownText: (text: string, limit: number) => string[];
     };

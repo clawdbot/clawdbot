@@ -25,6 +25,7 @@ import { MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
 
 export { MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
 const CODEX_APP_SERVER_PARSE_LOG_MAX = 500;
+const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 30_000;
 
 type PendingRequest = {
   method: string;
@@ -251,7 +252,13 @@ export class CodexAppServerClient {
     if (this.closed) {
       return;
     }
-    this.child.stdin.write(`${JSON.stringify(message)}\n`);
+    const id = "id" in message ? message.id : undefined;
+    const method = "method" in message ? message.method : undefined;
+    this.child.stdin.write(`${JSON.stringify(message)}\n`, (error?: Error | null) => {
+      if (error) {
+        embeddedAgentLog.warn("codex app-server write failed", { error, id, method });
+      }
+    });
   }
 
   private handleLine(line: string): void {
@@ -311,12 +318,10 @@ export class CodexAppServerClient {
     request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
   ): Promise<void> {
     try {
-      for (const handler of this.requestHandlers) {
-        const result = await handler(request);
-        if (result !== undefined) {
-          this.writeMessage({ id: request.id, result });
-          return;
-        }
+      const result = await this.runServerRequestHandlers(request);
+      if (result !== undefined) {
+        this.writeMessage({ id: request.id, result });
+        return;
       }
       this.writeMessage({ id: request.id, result: defaultServerRequestResponse(request) });
     } catch (error) {
@@ -327,6 +332,49 @@ export class CodexAppServerClient {
         },
       });
     }
+  }
+
+  private async runServerRequestHandlers(
+    request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
+  ): Promise<JsonValue | undefined> {
+    const timeoutResponse = timeoutServerRequestResponse(request);
+    if (!timeoutResponse) {
+      return await this.runServerRequestHandlersWithoutTimeout(request);
+    }
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        this.runServerRequestHandlersWithoutTimeout(request),
+        new Promise<JsonValue>((resolve) => {
+          timeout = setTimeout(() => {
+            embeddedAgentLog.warn("codex app-server server request timed out", {
+              id: request.id,
+              method: request.method,
+              timeoutMs: CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
+            });
+            resolve(timeoutResponse);
+          }, CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS);
+          timeout.unref?.();
+        }),
+      ]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
+  }
+
+  private async runServerRequestHandlersWithoutTimeout(
+    request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
+  ): Promise<JsonValue | undefined> {
+    for (const handler of this.requestHandlers) {
+      const result = await handler(request);
+      if (result !== undefined) {
+        return result;
+      }
+    }
+    return undefined;
   }
 
   private handleNotification(notification: CodexServerNotification): void {
@@ -405,6 +453,23 @@ export function defaultServerRequestResponse(
     };
   }
   return {};
+}
+
+function timeoutServerRequestResponse(
+  request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
+): JsonValue | undefined {
+  if (request.method !== "item/tool/call") {
+    return undefined;
+  }
+  return {
+    contentItems: [
+      {
+        type: "inputText",
+        text: `OpenClaw dynamic tool call timed out after ${CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS}ms before sending a response to Codex.`,
+      },
+    ],
+    success: false,
+  };
 }
 
 function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse): void {
@@ -505,5 +570,6 @@ function formatExitValue(value: unknown): string {
 export const __testing = {
   closeCodexAppServerTransport,
   closeCodexAppServerTransportAndWait,
+  CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
   redactCodexAppServerLinePreview,
 } as const;

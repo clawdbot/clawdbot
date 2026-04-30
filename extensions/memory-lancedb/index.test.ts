@@ -2160,6 +2160,101 @@ describe("memory plugin e2e", () => {
     expect(detectCategory("The server is running on port 3000")).toBe("fact");
     expect(detectCategory("Random note")).toBe("other");
   });
+
+  test("memory_forget candidate list shows full UUIDs, not truncated IDs", async () => {
+    const fakeUuid1 = "890e1fae-1234-5678-abcd-ef0123456789";
+    const fakeUuid2 = "a1b2c3d4-5678-9abc-def0-1234567890ab";
+
+    // LanceDB vectorSearch returns rows with _distance; score = 1/(1+d)
+    // We want scores between 0.7 and 0.9 so candidates are returned (not auto-deleted)
+    // score=0.85 => d = 1/0.85 - 1 ≈ 0.176; score=0.80 => d = 1/0.80 - 1 = 0.25
+    const fakeRows = [
+      {
+        id: fakeUuid1,
+        text: "User prefers dark mode",
+        category: "preference",
+        vector: [0.1],
+        importance: 0.8,
+        createdAt: Date.now(),
+        _distance: 0.176,
+      },
+      {
+        id: fakeUuid2,
+        text: "User lives in New York",
+        category: "fact",
+        vector: [0.2],
+        importance: 0.7,
+        createdAt: Date.now(),
+        _distance: 0.25,
+      },
+    ];
+
+    const toArray = vi.fn(async () => fakeRows);
+    const limitFn = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => ({ limit: limitFn }));
+
+    vi.resetModules();
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        post = vi.fn(async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
+      },
+    }));
+    vi.doMock("@lancedb/lancedb", () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          vectorSearch,
+          countRows: vi.fn(async () => 2),
+          add: vi.fn(async () => undefined),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    try {
+      const { default: memoryPlugin } = await import("./index.js");
+      const registeredTools: any[] = [];
+      const mockApi = {
+        id: "memory-lancedb",
+        name: "Memory (LanceDB)",
+        source: "test",
+        config: {},
+        pluginConfig: {
+          embedding: { apiKey: OPENAI_API_KEY, model: "text-embedding-3-small" },
+          dbPath: getDbPath(),
+          autoCapture: false,
+          autoRecall: false,
+        },
+        runtime: {},
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+        registerTool: (tool: any, opts: any) => {
+          registeredTools.push({ tool, opts });
+        },
+        registerCli: vi.fn(),
+        registerService: vi.fn(),
+        on: vi.fn(),
+        resolvePath: (p: string) => p,
+      };
+
+      memoryPlugin.register(mockApi as any);
+      const forgetTool = registeredTools.find((t) => t.opts?.name === "memory_forget")?.tool;
+      expect(forgetTool).toBeDefined();
+
+      const result = await forgetTool.execute("test-call-full-ids", { query: "user preference" });
+
+      // The candidate list text must contain the FULL UUID, not a truncated prefix
+      const text = result.content?.[0]?.text ?? "";
+      expect(text).toContain(fakeUuid1);
+      expect(text).toContain(fakeUuid2);
+      // Ensure truncated 8-char prefix alone is NOT the format used
+      expect(text).not.toMatch(/\[890e1fae\]/);
+      expect(text).not.toMatch(/\[a1b2c3d4\]/);
+    } finally {
+      vi.doUnmock("openai");
+      vi.doUnmock("@lancedb/lancedb");
+      vi.resetModules();
+    }
+  });
 });
 
 describe("lancedb runtime loader", () => {

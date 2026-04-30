@@ -123,6 +123,7 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
     });
     vi.doMock("openclaw/plugin-sdk/provider-auth", () => {
       return {
+        DEFAULT_COPILOT_API_BASE_URL: "https://api.individual.githubcopilot.com",
         MINIMAX_OAUTH_MARKER: "minimax-oauth",
         applyAuthProfileConfig: (config: OpenClawConfig) => config,
         buildApiKeyCredential: (

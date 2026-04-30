@@ -98,14 +98,19 @@ describe("agent handler session create events", () => {
       undefined,
       { runId: "idem-agent-create-event" },
     );
-    expect(broadcastToConnIds).toHaveBeenCalledWith(
-      "sessions.changed",
-      expect.objectContaining({
-        sessionKey: "agent:main:subagent:create-test",
-        reason: "create",
-      }),
-      new Set(["conn-1"]),
-      { dropIfSlow: true },
+    await vi.waitFor(
+      () => {
+        expect(broadcastToConnIds).toHaveBeenCalledWith(
+          "sessions.changed",
+          expect.objectContaining({
+            sessionKey: "agent:main:subagent:create-test",
+            reason: "create",
+          }),
+          new Set(["conn-1"]),
+          { dropIfSlow: true },
+        );
+      },
+      { timeout: 2_000, interval: 5 },
     );
   });
 });

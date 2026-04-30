@@ -11,7 +11,6 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
 import { sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
-import { resolveMergedWhatsAppAccountConfig } from "./account-config.js";
 import {
   normalizeWhatsAppOutboundPayload,
   normalizeWhatsAppPayloadText,
@@ -220,11 +219,7 @@ export function createWhatsAppOutboundBase({
   return {
     ...outbound,
     sendPayload: async (ctx) => {
-      if (
-        ctx.payload.isError === true &&
-        resolveMergedWhatsAppAccountConfig({ cfg: ctx.cfg, accountId: ctx.accountId })
-          .exposeErrorText === false
-      ) {
+      if (ctx.payload.isError === true) {
         return { channel: "whatsapp", messageId: "" };
       }
       const payload = normalizeWhatsAppOutboundPayload(ctx.payload, { normalizeText });

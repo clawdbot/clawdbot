@@ -31,6 +31,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     cliRegistrars: [],
     reloads: [],
     nodeHostCommands: [],
+    nodeInvokePolicies: [],
     securityAuditCollectors: [],
     services: [],
     gatewayDiscoveryServices: [],

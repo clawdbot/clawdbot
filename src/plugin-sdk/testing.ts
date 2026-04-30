@@ -13,6 +13,7 @@ export {
 } from "../channels/ack-reactions.js";
 export {
   expectChannelInboundContextContract,
+  expectChannelTurnDispatchResultContract,
   primeChannelOutboundSendMock,
 } from "../channels/plugins/contracts/test-helpers.js";
 export {

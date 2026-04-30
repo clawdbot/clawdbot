@@ -22,7 +22,9 @@ vi.mock("./doctor-gateway-daemon-flow.js", () => ({
 
 vi.mock("./doctor-gateway-health.js", () => ({
   checkGatewayHealth: vi.fn().mockResolvedValue({ healthOk: false }),
-  probeGatewayMemoryStatus: vi.fn().mockResolvedValue({ checked: false, ready: false }),
+  probeGatewayMemoryStatus: vi
+    .fn()
+    .mockResolvedValue({ checked: false, ready: false, skipped: false }),
 }));
 
 vi.mock("./doctor-memory-search.js", () => ({

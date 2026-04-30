@@ -44,6 +44,24 @@ Token credentials (`type: "token"`) support inline `token` and/or `tokenRef`.
 2. For eligible profiles, token material may be resolved from inline value or `tokenRef`.
 3. Unresolvable refs produce `unresolved_ref` in `models status --probe` output.
 
+## Agent copy portability
+
+Agent auth inheritance is read-through. When an agent has no local profile, it
+can resolve profiles from the default/main agent store at runtime without
+copying secret material into its own `auth-profiles.json`.
+
+Explicit copy flows, such as `openclaw agents add`, use this portability policy:
+
+- `api_key` profiles are portable unless `copyToAgents: false`.
+- `token` profiles are portable unless `copyToAgents: false`.
+- `oauth` profiles are not portable by default because refresh tokens can be
+  single-use or rotation-sensitive.
+- Provider-owned OAuth flows may opt in with `copyToAgents: true` only when
+  copying refresh material across agents is known safe.
+
+Non-portable profiles remain available through read-through inheritance unless
+the target agent signs in separately and creates its own local profile.
+
 ## Explicit auth order filtering
 
 - When `auth.order.<provider>` or the auth-store order override is set for a
@@ -61,6 +79,14 @@ Token credentials (`type: "token"`) support inline `token` and/or `tokenRef`.
 - If a provider has credentials but OpenClaw cannot resolve a probeable model
   candidate for it, `models status --probe` reports `status: no_model` with
   `reasonCode: no_model`.
+
+## External CLI credential discovery
+
+- Runtime-only credentials owned by external CLIs are discovered only when the
+  provider, runtime, or auth profile is in scope for the current operation, or
+  when a stored local profile for that external source already exists.
+- Read-only/status paths pass `allowKeychainPrompt: false`; they use file-backed
+  external CLI credentials only and do not read or reuse macOS Keychain results.
 
 ## OAuth SecretRef Policy Guard
 

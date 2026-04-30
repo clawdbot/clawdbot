@@ -362,7 +362,9 @@ function isBinaryMediaMime(mime?: string): boolean {
     mime === "application/gzip" ||
     mime === "application/x-gzip" ||
     mime === "application/x-rar-compressed" ||
-    mime === "application/x-7z-compressed"
+    mime === "application/x-7z-compressed" ||
+    mime === "application/msword" ||
+    mime === "application/x-cfb"
   ) {
     return true;
   }

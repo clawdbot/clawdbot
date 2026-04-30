@@ -297,6 +297,71 @@ describe("agent wait dedupe helper", () => {
     });
   });
 
+  it("preserves an RPC cancel snapshot when late completion writes the same key", () => {
+    const dedupe = new Map();
+    const runId = "run-cancel-wins";
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      ts: 100,
+      payload: { runId, status: "timeout", stopReason: "rpc", endedAt: 100 },
+    });
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      ts: 200,
+      payload: { runId, status: "ok", endedAt: 200 },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "timeout",
+      endedAt: 100,
+      error: undefined,
+      stopReason: "rpc",
+    });
+  });
+
+  it("preserves an RPC cancel snapshot when late rejection writes the same chat key", () => {
+    const dedupe = new Map();
+    const runId = "run-cancel-chat-error";
+
+    setRunEntry({
+      dedupe,
+      kind: "chat",
+      runId,
+      ts: 100,
+      payload: { runId, status: "timeout", stopReason: "rpc", endedAt: 100 },
+    });
+    setRunEntry({
+      dedupe,
+      kind: "chat",
+      runId,
+      ts: 200,
+      ok: false,
+      payload: { runId, status: "error", summary: "late failure", endedAt: 200 },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "timeout",
+      endedAt: 100,
+      error: undefined,
+      stopReason: "rpc",
+    });
+  });
+
   it("resolves multiple waiters for the same run id", async () => {
     const dedupe = new Map();
     const runId = "run-multi";

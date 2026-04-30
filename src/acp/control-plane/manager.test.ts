@@ -1555,6 +1555,44 @@ describe("AcpSessionManager", () => {
     });
   });
 
+  it("treats unsupported close controls as recoverable during discard cleanup", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.close.mockRejectedValueOnce(
+      new AcpRuntimeError(
+        "ACP_BACKEND_UNSUPPORTED_CONTROL",
+        'ACP backend "acpx" does not support session/close.',
+      ),
+    );
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:openclaw:acp:session-1",
+      storeSessionKey: "agent:openclaw:acp:session-1",
+      acp: readySessionMeta({
+        agent: "openclaw",
+      }),
+    });
+
+    const manager = new AcpSessionManager();
+    const closeResult = await manager.closeSession({
+      cfg: baseCfg,
+      sessionKey: "agent:openclaw:acp:session-1",
+      reason: "terminal-task-cleanup",
+      allowBackendUnavailable: true,
+      discardPersistentState: true,
+      clearMeta: true,
+    });
+
+    expect(closeResult.runtimeClosed).toBe(false);
+    expect(closeResult.runtimeNotice).toContain("does not support session/close");
+    expect(closeResult.metaCleared).toBe(true);
+    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith({
+      sessionKey: "agent:openclaw:acp:session-1",
+    });
+  });
+
   it("clears persisted resume identity when close discards persistent state", async () => {
     const runtimeState = createRuntime();
     const sessionKey = "agent:claude:acp:binding:discord:default:9373ab192b2317f4";

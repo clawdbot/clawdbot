@@ -117,6 +117,282 @@ describe("searchMemoryWiki", () => {
     expect(getActiveMemorySearchManagerMock).not.toHaveBeenCalled();
   });
 
+  it("does not match generated related blocks during wiki search", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "entities", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.alpha",
+          title: "Alpha",
+          sourceIds: ["source.alpha"],
+        },
+        body: [
+          "# Alpha",
+          "",
+          "Alpha body.",
+          "",
+          "## Related",
+          "<!-- openclaw:wiki:related:start -->",
+          "### Related Pages",
+          "- [Needle Person](entities/needle-person.md)",
+          "<!-- openclaw:wiki:related:end -->",
+          "",
+        ].join("\n"),
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "entities", "needle-person.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.needle-person",
+          title: "Needle Person",
+          sourceIds: ["source.alpha"],
+        },
+        body: "# Needle Person\n\nNeedle body.\n",
+      }),
+      "utf8",
+    );
+
+    const results = await searchMemoryWiki({
+      config,
+      query: "Needle Person",
+      maxResults: 10,
+    });
+
+    expect(results.map((result) => result.path)).toEqual(["entities/needle-person.md"]);
+  });
+
+  it("matches pages when all query terms appear without an exact phrase", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "entities", "brad.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.brad",
+          title: "Maintainer: Brad Groux",
+          sourceIds: ["source.maintainers"],
+        },
+        body: [
+          "# Maintainer: Brad Groux",
+          "",
+          "## Agent Card",
+          "- Maintainer lane: CEO; Microsoft-facing OpenClaw maintainer",
+          "",
+          "## AI Notes",
+          "- Main sample theme is Microsoft ecosystem adoption: Teams, M365, Azure, Foundry, tenants, and pilots.",
+          "",
+        ].join("\n"),
+      }),
+      "utf8",
+    );
+
+    const results = await searchMemoryWiki({
+      config,
+      query: "Brad Microsoft Teams",
+      maxResults: 10,
+    });
+
+    expect(results.map((result) => result.path)).toEqual(["entities/brad.md"]);
+    expect(results[0]?.snippet).toContain("Teams");
+  });
+
+  it("supports people-routing search modes and claim evidence drilldown metadata", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "entities", "brad.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          entityType: "person",
+          id: "entity.brad",
+          title: "Brad Groux",
+          canonicalId: "maintainer.brad-groux",
+          aliases: ["bgroux"],
+          privacyTier: "local-private",
+          personCard: {
+            handles: ["@bgroux"],
+            lane: "Microsoft Teams",
+            askFor: ["Teams and Azure rollout questions"],
+          },
+          bestUsedFor: ["Microsoft ecosystem routing"],
+          relationships: [
+            {
+              targetId: "entity.alice",
+              targetTitle: "Alice",
+              kind: "works-with",
+              note: "Teams escalation buddy",
+            },
+          ],
+          claims: [
+            {
+              id: "claim.brad.teams",
+              text: "Brad is a strong route for Microsoft Teams questions.",
+              status: "supported",
+              confidence: 0.88,
+              evidence: [
+                {
+                  kind: "maintainer-whois",
+                  sourceId: "source.maintainers",
+                  privacyTier: "local-private",
+                },
+              ],
+            },
+          ],
+        },
+        body: "# Brad Groux\n\nAgent card summary.\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "maintainers.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.maintainers",
+          title: "Maintainers Source",
+        },
+        body: "# Maintainers Source\n\nmaintainer-whois Teams sample.\n",
+      }),
+      "utf8",
+    );
+    await compileMemoryWikiVault(config);
+
+    const personResults = await searchMemoryWiki({
+      config,
+      query: "bgroux",
+      mode: "find-person",
+    });
+    expect(personResults[0]).toEqual(
+      expect.objectContaining({
+        path: "entities/brad.md",
+        canonicalId: "maintainer.brad-groux",
+        aliases: ["bgroux"],
+        privacyTier: "local-private",
+        searchMode: "find-person",
+      }),
+    );
+
+    const routeResults = await searchMemoryWiki({
+      config,
+      query: "who should I ask about Teams?",
+      mode: "route-question",
+    });
+    expect(routeResults[0]?.path).toBe("entities/brad.md");
+
+    const claimResults = await searchMemoryWiki({
+      config,
+      query: "strong route Teams",
+      mode: "raw-claim",
+    });
+    expect(claimResults[0]).toEqual(
+      expect.objectContaining({
+        path: "entities/brad.md",
+        matchedClaimId: "claim.brad.teams",
+        matchedClaimConfidence: 0.88,
+        evidenceKinds: ["maintainer-whois"],
+        evidenceSourceIds: ["source.maintainers"],
+      }),
+    );
+
+    const evidenceResults = await searchMemoryWiki({
+      config,
+      query: "maintainer-whois",
+      mode: "source-evidence",
+      maxResults: 2,
+    });
+    expect(evidenceResults.map((result) => result.path)).toContain("sources/maintainers.md");
+  });
+
+  it("keeps route-question relationship matches in compiled digest prefilter", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "entities", "brad.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          entityType: "person",
+          id: "entity.brad",
+          title: "Brad Groux",
+          relationships: [
+            {
+              targetId: "entity.alice",
+              targetTitle: "Alice",
+              kind: "collaborates-with",
+              note: "Azure escalation buddy",
+            },
+          ],
+        },
+        body: "# Brad Groux\n\nAgent card summary.\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "entities", "fallback.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.fallback",
+          title: "Fallback Router",
+          bestUsedFor: ["Azure escalation buddy"],
+        },
+        body: "# Fallback Router\n\nGeneric routing note.\n",
+      }),
+      "utf8",
+    );
+    await compileMemoryWikiVault(config);
+
+    const routeResults = await searchMemoryWiki({
+      config,
+      query: "who should I ask about Azure escalation buddy?",
+      mode: "route-question",
+      maxResults: 1,
+    });
+
+    expect(routeResults[0]?.path).toBe("entities/brad.md");
+  });
+
+  it("uses body text instead of frontmatter for fallback snippets", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "entities", "alias.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.alias",
+          title: "Alias Carrier",
+          aliases: ["frontmatter-only-alias"],
+          sourceIds: ["source.maintainers"],
+        },
+        body: "# Alias Carrier\n\nReadable agent card summary.\n",
+      }),
+      "utf8",
+    );
+
+    const results = await searchMemoryWiki({
+      config,
+      query: "frontmatter-only-alias",
+      maxResults: 10,
+    });
+
+    expect(results.map((result) => result.path)).toEqual(["entities/alias.md"]);
+    expect(results[0]?.snippet).toBe("# Alias Carrier");
+  });
+
   it("finds wiki pages by structured claim text and surfaces the claim as the snippet", async () => {
     const { rootDir, config } = await createQueryVault({
       initialize: true,

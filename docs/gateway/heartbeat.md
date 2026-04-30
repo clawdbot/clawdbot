@@ -50,6 +50,7 @@ Example config:
         directPolicy: "allow", // default: allow direct/DM targets; set "block" to suppress
         lightContext: true, // optional: only inject HEARTBEAT.md from bootstrap files
         isolatedSession: true, // optional: fresh session each run (no conversation history)
+        skipWhenBusy: true, // optional: also defer when subagent or nested lanes are busy
         // activeHours: { start: "08:00", end: "24:00" },
         // includeReasoning: true, // optional: send separate `Reasoning:` message too
       },
@@ -65,6 +66,7 @@ Example config:
 - The heartbeat prompt is sent **verbatim** as the user message. The system prompt includes a "Heartbeat" section only when heartbeats are enabled for the default agent, and the run is flagged internally.
 - When heartbeats are disabled with `0m`, normal runs also omit `HEARTBEAT.md` from bootstrap context so the model does not see heartbeat-only instructions.
 - Active hours (`heartbeat.activeHours`) are checked in the configured timezone. Outside the window, heartbeats are skipped until the next tick inside the window.
+- Heartbeats automatically defer while cron work is active or queued. Set `heartbeat.skipWhenBusy: true` to defer on extra busy lanes (subagent or nested command work) as well; this is useful for local Ollama and other constrained single-runtime hosts.
 
 ## What the heartbeat prompt is for
 
@@ -98,6 +100,7 @@ Outside heartbeats, stray `HEARTBEAT_OK` at the start/end of a message is stripp
         includeReasoning: false, // default: false (deliver separate Reasoning: message when available)
         lightContext: false, // default: false; true keeps only HEARTBEAT.md from workspace bootstrap files
         isolatedSession: false, // default: false; true runs each heartbeat in a fresh session (no conversation history)
+        skipWhenBusy: false, // default: false; true also waits for subagent/nested lanes
         target: "last", // default: none | options: last | none | <channel id> (core or plugin, e.g. "bluebubbles")
         to: "+15551234567", // optional channel-specific override
         accountId: "ops-bot", // optional multi-account channel id
@@ -230,6 +233,9 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 <ParamField path="isolatedSession" type="boolean" default="false">
   When true, each heartbeat runs in a fresh session with no prior conversation history. Uses the same isolation pattern as cron `sessionTarget: "isolated"`. Dramatically reduces per-heartbeat token cost. Combine with `lightContext: true` for maximum savings. Delivery routing still uses the main session context.
 </ParamField>
+<ParamField path="skipWhenBusy" type="boolean" default="false">
+  When true, heartbeat runs defer on extra busy lanes: subagent or nested command work. Cron lanes always defer heartbeats, even without this flag, so local-model hosts do not run cron and heartbeat prompts at the same time.
+</ParamField>
 <ParamField path="session" type="string">
   Optional session key for heartbeat runs.
 
@@ -287,7 +293,8 @@ Use `accountId` to target a specific account on multi-account channels like Tele
     - `session` only affects the run context; delivery is controlled by `target` and `to`.
     - To deliver to a specific channel/recipient, set `target` + `to`. With `target: "last"`, delivery uses the last external channel for that session.
     - Heartbeat deliveries allow direct/DM targets by default. Set `directPolicy: "block"` to suppress direct-target sends while still running the heartbeat turn.
-    - If the main queue is busy, the heartbeat is skipped and retried later.
+    - If the main queue, target session lane, cron lane, or an active cron job is busy, the heartbeat is skipped and retried later.
+    - If `skipWhenBusy: true`, subagent and nested lanes also defer heartbeat runs.
     - If `target` resolves to no external destination, the run still happens but no outbound message is sent.
 
   </Accordion>

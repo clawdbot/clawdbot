@@ -126,7 +126,15 @@ describe("doctor command", () => {
       }
     }
 
-    const written = writeConfigFile.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    const written = writeConfigFile.mock.calls
+      .map((call) => call[0] as Record<string, unknown>)
+      .find((candidate) => {
+        const auth = candidate.auth as { profiles?: unknown } | undefined;
+        return Boolean(auth?.profiles);
+      });
+    if (!written) {
+      throw new Error("Expected doctor to write migrated auth profiles");
+    }
     const profiles = (written.auth as { profiles: Record<string, unknown> }).profiles;
     expect(profiles["anthropic:me@example.com"]).toBeTruthy();
     expect(profiles["anthropic:default"]).toBeUndefined();

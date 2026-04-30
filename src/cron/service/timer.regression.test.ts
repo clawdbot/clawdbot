@@ -13,7 +13,7 @@ import {
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import * as schedule from "../schedule.js";
-import type { CronJob } from "../types.js";
+import type { CronAgentExecutionStarted, CronJob } from "../types.js";
 import { computeJobNextRunAtMs } from "./jobs.js";
 import { createCronServiceState, type CronEvent } from "./state.js";
 import {
@@ -1206,6 +1206,86 @@ describe("cron service timer regressions", () => {
       expect(elapsedMs).toBeGreaterThanOrEqual(timeoutSeconds * 1_000);
 
       const job = state.store?.jobs.find((entry) => entry.id === "timeout-fraction-29774");
+      expect(job?.state.lastStatus).toBe("error");
+      expect(job?.state.lastError).toContain("timed out");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cleans up timed-out isolated runs even when the runner ignores abort", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = timerRegressionFixtures.makeStorePath();
+      const scheduledAt = Date.parse("2026-02-15T14:00:00.000Z");
+      const cronJob = createIsolatedRegressionJob({
+        id: "timeout-cleanup-stuck-run",
+        name: "timeout cleanup stuck run",
+        scheduledAt,
+        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+        payload: { kind: "agentTurn", message: "work", timeoutSeconds: 1 },
+        state: { nextRunAtMs: scheduledAt },
+      });
+      await writeCronJobs(store.storePath, [cronJob]);
+
+      vi.setSystemTime(scheduledAt);
+      let now = scheduledAt;
+      const started = createDeferred<void>();
+      let abortObserved = false;
+      const cleanupTimedOutAgentRun = vi.fn(async () => {});
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeatNow: vi.fn(),
+        cleanupTimedOutAgentRun,
+        runIsolatedAgentJob: vi.fn(
+          async ({
+            abortSignal,
+            onExecutionStarted,
+          }: {
+            abortSignal?: AbortSignal;
+            onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+          }) => {
+            onExecutionStarted?.({
+              jobId: "timeout-cleanup-stuck-run",
+              agentId: "main",
+              sessionId: "cron-run-session",
+              sessionKey: "agent:main:cron:timeout-cleanup-stuck-run:run:cron-run-session",
+            });
+            started.resolve();
+            abortSignal?.addEventListener(
+              "abort",
+              () => {
+                abortObserved = true;
+              },
+              { once: true },
+            );
+            return await new Promise<never>(() => {});
+          },
+        ),
+      });
+
+      const timerPromise = onTimer(state);
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(1_100);
+      now += 1_100;
+      await timerPromise;
+
+      expect(abortObserved).toBe(true);
+      expect(cleanupTimedOutAgentRun).toHaveBeenCalledWith({
+        job: expect.objectContaining({ id: "timeout-cleanup-stuck-run" }),
+        timeoutMs: 1_000,
+        execution: {
+          jobId: "timeout-cleanup-stuck-run",
+          agentId: "main",
+          sessionId: "cron-run-session",
+          sessionKey: "agent:main:cron:timeout-cleanup-stuck-run:run:cron-run-session",
+        },
+      });
+      const job = state.store?.jobs.find((entry) => entry.id === "timeout-cleanup-stuck-run");
       expect(job?.state.lastStatus).toBe("error");
       expect(job?.state.lastError).toContain("timed out");
     } finally {

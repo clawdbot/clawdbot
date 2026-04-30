@@ -188,10 +188,6 @@ vi.mock("../commands/models/auth.js", () => ({
   modelsAuthLoginCommand: vi.fn(),
 }));
 
-vi.mock("../commands/models/list.js", () => ({
-  modelsStatusCommand:
-    mocks.modelsStatusCommand as typeof import("../commands/models/list.js").modelsStatusCommand,
-}));
 vi.mock("../commands/models/list.status-command.js", () => ({
   modelsStatusCommand:
     mocks.modelsStatusCommand as typeof import("../commands/models/list.status-command.js").modelsStatusCommand,

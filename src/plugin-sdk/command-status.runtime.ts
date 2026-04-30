@@ -83,10 +83,15 @@ export async function resolveDirectStatusReplyForSession(
   });
   let resolvedReasoningLevel = currentReasoningLevel;
   const hasAgentReasoningDefault =
-    agentEntry?.reasoningDefault !== undefined && agentEntry.reasoningDefault !== null;
-  const reasoningExplicitlySet =
-    (statusEntry?.reasoningLevel !== undefined && statusEntry.reasoningLevel !== null) ||
-    hasAgentReasoningDefault;
+    (agentEntry?.reasoningDefault !== undefined && agentEntry.reasoningDefault !== null) ||
+    (agentCfg?.reasoningDefault !== undefined && agentCfg.reasoningDefault !== null);
+  const sessionReasoningExplicitlySet =
+    statusEntry?.reasoningLevel !== undefined && statusEntry.reasoningLevel !== null;
+  const canUseReasoningState = params.senderIsOwner || params.isAuthorizedSender;
+  if (!canUseReasoningState && (sessionReasoningExplicitlySet || hasAgentReasoningDefault)) {
+    resolvedReasoningLevel = "off";
+  }
+  const reasoningExplicitlySet = sessionReasoningExplicitlySet || hasAgentReasoningDefault;
   if (!reasoningExplicitlySet && resolvedReasoningLevel === "off" && currentThinkLevel === "off") {
     resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel();
   }

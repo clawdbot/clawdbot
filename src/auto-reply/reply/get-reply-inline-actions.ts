@@ -399,6 +399,7 @@ export async function handleInlineActions(params: {
       provider,
       model,
       contextTokens,
+      workspaceDir,
       resolvedThinkLevel,
       resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
       resolvedReasoningLevel,

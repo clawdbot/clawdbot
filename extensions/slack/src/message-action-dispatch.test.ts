@@ -9,6 +9,96 @@ function createInvokeSpy() {
 }
 
 describe("handleSlackMessageAction", () => {
+  it("merges presentation and interactive blocks when sending", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "send",
+        cfg: {},
+        params: {
+          to: "channel:C1",
+          message: "Deploy?",
+          presentation: {
+            blocks: [{ type: "text", text: "Deploy summary" }],
+          },
+          interactive: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Approve", value: "approve" }],
+              },
+            ],
+          },
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    const action = invoke.mock.calls[0]?.[0] as {
+      blocks?: Array<{ type?: string; elements?: Array<{ value?: string }> }>;
+    };
+    expect(action.blocks).toEqual([
+      expect.objectContaining({ type: "section" }),
+      expect.objectContaining({
+        type: "actions",
+        elements: [expect.objectContaining({ value: "approve" })],
+      }),
+    ]);
+  });
+
+  it("keeps generated Slack control ids unique when presentation and interactive controls are merged", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "send",
+        cfg: {},
+        params: {
+          to: "channel:C1",
+          message: "Deploy?",
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Stage", value: "stage" }],
+              },
+            ],
+          },
+          interactive: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Approve", value: "approve" }],
+              },
+            ],
+          },
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    const action = invoke.mock.calls[0]?.[0] as {
+      blocks?: Array<{
+        block_id?: string;
+        elements?: Array<{ action_id?: string; value?: string }>;
+      }>;
+    };
+
+    expect(action.blocks).toEqual([
+      expect.objectContaining({
+        block_id: "openclaw_reply_buttons_1",
+        elements: [expect.objectContaining({ action_id: "openclaw:reply_button:1:1" })],
+      }),
+      expect.objectContaining({
+        block_id: "openclaw_reply_buttons_2",
+        elements: [expect.objectContaining({ action_id: "openclaw:reply_button:2:1" })],
+      }),
+    ]);
+  });
+
   it("maps upload-file to the internal uploadFile action", async () => {
     const invoke = createInvokeSpy();
 

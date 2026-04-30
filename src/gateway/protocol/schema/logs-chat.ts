@@ -72,6 +72,7 @@ export const ChatEventSchema = Type.Object(
   {
     runId: NonEmptyString,
     sessionKey: NonEmptyString,
+    spawnedBy: Type.Optional(NonEmptyString),
     seq: Type.Integer({ minimum: 0 }),
     state: Type.Union([
       Type.Literal("delta"),

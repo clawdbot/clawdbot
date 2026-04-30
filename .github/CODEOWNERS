@@ -2,51 +2,51 @@
 /.github/CODEOWNERS @steipete
 
 # WARNING: GitHub CODEOWNERS uses last-match-wins semantics.
-# If you add overlapping rules below the secops block, include @openclaw/secops
+# If you add overlapping rules below the secops block, include @openclaw/openclaw-secops
 # on those entries too or you can silently remove required secops review.
 # Security-sensitive code, config, and docs require secops review.
-/SECURITY.md @openclaw/secops
-/.github/dependabot.yml @openclaw/secops
-/.github/codeql/ @openclaw/secops
-/.github/workflows/codeql.yml @openclaw/secops
-/.github/workflows/codeql-android-critical-security.yml @openclaw/secops
-/.github/workflows/codeql-critical-quality.yml @openclaw/secops
-/src/security/ @openclaw/secops
-/src/secrets/ @openclaw/secops
-/src/config/*secret*.ts @openclaw/secops
-/src/config/**/*secret*.ts @openclaw/secops
-/src/gateway/*auth*.ts @openclaw/secops
-/src/gateway/**/*auth*.ts @openclaw/secops
-/src/gateway/*secret*.ts @openclaw/secops
-/src/gateway/**/*secret*.ts @openclaw/secops
-/src/gateway/security-path*.ts @openclaw/secops
-/src/gateway/resolve-configured-secret-input-string*.ts @openclaw/secops
-/src/gateway/protocol/**/*secret*.ts @openclaw/secops
-/src/gateway/server-methods/secrets*.ts @openclaw/secops
-/src/agents/*auth*.ts @openclaw/secops
-/src/agents/**/*auth*.ts @openclaw/secops
-/src/agents/auth-profiles*.ts @openclaw/secops
-/src/agents/auth-health*.ts @openclaw/secops
-/src/agents/auth-profiles/ @openclaw/secops
-/src/agents/sandbox.ts @openclaw/secops
-/src/agents/sandbox-*.ts @openclaw/secops
-/src/agents/sandbox/ @openclaw/secops
-/src/infra/secret-file*.ts @openclaw/secops
-/src/cron/stagger.ts @openclaw/secops
-/src/cron/service/jobs.ts @openclaw/secops
-/docs/security/ @openclaw/secops
-/docs/gateway/authentication.md @openclaw/secops
-/docs/gateway/sandbox-vs-tool-policy-vs-elevated.md @openclaw/secops
-/docs/gateway/sandboxing.md @openclaw/secops
-/docs/gateway/secrets-plan-contract.md @openclaw/secops
-/docs/gateway/secrets.md @openclaw/secops
-/docs/gateway/security/ @openclaw/secops
-/docs/cli/approvals.md @openclaw/secops
-/docs/cli/sandbox.md @openclaw/secops
-/docs/cli/security.md @openclaw/secops
-/docs/cli/secrets.md @openclaw/secops
-/docs/reference/secretref-credential-surface.md @openclaw/secops
-/docs/reference/secretref-user-supplied-credentials-matrix.json @openclaw/secops
+/SECURITY.md @openclaw/openclaw-secops
+/.github/dependabot.yml @openclaw/openclaw-secops
+/.github/codeql/ @openclaw/openclaw-secops
+/.github/workflows/codeql.yml @openclaw/openclaw-secops
+/.github/workflows/codeql-android-critical-security.yml @openclaw/openclaw-secops
+/.github/workflows/codeql-critical-quality.yml @openclaw/openclaw-secops
+/src/security/ @openclaw/openclaw-secops
+/src/secrets/ @openclaw/openclaw-secops
+/src/config/*secret*.ts @openclaw/openclaw-secops
+/src/config/**/*secret*.ts @openclaw/openclaw-secops
+/src/gateway/*auth*.ts @openclaw/openclaw-secops
+/src/gateway/**/*auth*.ts @openclaw/openclaw-secops
+/src/gateway/*secret*.ts @openclaw/openclaw-secops
+/src/gateway/**/*secret*.ts @openclaw/openclaw-secops
+/src/gateway/security-path*.ts @openclaw/openclaw-secops
+/src/gateway/resolve-configured-secret-input-string*.ts @openclaw/openclaw-secops
+/src/gateway/protocol/**/*secret*.ts @openclaw/openclaw-secops
+/src/gateway/server-methods/secrets*.ts @openclaw/openclaw-secops
+/src/agents/*auth*.ts @openclaw/openclaw-secops
+/src/agents/**/*auth*.ts @openclaw/openclaw-secops
+/src/agents/auth-profiles*.ts @openclaw/openclaw-secops
+/src/agents/auth-health*.ts @openclaw/openclaw-secops
+/src/agents/auth-profiles/ @openclaw/openclaw-secops
+/src/agents/sandbox.ts @openclaw/openclaw-secops
+/src/agents/sandbox-*.ts @openclaw/openclaw-secops
+/src/agents/sandbox/ @openclaw/openclaw-secops
+/src/infra/secret-file*.ts @openclaw/openclaw-secops
+/src/cron/stagger.ts @openclaw/openclaw-secops
+/src/cron/service/jobs.ts @openclaw/openclaw-secops
+/docs/security/ @openclaw/openclaw-secops
+/docs/gateway/authentication.md @openclaw/openclaw-secops
+/docs/gateway/sandbox-vs-tool-policy-vs-elevated.md @openclaw/openclaw-secops
+/docs/gateway/sandboxing.md @openclaw/openclaw-secops
+/docs/gateway/secrets-plan-contract.md @openclaw/openclaw-secops
+/docs/gateway/secrets.md @openclaw/openclaw-secops
+/docs/gateway/security/ @openclaw/openclaw-secops
+/docs/cli/approvals.md @openclaw/openclaw-secops
+/docs/cli/sandbox.md @openclaw/openclaw-secops
+/docs/cli/security.md @openclaw/openclaw-secops
+/docs/cli/secrets.md @openclaw/openclaw-secops
+/docs/reference/secretref-credential-surface.md @openclaw/openclaw-secops
+/docs/reference/secretref-user-supplied-credentials-matrix.json @openclaw/openclaw-secops
 
 # Release workflow and its supporting release-path checks.
 /.github/workflows/openclaw-npm-release.yml @openclaw/openclaw-release-managers

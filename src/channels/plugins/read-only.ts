@@ -1,4 +1,5 @@
-import { fileURLToPath } from "node:url";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
@@ -25,9 +26,13 @@ import {
 import { listChannelPlugins } from "./registry.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
-const LOADER_MODULE_CANDIDATES = [
-  new URL("../../plugins/loader.js", import.meta.url),
-  new URL("../../plugins/loader.ts", import.meta.url),
+const SOURCE_PLUGIN_LOADER_MODULE_CANDIDATES = [
+  "../../plugins/loader.js",
+  "../../plugins/loader.ts",
+] as const;
+const BUILT_PLUGIN_LOADER_MODULE_CANDIDATES = [
+  "plugins/loader.js",
+  "plugins/build-smoke-entry.js",
 ] as const;
 const jitiLoaders: PluginJitiLoaderCache = new Map();
 
@@ -53,11 +58,39 @@ type PluginLoaderModule = {
 
 let pluginLoaderModule: PluginLoaderModule | undefined;
 
+function listBuiltPluginLoaderModuleCandidateUrls(importerUrl: string): URL[] {
+  let importerPath: string;
+  try {
+    importerPath = fileURLToPath(importerUrl);
+  } catch {
+    return [];
+  }
+  const distMarker = `${path.sep}dist${path.sep}`;
+  const distMarkerIndex = importerPath.lastIndexOf(distMarker);
+  if (distMarkerIndex < 0) {
+    return [];
+  }
+  // Bundled read-only chunks live under dist/ with hashed names. Source-relative
+  // ../../plugins candidates would escape the installed openclaw package there.
+  const distRoot = importerPath.slice(0, distMarkerIndex + distMarker.length - 1);
+  return BUILT_PLUGIN_LOADER_MODULE_CANDIDATES.map((candidate) =>
+    pathToFileURL(path.join(distRoot, candidate)),
+  );
+}
+
+export function listPluginLoaderModuleCandidateUrls(importerUrl = import.meta.url): URL[] {
+  const builtCandidates = listBuiltPluginLoaderModuleCandidateUrls(importerUrl);
+  if (builtCandidates.length > 0) {
+    return builtCandidates;
+  }
+  return SOURCE_PLUGIN_LOADER_MODULE_CANDIDATES.map((candidate) => new URL(candidate, importerUrl));
+}
+
 function loadPluginLoaderModule(): PluginLoaderModule {
   if (pluginLoaderModule) {
     return pluginLoaderModule;
   }
-  for (const candidate of LOADER_MODULE_CANDIDATES) {
+  for (const candidate of listPluginLoaderModuleCandidateUrls()) {
     const modulePath = fileURLToPath(candidate);
     try {
       const jiti = getCachedPluginJitiLoader({

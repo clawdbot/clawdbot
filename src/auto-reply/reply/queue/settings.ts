@@ -5,7 +5,7 @@ import { DEFAULT_QUEUE_CAP, DEFAULT_QUEUE_DEBOUNCE_MS, DEFAULT_QUEUE_DROP } from
 import type { QueueMode, QueueSettings, ResolveQueueSettingsParams } from "./types.js";
 
 function defaultQueueModeForChannel(_channel?: string): QueueMode {
-  return "collect";
+  return "steer";
 }
 
 /** Resolve per-channel debounce override from debounceMsByChannel map. */

@@ -294,12 +294,12 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       const cfg = context.getRuntimeConfig();
       const agentDir = resolveOpenClawAgentDir();
       const externalCliAuthScope = resolveExternalCliAuthScopeFromConfig(cfg);
-      const store = externalCliAuthScope
-        ? ensureAuthProfileStore(agentDir, {
-            externalCliProviderIds: externalCliAuthScope.providerIds,
-            externalCliProfileIds: externalCliAuthScope.profileIds,
-          })
-        : ensureAuthProfileStore(agentDir);
+      const store = ensureAuthProfileStore(agentDir, {
+        allowKeychainPrompt: false,
+        config: cfg,
+        externalCliProviderIds: externalCliAuthScope?.providerIds,
+        externalCliProfileIds: externalCliAuthScope?.profileIds,
+      });
       const configured = resolveConfiguredProviders(cfg);
       const authHealth: AuthHealthSummary = buildAuthHealthSummary({
         store,

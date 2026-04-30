@@ -40,6 +40,7 @@ export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
   currentVerboseLevel?: VerboseLevel;
   currentReasoningLevel?: ReasoningLevel;
   currentElevatedLevel?: ElevatedLevel;
+  workspaceDir?: string;
   surface?: string;
   gatewayClientScopes?: string[];
   senderIsOwner?: boolean;
@@ -49,6 +50,7 @@ export type ApplyInlineDirectivesFastLaneParams = HandleDirectiveOnlyCoreParams 
   commandAuthorized: boolean;
   senderIsOwner: boolean;
   ctx: MsgContext;
+  workspaceDir?: string;
   agentId?: string;
   isGroup: boolean;
   agentCfg?: NonNullable<OpenClawConfig["agents"]>["defaults"];

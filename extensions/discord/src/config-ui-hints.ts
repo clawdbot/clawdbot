@@ -222,4 +222,8 @@ export const discordChannelConfigUiHints = {
     help: "Discord bot token used for gateway and REST API authentication for this provider account. Keep this secret out of committed config and rotate immediately after any leak.",
     sensitive: true,
   },
+  applicationId: {
+    label: "Discord Application ID",
+    help: "Optional Discord application/client ID. Set this when hosted environments cannot reach Discord's application lookup endpoint during startup.",
+  },
 } satisfies Record<string, ChannelConfigUiHint>;

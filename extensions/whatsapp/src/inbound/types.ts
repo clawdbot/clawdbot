@@ -2,6 +2,7 @@ import type { AnyMessageContent, MiscMessageGenerationOptions } from "@whiskeyso
 import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
 import type { PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import type { WhatsAppIdentity, WhatsAppReplyContext, WhatsAppSelfIdentity } from "../identity.js";
+import type { WhatsAppSendResult } from "./send-result.js";
 
 export type WebListenerCloseReason = {
   status?: number;
@@ -29,15 +30,15 @@ export type ActiveWebListener = {
     mediaBuffer?: Buffer,
     mediaType?: string,
     options?: ActiveWebSendOptions,
-  ) => Promise<{ messageId: string }>;
-  sendPoll: (to: string, poll: PollInput) => Promise<{ messageId: string }>;
+  ) => Promise<WhatsAppSendResult>;
+  sendPoll: (to: string, poll: PollInput) => Promise<WhatsAppSendResult>;
   sendReaction: (
     chatJid: string,
     messageId: string,
     emoji: string,
     fromMe: boolean,
     participant?: string,
-  ) => Promise<void>;
+  ) => Promise<WhatsAppSendResult>;
   sendComposingTo: (to: string) => Promise<void>;
   close?: () => Promise<void>;
 };
@@ -85,8 +86,11 @@ export type WebInboundMessage = {
   fromMe?: boolean;
   location?: NormalizedLocation;
   sendComposing: () => Promise<void>;
-  reply: (text: string, options?: MiscMessageGenerationOptions) => Promise<void>;
-  sendMedia: (payload: AnyMessageContent, options?: MiscMessageGenerationOptions) => Promise<void>;
+  reply: (text: string, options?: MiscMessageGenerationOptions) => Promise<WhatsAppSendResult>;
+  sendMedia: (
+    payload: AnyMessageContent,
+    options?: MiscMessageGenerationOptions,
+  ) => Promise<WhatsAppSendResult>;
   mediaPath?: string;
   mediaType?: string;
   mediaFileName?: string;

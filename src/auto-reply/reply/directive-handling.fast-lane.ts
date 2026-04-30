@@ -93,6 +93,7 @@ export async function applyInlineDirectivesFastLane(
     surface: ctx.Surface,
     gatewayClientScopes: ctx.GatewayClientScopes,
     senderIsOwner: params.senderIsOwner,
+    workspaceDir: params.workspaceDir,
   });
 
   if (sessionEntry?.providerOverride) {

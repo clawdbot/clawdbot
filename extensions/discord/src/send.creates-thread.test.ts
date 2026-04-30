@@ -1,7 +1,7 @@
-import { RateLimitError } from "@buape/carbon";
 import { ChannelType, Routes } from "discord-api-types/v10";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { RateLimitError } from "./internal/discord.js";
 import { makeDiscordRest } from "./send.test-harness.js";
 
 vi.mock("openclaw/plugin-sdk/web-media", async () => {
@@ -37,12 +37,12 @@ function discordClientOpts(rest: ReturnType<typeof makeDiscordRest>["rest"]) {
   return { cfg: DISCORD_TEST_CFG, rest, token: "t" };
 }
 
-function createCompatRateLimitError(
+function createRateLimitError(
   response: Response,
   body: { message: string; retry_after: number; global: boolean },
   request?: Request,
 ): RateLimitError {
-  const compatRequest =
+  const fallbackRequest =
     request ??
     new Request("https://discord.com/api/v10/channels/789/messages", {
       method: "POST",
@@ -52,7 +52,7 @@ function createCompatRateLimitError(
     body: { message: string; retry_after: number; global: boolean },
     request?: Request,
   ) => RateLimitError;
-  return new RateLimitErrorCtor(response, body, compatRequest);
+  return new RateLimitErrorCtor(response, body, fallbackRequest);
 }
 
 beforeAll(async () => {
@@ -468,7 +468,7 @@ function createMockRateLimitError(retryAfter = 0.001): RateLimitError {
       "X-RateLimit-Bucket": "test-bucket",
     },
   });
-  return createCompatRateLimitError(
+  return createRateLimitError(
     response,
     {
       message: "You are being rate limited.",

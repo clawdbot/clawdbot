@@ -1,7 +1,7 @@
-import type { RequestClient } from "@buape/carbon";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RequestClient } from "../internal/discord.js";
 
 const deliverOutboundPayloadsMock = vi.hoisted(() => vi.fn(async () => []));
 const sendMessageDiscordMock = vi.hoisted(() => vi.fn());

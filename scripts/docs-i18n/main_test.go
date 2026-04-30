@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -48,6 +50,24 @@ func (transcriptFrontmatterTranslator) TranslateRaw(_ context.Context, text, _, 
 }
 
 func (transcriptFrontmatterTranslator) Close() {}
+
+type partialFailTranslator struct{}
+
+func (partialFailTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	if strings.Contains(text, "FAIL") {
+		return "", errors.New("translation failed")
+	}
+	return text, nil
+}
+
+func (partialFailTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	if strings.Contains(text, "FAIL") {
+		return "", errors.New("translation failed")
+	}
+	return text, nil
+}
+
+func (partialFailTranslator) Close() {}
 
 func TestRunDocsI18NRewritesFinalLocalizedPageLinks(t *testing.T) {
 	t.Parallel()
@@ -96,6 +116,40 @@ func TestRunDocsI18NRewritesFinalLocalizedPageLinks(t *testing.T) {
 		if !containsLine(got, want) {
 			t.Fatalf("expected final localized page link %q in output:\n%s", want, got)
 		}
+	}
+}
+
+func TestRunDocsI18NAllowPartialKeepsSuccessfulDocOutputs(t *testing.T) {
+	t.Parallel()
+
+	docsRoot := t.TempDir()
+	writeFile(t, filepath.Join(docsRoot, ".i18n", "glossary.zh-CN.json"), "[]")
+	writeFile(t, filepath.Join(docsRoot, "docs.json"), `{"redirects":[]}`)
+	okPath := filepath.Join(docsRoot, "aaa-ok.md")
+	failPath := filepath.Join(docsRoot, "zzz-fail.md")
+	writeFile(t, okPath, "# Gateway\n")
+	writeFile(t, failPath, "# FAIL\n")
+
+	err := runDocsI18N(context.Background(), runConfig{
+		targetLang:   "zh-CN",
+		sourceLang:   "en",
+		docsRoot:     docsRoot,
+		mode:         "doc",
+		thinking:     "high",
+		overwrite:    true,
+		allowPartial: true,
+		parallel:     1,
+	}, []string{okPath, failPath}, func(_, _ string, _ []GlossaryEntry, _ string) (docsTranslator, error) {
+		return partialFailTranslator{}, nil
+	})
+	if err != nil {
+		t.Fatalf("runDocsI18N failed despite partial output: %v", err)
+	}
+	if got := mustReadFile(t, filepath.Join(docsRoot, "zh-CN", "aaa-ok.md")); !strings.Contains(got, "# Gateway") {
+		t.Fatalf("expected successful output to be written, got:\n%s", got)
+	}
+	if _, err := os.Stat(filepath.Join(docsRoot, "zh-CN", "zzz-fail.md")); err == nil {
+		t.Fatal("did not expect failed output to be written")
 	}
 }
 

@@ -48,6 +48,7 @@ function addExternalCliRuntimeScope(out: Set<string>, value: string | undefined)
     normalized === "claude-cli" ||
     normalized === "codex" ||
     normalized === "codex-cli" ||
+    normalized === "codex-app-server" ||
     normalized === "openai-codex" ||
     normalized === "minimax" ||
     normalized === "minimax-cli" ||
@@ -73,8 +74,14 @@ export function resolveExternalCliAuthScopeFromConfig(
     }
     addProviderScopeId(providerIds, profile?.provider);
   }
-  for (const provider of Object.keys(cfg.auth?.order ?? {})) {
+  for (const [provider, orderedProfileIds] of Object.entries(cfg.auth?.order ?? {})) {
     addProviderScopeId(providerIds, provider);
+    for (const profileId of orderedProfileIds ?? []) {
+      const normalizedProfileId = profileId.trim();
+      if (normalizedProfileId) {
+        profileIds.add(normalizedProfileId);
+      }
+    }
   }
 
   const defaults = cfg.agents?.defaults;

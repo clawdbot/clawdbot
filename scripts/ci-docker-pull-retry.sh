@@ -8,8 +8,8 @@ fi
 
 image="$1"
 attempts="${OPENCLAW_DOCKER_PULL_ATTEMPTS:-3}"
-timeout_seconds="${OPENCLAW_DOCKER_PULL_TIMEOUT_SECONDS:-480}"
-retry_delay_seconds="${OPENCLAW_DOCKER_PULL_RETRY_DELAY_SECONDS:-20}"
+timeout_seconds="${OPENCLAW_DOCKER_PULL_TIMEOUT_SECONDS:-180}"
+retry_delay_seconds="${OPENCLAW_DOCKER_PULL_RETRY_DELAY_SECONDS:-5}"
 
 if ! [[ "$attempts" =~ ^[1-9][0-9]*$ ]]; then
   echo "OPENCLAW_DOCKER_PULL_ATTEMPTS must be a positive integer, got: $attempts" >&2

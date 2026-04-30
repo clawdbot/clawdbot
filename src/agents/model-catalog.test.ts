@@ -19,6 +19,11 @@ vi.mock("./model-suppression.runtime.js", () => ({
       params.provider === "azure-openai-responses" ||
       params.provider === "openai-codex") &&
     params.id === "gpt-5.3-codex-spark",
+  buildShouldSuppressBuiltInModel: () => (params: { provider?: string; id?: string }) =>
+    (params.provider === "openai" ||
+      params.provider === "azure-openai-responses" ||
+      params.provider === "openai-codex") &&
+    params.id === "gpt-5.3-codex-spark",
 }));
 
 function mockCatalogImportFailThenRecover() {
@@ -118,6 +123,26 @@ describe("loadModelCatalog", () => {
       setLoggerOverride(null);
       resetLogger();
     }
+  });
+
+  it("reloads dynamic registry entries after clearing the cache", async () => {
+    const models = [{ id: "existing", name: "Existing", provider: "ollama" }];
+    mockPiDiscoveryModels(models);
+
+    const first = await loadModelCatalog({ config: {} as OpenClawConfig });
+    expect(first).toContainEqual({ id: "existing", name: "Existing", provider: "ollama" });
+
+    models.push({ id: "glm-5.1:cloud", name: "GLM 5.1 Cloud", provider: "ollama" });
+    resetModelCatalogCacheForTest();
+    mockPiDiscoveryModels(models);
+
+    const second = await loadModelCatalog({ config: {} as OpenClawConfig });
+    expect(second).toContainEqual({ id: "existing", name: "Existing", provider: "ollama" });
+    expect(second).toContainEqual({
+      id: "glm-5.1:cloud",
+      name: "GLM 5.1 Cloud",
+      provider: "ollama",
+    });
   });
 
   it("returns partial results on discovery errors", async () => {

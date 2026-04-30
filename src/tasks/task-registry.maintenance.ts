@@ -14,6 +14,10 @@ import type { CronJob, CronStoreFile } from "../cron/types.js";
 import { getAgentRunContext } from "../infra/agent-events.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  isPluginStateDatabaseOpen,
+  sweepExpiredPluginStateEntries,
+} from "../plugin-state/plugin-state-store.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { deriveSessionChatType } from "../sessions/session-chat-type.js";
 import {
@@ -846,6 +850,13 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
     }
   }
   await cleanupOrphanedParentOwnedAcpSessions(taskRegistryMaintenanceRuntime.listTaskRecords());
+  if (isPluginStateDatabaseOpen()) {
+    try {
+      sweepExpiredPluginStateEntries();
+    } catch (error) {
+      log.warn("Failed to sweep expired plugin state entries", { error });
+    }
+  }
   return { reconciled, recovered, cleanupStamped, pruned };
 }
 

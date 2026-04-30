@@ -46,9 +46,10 @@ describe("getShellConfig", () => {
 
   if (isWin) {
     it("uses PowerShell on Windows", () => {
-      const { shell } = getShellConfig();
+      const { shell, args } = getShellConfig();
       const normalized = shell.toLowerCase();
       expect(normalized.includes("powershell") || normalized.includes("pwsh")).toBe(true);
+      expect(args).toEqual(["-NoProfile", "-NonInteractive", "-Command"]);
     });
     return;
   }
@@ -56,28 +57,48 @@ describe("getShellConfig", () => {
   it("prefers bash when fish is default and bash is on PATH", () => {
     const binDir = createTempCommandDir(tempDirs, [{ name: "bash" }]);
     process.env.PATH = binDir;
-    const { shell } = getShellConfig();
+    const { shell, args } = getShellConfig();
     expect(shell).toBe(path.join(binDir, "bash"));
+    expect(args).toEqual(["--noprofile", "--norc", "-c"]);
   });
 
   it("falls back to sh when fish is default and bash is missing", () => {
     const binDir = createTempCommandDir(tempDirs, [{ name: "sh" }]);
     process.env.PATH = binDir;
-    const { shell } = getShellConfig();
+    const { shell, args } = getShellConfig();
     expect(shell).toBe(path.join(binDir, "sh"));
+    expect(args).toEqual(["-c"]);
   });
 
   it("falls back to env shell when fish is default and no sh is available", () => {
     process.env.PATH = "";
-    const { shell } = getShellConfig();
+    const { shell, args } = getShellConfig();
     expect(shell).toBe("/usr/bin/fish");
+    expect(args).toEqual(["--no-config", "-c"]);
+  });
+
+  it("uses startup-suppressed args for zsh env shells", () => {
+    process.env.SHELL = "/bin/zsh";
+    process.env.PATH = "";
+    const { shell, args } = getShellConfig();
+    expect(shell).toBe("/bin/zsh");
+    expect(args).toEqual(["-f", "-c"]);
+  });
+
+  it("uses startup-suppressed args for bash env shells", () => {
+    process.env.SHELL = "/bin/bash";
+    process.env.PATH = "";
+    const { shell, args } = getShellConfig();
+    expect(shell).toBe("/bin/bash");
+    expect(args).toEqual(["--noprofile", "--norc", "-c"]);
   });
 
   it("uses sh when SHELL is unset", () => {
     delete process.env.SHELL;
     process.env.PATH = "";
-    const { shell } = getShellConfig();
+    const { shell, args } = getShellConfig();
     expect(shell).toBe("sh");
+    expect(args).toEqual(["-c"]);
   });
 
   it("falls back to sh on PATH when SHELL is /usr/bin/false", () => {
@@ -93,15 +114,26 @@ describe("getShellConfig", () => {
     const binDir = createTempCommandDir(tempDirs, [{ name: "sh" }]);
     process.env.SHELL = "/sbin/nologin";
     process.env.PATH = binDir;
-    const { shell } = getShellConfig();
+    const { shell, args } = getShellConfig();
     expect(shell).toBe(path.join(binDir, "sh"));
+    expect(args).toEqual(["-c"]);
+  });
+
+  it("falls back to startup-suppressed bash on PATH when SHELL is a placeholder", () => {
+    const binDir = createTempCommandDir(tempDirs, [{ name: "bash" }]);
+    process.env.SHELL = "/usr/bin/false";
+    process.env.PATH = binDir;
+    const { shell, args } = getShellConfig();
+    expect(shell).toBe(path.join(binDir, "bash"));
+    expect(args).toEqual(["--noprofile", "--norc", "-c"]);
   });
 
   it("falls back to bare sh when SHELL is a placeholder and no sh is on PATH", () => {
     process.env.SHELL = "/usr/bin/false";
     process.env.PATH = "";
-    const { shell } = getShellConfig();
+    const { shell, args } = getShellConfig();
     expect(shell).toBe("sh");
+    expect(args).toEqual(["-c"]);
   });
 });
 

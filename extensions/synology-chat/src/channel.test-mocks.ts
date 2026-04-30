@@ -19,6 +19,49 @@ export const dispatchReplyWithBufferedBlockDispatcher: Mock<
 export const finalizeInboundContextMock: Mock<
   (ctx: Record<string, unknown>) => Record<string, unknown>
 > = vi.fn((ctx) => ctx);
+export const buildChannelTurnContextMock: Mock<
+  (params: {
+    channel: string;
+    accountId?: string;
+    timestamp?: number;
+    from: string;
+    sender: { id: string; name?: string };
+    conversation: { kind: string; label?: string };
+    route: {
+      accountId?: string;
+      routeSessionKey: string;
+      dispatchSessionKey?: string;
+    };
+    reply: { to: string; originatingTo: string };
+    message: {
+      rawBody: string;
+      bodyForAgent?: string;
+      commandBody?: string;
+    };
+    extra?: Record<string, unknown>;
+  }) => Record<string, unknown>
+> = vi.fn((params) =>
+  finalizeInboundContextMock({
+    Body: params.message.rawBody,
+    BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
+    RawBody: params.message.rawBody,
+    CommandBody: params.message.commandBody ?? params.message.rawBody,
+    From: params.from,
+    To: params.reply.to,
+    SessionKey: params.route.dispatchSessionKey ?? params.route.routeSessionKey,
+    AccountId: params.route.accountId ?? params.accountId,
+    OriginatingChannel: params.channel,
+    OriginatingTo: params.reply.originatingTo,
+    ChatType: params.conversation.kind,
+    SenderName: params.sender.name,
+    SenderId: params.sender.id,
+    Provider: params.channel,
+    Surface: params.channel,
+    ConversationLabel: params.conversation.label,
+    Timestamp: params.timestamp,
+    ...params.extra,
+  }),
+);
 export const resolveAgentRouteMock: Mock<
   (params: { accountId?: string }) => { agentId: string; sessionKey: string; accountId: string }
 > = vi.fn((params) => {
@@ -94,6 +137,39 @@ vi.mock("./runtime.js", () => ({
       reply: {
         finalizeInboundContext: finalizeInboundContextMock,
         dispatchReplyWithBufferedBlockDispatcher,
+      },
+      session: {
+        resolveStorePath: vi.fn(() => "/tmp/openclaw/synology-chat-sessions.json"),
+        recordInboundSession: vi.fn(async () => undefined),
+      },
+      turn: {
+        run: vi.fn(async (params) => {
+          const input = await params.adapter.ingest(params.raw);
+          if (!input) {
+            return { admission: { kind: "drop", reason: "ingest-null" }, dispatched: false };
+          }
+          const resolved = await params.adapter.resolveTurn(input, {
+            kind: "message",
+            canStartAgentTurn: true,
+          });
+          const dispatchResult = await resolved.dispatchReplyWithBufferedBlockDispatcher({
+            ctx: resolved.ctxPayload,
+            cfg: mockRuntimeConfig,
+            dispatcherOptions: {
+              ...resolved.dispatcherOptions,
+              deliver: resolved.delivery.deliver,
+              onError: resolved.delivery.onError,
+            },
+          });
+          return {
+            admission: { kind: "dispatch" },
+            dispatched: true,
+            dispatchResult,
+            ctxPayload: resolved.ctxPayload,
+            routeSessionKey: resolved.routeSessionKey,
+          };
+        }),
+        buildContext: buildChannelTurnContextMock,
       },
     },
   })),

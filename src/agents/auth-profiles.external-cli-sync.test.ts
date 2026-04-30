@@ -374,6 +374,36 @@ describe("external cli oauth resolution", () => {
     expect(mocks.readMiniMaxCliCredentialsCached).not.toHaveBeenCalled();
   });
 
+  it("passes non-prompting keychain policy to scoped Codex CLI credential reads", () => {
+    mocks.readCodexCliCredentialsCached.mockReturnValue(
+      makeOAuthCredential({
+        provider: "openai-codex",
+        access: "codex-cli-access",
+        refresh: "codex-cli-refresh",
+      }),
+    );
+
+    const profiles = resolveExternalCliAuthProfiles(makeStore(), {
+      providerIds: ["codex-app-server"],
+      allowKeychainPrompt: false,
+    });
+
+    expect(profiles).toEqual([
+      {
+        profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
+        credential: expect.objectContaining({
+          type: "oauth",
+          provider: "openai-codex",
+        }),
+      },
+    ]);
+    expect(mocks.readCodexCliCredentialsCached).toHaveBeenCalledWith(
+      expect.objectContaining({ allowKeychainPrompt: false }),
+    );
+    expect(mocks.readClaudeCliCredentialsCached).not.toHaveBeenCalled();
+    expect(mocks.readMiniMaxCliCredentialsCached).not.toHaveBeenCalled();
+  });
+
   it("ignores Claude CLI token credentials", () => {
     mocks.readClaudeCliCredentialsCached.mockReturnValue({
       type: "token",

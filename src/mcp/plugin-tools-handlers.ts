@@ -52,10 +52,14 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
       }
       try {
         const result = await tool.execute(`mcp-${Date.now()}`, params.arguments ?? {});
+        const rawContent =
+          result && typeof result === "object" && "content" in result
+            ? (result as { content?: unknown }).content
+            : result;
         return {
-          content: Array.isArray(result.content)
-            ? result.content
-            : [{ type: "text", text: coerceChatContentText(result.content) }],
+          content: Array.isArray(rawContent)
+            ? rawContent
+            : [{ type: "text", text: coerceChatContentText(rawContent) }],
         };
       } catch (err) {
         return {

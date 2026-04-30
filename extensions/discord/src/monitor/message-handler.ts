@@ -1,10 +1,10 @@
-import type { Client } from "@buape/carbon";
 import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
+import type { Client } from "../internal/discord.js";
 import {
   buildDiscordInboundReplayKey,
   claimDiscordInboundReplay,
@@ -115,10 +115,9 @@ export function createDiscordMessageHandler(
       return shouldDebounceTextInbound({
         text: baseText,
         cfg: params.cfg,
-        hasMedia: Boolean(
+        hasMedia:
           (message.attachments && message.attachments.length > 0) ||
           hasDiscordMessageStickers(message),
-        ),
       });
     },
     onFlush: async (entries) => {
@@ -163,17 +162,26 @@ export function createDiscordMessageHandler(
           )
           .filter(Boolean)
           .join("\n");
-        const syntheticMessage = {
-          ...last.data.message,
-          content: combinedBaseText,
-          attachments: [],
-          message_snapshots: (last.data.message as { message_snapshots?: unknown })
-            .message_snapshots,
-          messageSnapshots: (last.data.message as { messageSnapshots?: unknown }).messageSnapshots,
-          rawData: {
-            ...(last.data.message as { rawData?: Record<string, unknown> }).rawData,
+        const syntheticMessage = Object.create(Object.getPrototypeOf(last.data.message), {
+          ...Object.getOwnPropertyDescriptors(last.data.message),
+          content: { value: combinedBaseText, enumerable: true, configurable: true },
+          attachments: { value: [], enumerable: true, configurable: true },
+          message_snapshots: {
+            value: (last.data.message as { message_snapshots?: unknown }).message_snapshots,
+            enumerable: true,
+            configurable: true,
           },
-        };
+          messageSnapshots: {
+            value: (last.data.message as { messageSnapshots?: unknown }).messageSnapshots,
+            enumerable: true,
+            configurable: true,
+          },
+          rawData: {
+            value: { ...(last.data.message as { rawData?: Record<string, unknown> }).rawData },
+            enumerable: true,
+            configurable: true,
+          },
+        }) as DiscordMessageEvent["message"];
         const syntheticData: DiscordMessageEvent = {
           ...last.data,
           message: syntheticMessage,

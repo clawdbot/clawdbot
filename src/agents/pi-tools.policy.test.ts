@@ -7,8 +7,10 @@ import {
   filterToolsByPolicy,
   isToolAllowedByPolicyName,
   resolveEffectiveToolPolicy,
+  resolveGroupToolPolicy,
   resolveSubagentToolPolicy,
   resolveSubagentToolPolicyForSession,
+  resolveTrustedGroupId,
 } from "./pi-tools.policy.js";
 import { createStubTool } from "./test-helpers/pi-tool-stubs.js";
 import { providerAliasCases } from "./test-helpers/provider-alias-cases.js";
@@ -37,6 +39,137 @@ describe("pi-tools.policy", () => {
 
   it("blocks apply_patch when write is denylisted", () => {
     expect(isToolAllowedByPolicyName("apply_patch", { deny: ["write"] })).toBe(false);
+  });
+});
+
+describe("resolveGroupToolPolicy group context validation", () => {
+  const cfg: OpenClawConfig = {
+    channels: {
+      whatsapp: {
+        groups: {
+          "safe-room": {
+            tools: { allow: ["read"] },
+          },
+          "trusted-group": {
+            tools: { allow: ["exec", "read", "write", "edit"] },
+          },
+        },
+      },
+    },
+    tools: { allow: ["read"] },
+  };
+
+  it("rejects forged groupId when the session has no group context", () => {
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:main",
+        messageProvider: "whatsapp",
+        groupId: "trusted-group",
+        groupChannel: "whatsapp",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("uses session-derived group policy when caller groupId disagrees", () => {
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:whatsapp:group:safe-room",
+        messageProvider: "whatsapp",
+        groupId: "trusted-group",
+        groupChannel: "whatsapp",
+      }),
+    ).toEqual({ allow: ["read"] });
+  });
+
+  it("accepts caller groupId when it matches session-derived group context", () => {
+    expect(
+      resolveTrustedGroupId({
+        sessionKey: "agent:main:whatsapp:group:trusted-group",
+        groupId: "trusted-group",
+      }),
+    ).toEqual({ groupId: "trusted-group", dropped: false });
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:whatsapp:group:trusted-group",
+        messageProvider: "whatsapp",
+        groupId: "trusted-group",
+        groupChannel: "whatsapp",
+      }),
+    ).toEqual({ allow: ["exec", "read", "write", "edit"] });
+  });
+
+  it("accepts caller groupId when spawnedBy provides the trusted group context", () => {
+    expect(
+      resolveTrustedGroupId({
+        sessionKey: "agent:main:main",
+        spawnedBy: "agent:main:whatsapp:group:trusted-group",
+        groupId: "trusted-group",
+      }),
+    ).toEqual({ groupId: "trusted-group", dropped: false });
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:main",
+        spawnedBy: "agent:main:whatsapp:group:trusted-group",
+        messageProvider: "whatsapp",
+        groupId: "trusted-group",
+      }),
+    ).toEqual({ allow: ["exec", "read", "write", "edit"] });
+  });
+
+  it("keeps specific session group policy ahead of trusted parent caller groupId", () => {
+    const scopedCfg: OpenClawConfig = {
+      channels: {
+        whatsapp: {
+          groups: {
+            room: {
+              tools: { allow: ["exec", "read"] },
+            },
+            "room:sender:alice": {
+              tools: { allow: ["read"] },
+            },
+          },
+        },
+      },
+    };
+
+    expect(
+      resolveGroupToolPolicy({
+        config: scopedCfg,
+        sessionKey: "agent:main:whatsapp:group:room:sender:alice",
+        messageProvider: "whatsapp",
+        groupId: "room",
+      }),
+    ).toEqual({ allow: ["read"] });
+  });
+
+  it("prefers the session-derived channel over caller-supplied messageProvider", () => {
+    const channelCfg = {
+      channels: {
+        discord: {
+          groups: {
+            C123: { tools: { allow: ["exec"] } },
+          },
+        },
+        slack: {
+          groups: {
+            C123: { tools: { allow: ["read"] } },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const policy = resolveGroupToolPolicy({
+      config: channelCfg,
+      sessionKey: "agent:main:slack:group:C123",
+      messageProvider: "discord",
+      groupId: "C123",
+    });
+
+    expect(policy).toEqual({ allow: ["read"] });
   });
 });
 

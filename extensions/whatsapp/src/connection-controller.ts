@@ -45,6 +45,7 @@ export type WhatsAppLiveConnection = {
   handledMessages: number;
   unregisterUnhandled: (() => void) | null;
   unregisterTransportActivity: (() => void) | null;
+  openedAfterRecentInbound: boolean;
   backgroundTasks: Set<Promise<unknown>>;
   closePromise: Promise<WebListenerCloseReason>;
   resolveClose: (reason: WebListenerCloseReason) => void;
@@ -97,6 +98,7 @@ function createLiveConnection(params: {
   connectionId: string;
   sock: WASocket;
   listener: ManagedWhatsAppListener;
+  openedAfterRecentInbound: boolean;
 }): WhatsAppLiveConnection {
   let closeResolved = false;
   let resolveClosePromise = (_reason: WebListenerCloseReason) => {};
@@ -122,6 +124,7 @@ function createLiveConnection(params: {
     handledMessages: 0,
     unregisterUnhandled: null,
     unregisterTransportActivity: null,
+    openedAfterRecentInbound: params.openedAfterRecentInbound,
     backgroundTasks: new Set<Promise<unknown>>(),
     closePromise,
     resolveClose: resolveClosePromise,
@@ -259,6 +262,7 @@ export class WhatsAppConnectionController {
 
   private current: WhatsAppLiveConnection | null = null;
   private reconnectAttempts = 0;
+  private lastHandledInboundAt: number | null = null;
 
   constructor(params: {
     accountId: string;
@@ -334,6 +338,8 @@ export class WhatsAppConnectionController {
     this.current.handledMessages += 1;
     this.current.lastInboundAt = timestamp;
     this.current.lastTransportActivityAt = timestamp;
+    this.current.openedAfterRecentInbound = false;
+    this.lastHandledInboundAt = timestamp;
   }
 
   noteTransportActivity(timestamp = Date.now()): void {
@@ -397,6 +403,7 @@ export class WhatsAppConnectionController {
         connectionId: params.connectionId,
         sock,
         listener: placeholderListener,
+        openedAfterRecentInbound: this.isOpeningAfterRecentInbound(),
       });
       const listener = await params.createListener({ sock, connection });
       connection.listener = listener;
@@ -602,10 +609,10 @@ export class WhatsAppConnectionController {
       const transportStaleForMs = now - connection.lastTransportActivityAt;
       const appBaselineAt = connection.lastInboundAt ?? connection.startedAt;
       const appSilentForMs = now - appBaselineAt;
-      if (
-        transportStaleForMs <= this.transportTimeoutMs &&
-        appSilentForMs <= this.appSilenceTimeoutMs
-      ) {
+      const appSilenceTimeoutMs = connection.openedAfterRecentInbound
+        ? this.messageTimeoutMs
+        : this.appSilenceTimeoutMs;
+      if (transportStaleForMs <= this.transportTimeoutMs && appSilentForMs <= appSilenceTimeoutMs) {
         return;
       }
       const snapshot = this.getCurrentSnapshot(connection);
@@ -637,6 +644,13 @@ export class WhatsAppConnectionController {
       }
       ws.removeListener?.("frame", noteActivity);
     };
+  }
+
+  private isOpeningAfterRecentInbound(): boolean {
+    if (this.reconnectAttempts <= 0 || this.lastHandledInboundAt === null) {
+      return false;
+    }
+    return Date.now() - this.lastHandledInboundAt <= this.appSilenceTimeoutMs;
   }
 
   private stopDisconnectRetries(): void {

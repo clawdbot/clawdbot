@@ -2,6 +2,7 @@ import type {
   ChannelAccountSnapshot,
   ChannelStatusIssue,
 } from "openclaw/plugin-sdk/channel-contract";
+import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import {
   appendMatchMetadata,
   asString,
@@ -9,10 +10,20 @@ import {
   resolveEnabledConfiguredAccountId,
 } from "openclaw/plugin-sdk/status-helpers";
 
+const TELEGRAM_POLLING_CONNECT_GRACE_MS = 120_000;
+const TELEGRAM_POLLING_STALE_TRANSPORT_MS = 30 * 60_000;
+const TELEGRAM_WEBHOOK_CONNECT_GRACE_MS = 120_000;
+
 type TelegramAccountStatus = {
   accountId?: unknown;
   enabled?: unknown;
   configured?: unknown;
+  running?: unknown;
+  connected?: unknown;
+  mode?: unknown;
+  lastStartAt?: unknown;
+  lastTransportActivityAt?: unknown;
+  lastError?: unknown;
   allowUnmentionedGroups?: unknown;
   audit?: unknown;
 };
@@ -38,9 +49,114 @@ function readTelegramAccountStatus(value: ChannelAccountSnapshot): TelegramAccou
     accountId: value.accountId,
     enabled: value.enabled,
     configured: value.configured,
+    running: value.running,
+    connected: value.connected,
+    mode: value.mode,
+    lastStartAt: value.lastStartAt,
+    lastTransportActivityAt: value.lastTransportActivityAt,
+    lastError: value.lastError,
     allowUnmentionedGroups: value.allowUnmentionedGroups,
     audit: value.audit,
   };
+}
+
+function asFiniteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function appendTelegramRuntimeError(message: string, lastError: unknown): string {
+  const error = asString(lastError);
+  return error ? `${message}: ${error}` : message;
+}
+
+function collectTelegramPollingRuntimeIssues(params: {
+  account: TelegramAccountStatus;
+  accountId: string;
+  issues: ChannelStatusIssue[];
+  now: number;
+}) {
+  const { account, accountId, issues, now } = params;
+  if (account.running !== true || asString(account.mode) !== "polling") {
+    return;
+  }
+
+  const lastStartAt = asFiniteNumber(account.lastStartAt);
+  const lastTransportActivityAt = asFiniteNumber(account.lastTransportActivityAt);
+  const fix = `Run: ${formatCliCommand("openclaw channels status --probe")} (or restart the gateway). Check the bot token, proxy/network settings, and logs if it persists.`;
+
+  if (account.connected === false) {
+    const withinStartupGrace =
+      lastStartAt != null && now - lastStartAt < TELEGRAM_POLLING_CONNECT_GRACE_MS;
+    if (!withinStartupGrace) {
+      issues.push({
+        channel: "telegram",
+        accountId,
+        kind: "runtime",
+        message: appendTelegramRuntimeError(
+          "Telegram polling is running but has not completed a successful getUpdates call since startup",
+          account.lastError,
+        ),
+        fix,
+      });
+    }
+    return;
+  }
+
+  if (account.connected === true && lastTransportActivityAt != null) {
+    if (lastStartAt != null && lastTransportActivityAt < lastStartAt) {
+      const lifecycleAgeMs = Math.max(0, now - lastStartAt);
+      if (lifecycleAgeMs <= TELEGRAM_POLLING_STALE_TRANSPORT_MS) {
+        return;
+      }
+    }
+    const ageMs = now - lastTransportActivityAt;
+    if (ageMs > TELEGRAM_POLLING_STALE_TRANSPORT_MS) {
+      issues.push({
+        channel: "telegram",
+        accountId,
+        kind: "runtime",
+        message: appendTelegramRuntimeError(
+          `Telegram polling transport is stale (last successful getUpdates ${Math.max(0, Math.floor(ageMs / 60_000))}m ago)`,
+          account.lastError,
+        ),
+        fix,
+      });
+    }
+  }
+}
+
+function collectTelegramWebhookRuntimeIssues(params: {
+  account: TelegramAccountStatus;
+  accountId: string;
+  issues: ChannelStatusIssue[];
+  now: number;
+}) {
+  const { account, accountId, issues, now } = params;
+  if (account.running !== true || asString(account.mode) !== "webhook") {
+    return;
+  }
+
+  if (account.connected !== false) {
+    return;
+  }
+
+  const lastStartAt = asFiniteNumber(account.lastStartAt);
+  const withinStartupGrace =
+    lastStartAt != null && now - lastStartAt < TELEGRAM_WEBHOOK_CONNECT_GRACE_MS;
+  if (withinStartupGrace) {
+    return;
+  }
+
+  issues.push({
+    channel: "telegram",
+    accountId,
+    kind: "runtime",
+    message: appendTelegramRuntimeError(
+      "Telegram webhook listener is running but setWebhook has not completed since startup",
+      account.lastError,
+    ),
+    fix: `Run: ${formatCliCommand("openclaw channels status --probe")} (or restart the gateway). Check the webhook URL, secret, TLS/proxy reachability, and Telegram setWebhook logs if it persists.`,
+  });
 }
 
 function readTelegramGroupMembershipAuditSummary(
@@ -93,6 +209,20 @@ export function collectTelegramStatusIssues(
     if (!accountId) {
       continue;
     }
+    const now = Date.now();
+
+    collectTelegramPollingRuntimeIssues({
+      account,
+      accountId,
+      issues,
+      now,
+    });
+    collectTelegramWebhookRuntimeIssues({
+      account,
+      accountId,
+      issues,
+      now,
+    });
 
     if (account.allowUnmentionedGroups === true) {
       issues.push({

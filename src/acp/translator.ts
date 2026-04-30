@@ -58,6 +58,8 @@ const ACP_TRACE_LEVEL_CONFIG_ID = "trace_level";
 const ACP_REASONING_LEVEL_CONFIG_ID = "reasoning_level";
 const ACP_RESPONSE_USAGE_CONFIG_ID = "response_usage";
 const ACP_ELEVATED_LEVEL_CONFIG_ID = "elevated_level";
+const ACP_TIMEOUT_CONFIG_ID = "timeout";
+const ACP_TIMEOUT_SECONDS_CONFIG_ID = "timeout_seconds";
 const ACP_LOAD_SESSION_REPLAY_LIMIT = 1_000_000;
 const ACP_GATEWAY_DISCONNECT_GRACE_MS = 5_000;
 
@@ -664,10 +666,12 @@ export class AcpGatewayAgent implements Agent {
     const sessionPatch = this.resolveSessionConfigPatch(params.configId, params.value);
 
     try {
-      await this.gateway.request("sessions.patch", {
-        key: session.sessionKey,
-        ...sessionPatch.patch,
-      });
+      if (sessionPatch.patch) {
+        await this.gateway.request("sessions.patch", {
+          key: session.sessionKey,
+          ...sessionPatch.patch,
+        });
+      }
       this.log(
         `setSessionConfigOption: ${session.sessionId} -> ${params.configId}=${params.value}`,
       );
@@ -1291,7 +1295,7 @@ export class AcpGatewayAgent implements Agent {
     value: string | boolean,
   ): {
     overrides: Partial<GatewaySessionPresentationRow>;
-    patch: Record<string, string | boolean>;
+    patch?: Record<string, string | boolean>;
   } {
     if (typeof value !== "string") {
       throw new Error(
@@ -1333,6 +1337,11 @@ export class AcpGatewayAgent implements Agent {
         return {
           patch: { elevatedLevel: value },
           overrides: { elevatedLevel: value },
+        };
+      case ACP_TIMEOUT_CONFIG_ID:
+      case ACP_TIMEOUT_SECONDS_CONFIG_ID:
+        return {
+          overrides: {},
         };
       default:
         throw new Error(`ACP bridge mode does not support session config option "${configId}".`);

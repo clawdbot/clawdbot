@@ -14,7 +14,7 @@ import {
   shouldComputeCommandAuthorized,
 } from "../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../auto-reply/commands-registry.js";
-import { withReplyDispatcher } from "../../auto-reply/dispatch.js";
+import { settleReplyDispatcher, withReplyDispatcher } from "../../auto-reply/dispatch.js";
 import {
   formatAgentEnvelope,
   formatInboundEnvelope,
@@ -50,6 +50,13 @@ import {
 } from "../../channels/plugins/conversation-bindings.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import { recordInboundSession } from "../../channels/session.js";
+import {
+  buildChannelTurnContext,
+  runChannelTurn,
+  runPreparedChannelTurn,
+  runResolvedChannelTurn,
+  dispatchAssembledChannelTurn,
+} from "../../channels/turn/kernel.js";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
@@ -95,6 +102,7 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       resolveHumanDelayConfig,
       dispatchReplyFromConfig,
       withReplyDispatcher,
+      settleReplyDispatcher,
       finalizeInboundContext,
       formatAgentEnvelope,
       /** @deprecated Prefer `BodyForAgent` + structured user-context blocks (do not build plaintext envelopes for prompts). */
@@ -163,6 +171,13 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     },
     outbound: {
       loadAdapter: loadChannelOutboundAdapter,
+    },
+    turn: {
+      run: runChannelTurn,
+      runResolved: runResolvedChannelTurn,
+      buildContext: buildChannelTurnContext,
+      runPrepared: runPreparedChannelTurn,
+      dispatchAssembled: dispatchAssembledChannelTurn,
     },
     threadBindings: {
       setIdleTimeoutBySessionKey: ({ channelId, targetSessionKey, accountId, idleTimeoutMs }) =>

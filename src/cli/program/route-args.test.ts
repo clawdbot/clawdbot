@@ -111,6 +111,10 @@ describe("route-args", () => {
       json: true,
       bindings: true,
     });
+    expect(parseAgentsListRouteArgs(["node", "openclaw", "agents"])).toEqual({
+      json: false,
+      bindings: false,
+    });
   });
 
   it("parses config routes", () => {

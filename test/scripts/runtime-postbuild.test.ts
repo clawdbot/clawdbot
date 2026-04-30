@@ -13,8 +13,13 @@ const { createTempDir } = createScriptTestHarness();
 
 describe("runtime postbuild static assets", () => {
   it("tracks plugin-owned static assets that release packaging must ship", () => {
-    expect(listStaticExtensionAssetOutputs()).toContain(
-      "dist/extensions/diffs/assets/viewer-runtime.js",
+    expect(listStaticExtensionAssetOutputs()).toEqual(
+      expect.arrayContaining([
+        "dist/extensions/acpx/error-format.mjs",
+        "dist/extensions/acpx/mcp-command-line.mjs",
+        "dist/extensions/acpx/mcp-proxy.mjs",
+        "dist/extensions/diffs/assets/viewer-runtime.js",
+      ]),
     );
   });
 

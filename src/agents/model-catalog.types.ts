@@ -1,3 +1,5 @@
+import type { ModelCompatConfig } from "../config/types.models.js";
+
 export type ModelInputType = "text" | "image" | "audio" | "video" | "document";
 
 export type ModelCatalogEntry = {
@@ -8,4 +10,5 @@ export type ModelCatalogEntry = {
   contextWindow?: number;
   reasoning?: boolean;
   input?: ModelInputType[];
+  compat?: ModelCompatConfig;
 };

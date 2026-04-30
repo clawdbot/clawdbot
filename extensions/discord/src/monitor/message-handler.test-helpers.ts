@@ -43,6 +43,7 @@ export function createDiscordHandlerParams(overrides?: {
     textLimit: 2_000,
     replyToMode: "off" as const,
     dmEnabled: true,
+    dmPolicy: "pairing",
     groupDmEnabled: false,
     threadBindings: createNoopThreadBindingManager("default"),
     setStatus: overrides?.setStatus,

@@ -26,6 +26,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedSlackAccount } from "../accounts.js";
+import { SLACK_MAX_BLOCKS } from "../blocks-input.js";
 import { truncateSlackText } from "../truncate.js";
 import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "./allow-list.js";
 import { resolveSlackEffectiveAllowFrom } from "./auth.js";
@@ -52,8 +53,14 @@ const SLACK_COMMAND_ARG_BUTTON_ROW_SIZE = 5;
 const SLACK_COMMAND_ARG_OVERFLOW_MIN = 3;
 const SLACK_COMMAND_ARG_OVERFLOW_MAX = 5;
 const SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX = 100;
-const SLACK_COMMAND_ARG_SELECT_OPTION_VALUE_MAX = 75;
+const SLACK_COMMAND_ARG_SELECT_OPTION_TEXT_MAX = 75;
+const SLACK_COMMAND_ARG_SELECT_OPTION_VALUE_MAX = 150;
+const SLACK_COMMAND_ARG_BUTTON_TEXT_MAX = 75;
+const SLACK_COMMAND_ARG_BUTTON_VALUE_MAX = 2000;
+const SLACK_COMMAND_ARG_CONFIRM_TEXT_MAX = 300;
 const SLACK_HEADER_TEXT_MAX = 150;
+const SLACK_COMMAND_ARG_CHROME_BLOCKS = 3;
+const SLACK_COMMAND_ARG_ACTION_BLOCKS_MAX = SLACK_MAX_BLOCKS - SLACK_COMMAND_ARG_CHROME_BLOCKS;
 let slashCommandsRuntimePromise: Promise<typeof import("./slash-commands.runtime.js")> | null =
   null;
 let slashDispatchRuntimePromise: Promise<typeof import("./slash-dispatch.runtime.js")> | null =
@@ -140,7 +147,10 @@ function buildSlackArgMenuConfirm(params: { command: string; arg: string }) {
     title: { type: "plain_text", text: "Confirm selection" },
     text: {
       type: "mrkdwn",
-      text: `Run */${command}* with *${arg}* set to this value?`,
+      text: truncateSlackText(
+        `Run */${command}* with *${arg}* set to this value?`,
+        SLACK_COMMAND_ARG_CONFIRM_TEXT_MAX,
+      ),
     },
     confirm: { type: "plain_text", text: "Run command" },
     deny: { type: "plain_text", text: "Cancel" },
@@ -217,7 +227,10 @@ function parseSlackCommandArgValue(raw?: string | null): {
 
 function buildSlackArgMenuOptions(choices: EncodedMenuChoice[]) {
   return choices.map((choice) => ({
-    text: { type: "plain_text", text: choice.label.slice(0, 75) },
+    text: {
+      type: "plain_text",
+      text: truncateSlackText(choice.label, SLACK_COMMAND_ARG_SELECT_OPTION_TEXT_MAX),
+    },
     value: choice.value,
   }));
 }
@@ -287,18 +300,24 @@ function buildSlackCommandArgMenuBlocks(params: {
           },
         ]
       : encodedChoices.length <= SLACK_COMMAND_ARG_BUTTON_ROW_SIZE || !canUseStaticSelect
-        ? chunkItems(encodedChoices, SLACK_COMMAND_ARG_BUTTON_ROW_SIZE).map(
-            (choices, rowIndex) => ({
-              type: "actions",
-              elements: choices.map((choice, colIndex) => ({
-                type: "button",
-                action_id: `${SLACK_COMMAND_ARG_ACTION_ID}_${rowIndex}_${colIndex}`,
-                text: { type: "plain_text", text: choice.label },
-                value: choice.value,
-                confirm: buildSlackArgMenuConfirm({ command: params.command, arg: params.arg }),
-              })),
-            }),
-          )
+        ? chunkItems(
+            encodedChoices.filter(
+              (choice) => choice.value.length <= SLACK_COMMAND_ARG_BUTTON_VALUE_MAX,
+            ),
+            SLACK_COMMAND_ARG_BUTTON_ROW_SIZE,
+          ).map((choices, rowIndex) => ({
+            type: "actions",
+            elements: choices.map((choice, colIndex) => ({
+              type: "button",
+              action_id: `${SLACK_COMMAND_ARG_ACTION_ID}_${rowIndex}_${colIndex}`,
+              text: {
+                type: "plain_text",
+                text: truncateSlackText(choice.label, SLACK_COMMAND_ARG_BUTTON_TEXT_MAX),
+              },
+              value: choice.value,
+              confirm: buildSlackArgMenuConfirm({ command: params.command, arg: params.arg }),
+            })),
+          }))
         : chunkItems(encodedChoices, SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX).map(
             (choices, index) => ({
               type: "actions",
@@ -326,6 +345,7 @@ function buildSlackCommandArgMenuBlocks(params: {
     `Select one option to continue /${params.command} (${params.arg})`,
     3000,
   );
+  const visibleRows = rows.slice(0, SLACK_COMMAND_ARG_ACTION_BLOCKS_MAX);
   return [
     {
       type: "header",
@@ -339,7 +359,7 @@ function buildSlackCommandArgMenuBlocks(params: {
       type: "context",
       elements: [{ type: "mrkdwn", text: contextText }],
     },
-    ...rows,
+    ...visibleRows,
   ];
 }
 

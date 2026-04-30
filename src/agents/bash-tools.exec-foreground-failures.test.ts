@@ -50,4 +50,32 @@ describe("exec foreground failures", () => {
     });
     expect((result.details as { durationMs?: number }).durationMs).toEqual(expect.any(Number));
   });
+
+  it("rejects invalid host values before launching a command", async () => {
+    const tool = createExecTool({
+      security: "full",
+      ask: "off",
+      allowBackground: false,
+    });
+    for (const testCase of [
+      {
+        host: "spark-ff13",
+        message: 'Invalid exec host "spark-ff13". Allowed values: auto, sandbox, gateway, node.',
+      },
+      {
+        host: 42,
+        message:
+          "Invalid exec host value type number. Allowed values: auto, sandbox, gateway, node.",
+      },
+    ]) {
+      const malformedArgs = {
+        command: "echo should-not-run",
+        host: testCase.host,
+      } as unknown as Parameters<typeof tool.execute>[1];
+
+      await expect(tool.execute("call-invalid-host", malformedArgs)).rejects.toThrow(
+        testCase.message,
+      );
+    }
+  });
 });

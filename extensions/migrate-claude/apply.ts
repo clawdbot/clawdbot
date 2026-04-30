@@ -3,6 +3,7 @@ import { summarizeMigrationItems } from "openclaw/plugin-sdk/migration";
 import {
   archiveMigrationItem,
   copyMigrationFileItem,
+  withCachedMigrationConfigRuntime,
   writeMigrationReport,
 } from "openclaw/plugin-sdk/migration-runtime";
 import type {
@@ -16,54 +17,6 @@ import { appendItem } from "./helpers.js";
 import { buildClaudePlan } from "./plan.js";
 import { applyGeneratedSkillItem } from "./skills.js";
 
-function withCachedConfigRuntime(
-  runtime: MigrationProviderContext["runtime"] | undefined,
-  fallbackConfig: MigrationProviderContext["config"],
-): MigrationProviderContext["runtime"] | undefined {
-  if (!runtime) {
-    return undefined;
-  }
-  const configApi = runtime.config;
-  if (!configApi?.current || !configApi.mutateConfigFile) {
-    return runtime;
-  }
-  let cachedConfig: MigrationProviderContext["config"] | undefined;
-  const current = (): ReturnType<typeof configApi.current> => {
-    cachedConfig ??= structuredClone(
-      (configApi.current() ?? fallbackConfig) as MigrationProviderContext["config"],
-    );
-    return cachedConfig;
-  };
-  return {
-    ...runtime,
-    config: {
-      ...runtime.config,
-      current,
-      mutateConfigFile: async (params) => {
-        const result = await configApi.mutateConfigFile({
-          ...params,
-          mutate: async (draft, context) => {
-            const mutationResult = await params.mutate(draft, context);
-            cachedConfig = structuredClone(draft);
-            return mutationResult;
-          },
-        });
-        cachedConfig = structuredClone(result.nextConfig);
-        return result;
-      },
-      ...(configApi.replaceConfigFile
-        ? {
-            replaceConfigFile: async (params) => {
-              const result = await configApi.replaceConfigFile(params);
-              cachedConfig = structuredClone(result.nextConfig);
-              return result;
-            },
-          }
-        : {}),
-    },
-  };
-}
-
 export async function applyClaudePlan(params: {
   ctx: MigrationProviderContext;
   plan?: MigrationPlan;
@@ -71,7 +24,10 @@ export async function applyClaudePlan(params: {
 }): Promise<MigrationApplyResult> {
   const plan = params.plan ?? (await buildClaudePlan(params.ctx));
   const reportDir = params.ctx.reportDir ?? path.join(params.ctx.stateDir, "migration", "claude");
-  const runtime = withCachedConfigRuntime(params.ctx.runtime ?? params.runtime, params.ctx.config);
+  const runtime = withCachedMigrationConfigRuntime(
+    params.ctx.runtime ?? params.runtime,
+    params.ctx.config,
+  );
   const applyCtx = { ...params.ctx, runtime };
   const items: MigrationItem[] = [];
   for (const item of plan.items) {

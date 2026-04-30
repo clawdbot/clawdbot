@@ -92,20 +92,17 @@ describe("Zalo reply-once lifecycle", () => {
         },
       );
 
-      expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1);
-      expect(finalizeInboundContextMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          AccountId: "acct-zalo-lifecycle",
-          SessionKey: "agent:main:zalo:direct:dm-chat-1",
-          MessageSid: expect.stringContaining("zalo-replay-"),
-          From: "zalo:user-1",
-          To: "zalo:dm-chat-1",
-        }),
-      );
       expect(recordInboundSessionMock).toHaveBeenCalledTimes(1);
       expect(recordInboundSessionMock).toHaveBeenCalledWith(
         expect.objectContaining({
           sessionKey: "agent:main:zalo:direct:dm-chat-1",
+          ctx: expect.objectContaining({
+            AccountId: "acct-zalo-lifecycle",
+            SessionKey: "agent:main:zalo:direct:dm-chat-1",
+            MessageSid: expect.stringContaining("zalo-replay-"),
+            From: "zalo:user-1",
+            To: "zalo:dm-chat-1",
+          }),
         }),
       );
       expect(sendMessageMock).toHaveBeenCalledTimes(1);

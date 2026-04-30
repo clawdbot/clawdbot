@@ -138,7 +138,7 @@ export function createNodesTool(options?: {
     name: "nodes",
     ownerOnly: isOpenClawOwnerOnlyCoreToolName("nodes"),
     description:
-      "Discover and control paired nodes (status/describe/pairing/notify/camera/photos/screen/location/notifications/invoke).",
+      "Discover and control paired nodes (status/describe/pairing/notify/camera/photos/screen/location/notifications/invoke). For file retrieval, use the dedicated file_fetch tool.",
     parameters: NodesToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

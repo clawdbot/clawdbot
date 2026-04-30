@@ -123,7 +123,7 @@ describe("Discord native slash commands with commands.allowFrom", () => {
 
   it("authorizes guild slash commands when commands.allowFrom.discord matches the sender", async () => {
     const { dispatchSpy, interaction } = await runGuildSlashCommand();
-    expect(interaction.defer).toHaveBeenCalledTimes(1);
+    expect(interaction.defer).toHaveBeenCalledWith({ ephemeral: true });
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
     expectNotUnauthorizedReply(interaction);
   });
@@ -324,6 +324,39 @@ describe("Discord native slash commands with commands.allowFrom", () => {
           ...cfg.channels,
           discord: {
             ...cfg.channels?.discord,
+            guilds: {
+              "000000000000000000": {
+                channels: {
+                  "111111111111111111": {
+                    enabled: true,
+                    requireMention: false,
+                  },
+                },
+              },
+            },
+          },
+        };
+      },
+    });
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expectUnauthorizedReply(interaction);
+  });
+
+  it("does not treat open-DM wildcard access as guild command owner authorization", async () => {
+    const { dispatchSpy, interaction } = await runGuildSlashCommand({
+      userId: "999999999999999999",
+      mutateConfig: (cfg) => {
+        cfg.commands = {
+          ...cfg.commands,
+          useAccessGroups: false,
+          allowFrom: undefined,
+        };
+        cfg.channels = {
+          ...cfg.channels,
+          discord: {
+            ...cfg.channels?.discord,
+            dmPolicy: "open",
+            allowFrom: ["*"],
             guilds: {
               "000000000000000000": {
                 channels: {

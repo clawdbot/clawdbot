@@ -107,6 +107,19 @@ vi.mock("../gateway/client.js", () => ({
   GatewayClient: MockGatewayClient,
 }));
 
+vi.mock("../gateway/client-start-readiness.js", () => ({
+  startGatewayClientWhenEventLoopReady: vi.fn(async (client: MockGatewayClient) => {
+    client.start();
+    return {
+      ready: true,
+      elapsedMs: 0,
+      maxDriftMs: 0,
+      checks: 2,
+      aborted: false,
+    };
+  }),
+}));
+
 vi.mock("../infra/is-main.js", () => ({
   isMainModule: () => false,
 }));
@@ -158,11 +171,14 @@ describe("serveAcpGateway startup", () => {
   }
 
   async function emitHelloAndWaitForAgentSideConnection() {
+    await vi.waitFor(() => {
+      expect(mockState.gateways).toHaveLength(1);
+    });
     const gateway = getMockGateway();
     gateway.emitHello();
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(mockState.agentSideConnectionCtor).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(mockState.agentSideConnectionCtor).toHaveBeenCalledTimes(1);
+    });
   }
 
   async function stopServeWithSigint(

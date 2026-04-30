@@ -328,6 +328,96 @@ describe("subagent registry persistence", () => {
     expect(after.version).toBe(2);
   });
 
+  it("reuses unchanged persisted registry snapshots without reparsing runs.json", async () => {
+    const registryPath = await writePersistedRegistry(
+      {
+        version: 2,
+        runs: {
+          "run-cached": {
+            runId: "run-cached",
+            childSessionKey: "agent:main:subagent:cached",
+            requesterSessionKey: "agent:main:main",
+            requesterOrigin: { channel: "telegram", accountId: "cached-account" },
+            requesterDisplayKey: "main",
+            task: "cached persisted run",
+            cleanup: "keep",
+            createdAt: 1,
+            startedAt: 1,
+            outcome: { status: "ok" },
+          },
+        },
+      },
+      { seedChildSessions: false },
+    );
+    const readSpy = vi.spyOn(fsSync, "readFileSync");
+
+    const first = loadSubagentRegistryFromDisk();
+    first.clear();
+    const cachedEntry = loadSubagentRegistryFromDisk().get("run-cached");
+    if (!cachedEntry) {
+      throw new Error("expected cached run");
+    }
+    cachedEntry.endedAt = 999;
+    cachedEntry.cleanupHandled = true;
+    if (cachedEntry.requesterOrigin) {
+      cachedEntry.requesterOrigin.accountId = "mutated-account";
+    }
+    if (cachedEntry.outcome) {
+      cachedEntry.outcome.status = "error";
+    }
+    const second = loadSubagentRegistryFromDisk();
+
+    expect(second.get("run-cached")).toMatchObject({
+      requesterOrigin: { accountId: "cached-account" },
+      outcome: { status: "ok" },
+    });
+    expect(second.get("run-cached")?.endedAt).toBeUndefined();
+    expect(second.get("run-cached")?.cleanupHandled).toBeUndefined();
+    expect(
+      readSpy.mock.calls.filter(([pathname]) => String(pathname) === registryPath),
+    ).toHaveLength(1);
+
+    await fs.writeFile(
+      registryPath,
+      `${JSON.stringify({
+        version: 2,
+        runs: {
+          "run-updated": {
+            runId: "run-updated",
+            childSessionKey: "agent:main:subagent:updated",
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            task: "updated persisted run with a longer payload",
+            cleanup: "keep",
+            createdAt: 2,
+            startedAt: 2,
+          },
+        },
+      })}\n`,
+      "utf8",
+    );
+
+    expect(loadSubagentRegistryFromDisk().has("run-updated")).toBe(true);
+    expect(
+      readSpy.mock.calls.filter(([pathname]) => String(pathname) === registryPath),
+    ).toHaveLength(2);
+  });
+
+  it("reuses unchanged invalid persisted registry snapshots as empty", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    const registryPath = path.join(tempStateDir, "subagents", "runs.json");
+    await fs.mkdir(path.dirname(registryPath), { recursive: true });
+    await fs.writeFile(registryPath, "{invalid", "utf8");
+    const readSpy = vi.spyOn(fsSync, "readFileSync");
+
+    expect(loadSubagentRegistryFromDisk()).toEqual(new Map());
+    expect(loadSubagentRegistryFromDisk()).toEqual(new Map());
+    expect(
+      readSpy.mock.calls.filter(([pathname]) => String(pathname) === registryPath),
+    ).toHaveLength(1);
+  });
+
   it("normalizes persisted and newly registered session keys to canonical trimmed values", async () => {
     const persisted = {
       version: 2,

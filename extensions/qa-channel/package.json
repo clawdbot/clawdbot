@@ -11,7 +11,7 @@
     "./test-api.js": "./test-api.ts"
   },
   "dependencies": {
-    "typebox": "1.1.33"
+    "typebox": "1.1.34"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

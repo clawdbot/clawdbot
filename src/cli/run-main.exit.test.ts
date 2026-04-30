@@ -19,6 +19,7 @@ const buildProgramMock = vi.hoisted(() => vi.fn());
 const getProgramContextMock = vi.hoisted(() => vi.fn(() => null));
 const registerCoreCliByNameMock = vi.hoisted(() => vi.fn());
 const registerSubCliByNameMock = vi.hoisted(() => vi.fn());
+const registerPluginCliCommandsFromValidatedConfigMock = vi.hoisted(() => vi.fn(async () => ({})));
 const restoreTerminalStateMock = vi.hoisted(() => vi.fn());
 const hasEnvHttpProxyAgentConfiguredMock = vi.hoisted(() => vi.fn(() => false));
 const ensureGlobalUndiciEnvProxyDispatcherMock = vi.hoisted(() => vi.fn());
@@ -149,6 +150,10 @@ vi.mock("./program/command-registry.js", () => ({
 
 vi.mock("./program/register.subclis.js", () => ({
   registerSubCliByName: registerSubCliByNameMock,
+}));
+
+vi.mock("../plugins/cli.js", () => ({
+  registerPluginCliCommandsFromValidatedConfig: registerPluginCliCommandsFromValidatedConfigMock,
 }));
 
 vi.mock("../terminal/restore.js", () => ({
@@ -358,6 +363,7 @@ describe("runCli exit behavior", () => {
     ["models list", ["node", "openclaw", "models", "list"]],
     ["models status without live probe", ["node", "openclaw", "models", "status"]],
     ["tasks list", ["node", "openclaw", "tasks", "list"]],
+    ["gateway tools namespace typo", ["node", "openclaw", "tools", "effective"]],
     ["migrate", ["node", "openclaw", "migrate"]],
   ])("skips managed proxy routing for %s", (_name, argv) => {
     expect(shouldStartProxyForCli(argv)).toBe(false);
@@ -377,6 +383,26 @@ describe("runCli exit behavior", () => {
     await runCli(["node", "openclaw", "googlemeet", "login"]);
 
     expect(startProxyMock).toHaveBeenCalledWith(undefined);
+  });
+
+  it("keeps gateway tool RPC names out of plugin command discovery", async () => {
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [],
+      parseAsync,
+    });
+
+    await runCli(["node", "openclaw", "tools", "effective"]);
+
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(registerSubCliByNameMock).toHaveBeenCalledWith(expect.anything(), "tools", [
+      "node",
+      "openclaw",
+      "tools",
+      "effective",
+    ]);
+    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+    expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "tools", "effective"]);
   });
 
   it("fails protected commands when managed proxy activation fails", async () => {
@@ -685,11 +711,13 @@ describe("runCli exit behavior", () => {
     expect(typeof handler).toBe("function");
 
     try {
-      const epipe = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
-      expect(() => (handler as (error: unknown) => void)(epipe)).not.toThrow();
+      const hostUnreachable = Object.assign(new Error("connect EHOSTUNREACH 149.154.167.220:443"), {
+        code: "EHOSTUNREACH",
+      });
+      expect(() => (handler as (error: unknown) => void)(hostUnreachable)).not.toThrow();
       expect(consoleWarnSpy).toHaveBeenCalledWith(
         "[openclaw] Non-fatal uncaught exception (continuing):",
-        expect.stringContaining("write EPIPE"),
+        expect.stringContaining("EHOSTUNREACH"),
       );
       expect(restoreTerminalStateMock).not.toHaveBeenCalled();
       expect(exitSpy).not.toHaveBeenCalled();

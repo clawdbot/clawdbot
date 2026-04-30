@@ -1,6 +1,7 @@
 import { formatRemainingShort } from "../../agents/auth-health.js";
 import { resolveAuthProfileDisplayLabel } from "../../agents/auth-profiles/display.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
+import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persisted.js";
 import { listProfilesForProvider } from "../../agents/auth-profiles/profiles.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
@@ -42,11 +43,30 @@ function formatProfileSecretLabel(params: {
   return params.kind === "token" ? "token:missing" : "missing";
 }
 
+function resolveProfileSourceAgentDir(params: {
+  agentDir?: string;
+  profileIds: string[];
+}): string | undefined {
+  if (!params.agentDir || params.profileIds.length === 0) {
+    return params.agentDir;
+  }
+  const localStore = loadPersistedAuthProfileStore(params.agentDir);
+  if (params.profileIds.some((profileId) => Boolean(localStore?.profiles[profileId]))) {
+    return params.agentDir;
+  }
+  const mainStore = loadPersistedAuthProfileStore(undefined);
+  return params.profileIds.every((profileId) => Boolean(mainStore?.profiles[profileId]))
+    ? undefined
+    : params.agentDir;
+}
+
 export function resolveProviderAuthOverview(params: {
   provider: string;
   cfg: OpenClawConfig;
   store: AuthProfileStore;
   modelsPath: string;
+  agentDir?: string;
+  workspaceDir?: string;
   syntheticAuth?: { value: string; source: string };
 }): ProviderAuthOverview {
   const { provider, cfg, store } = params;
@@ -104,7 +124,10 @@ export function resolveProviderAuthOverview(params: {
   const tokenCount = profiles.filter((id) => store.profiles[id]?.type === "token").length;
   const apiKeyCount = profiles.filter((id) => store.profiles[id]?.type === "api_key").length;
 
-  const envKey = resolveEnvApiKey(provider);
+  const envKey = resolveEnvApiKey(provider, process.env, {
+    config: cfg,
+    workspaceDir: params.workspaceDir,
+  });
   const customKey = getCustomProviderApiKey(cfg, provider);
   const usableCustomKey = resolveUsableCustomProviderApiKey({ cfg, provider });
 
@@ -112,7 +135,14 @@ export function resolveProviderAuthOverview(params: {
     if (profiles.length > 0) {
       return {
         kind: "profiles",
-        detail: shortenHomePath(resolveAuthStorePathForDisplay()),
+        detail: shortenHomePath(
+          resolveAuthStorePathForDisplay(
+            resolveProfileSourceAgentDir({
+              agentDir: params.agentDir,
+              profileIds: profiles,
+            }),
+          ),
+        ),
       };
     }
     if (envKey) {

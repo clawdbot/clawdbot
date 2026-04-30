@@ -6,6 +6,7 @@ import {
   listKnownSecretEnvVarNames,
   PROVIDER_AUTH_ENV_VAR_CANDIDATES,
   PROVIDER_ENV_VARS,
+  resolveProviderAuthEvidence,
 } from "./provider-env-vars.js";
 
 type MockManifestRegistry = {
@@ -19,6 +20,15 @@ type MockManifestRegistry = {
       providers?: Array<{
         id: string;
         envVars?: string[];
+        authEvidence?: Array<{
+          type: "local-file-with-env";
+          fileEnvVar?: string;
+          fallbackPaths?: string[];
+          requiresAnyEnv?: string[];
+          requiresAllEnv?: string[];
+          credentialMarker: string;
+          source?: string;
+        }>;
       }>;
     };
   }>;
@@ -26,7 +36,7 @@ type MockManifestRegistry = {
 };
 
 const pluginRegistryMocks = vi.hoisted(() => {
-  const loadManifestRegistry = vi.fn<() => MockManifestRegistry>(() => ({
+  const loadManifestRegistry = vi.fn<(...args: unknown[]) => MockManifestRegistry>(() => ({
     plugins: [],
     diagnostics: [],
   }));
@@ -105,6 +115,119 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(getProviderEnvVars("model-studio")).toEqual(["MODEL_STUDIO_API_KEY"]);
     expect(listKnownProviderAuthEnvVarNames()).toContain("MODEL_STUDIO_API_KEY");
     expect(listKnownSecretEnvVarNames()).toContain("MODEL_STUDIO_API_KEY");
+  });
+
+  it("includes setup provider auth evidence without loading setup runtime", async () => {
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "external-cloud",
+          origin: "global",
+          setup: {
+            providers: [
+              {
+                id: "external-cloud",
+                authEvidence: [
+                  {
+                    type: "local-file-with-env",
+                    fileEnvVar: "EXTERNAL_CLOUD_CREDENTIALS",
+                    requiresAllEnv: ["EXTERNAL_CLOUD_PROJECT"],
+                    credentialMarker: "external-cloud-local-credentials",
+                    source: "external cloud credentials",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(resolveProviderAuthEvidence()["external-cloud"]).toEqual([
+      {
+        type: "local-file-with-env",
+        fileEnvVar: "EXTERNAL_CLOUD_CREDENTIALS",
+        requiresAllEnv: ["EXTERNAL_CLOUD_PROJECT"],
+        credentialMarker: "external-cloud-local-credentials",
+        source: "external cloud credentials",
+      },
+    ]);
+    expect(
+      pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mock.calls.at(-1)?.[0],
+    ).toMatchObject({ includeDisabled: false });
+  });
+
+  it("excludes untrusted workspace plugin auth evidence by default", async () => {
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "workspace-cloud",
+          origin: "workspace",
+          setup: {
+            providers: [
+              {
+                id: "workspace-cloud",
+                authEvidence: [
+                  {
+                    type: "local-file-with-env",
+                    fileEnvVar: "WORKSPACE_CLOUD_CREDENTIALS",
+                    credentialMarker: "workspace-cloud-local-credentials",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(
+      resolveProviderAuthEvidence({ config: { plugins: {} } })["workspace-cloud"],
+    ).toBeUndefined();
+  });
+
+  it("keeps explicitly trusted workspace plugin auth evidence", async () => {
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "workspace-cloud",
+          origin: "workspace",
+          setup: {
+            providers: [
+              {
+                id: "workspace-cloud",
+                authEvidence: [
+                  {
+                    type: "local-file-with-env",
+                    fileEnvVar: "WORKSPACE_CLOUD_CREDENTIALS",
+                    credentialMarker: "workspace-cloud-local-credentials",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(
+      resolveProviderAuthEvidence({
+        config: {
+          plugins: {
+            allow: ["workspace-cloud"],
+          },
+        },
+      })["workspace-cloud"],
+    ).toEqual([
+      {
+        type: "local-file-with-env",
+        fileEnvVar: "WORKSPACE_CLOUD_CREDENTIALS",
+        credentialMarker: "workspace-cloud-local-credentials",
+      },
+    ]);
   });
 
   it("appends setup provider env vars after explicit provider auth env vars", async () => {

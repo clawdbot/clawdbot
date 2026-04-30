@@ -1,20 +1,7 @@
-import { inspect } from "node:util";
-import {
-  Client,
-  RateLimitError,
-  type BaseCommand,
-  type BaseMessageInteractiveComponent,
-  type Modal,
-} from "@buape/carbon";
-import { GatewayCloseCodes, type GatewayPlugin } from "@buape/carbon/gateway";
-import { Routes } from "discord-api-types/v10";
-import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
-import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import {
   listNativeCommandSpecsForConfig,
   listSkillCommandsForAgents,
-  type NativeCommandSpec,
 } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-types";
 import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
@@ -25,13 +12,7 @@ import {
 } from "openclaw/plugin-sdk/native-command-config-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import {
-  danger,
-  isVerbose,
-  logVerbose,
-  shouldLogVerbose,
-  warn,
-} from "openclaw/plugin-sdk/runtime-env";
+import { isVerbose, logVerbose, shouldLogVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -42,44 +23,38 @@ import {
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
-  normalizeLowercaseStringOrEmpty,
-  summarizeStringEntries,
-} from "openclaw/plugin-sdk/text-runtime";
-import { resolveDiscordAccount } from "../accounts.js";
-import { isDiscordExecApprovalClientEnabled } from "../exec-approvals.js";
-import { fetchDiscordApplicationId } from "../probe.js";
+  resolveDiscordAccount,
+  resolveDiscordAccountAllowFrom,
+  resolveDiscordAccountDmPolicy,
+} from "../accounts.js";
+import { Client } from "../internal/discord.js";
+import { GatewayCloseCodes } from "../internal/gateway.js";
+import { fetchDiscordApplicationId, parseApplicationIdFromToken } from "../probe.js";
 import { resolveDiscordProxyFetchForAccount } from "../proxy-fetch.js";
 import { normalizeDiscordToken } from "../token.js";
-import { createDiscordVoiceCommand } from "../voice/command.js";
-import {
-  createAgentComponentButton,
-  createAgentSelectMenu,
-  createDiscordComponentButton,
-  createDiscordComponentChannelSelect,
-  createDiscordComponentMentionableSelect,
-  createDiscordComponentModal,
-  createDiscordComponentRoleSelect,
-  createDiscordComponentStringSelect,
-  createDiscordComponentUserSelect,
-} from "./agent-components.js";
 import { createDiscordAutoPresenceController } from "./auto-presence.js";
 import { resolveDiscordSlashCommandConfig } from "./commands.js";
-import {
-  createExecApprovalButton,
-  createDiscordExecApprovalButtonContext,
-} from "./exec-approvals.js";
 import type { MutableDiscordGateway } from "./gateway-handle.js";
 import { createDiscordGatewayPlugin } from "./gateway-plugin.js";
 import { createDiscordGatewaySupervisor } from "./gateway-supervisor.js";
 import { registerDiscordListener } from "./listeners.js";
-import {
-  createDiscordCommandArgFallbackButton,
-  createDiscordModelPickerFallbackButton,
-  createDiscordModelPickerFallbackSelect,
-  createDiscordNativeCommand,
-} from "./native-command.js";
+import { createDiscordNativeCommand } from "./native-command.js";
+import { probeDiscordAcpBindingHealth } from "./provider.acp.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
+import { cleanupDiscordProviderStartup } from "./provider.cleanup.js";
+import {
+  resolveDiscordProviderCommandSpecs,
+  type GetPluginCommandSpecs,
+} from "./provider.commands.js";
+import { logDiscordResolvedConfig } from "./provider.config-log.js";
+import {
+  clearDiscordNativeCommands,
+  formatDiscordDeployErrorDetails,
+  runDiscordCommandDeployInBackground,
+} from "./provider.deploy.js";
+import { createDiscordProviderInteractionSurface } from "./provider.interactions.js";
 import { runDiscordGatewayLifecycle } from "./provider.lifecycle.js";
+import { logDiscordStartupPhase as logDiscordStartupPhaseBase } from "./provider.startup-log.js";
 import {
   createDiscordMonitorClient,
   fetchDiscordBotIdentity,
@@ -88,7 +63,6 @@ import {
 import { resolveDiscordRestFetch } from "./rest-fetch.js";
 import { formatDiscordStartupStatusMessage } from "./startup-status.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
-import { formatThreadBindingDurationLabel } from "./thread-bindings.messages.js";
 
 export type MonitorDiscordOpts = {
   token?: string;
@@ -109,12 +83,9 @@ type DiscordVoiceManager = import("../voice/manager.js").DiscordVoiceManager;
 
 type DiscordVoiceRuntimeModule = typeof import("../voice/manager.runtime.js");
 type DiscordProviderSessionRuntimeModule = typeof import("./provider-session.runtime.js");
-type GetPluginCommandSpecs =
-  typeof import("openclaw/plugin-sdk/plugin-runtime").getPluginCommandSpecs;
 
 let discordVoiceRuntimePromise: Promise<DiscordVoiceRuntimeModule> | undefined;
 let discordProviderSessionRuntimePromise: Promise<DiscordProviderSessionRuntimeModule> | undefined;
-let pluginRuntimePromise: Promise<typeof import("openclaw/plugin-sdk/plugin-runtime")> | undefined;
 
 let fetchDiscordApplicationIdForTesting: typeof fetchDiscordApplicationId | undefined;
 let createDiscordNativeCommandForTesting: typeof createDiscordNativeCommand | undefined;
@@ -140,6 +111,15 @@ let listNativeCommandSpecsForConfigForTesting: typeof listNativeCommandSpecsForC
 let listSkillCommandsForAgentsForTesting: typeof listSkillCommandsForAgents | undefined;
 let isVerboseForTesting: typeof isVerbose | undefined;
 let shouldLogVerboseForTesting: typeof shouldLogVerbose | undefined;
+
+function logDiscordStartupPhase(
+  params: Omit<Parameters<typeof logDiscordStartupPhaseBase>[0], "isVerbose">,
+) {
+  logDiscordStartupPhaseBase({
+    ...params,
+    isVerbose: isVerboseForTesting ?? isVerbose,
+  });
+}
 
 async function loadDiscordVoiceRuntime(): Promise<DiscordVoiceRuntimeModule> {
   if (loadDiscordVoiceRuntimeForTesting) {
@@ -173,19 +153,6 @@ async function loadDiscordProviderSessionRuntime(): Promise<DiscordProviderSessi
   }
 }
 
-async function loadPluginRuntime() {
-  const promise = pluginRuntimePromise ?? import("openclaw/plugin-sdk/plugin-runtime");
-  pluginRuntimePromise = promise;
-  try {
-    return await promise;
-  } catch (error) {
-    if (pluginRuntimePromise === promise) {
-      pluginRuntimePromise = undefined;
-    }
-    throw error;
-  }
-}
-
 function normalizeBooleanForTesting(value: unknown): boolean | undefined {
   if (typeof value === "boolean") {
     return value;
@@ -202,407 +169,6 @@ function resolveThreadBindingsEnabledForTesting(params: {
     normalizeBooleanForTesting(params.sessionEnabledRaw) ??
     true
   );
-}
-
-function formatThreadBindingDurationForConfigLabel(durationMs: number): string {
-  const label = formatThreadBindingDurationLabel(durationMs);
-  return label === "disabled" ? "off" : label;
-}
-
-async function appendPluginCommandSpecs(params: {
-  commandSpecs: NativeCommandSpec[];
-  runtime: RuntimeEnv;
-  cfg: OpenClawConfig;
-}): Promise<NativeCommandSpec[]> {
-  const merged = [...params.commandSpecs];
-  const existingNames = new Set(
-    merged.map((spec) => normalizeLowercaseStringOrEmpty(spec.name)).filter(Boolean),
-  );
-  const getPluginCommandSpecs =
-    getPluginCommandSpecsForTesting ?? (await loadPluginRuntime()).getPluginCommandSpecs;
-  for (const pluginCommand of getPluginCommandSpecs("discord", { config: params.cfg })) {
-    const normalizedName = normalizeLowercaseStringOrEmpty(pluginCommand.name);
-    if (!normalizedName) {
-      continue;
-    }
-    if (existingNames.has(normalizedName)) {
-      params.runtime.error?.(
-        danger(
-          `discord: plugin command "/${normalizedName}" duplicates an existing native command. Skipping.`,
-        ),
-      );
-      continue;
-    }
-    existingNames.add(normalizedName);
-    merged.push({
-      name: pluginCommand.name,
-      description: pluginCommand.description,
-      acceptsArgs: pluginCommand.acceptsArgs,
-    });
-  }
-  return merged;
-}
-
-const DISCORD_ACP_STATUS_PROBE_TIMEOUT_MS = 8_000;
-const DISCORD_ACP_STALE_RUNNING_ACTIVITY_MS = 2 * 60 * 1000;
-
-function isLegacyMissingSessionError(message: string): boolean {
-  return (
-    message.includes("Session is not ACP-enabled") ||
-    message.includes("ACP session metadata missing")
-  );
-}
-
-function classifyAcpStatusProbeError(params: {
-  error: unknown;
-  isStaleRunning: boolean;
-  isAcpRuntimeError: DiscordProviderSessionRuntimeModule["isAcpRuntimeError"];
-}): {
-  status: "stale" | "uncertain";
-  reason: string;
-} {
-  if (params.isAcpRuntimeError(params.error) && params.error.code === "ACP_SESSION_INIT_FAILED") {
-    return { status: "stale", reason: "session-init-failed" };
-  }
-
-  const message = formatErrorMessage(params.error);
-  if (isLegacyMissingSessionError(message)) {
-    return { status: "stale", reason: "session-missing" };
-  }
-
-  return params.isStaleRunning
-    ? { status: "stale", reason: "status-error-running-stale" }
-    : { status: "uncertain", reason: "status-error" };
-}
-
-async function probeDiscordAcpBindingHealth(params: {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  storedState?: "idle" | "running" | "error";
-  lastActivityAt?: number;
-}): Promise<{ status: "healthy" | "stale" | "uncertain"; reason?: string }> {
-  const { getAcpSessionManager, isAcpRuntimeError } = await loadDiscordProviderSessionRuntime();
-  const manager = getAcpSessionManager();
-  const statusProbeAbortController = new AbortController();
-  const statusPromise = manager
-    .getSessionStatus({
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-      signal: statusProbeAbortController.signal,
-    })
-    .then((status) => ({ kind: "status" as const, status }))
-    .catch((error: unknown) => ({ kind: "error" as const, error }));
-
-  let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
-  const timeoutPromise = new Promise<{ kind: "timeout" }>((resolve) => {
-    timeoutTimer = setTimeout(
-      () => resolve({ kind: "timeout" }),
-      DISCORD_ACP_STATUS_PROBE_TIMEOUT_MS,
-    );
-    timeoutTimer.unref?.();
-  });
-  const result = await Promise.race([statusPromise, timeoutPromise]);
-  if (timeoutTimer) {
-    clearTimeout(timeoutTimer);
-  }
-  if (result.kind === "timeout") {
-    statusProbeAbortController.abort();
-  }
-  const runningForMs =
-    params.storedState === "running" && Number.isFinite(params.lastActivityAt)
-      ? Date.now() - Math.max(0, Math.floor(params.lastActivityAt ?? 0))
-      : 0;
-  const isStaleRunning =
-    params.storedState === "running" && runningForMs >= DISCORD_ACP_STALE_RUNNING_ACTIVITY_MS;
-
-  if (result.kind === "timeout") {
-    return isStaleRunning
-      ? { status: "stale", reason: "status-timeout-running-stale" }
-      : { status: "uncertain", reason: "status-timeout" };
-  }
-  if (result.kind === "error") {
-    return classifyAcpStatusProbeError({
-      error: result.error,
-      isStaleRunning,
-      isAcpRuntimeError,
-    });
-  }
-  if (result.status.state === "error") {
-    // ACP error state is recoverable (next turn can clear it), so keep the
-    // binding unless stronger stale signals exist.
-    return { status: "uncertain", reason: "status-error-state" };
-  }
-  return { status: "healthy" };
-}
-
-async function deployDiscordCommands(params: {
-  client: Client;
-  runtime: RuntimeEnv;
-  enabled: boolean;
-  accountId?: string;
-  startupStartedAt?: number;
-}) {
-  if (!params.enabled) {
-    return;
-  }
-  const startupStartedAt = params.startupStartedAt ?? Date.now();
-  const accountId = params.accountId ?? "default";
-  const maxAttempts = 3;
-  const maxRetryDelayMs = 15_000;
-  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
-  const isDailyCreateLimit = (err: unknown) =>
-    err instanceof RateLimitError &&
-    err.discordCode === 30034 &&
-    /daily application command creates/i.test(err.message);
-  const restClient = params.client.rest as {
-    put: (path: string, data?: unknown, query?: unknown) => Promise<unknown>;
-    options?: { queueRequests?: boolean };
-  };
-  const originalPut = restClient.put.bind(restClient);
-  const previousQueueRequests = restClient.options?.queueRequests;
-  restClient.put = async (path: string, data?: unknown, query?: unknown) => {
-    const startedAt = Date.now();
-    const body =
-      data && typeof data === "object" && "body" in data
-        ? (data as { body?: unknown }).body
-        : undefined;
-    const commandCount = Array.isArray(body) ? body.length : undefined;
-    const bodyBytes =
-      body === undefined
-        ? undefined
-        : Buffer.byteLength(typeof body === "string" ? body : JSON.stringify(body), "utf8");
-    if ((shouldLogVerboseForTesting ?? shouldLogVerbose)()) {
-      params.runtime.log?.(
-        `discord startup [${accountId}] deploy-rest:put:start ${Math.max(0, Date.now() - startupStartedAt)}ms path=${path}${typeof commandCount === "number" ? ` commands=${commandCount}` : ""}${typeof bodyBytes === "number" ? ` bytes=${bodyBytes}` : ""}`,
-      );
-    }
-    try {
-      const result = await originalPut(path, data, query);
-      if ((shouldLogVerboseForTesting ?? shouldLogVerbose)()) {
-        params.runtime.log?.(
-          `discord startup [${accountId}] deploy-rest:put:done ${Math.max(0, Date.now() - startupStartedAt)}ms path=${path} requestMs=${Date.now() - startedAt}`,
-        );
-      }
-      return result;
-    } catch (err) {
-      attachDiscordDeployRequestBody(err, body);
-      const details = formatDiscordDeployErrorDetails(err);
-      params.runtime.error?.(
-        `discord startup [${accountId}] deploy-rest:put:error ${Math.max(0, Date.now() - startupStartedAt)}ms path=${path} requestMs=${Date.now() - startedAt} error=${formatErrorMessage(err)}${details}`,
-      );
-      throw err;
-    }
-  };
-  try {
-    if (restClient.options) {
-      // Carbon's request queue retries 429s internally and can block startup for
-      // minutes before surfacing the real error. Disable it for deploy so quota
-      // errors like Discord 30034 fail fast and don't wedge the provider.
-      restClient.options.queueRequests = false;
-    }
-    logVerbose("discord: native commands using Carbon reconcile path");
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      try {
-        await params.client.handleDeployRequest();
-        return;
-      } catch (err) {
-        if (isDailyCreateLimit(err)) {
-          params.runtime.log?.(
-            warn(
-              `discord: native command deploy skipped for ${accountId}; daily application command create limit reached. Existing slash commands stay active until Discord resets the quota.`,
-            ),
-          );
-          return;
-        }
-        if (!(err instanceof RateLimitError) || attempt >= maxAttempts) {
-          throw err;
-        }
-        const retryAfterMs = Math.max(0, Math.ceil(err.retryAfter * 1000));
-        if (retryAfterMs > maxRetryDelayMs) {
-          params.runtime.log?.(
-            warn(
-              `discord: native command deploy skipped for ${accountId}; retry_after=${retryAfterMs}ms exceeds startup budget. Existing slash commands stay active.`,
-            ),
-          );
-          return;
-        }
-        if ((shouldLogVerboseForTesting ?? shouldLogVerbose)()) {
-          params.runtime.log?.(
-            `discord startup [${accountId}] deploy-retry ${Math.max(0, Date.now() - startupStartedAt)}ms attempt=${attempt}/${maxAttempts - 1} retryAfterMs=${retryAfterMs} scope=${err.scope ?? "unknown"} code=${err.discordCode ?? "unknown"}`,
-          );
-        }
-        await sleep(retryAfterMs);
-      }
-    }
-  } catch (err) {
-    const details = formatDiscordDeployErrorDetails(err);
-    params.runtime.error?.(
-      danger(`discord: failed to deploy native commands: ${formatErrorMessage(err)}${details}`),
-    );
-  } finally {
-    if (restClient.options) {
-      restClient.options.queueRequests = previousQueueRequests;
-    }
-    restClient.put = originalPut;
-  }
-}
-
-function formatDiscordStartupGatewayState(gateway?: GatewayPlugin): string {
-  if (!gateway) {
-    return "gateway=missing";
-  }
-  const reconnectAttempts = (gateway as unknown as { reconnectAttempts?: unknown })
-    .reconnectAttempts;
-  return `gatewayConnected=${gateway.isConnected ? "true" : "false"} reconnectAttempts=${typeof reconnectAttempts === "number" ? reconnectAttempts : "na"}`;
-}
-
-function logDiscordStartupPhase(params: {
-  runtime: RuntimeEnv;
-  accountId: string;
-  phase: string;
-  startAt: number;
-  gateway?: GatewayPlugin;
-  details?: string;
-}) {
-  if (!(isVerboseForTesting ?? isVerbose)()) {
-    return;
-  }
-  const elapsedMs = Math.max(0, Date.now() - params.startAt);
-  const suffix = [params.details, formatDiscordStartupGatewayState(params.gateway)]
-    .filter((value): value is string => Boolean(value))
-    .join(" ");
-  params.runtime.log?.(
-    `discord startup [${params.accountId}] ${params.phase} ${elapsedMs}ms${suffix ? ` ${suffix}` : ""}`,
-  );
-}
-
-const DISCORD_DEPLOY_REJECTED_ENTRY_LIMIT = 3;
-
-type DiscordDeployErrorLike = {
-  status?: unknown;
-  discordCode?: unknown;
-  rawBody?: unknown;
-  deployRequestBody?: unknown;
-};
-
-function attachDiscordDeployRequestBody(err: unknown, body: unknown) {
-  if (!err || typeof err !== "object" || body === undefined) {
-    return;
-  }
-  const deployErr = err as DiscordDeployErrorLike;
-  if (deployErr.deployRequestBody === undefined) {
-    deployErr.deployRequestBody = body;
-  }
-}
-
-function stringifyDiscordDeployField(value: unknown): string {
-  if (typeof value === "string") {
-    return JSON.stringify(value);
-  }
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return inspect(value, { depth: 2, breakLength: 120 });
-  }
-}
-
-function readDiscordDeployRejectedFields(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value.filter((entry): entry is string => typeof entry === "string").slice(0, 6);
-  }
-  if (!value || typeof value !== "object") {
-    return [];
-  }
-  return Object.keys(value).slice(0, 6);
-}
-
-function resolveDiscordRejectedDeployEntriesSource(
-  rawBody: unknown,
-): Record<string, unknown> | null {
-  if (!rawBody || typeof rawBody !== "object") {
-    return null;
-  }
-  const payload = rawBody as { errors?: unknown };
-  const errors = payload.errors && typeof payload.errors === "object" ? payload.errors : undefined;
-  const source = errors ?? rawBody;
-  return source && typeof source === "object" ? (source as Record<string, unknown>) : null;
-}
-
-function formatDiscordRejectedDeployEntries(params: {
-  rawBody: unknown;
-  requestBody: unknown;
-}): string[] {
-  const requestBody = Array.isArray(params.requestBody) ? params.requestBody : null;
-  const rejectedEntriesSource = resolveDiscordRejectedDeployEntriesSource(params.rawBody);
-  if (!rejectedEntriesSource || !requestBody || requestBody.length === 0) {
-    return [];
-  }
-  const rawEntries = Object.entries(rejectedEntriesSource).filter(([key]) => /^\d+$/.test(key));
-  return rawEntries.slice(0, DISCORD_DEPLOY_REJECTED_ENTRY_LIMIT).flatMap(([key, value]) => {
-    const index = Number.parseInt(key, 10);
-    if (!Number.isFinite(index) || index < 0 || index >= requestBody.length) {
-      return [];
-    }
-    const command = requestBody[index];
-    if (!command || typeof command !== "object") {
-      return [`#${index} fields=${readDiscordDeployRejectedFields(value).join("|") || "unknown"}`];
-    }
-    const payload = command as {
-      name?: unknown;
-      description?: unknown;
-      options?: unknown;
-    };
-    const parts = [
-      `#${index}`,
-      `fields=${readDiscordDeployRejectedFields(value).join("|") || "unknown"}`,
-    ];
-    if (typeof payload.name === "string" && payload.name.trim().length > 0) {
-      parts.push(`name=${payload.name}`);
-    }
-    if (payload.description !== undefined) {
-      parts.push(`description=${stringifyDiscordDeployField(payload.description)}`);
-    }
-    if (Array.isArray(payload.options) && payload.options.length > 0) {
-      parts.push(`options=${payload.options.length}`);
-    }
-    return [parts.join(" ")];
-  });
-}
-
-function formatDiscordDeployErrorDetails(err: unknown): string {
-  if (!err || typeof err !== "object") {
-    return "";
-  }
-  const status = (err as DiscordDeployErrorLike).status;
-  const discordCode = (err as DiscordDeployErrorLike).discordCode;
-  const rawBody = (err as DiscordDeployErrorLike).rawBody;
-  const requestBody = (err as DiscordDeployErrorLike).deployRequestBody;
-  const details: string[] = [];
-  if (typeof status === "number") {
-    details.push(`status=${status}`);
-  }
-  if (typeof discordCode === "number" || typeof discordCode === "string") {
-    details.push(`code=${discordCode}`);
-  }
-  if (rawBody !== undefined) {
-    let bodyText = "";
-    try {
-      bodyText = JSON.stringify(rawBody);
-    } catch {
-      bodyText =
-        typeof rawBody === "string" ? rawBody : inspect(rawBody, { depth: 3, breakLength: 120 });
-    }
-    if (bodyText) {
-      const maxLen = 800;
-      const trimmed = bodyText.length > maxLen ? `${bodyText.slice(0, maxLen)}...` : bodyText;
-      details.push(`body=${trimmed}`);
-    }
-  }
-  const rejectedEntries = formatDiscordRejectedDeployEntries({ rawBody, requestBody });
-  if (rejectedEntries.length > 0) {
-    details.push(`rejected=${rejectedEntries.join("; ")}`);
-  }
-  return details.length > 0 ? ` (${details.join(", ")})` : "";
 }
 
 const DISCORD_DISALLOWED_INTENTS_CODE = GatewayCloseCodes.DisallowedIntents;
@@ -639,6 +205,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const discordRestFetch = resolveDiscordRestFetch(rawDiscordCfg.proxy, runtime);
   const discordProxyFetch = resolveDiscordProxyFetchForAccount(account, cfg, runtime);
   const dmConfig = rawDiscordCfg.dm;
+  const configuredDmAllowFrom = resolveDiscordAccountAllowFrom({
+    cfg,
+    accountId: account.accountId,
+  });
   let guildEntries = rawDiscordCfg.guilds;
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const providerConfigPresent = cfg.channels?.discord !== undefined;
@@ -656,7 +226,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     blockedLabel: GROUP_POLICY_BLOCKED_LABEL.guild,
     log: (message) => runtime.log?.(warn(message)),
   });
-  let allowFrom = discordCfg.allowFrom ?? dmConfig?.allowFrom;
+  let allowFrom = configuredDmAllowFrom ?? [];
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? discordCfg.mediaMaxMb ?? DEFAULT_DISCORD_MEDIA_MAX_MB) * 1024 * 1024;
   const textLimit = resolveTextChunkLimit(cfg, "discord", account.accountId, {
@@ -668,7 +238,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   );
   const replyToMode = opts.replyToMode ?? discordCfg.replyToMode ?? "off";
   const dmEnabled = dmConfig?.enabled ?? true;
-  const dmPolicy = discordCfg.dmPolicy ?? dmConfig?.policy ?? "pairing";
+  const dmPolicy =
+    resolveDiscordAccountDmPolicy({
+      cfg,
+      accountId: account.accountId,
+    }) ?? "pairing";
   const discordProviderSessionRuntime = await loadDiscordProviderSessionRuntime();
   const threadBindingIdleTimeoutMs =
     discordProviderSessionRuntime.resolveThreadBindingIdleTimeoutMs({
@@ -715,27 +289,26 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     runtime,
   });
   guildEntries = allowlistResolved.guildEntries;
-  allowFrom = allowlistResolved.allowFrom;
+  allowFrom = allowlistResolved.allowFrom ?? [];
 
   if ((shouldLogVerboseForTesting ?? shouldLogVerbose)()) {
-    const allowFromSummary = summarizeStringEntries({
-      entries: allowFrom ?? [],
-      limit: 4,
-      emptyText: "any",
+    logDiscordResolvedConfig({
+      dmEnabled,
+      dmPolicy,
+      allowFrom,
+      groupDmEnabled,
+      groupDmChannels,
+      groupPolicy,
+      guildEntries,
+      historyLimit,
+      mediaMaxBytes,
+      nativeEnabled,
+      nativeSkillsEnabled,
+      useAccessGroups,
+      threadBindingsEnabled,
+      threadBindingIdleTimeoutMs,
+      threadBindingMaxAgeMs,
     });
-    const groupDmChannelSummary = summarizeStringEntries({
-      entries: groupDmChannels ?? [],
-      limit: 4,
-      emptyText: "any",
-    });
-    const guildSummary = summarizeStringEntries({
-      entries: Object.keys(guildEntries ?? {}),
-      limit: 4,
-      emptyText: "any",
-    });
-    logVerbose(
-      `discord: config dm=${dmEnabled ? "on" : "off"} dmPolicy=${dmPolicy} allowFrom=${allowFromSummary} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${groupDmChannelSummary} groupPolicy=${groupPolicy} guilds=${guildSummary} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))} native=${nativeEnabled ? "on" : "off"} nativeSkills=${nativeSkillsEnabled ? "on" : "off"} accessGroups=${useAccessGroups ? "on" : "off"} threadBindings=${threadBindingsEnabled ? "on" : "off"} threadIdleTimeout=${formatThreadBindingDurationForConfigLabel(threadBindingIdleTimeoutMs)} threadMaxAge=${formatThreadBindingDurationForConfigLabel(threadBindingMaxAgeMs)}`,
-    );
   }
 
   logDiscordStartupPhase({
@@ -744,11 +317,18 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     phase: "fetch-application-id:start",
     startAt: startupStartedAt,
   });
-  const applicationId = await (fetchDiscordApplicationIdForTesting ?? fetchDiscordApplicationId)(
-    token,
-    4000,
-    discordRestFetch,
-  );
+  const configuredApplicationId =
+    typeof discordCfg.applicationId === "string" && discordCfg.applicationId.trim()
+      ? discordCfg.applicationId.trim()
+      : undefined;
+  const parsedApplicationId = configuredApplicationId ?? parseApplicationIdFromToken(token);
+  const applicationId =
+    parsedApplicationId ??
+    (await (fetchDiscordApplicationIdForTesting ?? fetchDiscordApplicationId)(
+      token,
+      4000,
+      discordRestFetch,
+    ));
   if (!applicationId) {
     throw new Error("Failed to resolve Discord application id");
   }
@@ -760,41 +340,16 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     details: `applicationId=${applicationId}`,
   });
 
-  const maxDiscordCommands = 100;
-  let skillCommands =
-    nativeEnabled && nativeSkillsEnabled
-      ? (listSkillCommandsForAgentsForTesting ?? listSkillCommandsForAgents)({ cfg })
-      : [];
-  let commandSpecs = nativeEnabled
-    ? (listNativeCommandSpecsForConfigForTesting ?? listNativeCommandSpecsForConfig)(cfg, {
-        skillCommands,
-        provider: "discord",
-      })
-    : [];
-  if (nativeEnabled) {
-    commandSpecs = await appendPluginCommandSpecs({ commandSpecs, runtime, cfg });
-  }
-  const initialCommandCount = commandSpecs.length;
-  if (nativeEnabled && nativeSkillsEnabled && commandSpecs.length > maxDiscordCommands) {
-    skillCommands = [];
-    commandSpecs = (listNativeCommandSpecsForConfigForTesting ?? listNativeCommandSpecsForConfig)(
-      cfg,
-      { skillCommands: [], provider: "discord" },
-    );
-    commandSpecs = await appendPluginCommandSpecs({ commandSpecs, runtime, cfg });
-    runtime.log?.(
-      warn(
-        `discord: ${initialCommandCount} commands exceeds limit; removing per-skill commands and keeping /skill.`,
-      ),
-    );
-  }
-  if (nativeEnabled && commandSpecs.length > maxDiscordCommands) {
-    runtime.log?.(
-      warn(
-        `discord: ${commandSpecs.length} commands exceeds limit; some commands may fail to deploy.`,
-      ),
-    );
-  }
+  const { commandSpecs } = await resolveDiscordProviderCommandSpecs({
+    cfg,
+    runtime,
+    nativeEnabled,
+    nativeSkillsEnabled,
+    listSkillCommandsForAgents: listSkillCommandsForAgentsForTesting ?? listSkillCommandsForAgents,
+    listNativeCommandSpecsForConfig:
+      listNativeCommandSpecsForConfigForTesting ?? listNativeCommandSpecsForConfig,
+    getPluginCommandSpecs: getPluginCommandSpecsForTesting,
+  });
   const voiceManagerRef: { current: DiscordVoiceManager | null } = { current: null };
   const threadBindings = threadBindingsEnabled
     ? discordProviderSessionRuntime.createThreadBindingManager({
@@ -817,6 +372,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           sessionKey,
           storedState: session.acp?.state,
           lastActivityAt: session.acp?.lastActivityAt,
+          providerSessionRuntime: discordProviderSessionRuntime,
         });
         if (probe.status === "uncertain") {
           uncertainProbeKeys.add(`${sessionKey}${probe.reason ? ` (${probe.reason})` : ""}`);
@@ -845,113 +401,28 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   let earlyGatewayEmitter = gatewaySupervisor?.emitter;
   let onEarlyGatewayDebug: ((msg: unknown) => void) | undefined;
   try {
-    const commands: BaseCommand[] = commandSpecs.map((spec) =>
-      (createDiscordNativeCommandForTesting ?? createDiscordNativeCommand)({
-        command: spec,
-        cfg,
-        discordConfig: discordCfg,
-        accountId: account.accountId,
-        sessionPrefix,
-        ephemeralDefault,
-        threadBindings,
-      }),
-    );
-    if (nativeEnabled && voiceEnabled) {
-      commands.push(
-        createDiscordVoiceCommand({
-          cfg,
-          discordConfig: discordCfg,
-          accountId: account.accountId,
-          groupPolicy,
-          useAccessGroups,
-          getManager: () => voiceManagerRef.current,
-          ephemeralDefault,
-        }),
-      );
-    }
-
-    // Initialize exec approvals handler if enabled
-    const execApprovalsConfig = discordCfg.execApprovals ?? {};
-    const execApprovalsEnabled = isDiscordExecApprovalClientEnabled({
+    const { commands, components, modals } = createDiscordProviderInteractionSurface({
       cfg,
+      discordConfig: discordCfg,
       accountId: account.accountId,
-      configOverride: execApprovalsConfig,
+      token,
+      commandSpecs,
+      nativeEnabled,
+      voiceEnabled,
+      groupPolicy,
+      useAccessGroups,
+      sessionPrefix,
+      ephemeralDefault,
+      threadBindings,
+      voiceManagerRef,
+      guildEntries,
+      allowFrom,
+      dmPolicy,
+      runtime,
+      channelRuntime: opts.channelRuntime,
+      abortSignal: opts.abortSignal,
+      createNativeCommand: createDiscordNativeCommandForTesting ?? createDiscordNativeCommand,
     });
-    if (execApprovalsEnabled) {
-      registerChannelRuntimeContext({
-        channelRuntime: opts.channelRuntime,
-        channelId: "discord",
-        accountId: account.accountId,
-        capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
-        context: {
-          token,
-          config: execApprovalsConfig,
-        },
-        abortSignal: opts.abortSignal,
-      });
-    }
-
-    const agentComponentsConfig = discordCfg.agentComponents ?? {};
-    const agentComponentsEnabled = agentComponentsConfig.enabled ?? true;
-
-    const components: BaseMessageInteractiveComponent[] = [
-      createDiscordCommandArgFallbackButton({
-        cfg,
-        discordConfig: discordCfg,
-        accountId: account.accountId,
-        sessionPrefix,
-        threadBindings,
-      }),
-      createDiscordModelPickerFallbackButton({
-        cfg,
-        discordConfig: discordCfg,
-        accountId: account.accountId,
-        sessionPrefix,
-        threadBindings,
-      }),
-      createDiscordModelPickerFallbackSelect({
-        cfg,
-        discordConfig: discordCfg,
-        accountId: account.accountId,
-        sessionPrefix,
-        threadBindings,
-      }),
-    ];
-    const modals: Modal[] = [];
-
-    if (execApprovalsEnabled) {
-      components.push(
-        createExecApprovalButton(
-          createDiscordExecApprovalButtonContext({
-            cfg,
-            accountId: account.accountId,
-            config: execApprovalsConfig,
-          }),
-        ),
-      );
-    }
-
-    if (agentComponentsEnabled) {
-      const componentContext = {
-        cfg,
-        discordConfig: discordCfg,
-        accountId: account.accountId,
-        guildEntries,
-        allowFrom,
-        dmPolicy,
-        runtime,
-        token,
-      };
-      components.push(createAgentComponentButton(componentContext));
-      components.push(createAgentSelectMenu(componentContext));
-      components.push(createDiscordComponentButton(componentContext));
-      components.push(createDiscordComponentStringSelect(componentContext));
-      components.push(createDiscordComponentUserSelect(componentContext));
-      components.push(createDiscordComponentRoleSelect(componentContext));
-      components.push(createDiscordComponentMentionableSelect(componentContext));
-      components.push(createDiscordComponentChannelSelect(componentContext));
-      modals.push(createDiscordComponentModal(componentContext));
-    }
 
     const {
       client,
@@ -994,24 +465,19 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     logDiscordStartupPhase({
       runtime,
       accountId: account.accountId,
-      phase: "deploy-commands:start",
+      phase: "deploy-commands:schedule",
       startAt: startupStartedAt,
       gateway: lifecycleGateway,
       details: `native=${nativeEnabled ? "on" : "off"} reconcile=on commandCount=${commands.length}`,
     });
-    await deployDiscordCommands({
+    runDiscordCommandDeployInBackground({
       client,
       runtime,
       enabled: nativeEnabled,
       accountId: account.accountId,
       startupStartedAt,
-    });
-    logDiscordStartupPhase({
-      runtime,
-      accountId: account.accountId,
-      phase: "deploy-commands:done",
-      startAt: startupStartedAt,
-      gateway: lifecycleGateway,
+      shouldLogVerbose: shouldLogVerboseForTesting ?? shouldLogVerbose,
+      isVerbose: isVerboseForTesting ?? isVerbose,
     });
 
     const logger = createSubsystemLogger("discord/monitor");
@@ -1085,6 +551,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       textLimit,
       replyToMode,
       dmEnabled,
+      dmPolicy,
       groupDmEnabled,
       groupDmChannels,
       allowFrom,
@@ -1096,8 +563,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     const trackInboundEvent = opts.setStatus
       ? () => {
           const at = Date.now();
-          // Carbon handles gateway heartbeats internally but does not expose a
-          // stable heartbeat-ack event, so Discord app events stay app-level only.
+          // Gateway heartbeat ACKs are transport-level; Discord app events stay app-level only.
           opts.setStatus?.({ lastEventAt: at, lastInboundAt: at });
         }
       : undefined;
@@ -1156,40 +622,18 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       gatewaySupervisor,
     });
   } finally {
-    deactivateMessageHandler?.();
-    autoPresenceController?.stop();
-    opts.setStatus?.({ connected: false });
-    if (onEarlyGatewayDebug) {
-      earlyGatewayEmitter?.removeListener("debug", onEarlyGatewayDebug);
-    }
-    if (!lifecycleStarted) {
-      try {
-        lifecycleGateway?.disconnect();
-      } catch (err) {
-        runtime.error?.(
-          danger(`discord: failed to disconnect gateway during startup cleanup: ${String(err)}`),
-        );
-      }
-    }
-    gatewaySupervisor?.dispose();
-    if (!lifecycleStarted) {
-      threadBindings.stop();
-    }
-  }
-}
-
-async function clearDiscordNativeCommands(params: {
-  client: Client;
-  applicationId: string;
-  runtime: RuntimeEnv;
-}) {
-  try {
-    await params.client.rest.put(Routes.applicationCommands(params.applicationId), {
-      body: [],
+    cleanupDiscordProviderStartup({
+      deactivateMessageHandler,
+      autoPresenceController,
+      setStatus: opts.setStatus,
+      onEarlyGatewayDebug,
+      earlyGatewayEmitter,
+      lifecycleStarted,
+      lifecycleGateway,
+      gatewaySupervisor,
+      threadBindings,
+      runtime,
     });
-    logVerbose("discord: cleared native commands (commands.native=false)");
-  } catch (err) {
-    params.runtime.error?.(danger(`discord: failed to clear native commands: ${String(err)}`));
   }
 }
 

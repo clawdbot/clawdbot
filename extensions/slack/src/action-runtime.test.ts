@@ -115,7 +115,7 @@ describe("handleSlackAction", () => {
     { name: "raw channel id", channelId: "C1" },
     { name: "channel: prefixed id", channelId: "channel:C1" },
   ])("adds reactions for $name", async ({ channelId }) => {
-    await handleSlackAction(
+    const result = await handleSlackAction(
       {
         action: "react",
         channelId,
@@ -130,6 +130,10 @@ describe("handleSlackAction", () => {
       "✅",
       expect.objectContaining({ cfg: expect.any(Object) }),
     );
+    expect(JSON.parse((result.content?.[0] as { type: "text"; text: string }).text)).toEqual({
+      ok: true,
+      added: "✅",
+    });
   });
 
   it("removes reactions on empty emoji", async () => {

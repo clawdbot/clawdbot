@@ -14,6 +14,9 @@ describe("normalizeTranscriptForMatch", () => {
     expect(normalizeTranscriptForMatch("OpenCore xAI realtime transcription")).toMatch(
       OPENCLAW_LIVE_TRANSCRIPT_MARKER_RE,
     );
+    expect(normalizeTranscriptForMatch("OpenCL xAI realtime transcription")).toMatch(
+      OPENCLAW_LIVE_TRANSCRIPT_MARKER_RE,
+    );
     expectOpenClawLiveTranscriptMarker("OpenClar integration OK");
   });
 });

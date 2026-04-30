@@ -25,8 +25,10 @@ import {
   getGlobalHookRunner,
   isEmbeddedPiRunActive,
   getRuntimeConfig,
+  isSteeringQueueMode,
   loadSessionStore,
   queueEmbeddedPiMessage,
+  resolvePiSteeringModeForQueueMode,
   resolveActiveEmbeddedRunSessionId,
   resolveAgentIdFromSessionKey,
   resolveConversationIdFromTargets,
@@ -477,11 +479,15 @@ async function maybeQueueSubagentAnnounce(params: {
     sessionEntry: entry,
   });
 
-  const shouldSteer = queueSettings.mode === "steer" || queueSettings.mode === "steer-backlog";
+  const shouldSteer = isSteeringQueueMode(queueSettings.mode);
   if (shouldSteer) {
     const steered = subagentAnnounceDeliveryDeps.queueEmbeddedPiMessage(
       sessionId,
       params.steerMessage,
+      {
+        steeringMode: resolvePiSteeringModeForQueueMode(queueSettings.mode),
+        ...(queueSettings.debounceMs !== undefined ? { debounceMs: queueSettings.debounceMs } : {}),
+      },
     );
     if (steered) {
       return "steered";
@@ -493,7 +499,10 @@ async function maybeQueueSubagentAnnounce(params: {
     queueSettings.mode === "collect" ||
     queueSettings.mode === "steer-backlog" ||
     queueSettings.mode === "interrupt";
-  if (isActive && (shouldFollowup || queueSettings.mode === "steer")) {
+  if (
+    isActive &&
+    (shouldFollowup || queueSettings.mode === "steer" || queueSettings.mode === "queue")
+  ) {
     const origin = resolveAnnounceOrigin(entry, params.requesterOrigin);
     const didQueue = enqueueAnnounce({
       key: buildAnnounceQueueKey(canonicalKey, origin),
@@ -714,11 +723,28 @@ async function sendSubagentAnnounceDirectly(params: {
         ? extractThreadCompletionFallbackText(params.internalEvents)
         : "";
     const requesterActivity = resolveRequesterSessionActivity(canonicalRequesterSessionKey);
+    const requesterEntry = loadRequesterSessionEntry(params.targetRequesterSessionKey).entry;
+    const requesterQueueSettings = resolveQueueSettings({
+      cfg,
+      channel:
+        requesterEntry?.channel ??
+        requesterEntry?.lastChannel ??
+        requesterEntry?.origin?.provider ??
+        requesterSessionOrigin?.channel ??
+        directOrigin?.channel,
+      sessionEntry: requesterEntry,
+    });
     if (params.expectsCompletionMessage && requesterActivity.sessionId) {
       const woke = requesterActivity.sessionId
         ? subagentAnnounceDeliveryDeps.queueEmbeddedPiMessage(
             requesterActivity.sessionId,
             params.triggerMessage,
+            {
+              steeringMode: "all",
+              ...(requesterQueueSettings.debounceMs !== undefined
+                ? { debounceMs: requesterQueueSettings.debounceMs }
+                : {}),
+            },
           )
         : false;
       if (woke) {

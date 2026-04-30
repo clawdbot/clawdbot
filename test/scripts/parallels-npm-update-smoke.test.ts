@@ -1,31 +1,42 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const SCRIPT_PATH = "scripts/e2e/parallels-npm-update-smoke.sh";
+const SCRIPT_PATH = "scripts/e2e/parallels/npm-update-smoke.ts";
+const UPDATE_SCRIPTS_PATH = "scripts/e2e/parallels/npm-update-scripts.ts";
 
 describe("parallels npm update smoke", () => {
   it("does not leave guard/server children attached to the wrapper", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
-    expect(script).toContain('wait "$SERVER_PID" 2>/dev/null || true');
-    expect(script).toContain(") >&2 &");
-    expect(script).toContain('wait "$pid" 2>/dev/null || true');
+    expect(script).toContain("spawnLogged");
+    expect(script).toContain('child.on("close"');
+    expect(script).toContain("await this.server?.stop()");
+  });
+
+  it("runs Windows updates through a detached done-file runner", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("openclaw-parallels-npm-update-windows");
+    expect(script).toContain("runStreaming");
+    expect(script).toContain("__OPENCLAW_BACKGROUND_EXIT__");
+    expect(script).toContain("__OPENCLAW_BACKGROUND_DONE__");
+    expect(script).toContain("Windows update timed out");
   });
 
   it("scrubs future plugin entries before invoking old same-guest updaters", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
+    const script = readFileSync(UPDATE_SCRIPTS_PATH, "utf8");
 
     expect(script).toContain("Remove-FuturePluginEntries");
     expect(script).toContain("scrub_future_plugin_entries");
-    expect(script).toContain("delete entries.feishu");
-    expect(script).toContain("delete entries.whatsapp");
-    expect(script).toContain("Remove-FuturePluginEntries\n  Stop-OpenClawGatewayProcesses");
+    expect(script).toContain("delete plugins.entries.feishu");
+    expect(script).toContain("delete plugins.entries.whatsapp");
+    expect(script).toContain("Remove-FuturePluginEntries\nStop-OpenClawGatewayProcesses");
     expect(script).toContain("scrub_future_plugin_entries\nstop_openclaw_gateway_processes");
     expect(script).toContain("$env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'");
     expect(script).toContain(
-      "OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw update",
+      "OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw update --tag",
     );
-    expect(script).toContain("OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw update");
+    expect(script).toContain("OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw update --tag");
     expect(script).toContain(
       "OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw gateway stop",
     );

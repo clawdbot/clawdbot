@@ -5,6 +5,7 @@ import {
   extractAssistantText,
   prepareSimpleCompletionModelForAgent,
 } from "openclaw/plugin-sdk/simple-completion-runtime";
+import { withAbortTimeout } from "./timeouts.js";
 
 const DEFAULT_THREAD_TITLE_TIMEOUT_MS = 10_000;
 const MAX_THREAD_TITLE_SOURCE_CHARS = 600;
@@ -75,30 +76,29 @@ async function completeThreadTitle(params: {
   userMessage: string;
   timeoutMs: number;
 }) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), params.timeoutMs);
-  try {
-    return await completeWithPreparedSimpleCompletionModel({
-      model: params.model,
-      auth: params.auth,
-      context: {
-        systemPrompt: DISCORD_THREAD_TITLE_SYSTEM_PROMPT,
-        messages: [
-          {
-            role: "user",
-            content: params.userMessage,
-            timestamp: Date.now(),
-          },
-        ],
-      },
-      options: {
-        maxTokens: DISCORD_THREAD_TITLE_MAX_TOKENS,
-        signal: controller.signal,
-      },
-    });
-  } finally {
-    clearTimeout(timer);
-  }
+  return await withAbortTimeout({
+    timeoutMs: params.timeoutMs,
+    createTimeoutError: () => new Error(`thread-title timed out after ${params.timeoutMs}ms`),
+    run: async (signal) =>
+      await completeWithPreparedSimpleCompletionModel({
+        model: params.model,
+        auth: params.auth,
+        context: {
+          systemPrompt: DISCORD_THREAD_TITLE_SYSTEM_PROMPT,
+          messages: [
+            {
+              role: "user",
+              content: params.userMessage,
+              timestamp: Date.now(),
+            },
+          ],
+        },
+        options: {
+          maxTokens: DISCORD_THREAD_TITLE_MAX_TOKENS,
+          signal,
+        },
+      }),
+  });
 }
 
 function buildThreadTitleUserMessage(params: {

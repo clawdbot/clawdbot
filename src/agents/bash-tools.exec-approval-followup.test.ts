@@ -252,6 +252,28 @@ describe("exec approval followup", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("preserves turnSourceChannel as messageProvider on the followup run when no deliverable route exists", async () => {
+    // Regression: #74646 — tools.elevated.allowFrom.<provider> fails in approval followup
+    await sendExecApprovalFollowup({
+      approvalId: "req-elevated-74646",
+      sessionKey: "agent:main:telegram:-100123",
+      turnSourceChannel: "telegram",
+      resultText: "Exec completed: systemctl status gateway",
+    });
+
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "agent",
+      expect.any(Object),
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:-100123",
+        deliver: false,
+        channel: "telegram",
+      }),
+      { expectFinal: true },
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("throws when neither a session nor a deliverable route is available", async () => {
     await expect(
       sendExecApprovalFollowup({

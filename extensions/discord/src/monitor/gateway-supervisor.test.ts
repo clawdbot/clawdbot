@@ -7,7 +7,7 @@ import {
 } from "./gateway-supervisor.js";
 
 describe("classifyDiscordGatewayEvent", () => {
-  it("maps current Carbon gateway errors onto domain events", () => {
+  it("maps current gateway errors onto domain events", () => {
     const transientTypeError = new TypeError();
     transientTypeError.stack = "TypeError\n    at gatewayCrash (discord-gateway.js:12:34)";
     const reconnectEvent = classifyDiscordGatewayEvent({

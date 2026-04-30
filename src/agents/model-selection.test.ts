@@ -224,6 +224,12 @@ describe("model-selection", () => {
         expected: { provider: "mlx", model: "mlx-community/Qwen3-30B-A3B-6bit" },
       },
       {
+        name: "preserves three-segment refs where the maker equals the provider",
+        variants: ["nvidia/nvidia/nemotron-3-super-120b-a12b"],
+        defaultProvider: "anthropic",
+        expected: { provider: "nvidia", model: "nvidia/nemotron-3-super-120b-a12b" },
+      },
+      {
         name: "normalizes anthropic shorthand aliases",
         variants: ["anthropic/opus-4.6", "opus-4.6", " anthropic / opus-4.6 "],
         defaultProvider: "anthropic",
@@ -629,6 +635,7 @@ describe("model-selection", () => {
                   id: "gpt-test-z",
                   name: "Configured GPT Test Z",
                   contextWindow: 64_000,
+                  compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
                 },
               ],
             },
@@ -650,8 +657,54 @@ describe("model-selection", () => {
           name: "Configured GPT Test Z",
           alias: "GPT Test Z Alias",
           contextWindow: 64_000,
+          compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
         },
       ]);
+    });
+
+    it("keeps configured provider models visible when the catalog is otherwise allow-any", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "ollama/existing" },
+          },
+        },
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://127.0.0.1:11434",
+              api: "ollama",
+              apiKey: "ollama-local",
+              models: [
+                {
+                  id: "glm-5.1:cloud",
+                  name: "GLM 5.1 Cloud",
+                  contextWindow: 131_072,
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [{ provider: "ollama", id: "existing", name: "Existing" }],
+        defaultProvider: "ollama",
+        defaultModel: "existing",
+      });
+
+      expect(result.allowAny).toBe(true);
+      expect(result.allowedCatalog).toEqual([
+        { provider: "ollama", id: "existing", name: "Existing" },
+        {
+          provider: "ollama",
+          id: "glm-5.1:cloud",
+          name: "GLM 5.1 Cloud",
+          contextWindow: 131_072,
+        },
+      ]);
+      expect(result.allowedKeys.has("ollama/glm-5.1:cloud")).toBe(true);
     });
 
     it("matches allowlisted catalog entries with normalized provider and model ids", () => {
@@ -707,6 +760,7 @@ describe("model-selection", () => {
                   name: "Kimi K2.5 (Configured)",
                   contextWindow: 32_000,
                   reasoning: true,
+                  compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
                 },
               ],
             },
@@ -729,6 +783,7 @@ describe("model-selection", () => {
           alias: "Kimi K2.5 (NVIDIA)",
           contextWindow: 32_000,
           reasoning: true,
+          compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
         },
       ]);
     });

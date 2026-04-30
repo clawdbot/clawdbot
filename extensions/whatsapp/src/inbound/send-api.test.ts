@@ -1,3 +1,8 @@
+import type {
+  AnyMessageContent,
+  MiscMessageGenerationOptions,
+  WAMessage,
+} from "@whiskeysockets/baileys";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWebSendApi } from "./send-api.js";
 
@@ -14,7 +19,13 @@ vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
 });
 
 describe("createWebSendApi", () => {
-  const sendMessage = vi.fn(async () => ({ key: { id: "msg-1" } }));
+  const sendMessage = vi.fn(
+    async (
+      _jid: string,
+      _content: AnyMessageContent,
+      _options?: MiscMessageGenerationOptions,
+    ): Promise<WAMessage | undefined> => ({ key: { id: "msg-1" } }) as WAMessage,
+  );
   const sendPresenceUpdate = vi.fn(async () => {});
   let api: ReturnType<typeof createWebSendApi>;
 
@@ -60,8 +71,14 @@ describe("createWebSendApi", () => {
   });
 
   it("sends plain text messages", async () => {
-    await api.sendMessage("+1555", "hello");
+    const res = await api.sendMessage("+1555", "hello");
     expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", { text: "hello" });
+    expect(res).toMatchObject({
+      kind: "text",
+      messageId: "msg-1",
+      messageIds: ["msg-1"],
+      providerAccepted: true,
+    });
     expect(recordChannelActivity).toHaveBeenCalledWith({
       channel: "whatsapp",
       accountId: "main",
@@ -102,7 +119,10 @@ describe("createWebSendApi", () => {
 
   it("sends visible text separately from push-to-talk voice notes", async () => {
     const payload = Buffer.from("aud");
-    await api.sendMessage("+1555", "voice text", payload, "audio/ogg");
+    sendMessage
+      .mockResolvedValueOnce({ key: { id: "voice-1" } })
+      .mockResolvedValueOnce({ key: { id: "voice-text-1" } });
+    const res = await api.sendMessage("+1555", "voice text", payload, "audio/ogg");
     expect(sendMessage).toHaveBeenNthCalledWith(
       1,
       "1555@s.whatsapp.net",
@@ -114,6 +134,12 @@ describe("createWebSendApi", () => {
     );
     expect(sendMessage).toHaveBeenNthCalledWith(2, "1555@s.whatsapp.net", {
       text: "voice text",
+    });
+    expect(res).toMatchObject({
+      kind: "media",
+      messageId: "voice-1",
+      messageIds: ["voice-1", "voice-text-1"],
+      providerAccepted: true,
     });
   });
 
@@ -158,7 +184,7 @@ describe("createWebSendApi", () => {
   });
 
   it("sends reactions with participant JID normalization", async () => {
-    await api.sendReaction("+1555", "msg-2", "👍", false, "+1999");
+    const res = await api.sendReaction("+1555", "msg-2", "👍", false, "+1999");
     expect(sendMessage).toHaveBeenCalledWith(
       "1555@s.whatsapp.net",
       expect.objectContaining({
@@ -173,6 +199,24 @@ describe("createWebSendApi", () => {
         },
       }),
     );
+    expect(res).toMatchObject({
+      kind: "reaction",
+      messageId: "msg-1",
+      providerAccepted: true,
+    });
+  });
+
+  it("reports provider-unaccepted sends when Baileys returns no message", async () => {
+    sendMessage.mockResolvedValueOnce(undefined);
+
+    const res = await api.sendMessage("+1555", "hello");
+
+    expect(res).toMatchObject({
+      kind: "text",
+      messageId: "unknown",
+      messageIds: [],
+      providerAccepted: false,
+    });
   });
 
   it("keeps direct-chat reactions without a participant key", async () => {

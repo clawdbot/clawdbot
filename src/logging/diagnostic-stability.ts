@@ -239,6 +239,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       break;
     case "session.stuck":
       record.outcome = event.state;
+      assignReasonCode(record, event.reason);
       record.ageMs = event.ageMs;
       record.queueDepth = event.queueDepth;
       break;

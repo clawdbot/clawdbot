@@ -16,7 +16,7 @@ export type PluginCommandSpecMock = {
 };
 
 type ProviderMonitorTestMocks = {
-  clientHandleDeployRequestMock: Mock<() => Promise<void>>;
+  clientDeployCommandsMock: Mock<(options?: { mode?: string }) => Promise<void>>;
   clientFetchUserMock: Mock<(target: string) => Promise<{ id: string }>>;
   clientGetPluginMock: Mock<(name: string) => unknown>;
   clientConstructorOptionsMock: Mock<(options?: unknown) => void>;
@@ -80,7 +80,7 @@ const providerMonitorTestMocks: ProviderMonitorTestMocks = vi.hoisted(() => {
   const shouldLogVerboseMock = vi.fn(() => false);
 
   return {
-    clientHandleDeployRequestMock: vi.fn(async () => undefined),
+    clientDeployCommandsMock: vi.fn(async () => undefined),
     clientFetchUserMock: vi.fn(async (_target: string) => ({ id: "bot-1" })),
     clientGetPluginMock: vi.fn<(_name: string) => unknown>(() => undefined),
     clientConstructorOptionsMock: vi.fn(),
@@ -163,7 +163,7 @@ function buildDiscordSourceModuleId(artifactBasename: string): string {
 }
 
 const {
-  clientHandleDeployRequestMock,
+  clientDeployCommandsMock,
   clientFetchUserMock,
   clientGetPluginMock,
   clientConstructorOptionsMock,
@@ -215,7 +215,7 @@ export function getFirstDiscordMessageHandlerParams<T extends object>() {
 export function resetDiscordProviderMonitorMocks(params?: {
   nativeCommands?: NativeCommandSpecMock[];
 }) {
-  clientHandleDeployRequestMock.mockClear().mockResolvedValue(undefined);
+  clientDeployCommandsMock.mockClear().mockResolvedValue(undefined);
   clientFetchUserMock.mockClear().mockResolvedValue({ id: "bot-1" });
   clientGetPluginMock.mockClear().mockReturnValue(undefined);
   clientConstructorOptionsMock.mockClear();
@@ -296,8 +296,9 @@ export const baseConfig = (): OpenClawConfig =>
     },
   }) as OpenClawConfig;
 
-vi.mock("@buape/carbon", async () => {
-  const actual = await vi.importActual<typeof import("@buape/carbon")>("@buape/carbon");
+vi.mock("../internal/discord.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../internal/discord.js")>("../internal/discord.js");
   class RateLimitError extends Error {
     status = 429;
     discordCode?: number;
@@ -316,16 +317,28 @@ vi.mock("@buape/carbon", async () => {
   }
   class Client {
     listeners: unknown[];
-    rest: { put: ReturnType<typeof vi.fn> };
+    rest: {
+      get: ReturnType<typeof vi.fn>;
+      post: ReturnType<typeof vi.fn>;
+      put: ReturnType<typeof vi.fn>;
+      patch: ReturnType<typeof vi.fn>;
+      delete: ReturnType<typeof vi.fn>;
+    };
     options: unknown;
     constructor(options: unknown, handlers: { listeners?: unknown[] }) {
       this.options = options;
       this.listeners = handlers.listeners ?? [];
-      this.rest = { put: vi.fn(async () => undefined) };
+      this.rest = {
+        get: vi.fn(async () => undefined),
+        post: vi.fn(async () => undefined),
+        put: vi.fn(async () => undefined),
+        patch: vi.fn(async () => undefined),
+        delete: vi.fn(async () => undefined),
+      };
       clientConstructorOptionsMock(options);
     }
-    async handleDeployRequest() {
-      return await clientHandleDeployRequestMock();
+    async deployCommands(options?: { mode?: string }) {
+      return await clientDeployCommandsMock(options);
     }
     async fetchUser(target: string) {
       return await clientFetchUserMock(target);
@@ -337,11 +350,11 @@ vi.mock("@buape/carbon", async () => {
   return { ...actual, Client, RateLimitError };
 });
 
-vi.mock("@buape/carbon/gateway", () => ({
+vi.mock("../internal/gateway.js", () => ({
   GatewayCloseCodes: { DisallowedIntents: 4014 },
 }));
 
-vi.mock("@buape/carbon/voice", () => ({
+vi.mock("../internal/voice.js", () => ({
   VoicePlugin: function VoicePlugin() {},
 }));
 
@@ -442,6 +455,18 @@ vi.mock(buildDiscordSourceModuleId("accounts.js"), () => ({
 
 vi.mock(buildDiscordSourceModuleId("probe.js"), () => ({
   fetchDiscordApplicationId: async () => "app-1",
+  parseApplicationIdFromToken: (token: string) => {
+    const segment = token.trim().split(".")[0];
+    if (!segment) {
+      return undefined;
+    }
+    try {
+      const decoded = Buffer.from(segment, "base64url").toString("utf8").trim();
+      return /^\d+$/.test(decoded) ? decoded : undefined;
+    } catch {
+      return undefined;
+    }
+  },
 }));
 
 vi.mock(buildDiscordSourceModuleId("token.js"), () => ({

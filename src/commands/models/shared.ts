@@ -152,15 +152,39 @@ export function upsertCanonicalModelConfigEntry(
   params: { provider: string; model: string },
 ) {
   const key = modelKey(params.provider, params.model);
-  const legacyKey = legacyModelKey(params.provider, params.model);
-  if (!models[key]) {
-    if (legacyKey && models[legacyKey]) {
-      models[key] = models[legacyKey];
-    } else {
-      models[key] = {};
+  const legacyKeys = [
+    legacyModelKey(params.provider, params.model),
+    `${params.provider}/${key}`,
+  ].filter(
+    (legacyKey): legacyKey is string =>
+      typeof legacyKey === "string" && legacyKey.length > 0 && legacyKey !== key,
+  );
+  let legacyEntry: AgentModelEntryConfig | undefined;
+  for (const legacyKey of legacyKeys) {
+    const entry = models[legacyKey];
+    if (!entry) {
+      continue;
     }
+    Object.assign((legacyEntry ??= {}), entry);
+    legacyEntry.params = {
+      ...legacyEntry.params,
+      ...entry.params,
+    };
   }
-  if (legacyKey) {
+
+  if (legacyEntry) {
+    models[key] = {
+      ...legacyEntry,
+      ...models[key],
+      params: {
+        ...legacyEntry.params,
+        ...models[key]?.params,
+      },
+    };
+  } else if (!models[key]) {
+    models[key] = {};
+  }
+  for (const legacyKey of legacyKeys) {
     delete models[legacyKey];
   }
   return key;

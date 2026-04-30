@@ -656,6 +656,7 @@ async function runModelRun(params: {
     const result = await completeWithPreparedSimpleCompletionModel({
       model: prepared.model,
       auth: prepared.auth,
+      cfg,
       context: {
         messages: [
           {

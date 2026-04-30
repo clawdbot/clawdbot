@@ -78,9 +78,9 @@ describe("memory host SDK package internals", () => {
     ]);
   });
 
-  it("keeps package-specific dreams path casing", () => {
+  it("allows top-level dreams path casing variants", () => {
     expect(isMemoryPath("dreams.md")).toBe(true);
-    expect(isMemoryPath("DREAMS.md")).toBe(false);
+    expect(isMemoryPath("DREAMS.md")).toBe(true);
   });
 
   it("builds markdown and multimodal file entries", async () => {

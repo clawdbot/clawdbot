@@ -131,6 +131,7 @@ export type DiagnosticSessionStuckEvent = DiagnosticBaseEvent & {
   state: DiagnosticSessionState;
   ageMs: number;
   queueDepth?: number;
+  reason?: string;
 };
 
 export type DiagnosticLaneEnqueueEvent = DiagnosticBaseEvent & {

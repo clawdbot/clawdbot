@@ -32,7 +32,7 @@ describe("maybeHandleQueueDirective", () => {
       "Current queue settings: mode=collect, debounce=1500ms, cap=9, drop=summarize.",
     );
     expect(current?.text).toContain(
-      "Options: modes steer, followup, collect, steer+backlog, interrupt; debounce:<ms|s|m>, cap:<n>, drop:old|new|summarize.",
+      "Options: modes steer, queue, followup, collect, steer+backlog, interrupt; debounce:<ms|s|m>, cap:<n>, drop:old|new|summarize.",
     );
   });
 });

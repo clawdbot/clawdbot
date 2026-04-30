@@ -63,7 +63,7 @@ The same `provider/model` can mean different things depending on where it came f
 - User session selections are exact. `/model`, the model picker, `session_status(model=...)`, and `sessions.patch` store `modelOverrideSource: "user"`; if that selected provider/model is unreachable, OpenClaw fails visibly instead of falling through to another configured model.
 - Cron `--model` / payload `model` is a per-job primary. It still uses configured fallbacks unless the job supplies explicit payload `fallbacks` (use `fallbacks: []` for a strict cron run).
 - CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing explicit `models.providers.*.models` instead of loading the full built-in catalog.
-- The Control UI model picker asks the Gateway for its configured model view: `agents.defaults.models` when present, otherwise explicit `models.providers.*.models`, otherwise the full catalog so fresh installs are not blank.
+- The Control UI model picker asks the Gateway for its configured model view: `agents.defaults.models` when present, otherwise explicit `models.providers.*.models` plus providers with usable auth. The full built-in catalog is reserved for explicit browse views such as `models.list` with `view: "all"` or `openclaw models list --all`.
 
 ## Quick model policy
 
@@ -219,7 +219,7 @@ openclaw models image-fallbacks clear
 
 ### `models list`
 
-Shows configured models by default. Useful flags:
+Shows configured/auth-available models by default. Useful flags:
 
 <ParamField path="--all" type="boolean">
   Full catalog. Includes bundled provider-owned static catalog rows before auth is configured, so discovery-only views can show models that are unavailable until you add matching provider credentials.

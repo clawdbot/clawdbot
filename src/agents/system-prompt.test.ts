@@ -759,6 +759,26 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("`style` can be `primary`, `success`, or `danger`");
   });
 
+  it("uses Slack interactive reply hints instead of generic inline button config guidance", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      runtimeInfo: {
+        channel: "slack",
+      },
+      messageToolHints: [
+        "- Prefer Slack buttons/selects for 2-5 discrete choices or parameter picks instead of asking the user to type one.",
+        "- Slack interactive replies: use `[[slack_buttons: Label:value, Other:other]]` to add action buttons that route clicks back as Slack interaction system events.",
+      ],
+    });
+
+    expect(prompt).toContain("Slack interactive replies");
+    expect(prompt).toContain("[[slack_buttons: Label:value, Other:other]]");
+    expect(prompt).not.toContain("Inline buttons not enabled for slack");
+    expect(prompt).not.toContain("slack.capabilities.inlineButtons");
+    expect(prompt).not.toContain("buttons=[[{text,callback_data,style?}]]");
+  });
+
   it("describes message-tool-only source delivery without requiring target", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -785,6 +805,18 @@ describe("buildAgentSystemPrompt", () => {
       runtimeInfo: {
         channel: "telegram",
         capabilities: ["inlineButtons"],
+      },
+    });
+
+    expect(prompt).toContain("rely on native approval card/buttons when they appear");
+    expect(prompt).toContain("do not also send plain chat /approve instructions");
+  });
+
+  it("suppresses plain chat approval commands for native approval channels", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        channel: "slack",
       },
     });
 

@@ -147,6 +147,7 @@ describe("mergeSsrFPolicies", () => {
         {
           dangerouslyAllowPrivateNetwork: true,
           allowRfc2544BenchmarkRange: true,
+          allowIpv6UniqueLocalRange: true,
           allowedHostnames: ["api.example.com", "cdn.example.com"],
           hostnameAllowlist: ["downloads.example.com", "assets.example.com"],
         },
@@ -155,6 +156,7 @@ describe("mergeSsrFPolicies", () => {
       allowPrivateNetwork: true,
       dangerouslyAllowPrivateNetwork: true,
       allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
       allowedHostnames: ["api.example.com", "cdn.example.com"],
       hostnameAllowlist: ["downloads.example.com", "assets.example.com"],
     });

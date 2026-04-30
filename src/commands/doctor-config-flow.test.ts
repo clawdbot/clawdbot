@@ -1615,6 +1615,24 @@ describe("doctor config flow", () => {
     expect(result.cfg.plugins?.entries?.browser?.enabled).toBe(true);
   });
 
+  it("preserves commitments config on repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        commitments: {
+          enabled: true,
+          maxPerDay: 2,
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.cfg.commitments).toEqual({
+      enabled: true,
+      maxPerDay: 2,
+    });
+  });
+
   it("preserves discord streaming intent while stripping unsupported keys on repair", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
@@ -2525,7 +2543,7 @@ describe("doctor config flow", () => {
       };
     };
     expect(cfg.channels.googlechat.dm.allowFrom).toEqual(["*"]);
-    expect(cfg.channels.googlechat.allowFrom).toEqual(["*"]);
+    expect(cfg.channels.googlechat.allowFrom).toBeUndefined();
   });
 
   it("does not report repeat talk provider normalization on consecutive repair runs", async () => {

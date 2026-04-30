@@ -1,5 +1,5 @@
-import { readdirSync, readFileSync } from "node:fs";
-import { dirname, relative, resolve, sep } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { basename, dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
@@ -72,9 +72,17 @@ function listBundledPluginRoots() {
     .plugins.filter((plugin) => plugin.origin === "bundled")
     .map((plugin) => ({
       pluginId: plugin.id,
-      rootDir: plugin.workspaceDir ?? plugin.rootDir,
+      rootDir: resolveBundledPluginSourceRoot(plugin.rootDir, plugin.workspaceDir),
     }))
     .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
+}
+
+function resolveBundledPluginSourceRoot(rootDir: string, workspaceDir?: string): string {
+  if (workspaceDir) {
+    return workspaceDir;
+  }
+  const sourceRoot = resolve(REPO_ROOT, "extensions", basename(rootDir));
+  return existsSync(sourceRoot) ? sourceRoot : rootDir;
 }
 
 function collectSharedFamilyProviders(): Map<string, SharedFamilyProviderInventory> {
@@ -132,7 +140,7 @@ function listMatchingFamilies(source: string, pattern: RegExp): string[] {
 
 function collectSharedFamilyAssignments(): Map<string, ExpectedSharedFamilyContract> {
   const inventory = new Map<string, ExpectedSharedFamilyContract>();
-  const replayPattern = /buildProviderReplayFamilyHooks\s*\(\s*\{\s*family:\s*"([^"]+)"/gu;
+  const replayPattern = /buildProviderReplayFamilyHooks\s*\(\s*\{[\s\S]*?\bfamily:\s*"([^"]+)"/gu;
   const streamPattern = /buildProviderStreamFamilyHooks\s*\(\s*"([^"]+)"/gu;
   const toolCompatPattern = /buildProviderToolCompatFamilyHooks\s*\(\s*"([^"]+)"/gu;
 
@@ -201,7 +209,7 @@ describe("provider family plugin-boundary inventory", () => {
     for (const [pluginId, expected] of Object.entries(
       EXPECTED_SENTINEL_SHARED_FAMILY_ASSIGNMENTS,
     )) {
-      expect(actualAssignments[pluginId]).toBeDefined();
+      expect(actualAssignments[pluginId], pluginId).toBeDefined();
       if (expected.replayFamilies) {
         expect(actualAssignments[pluginId]?.replayFamilies ?? []).toEqual(
           expect.arrayContaining([...expected.replayFamilies]),

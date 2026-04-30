@@ -22,7 +22,7 @@ import { formatQaGatewayLogsForError, redactQaGatewayDebugText } from "./gateway
 import { startQaGatewayRpcClient } from "./gateway-rpc-client.js";
 import { splitQaModelRef, type QaProviderMode } from "./model-selection.js";
 import { resolveQaNodeExecPath } from "./node-exec.js";
-import { readProcessTreeCpuMs } from "./process-tree-cpu.js";
+import { readProcessTreeCpuMs, readProcessTreeRssBytes } from "./process-tree-cpu.js";
 import {
   normalizeQaProviderModeEnv,
   QA_LIVE_PROVIDER_CONFIG_PATH_ENV,
@@ -828,6 +828,7 @@ export async function startQaGatewayChild(params: {
       wsUrl,
       pid: child.pid ?? null,
       getProcessCpuMs: () => readProcessTreeCpuMs(activeChild.pid ?? null),
+      getProcessRssBytes: () => readProcessTreeRssBytes(activeChild.pid ?? null),
       token: gatewayToken,
       workspaceDir,
       tempRoot,

@@ -3,6 +3,18 @@ import { INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END } from "./
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 
 const state = vi.hoisted(() => ({
+  defaultRuntimeConfig: {
+    agents: {
+      defaults: {
+        models: {
+          "anthropic/claude": {},
+          "openai/claude": {},
+          "openai/gpt-5.4": {},
+        },
+      },
+    },
+  },
+  runtimeConfigMock: undefined as unknown,
   acpResolveSessionMock: vi.fn((..._args: unknown[]): unknown => null),
   acpRunTurnMock: vi.fn((..._args: unknown[]): unknown => undefined),
   buildAcpResultMock: vi.fn(),
@@ -22,6 +34,8 @@ const state = vi.hoisted(() => ({
   trajectoryRecordEventMock: vi.fn(),
   trajectoryFlushMock: vi.fn(async () => undefined),
   clearSessionAuthProfileOverrideMock: vi.fn(),
+  isThinkingLevelSupportedMock: vi.fn((_args: unknown) => true),
+  resolveThinkingDefaultMock: vi.fn((_args: unknown) => "low"),
   authProfileStoreMock: { profiles: {} } as { profiles: Record<string, unknown> },
   sessionEntryMock: undefined as unknown,
   sessionStoreMock: undefined as unknown,
@@ -109,7 +123,7 @@ vi.mock("../auto-reply/thinking.js", () => ({
   formatXHighModelHint: () => "model-x",
   normalizeThinkLevel: (v?: string) => v || undefined,
   normalizeVerboseLevel: (v?: string) => v || undefined,
-  isThinkingLevelSupported: () => true,
+  isThinkingLevelSupported: (args: unknown) => state.isThinkingLevelSupportedMock(args),
   resolveSupportedThinkingLevel: ({ level }: { level?: string }) => level,
   supportsXHighThinking: () => false,
 }));
@@ -134,39 +148,18 @@ vi.mock("../cli/deps.js", () => ({
 }));
 
 vi.mock("../config/io.js", () => ({
-  getRuntimeConfig: () => ({
-    agents: {
-      defaults: {
-        models: {
-          "anthropic/claude": {},
-          "openai/claude": {},
-          "openai/gpt-5.4": {},
-        },
-      },
-    },
-  }),
+  getRuntimeConfig: () => state.runtimeConfigMock ?? state.defaultRuntimeConfig,
   readConfigFileSnapshotForWrite: async () => ({
     snapshot: { valid: false },
   }),
 }));
 
 vi.mock("./agent-runtime-config.js", () => {
-  const cfg = {
-    agents: {
-      defaults: {
-        models: {
-          "anthropic/claude": {},
-          "openai/claude": {},
-          "openai/gpt-5.4": {},
-        },
-      },
-    },
-  };
   return {
     resolveAgentRuntimeConfig: async () => ({
-      loadedRaw: cfg,
-      sourceConfig: cfg,
-      cfg,
+      loadedRaw: state.runtimeConfigMock ?? state.defaultRuntimeConfig,
+      sourceConfig: state.runtimeConfigMock ?? state.defaultRuntimeConfig,
+      cfg: state.runtimeConfigMock ?? state.defaultRuntimeConfig,
     }),
   };
 });
@@ -311,12 +304,50 @@ vi.mock("./model-selection.js", () => ({
     allowedCatalog: [],
     allowAny: false,
   }),
+  buildConfiguredModelCatalog: ({ cfg }: { cfg?: unknown }) => {
+    const providers = (cfg as { models?: { providers?: Record<string, { models?: unknown[] }> } })
+      ?.models?.providers;
+    if (!providers) {
+      return [];
+    }
+    return Object.entries(providers).flatMap(([provider, entry]) =>
+      Array.isArray(entry?.models)
+        ? entry.models
+            .filter(
+              (model): model is Record<string, unknown> => !!model && typeof model === "object",
+            )
+            .map((model) => {
+              const id = typeof model.id === "string" ? model.id : "";
+              return {
+                provider,
+                id,
+                name: typeof model.name === "string" ? model.name : id,
+                reasoning: typeof model.reasoning === "boolean" ? model.reasoning : undefined,
+                compat: model.compat,
+              };
+            })
+            .filter((model) => model.id)
+        : [],
+    );
+  },
   modelKey: (p: string, m: string) => `${p}/${m}`,
   normalizeModelRef: (p: string, m: string) => ({ provider: p, model: m }),
   parseModelRef: (m: string, p: string) => ({ provider: p, model: m }),
-  resolveConfiguredModelRef: () => ({ provider: "anthropic", model: "claude" }),
-  resolveDefaultModelForAgent: () => ({ provider: "anthropic", model: "claude" }),
-  resolveThinkingDefault: () => "low",
+  resolveConfiguredModelRef: ({ cfg }: { cfg?: unknown }) => {
+    const raw = (cfg as { agents?: { defaults?: { model?: string | { primary?: string } } } })
+      ?.agents?.defaults?.model;
+    const primary = typeof raw === "string" ? raw : raw?.primary;
+    const [provider, ...modelParts] = (primary ?? "anthropic/claude").split("/");
+    return { provider, model: modelParts.join("/") || "claude" };
+  },
+  resolveDefaultModelForAgent: ({ cfg }: { cfg?: unknown }) => {
+    const raw = (cfg as { agents?: { defaults?: { model?: string | { primary?: string } } } })
+      ?.agents?.defaults?.model;
+    const primary = typeof raw === "string" ? raw : raw?.primary;
+    const [provider, ...modelParts] = (primary ?? "anthropic/claude").split("/");
+    return { provider, model: modelParts.join("/") || "claude" };
+  },
+  resolveThinkingDefault: (args: unknown) => state.resolveThinkingDefaultMock(args),
 }));
 
 vi.mock("./provider-auth-aliases.js", () => ({
@@ -446,6 +477,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.resolveAcpAgentPolicyErrorMock.mockReturnValue(null);
     state.resolveAcpDispatchPolicyErrorMock.mockReturnValue(null);
     state.resolveAcpExplicitTurnPolicyErrorMock.mockReturnValue(null);
+    state.runtimeConfigMock = undefined;
+    state.isThinkingLevelSupportedMock.mockReturnValue(true);
+    state.resolveThinkingDefaultMock.mockReturnValue("low");
     state.acpRunTurnMock.mockImplementation(async (params: unknown) => {
       const onEvent = (params as { onEvent?: (event: unknown) => void }).onEvent;
       onEvent?.({ type: "text_delta", stream: "output", text: "done" });
@@ -504,6 +538,62 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       return arg?.stream === "lifecycle" && arg?.data?.phase === "end";
     });
     expect(lifecycleEndCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("validates explicit thinking against configured model compat without an allowlist", async () => {
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "gmn/gpt-5.4" },
+        },
+      },
+      models: {
+        providers: {
+          gmn: {
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "GPT 5.4 via GMN",
+                reasoning: true,
+                compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+              },
+            ],
+          },
+        },
+      },
+    };
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("gmn", "gpt-5.4"));
+
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      senderIsOwner: true,
+      thinking: "xhigh",
+    });
+
+    expect(state.isThinkingLevelSupportedMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "gmn",
+        model: "gpt-5.4",
+        level: "xhigh",
+        catalog: [
+          expect.objectContaining({
+            provider: "gmn",
+            id: "gpt-5.4",
+            compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+          }),
+        ],
+      }),
+    );
   });
 
   it("records fallback steps to the session trajectory runtime", async () => {

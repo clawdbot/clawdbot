@@ -278,9 +278,10 @@ export async function completeWithPreparedSimpleCompletionModel(params: {
   model: Model<Api>;
   auth: ResolvedProviderAuth;
   context: Parameters<typeof complete>[1];
+  cfg?: OpenClawConfig;
   options?: SimpleCompletionModelOptions;
 }) {
-  const completionModel = prepareModelForSimpleCompletion({ model: params.model });
+  const completionModel = prepareModelForSimpleCompletion({ model: params.model, cfg: params.cfg });
   return await complete(completionModel, params.context, {
     ...params.options,
     apiKey: params.auth.apiKey,

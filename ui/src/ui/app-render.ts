@@ -40,6 +40,7 @@ import {
   resetConfigPendingChanges,
   runUpdate,
   saveConfig,
+  stageDefaultAgentConfigEntry,
   stageConfigPreset,
   updateConfigFormValue,
   removeConfigFormValue,
@@ -116,14 +117,21 @@ import {
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
 import { createLazyView, renderLazyView } from "./lazy-view.ts";
-import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
-import "./components/dashboard-header.ts";
+import {
+  normalizeBasePath,
+  TAB_GROUPS,
+  subtitleForTab,
+  titleForTab,
+  type Tab,
+} from "./navigation.ts";
 import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
+import "./components/dashboard-header.ts";
 import {
   buildAgentMainSessionKey,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "./session-key.ts";
+import { loadLocalAssistantIdentity } from "./storage.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
 import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
@@ -636,28 +644,44 @@ export function renderApp(state: AppViewState) {
   const navCollapsed = state.settings.navCollapsed && !navDrawerOpen;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
+  const localAssistantAvatarOverride =
+    normalizeOptionalString(loadLocalAssistantIdentity().avatar) ?? null;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
-  const chatAssistantAvatarStatus = state.chatAvatarStatus ?? state.assistantAvatarStatus ?? null;
-  const chatAssistantAvatarReason = state.chatAvatarReason ?? state.assistantAvatarReason ?? null;
+  const chatAssistantAvatarStatus = localAssistantAvatarOverride
+    ? "data"
+    : (state.chatAvatarStatus ?? state.assistantAvatarStatus ?? null);
+  const chatAssistantAvatarReason = localAssistantAvatarOverride
+    ? null
+    : (state.chatAvatarReason ?? state.assistantAvatarReason ?? null);
   const chatAssistantAvatarMissing =
     chatAssistantAvatarStatus === "none" && chatAssistantAvatarReason === "missing";
-  const effectiveAssistantAvatar = chatAssistantAvatarMissing ? null : state.assistantAvatar;
+  const effectiveAssistantAvatar =
+    localAssistantAvatarOverride ?? (chatAssistantAvatarMissing ? null : state.assistantAvatar);
   const chatAvatarUrl =
-    state.chatAvatarUrl ?? (chatAssistantAvatarMissing ? null : (assistantAvatarUrl ?? null));
-  const configAssistantAvatarStatus = state.assistantAvatarStatus ?? state.chatAvatarStatus ?? null;
-  const configAssistantAvatarReason = state.assistantAvatarReason ?? state.chatAvatarReason ?? null;
-  const configAssistantAvatarSource = state.assistantAvatarSource ?? state.chatAvatarSource ?? null;
+    localAssistantAvatarOverride ??
+    state.chatAvatarUrl ??
+    (chatAssistantAvatarMissing ? null : (assistantAvatarUrl ?? null));
+  const configAssistantAvatarStatus = localAssistantAvatarOverride
+    ? "data"
+    : (state.assistantAvatarStatus ?? state.chatAvatarStatus ?? null);
+  const configAssistantAvatarReason = localAssistantAvatarOverride
+    ? null
+    : (state.assistantAvatarReason ?? state.chatAvatarReason ?? null);
+  const configAssistantAvatarSource =
+    localAssistantAvatarOverride ?? state.assistantAvatarSource ?? state.chatAvatarSource ?? null;
   const configAssistantAvatarMissing =
     configAssistantAvatarStatus === "none" && configAssistantAvatarReason === "missing";
   const configAssistantAvatar =
-    configAssistantAvatarMissing || configAssistantAvatarStatus === "local"
+    localAssistantAvatarOverride ??
+    (configAssistantAvatarMissing || configAssistantAvatarStatus === "local"
       ? null
-      : state.assistantAvatar;
+      : state.assistantAvatar);
   const configAssistantAvatarUrl =
-    configAssistantAvatarStatus === "local" && state.assistantAgentId
+    localAssistantAvatarOverride ??
+    (configAssistantAvatarStatus === "local" && state.assistantAgentId
       ? buildAssistantAvatarRoute(state.basePath, state.assistantAgentId)
       : (state.chatAvatarUrl ??
-        (configAssistantAvatarMissing ? null : (assistantAvatarUrl ?? null)));
+        (configAssistantAvatarMissing ? null : (assistantAvatarUrl ?? null))));
   const configValue =
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
   const configuredDreaming = resolveConfiguredDreaming(configValue);
@@ -955,7 +979,8 @@ export function renderApp(state: AppViewState) {
         // Quick Settings mode — opinionated card layout
         if (state.configSettingsMode === "quick") {
           const configObj = state.configForm ?? state.configSnapshot?.config ?? {};
-          const assistantAvatarOverride = resolveAssistantAvatarOverride(configObj);
+          const assistantAvatarOverride =
+            localAssistantAvatarOverride ?? resolveAssistantAvatarOverride(configObj);
           const agentsDefaults = ((configObj.agents as Record<string, unknown> | undefined)
             ?.defaults ?? {}) as Record<string, unknown>;
           const activeSession = resolveQuickSettingsSessionRow(state);
@@ -1068,6 +1093,7 @@ export function renderApp(state: AppViewState) {
               state.chatAvatarStatus = null;
               state.chatAvatarReason = null;
               state.assistantAvatarUploadError = null;
+              void state.loadAssistantIdentity?.().finally(() => requestHostUpdate?.());
               requestHostUpdate?.();
             },
             basePath: state.basePath ?? "",
@@ -1315,7 +1341,7 @@ export function renderApp(state: AppViewState) {
         <div class="topnav-shell">
           <button
             type="button"
-            class="topbar-nav-toggle"
+            class="sidebar-menu-trigger topbar-nav-toggle"
             @click=${() => {
               state.navDrawerOpen = !navDrawerOpen;
             }}
@@ -1326,7 +1352,13 @@ export function renderApp(state: AppViewState) {
             <span class="nav-collapse-toggle__icon" aria-hidden="true">${icons.menu}</span>
           </button>
           <div class="topnav-shell__content">
-            <dashboard-header .tab=${state.tab}></dashboard-header>
+            <dashboard-header
+              .tab=${state.tab}
+              .basePath=${state.basePath}
+              @navigate=${(event: CustomEvent<Tab>) => {
+                state.setTab(event.detail);
+              }}
+            ></dashboard-header>
           </div>
           <div class="topnav-shell__actions">
             <button
@@ -1334,8 +1366,8 @@ export function renderApp(state: AppViewState) {
               @click=${() => {
                 state.paletteOpen = !state.paletteOpen;
               }}
-              title="Search or jump to… (⌘K)"
-              aria-label="Open command palette"
+              title=${t("chat.commandPaletteTitle")}
+              aria-label=${t("chat.openCommandPalette")}
             >
               <span class="topbar-search__label">${t("common.search")}</span>
               <kbd class="topbar-search__kbd">⌘K</kbd>
@@ -1429,7 +1461,7 @@ export function renderApp(state: AppViewState) {
                   href="https://docs.openclaw.ai"
                   target=${EXTERNAL_LINK_TARGET}
                   rel=${buildExternalLinkRel()}
-                  title="${t("common.docs")} (opens in new tab)"
+                  title=${t("chat.docsOpensInNewTab", { label: t("common.docs") })}
                 >
                   <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
                   ${!navCollapsed
@@ -1471,20 +1503,20 @@ export function renderApp(state: AppViewState) {
         state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion &&
         !isUpdateBannerDismissed(state.updateAvailable)
           ? html`<div class="update-banner callout danger" role="alert">
-              <strong>Update available:</strong> v${state.updateAvailable.latestVersion} (running
-              v${state.updateAvailable.currentVersion}).
+              <strong>${t("chat.updateAvailable")}</strong> v${state.updateAvailable.latestVersion}
+              (${t("chat.runningVersion", { version: state.updateAvailable.currentVersion })}).
               <button
                 class="btn btn--sm update-banner__btn"
                 ?disabled=${state.updateRunning || !state.connected}
                 @click=${() => runUpdate(state)}
               >
-                ${state.updateRunning ? "Updating…" : "Update now"}
+                ${state.updateRunning ? t("chat.updating") : t("chat.updateNow")}
               </button>
               <button
                 class="update-banner__close"
                 type="button"
-                title="Dismiss"
-                aria-label="Dismiss update banner"
+                title=${t("common.dismiss")}
+                aria-label=${t("chat.dismissUpdateBanner")}
                 @click=${() => {
                   dismissUpdateBanner(state.updateAvailable);
                   state.updateAvailable = null;
@@ -2148,10 +2180,7 @@ export function renderApp(state: AppViewState) {
                   updateConfigFormValue(state, basePath, { primary, fallbacks: normalized });
                 },
                 onSetDefault: (agentId) => {
-                  if (!configValue) {
-                    return;
-                  }
-                  updateConfigFormValue(state, ["agents", "defaultId"], agentId);
+                  stageDefaultAgentConfigEntry(state, agentId);
                 },
               }),
             )

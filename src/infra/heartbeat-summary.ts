@@ -38,6 +38,9 @@ export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string
       (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
     );
   }
+  if (cfg.agents?.defaults?.heartbeat) {
+    return true;
+  }
   return resolvedAgentId === resolveDefaultAgentId(cfg);
 }
 

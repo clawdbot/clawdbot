@@ -2,8 +2,10 @@ import { createHmac, createHash } from "node:crypto";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { resolveChannelApprovalCapability } from "../channels/plugins/approvals.js";
-import { getChannelPlugin } from "../channels/plugins/index.js";
+import {
+  hasNativeApprovalPromptRuntimeCapability,
+  isKnownNativeApprovalPromptChannel,
+} from "../channels/plugins/native-approval-prompt.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
 import {
@@ -141,13 +143,13 @@ function buildHeartbeatSection(params: { isMinimal: boolean; heartbeatPrompt?: s
 function buildExecApprovalPromptGuidance(params: {
   runtimeChannel?: string;
   inlineButtonsEnabled?: boolean;
+  runtimeCapabilities?: readonly string[];
 }) {
   const runtimeChannel = normalizeOptionalLowercaseString(params.runtimeChannel);
   const usesNativeApprovalUi =
     params.inlineButtonsEnabled ||
-    (runtimeChannel
-      ? Boolean(resolveChannelApprovalCapability(getChannelPlugin(runtimeChannel))?.native)
-      : false);
+    hasNativeApprovalPromptRuntimeCapability(params.runtimeCapabilities) ||
+    isKnownNativeApprovalPromptChannel(runtimeChannel);
   if (usesNativeApprovalUi) {
     return 'When exec returns approval-pending on this channel, rely on native approval card/buttons when they appear and do not also send plain chat /approve instructions. Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible; when needed, copy the exact /approve command from the tool output\'s "Reply with:" line.';
   }
@@ -346,6 +348,7 @@ function buildMessagingSection(params: {
     return [];
   }
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
+  const showGenericInlineButtonHint = params.runtimeChannel !== "slack";
   const hasSessionsSpawn = params.availableTools.has("sessions_spawn");
   const hasSubagents = params.availableTools.has("subagents");
   const subagentOrchestrationGuidance = hasSessionsSpawn
@@ -376,11 +379,13 @@ function buildMessagingSection(params: {
           messageToolOnly
             ? "- If you use `message` (`action=send`) to deliver visible output, do not repeat that visible content in your final answer; final answers are private in this mode."
             : `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
-          params.inlineButtonsEnabled
-            ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data,style?}]]`; `style` can be `primary`, `success`, or `danger`."
-            : params.runtimeChannel
-              ? `- Inline buttons not enabled for ${params.runtimeChannel}. If you need them, ask to set ${params.runtimeChannel}.capabilities.inlineButtons ("dm"|"group"|"all"|"allowlist").`
-              : "",
+          showGenericInlineButtonHint
+            ? params.inlineButtonsEnabled
+              ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data,style?}]]`; `style` can be `primary`, `success`, or `danger`."
+              : params.runtimeChannel
+                ? `- Inline buttons not enabled for ${params.runtimeChannel}. If you need them, ask to set ${params.runtimeChannel}.capabilities.inlineButtons ("dm"|"group"|"all"|"allowlist").`
+                : ""
+            : "",
           ...(params.messageToolHints ?? []),
         ]
           .filter(Boolean)
@@ -766,6 +771,7 @@ export function buildAgentSystemPrompt(params: {
         buildExecApprovalPromptGuidance({
           runtimeChannel: params.runtimeInfo?.channel,
           inlineButtonsEnabled,
+          runtimeCapabilities,
         }),
         "Never execute /approve through exec or any other shell/tool path; /approve is a user-facing approval command, not a shell command.",
         "Treat allow-once as single-command only: if another elevated command needs approval, request a fresh /approve and do not claim prior approval covered it.",

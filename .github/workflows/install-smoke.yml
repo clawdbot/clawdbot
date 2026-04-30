@@ -34,10 +34,11 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-manual-{1}', github.workflow, github.run_id) || format('{0}-{1}', github.workflow, github.ref) }}
-  cancel-in-progress: true
+  group: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && format('{0}-{1}-{2}', github.workflow, github.event_name, github.run_id) || format('{0}-{1}', github.workflow, github.ref) }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_call' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -51,6 +52,8 @@ jobs:
       run_fast_install_smoke: ${{ steps.manifest.outputs.run_fast_install_smoke }}
       run_full_install_smoke: ${{ steps.manifest.outputs.run_full_install_smoke }}
       run_bun_global_install_smoke: ${{ steps.manifest.outputs.run_bun_global_install_smoke }}
+      target_sha: ${{ steps.manifest.outputs.target_sha }}
+      dockerfile_image: ${{ steps.manifest.outputs.dockerfile_image }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -74,6 +77,9 @@ jobs:
           run_full_install_smoke=true
           run_bun_global_install_smoke=false
           run_install_smoke=true
+          target_sha="$(git rev-parse HEAD)"
+          owner="$(printf '%s' "${GITHUB_REPOSITORY_OWNER:-openclaw}" | tr '[:upper:]' '[:lower:]')"
+          dockerfile_image="ghcr.io/${owner}/openclaw-dockerfile-smoke:${target_sha}"
           if [ "$event_name" = "schedule" ]; then
             run_bun_global_install_smoke=true
           elif [ "$event_name" = "workflow_dispatch" ] || [ "$event_name" = "workflow_call" ]; then
@@ -87,6 +93,8 @@ jobs:
             echo "run_fast_install_smoke=$run_fast_install_smoke"
             echo "run_full_install_smoke=$run_full_install_smoke"
             echo "run_bun_global_install_smoke=$run_bun_global_install_smoke"
+            echo "target_sha=$target_sha"
+            echo "dockerfile_image=$dockerfile_image"
           } >> "$GITHUB_OUTPUT"
 
   install-smoke-fast:
@@ -103,25 +111,23 @@ jobs:
           ref: ${{ inputs.ref || github.ref }}
 
       - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1
+        uses: useblacksmith/setup-docker-builder@722e97d12b1d06a961800dd6c05d79d951ad3c80 # v1
         with:
           max-cache-size-mb: 800000
 
-      # Blacksmith's builder owns the Docker layer cache; keep smoke builds off
-      # explicit gha cache directives so local tags still load cleanly.
+      # Keep release smoke builds bounded and log-producing. The Blacksmith
+      # build action can leave jobs in-progress without step logs when a remote
+      # builder stalls; an explicit buildx invocation fails closed instead.
       - name: Build root Dockerfile smoke image
-        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
-        with:
-          context: .
-          file: ./Dockerfile
-          build-args: |
-            OPENCLAW_EXTENSIONS=matrix
-          tags: |
-            openclaw-dockerfile-smoke:local
-            openclaw-ext-smoke:local
-          load: true
-          push: false
-          provenance: false
+        run: |
+          timeout 45m docker buildx build \
+            --progress=plain \
+            --load \
+            --build-arg OPENCLAW_EXTENSIONS=matrix \
+            -t openclaw-dockerfile-smoke:local \
+            -t openclaw-ext-smoke:local \
+            -f ./Dockerfile \
+            .
 
       - name: Run root Dockerfile CLI smoke
         run: |
@@ -198,10 +204,12 @@ jobs:
             "
           '
 
-  install-smoke:
+  root_dockerfile_image:
     needs: [preflight]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    outputs:
+      image_ref: ${{ steps.image.outputs.image_ref }}
     env:
       DOCKER_BUILD_SUMMARY: "false"
       DOCKER_BUILD_RECORD_UPLOAD: "false"
@@ -211,53 +219,127 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
+      - name: Log in to GHCR
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Check for existing root Dockerfile smoke image
+        id: existing
+        env:
+          IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
+        run: |
+          set -euo pipefail
+          if timeout 180s docker pull "$IMAGE_REF"; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Using existing root Dockerfile smoke image: \`$IMAGE_REF\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "No existing root Dockerfile smoke image found for \`$IMAGE_REF\`; building it." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1
+        if: steps.existing.outputs.exists != 'true'
+        uses: useblacksmith/setup-docker-builder@722e97d12b1d06a961800dd6c05d79d951ad3c80 # v1
         with:
           max-cache-size-mb: 800000
 
-      # Blacksmith's builder owns the Docker layer cache; keep smoke builds off
-      # explicit gha cache directives so local tags still load cleanly.
+      # Build once with the matrix extension and publish by target SHA. Use a
+      # direct buildx command so release jobs emit Docker progress and time out.
+      - name: Build and push root Dockerfile smoke image
+        if: steps.existing.outputs.exists != 'true'
+        env:
+          IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
+        run: |
+          timeout 45m docker buildx build \
+            --progress=plain \
+            --push \
+            --build-arg OPENCLAW_EXTENSIONS=matrix \
+            -t "$IMAGE_REF" \
+            -f ./Dockerfile \
+            .
+
+      - name: Record root image output
+        id: image
+        env:
+          IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
+        run: echo "image_ref=$IMAGE_REF" >> "$GITHUB_OUTPUT"
+
+      - name: Summarize root image
+        env:
+          IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+        run: |
+          {
+            echo "## Root Dockerfile smoke image"
+            echo
+            echo "- Target SHA: \`${TARGET_SHA}\`"
+            echo "- Image: \`${IMAGE_REF}\`"
+            echo "- Reused existing image: \`${{ steps.existing.outputs.exists }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  qr_package_install_smoke:
+    needs: [preflight]
+    if: needs.preflight.outputs.run_full_install_smoke == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout CLI
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
       - name: Run QR package install smoke
         env:
           OPENCLAW_QR_SMOKE_FORCE_INSTALL: "1"
         run: bash scripts/e2e/qr-import-docker.sh
 
-      # Build once with the matrix extension and tag both smoke names. This
-      # keeps the build-arg coverage without a second Blacksmith build action.
-      - name: Build root Dockerfile smoke image
-        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
+  root_dockerfile_smokes:
+    needs: [preflight, root_dockerfile_image]
+    if: needs.preflight.outputs.run_full_install_smoke == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout CLI
+        uses: actions/checkout@v6
         with:
-          context: .
-          file: ./Dockerfile
-          build-args: |
-            OPENCLAW_EXTENSIONS=matrix
-          tags: |
-            openclaw-dockerfile-smoke:local
-            openclaw-ext-smoke:local
-          load: true
-          push: false
-          provenance: false
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Pull root Dockerfile smoke image
+        env:
+          IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
+        run: timeout 300s docker pull "$IMAGE_REF"
 
       - name: Run root Dockerfile CLI smoke
+        env:
+          IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
         run: |
-          docker run --rm --entrypoint sh openclaw-dockerfile-smoke:local -lc 'which openclaw && openclaw --version'
+          docker run --rm --entrypoint sh "$IMAGE_REF" -lc 'which openclaw && openclaw --version'
 
       - name: Run agents delete shared workspace Docker CLI smoke
         env:
-          OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_IMAGE: openclaw-dockerfile-smoke:local
+          OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}
           OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_SKIP_BUILD: "1"
         run: bash scripts/e2e/agents-delete-shared-workspace-docker.sh
 
       - name: Run Docker gateway network e2e
         env:
-          OPENCLAW_GATEWAY_NETWORK_E2E_IMAGE: openclaw-dockerfile-smoke:local
+          OPENCLAW_GATEWAY_NETWORK_E2E_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}
           OPENCLAW_GATEWAY_NETWORK_E2E_SKIP_BUILD: "1"
         run: bash scripts/e2e/gateway-network-docker.sh
 
       - name: Smoke test Dockerfile with matrix extension build arg
+        env:
+          IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
         run: |
-          docker run --rm --entrypoint sh openclaw-ext-smoke:local -lc '
+          docker run --rm --entrypoint sh "$IMAGE_REF" -lc '
             which openclaw &&
             openclaw --version &&
             node -e "
@@ -300,38 +382,59 @@ jobs:
             "
           '
 
-      - name: Build installer smoke image
-        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
+  installer_smoke:
+    needs: [preflight, root_dockerfile_image]
+    if: needs.preflight.outputs.run_full_install_smoke == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    env:
+      DOCKER_BUILD_SUMMARY: "false"
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+    steps:
+      - name: Checkout CLI
+        uses: actions/checkout@v6
         with:
-          context: ./scripts/docker
-          file: ./scripts/docker/install-sh-smoke/Dockerfile
-          tags: openclaw-install-smoke:local
-          load: true
-          push: false
-          provenance: false
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Pull root Dockerfile smoke image
+        env:
+          IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
+        run: timeout 300s docker pull "$IMAGE_REF"
+
+      - name: Set up Blacksmith Docker Builder
+        uses: useblacksmith/setup-docker-builder@722e97d12b1d06a961800dd6c05d79d951ad3c80 # v1
+        with:
+          max-cache-size-mb: 800000
+
+      - name: Build installer smoke image
+        run: |
+          timeout 20m docker buildx build \
+            --progress=plain \
+            --load \
+            -t openclaw-install-smoke:local \
+            -f ./scripts/docker/install-sh-smoke/Dockerfile \
+            ./scripts/docker
 
       - name: Build installer non-root image
-        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
-        with:
-          context: ./scripts/docker
-          file: ./scripts/docker/install-sh-nonroot/Dockerfile
-          tags: openclaw-install-nonroot:local
-          load: true
-          push: false
-          provenance: false
+        run: |
+          timeout 20m docker buildx build \
+            --progress=plain \
+            --load \
+            -t openclaw-install-nonroot:local \
+            -f ./scripts/docker/install-sh-nonroot/Dockerfile \
+            ./scripts/docker
 
       - name: Setup Node environment for installer smoke
         uses: ./.github/actions/setup-node-env
         with:
-          install-bun: ${{ needs.preflight.outputs.run_bun_global_install_smoke }}
+          install-bun: "false"
           install-deps: "true"
-
-      - name: Run Bun global install image-provider smoke
-        if: needs.preflight.outputs.run_bun_global_install_smoke == 'true'
-        env:
-          OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: openclaw-dockerfile-smoke:local
-          OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD: "0"
-        run: bash scripts/e2e/bun-global-install-smoke.sh
 
       - name: Run installer docker tests
         env:
@@ -345,9 +448,43 @@ jobs:
           OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL: "1"
           OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS: "1"
           OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE: ${{ inputs.update_baseline_version || 'latest' }}
-          OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE: openclaw-dockerfile-smoke:local
+          OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}
           OPENCLAW_INSTALL_SMOKE_UPDATE_SKIP_LOCAL_BUILD: "1"
         run: bash scripts/test-install-sh-docker.sh
+
+  bun_global_install_smoke:
+    needs: [preflight, root_dockerfile_image]
+    if: needs.preflight.outputs.run_full_install_smoke == 'true' && needs.preflight.outputs.run_bun_global_install_smoke == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout CLI
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Pull root Dockerfile smoke image
+        env:
+          IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
+        run: timeout 300s docker pull "$IMAGE_REF"
+
+      - name: Setup Node environment for Bun smoke
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "true"
+          install-deps: "true"
+
+      - name: Run Bun global install image-provider smoke
+        env:
+          OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}
+          OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD: "0"
+        run: bash scripts/e2e/bun-global-install-smoke.sh
 
   docker-e2e-fast:
     needs: [preflight]
@@ -364,7 +501,7 @@ jobs:
           ref: ${{ inputs.ref || github.ref }}
 
       - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1
+        uses: useblacksmith/setup-docker-builder@722e97d12b1d06a961800dd6c05d79d951ad3c80 # v1
         with:
           max-cache-size-mb: 800000
 

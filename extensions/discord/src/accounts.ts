@@ -4,6 +4,13 @@ import {
   resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-helpers";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import {
+  mapAllowFromEntries,
+  normalizeChannelDmPolicy,
+  resolveChannelDmAllowFrom,
+  resolveChannelDmPolicy,
+  type ChannelDmPolicy,
+} from "openclaw/plugin-sdk/channel-config-helpers";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { DiscordAccountConfig, DiscordActionConfig, OpenClawConfig } from "./runtime-api.js";
@@ -40,6 +47,40 @@ export function mergeDiscordAccountConfig(
       | undefined,
     accountId,
   });
+}
+
+export function resolveDiscordAccountAllowFrom(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): string[] | undefined {
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultDiscordAccountId(params.cfg),
+  );
+  const accountConfig = resolveDiscordAccountConfig(params.cfg, accountId);
+  const rootConfig = params.cfg.channels?.discord as DiscordAccountConfig | undefined;
+
+  const allowFrom = resolveChannelDmAllowFrom({
+    account: accountConfig as Record<string, unknown> | undefined,
+    parent: rootConfig as Record<string, unknown> | undefined,
+  });
+  return allowFrom ? mapAllowFromEntries(allowFrom) : undefined;
+}
+
+export function resolveDiscordAccountDmPolicy(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): ChannelDmPolicy | undefined {
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultDiscordAccountId(params.cfg),
+  );
+  const accountConfig = resolveDiscordAccountConfig(params.cfg, accountId);
+  const rootConfig = params.cfg.channels?.discord as DiscordAccountConfig | undefined;
+  const policy = resolveChannelDmPolicy({
+    account: accountConfig as Record<string, unknown> | undefined,
+    parent: rootConfig as Record<string, unknown> | undefined,
+    defaultPolicy: "pairing",
+  });
+  return normalizeChannelDmPolicy(policy);
 }
 
 export function createDiscordActionGate(params: {

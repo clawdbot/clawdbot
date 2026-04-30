@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 const GATEWAY_CLIENT_CONSTRUCTOR_PATTERN = /new\s+GatewayClient\s*\(/;
 
 const ALLOWED_GATEWAY_CLIENT_CALLSITES = new Set([
+  "extensions/google-meet/src/voice-call-gateway.ts",
   "src/acp/server.ts",
   "src/gateway/call.ts",
   "src/gateway/gateway-cli-backend.live-helpers.ts",
@@ -45,7 +46,10 @@ async function collectSourceFiles(dir: string): Promise<string[]> {
 describe("GatewayClient production callsites", () => {
   it("remain constrained to allowlisted files", async () => {
     const root = process.cwd();
-    const sourceFiles = await collectSourceFiles(path.join(root, "src"));
+    const sourceFiles = [
+      ...(await collectSourceFiles(path.join(root, "src"))),
+      ...(await collectSourceFiles(path.join(root, "extensions"))),
+    ];
     const callsites: string[] = [];
     for (const fullPath of sourceFiles) {
       const relativePath = path.relative(root, fullPath).replaceAll(path.sep, "/");

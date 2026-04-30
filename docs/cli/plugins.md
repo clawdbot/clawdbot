@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw plugins` (list, install, marketplace, uninstall, enable/disable, doctor)"
+summary: "CLI reference for `openclaw plugins` (list, install, marketplace, uninstall, enable/disable, deps, doctor)"
 read_when:
   - You want to install or manage Gateway plugins or compatible bundles
   - You want to debug plugin load failures
@@ -41,6 +41,10 @@ openclaw plugins disable <id>
 openclaw plugins registry
 openclaw plugins registry --refresh
 openclaw plugins uninstall <id>
+openclaw plugins deps
+openclaw plugins deps --repair
+openclaw plugins deps --prune
+openclaw plugins deps --json
 openclaw plugins doctor
 openclaw plugins update <id-or-npm-spec>
 openclaw plugins update --all
@@ -251,6 +255,19 @@ Use `--pin` on npm installs to save the resolved exact spec (`name@version`) in 
 Plugin install metadata is machine-managed state, not user config. Installs and updates write it to `plugins/installs.json` under the active OpenClaw state directory. Its top-level `installRecords` map is the durable source of install metadata, including records for broken or missing plugin manifests. The `plugins` array is the manifest-derived cold registry cache. The file includes a do-not-edit warning and is used by `openclaw plugins update`, uninstall, diagnostics, and the cold plugin registry.
 
 When OpenClaw sees shipped legacy `plugins.installs` records in config, it moves them into the plugin index and removes the config key; if either write fails, the config records are kept so the install metadata is not lost.
+
+### Runtime deps
+
+```bash
+openclaw plugins deps
+openclaw plugins deps --repair
+openclaw plugins deps --prune
+openclaw plugins deps --json
+```
+
+`plugins deps` inspects the packaged runtime dependency stage for OpenClaw-owned bundled plugins selected by plugin config, enabled/configured channels, configured model providers, or bundled manifest defaults. It is not the install/update path for third-party npm or ClawHub plugins.
+
+Use `--repair` when a packaged install reports missing bundled runtime dependencies during Gateway startup or `plugins doctor`. Repair installs only missing enabled bundled-plugin deps with lifecycle scripts disabled. Use `--prune` to remove stale unknown external runtime-dependency roots left behind by older packaged layouts.
 
 ### Uninstall
 

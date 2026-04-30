@@ -25,7 +25,11 @@ import {
   resetClaudeLiveSessionsForTest,
   runClaudeLiveSessionTurn,
 } from "./cli-runner/claude-live-session.js";
-import { buildCliEnvAuthLog, executePreparedCliRun } from "./cli-runner/execute.js";
+import {
+  buildCliEnvAuthLog,
+  buildCliExecLogLine,
+  executePreparedCliRun,
+} from "./cli-runner/execute.js";
 import { buildSystemPrompt } from "./cli-runner/helpers.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
@@ -127,6 +131,27 @@ function buildPreparedCliRunContext(params: {
 }
 
 describe("runCliAgent spawn path", () => {
+  it("formats redacted CLI resume diagnostics without exposing raw session ids", () => {
+    const logLine = buildCliExecLogLine({
+      provider: "claude-cli",
+      model: "claude-opus-4-7",
+      promptChars: 42,
+      trigger: "heartbeat",
+      useResume: true,
+      cliSessionId: "claude-session-secret",
+      resolvedSessionId: "claude-session-secret",
+      reusableSessionId: "claude-session-secret",
+      hasHistoryPrompt: false,
+    });
+
+    expect(logLine).toContain("trigger=heartbeat");
+    expect(logLine).toContain("useResume=true");
+    expect(logLine).toContain("session=present");
+    expect(logLine).toContain("reuse=reusable");
+    expect(logLine).toContain("historyPrompt=none");
+    expect(logLine).not.toContain("claude-session-secret");
+  });
+
   it("does not inject hardcoded 'Tools are disabled' text into CLI arguments", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({

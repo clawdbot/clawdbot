@@ -14,7 +14,7 @@ export function normalizeTranscriptForMatch(value: string): string {
 
 type ExpectedTranscriptMatch = RegExp | string;
 
-export const OPENCLAW_LIVE_TRANSCRIPT_MARKER_RE = /open(?:claw|flaw|clar|core)/;
+export const OPENCLAW_LIVE_TRANSCRIPT_MARKER_RE = /open(?:claw|cl|flaw|clar|core)/;
 
 export function expectOpenClawLiveTranscriptMarker(value: string): void {
   expect(normalizeTranscriptForMatch(value)).toMatch(OPENCLAW_LIVE_TRANSCRIPT_MARKER_RE);

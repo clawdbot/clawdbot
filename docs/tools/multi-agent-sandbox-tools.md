@@ -21,7 +21,7 @@ Each agent in a multi-agent setup can override the global sandbox and tool polic
 </CardGroup>
 
 <Warning>
-Auth is per-agent: each agent reads from its own `agentDir` auth store at `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`. Credentials are **not** shared between agents. Never reuse `agentDir` across agents. If you want to share creds, copy `auth-profiles.json` into the other agent's `agentDir`.
+Auth is scoped by agent: each agent has its own `agentDir` auth store at `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`. Never reuse `agentDir` across agents. Agents can read through to the default/main agent's auth profiles when they do not have a local profile, but OAuth refresh tokens are not cloned into secondary agent stores. If you copy credentials manually, copy only portable static `api_key` or `token` profiles.
 </Warning>
 
 ---

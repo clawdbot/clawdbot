@@ -32,11 +32,13 @@ for plugin_entry in "${plugin_entries[@]}"; do
   IFS=$'\t' read -r plugin_id plugin_dir requires_config <<<"$plugin_entry"
   install_log="/tmp/openclaw-install-${plugin_index}.log"
   uninstall_log="/tmp/openclaw-uninstall-${plugin_index}.log"
+  plugin_started_at="$(date +%s)"
   echo "Installing bundled plugin: $plugin_id ($plugin_dir)"
   node "$OPENCLAW_ENTRY" plugins install "$plugin_id" >"$install_log" 2>&1 || {
     cat "$install_log"
     exit 1
   }
+  install_finished_at="$(date +%s)"
   node "$probe" assert-installed "$plugin_id" "$plugin_dir" "$requires_config"
 
   echo "Uninstalling bundled plugin: $plugin_id ($plugin_dir)"
@@ -44,7 +46,9 @@ for plugin_entry in "${plugin_entries[@]}"; do
     cat "$uninstall_log"
     exit 1
   }
+  uninstall_finished_at="$(date +%s)"
   node "$probe" assert-uninstalled "$plugin_id" "$plugin_dir"
+  echo "Bundled plugin lifecycle timing: $plugin_id install=$((install_finished_at - plugin_started_at))s uninstall=$((uninstall_finished_at - install_finished_at))s total=$((uninstall_finished_at - plugin_started_at))s"
   plugin_index=$((plugin_index + 1))
 done
 

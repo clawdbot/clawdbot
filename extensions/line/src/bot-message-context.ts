@@ -9,7 +9,6 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   ensureConfiguredBindingRouteReady,
-  recordInboundSession,
   resolvePinnedMainDmOwnerFromAllowlist,
   resolveConfiguredBindingRoute,
   resolveRuntimeConversationBindingRoute,
@@ -378,35 +377,6 @@ async function finalizeLineInboundContext(params: {
         normalizeEntry: (entry) => normalizeAllowFrom([entry]).entries[0],
       })
     : null;
-  await recordInboundSession({
-    storePath,
-    sessionKey: ctxPayload.SessionKey ?? params.route.sessionKey,
-    ctx: ctxPayload,
-    updateLastRoute: !params.source.isGroup
-      ? {
-          sessionKey: params.route.mainSessionKey,
-          channel: "line",
-          to: params.source.userId ?? params.source.peerId,
-          accountId: params.route.accountId,
-          mainDmOwnerPin:
-            pinnedMainDmOwner && params.source.userId
-              ? {
-                  ownerRecipient: pinnedMainDmOwner,
-                  senderRecipient: params.source.userId,
-                  onSkip: ({ ownerRecipient, senderRecipient }) => {
-                    logVerbose(
-                      `line: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                    );
-                  },
-                }
-              : undefined,
-        }
-      : undefined,
-    onRecordError: (err) => {
-      logVerbose(`line: failed updating session meta: ${String(err)}`);
-    },
-  });
-
   if (shouldLogVerbose()) {
     const preview = body.slice(0, 200).replace(/\n/g, "\\n");
     const mediaInfo =
@@ -419,7 +389,44 @@ async function finalizeLineInboundContext(params: {
     );
   }
 
-  return { ctxPayload, replyToken: (params.event as { replyToken: string }).replyToken };
+  return {
+    ctxPayload,
+    replyToken: (params.event as { replyToken: string }).replyToken,
+    turn: {
+      storePath,
+      record: {
+        updateLastRoute: !params.source.isGroup
+          ? {
+              sessionKey: params.route.mainSessionKey,
+              channel: "line",
+              to: params.source.userId ?? params.source.peerId,
+              accountId: params.route.accountId,
+              mainDmOwnerPin:
+                pinnedMainDmOwner && params.source.userId
+                  ? {
+                      ownerRecipient: pinnedMainDmOwner,
+                      senderRecipient: params.source.userId,
+                      onSkip: ({
+                        ownerRecipient,
+                        senderRecipient,
+                      }: {
+                        ownerRecipient: string;
+                        senderRecipient: string;
+                      }) => {
+                        logVerbose(
+                          `line: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                        );
+                      },
+                    }
+                  : undefined,
+            }
+          : undefined,
+        onRecordError: (err: unknown) => {
+          logVerbose(`line: failed updating session meta: ${String(err)}`);
+        },
+      },
+    },
+  };
 }
 
 export async function buildLineMessageContext(params: BuildLineMessageContextParams) {
@@ -469,7 +476,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
         }))
       : undefined;
 
-  const { ctxPayload } = await finalizeLineInboundContext({
+  const finalized = await finalizeLineInboundContext({
     cfg,
     account,
     event,
@@ -494,7 +501,8 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
   });
 
   return {
-    ctxPayload,
+    ctxPayload: finalized.ctxPayload,
+    turn: finalized.turn,
     event,
     userId,
     groupId,
@@ -535,7 +543,7 @@ export async function buildLinePostbackContext(params: {
   }
 
   const messageSid = event.replyToken ? `postback:${event.replyToken}` : `postback:${timestamp}`;
-  const { ctxPayload } = await finalizeLineInboundContext({
+  const finalized = await finalizeLineInboundContext({
     cfg,
     account,
     event,
@@ -555,7 +563,8 @@ export async function buildLinePostbackContext(params: {
   });
 
   return {
-    ctxPayload,
+    ctxPayload: finalized.ctxPayload,
+    turn: finalized.turn,
     event,
     userId,
     groupId,

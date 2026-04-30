@@ -4,14 +4,6 @@ import path from "node:path";
 const command = process.argv[2];
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 
-function setManifestId() {
-  const file = process.argv[3];
-  const id = process.argv[4];
-  const parsed = readJson(file);
-  parsed.id = id;
-  fs.writeFileSync(file, `${JSON.stringify(parsed, null, 2)}\n`);
-}
-
 function recordFixturePluginTrust() {
   const pluginId = process.argv[3];
   const pluginRoot = process.argv[4];
@@ -213,6 +205,38 @@ function assertMarketplaceRecords() {
   }
 }
 
+function assertRealPathInside(parentPath, childPath, label) {
+  const parentRealPath = fs.realpathSync(parentPath);
+  const childRealPath = fs.realpathSync(childPath);
+  if (
+    childRealPath !== parentRealPath &&
+    !childRealPath.startsWith(`${parentRealPath}${path.sep}`)
+  ) {
+    throw new Error(`${label} resolved outside ${parentPath}: ${childRealPath}`);
+  }
+}
+
+function assertClawHubExternalInstallContract(installPath) {
+  const openclawPeerPath = path.join(installPath, "node_modules", "openclaw");
+  if (!fs.existsSync(openclawPeerPath)) {
+    throw new Error(`missing ClawHub openclaw peer symlink: ${openclawPeerPath}`);
+  }
+  if (!fs.lstatSync(openclawPeerPath).isSymbolicLink()) {
+    throw new Error(`ClawHub openclaw peer is not a symlink: ${openclawPeerPath}`);
+  }
+  const hostRoot = fs.realpathSync(process.cwd());
+  const linkedHostRoot = fs.realpathSync(openclawPeerPath);
+  if (linkedHostRoot !== hostRoot) {
+    throw new Error(`expected ClawHub openclaw peer ${linkedHostRoot} to target ${hostRoot}`);
+  }
+
+  const dependencyPackagePath = path.join(installPath, "node_modules", "is-number", "package.json");
+  if (!fs.existsSync(dependencyPackagePath)) {
+    throw new Error(`missing ClawHub isolated dependency: ${dependencyPackagePath}`);
+  }
+  assertRealPathInside(installPath, dependencyPackagePath, "ClawHub isolated dependency");
+}
+
 function assertMarketplaceUpdated() {
   const data = readJson("/tmp/plugins-marketplace-updated.json");
   const inspect = readJson("/tmp/plugins-marketplace-updated-inspect.json");
@@ -322,6 +346,7 @@ function assertClawHubInstalled() {
   if (!fs.existsSync(installPath)) {
     throw new Error(`ClawHub install path missing on disk: ${installPath}`);
   }
+  assertClawHubExternalInstallContract(installPath);
   fs.writeFileSync("/tmp/plugins-clawhub-install-path.txt", installPath, "utf8");
 }
 
@@ -363,7 +388,6 @@ function assertClawHubRemoved() {
 }
 
 const commands = {
-  "set-manifest-id": setManifestId,
   "record-fixture-plugin-trust": recordFixturePluginTrust,
   "demo-plugin": assertDemoPlugin,
   "plugin-tgz": () =>

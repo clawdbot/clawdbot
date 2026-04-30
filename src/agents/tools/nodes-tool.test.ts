@@ -321,6 +321,20 @@ describe("createNodesTool screen_record duration guardrails", () => {
     ).rejects.toThrow('invokeCommand "system.run" is reserved for shell execution');
   });
 
+  it("redirects file-transfer invoke commands to the dedicated file-transfer tool", async () => {
+    const tool = createNodesTool({ allowMediaInvokeCommands: true });
+
+    await expect(
+      tool.execute("call-1", {
+        action: "invoke",
+        node: "macbook",
+        invokeCommand: "file.fetch",
+      }),
+    ).rejects.toThrow(
+      'invokeCommand "file.fetch" enforces a path-allowlist policy and cannot be invoked via the generic nodes.invoke surface; use the dedicated file-transfer tool "file_fetch"',
+    );
+  });
+
   it("keeps invoke pairing guidance for scope upgrade rejections", async () => {
     gatewayMocks.callGatewayTool.mockRejectedValueOnce(
       new Error("scope upgrade pending approval (requestId: req-123)"),

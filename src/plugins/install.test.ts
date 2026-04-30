@@ -2799,6 +2799,7 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
   function writePluginWithPeerDeps(
     pluginDir: string,
     peerDependencies: Record<string, string>,
+    dependencies?: Record<string, string>,
   ): void {
     fs.mkdirSync(pluginDir, { recursive: true });
     fs.writeFileSync(
@@ -2807,6 +2808,7 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
         name: "peer-dep-plugin",
         version: "1.0.0",
         openclaw: { extensions: ["index.js"] },
+        ...(dependencies ? { dependencies } : {}),
         peerDependencies,
       }),
       "utf-8",
@@ -2834,6 +2836,31 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
     expect(stat.isSymbolicLink()).toBe(true);
     expect(fs.realpathSync(symlinkPath)).toBe(fs.realpathSync(fakeHostRoot));
     expect(run).not.toHaveBeenCalled();
+  });
+
+  it("keeps the openclaw peer symlink when plugin package dependencies are installed", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    const fakeHostRoot = suiteTempRootTracker.makeTempDir();
+    const run = vi.mocked(runCommandWithTimeout);
+    mockSuccessfulCommandRun(run);
+    resolveRootMock.mockReturnValue(fakeHostRoot);
+
+    writePluginWithPeerDeps(pluginDir, { openclaw: "*" }, { "is-number": "7.0.0" });
+
+    const { result } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+
+    expectSingleNpmInstallIgnoreScriptsCall({
+      calls: run.mock.calls as Array<[unknown, { cwd?: string } | undefined]>,
+      expectedTargetDir: result.targetDir,
+    });
+    const symlinkPath = path.join(result.targetDir, "node_modules", "openclaw");
+    expect(fs.lstatSync(symlinkPath).isSymbolicLink()).toBe(true);
+    expect(fs.realpathSync(symlinkPath)).toBe(fs.realpathSync(fakeHostRoot));
   });
 
   it("does not create a symlink when peerDependencies is empty", async () => {

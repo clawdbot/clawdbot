@@ -3,6 +3,7 @@
 import { execFileSync, execSync } from "node:child_process";
 import {
   existsSync,
+  lstatSync,
   mkdtempSync,
   mkdirSync,
   realpathSync,
@@ -14,6 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import {
   isBundledRuntimeDepsInstallStagePath,
   LOCAL_BUILD_METADATA_DIST_PATHS,
@@ -35,6 +37,7 @@ import {
   collectBuiltBundledPluginStagedRuntimeDependencyErrors,
   collectBundledPluginRootRuntimeMirrorErrors,
   collectBundledPluginRuntimeDependencySpecs,
+  collectDeclaredRootRuntimeDependencyMetadataErrors,
   collectRootDistBundledRuntimeMirrors,
 } from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
 import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
@@ -52,6 +55,7 @@ export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-m
 export {
   collectBuiltBundledPluginStagedRuntimeDependencyErrors,
   collectBundledPluginRootRuntimeMirrorErrors,
+  collectDeclaredRootRuntimeDependencyMetadataErrors,
   collectRootDistBundledRuntimeMirrors,
   packageNameFromSpecifier,
 } from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
@@ -69,6 +73,7 @@ const requiredPathGroups = [
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
   "scripts/npm-runner.mjs",
   "scripts/preinstall-package-manager-warning.mjs",
+  "scripts/lib/bundled-runtime-deps-install.mjs",
   "scripts/lib/package-dist-imports.mjs",
   "scripts/postinstall-bundled-plugins.mjs",
   "dist/plugin-sdk/compat.js",
@@ -113,6 +118,15 @@ const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
 const SAFE_UNIX_SMOKE_PATH = "/usr/bin:/bin";
+export const MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES = 2 * 1024 * 1024;
+export const CRITICAL_PLUGIN_SDK_SIZE_CHECK_SPECIFIERS = [
+  "openclaw/plugin-sdk/agent-runtime-test-contracts",
+  "openclaw/plugin-sdk/plugin-test-contracts",
+  "openclaw/plugin-sdk/provider-test-contracts",
+] as const;
+export const CRITICAL_PLUGIN_SDK_IMPORT_SMOKE_SPECIFIERS = [
+  "openclaw/plugin-sdk/plugin-test-contracts",
+] as const;
 export const PACKED_CLI_SMOKE_COMMANDS = [
   ["--help"],
   ["onboard", "--help"],
@@ -120,6 +134,12 @@ export const PACKED_CLI_SMOKE_COMMANDS = [
   ["status", "--json", "--timeout", "1"],
   ["config", "schema"],
   ["models", "list", "--provider", "amazon-bedrock"],
+] as const;
+export const PACKED_COMPLETION_SMOKE_ARGS = [
+  "completion",
+  "--write-state",
+  "--shell",
+  "zsh",
 ] as const;
 
 function collectBundledExtensions(): BundledExtension[] {
@@ -162,10 +182,16 @@ function checkBundledExtensionMetadata() {
     requiredRootMirrors,
     rootPackageJson: rootPackage,
   });
+  const rootMirrorMetadataErrors = collectDeclaredRootRuntimeDependencyMetadataErrors(rootPackage);
   const builtArtifactErrors = collectBuiltBundledPluginStagedRuntimeDependencyErrors({
     bundledPluginsDir: resolve("dist/extensions"),
   });
-  const errors = [...manifestErrors, ...rootMirrorErrors, ...builtArtifactErrors];
+  const errors = [
+    ...manifestErrors,
+    ...rootMirrorErrors,
+    ...rootMirrorMetadataErrors,
+    ...builtArtifactErrors,
+  ];
   if (errors.length > 0) {
     console.error("release-check: bundled extension manifest validation failed:");
     for (const error of errors) {
@@ -296,6 +322,19 @@ export function createPackedCliSmokeEnv(
     OPENCLAW_NO_ONBOARD: "1",
     OPENCLAW_SUPPRESS_NOTES: "1",
     ...overrides,
+  };
+}
+
+export function createPackedCompletionSmokeEnv(
+  env: NodeJS.ProcessEnv,
+  overrides: NodeJS.ProcessEnv = {},
+): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    ...overrides,
+    OPENCLAW_SUPPRESS_NOTES: "1",
+    OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
+    [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1",
   };
 }
 
@@ -580,17 +619,14 @@ function runPackedBundledChannelEntrySmoke(): void {
 
     execFileSync(
       process.execPath,
-      [join(packageRoot, "openclaw.mjs"), "completion", "--write-state"],
+      [join(packageRoot, "openclaw.mjs"), ...PACKED_COMPLETION_SMOKE_ARGS],
       {
         cwd: packageRoot,
         stdio: "inherit",
-        env: {
-          ...process.env,
+        env: createPackedCompletionSmokeEnv(process.env, {
           HOME: homeDir,
           OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_SUPPRESS_NOTES: "1",
-          OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
-        },
+        }),
       },
     );
 
@@ -834,6 +870,44 @@ async function checkPluginSdkExports() {
   }
 }
 
+export function collectCriticalPluginSdkEntrypointSizeErrors(rootDir = process.cwd()): string[] {
+  const errors: string[] = [];
+  for (const specifier of CRITICAL_PLUGIN_SDK_SIZE_CHECK_SPECIFIERS) {
+    const subpath = specifier.slice("openclaw/plugin-sdk/".length);
+    const relativePath = `dist/plugin-sdk/${subpath}.js`;
+    const filePath = resolve(rootDir, relativePath);
+    if (!existsSync(filePath)) {
+      errors.push(`${relativePath} is missing.`);
+      continue;
+    }
+    const stat = lstatSync(filePath);
+    if (!stat.isFile()) {
+      errors.push(`${relativePath} is not a file.`);
+      continue;
+    }
+    if (stat.size > MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES) {
+      errors.push(
+        `${relativePath} is ${stat.size} bytes, exceeding ${MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES} bytes. Keep public SDK test-contract entrypoints lazy and avoid bundling compiler/runtime internals.`,
+      );
+    }
+  }
+  return errors;
+}
+
+function runCriticalPluginSdkEntrypointImportSmoke() {
+  const script = [
+    `const specifiers = ${JSON.stringify(CRITICAL_PLUGIN_SDK_IMPORT_SMOKE_SPECIFIERS)};`,
+    `const importModule = new Function("specifier", "return imp" + "ort(specifier)");`,
+    "for (const specifier of specifiers) {",
+    "  await importModule(specifier);",
+    "}",
+  ].join("\n");
+  execFileSync(process.execPath, ["--input-type=module", "--eval", script], {
+    cwd: process.cwd(),
+    stdio: "inherit",
+  });
+}
+
 async function main() {
   checkAppcastSparkleVersions();
   checkCliBootstrapExternalImports({
@@ -842,6 +916,15 @@ async function main() {
     },
   });
   await checkPluginSdkExports();
+  const criticalPluginSdkEntrypointErrors = collectCriticalPluginSdkEntrypointSizeErrors();
+  if (criticalPluginSdkEntrypointErrors.length > 0) {
+    console.error("release-check: critical plugin-sdk entrypoint validation failed:");
+    for (const error of criticalPluginSdkEntrypointErrors) {
+      console.error(`  - ${error}`);
+    }
+    process.exit(1);
+  }
+  runCriticalPluginSdkEntrypointImportSmoke();
   checkBundledExtensionMetadata();
   await writePackageDistInventory(process.cwd());
 

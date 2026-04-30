@@ -15,4 +15,5 @@ export {
 } from "./browser-profiles.js";
 export { parseBrowserHttpUrl, redactCdpUrl } from "./browser-cdp.js";
 export { ensureBrowserControlAuth, resolveBrowserControlAuth } from "./browser-control-auth.js";
+export { movePathToTrash, type MovePathToTrashOptions } from "./browser-trash.js";
 export type { BrowserControlAuth } from "./browser-control-auth.js";

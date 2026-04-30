@@ -48,6 +48,7 @@ export type {
   ProviderRequestTlsOverride,
   ProviderRequestTransportOverrides,
 } from "../agents/provider-request-config.js";
+export { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
 export {
   resolveProviderEndpoint,
   resolveProviderRequestCapabilities,

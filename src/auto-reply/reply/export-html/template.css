@@ -969,25 +969,67 @@ body {
 }
 
 /* Mobile */
-#hamburger {
+#hamburger.sidebar-menu-trigger {
   display: none;
   position: fixed;
   top: 10px;
   left: 10px;
   z-index: 100;
-  padding: 3px 8px;
-  font-size: 12px;
-  font-family: inherit;
-  background: transparent;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  background: var(--body-bg);
   color: var(--muted);
   border: 1px solid var(--dim);
-  border-radius: 3px;
+  border-radius: 999px;
   cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
+  box-shadow:
+    0 8px 20px rgba(0, 0, 0, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
-#hamburger:hover {
+#hamburger.sidebar-menu-trigger:hover {
+  background: var(--container-bg);
   color: var(--text);
   border-color: var(--text);
+  transform: translateY(-1px);
+}
+
+#hamburger.sidebar-menu-trigger:active {
+  transform: translateY(0);
+}
+
+#hamburger.sidebar-menu-trigger:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--body-bg),
+    0 0 0 3px var(--accent);
+}
+
+#hamburger.sidebar-menu-trigger svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #hamburger.sidebar-menu-trigger {
+    transition: none;
+  }
+
+  #hamburger.sidebar-menu-trigger:hover {
+    transform: none;
+  }
 }
 
 #sidebar-overlay {
@@ -1021,8 +1063,8 @@ body {
     display: block;
   }
 
-  #hamburger {
-    display: block;
+  #hamburger.sidebar-menu-trigger {
+    display: inline-flex;
   }
 
   .sidebar-close {

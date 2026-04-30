@@ -64,6 +64,10 @@ function isNativeResponsesReasoningPayload(model: Model<Api>): boolean {
   }).usesKnownNativeOpenAIRoute;
 }
 
+function formatModelInputCapabilities(input: Model<Api>["input"] | undefined): string {
+  return input && input.length > 0 ? input.join(", ") : "none";
+}
+
 function removeReasoningInclude(value: unknown): unknown {
   if (!Array.isArray(value)) {
     return value;
@@ -192,7 +196,10 @@ async function resolveImageRuntime(params: {
     if (isMinimaxVlmModel(resolvedRef.provider, resolvedRef.model)) {
       throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
     }
-    throw new Error(`Model does not support images: ${params.provider}/${params.model}`);
+    throw new Error(
+      `Model does not support images: ${params.provider}/${params.model} ` +
+        `(resolved ${model.provider}/${model.id} input: ${formatModelInputCapabilities(model.input)})`,
+    );
   }
   const apiKeyInfo = await getApiKeyForModel({
     model,

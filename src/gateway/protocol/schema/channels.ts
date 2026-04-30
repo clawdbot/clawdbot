@@ -102,6 +102,7 @@ const BrowserRealtimeWebRtcSdpSessionSchema = Type.Object(
     transport: Type.Optional(Type.Literal("webrtc-sdp")),
     clientSecret: NonEmptyString,
     offerUrl: Type.Optional(Type.String()),
+    offerHeaders: Type.Optional(Type.Record(Type.String(), Type.String())),
     model: Type.Optional(Type.String()),
     voice: Type.Optional(Type.String()),
     expiresAt: Type.Optional(Type.Number()),

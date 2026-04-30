@@ -4,6 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearBundledRuntimeDependencyNodePaths,
+  ensureBundledPluginRuntimeDeps,
   resolveBundledRuntimeDependencyInstallRoot,
 } from "../plugins/bundled-runtime-deps.js";
 import { shouldExpectNativeJitiForJavaScriptTestRuntime } from "../test-utils/jiti-runtime.js";
@@ -180,6 +181,18 @@ function writeStagedRuntimeDepPackage(params: {
   fs.writeFileSync(path.join(depRoot, "index.js"), params.source ?? "export {};\n", "utf8");
 }
 
+function concreteRuntimeDepVersionForTest(version: string): string {
+  return version.startsWith("^") || version.startsWith("~") ? version.slice(1) : version;
+}
+
+function parseRuntimeDepSpecForTest(spec: string): { name: string; version: string } {
+  const atIndex = spec.lastIndexOf("@");
+  return {
+    name: spec.slice(0, atIndex),
+    version: spec.slice(atIndex + 1),
+  };
+}
+
 function createPackagedBundledPluginDirWithStagedRuntimeDep(params: {
   marker: string;
   prefix: string;
@@ -227,14 +240,24 @@ function createPackagedBundledPluginDirWithStagedRuntimeDep(params: {
   const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, {
     env,
   });
-  writeStagedRuntimeDepPackage({
-    installRoot,
-    name: STAGED_RUNTIME_DEP_NAME,
-    version: "1.0.0",
-    source: `export const marker = ${JSON.stringify(params.marker)};\n`,
+  ensureBundledPluginRuntimeDeps({
+    env,
+    pluginId,
+    pluginRoot,
+    installDeps: ({ installRoot: runtimeInstallRoot, installSpecs = [] }) => {
+      for (const spec of installSpecs) {
+        const dep = parseRuntimeDepSpecForTest(spec);
+        writeStagedRuntimeDepPackage({
+          installRoot: runtimeInstallRoot,
+          name: dep.name,
+          version: concreteRuntimeDepVersionForTest(dep.version),
+          ...(dep.name === STAGED_RUNTIME_DEP_NAME
+            ? { source: `export const marker = ${JSON.stringify(params.marker)};\n` }
+            : {}),
+        });
+      }
+    },
   });
-  writeStagedRuntimeDepPackage({ installRoot, name: "semver", version: "7.7.4" });
-  writeStagedRuntimeDepPackage({ installRoot, name: "tslog", version: "4.10.2" });
 
   return {
     bundledPluginsDir,

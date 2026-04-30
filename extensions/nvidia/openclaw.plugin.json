@@ -100,7 +100,7 @@
       "choiceLabel": "NVIDIA API key",
       "groupId": "nvidia",
       "groupLabel": "NVIDIA",
-      "groupHint": "API key",
+      "groupHint": "Direct API key",
       "optionKey": "nvidiaApiKey",
       "cliFlag": "--nvidia-api-key",
       "cliOption": "--nvidia-api-key <key>",

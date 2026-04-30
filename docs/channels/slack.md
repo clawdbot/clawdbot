@@ -36,17 +36,25 @@ Production-ready for DMs and channels via Slack app integrations. Default mode i
 
       <Step title="Configure OpenClaw">
 
-```json5
+        Recommended SecretRef setup:
+
+```bash
+export SLACK_APP_TOKEN=xapp-...
+export SLACK_BOT_TOKEN=xoxb-...
+cat > slack.socket.patch.json5 <<'JSON5'
 {
   channels: {
     slack: {
       enabled: true,
       mode: "socket",
-      appToken: "xapp-...",
-      botToken: "xoxb-...",
+      appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+      botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
     },
   },
 }
+JSON5
+openclaw config patch --file ./slack.socket.patch.json5 --dry-run
+openclaw config patch --file ./slack.socket.patch.json5
 ```
 
         Env fallback (default account only):
@@ -83,18 +91,26 @@ openclaw gateway
 
       <Step title="Configure OpenClaw">
 
-```json5
+        Recommended SecretRef setup:
+
+```bash
+export SLACK_BOT_TOKEN=xoxb-...
+export SLACK_SIGNING_SECRET=...
+cat > slack.http.patch.json5 <<'JSON5'
 {
   channels: {
     slack: {
       enabled: true,
       mode: "http",
-      botToken: "xoxb-...",
-      signingSecret: "your-signing-secret",
+      botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+      signingSecret: { source: "env", provider: "default", id: "SLACK_SIGNING_SECRET" },
       webhookPath: "/slack/events",
     },
   },
 }
+JSON5
+openclaw config patch --file ./slack.http.patch.json5 --dry-run
+openclaw config patch --file ./slack.http.patch.json5
 ```
 
         <Note>
@@ -464,17 +480,17 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 
 <Tabs>
   <Tab title="DM policy">
-    `channels.slack.dmPolicy` controls DM access (legacy: `channels.slack.dm.policy`):
+    `channels.slack.dmPolicy` controls DM access. `channels.slack.allowFrom` is the canonical DM allowlist.
 
     - `pairing` (default)
     - `allowlist`
-    - `open` (requires `channels.slack.allowFrom` to include `"*"`; legacy: `channels.slack.dm.allowFrom`)
+    - `open` (requires `channels.slack.allowFrom` to include `"*"`)
     - `disabled`
 
     DM flags:
 
     - `dm.enabled` (default true)
-    - `channels.slack.allowFrom` (preferred)
+    - `channels.slack.allowFrom`
     - `dm.allowFrom` (legacy)
     - `dm.groupEnabled` (group DMs default false)
     - `dm.groupChannels` (optional MPIM allowlist)
@@ -484,6 +500,8 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     - `channels.slack.accounts.default.allowFrom` applies only to the `default` account.
     - Named accounts inherit `channels.slack.allowFrom` when their own `allowFrom` is unset.
     - Named accounts do not inherit `channels.slack.accounts.default.allowFrom`.
+
+    Legacy `channels.slack.dm.policy` and `channels.slack.dm.allowFrom` still read for compatibility. `openclaw doctor --fix` migrates them to `dmPolicy` and `allowFrom` when it can do so without changing access.
 
     Pairing in DMs uses `openclaw pairing approve slack <code>`.
 
@@ -496,7 +514,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     - `allowlist`
     - `disabled`
 
-    Channel allowlist lives under `channels.slack.channels` and should use stable channel IDs.
+    Channel allowlist lives under `channels.slack.channels` and **must use stable Slack channel IDs** (for example `C12345678`) as config keys.
 
     Runtime note: if `channels.slack` is completely missing (env-only setup), runtime falls back to `groupPolicy="allowlist"` and logs a warning (even if `channels.defaults.groupPolicy` is set).
 
@@ -505,6 +523,42 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     - channel allowlist entries and DM allowlist entries are resolved at startup when token access allows
     - unresolved channel-name entries are kept as configured but ignored for routing by default
     - inbound authorization and channel routing are ID-first by default; direct username/slug matching requires `channels.slack.dangerouslyAllowNameMatching: true`
+
+    <Warning>
+    Name-based keys (`#channel-name` or `channel-name`) do **not** match under `groupPolicy: "allowlist"`. The channel lookup is ID-first by default, so a name-based key will never route successfully and all messages in that channel will be silently blocked. This differs from `groupPolicy: "open"`, where the channel key is not required for routing and a name-based key appears to work.
+
+    Always use the Slack channel ID as the key. To find it: right-click the channel in Slack → **Copy link** — the ID (`C...`) appears at the end of the URL.
+
+    Correct:
+
+    ```json5
+    {
+      channels: {
+        slack: {
+          groupPolicy: "allowlist",
+          channels: {
+            C12345678: { allow: true, requireMention: true },
+          },
+        },
+      },
+    }
+    ```
+
+    Incorrect (silently blocked under `groupPolicy: "allowlist"`):
+
+    ```json5
+    {
+      channels: {
+        slack: {
+          groupPolicy: "allowlist",
+          channels: {
+            "#eng-my-channel": { allow: true, requireMention: true },
+          },
+        },
+      },
+    }
+    ```
+    </Warning>
 
   </Tab>
 
@@ -834,7 +888,7 @@ Primary reference: [Configuration reference - Slack](/gateway/config-channels#sl
     Check, in order:
 
     - `groupPolicy`
-    - channel allowlist (`channels.slack.channels`)
+    - channel allowlist (`channels.slack.channels`) — **keys must be channel IDs** (`C12345678`), not names (`#channel-name`). Name-based keys silently fail under `groupPolicy: "allowlist"` because channel routing is ID-first by default. To find an ID: right-click the channel in Slack → **Copy link** — the `C...` value at the end of the URL is the channel ID.
     - `requireMention`
     - per-channel `users` allowlist
 

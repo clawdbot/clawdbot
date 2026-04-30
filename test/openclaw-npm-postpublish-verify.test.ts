@@ -171,6 +171,7 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
     root: string;
     importerSource?: string;
     importerPath?: string;
+    mirroredRootRuntimeDependencies?: string[];
     rootDependencies?: Record<string, string>;
     rootOptionalDependencies?: Record<string, string>;
   }): void {
@@ -178,6 +179,13 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
       version: "2026.4.10",
       dependencies: params.rootDependencies,
       optionalDependencies: params.rootOptionalDependencies,
+      openclaw: params.mirroredRootRuntimeDependencies
+        ? {
+            bundle: {
+              mirroredRootRuntimeDependencies: params.mirroredRootRuntimeDependencies,
+            },
+          }
+        : undefined,
     });
     writePackageFile(params.root, "dist/extensions/slack/package.json", {
       dependencies: {
@@ -272,6 +280,11 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
         optionalDependencies: {
           "@discordjs/opus": "^0.10.0",
         },
+        openclaw: {
+          bundle: {
+            mirroredRootRuntimeDependencies: ["@discordjs/opus"],
+          },
+        },
       });
       writePackageFile(packageRoot, "dist/extensions/discord/package.json", {
         optionalDependencies: {
@@ -297,6 +310,7 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
     try {
       writeSlackWebApiProbePackage({
         root: packageRoot,
+        mirroredRootRuntimeDependencies: ["@slack/web-api"],
         rootDependencies: {
           "@slack/web-api": "^7.16.0",
         },

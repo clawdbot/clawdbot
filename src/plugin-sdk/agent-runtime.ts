@@ -45,6 +45,8 @@ export {
   replaceRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStore,
   saveAuthProfileStore,
+  findPersistedAuthProfileCredential,
+  resolvePersistedAuthProfileOwnerAgentDir,
   calculateAuthProfileCooldownMs,
   clearAuthProfileCooldown,
   clearExpiredCooldowns,

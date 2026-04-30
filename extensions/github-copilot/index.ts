@@ -3,6 +3,7 @@ import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-run
 import {
   definePluginEntry,
   type ProviderAuthContext,
+  type ProviderAuthResult,
   type ProviderAuthMethodNonInteractiveContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -84,6 +85,29 @@ function resolveExistingCopilotTokenProfileId(agentDir?: string): string | undef
       normalizeOptionalSecretInput(profile.token) || coerceSecretRef(profile.tokenRef)?.id.trim(),
     );
   });
+}
+
+function resolveExistingCopilotAuthResult(agentDir?: string): ProviderAuthResult | null {
+  const profileId = resolveExistingCopilotTokenProfileId(agentDir);
+  if (!profileId) {
+    return null;
+  }
+  const authStore = ensureAuthProfileStore(agentDir, {
+    allowKeychainPrompt: false,
+  });
+  const credential = authStore.profiles[profileId];
+  if (!credential || credential.type !== "token") {
+    return null;
+  }
+  return {
+    profiles: [
+      {
+        profileId,
+        credential,
+      },
+    ],
+    defaultModel: DEFAULT_COPILOT_MODEL,
+  };
 }
 
 async function resolveCopilotNonInteractiveToken(
@@ -232,7 +256,17 @@ export default definePluginEntry({
     }
 
     async function runGitHubCopilotAuth(ctx: ProviderAuthContext) {
-      const { githubCopilotLoginCommand } = await loadGithubCopilotRuntime();
+      const existing = resolveExistingCopilotAuthResult(ctx.agentDir);
+      if (existing) {
+        const runLogin = await ctx.prompter.confirm({
+          message: "GitHub Copilot auth already exists. Re-run login?",
+          initialValue: false,
+        });
+        if (!runLogin) {
+          return existing;
+        }
+      }
+
       await ctx.prompter.note(
         [
           "This will open a GitHub device login to authorize Copilot.",
@@ -241,29 +275,38 @@ export default definePluginEntry({
         "GitHub Copilot",
       );
 
-      if (!process.stdin.isTTY) {
+      const { runGitHubCopilotDeviceFlow } = await import("./login.js");
+
+      const result = await runGitHubCopilotDeviceFlow({
+        showCode: async ({ verificationUrl, userCode, expiresInMs }) => {
+          const expiresInMinutes = Math.max(1, Math.round(expiresInMs / 60_000));
+          await ctx.prompter.note(
+            [
+              "Open this URL in your browser and enter the code below.",
+              `URL: ${verificationUrl}`,
+              `Code: ${userCode}`,
+              `Code expires in ${expiresInMinutes} minutes. Never share it.`,
+              "",
+              "If a browser does not open automatically after you continue, copy the URL manually.",
+            ].join("\n"),
+            "Authorize GitHub Copilot",
+          );
+        },
+        openUrl: async (url) => {
+          await ctx.openUrl(url);
+        },
+      });
+
+      if (result.status === "access_denied") {
+        await ctx.prompter.note("GitHub Copilot login was cancelled.", "GitHub Copilot");
+        return { profiles: [] };
+      }
+
+      if (result.status === "expired") {
         await ctx.prompter.note(
-          "GitHub Copilot login requires an interactive TTY.",
+          "The GitHub device code expired. Retry login to get a new code.",
           "GitHub Copilot",
         );
-        return { profiles: [] };
-      }
-
-      try {
-        await githubCopilotLoginCommand(
-          { yes: true, profileId: "github-copilot:github" },
-          ctx.runtime,
-        );
-      } catch (err) {
-        await ctx.prompter.note(`GitHub Copilot login failed: ${String(err)}`, "GitHub Copilot");
-        return { profiles: [] };
-      }
-
-      const authStore = ensureAuthProfileStore(undefined, {
-        allowKeychainPrompt: false,
-      });
-      const credential = authStore.profiles["github-copilot:github"];
-      if (!credential || credential.type !== "token") {
         return { profiles: [] };
       }
 
@@ -271,7 +314,11 @@ export default definePluginEntry({
         profiles: [
           {
             profileId: DEFAULT_COPILOT_PROFILE_ID,
-            credential,
+            credential: {
+              type: "token" as const,
+              provider: PROVIDER_ID,
+              token: result.accessToken,
+            },
           },
         ],
         defaultModel: DEFAULT_COPILOT_MODEL,
@@ -301,6 +348,9 @@ export default definePluginEntry({
           choiceLabel: "GitHub Copilot",
           choiceHint: "Device login with your GitHub account",
           methodId: "device",
+          modelSelection: {
+            promptWhenAuthChoiceProvided: true,
+          },
         },
       },
       catalog: {

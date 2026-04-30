@@ -481,7 +481,7 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
-  it("narrows default-lane changed source files to include globs", () => {
+  it("narrows default-lane changed source files to affected tests", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "packages/sdk/src/index.ts",
     ]);
@@ -489,8 +489,8 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(plans).toEqual([
       {
         config: "test/vitest/vitest.unit.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["packages/sdk/src/**/*.test.ts"],
+        forwardedArgs: ["packages/sdk/src/index.test.ts"],
+        includePatterns: null,
         watchMode: false,
       },
     ]);

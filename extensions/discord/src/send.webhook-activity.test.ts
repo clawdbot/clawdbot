@@ -23,11 +23,11 @@ vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
   };
 });
 
-let sendWebhookMessageDiscord: typeof import("./send.outbound.js").sendWebhookMessageDiscord;
+let sendWebhookMessageDiscord: typeof import("./send.webhook.js").sendWebhookMessageDiscord;
 
 describe("sendWebhookMessageDiscord activity", () => {
   beforeAll(async () => {
-    ({ sendWebhookMessageDiscord } = await import("./send.outbound.js"));
+    ({ sendWebhookMessageDiscord } = await import("./send.webhook.js"));
   });
 
   beforeEach(() => {

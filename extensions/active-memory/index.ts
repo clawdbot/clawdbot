@@ -39,6 +39,8 @@ const DEFAULT_SETUP_GRACE_TIMEOUT_MS = 30_000;
 const DEFAULT_QUERY_MODE = "recent" as const;
 const DEFAULT_QMD_SEARCH_MODE = "search" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
+const DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS = 3;
+const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
 const TOGGLE_STATE_FILE = "session-toggles.json";
 const DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS = 32_000;
 const DEFAULT_TRANSCRIPT_READ_MAX_LINES = 2_000;
@@ -97,6 +99,8 @@ type ActiveRecallPluginConfig = {
   recentAssistantChars?: number;
   logging?: boolean;
   cacheTtlMs?: number;
+  circuitBreakerMaxTimeouts?: number;
+  circuitBreakerCooldownMs?: number;
   persistTranscripts?: boolean;
   transcriptDir?: string;
   qmd?: {
@@ -134,6 +138,8 @@ type ResolvedActiveRecallPluginConfig = {
   recentAssistantChars: number;
   logging: boolean;
   cacheTtlMs: number;
+  circuitBreakerMaxTimeouts: number;
+  circuitBreakerCooldownMs: number;
   persistTranscripts: boolean;
   transcriptDir: string;
   qmd: {
@@ -277,6 +283,44 @@ const ACTIVE_MEMORY_CLOSE_TAG = `</${ACTIVE_MEMORY_PLUGIN_TAG}>`;
 const MAX_LOG_VALUE_CHARS = 300;
 
 const activeRecallCache = new Map<string, CachedActiveRecallResult>();
+
+type CircuitBreakerEntry = {
+  consecutiveTimeouts: number;
+  lastTimeoutAt: number;
+};
+
+const timeoutCircuitBreaker = new Map<string, CircuitBreakerEntry>();
+
+function buildCircuitBreakerKey(agentId: string, provider?: string, model?: string): string {
+  return `${agentId}:${provider ?? "unknown"}/${model ?? "unknown"}`;
+}
+
+function isCircuitBreakerOpen(key: string, maxTimeouts: number, cooldownMs: number): boolean {
+  const entry = timeoutCircuitBreaker.get(key);
+  if (!entry || entry.consecutiveTimeouts < maxTimeouts) {
+    return false;
+  }
+  if (Date.now() - entry.lastTimeoutAt >= cooldownMs) {
+    // Cooldown expired — reset and allow one attempt through.
+    timeoutCircuitBreaker.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function recordCircuitBreakerTimeout(key: string): void {
+  const entry = timeoutCircuitBreaker.get(key);
+  if (entry) {
+    entry.consecutiveTimeouts++;
+    entry.lastTimeoutAt = Date.now();
+  } else {
+    timeoutCircuitBreaker.set(key, { consecutiveTimeouts: 1, lastTimeoutAt: Date.now() });
+  }
+}
+
+function resetCircuitBreaker(key: string): void {
+  timeoutCircuitBreaker.delete(key);
+}
 
 function parseOptionalPositiveInt(value: unknown, fallback: number): number {
   const parsed =
@@ -718,6 +762,18 @@ function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPlugi
     ),
     logging: raw.logging === true,
     cacheTtlMs: clampInt(raw.cacheTtlMs, DEFAULT_CACHE_TTL_MS, 1000, 120_000),
+    circuitBreakerMaxTimeouts: clampInt(
+      raw.circuitBreakerMaxTimeouts,
+      DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS,
+      1,
+      20,
+    ),
+    circuitBreakerCooldownMs: clampInt(
+      raw.circuitBreakerCooldownMs,
+      DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS,
+      5000,
+      600_000,
+    ),
     persistTranscripts: raw.persistTranscripts === true,
     transcriptDir: normalizeTranscriptDir(raw.transcriptDir),
     qmd: {
@@ -2181,6 +2237,39 @@ async function maybeResolveActiveRecall(params: {
     return cached;
   }
 
+  // Circuit breaker: skip recall when the same agent/model has timed out
+  // too many times in a row (#74054).
+  const cbKey = buildCircuitBreakerKey(
+    params.agentId,
+    resolvedModelRef?.provider,
+    resolvedModelRef?.model,
+  );
+  if (
+    isCircuitBreakerOpen(
+      cbKey,
+      params.config.circuitBreakerMaxTimeouts,
+      params.config.circuitBreakerCooldownMs,
+    )
+  ) {
+    const result: ActiveRecallResult = {
+      status: "timeout",
+      elapsedMs: 0,
+      summary: null,
+    };
+    if (params.config.logging) {
+      params.api.logger.info?.(
+        `${logPrefix} skipped (circuit breaker open after consecutive timeouts)`,
+      );
+    }
+    await persistPluginStatusLines({
+      api: params.api,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      statusLine: `${buildPluginStatusLine({ result, config: params.config })} circuit-breaker`,
+    });
+    return result;
+  }
+
   if (params.config.logging) {
     params.api.logger.info?.(
       `${logPrefix} start timeoutMs=${String(params.config.timeoutMs)} queryChars=${String(params.query.length)}`,
@@ -2241,6 +2330,7 @@ async function maybeResolveActiveRecall(params: {
         debugSummary: buildPersistedDebugSummary(result),
         searchDebug: result.searchDebug,
       });
+      recordCircuitBreakerTimeout(cbKey);
       return result;
     }
 
@@ -2283,6 +2373,7 @@ async function maybeResolveActiveRecall(params: {
     if (shouldCacheResult(result)) {
       setCachedResult(cacheKey, result, params.config.cacheTtlMs);
     }
+    resetCircuitBreaker(cbKey);
     return result;
   } catch (error) {
     if (controller.signal.aborted) {
@@ -2307,6 +2398,7 @@ async function maybeResolveActiveRecall(params: {
         debugSummary: buildPersistedDebugSummary(result),
         searchDebug: result.searchDebug,
       });
+      recordCircuitBreakerTimeout(cbKey);
       return result;
     }
     const message = toSingleLineLogValue(error instanceof Error ? error.message : String(error));
@@ -2339,8 +2431,19 @@ export default definePluginEntry({
     let config = normalizePluginConfig(api.pluginConfig);
     const warnDeprecatedModelFallbackPolicy = (pluginConfig: unknown) => {
       if (hasDeprecatedModelFallbackPolicy(pluginConfig)) {
+        // Wording matters here: the previous text ("set config.modelFallback
+        // explicitly if you want a fallback model") read naturally as runtime
+        // failover (model A errors → switch to model B), but `getModelRef`
+        // only consults `modelFallback` as the *last candidate* in the
+        // resolution chain after `config.model`, the current run's model,
+        // and the agent's configured default have all resolved to nothing.
+        // Surface the chain-resolution semantics directly so operators
+        // don't waste debug cycles assuming runtime failover (#74587).
         api.logger.warn?.(
-          "active-memory: config.modelFallbackPolicy is deprecated and no longer changes runtime behavior; set config.modelFallback explicitly if you want a fallback model",
+          "active-memory: config.modelFallbackPolicy is deprecated and no longer changes runtime behavior. " +
+            "config.modelFallback is a chain-resolution last-resort (consulted only when config.model, " +
+            "the current run's model, and the agent's configured default all resolve to nothing) — " +
+            "it is NOT a runtime failover that substitutes a different model when the resolved model errors out.",
         );
       }
     };
@@ -2544,16 +2647,19 @@ export default definePluginEntry({
 
 export const __testing = {
   buildCacheKey,
+  buildCircuitBreakerKey,
   buildMetadata,
   buildPluginStatusLine,
   buildPromptPrefix,
   getCachedResult,
+  isCircuitBreakerOpen,
   normalizePluginConfig,
   readActiveMemorySearchDebug,
   readPartialAssistantText,
   shouldCacheResult,
   resetActiveRecallCacheForTests() {
     activeRecallCache.clear();
+    timeoutCircuitBreaker.clear();
     lastActiveRecallCacheSweepAt = 0;
     minimumTimeoutMs = DEFAULT_MIN_TIMEOUT_MS;
     setupGraceTimeoutMs = DEFAULT_SETUP_GRACE_TIMEOUT_MS;
@@ -2565,4 +2671,7 @@ export const __testing = {
     setupGraceTimeoutMs = Math.max(0, Math.floor(value));
   },
   setCachedResult,
+  getCircuitBreakerEntry(key: string) {
+    return timeoutCircuitBreaker.get(key);
+  },
 };

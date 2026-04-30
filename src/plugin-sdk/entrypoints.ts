@@ -18,6 +18,7 @@ export const supportedBundledFacadeSdkEntrypoints = [
   "qa-runner-runtime",
   "telegram-account",
   "tts-runtime",
+  "zalouser",
 ] as const;
 
 // Plugin-owned surfaces that are intentionally public and documented for third-party plugins.

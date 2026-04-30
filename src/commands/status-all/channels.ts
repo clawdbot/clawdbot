@@ -188,7 +188,11 @@ function collectMissingPaths(accounts: ChannelAccountRow[]): string[] {
 // Keep this generic: channel-specific rules belong in the channel plugin.
 export async function buildChannelsTable(
   cfg: OpenClawConfig,
-  opts?: { showSecrets?: boolean; sourceConfig?: OpenClawConfig },
+  opts?: {
+    showSecrets?: boolean;
+    sourceConfig?: OpenClawConfig;
+    includeSetupRuntimeFallback?: boolean;
+  },
 ): Promise<{
   rows: ChannelRow[];
   details: Array<{
@@ -206,9 +210,10 @@ export async function buildChannelsTable(
   }> = [];
 
   const sourceConfig = opts?.sourceConfig ?? cfg;
+  const includeSetupRuntimeFallback = opts?.includeSetupRuntimeFallback ?? true;
   for (const plugin of listReadOnlyChannelPluginsForConfig(cfg, {
     activationSourceConfig: sourceConfig,
-    includeSetupRuntimeFallback: true,
+    includeSetupRuntimeFallback,
   })) {
     const accountIds = plugin.config.listAccountIds(cfg);
     const defaultAccountId = resolveChannelDefaultAccountId({

@@ -12,6 +12,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
+import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveUserPath } from "../../utils.js";
@@ -76,6 +77,7 @@ import {
   pickFallbackThinkingLevel,
 } from "../pi-embedded-helpers.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
@@ -90,6 +92,11 @@ import { log } from "./logger.js";
 import { resolveModelAsync } from "./model.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "./replay-state.js";
 import { handleAssistantFailover } from "./run/assistant-failover.js";
+import {
+  createEmbeddedRunStageTracker,
+  formatEmbeddedRunStageSummary,
+  shouldWarnEmbeddedRunStageSummary,
+} from "./run/attempt-stage-timing.js";
 import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.js";
 import { createEmbeddedRunAuthController } from "./run/auth-controller.js";
 import { resolveAuthProfileFailureReason } from "./run/auth-profile-failure-policy.js";
@@ -104,6 +111,7 @@ import {
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
   resolveMaxRunRetryIterations,
+  resolveReportedModelRef,
   resolveOverloadFailoverBackoffMs,
   resolveOverloadProfileRotationLimit,
   resolveRateLimitProfileRotationLimit,
@@ -153,7 +161,25 @@ import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accum
 type ApiKeyInfo = ResolvedProviderAuth;
 
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
+const EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS = 30_000;
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
+
+function resolveEmbeddedRunLaneTimeoutMs(timeoutMs: number): number | undefined {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return undefined;
+  }
+  return Math.floor(timeoutMs) + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS;
+}
+
+function withEmbeddedRunLaneTimeout(
+  opts: CommandQueueEnqueueOptions | undefined,
+  laneTaskTimeoutMs: number | undefined,
+): CommandQueueEnqueueOptions | undefined {
+  if (laneTaskTimeoutMs === undefined || opts?.taskTimeoutMs !== undefined) {
+    return opts;
+  }
+  return { ...opts, taskTimeoutMs: laneTaskTimeoutMs };
+}
 
 function normalizeEmbeddedRunAttemptResult(
   attempt: EmbeddedRunAttemptForRunner,
@@ -286,10 +312,15 @@ export async function runEmbeddedPiAgent(
   }
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
-  const enqueueGlobal =
-    params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
-  const enqueueSession =
-    params.enqueue ?? ((task, opts) => enqueueCommandInLane(sessionLane, task, opts));
+  const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(params.timeoutMs);
+  const withLaneTimeout = (opts?: CommandQueueEnqueueOptions) =>
+    withEmbeddedRunLaneTimeout(opts, laneTaskTimeoutMs);
+  const enqueueGlobal = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) =>
+    params.enqueue
+      ? params.enqueue(task, withLaneTimeout(opts))
+      : enqueueCommandInLane(globalLane, task, withLaneTimeout(opts));
+  const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) =>
+    params.enqueue ? params.enqueue(task, opts) : enqueueCommandInLane(sessionLane, task, opts);
   const channelHint = params.messageChannel ?? params.messageProvider;
   const resolvedToolResultFormat =
     params.toolResultFormat ??
@@ -323,6 +354,24 @@ export async function runEmbeddedPiAgent(
     return enqueueGlobal(async () => {
       throwIfAborted();
       const started = Date.now();
+      const startupStages = createEmbeddedRunStageTracker();
+      let startupStagesEmitted = false;
+      const emitStartupStageSummary = (phase: string) => {
+        const summary = startupStages.snapshot();
+        const shouldWarn = shouldWarnEmbeddedRunStageSummary(summary);
+        if (!shouldWarn && !log.isEnabled("trace")) {
+          return;
+        }
+        const message = formatEmbeddedRunStageSummary(
+          `[trace:embedded-run] startup stages: runId=${params.runId} sessionId=${params.sessionId} phase=${phase}`,
+          summary,
+        );
+        if (shouldWarn) {
+          log.warn(message);
+        } else {
+          log.trace(message);
+        }
+      };
       params.onExecutionStarted?.();
       const workspaceResolution = resolveRunWorkspaceDir({
         workspaceDir: params.workspaceDir,
@@ -343,11 +392,13 @@ export async function runEmbeddedPiAgent(
           `[workspace-fallback] caller=runEmbeddedPiAgent reason=${workspaceResolution.fallbackReason} run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${workspaceResolution.agentId} workspace=${redactedWorkspace}`,
         );
       }
+      startupStages.mark("workspace");
       ensureRuntimePluginsLoaded({
         config: params.config,
         workspaceDir: resolvedWorkspace,
         allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
       });
+      startupStages.mark("runtime-plugins");
 
       let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
@@ -406,6 +457,7 @@ export async function runEmbeddedPiAgent(
       provider = hookSelection.provider;
       modelId = hookSelection.modelId;
       const legacyBeforeAgentStartResult = hookSelection.legacyBeforeAgentStartResult;
+      startupStages.mark("hooks");
       const agentHarness = selectAgentHarness({
         provider,
         modelId,
@@ -452,6 +504,7 @@ export async function runEmbeddedPiAgent(
       });
       const ctxInfo = resolvedRuntimeModel.ctxInfo;
       let effectiveModel = resolvedRuntimeModel.effectiveModel;
+      startupStages.mark("model-resolution");
 
       const authStore = pluginHarnessOwnsTransport
         ? createEmptyAuthProfileStore()
@@ -610,6 +663,7 @@ export async function runEmbeddedPiAgent(
       } else if (lockedProfileId) {
         lastProfileId = lockedProfileId;
       }
+      startupStages.mark("auth");
       const { sessionAgentId } = resolveSessionAgentIds({
         sessionKey: params.sessionKey,
         config: params.config,
@@ -744,6 +798,7 @@ export async function runEmbeddedPiAgent(
         agentDir,
         workspaceDir: resolvedWorkspace,
       });
+      startupStages.mark("context-engine");
       try {
         let activeSessionId = params.sessionId;
         let activeSessionFile = params.sessionFile;
@@ -891,6 +946,11 @@ export async function runEmbeddedPiAgent(
               fastMode: params.fastMode,
             },
           });
+          if (!startupStagesEmitted) {
+            startupStages.mark("attempt-dispatch");
+            emitStartupStageSummary("attempt-dispatch");
+            startupStagesEmitted = true;
+          }
 
           const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
@@ -1878,11 +1938,16 @@ export async function runEmbeddedPiAgent(
             lastRunPromptUsage,
             lastTurnTotal,
           });
+          const reportedModelRef = resolveReportedModelRef({
+            provider,
+            model: model.id,
+            assistant: sessionLastAssistant,
+          });
           const agentMeta: EmbeddedPiAgentMeta = {
             sessionId: sessionIdUsed,
             sessionFile: sessionFileUsed,
-            provider: sessionLastAssistant?.provider ?? provider,
-            model: sessionLastAssistant?.model ?? model.id,
+            provider: reportedModelRef.provider,
+            model: reportedModelRef.model,
             contextTokens: ctxInfo.tokens,
             agentHarnessId: attempt.agentHarnessId,
             usage: usageMeta.usage,
@@ -2403,8 +2468,8 @@ export async function runEmbeddedPiAgent(
                   ]
                 : undefined,
               executionTrace: {
-                winnerProvider: sessionLastAssistant?.provider ?? provider,
-                winnerModel: sessionLastAssistant?.model ?? model.id,
+                winnerProvider: reportedModelRef.provider,
+                winnerModel: reportedModelRef.model,
                 attempts:
                   traceAttempts.length > 0 ||
                   sessionLastAssistant?.provider ||
@@ -2412,8 +2477,8 @@ export async function runEmbeddedPiAgent(
                     ? [
                         ...traceAttempts,
                         {
-                          provider: sessionLastAssistant?.provider ?? provider,
-                          model: sessionLastAssistant?.model ?? model.id,
+                          provider: reportedModelRef.provider,
+                          model: reportedModelRef.model,
                           result: "success",
                           stage: "assistant",
                         },
@@ -2449,26 +2514,42 @@ export async function runEmbeddedPiAgent(
         }
       } finally {
         forgetPromptBuildDrainCacheForRun(params.runId);
-        await contextEngine.dispose?.();
         stopRuntimeAuthRefreshTimer();
+        await runAgentCleanupStep({
+          runId: params.runId,
+          sessionId: params.sessionId,
+          step: "context-engine-dispose",
+          log,
+          cleanup: async () => {
+            await contextEngine.dispose?.();
+          },
+        });
         if (params.cleanupBundleMcpOnRunEnd === true) {
-          const onError = (error: unknown, sessionId: string) => {
-            log.warn(
-              `bundle-mcp cleanup failed after run for ${sessionId}: ${formatErrorMessage(error)}`,
-            );
-          };
-          const retiredBySessionKey = await retireSessionMcpRuntimeForSessionKey({
-            sessionKey: params.sessionKey,
-            reason: "embedded-run-end",
-            onError,
+          await runAgentCleanupStep({
+            runId: params.runId,
+            sessionId: params.sessionId,
+            step: "bundle-mcp-retire",
+            log,
+            cleanup: async () => {
+              const onError = (error: unknown, sessionId: string) => {
+                log.warn(
+                  `bundle-mcp cleanup failed after run for ${sessionId}: ${formatErrorMessage(error)}`,
+                );
+              };
+              const retiredBySessionKey = await retireSessionMcpRuntimeForSessionKey({
+                sessionKey: params.sessionKey,
+                reason: "embedded-run-end",
+                onError,
+              });
+              if (!retiredBySessionKey) {
+                await retireSessionMcpRuntime({
+                  sessionId: params.sessionId,
+                  reason: "embedded-run-end",
+                  onError,
+                });
+              }
+            },
           });
-          if (!retiredBySessionKey) {
-            await retireSessionMcpRuntime({
-              sessionId: params.sessionId,
-              reason: "embedded-run-end",
-              onError,
-            });
-          }
         }
       }
     });

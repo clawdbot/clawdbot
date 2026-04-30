@@ -70,3 +70,17 @@ export function resolveStaticAllowlistModelKey(
   }
   return modelKey(parsed.provider, parsed.model);
 }
+
+export function formatLiteralProviderPrefixedModelRef(provider: string, modelRef: string): string {
+  const providerId = normalizeProviderId(provider);
+  const trimmedRef = modelRef.trim();
+  if (!providerId || !trimmedRef) {
+    return trimmedRef;
+  }
+  const normalizedRef = normalizeLowercaseStringOrEmpty(trimmedRef);
+  const literalPrefix = `${providerId}/${providerId}/`;
+  if (normalizedRef.startsWith(literalPrefix)) {
+    return trimmedRef;
+  }
+  return normalizedRef.startsWith(`${providerId}/`) ? `${providerId}/${trimmedRef}` : trimmedRef;
+}

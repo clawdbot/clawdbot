@@ -3,9 +3,11 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 type RegistryModule = typeof import("./registry.js");
 type RuntimeModule = typeof import("./runtime.js");
 type WebSearchProvidersRuntimeModule = typeof import("./web-search-providers.runtime.js");
-type ManifestRegistryModule = typeof import("./manifest-registry.js");
 type PluginAutoEnableModule = typeof import("../config/plugin-auto-enable.js");
 type WebSearchProvidersSharedModule = typeof import("./web-search-providers.shared.js");
+type PluginManifestRegistry = import("./manifest-registry.js").PluginManifestRegistry;
+type LoadPluginManifestRegistryForPluginRegistry =
+  typeof import("./plugin-registry.js").loadPluginManifestRegistryForPluginRegistry;
 
 const BUNDLED_WEB_SEARCH_PROVIDERS = [
   { pluginId: "brave", id: "brave", order: 10 },
@@ -20,13 +22,14 @@ const BUNDLED_WEB_SEARCH_PROVIDERS = [
 ] as const;
 
 let createEmptyPluginRegistry: RegistryModule["createEmptyPluginRegistry"];
-let loadPluginManifestRegistryMock: ReturnType<typeof vi.fn>;
+let loadPluginManifestRegistryMock: ReturnType<
+  typeof vi.fn<LoadPluginManifestRegistryForPluginRegistry>
+>;
 let setActivePluginRegistry: RuntimeModule["setActivePluginRegistry"];
 let resolvePluginWebSearchProviders: WebSearchProvidersRuntimeModule["resolvePluginWebSearchProviders"];
 let resolveRuntimeWebSearchProviders: WebSearchProvidersRuntimeModule["resolveRuntimeWebSearchProviders"];
 let loadOpenClawPluginsMock: ReturnType<typeof vi.fn>;
 let loaderModule: typeof import("./loader.js");
-let manifestRegistryModule: ManifestRegistryModule;
 let pluginAutoEnableModule: PluginAutoEnableModule;
 let applyPluginAutoEnableSpy: ReturnType<typeof vi.fn>;
 let webSearchProvidersSharedModule: WebSearchProvidersSharedModule;
@@ -135,7 +138,7 @@ function expectBundledRuntimeProviderKeys(
   );
 }
 
-function createManifestRegistryFixture() {
+function createManifestRegistryFixture(): PluginManifestRegistry {
   return {
     plugins: [
       {
@@ -316,8 +319,19 @@ function expectRuntimeProviderResolution(
 
 describe("resolvePluginWebSearchProviders", () => {
   beforeAll(async () => {
+    loadPluginManifestRegistryMock = vi.fn<LoadPluginManifestRegistryForPluginRegistry>();
+    vi.doMock("./plugin-registry.js", async () => {
+      const actual =
+        await vi.importActual<typeof import("./plugin-registry.js")>("./plugin-registry.js");
+      return {
+        ...actual,
+        loadPluginManifestRegistryForPluginRegistry: (
+          ...args: Parameters<LoadPluginManifestRegistryForPluginRegistry>
+        ) => loadPluginManifestRegistryMock(...args),
+      };
+    });
+
     ({ createEmptyPluginRegistry } = await import("./registry-empty.js"));
-    manifestRegistryModule = await import("./manifest-registry.js");
     loaderModule = await import("./loader.js");
     pluginAutoEnableModule = await import("../config/plugin-auto-enable.js");
     webSearchProvidersSharedModule = await import("./web-search-providers.shared.js");
@@ -338,15 +352,8 @@ describe("resolvePluginWebSearchProviders", () => {
             autoEnabledReasons: {},
           }) as ReturnType<PluginAutoEnableModule["applyPluginAutoEnable"]>,
       );
-    loadPluginManifestRegistryMock = vi
-      .spyOn(manifestRegistryModule, "loadPluginManifestRegistry")
-      .mockReturnValue(
-        createManifestRegistryFixture() as ManifestRegistryModule["loadPluginManifestRegistry"] extends (
-          ...args: unknown[]
-        ) => infer R
-          ? R
-          : never,
-      );
+    loadPluginManifestRegistryMock.mockReset();
+    loadPluginManifestRegistryMock.mockReturnValue(createManifestRegistryFixture());
     loadOpenClawPluginsMock = vi
       .spyOn(loaderModule, "loadOpenClawPlugins")
       .mockImplementation((params) => {

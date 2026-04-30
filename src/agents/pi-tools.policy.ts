@@ -279,6 +279,51 @@ export function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   };
 }
 
+type GroupToolPolicyContext = ReturnType<typeof resolveGroupContextFromSessionKey>;
+
+function resolveTrustedGroupIdFromContexts(params: {
+  groupId?: string | null;
+  sessionContext: GroupToolPolicyContext;
+  spawnedContext: GroupToolPolicyContext;
+}): {
+  groupId: string | null | undefined;
+  dropped: boolean;
+} {
+  const callerGroupId = (params.groupId ?? "").trim();
+  if (!callerGroupId) {
+    return { groupId: params.groupId, dropped: false };
+  }
+  const trustedGroupIds = collectUniqueStrings([
+    ...(params.sessionContext.groupIds ?? []),
+    ...(params.spawnedContext.groupIds ?? []),
+  ]);
+  // Fail closed when no server-derived session/spawn context can vouch for the
+  // caller group id. Non-group sessions must not opt into group-scoped tool
+  // policy by supplying an arbitrary groupId.
+  if (trustedGroupIds.length === 0) {
+    return { groupId: null, dropped: true };
+  }
+  if (trustedGroupIds.includes(callerGroupId)) {
+    return { groupId: params.groupId, dropped: false };
+  }
+  return { groupId: null, dropped: true };
+}
+
+export function resolveTrustedGroupId(params: {
+  groupId?: string | null;
+  sessionKey?: string | null;
+  spawnedBy?: string | null;
+}): {
+  groupId: string | null | undefined;
+  dropped: boolean;
+} {
+  return resolveTrustedGroupIdFromContexts({
+    groupId: params.groupId,
+    sessionContext: resolveGroupContextFromSessionKey(params.sessionKey),
+    spawnedContext: resolveGroupContextFromSessionKey(params.spawnedBy),
+  });
+}
+
 function resolveProviderToolPolicy(params: {
   byProvider?: Record<string, ToolPolicyConfig>;
   modelProvider?: string;
@@ -421,15 +466,22 @@ export function resolveGroupToolPolicy(params: {
   }
   const sessionContext = resolveGroupContextFromSessionKey(params.sessionKey);
   const spawnedContext = resolveGroupContextFromSessionKey(params.spawnedBy);
+  const trustedGroup = resolveTrustedGroupIdFromContexts({
+    groupId: params.groupId,
+    sessionContext,
+    spawnedContext,
+  });
+  // Keep server-derived ids first so a caller cannot use a trusted parent
+  // candidate to skip a more-specific session group policy.
   const groupIds = collectUniqueStrings([
-    ...buildScopedGroupIdCandidates(params.groupId),
     ...(sessionContext.groupIds ?? []),
     ...(spawnedContext.groupIds ?? []),
+    ...buildScopedGroupIdCandidates(trustedGroup.groupId),
   ]);
   if (groupIds.length === 0) {
     return undefined;
   }
-  const channelRaw = params.messageProvider ?? sessionContext.channel ?? spawnedContext.channel;
+  const channelRaw = sessionContext.channel ?? spawnedContext.channel ?? params.messageProvider;
   const channel = normalizeMessageChannel(channelRaw);
   if (!channel) {
     return undefined;
@@ -444,8 +496,8 @@ export function resolveGroupToolPolicy(params: {
     const toolsConfig = plugin?.groups?.resolveToolPolicy?.({
       cfg: params.config,
       groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
+      groupChannel: trustedGroup.dropped ? null : params.groupChannel,
+      groupSpace: trustedGroup.dropped ? null : params.groupSpace,
       accountId: params.accountId,
       senderId: params.senderId,
       senderName: params.senderName,

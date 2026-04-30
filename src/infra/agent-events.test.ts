@@ -75,7 +75,7 @@ describe("agent-events sequencing", () => {
     expect(phases).toEqual(["start", "end"]);
   });
 
-  test("omits sessionKey for runs hidden from Control UI", async () => {
+  test("omits sessionKey for non-lifecycle runs hidden from Control UI", async () => {
     resetAgentRunContextForTest();
     registerAgentRunContext("run-hidden", {
       sessionKey: "session-quietchat",
@@ -95,6 +95,49 @@ describe("agent-events sequencing", () => {
     stop();
 
     expect(receivedSessionKey).toBeUndefined();
+  });
+
+  test("preserves sessionKey for lifecycle events hidden from Control UI", async () => {
+    resetAgentRunContextForTest();
+    registerAgentRunContext("run-hidden-lifecycle", {
+      sessionKey: "session-quietchat",
+      isControlUiVisible: false,
+    });
+
+    let receivedSessionKey: string | undefined;
+    const stop = onAgentEvent((evt) => {
+      receivedSessionKey = evt.sessionKey;
+    });
+    emitAgentEvent({
+      runId: "run-hidden-lifecycle",
+      stream: "lifecycle",
+      data: { phase: "end" },
+      sessionKey: "session-quietchat",
+    });
+    stop();
+
+    expect(receivedSessionKey).toBe("session-quietchat");
+  });
+
+  test("falls back to registered sessionKey for hidden lifecycle events", async () => {
+    resetAgentRunContextForTest();
+    registerAgentRunContext("run-hidden-lifecycle-context", {
+      sessionKey: "session-quietchat-context",
+      isControlUiVisible: false,
+    });
+
+    let receivedSessionKey: string | undefined;
+    const stop = onAgentEvent((evt) => {
+      receivedSessionKey = evt.sessionKey;
+    });
+    emitAgentEvent({
+      runId: "run-hidden-lifecycle-context",
+      stream: "lifecycle",
+      data: { phase: "error", error: "boom" },
+    });
+    stop();
+
+    expect(receivedSessionKey).toBe("session-quietchat-context");
   });
 
   test("merges later run context updates into existing runs", async () => {

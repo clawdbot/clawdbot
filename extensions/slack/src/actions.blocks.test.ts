@@ -3,6 +3,7 @@ import { createSlackEditTestClient, installSlackBlockTestMocks } from "./blocks.
 
 installSlackBlockTestMocks();
 const { editSlackMessage } = await import("./actions.js");
+const SLACK_TEXT_LIMIT = 8000;
 
 describe("editSlackMessage blocks", () => {
   it("updates with valid blocks", async () => {
@@ -78,6 +79,35 @@ describe("editSlackMessage blocks", () => {
         text: "Shared a file",
       }),
     );
+  });
+
+  it("caps long block fallback text while preserving edit blocks", async () => {
+    const client = createSlackEditTestClient();
+    const longContextText = "a".repeat(3000);
+    const blocks = [
+      {
+        type: "context",
+        elements: [
+          { type: "mrkdwn", text: longContextText },
+          { type: "mrkdwn", text: longContextText },
+          { type: "mrkdwn", text: longContextText },
+        ],
+      },
+    ];
+
+    await editSlackMessage("C123", "171234.567", "", {
+      token: "xoxb-test",
+      client,
+      blocks,
+    });
+
+    expect(client.chat.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringMatching(/…$/),
+        blocks,
+      }),
+    );
+    expect(client.chat.update.mock.calls[0]?.[0].text).toHaveLength(SLACK_TEXT_LIMIT);
   });
 
   it("rejects empty blocks arrays", async () => {

@@ -1,6 +1,6 @@
-import { ChannelType, type Client, type Message } from "@buape/carbon";
 import { MessageReferenceType, StickerFormatType } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { ChannelType, type Client, type Message } from "../internal/discord.js";
 
 const fetchRemoteMedia = vi.fn();
 const saveMediaBuffer = vi.fn();

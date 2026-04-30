@@ -151,7 +151,7 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 ## Runtime model
 
 - Gateway owns the WhatsApp socket and reconnect loop.
-- The reconnect watchdog uses WhatsApp Web transport activity, not only inbound app-message volume, so a quiet linked-device session is not restarted solely because nobody has sent a message recently. A longer application-silence cap still forces a reconnect if transport frames keep arriving but no application messages are handled for the watchdog window.
+- The reconnect watchdog uses WhatsApp Web transport activity, not only inbound app-message volume, so a quiet linked-device session is not restarted solely because nobody has sent a message recently. A longer application-silence cap still forces a reconnect if transport frames keep arriving but no application messages are handled for the watchdog window; after a transient reconnect for a recently active session, that application-silence check uses the normal message timeout for the first recovery window.
 - Baileys socket timings are explicit under `web.whatsapp.*`: `keepAliveIntervalMs` controls WhatsApp Web application pings, `connectTimeoutMs` controls the opening handshake timeout, and `defaultQueryTimeoutMs` controls Baileys query timeouts.
 - Outbound sends require an active WhatsApp listener for the target account.
 - Status and broadcast chats are ignored (`@status`, `@broadcast`).
@@ -398,22 +398,6 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
   </Accordion>
 </AccordionGroup>
 
-## Error visibility
-
-`channels.whatsapp.exposeErrorText` controls whether agent/provider error text is delivered back into WhatsApp. The default is `true`. Set it to `false` to keep failures quiet on WhatsApp while preserving other channel behavior.
-
-```json5
-{
-  channels: {
-    whatsapp: {
-      exposeErrorText: false,
-    },
-  },
-}
-```
-
-Per-account overrides use `channels.whatsapp.accounts.<id>.exposeErrorText`.
-
 ## Reply quoting
 
 WhatsApp supports native reply quoting, where outbound replies visibly quote the inbound message. Control it with `channels.whatsapp.replyToMode`.
@@ -585,6 +569,15 @@ Behavior notes:
 
   </Accordion>
 
+  <Accordion title="Reply appears in transcript but not in WhatsApp">
+    Transcript rows record what the agent generated. WhatsApp delivery is checked separately: OpenClaw only treats an auto-reply as sent after Baileys returns an outbound message id for at least one visible text or media send.
+
+    Ack reactions are independent pre-reply receipts. A successful reaction does not prove that the later text or media reply was accepted by WhatsApp.
+
+    Check gateway logs for `auto-reply delivery failed` or `auto-reply was not accepted by WhatsApp provider`.
+
+  </Accordion>
+
   <Accordion title="Group messages unexpectedly ignored">
     Check in this order:
 
@@ -681,7 +674,7 @@ Primary reference:
 High-signal WhatsApp fields:
 
 - access: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`
-- delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`, `exposeErrorText`
+- delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`
 - multi-account: `accounts.<id>.enabled`, `accounts.<id>.authDir`, account-level overrides
 - operations: `configWrites`, `debounceMs`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`, `web.whatsapp.*`
 - session behavior: `session.dmScope`, `historyLimit`, `dmHistoryLimit`, `dms.<id>.historyLimit`

@@ -78,13 +78,18 @@ describe("Dockerfile", () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
     const postinstallIndex = dockerfile.indexOf("COPY scripts/postinstall-bundled-plugins.mjs");
+    const runtimeDepsHelperIndex = dockerfile.indexOf(
+      "COPY scripts/lib/bundled-runtime-deps-install.mjs ./scripts/lib/bundled-runtime-deps-install.mjs",
+    );
     const distImportHelperIndex = dockerfile.indexOf(
       "COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs",
     );
 
     expect(postinstallIndex).toBeGreaterThan(-1);
+    expect(runtimeDepsHelperIndex).toBeGreaterThan(-1);
     expect(distImportHelperIndex).toBeGreaterThan(-1);
     expect(postinstallIndex).toBeLessThan(installIndex);
+    expect(runtimeDepsHelperIndex).toBeLessThan(installIndex);
     expect(distImportHelperIndex).toBeLessThan(installIndex);
   });
 

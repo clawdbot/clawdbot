@@ -76,6 +76,30 @@ describe("discord config schema", () => {
     expect(cfg.historyLimit).toBe(3);
   });
 
+  it("accepts Discord application IDs at top-level and account scope", () => {
+    const cfg = expectValidDiscordConfig({
+      applicationId: "123456789012345678",
+      accounts: {
+        work: {
+          applicationId: 234567890123456,
+        },
+      },
+    });
+
+    expect(cfg.applicationId).toBe("123456789012345678");
+    expect(cfg.accounts?.work?.applicationId).toBe("234567890123456");
+  });
+
+  it("rejects unsafe numeric Discord application IDs", () => {
+    const issues = expectInvalidDiscordConfig({
+      applicationId: 106232522769186816,
+    });
+
+    expect(
+      issues.some((issue) => issue.message.includes("not a valid non-negative safe integer")),
+    ).toBe(true);
+  });
+
   it("loads guild map and dm group settings", () => {
     const cfg = expectValidDiscordConfig({
       enabled: true,

@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it } from "vitest";
 import type { ResolvedTelegramAccount } from "./accounts.js";
-import { createTelegramPluginBase } from "./shared.js";
+import { createTelegramPluginBase, telegramConfigAdapter } from "./shared.js";
 
 const telegramPluginBase = createTelegramPluginBase({
   setupWizard: {} as never,
@@ -165,5 +165,33 @@ describe("createTelegramPluginBase config duplicate token guard", () => {
     const account = resolveAccount(cfg, "default");
     expect(await telegramPluginBase.config.isConfigured!(account, cfg)).toBe(false);
     expect(telegramPluginBase.config.unconfiguredReason?.(account, cfg)).toContain("unavailable");
+  });
+
+  it("keeps read-only accessors from resolving bot token SecretRefs", () => {
+    const cfg = {
+      secrets: {
+        providers: {
+          telegram_token: {
+            source: "file",
+            path: "/tmp/openclaw-missing-telegram-token",
+            mode: "singleValue",
+          },
+        },
+      },
+      channels: {
+        telegram: {
+          botToken: { source: "file", provider: "telegram_token", id: "value" },
+          allowFrom: ["1128540374256849009"],
+          defaultTo: "1498959610751750304",
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(telegramConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([
+      "1128540374256849009",
+    ]);
+    expect(telegramConfigAdapter.resolveDefaultTo?.({ cfg, accountId: "default" })).toBe(
+      "1498959610751750304",
+    );
   });
 });

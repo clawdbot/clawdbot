@@ -5,6 +5,7 @@ import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { jsonResult, readStringParam } from "./common.js";
 import type { GatewayCallOptions } from "./gateway.js";
 import { callGatewayTool } from "./gateway.js";
+import { POLICY_REDIRECT_INVOKE_COMMANDS } from "./nodes-tool-media.js";
 import { resolveNodeId } from "./nodes-utils.js";
 
 export const BLOCKED_INVOKE_COMMANDS = new Set(["system.run", "system.run.prepare"]);
@@ -123,6 +124,17 @@ export async function executeNodeCommandAction(params: {
         );
       }
       const dedicatedAction = params.mediaInvokeActions[invokeCommandNormalized];
+      // Policy-redirect commands (file-transfer) ALWAYS reroute to their
+      // dedicated tool. The dedicated tool runs gatekeep() + path policy
+      // + operator approval; the generic invoke path doesn't. Operators
+      // who set allowMediaInvokeCommands=true to allow camera/screen
+      // bytes via raw invoke must not also get a path-policy bypass for
+      // file-transfer.
+      if (dedicatedAction && POLICY_REDIRECT_INVOKE_COMMANDS.has(invokeCommandNormalized)) {
+        throw new Error(
+          `invokeCommand "${invokeCommand}" enforces a path-allowlist policy and cannot be invoked via the generic nodes.invoke surface; use the dedicated file-transfer tool "${dedicatedAction}"`,
+        );
+      }
       if (dedicatedAction && !params.allowMediaInvokeCommands) {
         throw new Error(
           `invokeCommand "${invokeCommand}" returns media payloads and is blocked to prevent base64 context bloat; use action="${dedicatedAction}"`,

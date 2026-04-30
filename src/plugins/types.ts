@@ -1101,6 +1101,7 @@ export type ProviderPluginWizardSetup = {
   modelAllowlist?: {
     allowedKeys?: string[];
     initialSelections?: string[];
+    loadCatalog?: boolean;
     message?: string;
   };
   /**
@@ -1213,6 +1214,19 @@ export type ProviderPlugin = {
    * configured.
    */
   staticCatalog?: ProviderPluginCatalog;
+  /**
+   * Show catalog row labels as the literal `<provider>/<entry.id>`
+   * composition instead of the canonical (deduped) key.
+   *
+   * `modelKey` strips a duplicate `<provider>/` prefix so storage and
+   * lookups stay stable. This flag only changes the picker label — the
+   * option value and persisted config remain canonical.
+   *
+   * Set when the leading `<provider>/` segment in the native model id is
+   * a meaningful vendor namespace (e.g. NVIDIA's `nvidia/nemotron-...`
+   * alongside `moonshotai/kimi-k2.5`).
+   */
+  preserveLiteralProviderPrefix?: boolean;
   /**
    * @deprecated Use catalog.
    *
@@ -2031,7 +2045,87 @@ export type OpenClawPluginReloadRegistration = {
 export type OpenClawPluginNodeHostCommand = {
   command: string;
   cap?: string;
+  dangerous?: boolean;
   handle: (paramsJSON?: string | null) => Promise<string>;
+};
+
+export type OpenClawPluginNodeInvokeTransportResult =
+  | {
+      ok: true;
+      payload?: unknown;
+      payloadJSON?: string | null;
+    }
+  | {
+      ok: false;
+      code?: string;
+      message: string;
+      details?: Record<string, unknown>;
+    };
+
+export type OpenClawPluginNodeInvokeApprovalDecision = "allow-once" | "allow-always" | "deny";
+
+export type OpenClawPluginNodeInvokePolicyApprovalRuntime = {
+  request: (input: {
+    title: string;
+    description: string;
+    severity?: "info" | "warning" | "critical";
+    toolName?: string;
+    toolCallId?: string;
+    agentId?: string;
+    sessionKey?: string;
+    timeoutMs?: number;
+  }) => Promise<{
+    id?: string;
+    decision?: OpenClawPluginNodeInvokeApprovalDecision | null;
+  }>;
+};
+
+export type OpenClawPluginNodeInvokePolicyContext = {
+  nodeId: string;
+  command: string;
+  params: unknown;
+  timeoutMs?: number;
+  idempotencyKey?: string;
+  config: OpenClawConfig;
+  pluginConfig?: Record<string, unknown>;
+  node?: {
+    nodeId: string;
+    displayName?: string;
+    platform?: string;
+    deviceFamily?: string;
+    commands?: string[];
+  };
+  client?: {
+    connId?: string;
+    scopes?: string[];
+  } | null;
+  approvals?: OpenClawPluginNodeInvokePolicyApprovalRuntime;
+  invokeNode: (input?: {
+    params?: unknown;
+    timeoutMs?: number;
+    idempotencyKey?: string;
+  }) => Promise<OpenClawPluginNodeInvokeTransportResult>;
+};
+
+export type OpenClawPluginNodeInvokePolicyResult =
+  | {
+      ok: true;
+      payload?: unknown;
+      payloadJSON?: string | null;
+    }
+  | {
+      ok: false;
+      message: string;
+      code?: string;
+      details?: Record<string, unknown>;
+      unavailable?: boolean;
+    };
+
+export type OpenClawPluginNodeInvokePolicy = {
+  commands: string[];
+  handle: (
+    ctx: OpenClawPluginNodeInvokePolicyContext,
+  ) => Promise<OpenClawPluginNodeInvokePolicyResult> | OpenClawPluginNodeInvokePolicyResult;
 };
 
 export type OpenClawPluginSecurityAuditContext = {
@@ -2304,6 +2398,7 @@ export type OpenClawPluginApi = {
   ) => void;
   registerReload: (registration: OpenClawPluginReloadRegistration) => void;
   registerNodeHostCommand: (command: OpenClawPluginNodeHostCommand) => void;
+  registerNodeInvokePolicy: (policy: OpenClawPluginNodeInvokePolicy) => void;
   registerSecurityAuditCollector: (collector: OpenClawPluginSecurityAuditCollector) => void;
   registerService: (service: OpenClawPluginService) => void;
   /** Register a local gateway discovery advertiser such as mDNS/Bonjour. */

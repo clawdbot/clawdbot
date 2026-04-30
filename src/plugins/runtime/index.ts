@@ -115,6 +115,7 @@ function createRuntimeModelAuth(): PluginRuntime["modelAuth"] {
       getApiKeyForModel({
         model: params.model,
         cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
       }),
     getRuntimeAuthForModel: (params) =>
       getRuntimeAuthForModel({
@@ -126,6 +127,7 @@ function createRuntimeModelAuth(): PluginRuntime["modelAuth"] {
       resolveApiKeyForProvider({
         provider: params.provider,
         cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
       }),
   };
 }
@@ -226,7 +228,12 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     channel: createRuntimeChannel(),
     events: createRuntimeEvents(),
     logging: createRuntimeLogging(),
-    state: { resolveStateDir },
+    state: {
+      resolveStateDir,
+      openKeyedStore: () => {
+        throw new Error("openKeyedStore is only available through the plugin runtime proxy.");
+      },
+    },
     tasks,
     taskFlow,
   } satisfies Omit<
@@ -262,7 +269,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
   defineCachedValue(runtime, "videoGeneration", createRuntimeVideoGeneration);
   defineCachedValue(runtime, "musicGeneration", createRuntimeMusicGeneration);
 
-  return runtime as PluginRuntime;
+  return runtime as unknown as PluginRuntime;
 }
 
 export type { PluginRuntime } from "./types.js";

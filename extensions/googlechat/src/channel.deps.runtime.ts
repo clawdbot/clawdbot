@@ -15,7 +15,9 @@ export {
   type OpenClawConfig,
 } from "../runtime-api.js";
 export {
+  type GoogleChatConfigAccessorAccount,
   listGoogleChatAccountIds,
+  resolveGoogleChatConfigAccessorAccount,
   resolveDefaultGoogleChatAccountId,
   resolveGoogleChatAccount,
   type ResolvedGoogleChatAccount,

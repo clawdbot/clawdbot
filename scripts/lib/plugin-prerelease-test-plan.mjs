@@ -10,6 +10,7 @@ export const PLUGIN_PRERELEASE_REQUIRED_SURFACES = Object.freeze([
   "config-round-trip",
   "gateway-bootstrap",
   "sdk-compatibility",
+  "external-install-boundary",
   "status-diagnostics",
   "npm-registry-plugin",
   "clawhub-registry-plugin",
@@ -40,13 +41,19 @@ const pluginPrereleaseDockerLanes = Object.freeze([
   },
   {
     lane: "plugins",
-    surfaces: ["external-plugins", "sdk-compatibility", "status-diagnostics"],
+    surfaces: [
+      "external-plugins",
+      "sdk-compatibility",
+      "external-install-boundary",
+      "status-diagnostics",
+    ],
   },
   {
     lane: "kitchen-sink-plugin",
     surfaces: [
       "external-plugins",
       "sdk-compatibility",
+      "external-install-boundary",
       "status-diagnostics",
       "npm-registry-plugin",
       "clawhub-registry-plugin",

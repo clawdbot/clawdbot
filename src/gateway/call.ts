@@ -18,6 +18,7 @@ import {
 } from "../utils/message-channel.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { VERSION } from "../version.js";
+import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
 import {
   buildGatewayConnectionDetailsWithResolvers,
@@ -615,19 +616,16 @@ async function executeGatewayRequestWithScopes<T>(params: {
     timeoutMs,
     safeTimerTimeoutMs,
   } = params;
-  // Yield to the event loop before starting the WebSocket connection.
-  // On Windows with large dist bundles, heavy synchronous module loading
-  // can starve the event loop, preventing timely processing of the
-  // connect.challenge frame and causing handshake timeouts (#48736).
-  await new Promise<void>((r) => setImmediate(r));
   return await new Promise<T>((resolve, reject) => {
     let settled = false;
     let ignoreClose = false;
+    const startAbort = new AbortController();
     const stop = (err?: Error, value?: T) => {
       if (settled) {
         return;
       }
       settled = true;
+      startAbort.abort();
       clearTimeout(timer);
       void stopGatewayClient(client).finally(() => {
         if (err) {
@@ -701,7 +699,29 @@ async function executeGatewayRequestWithScopes<T>(params: {
       );
     }, safeTimerTimeoutMs);
 
-    client.start();
+    void startGatewayClientWhenEventLoopReady(client, {
+      timeoutMs: safeTimerTimeoutMs,
+      signal: startAbort.signal,
+    })
+      .then((readiness) => {
+        if (settled || readiness.ready || readiness.aborted) {
+          return;
+        }
+        ignoreClose = true;
+        stop(
+          createGatewayTimeoutTransportError({
+            timeoutMs,
+            connectionDetails: params.connectionDetails,
+          }),
+        );
+      })
+      .catch((err) => {
+        if (settled) {
+          return;
+        }
+        ignoreClose = true;
+        stop(err instanceof Error ? err : new Error(String(err)));
+      });
   });
 }
 

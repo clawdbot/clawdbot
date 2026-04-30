@@ -18,6 +18,7 @@ import {
   hasExplicitPluginConfig as hasExplicitPluginConfigShared,
   isBundledChannelEnabledByChannelConfig as isBundledChannelEnabledByChannelConfigShared,
   normalizePluginsConfigWithResolver,
+  type NormalizePluginId,
   type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -76,20 +77,36 @@ function getBundledPluginAliasLookup(): ReadonlyMap<string, string> {
   return bundledPluginAliasLookup;
 }
 
-export function normalizePluginId(id: string): string {
+function normalizePluginIdWithLookup(
+  id: string,
+  getAliasLookup: () => ReadonlyMap<string, string>,
+): string {
   const trimmed = normalizeOptionalString(id) ?? "";
   const normalized = normalizeOptionalLowercaseString(trimmed) ?? "";
   const builtInAlias = BUILT_IN_PLUGIN_ALIAS_LOOKUP.get(normalized);
   if (builtInAlias) {
     return builtInAlias;
   }
-  return getBundledPluginAliasLookup().get(normalized) ?? trimmed;
+  return getAliasLookup().get(normalized) ?? trimmed;
+}
+
+function createScopedPluginIdNormalizer(): NormalizePluginId {
+  let lookup: ReadonlyMap<string, string> | undefined;
+  return (id) =>
+    normalizePluginIdWithLookup(id, () => {
+      lookup ??= getBundledPluginAliasLookup();
+      return lookup;
+    });
+}
+
+export function normalizePluginId(id: string): string {
+  return normalizePluginIdWithLookup(id, getBundledPluginAliasLookup);
 }
 
 export const normalizePluginsConfig = (
   config?: OpenClawConfig["plugins"],
 ): NormalizedPluginsConfig => {
-  return normalizePluginsConfigWithResolver(config, normalizePluginId);
+  return normalizePluginsConfigWithResolver(config, createScopedPluginIdNormalizer());
 };
 
 export function createPluginActivationSource(params: {

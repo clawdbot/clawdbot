@@ -1,8 +1,9 @@
 import type { DirectoryConfigParams } from "openclaw/plugin-sdk/directory-runtime";
 import { buildMessagingTarget, type MessagingTarget } from "openclaw/plugin-sdk/messaging-targets";
-import { resolveDiscordAccount } from "./accounts.js";
+import { resolveDiscordAccount, resolveDiscordAccountAllowFrom } from "./accounts.js";
 import { rememberDiscordDirectoryUser } from "./directory-cache.js";
 import { listDiscordDirectoryPeersLive } from "./directory-live.js";
+import { allowFromContainsDiscordUserId } from "./normalize.js";
 import { parseDiscordSendTarget } from "./send-target-parsing.js";
 import { type DiscordTargetParseOptions } from "./target-parsing.js";
 
@@ -22,6 +23,14 @@ export async function resolveDiscordTarget(
 
   const likelyUsername = isLikelyUsername(trimmed);
   const shouldLookup = isExplicitUserLookup(trimmed, parseOptions) || likelyUsername;
+
+  if (
+    /^\d+$/.test(trimmed) &&
+    parseOptions.defaultKind !== "user" &&
+    isConfiguredAllowedDiscordDmUser(trimmed, options)
+  ) {
+    return buildMessagingTarget("user", trimmed, trimmed);
+  }
 
   // Parse directly if it's already a known format. Use a safe parse so ambiguous
   // numeric targets don't throw when we still want to attempt username lookup.
@@ -85,6 +94,15 @@ function safeParseDiscordTarget(
   } catch {
     return undefined;
   }
+}
+
+function isConfiguredAllowedDiscordDmUser(input: string, options: DirectoryConfigParams): boolean {
+  const allowFrom =
+    resolveDiscordAccountAllowFrom({
+      cfg: options.cfg,
+      accountId: options.accountId,
+    }) ?? [];
+  return allowFromContainsDiscordUserId(allowFrom, input);
 }
 
 function isExplicitUserLookup(input: string, options: DiscordTargetParseOptions): boolean {

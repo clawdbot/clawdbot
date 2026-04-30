@@ -130,6 +130,9 @@ Native `openclaw skills install` installs into the active workspace
 `./skills` under your current working directory (or falls back to the
 configured OpenClaw workspace). OpenClaw picks that up as
 `<workspace>/skills` on the next session.
+Configured skill roots also support one grouping level, such as
+`skills/<group>/<skill>/SKILL.md`, so related third-party skills can be
+kept under a shared folder without broad recursive scanning.
 
 ClawHub skill pages expose the latest security scan state before install,
 with scanner detail pages for VirusTotal, ClawScan, and static analysis.

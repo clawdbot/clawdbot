@@ -123,5 +123,6 @@ export async function planAllModelListSources(params: {
 
   return createSourcePlan({
     kind: "provider-runtime-scoped",
+    fallbackToRegistryWhenEmpty: true,
   });
 }

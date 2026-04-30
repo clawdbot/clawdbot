@@ -100,11 +100,16 @@ function createPreparedSlackMessage(params?: {
       agentId: "agent-1",
       accountId: "default",
       mainSessionKey: "main",
+      sessionKey: "agent:agent-1:slack:C123",
     },
     channelConfig: null,
     replyTarget: "channel:C123",
     ctxPayload: {
       MessageThreadId: THREAD_TS,
+    },
+    turn: {
+      storePath: "/tmp/slack-sessions.json",
+      record: {},
     },
     replyToMode: params?.replyToMode ?? "all",
     isDirectMessage: false,
@@ -137,6 +142,10 @@ vi.mock("openclaw/plugin-sdk/channel-feedback", () => ({
   logAckFailure: () => {},
   logTypingFailure: () => {},
   removeAckReactionAfterReply: () => {},
+}));
+
+vi.mock("../conversation.runtime.js", () => ({
+  recordInboundSession: vi.fn(async () => undefined),
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-reply-pipeline", () => ({

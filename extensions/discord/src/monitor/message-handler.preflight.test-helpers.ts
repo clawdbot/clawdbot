@@ -1,11 +1,11 @@
-import { ChannelType } from "@buape/carbon";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { ChannelType } from "../internal/discord.js";
 import type { preflightDiscordMessage } from "./message-handler.preflight.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 export type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
 export type DiscordMessageEvent = import("./listeners.js").DiscordMessageEvent;
-export type DiscordClient = import("@buape/carbon").Client;
+export type DiscordClient = import("../internal/discord.js").Client;
 
 export const DEFAULT_PREFLIGHT_CFG = {
   session: {
@@ -32,8 +32,8 @@ export function createGuildTextClient(channelId: string): DiscordClient {
 export function createGuildEvent(params: {
   channelId: string;
   guildId: string;
-  author: import("@buape/carbon").Message["author"];
-  message: import("@buape/carbon").Message;
+  author: import("../internal/discord.js").Message["author"];
+  message: import("../internal/discord.js").Message;
   includeGuildObject?: boolean;
 }): DiscordMessageEvent {
   return {
@@ -64,7 +64,7 @@ export function createDiscordMessage(params: {
   mentionedUsers?: Array<{ id: string }>;
   mentionedEveryone?: boolean;
   attachments?: Array<Record<string, unknown>>;
-}): import("@buape/carbon").Message {
+}): import("../internal/discord.js").Message {
   return {
     id: params.id,
     content: params.content,
@@ -75,7 +75,7 @@ export function createDiscordMessage(params: {
     mentionedRoles: [],
     mentionedEveryone: params.mentionedEveryone ?? false,
     author: params.author,
-  } as unknown as import("@buape/carbon").Message;
+  } as unknown as import("../internal/discord.js").Message;
 }
 
 export function createDiscordPreflightArgs(params: {
@@ -99,6 +99,7 @@ export function createDiscordPreflightArgs(params: {
     replyToMode: "all",
     dmEnabled: true,
     groupDmEnabled: true,
+    dmPolicy: params.discordConfig?.dmPolicy ?? params.discordConfig?.dm?.policy ?? "pairing",
     ackReactionScope: "direct",
     groupPolicy: "open",
     threadBindings: createNoopThreadBindingManager("default"),

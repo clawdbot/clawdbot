@@ -487,6 +487,9 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
       ...model,
       api: "openclaw-ollama-simple-test",
     };
+    const cfg = {
+      models: { providers: { ollama: { baseUrl: "http://remote-ollama:11434", models: [] } } },
+    };
     hoisted.prepareModelForSimpleCompletionMock.mockReturnValueOnce(preparedModel);
 
     await completeWithPreparedSimpleCompletionModel({
@@ -496,12 +499,13 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
         source: "models.json (local marker)",
         mode: "api-key",
       },
+      cfg,
       context: {
         messages: [{ role: "user", content: "pong", timestamp: 1 }],
       },
     });
 
-    expect(hoisted.prepareModelForSimpleCompletionMock).toHaveBeenCalledWith({ model });
+    expect(hoisted.prepareModelForSimpleCompletionMock).toHaveBeenCalledWith({ model, cfg });
     expect(hoisted.completeMock).toHaveBeenCalledWith(
       preparedModel,
       {

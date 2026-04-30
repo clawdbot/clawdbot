@@ -112,4 +112,17 @@ describe("agentsListCommand", () => {
       }),
     ]);
   });
+
+  it("keeps human output enriched from read-only provider metadata", async () => {
+    const runtime = createRuntime();
+
+    await agentsListCommand({}, runtime);
+
+    expect(buildProviderStatusIndexMock).toHaveBeenCalledOnce();
+    expect(buildProviderSummaryMetadataIndexMock).toHaveBeenCalledOnce();
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Providers:"));
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Telegram default: configured"),
+    );
+  });
 });

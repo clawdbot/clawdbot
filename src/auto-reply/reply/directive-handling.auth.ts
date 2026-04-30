@@ -56,6 +56,7 @@ export const resolveAuthLabel = async (
   modelsPath: string,
   agentDir?: string,
   mode: ModelAuthDetailMode = "compact",
+  workspaceDir?: string,
 ): Promise<{ label: string; source: string }> => {
   const formatPath = (value: string) => shortenHomePath(value);
   const store = ensureAuthProfileStore(agentDir, {
@@ -193,7 +194,7 @@ export const resolveAuthLabel = async (
     };
   }
 
-  const envKey = resolveEnvApiKey(provider);
+  const envKey = resolveEnvApiKey(provider, process.env, { config: cfg, workspaceDir });
   if (envKey) {
     const isOAuthEnv =
       envKey.source.includes("ANTHROPIC_OAUTH_TOKEN") ||

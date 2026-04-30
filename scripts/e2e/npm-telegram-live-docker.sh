@@ -233,24 +233,9 @@ ln -sfnT /app/extensions "$openclaw_package_dir/extensions"
 mkdir -p /app/node_modules/@openclaw
 rm -rf /app/node_modules/@openclaw/qa-channel
 ln -sfnT /app/extensions/qa-channel /app/node_modules/@openclaw/qa-channel
-node --input-type=module <<'NODE'
-import fs from "node:fs";
-
-for (const packageJsonPath of [
-  "/app/package.json",
-  "/app/node_modules/openclaw/package.json",
-]) {
-  const pkg = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
-  pkg.exports = pkg.exports && typeof pkg.exports === "object" ? pkg.exports : {};
-  if (!pkg.exports["./plugin-sdk/gateway-runtime"]) {
-    pkg.exports["./plugin-sdk/gateway-runtime"] = {
-      types: "./dist/plugin-sdk/gateway-runtime.d.ts",
-      default: "./dist/plugin-sdk/gateway-runtime.js",
-    };
-  }
-  fs.writeFileSync(packageJsonPath, `${JSON.stringify(pkg, null, 2)}\n`);
-}
-NODE
+node scripts/e2e/lib/npm-telegram-live/prepare-package.mjs \
+  /app/package.json \
+  /app/node_modules/openclaw/package.json
 for deps_dir in "$openclaw_package_dir/node_modules" /npm-global/lib/node_modules; do
   [ -d "$deps_dir" ] || continue
   for dependency_dir in "$deps_dir"/*; do

@@ -49,7 +49,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          all_locales_json='["zh-CN","zh-TW","pt-BR","de","es","ja-JP","ko","fr","tr","uk","id","pl","th"]'
+          all_locales_json='["zh-CN","zh-TW","pt-BR","de","es","ja-JP","ko","fr","ar","it","tr","uk","id","pl","th","vi","nl","fa"]'
 
           if [ "$EVENT_NAME" != "push" ]; then
             echo "has_locales=true" >> "$GITHUB_OUTPUT"

@@ -18,6 +18,7 @@ vi.mock("./model-auth-env-vars.js", () => ({
   listKnownProviderEnvApiKeyNames: () => ["OPENAI_API_KEY"],
   PROVIDER_ENV_API_KEY_CANDIDATES: { openai: ["OPENAI_API_KEY"] },
   resolveProviderEnvApiKeyCandidates: () => ({ openai: ["OPENAI_API_KEY"] }),
+  resolveProviderEnvAuthEvidence: () => ({}),
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({

@@ -1,4 +1,3 @@
-import { RequestClient } from "@buape/carbon";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { RetryConfig, RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
@@ -10,6 +9,7 @@ import {
   resolveDiscordAccount,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
+import { RequestClient } from "./internal/discord.js";
 import { resolveDiscordProxyFetchForAccount } from "./proxy-fetch.js";
 import { createDiscordRequestClient } from "./proxy-request-client.js";
 import { createDiscordRetryRunner } from "./retry.js";

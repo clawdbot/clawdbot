@@ -14,6 +14,8 @@ import {
   resolveCliNetworkProxyPolicy,
 } from "./command-path-policy.js";
 
+const ROOT_HELP_ALIASES = new Set(["tools"]);
+
 export function rewriteUpdateFlagArgv(argv: string[]): string[] {
   const index = argv.indexOf("--update");
   if (index === -1) {
@@ -41,6 +43,9 @@ export function shouldUseRootHelpFastPath(
   return (
     env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH !== "1" &&
     (invocation.isRootHelpInvocation ||
+      (invocation.commandPath.length === 1 &&
+        ROOT_HELP_ALIASES.has(invocation.commandPath[0] ?? "") &&
+        invocation.hasHelpOrVersion) ||
       (invocation.commandPath.length === 1 &&
         invocation.commandPath[0] === "help" &&
         invocation.hasHelpOrVersion))

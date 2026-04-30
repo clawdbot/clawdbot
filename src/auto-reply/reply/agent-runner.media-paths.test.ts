@@ -42,9 +42,14 @@ vi.mock("../../agents/pi-embedded.js", () => ({
   waitForEmbeddedPiRunEnd: waitForEmbeddedPiRunEndMock,
 }));
 
+vi.mock("../../agents/pi-embedded-runner/runs.js", () => ({
+  queueEmbeddedPiMessage: queueEmbeddedPiMessageMock,
+}));
+
 vi.mock("./queue.js", () => ({
   enqueueFollowupRun: enqueueFollowupRunMock,
   refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock,
+  resolvePiSteeringModeForQueueMode: (mode: string) => (mode === "queue" ? "one-at-a-time" : "all"),
   scheduleFollowupDrain: scheduleFollowupDrainMock,
 }));
 
@@ -196,6 +201,34 @@ describe("runReplyAgent media path normalization", () => {
         }),
       }),
     );
+  });
+
+  it("maps steer queue modes to Pi steering drain modes", async () => {
+    queueEmbeddedPiMessageMock.mockReturnValue(true);
+
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        resolvedQueue: { mode: "steer" } as QueueSettings,
+        shouldSteer: true,
+        isStreaming: true,
+      }),
+    );
+
+    expect(queueEmbeddedPiMessageMock).toHaveBeenLastCalledWith("session", "generate chart", {
+      steeringMode: "all",
+    });
+
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        resolvedQueue: { mode: "queue" } as QueueSettings,
+        shouldSteer: true,
+        isStreaming: true,
+      }),
+    );
+
+    expect(queueEmbeddedPiMessageMock).toHaveBeenLastCalledWith("session", "generate chart", {
+      steeringMode: "one-at-a-time",
+    });
   });
 
   it("shares one media cache between block accumulation and final payload delivery", async () => {

@@ -5,6 +5,11 @@ record_fixture_plugin_trust() {
   node scripts/e2e/lib/plugins/assertions.mjs record-fixture-plugin-trust "$plugin_id" "$plugin_root" "$enabled"
 }
 
+write_demo_fixture_plugin() {
+  local dir="$1"
+  node scripts/e2e/lib/fixture.mjs plugin-demo "$dir"
+}
+
 write_fixture_plugin() {
   local dir="$1"
   local id="$2"
@@ -12,31 +17,31 @@ write_fixture_plugin() {
   local method="$4"
   local name="$5"
 
-  mkdir -p "$dir"
-  cat >"$dir/package.json" <<JSON
-{
-  "name": "@openclaw/$id",
-  "version": "$version",
-  "openclaw": { "extensions": ["./index.js"] }
+  node scripts/e2e/lib/fixture.mjs plugin "$dir" "$id" "$version" "$method" "$name"
 }
-JSON
-  cat >"$dir/index.js" <<JS
-module.exports = {
-  id: "$id",
-  name: "$name",
-  register(api) {
-    api.registerGatewayMethod("$method", async () => ({ ok: true }));
-  },
-};
-JS
-  cat >"$dir/openclaw.plugin.json" <<'JSON'
-{
-  "id": "placeholder",
-  "configSchema": {
-    "type": "object",
-    "properties": {}
-  }
+
+write_fixture_manifest() {
+  local file="$1"
+  local id="$2"
+
+  node scripts/e2e/lib/fixture.mjs plugin-manifest "$file" "$id"
 }
-JSON
-  node scripts/e2e/lib/plugins/assertions.mjs set-manifest-id "$dir/openclaw.plugin.json" "$id"
+
+pack_fixture_plugin() {
+  local pack_dir="$1"
+  local output_tgz="$2"
+  local id="$3"
+  local version="$4"
+  local method="$5"
+  local name="$6"
+
+  mkdir -p "$pack_dir/package"
+  write_fixture_plugin "$pack_dir/package" "$id" "$version" "$method" "$name"
+  tar -czf "$output_tgz" -C "$pack_dir" package
+}
+
+write_claude_bundle_fixture() {
+  local bundle_root="$1"
+
+  node scripts/e2e/lib/fixture.mjs claude-bundle "$bundle_root"
 }

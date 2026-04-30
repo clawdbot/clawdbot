@@ -1334,6 +1334,15 @@ describe("plugin-sdk subpath exports", () => {
     }
   });
 
+  it("keeps the Zalouser command-auth compatibility facade importable", async () => {
+    const zalouserSdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/zalouser");
+    const commandAuthSdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/command-auth");
+
+    expect(zalouserSdk.resolveSenderCommandAuthorization).toBe(
+      commandAuthSdk.resolveSenderCommandAuthorization,
+    );
+  });
+
   it("exports single-provider plugin entry helpers from the dedicated subpath", () => {
     expect(typeof providerEntrySdk.defineSingleProviderPluginEntry).toBe("function");
   });

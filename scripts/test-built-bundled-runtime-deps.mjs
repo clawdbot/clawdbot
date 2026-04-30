@@ -8,6 +8,7 @@ import {
   collectBuiltBundledPluginStagedRuntimeDependencyErrors,
   collectBundledPluginRootRuntimeMirrorErrors,
   collectBundledPluginRuntimeDependencySpecs,
+  collectDeclaredRootRuntimeDependencyMetadataErrors,
   collectRootDistBundledRuntimeMirrors,
 } from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
 import { parsePackageRootArg } from "./lib/package-root-args.mjs";
@@ -36,6 +37,7 @@ const errors = [
     requiredRootMirrors,
     rootPackageJson,
   }),
+  ...collectDeclaredRootRuntimeDependencyMetadataErrors(rootPackageJson),
   ...collectBuiltBundledPluginStagedRuntimeDependencyErrors({
     bundledPluginsDir: builtPluginsDir,
   }),

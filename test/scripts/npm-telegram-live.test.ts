@@ -6,6 +6,10 @@ import { __testing } from "../../scripts/e2e/npm-telegram-live-runner.ts";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DOCKER_SCRIPT_PATH = path.resolve(TEST_DIR, "../../scripts/e2e/npm-telegram-live-docker.sh");
+const PREPARE_PACKAGE_PATH = path.resolve(
+  TEST_DIR,
+  "../../scripts/e2e/lib/npm-telegram-live/prepare-package.mjs",
+);
 
 describe("package Telegram live Docker E2E", () => {
   it("supports npm-specific Convex credential aliases", () => {
@@ -61,6 +65,7 @@ describe("package Telegram live Docker E2E", () => {
 
   it("keeps private QA harness imports local while using the installed package dist", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+    const preparePackage = readFileSync(PREPARE_PACKAGE_PATH, "utf8");
     const gatewayRpcClient = readFileSync(
       path.resolve(TEST_DIR, "../../extensions/qa-lab/src/gateway-rpc-client.ts"),
       "utf8",
@@ -73,9 +78,10 @@ describe("package Telegram live Docker E2E", () => {
     expect(script).toContain('ln -sfnT "$openclaw_package_dir/dist" /app/dist');
     expect(script).toContain('cp "$openclaw_package_dir/package.json" /app/package.json');
     expect(script).toContain('ln -sfnT /app/extensions "$openclaw_package_dir/extensions"');
-    expect(script).toContain('"/app/node_modules/openclaw/package.json"');
-    expect(script).toContain('pkg.exports["./plugin-sdk/gateway-runtime"]');
-    expect(script).toContain('"./dist/plugin-sdk/gateway-runtime.js"');
+    expect(script).toContain("node scripts/e2e/lib/npm-telegram-live/prepare-package.mjs");
+    expect(script).toContain("/app/node_modules/openclaw/package.json");
+    expect(preparePackage).toContain('pkg.exports["./plugin-sdk/gateway-runtime"]');
+    expect(preparePackage).toContain('"./dist/plugin-sdk/gateway-runtime.js"');
     expect(gatewayRpcClient).toContain('from "openclaw/plugin-sdk/gateway-runtime"');
     expect(qaRuntimeApi).toContain('from "openclaw/plugin-sdk/gateway-runtime"');
   });

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { WhatsAppSendResult } from "../inbound/send-result.js";
 import { buildMentionConfig } from "./mentions.js";
 import { applyGroupGating, type GroupHistoryEntry } from "./monitor/group-gating.js";
 import { buildInboundLine, formatReplyContext } from "./monitor/message-line.js";
@@ -10,6 +11,16 @@ import type { WebInboundMsg } from "./types.js";
 
 let sessionDir: string | undefined;
 let sessionStorePath: string;
+
+function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendResult {
+  return {
+    kind,
+    messageId: id,
+    messageIds: [id],
+    keys: [{ id }],
+    providerAccepted: true,
+  };
+}
 
 beforeEach(async () => {
   sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-group-gating-"));
@@ -82,8 +93,8 @@ function createGroupMessage(overrides: Partial<WebInboundMsg> = {}): WebInboundM
     senderName: "Alice",
     selfE164: "+999",
     sendComposing: async () => {},
-    reply: async (_text, _options) => {},
-    sendMedia: async (_payload, _options) => {},
+    reply: async (_text, _options) => acceptedSendResult("text", "r1"),
+    sendMedia: async (_payload, _options) => acceptedSendResult("media", "m1"),
     ...overrides,
   };
 }

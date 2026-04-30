@@ -1,27 +1,18 @@
-import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { serializePayload, type MessagePayloadObject, type RequestClient } from "@buape/carbon";
-import { ChannelType, Routes } from "discord-api-types/v10";
+import { ChannelType } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { maxBytesForKind } from "openclaw/plugin-sdk/media-runtime";
-import { extensionForMime } from "openclaw/plugin-sdk/media-runtime";
-import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
 import type { PollInput } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { resolveChunkMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { convertMarkdownTables, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordAccount } from "./accounts.js";
-import { resolveDiscordClientAccountContext } from "./client.js";
+import { createChannelMessage, createThread, type RequestClient } from "./internal/discord.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
 import { parseAndResolveRecipient } from "./recipient-resolution.js";
 import {
-  buildDiscordMessagePayload,
+  buildDiscordMessageRequest,
   buildDiscordSendError,
   buildDiscordTextChunks,
   createDiscordClient,
@@ -33,18 +24,11 @@ import {
   resolveDiscordSendEmbeds,
   sendDiscordMedia,
   sendDiscordText,
-  stripUndefinedFields,
   SUPPRESS_NOTIFICATIONS_FLAG,
   type DiscordSendComponents,
   type DiscordSendEmbeds,
 } from "./send.shared.js";
 import type { DiscordSendResult } from "./send.types.js";
-import {
-  ensureOggOpus,
-  getVoiceMessageMetadata,
-  sendDiscordVoiceMessage,
-} from "./voice-message.js";
-
 type DiscordSendOpts = {
   cfg: OpenClawConfig;
   token?: string;
@@ -193,8 +177,8 @@ export async function sendMessageDiscord(
       isFirst: true,
     });
     const starterEmbeds = resolveDiscordSendEmbeds({ embeds: opts.embeds, isFirst: true });
-    const silentFlags = opts.silent ? 1 << 12 : undefined;
-    const starterPayload: MessagePayloadObject = buildDiscordMessagePayload({
+    const silentFlags = opts.silent ? SUPPRESS_NOTIFICATIONS_FLAG : undefined;
+    const starterBody = buildDiscordMessageRequest({
       text: starterContent,
       components: starterComponents,
       embeds: starterEmbeds,
@@ -204,12 +188,16 @@ export async function sendMessageDiscord(
     try {
       threadRes = (await request(
         () =>
-          rest.post(Routes.threads(channelId), {
-            body: {
-              name: threadName,
-              message: stripUndefinedFields(serializePayload(starterPayload)),
+          createThread<{ id: string; message?: { id: string; channel_id: string } }>(
+            rest,
+            channelId,
+            {
+              body: {
+                name: threadName,
+                message: starterBody,
+              },
             },
-          }) as Promise<{ id: string; message?: { id: string; channel_id: string } }>,
+          ),
         "forum-thread",
       )) as { id: string; message?: { id: string; channel_id: string } };
     } catch (err) {
@@ -348,100 +336,6 @@ export async function sendMessageDiscord(
   return toDiscordSendResult(result, channelId);
 }
 
-type DiscordWebhookSendOpts = {
-  cfg: OpenClawConfig;
-  webhookId: string;
-  webhookToken: string;
-  accountId?: string;
-  threadId?: string | number;
-  replyTo?: string;
-  username?: string;
-  avatarUrl?: string;
-  wait?: boolean;
-};
-
-function resolveWebhookExecutionUrl(params: {
-  webhookId: string;
-  webhookToken: string;
-  threadId?: string | number;
-  wait?: boolean;
-}) {
-  const baseUrl = new URL(
-    `https://discord.com/api/v10/webhooks/${encodeURIComponent(params.webhookId)}/${encodeURIComponent(params.webhookToken)}`,
-  );
-  baseUrl.searchParams.set("wait", params.wait === false ? "false" : "true");
-  if (params.threadId !== undefined && params.threadId !== null && params.threadId !== "") {
-    baseUrl.searchParams.set("thread_id", String(params.threadId));
-  }
-  return baseUrl.toString();
-}
-
-export async function sendWebhookMessageDiscord(
-  text: string,
-  opts: DiscordWebhookSendOpts,
-): Promise<DiscordSendResult> {
-  const webhookId = normalizeOptionalString(opts.webhookId) ?? "";
-  const webhookToken = normalizeOptionalString(opts.webhookToken) ?? "";
-  if (!webhookId || !webhookToken) {
-    throw new Error("Discord webhook id/token are required");
-  }
-
-  const replyTo = normalizeOptionalString(opts.replyTo) ?? "";
-  const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
-  const { account, proxyFetch } = resolveDiscordClientAccountContext({
-    cfg: opts.cfg,
-    accountId: opts.accountId,
-  });
-  const rewrittenText = rewriteDiscordKnownMentions(text, {
-    accountId: account.accountId,
-  });
-
-  const response = await (proxyFetch ?? fetch)(
-    resolveWebhookExecutionUrl({
-      webhookId,
-      webhookToken,
-      threadId: opts.threadId,
-      wait: opts.wait,
-    }),
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        content: rewrittenText,
-        username: normalizeOptionalString(opts.username),
-        avatar_url: normalizeOptionalString(opts.avatarUrl),
-        ...(messageReference ? { message_reference: messageReference } : {}),
-      }),
-    },
-  );
-  if (!response.ok) {
-    const raw = await response.text().catch(() => "");
-    throw new Error(
-      `Discord webhook send failed (${response.status}${raw ? `: ${raw.slice(0, 200)}` : ""})`,
-    );
-  }
-
-  const payload = (await response.json().catch(() => ({}))) as {
-    id?: string;
-    channel_id?: string;
-  };
-  try {
-    recordChannelActivity({
-      channel: "discord",
-      accountId: account.accountId,
-      direction: "outbound",
-    });
-  } catch {
-    // Best-effort telemetry only.
-  }
-  return {
-    messageId: payload.id || "unknown",
-    channelId: payload.channel_id ? payload.channel_id : opts.threadId ? String(opts.threadId) : "",
-  };
-}
-
 export async function sendStickerDiscord(
   to: string,
   stickerIds: string[],
@@ -454,12 +348,12 @@ export async function sendStickerDiscord(
   const stickers = normalizeStickerIds(stickerIds);
   const res = (await request(
     () =>
-      rest.post(Routes.channelMessages(channelId), {
+      createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, {
         body: {
           content: rewrittenContent || undefined,
           sticker_ids: stickers,
         },
-      }) as Promise<{ id: string; channel_id: string }>,
+      }),
     "sticker",
   )) as { id: string; channel_id: string };
   return toDiscordSendResult(res, channelId);
@@ -481,13 +375,13 @@ export async function sendPollDiscord(
   const flags = opts.silent ? SUPPRESS_NOTIFICATIONS_FLAG : undefined;
   const res = (await request(
     () =>
-      rest.post(Routes.channelMessages(channelId), {
+      createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, {
         body: {
           content: rewrittenContent || undefined,
           poll: payload,
           ...(flags ? { flags } : {}),
         },
-      }) as Promise<{ id: string; channel_id: string }>,
+      }),
     "poll",
   )) as { id: string; channel_id: string };
   return toDiscordSendResult(res, channelId);
@@ -515,110 +409,4 @@ async function resolveDiscordStructuredSendContext(
       })
     : undefined;
   return { rest, request, channelId, rewrittenContent };
-}
-
-type VoiceMessageOpts = {
-  cfg: OpenClawConfig;
-  token?: string;
-  accountId?: string;
-  verbose?: boolean;
-  rest?: RequestClient;
-  replyTo?: string;
-  retry?: RetryConfig;
-  silent?: boolean;
-};
-
-async function materializeVoiceMessageInput(mediaUrl: string): Promise<{ filePath: string }> {
-  // Security: reuse the standard media loader so we apply SSRF guards + allowed-local-root checks.
-  // Then write to a private temp file so ffmpeg/ffprobe never sees the original URL/path string.
-  const media = await loadWebMediaRaw(mediaUrl, maxBytesForKind("audio"));
-  const extFromName = media.fileName ? path.extname(media.fileName) : "";
-  const extFromMime = media.contentType ? extensionForMime(media.contentType) : "";
-  const ext = extFromName || extFromMime || ".bin";
-  const tempDir = resolvePreferredOpenClawTmpDir();
-  const filePath = path.join(tempDir, `voice-src-${crypto.randomUUID()}${ext}`);
-  await fs.writeFile(filePath, media.buffer, { mode: 0o600 });
-  return { filePath };
-}
-
-/**
- * Send a voice message to Discord.
- *
- * Voice messages are a special Discord feature that displays audio with a waveform
- * visualization. They require OGG/Opus format and cannot include text content.
- *
- * @param to - Recipient (user ID for DM or channel ID)
- * @param audioPath - Path to local audio file (will be converted to OGG/Opus if needed)
- * @param opts - Send options
- */
-export async function sendVoiceMessageDiscord(
-  to: string,
-  audioPath: string,
-  opts: VoiceMessageOpts,
-): Promise<DiscordSendResult> {
-  const { filePath: localInputPath } = await materializeVoiceMessageInput(audioPath);
-  let oggPath: string | null = null;
-  let oggCleanup = false;
-  let token: string | undefined;
-  let rest: RequestClient | undefined;
-  let channelId: string | undefined;
-  const cfg = requireRuntimeConfig(opts.cfg, "Discord voice send");
-
-  try {
-    const accountInfo = resolveDiscordAccount({
-      cfg,
-      accountId: opts.accountId,
-    });
-    const client = createDiscordClient({ ...opts, cfg });
-    token = client.token;
-    rest = client.rest;
-    const request = client.request;
-    const recipient = await parseAndResolveRecipient(to, cfg, opts.accountId);
-    channelId = (await resolveChannelId(rest, recipient, request)).channelId;
-
-    // Convert to OGG/Opus if needed
-    const ogg = await ensureOggOpus(localInputPath);
-    oggPath = ogg.path;
-    oggCleanup = ogg.cleanup;
-
-    // Get voice message metadata (duration and waveform)
-    const metadata = await getVoiceMessageMetadata(oggPath);
-
-    // Read the audio file
-    const audioBuffer = await fs.readFile(oggPath);
-
-    // Send the voice message
-    const result = await sendDiscordVoiceMessage(
-      rest,
-      channelId,
-      audioBuffer,
-      metadata,
-      opts.replyTo,
-      request,
-      opts.silent,
-      token,
-    );
-
-    recordChannelActivity({
-      channel: "discord",
-      accountId: accountInfo.accountId,
-      direction: "outbound",
-    });
-
-    return toDiscordSendResult(result, channelId);
-  } catch (err) {
-    if (channelId && rest && token) {
-      throw await buildDiscordSendError(err, {
-        channelId,
-        cfg,
-        rest,
-        token,
-        hasMedia: true,
-      });
-    }
-    throw err;
-  } finally {
-    await unlinkIfExists(oggCleanup ? oggPath : null);
-    await unlinkIfExists(localInputPath);
-  }
 }

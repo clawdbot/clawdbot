@@ -355,6 +355,19 @@ describe("Codex app-server config", () => {
     expect(second).not.toContain("sk-second");
   });
 
+  it("derives distinct shared-client keys for distinct agent dirs", () => {
+    const startOptions = {
+      transport: "stdio" as const,
+      command: "codex",
+      args: ["app-server"],
+      headers: {},
+    };
+
+    expect(codexAppServerStartOptionsKey(startOptions, { agentDir: "/tmp/agent-a" })).not.toEqual(
+      codexAppServerStartOptionsKey(startOptions, { agentDir: "/tmp/agent-b" }),
+    );
+  });
+
   it("keeps runtime config keys aligned with manifest schema and UI hints", async () => {
     const manifest = JSON.parse(
       await fs.readFile(new URL("../../openclaw.plugin.json", import.meta.url), "utf8"),

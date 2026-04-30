@@ -268,6 +268,11 @@ function writeDoctorStatus(status: ReturnType<GoogleMeetRuntime["status"]>): voi
       writeStdoutLine("manual reason: %s", formatOptional(health.manualActionReason));
       writeStdoutLine("manual message: %s", formatOptional(health.manualActionMessage));
     }
+    writeStdoutLine("speech ready: %s", formatBoolean(health?.speechReady));
+    if (health?.speechReady === false) {
+      writeStdoutLine("speech blocked reason: %s", formatOptional(health.speechBlockedReason));
+      writeStdoutLine("speech blocked message: %s", formatOptional(health.speechBlockedMessage));
+    }
     writeStdoutLine("provider connected: %s", formatBoolean(health?.providerConnected));
     writeStdoutLine("realtime ready: %s", formatBoolean(health?.realtimeReady));
     writeStdoutLine("audio input active: %s", formatBoolean(health?.audioInputActive));
@@ -2017,12 +2022,15 @@ export function registerGoogleMeetCli(params: {
     .argument("[message]", "Realtime instructions to speak now")
     .action(async (sessionId: string, message?: string) => {
       const rt = await params.ensureRuntime();
-      const result = rt.speak(sessionId, message);
+      const result = await rt.speak(sessionId, message);
       if (!result.found) {
         throw new Error("session not found");
       }
       if (!result.spoken) {
-        throw new Error("session has no active realtime audio bridge");
+        throw new Error(
+          result.session?.chrome?.health?.speechBlockedMessage ??
+            "session has no active realtime audio bridge",
+        );
       }
       writeStdoutLine("speaking on %s", sessionId);
     });

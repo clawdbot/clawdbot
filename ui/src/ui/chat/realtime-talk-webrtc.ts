@@ -72,6 +72,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       method: "POST",
       body: offer.sdp,
       headers: {
+        ...this.session.offerHeaders,
         Authorization: `Bearer ${this.session.clientSecret}`,
         "Content-Type": "application/sdp",
       },

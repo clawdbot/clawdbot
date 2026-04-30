@@ -7,7 +7,7 @@ type DiscordWebMediaMockFactoryResult = {
 };
 
 type DiscordRestFactoryResult = {
-  rest: import("@buape/carbon").RequestClient;
+  rest: import("./internal/discord.js").RequestClient;
   postMock: MockFn;
   putMock: MockFn;
   getMock: MockFn;
@@ -46,7 +46,7 @@ export function makeDiscordRest(): DiscordRestFactoryResult {
       get: getMock,
       patch: patchMock,
       delete: deleteMock,
-    } as unknown as import("@buape/carbon").RequestClient,
+    } as unknown as import("./internal/discord.js").RequestClient,
     postMock,
     putMock,
     getMock,

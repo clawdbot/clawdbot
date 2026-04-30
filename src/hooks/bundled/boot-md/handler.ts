@@ -19,15 +19,25 @@ const runBootChecklist: HookHandler = async (event) => {
 
   const cfg = event.context.cfg;
   const deps = event.context.deps ?? createDefaultDeps();
-  const tasks: StartupTask[] = listAgentIds(cfg).map((agentId) => {
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-    return {
-      source: "boot-md",
+  const seenWorkspaces = new Set<string>();
+  const tasks: StartupTask[] = listAgentIds(cfg)
+    .map((agentId) => {
+      const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+      return { agentId, workspaceDir };
+    })
+    .filter(({ workspaceDir }) => {
+      if (seenWorkspaces.has(workspaceDir)) {
+        return false;
+      }
+      seenWorkspaces.add(workspaceDir);
+      return true;
+    })
+    .map(({ agentId, workspaceDir }) => ({
+      source: "boot-md" as const,
       agentId,
       workspaceDir,
       run: () => runBootOnce({ cfg, deps, workspaceDir, agentId }),
-    };
-  });
+    }));
 
   await runStartupTasks({ tasks, log });
 };

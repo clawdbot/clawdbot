@@ -1,9 +1,10 @@
-import { normalizeStringEntries } from "../shared/string-normalization.js";
+import {
+  normalizeLegacyDmAliases,
+  type CompatMutationResult,
+} from "../channels/plugins/dm-access.js";
 
-export type CompatMutationResult = {
-  entry: Record<string, unknown>;
-  changed: boolean;
-};
+export { normalizeLegacyDmAliases };
+export type { CompatMutationResult };
 
 export type LegacyStreamingAliasOptions = {
   resolvedMode: string;
@@ -42,96 +43,6 @@ function ensureNestedRecord(owner: Record<string, unknown>, key: string): Record
     return { ...existing };
   }
   return {};
-}
-
-function allowFromListsMatch(left: unknown, right: unknown): boolean {
-  if (!Array.isArray(left) || !Array.isArray(right)) {
-    return false;
-  }
-  const normalizedLeft = normalizeStringEntries(left);
-  const normalizedRight = normalizeStringEntries(right);
-  if (normalizedLeft.length !== normalizedRight.length) {
-    return false;
-  }
-  return normalizedLeft.every((value, index) => value === normalizedRight[index]);
-}
-
-export function normalizeLegacyDmAliases(params: {
-  entry: Record<string, unknown>;
-  pathPrefix: string;
-  changes: string[];
-  promoteAllowFrom?: boolean;
-}): CompatMutationResult {
-  let changed = false;
-  let updated: Record<string, unknown> = params.entry;
-  const rawDm = updated.dm;
-  const dm = asObjectRecord(rawDm) ? (structuredClone(rawDm) as Record<string, unknown>) : null;
-  let dmChanged = false;
-
-  const topDmPolicy = updated.dmPolicy;
-  const legacyDmPolicy = dm?.policy;
-  if (topDmPolicy === undefined && legacyDmPolicy !== undefined) {
-    updated = { ...updated, dmPolicy: legacyDmPolicy };
-    changed = true;
-    if (dm) {
-      delete dm.policy;
-      dmChanged = true;
-    }
-    params.changes.push(`Moved ${params.pathPrefix}.dm.policy → ${params.pathPrefix}.dmPolicy.`);
-  } else if (
-    topDmPolicy !== undefined &&
-    legacyDmPolicy !== undefined &&
-    topDmPolicy === legacyDmPolicy
-  ) {
-    if (dm) {
-      delete dm.policy;
-      dmChanged = true;
-      params.changes.push(`Removed ${params.pathPrefix}.dm.policy (dmPolicy already set).`);
-    }
-  }
-
-  if (params.promoteAllowFrom !== false) {
-    const topAllowFrom = updated.allowFrom;
-    const legacyAllowFrom = dm?.allowFrom;
-    if (topAllowFrom === undefined && legacyAllowFrom !== undefined) {
-      updated = { ...updated, allowFrom: legacyAllowFrom };
-      changed = true;
-      if (dm) {
-        delete dm.allowFrom;
-        dmChanged = true;
-      }
-      params.changes.push(
-        `Moved ${params.pathPrefix}.dm.allowFrom → ${params.pathPrefix}.allowFrom.`,
-      );
-    } else if (
-      topAllowFrom !== undefined &&
-      legacyAllowFrom !== undefined &&
-      allowFromListsMatch(topAllowFrom, legacyAllowFrom)
-    ) {
-      if (dm) {
-        delete dm.allowFrom;
-        dmChanged = true;
-        params.changes.push(`Removed ${params.pathPrefix}.dm.allowFrom (allowFrom already set).`);
-      }
-    }
-  }
-
-  if (dm && asObjectRecord(rawDm) && dmChanged) {
-    const keys = Object.keys(dm);
-    if (keys.length === 0) {
-      if (updated.dm !== undefined) {
-        const { dm: _ignored, ...rest } = updated;
-        updated = rest;
-        changed = true;
-        params.changes.push(`Removed empty ${params.pathPrefix}.dm after migration.`);
-      }
-    } else {
-      updated = { ...updated, dm };
-      changed = true;
-    }
-  }
-
-  return { entry: updated, changed };
 }
 
 export function normalizeLegacyStreamingAliases(

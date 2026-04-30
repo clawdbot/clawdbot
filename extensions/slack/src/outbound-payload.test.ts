@@ -94,6 +94,61 @@ describe("slackOutbound sendPayload", () => {
     await expect(run()).rejects.toThrow(/Slack blocks cannot exceed 50 items/i);
     expect(sendMock).not.toHaveBeenCalled();
   });
+
+  it("offsets presentation controls against native Slack blocks before standalone interactive controls", async () => {
+    const { run, sendMock, to } = createHarness({
+      payload: {
+        text: "Deploy?",
+        channelData: {
+          slack: {
+            blocks: [
+              {
+                type: "actions",
+                block_id: "openclaw_reply_buttons_1",
+                elements: [],
+              },
+            ],
+          },
+        },
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Stage", value: "stage" }],
+            },
+          ],
+        },
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Approve", value: "approve" }],
+            },
+          ],
+        },
+      },
+    });
+
+    await run();
+
+    expect(sendMock).toHaveBeenCalledWith(
+      to,
+      "Deploy?",
+      expect.objectContaining({
+        blocks: [
+          expect.objectContaining({ block_id: "openclaw_reply_buttons_1" }),
+          expect.objectContaining({
+            block_id: "openclaw_reply_buttons_2",
+            elements: [expect.objectContaining({ action_id: "openclaw:reply_button:2:1" })],
+          }),
+          expect.objectContaining({
+            block_id: "openclaw_reply_buttons_3",
+            elements: [expect.objectContaining({ action_id: "openclaw:reply_button:3:1" })],
+          }),
+        ],
+      }),
+    );
+  });
 });
 
 describe("Slack outbound payload contract", () => {

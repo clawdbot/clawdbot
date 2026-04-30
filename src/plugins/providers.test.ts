@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginAutoEnableResult } from "../config/plugin-auto-enable.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginRegistrySnapshot } from "./plugin-registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { ProviderPlugin } from "./types.js";
 
@@ -123,6 +124,95 @@ function setOwningProviderManifestPluginsWithWorkspace() {
       },
     }),
   ]);
+}
+
+function createProviderRegistrySnapshotFixture(): PluginRegistrySnapshot {
+  const manifestRegistry = loadPluginManifestRegistryMock();
+  const plugins = manifestRegistry.plugins.map((plugin) => {
+    const snapshotPlugin = {
+      pluginId: plugin.id,
+      manifestPath: plugin.manifestPath,
+      manifestHash: `test-${plugin.id}`,
+      source: plugin.source,
+      rootDir: plugin.rootDir,
+      origin: plugin.origin,
+      enabled: plugin.enabledByDefault !== false,
+      syntheticAuthRefs: plugin.syntheticAuthRefs,
+      startup: {
+        sidecar: false,
+        memory: false,
+        deferConfiguredChannelFullLoadUntilAfterListen: false,
+        agentHarnesses: [],
+      },
+      compat: [],
+    };
+    if (plugin.enabledByDefault === true) {
+      Object.assign(snapshotPlugin, { enabledByDefault: true });
+    }
+    return snapshotPlugin;
+  });
+
+  return {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "test",
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins,
+    diagnostics: [],
+  };
+}
+
+function normalizeProviderForFixture(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function sortUniqueFixtureValues(values: Iterable<string>): string[] {
+  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
+}
+
+function listManifestContributionIdsForFixture(
+  plugin: PluginManifestRecord,
+  contribution: string,
+): readonly string[] {
+  switch (contribution) {
+    case "providers":
+      return plugin.providers;
+    case "cliBackends":
+      return plugin.cliBackends;
+    default:
+      return [];
+  }
+}
+
+function resolvePluginContributionOwnersFixture(params: {
+  contribution: string;
+  matches: string | ((contributionId: string) => boolean);
+}): readonly string[] {
+  const matcher =
+    typeof params.matches === "string"
+      ? (contributionId: string) => contributionId === params.matches
+      : params.matches;
+  return sortUniqueFixtureValues(
+    loadPluginManifestRegistryMock().plugins.flatMap((plugin) =>
+      listManifestContributionIdsForFixture(plugin, params.contribution).some(matcher)
+        ? [plugin.id]
+        : [],
+    ),
+  );
+}
+
+function resolveProviderOwnersFixture(params: { providerId: string }): readonly string[] {
+  const providerId = normalizeProviderForFixture(params.providerId);
+  if (!providerId) {
+    return [];
+  }
+  return resolvePluginContributionOwnersFixture({
+    contribution: "providers",
+    matches: (contributionId) => normalizeProviderForFixture(contributionId) === providerId,
+  });
 }
 
 function getLastRuntimeRegistryCall(): Record<string, unknown> {
@@ -290,6 +380,16 @@ describe("resolvePluginProviders", () => {
       loadPluginManifestRegistry: (...args: Parameters<LoadPluginManifestRegistry>) =>
         loadPluginManifestRegistryMock(...args),
     }));
+    vi.doMock("./plugin-registry.js", async () => {
+      const actual =
+        await vi.importActual<typeof import("./plugin-registry.js")>("./plugin-registry.js");
+      return {
+        ...actual,
+        loadPluginRegistrySnapshot: () => createProviderRegistrySnapshotFixture(),
+        resolvePluginContributionOwners: resolvePluginContributionOwnersFixture,
+        resolveProviderOwners: resolveProviderOwnersFixture,
+      };
+    });
     vi.doMock("./installed-plugin-index-store.js", async (importOriginal) => {
       const actual = await importOriginal<typeof import("./installed-plugin-index-store.js")>();
       return {

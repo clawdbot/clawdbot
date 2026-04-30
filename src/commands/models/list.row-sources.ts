@@ -72,6 +72,8 @@ export async function appendAllModelRowSources(
         models: params.modelRegistry.getAll(),
         modelRegistry: params.modelRegistry,
         context: params.context,
+        resolveWithRegistry: false,
+        skipSuppression: true,
       });
     }
     return { requiresRegistryFallback: false };

@@ -1,7 +1,7 @@
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { editSlackMessage } from "../../actions.js";
-import { buildSlackBlocksFallbackText } from "../../blocks-fallback.js";
+import { buildSlackEditTextPayload } from "../../edit-text.js";
 import { normalizeSlackOutboundText } from "../../format.js";
 
 type SlackReadbackMessage = {
@@ -14,14 +14,7 @@ function buildExpectedSlackEditText(params: {
   text: string;
   blocks?: (Block | KnownBlock)[];
 }): string {
-  const trimmed = normalizeSlackOutboundText(params.text.trim());
-  if (trimmed) {
-    return trimmed;
-  }
-  if (params.blocks?.length) {
-    return buildSlackBlocksFallbackText(params.blocks);
-  }
-  return " ";
+  return buildSlackEditTextPayload(params.text, params.blocks);
 }
 
 function blocksMatch(expected?: (Block | KnownBlock)[], actual?: unknown[]): boolean {

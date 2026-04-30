@@ -1,5 +1,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { i18n } from "../../i18n/index.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import { renderAgentFiles } from "./agents-panels-status-files.ts";
 import { renderAgents, type AgentsProps } from "./agents.ts";
 
@@ -305,6 +307,40 @@ describe("renderAgents", () => {
     );
 
     expect(skillsTab?.textContent?.trim()).toContain("1");
+  });
+
+  it("keeps the Cron Jobs tab label while localizing channel refresh never state", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    await i18n.setLocale("zh-CN");
+    const container = document.createElement("div");
+
+    try {
+      render(
+        renderAgents(
+          createProps({
+            activePanel: "channels",
+            channels: {
+              snapshot: null,
+              loading: false,
+              error: null,
+              lastSuccess: null,
+            },
+          }),
+        ),
+        container,
+      );
+      await Promise.resolve();
+
+      const tabLabels = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).map(
+        (button) => button.textContent?.trim(),
+      );
+
+      expect(tabLabels).toContain("Cron Jobs");
+      expect(container.textContent).toContain("上次刷新：从未");
+    } finally {
+      await i18n.setLocale("en");
+      vi.unstubAllGlobals();
+    }
   });
 });
 

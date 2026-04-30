@@ -1,5 +1,6 @@
 import { Readable, Writable } from "node:stream";
 import {
+  invokeNativeHookRelayBridge,
   renderNativeHookRelayUnavailableResponse,
   type NativeHookRelayProcessResponse,
 } from "../agents/harness/native-hook-relay.js";
@@ -41,6 +42,23 @@ export async function runNativeHookRelayCli(
   } catch (error) {
     writeText(stderr, formatRelayCliError("failed to read native hook input", error));
     return 1;
+  }
+
+  try {
+    const response = await invokeNativeHookRelayBridge({
+      provider,
+      relayId,
+      event,
+      rawPayload,
+      registrationTimeoutMs: 100,
+      timeoutMs: normalizeTimeoutMs(opts.timeout),
+    });
+    writeText(stdout, response.stdout);
+    writeText(stderr, response.stderr);
+    return response.exitCode;
+  } catch {
+    // Fall through to the gateway path for embedded/local gateway cases and
+    // older registrations that predate the direct relay bridge.
   }
 
   try {

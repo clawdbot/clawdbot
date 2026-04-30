@@ -65,6 +65,39 @@ describe("plugin tools MCP server", () => {
     expect(result.content).toEqual([{ type: "text", text: "Stored." }]);
   });
 
+  it("serializes plugin tool results that do not use the MCP content envelope", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      provider: "kitchen-sink-search",
+      results: [{ title: "Kitchen Sink image fixture" }],
+    });
+    const tool = {
+      name: "kitchen_sink_search",
+      description: "Search Kitchen Sink fixture content",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+        },
+      },
+      execute,
+    } as unknown as AnyAgentTool;
+
+    const handlers = createPluginToolsMcpHandlers([tool]);
+    const result = await handlers.callTool({
+      name: "kitchen_sink_search",
+      arguments: { query: "kitchen sink" },
+    });
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: JSON.stringify({
+          provider: "kitchen-sink-search",
+          results: [{ title: "Kitchen Sink image fixture" }],
+        }),
+      },
+    ]);
+  });
+
   it("returns MCP errors for unknown tools and thrown tool errors", async () => {
     const failingTool = {
       name: "memory_forget",

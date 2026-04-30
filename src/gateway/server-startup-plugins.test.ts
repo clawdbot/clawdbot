@@ -245,7 +245,7 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     );
   });
 
-  it("pre-stages only missing runtime deps while retaining the full startup dependency set", async () => {
+  it("pre-stages the full startup dependency set", async () => {
     scanBundledPluginRuntimeDeps.mockReturnValueOnce({
       deps: [
         { name: "alpha-runtime", version: "1.0.0", pluginIds: ["telegram"] },
@@ -267,7 +267,7 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     expect(repairBundledRuntimeDepsInstallRootAsync).toHaveBeenCalledWith(
       expect.objectContaining({
         installRoot: "/runtime",
-        missingSpecs: ["grammy@1.37.0"],
+        missingSpecs: ["alpha-runtime@1.0.0", "grammy@1.37.0"],
         installSpecs: ["alpha-runtime@1.0.0", "grammy@1.37.0"],
       }),
     );

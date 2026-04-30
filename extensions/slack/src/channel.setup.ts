@@ -6,8 +6,10 @@ import {
 import { type ResolvedSlackAccount } from "./accounts.js";
 import {
   listSlackAccountIds,
+  resolveSlackConfigAccessorAccount,
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
+  type SlackConfigAccessorAccount,
 } from "./accounts.js";
 import { type ChannelPlugin } from "./channel-api.js";
 import { SlackChannelConfigSchema } from "./config-schema.js";
@@ -22,15 +24,19 @@ const slackSetupWizard = createSlackSetupWizardProxy(async () => ({
   slackSetupWizard: (await import("./setup-surface.js")).slackSetupWizard,
 }));
 
-const slackSetupConfigAdapter = createScopedChannelConfigAdapter<ResolvedSlackAccount>({
+const slackSetupConfigAdapter = createScopedChannelConfigAdapter<
+  ResolvedSlackAccount,
+  SlackConfigAccessorAccount
+>({
   sectionKey: SLACK_CHANNEL,
   listAccountIds: listSlackAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveSlackAccount),
+  resolveAccessorAccount: resolveSlackConfigAccessorAccount,
   defaultAccountId: resolveDefaultSlackAccountId,
   clearBaseFields: ["botToken", "appToken", "name"],
-  resolveAllowFrom: (account) => account.dm?.allowFrom,
+  resolveAllowFrom: (account) => account.allowFrom,
   formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
-  resolveDefaultTo: (account) => account.config.defaultTo,
+  resolveDefaultTo: (account) => account.defaultTo,
 });
 
 export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {

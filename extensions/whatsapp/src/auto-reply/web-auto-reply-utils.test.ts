@@ -3,6 +3,7 @@ import path from "node:path";
 import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
+import type { WhatsAppSendResult } from "../inbound/send-result.js";
 import {
   debugMention,
   isBotMentionedFromTargets,
@@ -12,6 +13,16 @@ import {
 import { getSessionSnapshot } from "./session-snapshot.js";
 import type { WebInboundMsg } from "./types.js";
 import { elide, isLikelyWhatsAppCryptoError } from "./util.js";
+
+function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendResult {
+  return {
+    kind,
+    messageId: id,
+    messageIds: [id],
+    keys: [{ id }],
+    providerAccepted: true,
+  };
+}
 
 const makeMsg = (overrides: Partial<WebInboundMsg>): WebInboundMsg =>
   ({
@@ -24,8 +35,8 @@ const makeMsg = (overrides: Partial<WebInboundMsg>): WebInboundMsg =>
     chatType: "group",
     chatId: "120363401234567890@g.us",
     sendComposing: async () => {},
-    reply: async () => {},
-    sendMedia: async () => {},
+    reply: async () => acceptedSendResult("text", "r1"),
+    sendMedia: async () => acceptedSendResult("media", "m1"),
     ...overrides,
   }) as WebInboundMsg;
 

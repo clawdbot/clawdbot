@@ -699,6 +699,29 @@ describe("message tool schema scoping", () => {
       expect.arrayContaining(["send", "broadcast"]),
     );
   });
+
+  it("advertises Slack download-file fileId in scoped schemas", () => {
+    const slackFilePlugin = createChannelPlugin({
+      id: "slack",
+      label: "Slack",
+      docsPath: "/channels/slack",
+      blurb: "Slack test plugin.",
+      actions: ["download-file"],
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "slack", source: "test", plugin: slackFilePlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "slack",
+    });
+    const properties = getToolProperties(tool);
+
+    expect(getActionEnum(properties)).toContain("download-file");
+    expect(properties.fileId).toMatchObject({ type: "string" });
+  });
 });
 
 describe("message tool description", () => {

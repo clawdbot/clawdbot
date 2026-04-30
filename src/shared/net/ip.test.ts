@@ -3,6 +3,7 @@ import { blockedIpv6MulticastLiterals } from "./ip-test-fixtures.js";
 import {
   extractEmbeddedIpv4FromIpv6,
   isBlockedSpecialUseIpv4Address,
+  isBlockedSpecialUseIpv6Address,
   isCanonicalDottedDecimalIPv4,
   isCarrierGradeNatIpv4Address,
   isIpInCidr,
@@ -102,5 +103,53 @@ describe("shared ip helpers", () => {
     expect(isBlockedSpecialUseIpv4Address(benchmark, { allowRfc2544BenchmarkRange: true })).toBe(
       false,
     );
+  });
+
+  it("blocks IPv6 unique-local addresses by default and exempts them on opt-in (#74351)", () => {
+    // fc00::/7 is the IPv6 ULA range. Sing-box / Clash / Surge fake-ip
+    // proxies resolve foreign domains here, alongside the IPv4 198.18.0.0/15
+    // benchmark range. Operators using those proxies need both ranges
+    // exempted to keep web_fetch working.
+    const ula = parseCanonicalIpAddress("fc00::1");
+    expect(ula?.kind()).toBe("ipv6");
+    if (!ula || !isIpv6Address(ula)) {
+      throw new Error("expected ipv6 fixture");
+    }
+
+    // Default policy (no options) must continue to block the ULA range.
+    expect(isBlockedSpecialUseIpv6Address(ula)).toBe(true);
+    expect(isBlockedSpecialUseIpv6Address(ula, {})).toBe(true);
+    expect(isBlockedSpecialUseIpv6Address(ula, { allowUniqueLocalRange: false })).toBe(true);
+
+    // Opt-in flag — the only path the SSRF policy uses to thread fake-ip
+    // proxy intent through to the address classifier.
+    expect(isBlockedSpecialUseIpv6Address(ula, { allowUniqueLocalRange: true })).toBe(false);
+  });
+
+  it("opt-in unique-local exemption does NOT bleed into other special-use IPv6 ranges (#74351)", () => {
+    // The exemption must be scoped: loopback (::1), unspecified (::), and
+    // multicast (ff00::/8) all stay blocked even when `allowUniqueLocalRange`
+    // is set, otherwise the flag silently widens the SSRF escape hatch
+    // beyond what operators opted into.
+    const loopback = parseCanonicalIpAddress("::1");
+    const multicast = parseCanonicalIpAddress("ff02::1");
+    const siteLocal = parseCanonicalIpAddress("fec0::1"); // deprecated fec0::/10
+
+    if (
+      !loopback ||
+      !isIpv6Address(loopback) ||
+      !multicast ||
+      !isIpv6Address(multicast) ||
+      !siteLocal ||
+      !isIpv6Address(siteLocal)
+    ) {
+      throw new Error("expected ipv6 fixtures");
+    }
+
+    for (const options of [{}, { allowUniqueLocalRange: true }] as const) {
+      expect(isBlockedSpecialUseIpv6Address(loopback, options)).toBe(true);
+      expect(isBlockedSpecialUseIpv6Address(multicast, options)).toBe(true);
+      expect(isBlockedSpecialUseIpv6Address(siteLocal, options)).toBe(true);
+    }
   });
 });

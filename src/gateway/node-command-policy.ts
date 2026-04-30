@@ -4,6 +4,7 @@ import {
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
+import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
 import { normalizeDeviceMetadataForPolicy } from "./device-metadata-normalization.js";
 import type { NodeSession } from "./node-registry.js";
 
@@ -182,6 +183,20 @@ function normalizePlatformId(platform?: string, deviceFamily?: string): Platform
   return byFamily ?? "unknown";
 }
 
+export function listDangerousPluginNodeCommands(): string[] {
+  const registry = getActiveRuntimePluginRegistry();
+  if (!registry) {
+    return [];
+  }
+  const commands = [
+    ...(registry.nodeHostCommands ?? [])
+      .filter((entry) => entry.command.dangerous === true)
+      .map((entry) => entry.command.command),
+    ...(registry.nodeInvokePolicies ?? []).flatMap((entry) => entry.policy.commands),
+  ];
+  return [...new Set(commands.map((command) => command.trim()).filter(Boolean))];
+}
+
 export function resolveNodeCommandAllowlist(
   cfg: OpenClawConfig,
   node?: Pick<NodeSession, "platform" | "deviceFamily">,
@@ -190,7 +205,18 @@ export function resolveNodeCommandAllowlist(
   const base = PLATFORM_DEFAULTS[platformId] ?? PLATFORM_DEFAULTS.unknown;
   const extra = cfg.gateway?.nodes?.allowCommands ?? [];
   const deny = new Set(cfg.gateway?.nodes?.denyCommands ?? []);
-  const allow = new Set([...base, ...extra].map((cmd) => cmd.trim()).filter(Boolean));
+  const dangerousPluginCommands = new Set(listDangerousPluginNodeCommands());
+  const allow = new Set(
+    [...base, ...extra]
+      .map((cmd) => cmd.trim())
+      .filter((cmd) => cmd && !dangerousPluginCommands.has(cmd)),
+  );
+  for (const cmd of extra) {
+    const trimmed = cmd.trim();
+    if (trimmed) {
+      allow.add(trimmed);
+    }
+  }
   for (const blocked of deny) {
     const trimmed = blocked.trim();
     if (trimmed) {

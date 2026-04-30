@@ -294,7 +294,7 @@ export function resolveCodexComputerUseConfig(
 
 export function codexAppServerStartOptionsKey(
   options: CodexAppServerStartOptions,
-  params: { authProfileId?: string } = {},
+  params: { authProfileId?: string; agentDir?: string } = {},
 ): string {
   return JSON.stringify({
     transport: options.transport,
@@ -311,6 +311,7 @@ export function codexAppServerStartOptionsKey(
       .map(([key, value]) => [key, hashSecretForKey(value, `env:${key}`)]),
     clearEnv: [...(options.clearEnv ?? [])].toSorted(),
     authProfileId: params.authProfileId ?? null,
+    agentDir: params.agentDir ?? null,
   });
 }
 

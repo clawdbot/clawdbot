@@ -2,11 +2,20 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/config.js";
 
-const { listReadOnlyChannelPluginsForConfigMock, hasConfiguredChannelsForReadOnlyScopeMock } =
-  vi.hoisted(() => ({
-    listReadOnlyChannelPluginsForConfigMock: vi.fn(),
-    hasConfiguredChannelsForReadOnlyScopeMock: vi.fn(),
-  }));
+const {
+  collectEnabledInsecureOrDangerousFlagsMock,
+  listReadOnlyChannelPluginsForConfigMock,
+  hasConfiguredChannelsForReadOnlyScopeMock,
+} = vi.hoisted(() => ({
+  collectEnabledInsecureOrDangerousFlagsMock: vi.fn((_config: OpenClawConfig): string[] => []),
+  listReadOnlyChannelPluginsForConfigMock: vi.fn(),
+  hasConfiguredChannelsForReadOnlyScopeMock: vi.fn(),
+}));
+
+vi.mock("./dangerous-config-flags.js", () => ({
+  collectEnabledInsecureOrDangerousFlags: (config: OpenClawConfig) =>
+    collectEnabledInsecureOrDangerousFlagsMock(config),
+}));
 
 vi.mock("../channels/plugins/read-only.js", () => ({
   listReadOnlyChannelPluginsForConfig: (...args: unknown[]) =>

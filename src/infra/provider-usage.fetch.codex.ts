@@ -1,3 +1,4 @@
+import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
 import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
@@ -53,14 +54,21 @@ export async function fetchCodexUsage(
   timeoutMs: number,
   fetchFn: typeof fetch,
 ): Promise<ProviderUsageSnapshot> {
-  const headers: Record<string, string> = {
+  const defaultHeaders: Record<string, string> = {
     Authorization: `Bearer ${token}`,
-    "User-Agent": "CodexBar",
     Accept: "application/json",
   };
   if (accountId) {
-    headers["ChatGPT-Account-Id"] = accountId;
+    defaultHeaders["ChatGPT-Account-Id"] = accountId;
   }
+  const headers =
+    resolveProviderRequestHeaders({
+      provider: "openai-codex",
+      baseUrl: "https://chatgpt.com/backend-api/wham/usage",
+      capability: "other",
+      transport: "http",
+      defaultHeaders,
+    }) ?? defaultHeaders;
 
   const res = await fetchJson(
     "https://chatgpt.com/backend-api/wham/usage",

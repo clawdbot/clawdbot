@@ -1,5 +1,6 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it } from "vitest";
-import { createSlackPluginBase, setSlackChannelAllowlist } from "./shared.js";
+import { createSlackPluginBase, setSlackChannelAllowlist, slackConfigAdapter } from "./shared.js";
 
 describe("createSlackPluginBase", () => {
   it("owns Slack native command name overrides", () => {
@@ -54,5 +55,37 @@ describe("setSlackChannelAllowlist", () => {
       C123: { enabled: true },
       C456: { enabled: true },
     });
+  });
+});
+
+describe("slackConfigAdapter", () => {
+  it("keeps read-only accessors from resolving token SecretRefs", () => {
+    const cfg = {
+      secrets: {
+        providers: {
+          slack_bot: {
+            source: "file",
+            path: "/tmp/openclaw-missing-slack-bot-token",
+            mode: "singleValue",
+          },
+          slack_app: {
+            source: "file",
+            path: "/tmp/openclaw-missing-slack-app-token",
+            mode: "singleValue",
+          },
+        },
+      },
+      channels: {
+        slack: {
+          botToken: { source: "file", provider: "slack_bot", id: "value" },
+          appToken: { source: "file", provider: "slack_app", id: "value" },
+          allowFrom: ["U123"],
+          defaultTo: "C123",
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(slackConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual(["U123"]);
+    expect(slackConfigAdapter.resolveDefaultTo?.({ cfg, accountId: "default" })).toBe("C123");
   });
 });

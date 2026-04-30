@@ -520,7 +520,7 @@ describe("MatrixVerificationManager", () => {
     }
   });
 
-  it("does not cross-sign the other own device after auto-confirmed self-verification SAS", async () => {
+  it("cross-signs the other own device after auto-confirmed self-verification SAS", async () => {
     vi.useFakeTimers();
     const { confirm, verifier } = createSasVerifierFixture({
       decimal: [6158, 1986, 3513],
@@ -541,10 +541,79 @@ describe("MatrixVerificationManager", () => {
       await vi.advanceTimersByTimeAsync(30_100);
 
       expect(confirm).toHaveBeenCalledTimes(1);
-      expect(trustOwnDeviceAfterSas).not.toHaveBeenCalled();
+      expect(trustOwnDeviceAfterSas).toHaveBeenCalledWith("OTHERDEVICE");
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("confirmVerificationSas awaits the verifier's verify promise before resolving", async () => {
+    let resolveVerify!: () => void;
+    const verifyPromise = new Promise<void>((res) => {
+      resolveVerify = res;
+    });
+    const verifyImpl = vi.fn(() => verifyPromise);
+    const { confirm, verifier } = createSasVerifierFixture({
+      decimal: [111, 222, 333],
+      emoji: [["cat", "Cat"]],
+      verifyImpl,
+    });
+    const trustOwnDeviceAfterSas = vi.fn(async () => {});
+    const request = new MockVerificationRequest({
+      isSelfVerification: true,
+      otherDeviceId: "OTHERDEVICE",
+      transactionId: "txn-await-verify",
+      initiatedByMe: true,
+      verifier,
+    });
+    const manager = new MatrixVerificationManager({ trustOwnDeviceAfterSas });
+    const tracked = manager.trackVerificationRequest(request);
+
+    await manager.startVerification(tracked.id, "sas");
+    expect(verifyImpl).toHaveBeenCalledTimes(1);
+
+    let confirmResolved = false;
+    const confirmPromise = manager.confirmVerificationSas(tracked.id).then(() => {
+      confirmResolved = true;
+    });
+
+    // Yield once so confirmSasForSession + trustOwnDeviceAfterSas finish, but
+    // verifyPromise stays pending. confirmVerificationSas must still be
+    // blocked awaiting verifyPromise.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(trustOwnDeviceAfterSas).toHaveBeenCalledWith("OTHERDEVICE");
+    expect(confirmResolved).toBe(false);
+
+    resolveVerify();
+    await confirmPromise;
+    expect(confirmResolved).toBe(true);
+  });
+
+  it("confirmVerificationSas surfaces a verifier-promise rejection on session.error", async () => {
+    const verifyImpl = vi.fn(async () => {
+      throw new Error("verifier rejected mid-protocol");
+    });
+    const { verifier } = createSasVerifierFixture({
+      decimal: [111, 222, 333],
+      emoji: [["cat", "Cat"]],
+      verifyImpl,
+    });
+    const request = new MockVerificationRequest({
+      isSelfVerification: true,
+      otherDeviceId: "OTHERDEVICE",
+      transactionId: "txn-verify-rejects",
+      initiatedByMe: true,
+      verifier,
+    });
+    const manager = new MatrixVerificationManager();
+    const tracked = manager.trackVerificationRequest(request);
+
+    await manager.startVerification(tracked.id, "sas");
+    const summary = await manager.confirmVerificationSas(tracked.id);
+
+    expect(summary.error).toMatch(/verifier rejected mid-protocol/);
   });
 
   it("does not auto-confirm SAS for verifications initiated by this device", async () => {

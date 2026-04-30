@@ -18,6 +18,7 @@ type MockDockerChild = EventEmitter & {
 const spawnState = vi.hoisted(() => ({
   calls: [] as SpawnCall[],
   imageExists: true,
+  inspectError: "",
 }));
 
 function createMockDockerChild(): MockDockerChild {
@@ -40,7 +41,9 @@ function spawnDockerProcess(command: string, args: string[]) {
     stderr = `unexpected command: ${command}`;
   } else if (args[0] === "image" && args[1] === "inspect") {
     code = spawnState.imageExists ? 0 : 1;
-    stderr = spawnState.imageExists ? "" : `Error response from daemon: No such image: ${args[2]}`;
+    stderr = spawnState.imageExists
+      ? ""
+      : spawnState.inspectError || `Error response from daemon: No such image: ${args[2]}`;
   } else if (args[0] === "pull" || args[0] === "tag") {
     code = 0;
   } else {
@@ -79,6 +82,7 @@ describe("ensureDockerImage", () => {
   beforeEach(async () => {
     spawnState.calls.length = 0;
     spawnState.imageExists = true;
+    spawnState.inspectError = "";
     await loadFreshDockerModuleForTest();
   });
 
@@ -106,6 +110,23 @@ describe("ensureDockerImage", () => {
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toContain("scripts/sandbox-setup.sh");
     expect((err as Error).message).toContain("python3");
+    expect(spawnState.calls).toEqual([
+      {
+        command: "docker",
+        args: ["image", "inspect", DEFAULT_SANDBOX_IMAGE],
+      },
+    ]);
+  });
+
+  it("throws when the Docker daemon is unavailable during image inspection", async () => {
+    spawnState.imageExists = false;
+    spawnState.inspectError =
+      "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?";
+
+    await expect(ensureDockerImage(DEFAULT_SANDBOX_IMAGE)).rejects.toThrow(
+      "Docker daemon is not available",
+    );
+
     expect(spawnState.calls).toEqual([
       {
         command: "docker",

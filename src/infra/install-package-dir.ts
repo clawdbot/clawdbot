@@ -3,7 +3,7 @@ import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { fileExists } from "./archive.js";
 import { assertCanonicalPathWithinBase } from "./install-safe-path.js";
-import { createNpmProjectInstallEnv } from "./npm-install-env.js";
+import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
 
 const INSTALL_BASE_CHANGED_ERROR_MESSAGE = "install base directory changed during install";
 const INSTALL_BASE_CHANGED_ABORT_WARNING =
@@ -261,15 +261,11 @@ export async function installPackageDir(params: {
             // Verified on Blacksmith Ubuntu/Node 24/npm 11: `--silent` can make npm fail
             // with empty stdout/stderr for bad specs like `workspace:^`; `--loglevel=error`
             // stays quiet on success while preserving the actionable npm failure text.
-            ["npm", "install", "--omit=dev", "--loglevel=error", "--ignore-scripts"],
+            ["npm", ...createSafeNpmInstallArgs({ omitDev: true, loglevel: "error" })],
             {
               timeoutMs: Math.max(params.timeoutMs, 300_000),
               cwd: stageDir,
-              env: {
-                ...createNpmProjectInstallEnv(process.env),
-                COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-                NPM_CONFIG_IGNORE_SCRIPTS: "true",
-              },
+              env: createSafeNpmInstallEnv(process.env),
             },
           );
         } finally {

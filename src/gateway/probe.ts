@@ -3,6 +3,7 @@ import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
+import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, GatewayClientRequestError } from "./client.js";
 import { READ_SCOPE } from "./method-scopes.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "./protocol/client-info.js";
@@ -185,19 +186,21 @@ export async function probeGateway(opts: {
       return null;
     }
   })();
+  const initialProbeTimeoutMs = clampProbeTimeoutMs(opts.timeoutMs);
 
   return await new Promise<GatewayProbeResult>((resolve) => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    const startAbort = new AbortController();
     const clearProbeTimer = () => {
       if (timer) {
         clearTimeout(timer);
         timer = null;
       }
     };
-    const armProbeTimer = (onTimeout: () => void) => {
+    const armProbeTimer = (onTimeout: () => void, timeoutMs = initialProbeTimeoutMs) => {
       clearProbeTimer();
-      timer = setTimeout(onTimeout, clampProbeTimeoutMs(opts.timeoutMs));
+      timer = setTimeout(onTimeout, resolveSafeTimeoutDelayMs(timeoutMs));
     };
     const settle = (
       result: Omit<GatewayProbeResult, "url" | "connectErrorDetails"> & {
@@ -208,6 +211,7 @@ export async function probeGateway(opts: {
         return;
       }
       settled = true;
+      startAbort.abort();
       clearProbeTimer();
       client.stop();
       const { connectErrorDetails: resultConnectErrorDetails, ...rest } = result;
@@ -373,6 +377,36 @@ export async function probeGateway(opts: {
       });
     });
 
-    client.start();
+    void startGatewayClientWhenEventLoopReady(client, {
+      timeoutMs: initialProbeTimeoutMs,
+      signal: startAbort.signal,
+    })
+      .then((readiness) => {
+        if (settled || readiness.ready || readiness.aborted) {
+          return;
+        }
+        settleProbe({
+          ok: false,
+          error: "timeout",
+          health: null,
+          status: null,
+          presence: null,
+          configSnapshot: null,
+        });
+      })
+      .catch((err) => {
+        if (settled) {
+          return;
+        }
+        connectError = formatErrorMessage(err);
+        settleProbe({
+          ok: false,
+          error: connectError,
+          health: null,
+          status: null,
+          presence: null,
+          configSnapshot: null,
+        });
+      });
   });
 }

@@ -46,6 +46,7 @@ import {
   isInvalidStreamingEventOrderError,
   isLikelyHttpErrorText,
   isRawApiErrorPayload,
+  isStreamingJsonParseError,
   sanitizeUserFacingText,
 } from "./sanitize-user-facing-text.js";
 import type { FailoverReason } from "./types.js";
@@ -1137,6 +1138,10 @@ export function formatAssistantErrorText(
 
   if (isLikelyHttpErrorText(raw) || isRawApiErrorPayload(raw)) {
     return formatRawAssistantErrorForUi(raw);
+  }
+
+  if (isStreamingJsonParseError(raw)) {
+    return "LLM streaming response contained a malformed fragment. Please try again.";
   }
 
   // Never return raw unhandled errors - log for debugging but return safe message

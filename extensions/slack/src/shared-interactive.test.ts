@@ -36,7 +36,7 @@ describe("buildSlackInteractiveBlocks", () => {
     const blocks = buildSlackInteractiveBlocks({
       blocks: [
         { type: "text", text: "y".repeat(3100) },
-        { type: "select", placeholder: long, options: [{ label: long, value: long }] },
+        { type: "select", placeholder: long, options: [{ label: long, value: "valid" }] },
         { type: "buttons", buttons: [{ label: long, value: long }] },
       ],
     });
@@ -81,6 +81,136 @@ describe("buildSlackInteractiveBlocks", () => {
     expect(buttonBlock.elements?.[0]?.value).toBe("pluginbind:approval-123:o");
     expect(selectBlock.elements?.[0]?.action_id).toBe("openclaw:reply_select:1");
     expect(selectBlock.elements?.[0]?.options?.[0]?.value).toBe("codex:approve:thread-1");
+  });
+
+  it("drops Slack select options with values beyond Block Kit limits", () => {
+    const blocks = buildSlackInteractiveBlocks({
+      blocks: [
+        {
+          type: "select",
+          options: [
+            { label: "Allowed", value: "a".repeat(150) },
+            { label: "Too long", value: "b".repeat(151) },
+          ],
+        },
+      ],
+    });
+
+    const selectBlock = blocks[0] as {
+      elements?: Array<{ options?: Array<{ value?: string }> }>;
+    };
+
+    expect(selectBlock.elements?.[0]?.options).toHaveLength(1);
+    expect(selectBlock.elements?.[0]?.options?.[0]?.value).toBe("a".repeat(150));
+  });
+
+  it("omits Slack select blocks when every option value exceeds Block Kit limits", () => {
+    expect(
+      buildSlackInteractiveBlocks({
+        blocks: [
+          {
+            type: "select",
+            options: [{ label: "Too long", value: "x".repeat(151) }],
+          },
+        ],
+      }),
+    ).toEqual([]);
+  });
+
+  it("caps Slack static selects at the Block Kit option limit", () => {
+    const blocks = buildSlackInteractiveBlocks({
+      blocks: [
+        {
+          type: "select",
+          options: Array.from({ length: 101 }, (_entry, index) => ({
+            label: `Option ${index + 1}`,
+            value: `v${index + 1}`,
+          })),
+        },
+      ],
+    });
+
+    const selectBlock = blocks[0] as {
+      elements?: Array<{ options?: Array<{ value?: string }> }>;
+    };
+
+    expect(selectBlock.elements?.[0]?.options).toHaveLength(100);
+    expect(selectBlock.elements?.[0]?.options?.at(-1)?.value).toBe("v100");
+  });
+
+  it("drops value-only Slack buttons with values beyond Block Kit limits", () => {
+    const blocks = buildSlackInteractiveBlocks({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            { label: "Allowed", value: "a".repeat(2000) },
+            { label: "Too long", value: "b".repeat(2001) },
+            { label: "Docs", value: "c".repeat(2001), url: "https://example.com/docs" },
+          ],
+        },
+      ],
+    });
+
+    const buttonBlock = blocks[0] as {
+      elements?: Array<{ value?: string; url?: string }>;
+    };
+
+    expect(buttonBlock.elements).toHaveLength(2);
+    expect(buttonBlock.elements?.[0]?.value).toBe("a".repeat(2000));
+    expect(buttonBlock.elements?.[1]).toEqual(
+      expect.objectContaining({ url: "https://example.com/docs" }),
+    );
+    expect(buttonBlock.elements?.[1]).not.toHaveProperty("value");
+  });
+
+  it("drops Slack button URLs beyond Block Kit limits", () => {
+    const validUrl = `https://example.com/${"a".repeat(2980)}`;
+    const longUrl = `https://example.com/${"b".repeat(2981)}`;
+    const blocks = buildSlackInteractiveBlocks({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            { label: "Allowed", url: validUrl },
+            { label: "Too long", url: longUrl },
+            { label: "Fallback action", value: "fallback", url: longUrl },
+          ],
+        },
+      ],
+    });
+
+    const buttonBlock = blocks[0] as {
+      elements?: Array<{ value?: string; url?: string }>;
+    };
+
+    expect(validUrl).toHaveLength(3000);
+    expect(longUrl).toHaveLength(3001);
+    expect(buttonBlock.elements).toHaveLength(2);
+    expect(buttonBlock.elements?.[0]?.url).toBe(validUrl);
+    expect(buttonBlock.elements?.[1]?.value).toBe("fallback");
+    expect(buttonBlock.elements?.[1]).not.toHaveProperty("url");
+  });
+
+  it("caps Slack actions blocks at the Block Kit element limit", () => {
+    const blocks = buildSlackInteractiveBlocks({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: Array.from({ length: 26 }, (_entry, index) => ({
+            label: `Option ${index + 1}`,
+            value: `v${index + 1}`,
+          })),
+        },
+      ],
+    });
+
+    const buttonBlock = blocks[0] as {
+      elements?: Array<{ value?: string }>;
+    };
+
+    expect(buttonBlock.elements).toHaveLength(25);
+    expect(buttonBlock.elements?.at(-1)?.value).toBe("v25");
   });
 
   it("preserves URL-only buttons as Slack link buttons", () => {

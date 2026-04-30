@@ -104,6 +104,7 @@ export async function handleDirectiveOnly(
     aliasIndex,
     allowedModelCatalog,
     resetModelOverride,
+    workspaceDir: params.workspaceDir,
     surface: params.surface,
     sessionEntry,
   });

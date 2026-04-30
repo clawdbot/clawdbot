@@ -112,11 +112,9 @@ export function collectPackageDistImportErrors(params) {
   const files = [...new Set(params.files.map(normalizePackagePath))];
   const fileSet = new Set(files);
   const errors = [];
+  const imports = params.imports ?? collectPackageDistImports({ files, readText: params.readText });
 
-  for (const { importerPath, importedPath } of collectPackageDistImports({
-    files,
-    readText: params.readText,
-  })) {
+  for (const { importerPath, importedPath } of imports) {
     if (!fileSet.has(importedPath)) {
       errors.push(`${importerPath} imports missing ${importedPath}`);
     }
@@ -150,19 +148,22 @@ export function expandPackageDistImportClosure(params) {
   const files = [...new Set(params.files.map(normalizePackagePath))];
   const fileSet = new Set(files);
   const expectedSet = new Set(params.seedFiles.map(normalizePackagePath));
-  let changed = true;
+  const imports = params.imports ?? collectPackageDistImports({ files, readText: params.readText });
+  const importsByImporter = new Map();
+  for (const { importerPath, importedPath } of imports) {
+    const importerImports = importsByImporter.get(importerPath) ?? [];
+    importerImports.push(importedPath);
+    importsByImporter.set(importerPath, importerImports);
+  }
 
-  while (changed) {
-    changed = false;
-    for (const { importedPath } of collectPackageDistImports({
-      files: [...expectedSet].filter((file) => fileSet.has(file)),
-      readText: params.readText,
-    })) {
-      if (!fileSet.has(importedPath) || expectedSet.has(importedPath)) {
-        continue;
+  const queue = [...expectedSet].filter((file) => fileSet.has(file));
+  for (let index = 0; index < queue.length; index += 1) {
+    const importerPath = queue[index];
+    for (const importedPath of importsByImporter.get(importerPath) ?? []) {
+      if (fileSet.has(importedPath) && !expectedSet.has(importedPath)) {
+        expectedSet.add(importedPath);
+        queue.push(importedPath);
       }
-      expectedSet.add(importedPath);
-      changed = true;
     }
   }
 

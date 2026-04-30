@@ -21,7 +21,7 @@
   "devDependencies": {
     "@types/markdown-it": "^14.1.2",
     "@vitest/browser-playwright": "4.1.5",
-    "jsdom": "^29.0.2",
+    "jsdom": "^29.1.0",
     "playwright": "^1.59.1",
     "vite": "8.0.10",
     "vitest": "4.1.5"

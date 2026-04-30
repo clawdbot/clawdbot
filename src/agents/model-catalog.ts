@@ -30,6 +30,7 @@ type DiscoveredModel = {
   contextWindow?: number;
   reasoning?: boolean;
   input?: ModelInputType[];
+  compat?: ModelCatalogEntry["compat"];
 };
 
 type PiSdkModule = typeof import("./pi-model-discovery-runtime.js");
@@ -61,11 +62,11 @@ function loadModelSuppression() {
 export function resetModelCatalogCache() {
   modelCatalogPromise = null;
   hasLoggedModelCatalogError = false;
-  importPiSdk = defaultImportPiSdk;
 }
 
 export function resetModelCatalogCacheForTest() {
   resetModelCatalogCache();
+  importPiSdk = defaultImportPiSdk;
 }
 
 // Test-only escape hatch: allow mocking the dynamic import to simulate transient failures.
@@ -149,7 +150,7 @@ export async function loadModelCatalog(params?: {
       const piSdk = await importPiSdk();
       logStage("pi-sdk-imported");
       const agentDir = resolveOpenClawAgentDir();
-      const { shouldSuppressBuiltInModel } = await loadModelSuppression();
+      const { buildShouldSuppressBuiltInModel } = await loadModelSuppression();
       logStage("catalog-deps-ready");
       const authStorage = piSdk.discoverAuthStorage(
         agentDir,
@@ -164,6 +165,10 @@ export async function loadModelCatalog(params?: {
       logStage("registry-ready");
       const entries = Array.isArray(registry) ? registry : registry.getAll();
       logStage("registry-read", `entries=${entries.length}`);
+
+      const shouldSuppressBuiltInModel = buildShouldSuppressBuiltInModel({ config: cfg });
+      logStage("suppress-resolver-ready");
+
       for (const entry of entries) {
         const id = normalizeOptionalString(entry?.id) ?? "";
         if (!id) {
@@ -173,7 +178,7 @@ export async function loadModelCatalog(params?: {
         if (!provider) {
           continue;
         }
-        if (shouldSuppressBuiltInModel({ provider, id, config: cfg })) {
+        if (shouldSuppressBuiltInModel({ provider, id })) {
           continue;
         }
         const name = normalizeOptionalString(entry?.name ?? id) || id;
@@ -183,7 +188,8 @@ export async function loadModelCatalog(params?: {
             : undefined;
         const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
         const input = Array.isArray(entry?.input) ? entry.input : undefined;
-        models.push({ id, name, provider, contextWindow, reasoning, input });
+        const compat = entry?.compat && typeof entry.compat === "object" ? entry.compat : undefined;
+        models.push({ id, name, provider, contextWindow, reasoning, input, compat });
       }
       const supplemental = await augmentModelCatalogWithProviderPlugins({
         config: cfg,

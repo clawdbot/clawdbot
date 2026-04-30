@@ -8,6 +8,7 @@ import {
   resetConfigPendingChanges,
   runUpdate,
   saveConfig,
+  stageDefaultAgentConfigEntry,
   stageConfigPreset,
   updateConfigFormValue,
   type ConfigState,
@@ -476,6 +477,50 @@ describe("agent config helpers", () => {
         list: [{ id: "main" }],
       },
     });
+  });
+
+  it("sets default via agents.list[].default instead of agents.defaultId", () => {
+    const state = createState();
+    state.configSnapshot = {
+      config: {
+        agents: {
+          list: [{ id: "alpha", default: true }, { id: "beta" }],
+        },
+      },
+      valid: true,
+      issues: [],
+      raw: "{\n}\n",
+    };
+
+    const updated = stageDefaultAgentConfigEntry(state, "beta");
+
+    expect(updated).toBe(true);
+    expect(state.configFormDirty).toBe(true);
+    expect(state.configForm).toEqual({
+      agents: {
+        list: [{ id: "alpha" }, { id: "beta", default: true }],
+      },
+    });
+  });
+
+  it("does not stage agents.defaultId when the target agent is absent", () => {
+    const state = createState();
+    state.configSnapshot = {
+      config: {
+        agents: {
+          list: [{ id: "alpha", default: true }],
+        },
+      },
+      valid: true,
+      issues: [],
+      raw: "{\n}\n",
+    };
+
+    const updated = stageDefaultAgentConfigEntry(state, "beta");
+
+    expect(updated).toBe(false);
+    expect(state.configFormDirty).toBe(false);
+    expect(state.configForm).toBeNull();
   });
 });
 

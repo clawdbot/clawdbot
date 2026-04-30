@@ -8,6 +8,7 @@ import {
   resolveMainSessionKeyFromConfig,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { RunCronAgentTurnResult } from "../../cron/isolated-agent/run.types.js";
 import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -22,6 +23,18 @@ function resolveHookEventSessionKey(params: { cfg: OpenClawConfig; agentId?: str
   return params.agentId
     ? resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId })
     : resolveMainSessionKey(params.cfg);
+}
+
+function shouldAnnounceHookRunResult(params: {
+  deliver: boolean;
+  result: RunCronAgentTurnResult;
+}): boolean {
+  if (params.result.status !== "ok") {
+    return true;
+  }
+  return (
+    params.deliver && params.result.delivered !== true && params.result.deliveryAttempted !== true
+  );
 }
 
 export function createGatewayHooksRequestHandler(params: {
@@ -46,6 +59,7 @@ export function createGatewayHooksRequestHandler(params: {
     const sessionKey = value.sessionKey;
     const safeName = sanitizeInboundSystemTags(value.name);
     const jobId = randomUUID();
+    const runId = randomUUID();
     const now = Date.now();
     const delivery = value.deliver
       ? {
@@ -77,7 +91,6 @@ export function createGatewayHooksRequestHandler(params: {
       state: { nextRunAtMs: now },
     };
 
-    const runId = randomUUID();
     let hookEventSessionKey: string | undefined;
     void (async () => {
       try {
@@ -101,7 +114,8 @@ export function createGatewayHooksRequestHandler(params: {
           result.status;
         const prefix =
           result.status === "ok" ? `Hook ${safeName}` : `Hook ${safeName} (${result.status})`;
-        if (!result.delivered) {
+        const shouldAnnounce = shouldAnnounceHookRunResult({ deliver: value.deliver, result });
+        if (shouldAnnounce) {
           const eventSessionKey = hookEventSessionKey ?? resolveMainSessionKeyFromConfig();
           enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
             sessionKey: eventSessionKey,
@@ -110,6 +124,16 @@ export function createGatewayHooksRequestHandler(params: {
           if (value.wakeMode === "now") {
             requestHeartbeatNow({ reason: `hook:${jobId}` });
           }
+        } else if (result.status === "ok" && !value.deliver) {
+          logHooks.info("hook agent run completed without announcement", {
+            sourcePath: value.sourcePath,
+            name: safeName,
+            runId,
+            jobId,
+            agentId: value.agentId,
+            sessionKey,
+            completedAt: new Date().toISOString(),
+          });
         }
       } catch (err) {
         logHooks.warn(`hook agent failed: ${String(err)}`);

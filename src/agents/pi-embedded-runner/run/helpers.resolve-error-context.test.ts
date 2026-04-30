@@ -22,4 +22,17 @@ describe("resolveActiveErrorContext", () => {
 
     expect(result).toEqual({ provider: "openai", model: "gpt-5.4-codex" });
   });
+
+  it("ignores the embedded PI harness provider when the model provider is known", () => {
+    const result = resolveActiveErrorContext({
+      provider: "openrouter",
+      model: "openai/gpt-5.4",
+      assistant: {
+        provider: "pi",
+        model: "pi",
+      },
+    });
+
+    expect(result).toEqual({ provider: "openrouter", model: "openai/gpt-5.4" });
+  });
 });

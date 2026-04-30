@@ -1,7 +1,7 @@
 ---
 summary: "Import map, registration API reference, and SDK architecture"
 title: "Plugin SDK overview"
-sidebarTitle: "SDK overview"
+sidebarTitle: "Plugin SDK overview"
 read_when:
   - You need to know which SDK subpath to import from
   - You want a reference for all registration methods on OpenClawPluginApi
@@ -10,6 +10,14 @@ read_when:
 
 The plugin SDK is the typed contract between plugins and core. This page is the
 reference for **what to import** and **what you can register**.
+
+<Note>
+  This page is for plugin authors using `openclaw/plugin-sdk/*` inside
+  OpenClaw. For external apps, scripts, dashboards, CI jobs, and IDE extensions
+  that want to run agents through the Gateway, use the
+  [OpenClaw App SDK](/concepts/openclaw-sdk) and the `@openclaw/sdk` package
+  instead.
+</Note>
 
 <Tip>
 Looking for a how-to guide instead? Start with [Building plugins](/plugins/building-plugins), use [Channel plugins](/plugins/sdk-channel-plugins) for channel plugins, [Provider plugins](/plugins/sdk-provider-plugins) for provider plugins, and [Plugin hooks](/plugins/hooks) for tool or lifecycle hook plugins.
@@ -346,7 +354,7 @@ Facade-loaded bundled plugin public surfaces (`api.ts`, `runtime-api.ts`,
 `index.ts`, `setup-entry.ts`, and similar public entry files) prefer the
 active runtime config snapshot when OpenClaw is already running. If no runtime
 snapshot exists yet, they fall back to the resolved config file on disk.
-Packaged bundled plugin facades should be loaded through the OpenClaw SDK
+Packaged bundled plugin facades should be loaded through OpenClaw's plugin
 facade loaders; direct imports from `dist/extensions/...` bypass staged runtime
 dependency mirrors that packaged installs use for plugin-owned dependencies.
 

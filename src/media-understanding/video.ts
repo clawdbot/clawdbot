@@ -1,4 +1,4 @@
-import { DEFAULT_VIDEO_MAX_BASE64_BYTES } from "./defaults.js";
+import { DEFAULT_VIDEO_MAX_BASE64_BYTES } from "./defaults.constants.js";
 
 export function estimateBase64Size(bytes: number): number {
   return Math.ceil(bytes / 3) * 4;

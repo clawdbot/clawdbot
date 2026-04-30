@@ -111,7 +111,7 @@ afterEach(() => {
 });
 
 describe("bundled plugin public surface loader", () => {
-  it("uses transpiled Jiti import for Windows dist public artifact loads", async () => {
+  it("uses native Jiti import for Windows dist public artifact loads", async () => {
     const createJiti = vi.fn(() => vi.fn(() => ({ marker: "windows-dist-ok" })));
     vi.doMock("jiti", () => ({
       createJiti,
@@ -140,7 +140,7 @@ describe("bundled plugin public surface loader", () => {
       expect(createJiti).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({
-          tryNative: false,
+          tryNative: true,
         }),
       );
     } finally {

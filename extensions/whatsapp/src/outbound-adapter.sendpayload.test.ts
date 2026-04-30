@@ -167,11 +167,11 @@ describe("whatsappOutbound sendPayload", () => {
     expect(sendWhatsApp).not.toHaveBeenCalled();
   });
 
-  it("suppresses routed error payloads when error text is hidden", async () => {
+  it("suppresses routed error payloads", async () => {
     const sendWhatsApp = vi.fn();
 
     const result = await whatsappOutbound.sendPayload!({
-      cfg: { channels: { whatsapp: { exposeErrorText: false } } },
+      cfg: {},
       to: "5511999999999@c.us",
       text: "",
       payload: { text: "provider exploded", isError: true },
@@ -180,35 +180,6 @@ describe("whatsappOutbound sendPayload", () => {
 
     expect(result).toEqual({ channel: "whatsapp", messageId: "" });
     expect(sendWhatsApp).not.toHaveBeenCalled();
-  });
-
-  it("uses account-level error text visibility for routed payloads", async () => {
-    const sendWhatsApp = vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" }));
-
-    await whatsappOutbound.sendPayload!({
-      cfg: {
-        channels: {
-          whatsapp: {
-            exposeErrorText: false,
-            accounts: {
-              work: { exposeErrorText: true },
-            },
-          },
-        },
-      },
-      accountId: "work",
-      to: "5511999999999@c.us",
-      text: "",
-      payload: { text: "provider exploded", isError: true },
-      deps: { sendWhatsApp },
-    });
-
-    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-    expect(sendWhatsApp).toHaveBeenCalledWith(
-      "5511999999999@c.us",
-      "provider exploded",
-      expect.any(Object),
-    );
   });
 
   it("sanitizes HTML-only text to whitespace-only payload", () => {

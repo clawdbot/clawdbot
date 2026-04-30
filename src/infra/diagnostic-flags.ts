@@ -3,25 +3,33 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const DIAGNOSTICS_ENV = "OPENCLAW_DIAGNOSTICS";
 
-function parseEnvFlags(raw?: string): string[] {
+type ParsedEnvFlags = {
+  flags: string[];
+  disablesAll: boolean;
+};
+
+function parseEnvFlags(raw?: string): ParsedEnvFlags {
   if (!raw) {
-    return [];
+    return { flags: [], disablesAll: false };
   }
   const trimmed = raw.trim();
   const lowered = normalizeLowercaseStringOrEmpty(trimmed);
   if (!lowered) {
-    return [];
+    return { flags: [], disablesAll: false };
   }
   if (["0", "false", "off", "none"].includes(lowered)) {
-    return [];
+    return { flags: [], disablesAll: true };
   }
   if (["1", "true", "all", "*"].includes(lowered)) {
-    return ["*"];
+    return { flags: ["*"], disablesAll: false };
   }
-  return trimmed
-    .split(/[,\s]+/)
-    .map((value) => normalizeLowercaseStringOrEmpty(value))
-    .filter(Boolean);
+  return {
+    flags: trimmed
+      .split(/[,\s]+/)
+      .map((value) => normalizeLowercaseStringOrEmpty(value))
+      .filter(Boolean),
+    disablesAll: false,
+  };
 }
 
 function uniqueFlags(flags: string[]): string[] {
@@ -44,7 +52,10 @@ export function resolveDiagnosticFlags(
 ): string[] {
   const configFlags = Array.isArray(cfg?.diagnostics?.flags) ? cfg?.diagnostics?.flags : [];
   const envFlags = parseEnvFlags(env[DIAGNOSTICS_ENV]);
-  return uniqueFlags([...configFlags, ...envFlags]);
+  if (envFlags.disablesAll) {
+    return [];
+  }
+  return uniqueFlags([...configFlags, ...envFlags.flags]);
 }
 
 export function matchesDiagnosticFlag(flag: string, enabledFlags: string[]): boolean {

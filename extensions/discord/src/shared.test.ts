@@ -1,5 +1,6 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDiscordPluginBase } from "./shared.js";
+import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -54,5 +55,105 @@ describe("createDiscordPluginBase", () => {
       'duplicate bot token; using account "work"',
     );
     expect(plugin.config.isEnabled?.(workAccount, cfg)).toBe(true);
+  });
+});
+
+describe("discordConfigAdapter", () => {
+  it("resolves top-level allowFrom before legacy dm.allowFrom", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            default: {
+              allowFrom: ["123"],
+              dm: { allowFrom: ["456"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual(["123"]);
+  });
+
+  it("falls back to legacy dm.allowFrom", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            default: {
+              dm: { allowFrom: ["456"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual(["456"]);
+  });
+
+  it("prefers account legacy dm.allowFrom over inherited root allowFrom", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          allowFrom: ["root"],
+          accounts: {
+            work: {
+              dm: { allowFrom: ["account-legacy"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "work" })).toEqual([
+      "account-legacy",
+    ]);
+  });
+
+  it("coerces numeric allowFrom entries at the config boundary", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            default: {
+              allowFrom: [123456789],
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([
+      "123456789",
+    ]);
+  });
+
+  it("keeps read-only accessors from resolving token SecretRefs", () => {
+    const cfg = {
+      secrets: {
+        providers: {
+          discord_token: {
+            source: "file",
+            path: "/tmp/openclaw-missing-discord-token",
+            mode: "singleValue",
+          },
+        },
+      },
+      channels: {
+        discord: {
+          token: { source: "file", provider: "discord_token", id: "value" },
+          allowFrom: ["1128540374256849009"],
+          defaultTo: "1498959610751750304",
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([
+      "1128540374256849009",
+    ]);
+    expect(discordConfigAdapter.resolveDefaultTo?.({ cfg, accountId: "default" })).toBe(
+      "1498959610751750304",
+    );
   });
 });

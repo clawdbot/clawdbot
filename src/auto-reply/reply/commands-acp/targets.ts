@@ -59,13 +59,13 @@ export async function resolveAcpTargetSessionKey(params: {
   const token = normalizeOptionalString(params.token) ?? "";
   if (token) {
     const resolved = await resolveSessionKeyByToken(token);
-    if (!resolved) {
-      return {
-        ok: false,
-        error: `Unable to resolve session target: ${token}`,
-      };
+    if (resolved) {
+      return { ok: true, sessionKey: resolved };
     }
-    return { ok: true, sessionKey: resolved };
+    // Token was supplied but could not be resolved as a session key/id/label.
+    // Fall through to thread-bound resolution so that callers that auto-fill
+    // the current thread ID as the token (e.g. Discord slash commands) still
+    // reach the correct session via the binding context.
   }
 
   const threadBound = resolveBoundAcpThreadSessionKey(params.commandParams);
@@ -73,6 +73,13 @@ export async function resolveAcpTargetSessionKey(params: {
     return {
       ok: true,
       sessionKey: threadBound,
+    };
+  }
+
+  if (token) {
+    return {
+      ok: false,
+      error: `Unable to resolve session target: ${token}`,
     };
   }
 

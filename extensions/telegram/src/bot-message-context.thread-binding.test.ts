@@ -93,7 +93,7 @@ describe("buildTelegramMessageContext thread binding override", () => {
       }),
     );
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:codex-acp:session-1");
-    expect(recordInboundSessionMock.mock.calls[0]?.[0]).toMatchObject({
+    expect(ctx?.turn.record).toMatchObject({
       updateLastRoute: undefined,
     });
   });

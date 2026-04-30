@@ -113,7 +113,7 @@ describe("planAllModelListSources", () => {
     expect(mocks.loadProviderIndexCatalogRowsForList).not.toHaveBeenCalled();
   });
 
-  it("keeps scoped runtime catalog fallback separate from broad registry loading", async () => {
+  it("allows scoped runtime catalog plans to fall back to registry rows", async () => {
     const { planAllModelListSources } = await import("./list.source-plan.js");
 
     await expect(
@@ -126,7 +126,7 @@ describe("planAllModelListSources", () => {
       kind: "provider-runtime-scoped",
       requiresInitialRegistry: false,
       skipRuntimeModelSuppression: false,
-      fallbackToRegistryWhenEmpty: false,
+      fallbackToRegistryWhenEmpty: true,
     });
   });
 

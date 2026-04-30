@@ -26,6 +26,9 @@ export type ThinkingCatalogEntry = {
   provider: string;
   id: string;
   reasoning?: boolean;
+  compat?: {
+    supportedReasoningEfforts?: readonly string[] | null;
+  } | null;
 };
 
 export const BASE_THINKING_LEVELS: ThinkLevel[] = ["off", "minimal", "low", "medium", "high"];

@@ -3,7 +3,11 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { MigrationApplyResult, MigrationItem } from "../plugins/types.js";
+import type {
+  MigrationApplyResult,
+  MigrationItem,
+  MigrationProviderContext,
+} from "../plugins/types.js";
 import {
   MIGRATION_REASON_MISSING_SOURCE_OR_TARGET,
   MIGRATION_REASON_TARGET_EXISTS,
@@ -13,6 +17,54 @@ import {
 } from "./migration.js";
 
 export type { MigrationApplyResult, MigrationItem } from "../plugins/types.js";
+
+export function withCachedMigrationConfigRuntime(
+  runtime: MigrationProviderContext["runtime"] | undefined,
+  fallbackConfig: MigrationProviderContext["config"],
+): MigrationProviderContext["runtime"] | undefined {
+  if (!runtime) {
+    return undefined;
+  }
+  const configApi = runtime.config;
+  if (!configApi?.current || !configApi.mutateConfigFile) {
+    return runtime;
+  }
+  let cachedConfig: MigrationProviderContext["config"] | undefined;
+  const current = (): ReturnType<typeof configApi.current> => {
+    cachedConfig ??= structuredClone(
+      (configApi.current() ?? fallbackConfig) as MigrationProviderContext["config"],
+    );
+    return cachedConfig;
+  };
+  return {
+    ...runtime,
+    config: {
+      ...runtime.config,
+      current,
+      mutateConfigFile: async (params) => {
+        const result = await configApi.mutateConfigFile({
+          ...params,
+          mutate: async (draft, context) => {
+            const mutationResult = await params.mutate(draft, context);
+            cachedConfig = structuredClone(draft);
+            return mutationResult;
+          },
+        });
+        cachedConfig = structuredClone(result.nextConfig);
+        return result;
+      },
+      ...(configApi.replaceConfigFile
+        ? {
+            replaceConfigFile: async (params) => {
+              const result = await configApi.replaceConfigFile(params);
+              cachedConfig = structuredClone(result.nextConfig);
+              return result;
+            },
+          }
+        : {}),
+    },
+  };
+}
 
 async function exists(filePath: string): Promise<boolean> {
   try {

@@ -187,12 +187,12 @@ export type SlackAccountConfig = {
   actions?: SlackActionConfig;
   slashCommand?: SlackSlashCommandConfig;
   /**
-   * Alias for dm.policy (prefer this so it inherits cleanly via base->account shallow merge).
+   * Canonical DM policy key. Doctor migrates legacy channels.slack.dm.policy here.
    * Legacy key: channels.slack.dm.policy.
    */
   dmPolicy?: DmPolicy;
   /**
-   * Alias for dm.allowFrom (prefer this so it inherits cleanly via base->account shallow merge).
+   * Canonical DM allowlist. Doctor migrates legacy channels.slack.dm.allowFrom here.
    * Legacy key: channels.slack.dm.allowFrom.
    */
   allowFrom?: Array<string | number>;
