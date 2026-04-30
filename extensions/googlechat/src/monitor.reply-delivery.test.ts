@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./api.js", () => ({
   deleteGoogleChatMessage: mocks.deleteGoogleChatMessage,
+  isGoogleChatMessageResourceName: (value: string | undefined) =>
+    typeof value === "string" && /^spaces\/[^/]+\/messages\/[^/]+$/.test(value),
   isGoogleChatThreadResourceName: (value: string | undefined) =>
     typeof value === "string" && /^spaces\/[^/]+\/threads\/[^/]+$/.test(value),
   sendGoogleChatMessage: mocks.sendGoogleChatMessage,
@@ -132,7 +134,7 @@ describe("Google Chat reply delivery", () => {
     });
   });
 
-  it("falls back to the inbound thread when no reply target is supplied", async () => {
+  it("does not fall back to the inbound thread when no reply target is supplied", async () => {
     const core = createCore({ chunks: ["only chunk"] });
     const runtime = createRuntime();
     mocks.sendGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/sent" });
@@ -148,7 +150,27 @@ describe("Google Chat reply delivery", () => {
     });
 
     expect(mocks.sendGoogleChatMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ thread: "spaces/AAA/threads/inbound-thread" }),
+      expect.objectContaining({ thread: undefined }),
+    );
+  });
+
+  it("does not fall back to the inbound thread for malformed reply targets", async () => {
+    const core = createCore({ chunks: ["only chunk"] });
+    const runtime = createRuntime();
+    mocks.sendGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/sent" });
+
+    await deliverGoogleChatReply({
+      payload: { text: "only chunk", replyToId: "spaces/AAA/not-a-thread/current" },
+      account,
+      spaceId: "spaces/AAA",
+      runtime,
+      core,
+      config,
+      inboundThreadId: "spaces/AAA/threads/inbound-thread",
+    });
+
+    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ thread: undefined }),
     );
   });
 

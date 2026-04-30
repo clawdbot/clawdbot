@@ -503,6 +503,7 @@ describe("googlechatPlugin threading", () => {
       cfg,
       context: { MessageThreadId: 12345 },
     });
+    expect(result.replyToMode).toBe("off");
     expect(result.currentThreadTs).toBeUndefined();
     expect(result.currentMessageId).toBeUndefined();
     expect(
@@ -516,6 +517,7 @@ describe("googlechatPlugin threading", () => {
   it("returns an empty tool context when no inbound thread is present", () => {
     const cfg = createGoogleChatCfg();
     const context = googlechatThreadingAdapter.buildToolContext({ cfg, context: {} });
+    expect(context.replyToMode).toBe("off");
     expect(context.currentThreadTs).toBeUndefined();
     expect(context.currentMessageId).toBeUndefined();
   });
@@ -548,6 +550,83 @@ describe("googlechatPlugin threading", () => {
         threadId: undefined,
       }),
     ).toBeNull();
+    expect(
+      googlechatThreadingAdapter.resolveReplyTransport?.({
+        cfg: {} as OpenClawConfig,
+        replyToId: undefined,
+        threadId: "spaces/AAA/threads/inbound",
+      }),
+    ).toBeNull();
+    expect(
+      googlechatThreadingAdapter.resolveReplyTransport?.({
+        cfg: {} as OpenClawConfig,
+        replyToId: "spaces/AAA/not-a-thread/current",
+        threadId: "spaces/AAA/threads/inbound",
+      }),
+    ).toBeNull();
+  });
+
+  it("resolves an auto thread only when reply mode allows implicit tool threading", () => {
+    expect(
+      googlechatThreadingAdapter.resolveAutoThreadId?.({
+        cfg: {} as OpenClawConfig,
+        to: "spaces/AAA",
+        toolContext: {
+          currentChannelId: "spaces/AAA",
+          currentThreadTs: "spaces/AAA/threads/inbound",
+          replyToMode: "all",
+        },
+        replyToId: "spaces/AAA/messages/current",
+      }),
+    ).toBe("spaces/AAA/threads/inbound");
+    expect(
+      googlechatThreadingAdapter.resolveAutoThreadId?.({
+        cfg: {} as OpenClawConfig,
+        to: "spaces/AAA",
+        toolContext: {
+          currentChannelId: "spaces/AAA",
+          currentThreadTs: "spaces/AAA/threads/inbound",
+          replyToMode: "off",
+        },
+        replyToId: "spaces/AAA/messages/current",
+      }),
+    ).toBeUndefined();
+    expect(
+      googlechatThreadingAdapter.resolveAutoThreadId?.({
+        cfg: {} as OpenClawConfig,
+        to: "spaces/AAA",
+        toolContext: {
+          currentChannelId: "spaces/AAA",
+          currentThreadTs: "spaces/AAA/threads/inbound",
+          replyToMode: "all",
+        },
+        replyToId: "spaces/AAA/not-a-thread/current",
+      }),
+    ).toBeUndefined();
+    expect(
+      googlechatThreadingAdapter.resolveAutoThreadId?.({
+        cfg: {} as OpenClawConfig,
+        to: "spaces/AAA",
+        toolContext: {
+          currentChannelId: "spaces/AAA",
+          currentThreadTs: "spaces/AAA/threads/inbound",
+          replyToMode: "all",
+        },
+        replyToId: undefined,
+      }),
+    ).toBe("spaces/AAA/threads/inbound");
+    expect(
+      googlechatThreadingAdapter.resolveAutoThreadId?.({
+        cfg: {} as OpenClawConfig,
+        to: "spaces/BBB",
+        toolContext: {
+          currentChannelId: "spaces/AAA",
+          currentThreadTs: "spaces/AAA/threads/inbound",
+          replyToMode: "all",
+        },
+        replyToId: undefined,
+      }),
+    ).toBeUndefined();
   });
 });
 

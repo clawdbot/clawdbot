@@ -284,6 +284,8 @@ const updateGoogleChatMessageMock = vi.hoisted(() => vi.fn().mockResolvedValue({
 
 vi.mock("./api.js", () => ({
   sendGoogleChatMessage: sendGoogleChatMessageMock,
+  isGoogleChatMessageResourceName: (value: string | undefined) =>
+    typeof value === "string" && /^spaces\/[^/]+\/messages\/[^/]+$/.test(value),
   isGoogleChatThreadResourceName: (value: string | undefined) =>
     typeof value === "string" && /^spaces\/[^/]+\/threads\/[^/]+$/.test(value),
   updateGoogleChatMessage: updateGoogleChatMessageMock,

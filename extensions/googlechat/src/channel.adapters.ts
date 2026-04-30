@@ -41,7 +41,10 @@ import {
   type OpenClawConfig,
 } from "./channel.deps.runtime.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
-import { isGoogleChatThreadResourceName } from "./thread-resource.js";
+import {
+  isGoogleChatMessageResourceName,
+  isGoogleChatThreadResourceName,
+} from "./thread-resource.js";
 
 const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
@@ -72,18 +75,63 @@ function createGoogleChatSendReceipt(params: {
 
 export const formatAllowFromEntry = formatGoogleChatAllowFromEntry;
 
+type GoogleChatToolContext = ChannelThreadingToolContext & {
+  currentChannelId?: string;
+  currentMessageId?: string;
+  currentThreadTs?: string;
+  replyToMode: "off" | "first" | "all" | "batched";
+  hasRepliedRef?: { value: boolean };
+};
+
 function normalizeGoogleChatThreadResourceName(value?: string | number | null): string | undefined {
   return typeof value === "string" && isGoogleChatThreadResourceName(value) ? value : undefined;
+}
+
+function normalizeGoogleChatChannelTarget(value?: string | null): string | undefined {
+  const trimmed = normalizeOptionalString(value);
+  return trimmed ? (normalizeGoogleChatTarget(trimmed) ?? trimmed) : undefined;
 }
 
 function resolveGoogleChatOutboundThread(params: {
   threadId?: string | number | null;
   replyToId?: string | null;
+  allowThreadIdOnly?: boolean;
 }): string | undefined {
-  return (
-    normalizeGoogleChatThreadResourceName(params.replyToId) ??
-    normalizeGoogleChatThreadResourceName(params.threadId)
-  );
+  const explicitThread = normalizeGoogleChatThreadResourceName(params.replyToId);
+  if (explicitThread) {
+    return explicitThread;
+  }
+  if (isGoogleChatMessageResourceName(params.replyToId)) {
+    return normalizeGoogleChatThreadResourceName(params.threadId);
+  }
+  return params.allowThreadIdOnly
+    ? normalizeGoogleChatThreadResourceName(params.threadId)
+    : undefined;
+}
+
+function resolveGoogleChatToolReplyToMode(params: {
+  cfg?: OpenClawConfig;
+  accountId?: string | null;
+}): GoogleChatToolContext["replyToMode"] {
+  if (!params.cfg) {
+    return "off" as const;
+  }
+  const mode = resolveGoogleChatAccount({ cfg: params.cfg, accountId: params.accountId }).config
+    .replyToMode;
+  return mode === "first" || mode === "all" || mode === "batched" ? mode : "off";
+}
+
+function allowsImplicitToolThread(mode: string | undefined): boolean {
+  return mode === "first" || mode === "all";
+}
+
+function isCurrentGoogleChatTarget(params: {
+  to: string;
+  toolContext?: { currentChannelId?: string | null };
+}): boolean {
+  const target = normalizeGoogleChatChannelTarget(params.to);
+  const current = normalizeGoogleChatChannelTarget(params.toolContext?.currentChannelId);
+  return Boolean(target && current && target === current);
 }
 const collectGoogleChatGroupPolicyWarnings =
   createAllowlistProviderOpenWarningCollector<ResolvedGoogleChatAccount>({
@@ -149,27 +197,54 @@ export const googlechatThreadingAdapter = {
       account.config.replyToMode,
     fallback: "off" as const,
   },
-  buildToolContext: ({
-    cfg,
-    accountId,
-    context,
-    hasRepliedRef,
-  }: {
-    cfg: OpenClawConfig;
+  buildToolContext: (params: {
+    cfg?: OpenClawConfig;
     accountId?: string | null;
-    context: ChannelThreadingContext;
+    context?: ChannelThreadingContext;
     hasRepliedRef?: { value: boolean };
-  }): ChannelThreadingToolContext => {
-    const currentChannelId = normalizeGoogleChatTarget(context.To);
-    const currentThreadTs = normalizeGoogleChatThreadResourceName(context.MessageThreadId);
-
-    return {
-      currentChannelId,
-      currentMessageId: currentThreadTs,
-      currentThreadTs,
-      replyToMode: resolveGoogleChatAccount({ cfg, accountId }).config.replyToMode,
-      hasRepliedRef,
+  }): GoogleChatToolContext => {
+    const replyToMode = resolveGoogleChatToolReplyToMode(params);
+    const currentChannelId = normalizeGoogleChatChannelTarget(params.context?.To);
+    const currentThreadTs = normalizeGoogleChatThreadResourceName(params.context?.MessageThreadId);
+    const baseContext: GoogleChatToolContext = {
+      ...(currentChannelId ? { currentChannelId } : {}),
+      replyToMode,
+      ...(params.hasRepliedRef ? { hasRepliedRef: params.hasRepliedRef } : {}),
     };
+    if (!currentThreadTs) {
+      return baseContext;
+    }
+    return { ...baseContext, currentMessageId: currentThreadTs, currentThreadTs };
+  },
+  resolveAutoThreadId: ({
+    to,
+    replyToId,
+    toolContext,
+  }: {
+    cfg?: OpenClawConfig;
+    accountId?: string | null;
+    to: string;
+    replyToId?: string | null;
+    toolContext?: {
+      currentChannelId?: string | null;
+      currentThreadTs?: string | null;
+      replyToMode?: string | null;
+    };
+  }) => {
+    if (!allowsImplicitToolThread(toolContext?.replyToMode ?? undefined)) {
+      return undefined;
+    }
+    const inboundThread = normalizeGoogleChatThreadResourceName(toolContext?.currentThreadTs);
+    if (!inboundThread) {
+      return undefined;
+    }
+    if (replyToId && !isGoogleChatMessageResourceName(replyToId)) {
+      return undefined;
+    }
+    if (!replyToId && !isCurrentGoogleChatTarget({ to, toolContext })) {
+      return undefined;
+    }
+    return inboundThread;
   },
   resolveReplyTransport: ({
     threadId,
@@ -271,7 +346,11 @@ export const googlechatOutboundAdapter = {
         accountId,
       });
       const space = await resolveGoogleChatOutboundSpace({ account, target: to });
-      const thread = resolveGoogleChatOutboundThread({ threadId, replyToId });
+      const thread = resolveGoogleChatOutboundThread({
+        threadId,
+        replyToId,
+        allowThreadIdOnly: true,
+      });
       const { sendGoogleChatMessage } = await loadGoogleChatChannelRuntime();
       const result = await sendGoogleChatMessage({
         account,
