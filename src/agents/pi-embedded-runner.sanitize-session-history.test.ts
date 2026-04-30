@@ -1141,17 +1141,9 @@ describe("sanitizeSessionHistory", () => {
       "```",
     ].join("\n");
     const messages = castAgentMessages([
-      {
-        role: "user",
-        content: [{ type: "text", text: "First" }],
-        timestamp: nextTimestamp(),
-      },
+      makeUserMessage("First"),
       makeAssistantMessage([{ type: "text", text: metadataOnlyText }]),
-      {
-        role: "user",
-        content: [{ type: "text", text: "Second" }],
-        timestamp: nextTimestamp(),
-      },
+      makeUserMessage("Second"),
     ]);
 
     const sanitized = await sanitizeSessionHistory({

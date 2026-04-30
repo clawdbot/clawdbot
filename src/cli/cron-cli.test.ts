@@ -569,7 +569,7 @@ describe("cron cli", () => {
       expect.stringContaining("No --agent specified"),
     );
     expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("default agent (main)"),
+      expect.stringContaining("configured default agent"),
     );
   });
 

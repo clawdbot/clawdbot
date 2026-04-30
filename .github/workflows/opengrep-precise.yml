@@ -9,10 +9,24 @@ name: OpenGrep — PR Diff
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - ".github/workflows/opengrep-precise.yml"
+      - ".github/workflows/opengrep-precise-full.yml"
+      - ".semgrepignore"
+      - "apps/**"
+      - "extensions/**"
+      - "packages/**"
+      - "scripts/**"
+      - "security/opengrep/**"
+      - "src/**"
 
 concurrency:
   group: opengrep-pr-diff-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 permissions:
   contents: read
@@ -21,11 +35,12 @@ permissions:
 jobs:
   scan:
     name: Scan changed paths (precise)
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           persist-credentials: false
           # `scripts/run-opengrep.sh --changed` diffs base...HEAD.
@@ -59,7 +74,7 @@ jobs:
           scripts/run-opengrep.sh --changed --sarif --error
 
       - name: Upload SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         # Only upload if the scan actually produced a SARIF file.
         if: always() && hashFiles('.opengrep-out/precise.sarif') != ''
         with:

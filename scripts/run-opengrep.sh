@@ -127,7 +127,9 @@ if (( PATHS_PASSED == 0 )); then
       } | awk '/^(security\/opengrep\/|scripts\/run-opengrep\.sh$|\.semgrepignore$|\.github\/workflows\/opengrep-)/ { print }' | sort -u
     )
     if (( ${#SCAN_PATHS[@]} == 0 && ${#RULEPACK_CHANGED_PATHS[@]} > 0 )); then
-      SCAN_PATHS=( "security/opengrep/precise.yml" )
+      # Exercise rulepack loading without scanning the compiled YAML, which contains
+      # rule pattern literals that can match themselves.
+      SCAN_PATHS=( "scripts/run-opengrep.sh" )
     fi
     if (( ${#SCAN_PATHS[@]} == 0 )); then
       echo "→ No changed first-party paths for opengrep." >&2

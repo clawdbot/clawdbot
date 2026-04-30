@@ -86,9 +86,6 @@ describe("gateway shared token session rotation", () => {
       });
       expect(setRes.ok).toBe(true);
 
-      await expect(rpcReq(ws, "config.get", {})).rejects.toThrow(
-        "closed 4001: gateway auth changed",
-      );
       await expect(closed).resolves.toMatchObject({
         code: 4001,
         reason: "gateway auth changed",

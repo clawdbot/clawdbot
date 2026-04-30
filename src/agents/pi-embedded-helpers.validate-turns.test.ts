@@ -357,6 +357,26 @@ describe("mergeConsecutiveUserTurns", () => {
     expect(merged.timestamp).toBe(2000);
   });
 
+  it("preserves string content while merging content", () => {
+    const previous = {
+      role: "user",
+      content: "before",
+      timestamp: 1000,
+    } as Extract<AgentMessage, { role: "user" }>;
+    const current = {
+      role: "user",
+      content: "after",
+      timestamp: 2000,
+    } as Extract<AgentMessage, { role: "user" }>;
+
+    const merged = mergeConsecutiveUserTurns(previous, current);
+
+    expect(merged.content).toEqual([
+      { type: "text", text: "before" },
+      { type: "text", text: "after" },
+    ]);
+  });
+
   it("backfills timestamp from earlier message when missing", () => {
     const previous = {
       role: "user",
