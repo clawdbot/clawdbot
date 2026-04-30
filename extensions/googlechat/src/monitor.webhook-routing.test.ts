@@ -300,7 +300,7 @@ describe("Google Chat monitor inbound context", () => {
     await import("./monitor.js");
 
     const buildContext = createGoogleChatBuildContextMock();
-    const runResolved = vi.fn(async () => ({}));
+    const run = vi.fn(async () => ({}));
     const core = {
       logging: { shouldLogVerbose: () => false },
       channel: {
@@ -333,7 +333,7 @@ describe("Google Chat monitor inbound context", () => {
         },
         turn: {
           buildContext,
-          runResolved,
+          run,
         },
         media: {
           saveMediaBuffer: vi.fn(),
@@ -396,9 +396,11 @@ describe("Google Chat monitor inbound context", () => {
           }),
         }),
       );
-      expect(runResolved).toHaveBeenCalledWith(
+      expect(run).toHaveBeenCalledWith(
         expect.objectContaining({
-          resolveTurn: expect.any(Function),
+          adapter: expect.objectContaining({
+            resolveTurn: expect.any(Function),
+          }),
         }),
       );
     } finally {
@@ -411,7 +413,7 @@ describe("Google Chat monitor inbound context", () => {
     await import("./monitor.js");
 
     const buildContext = createGoogleChatBuildContextMock();
-    const runResolved = vi.fn(async () => ({}));
+    const run = vi.fn(async () => ({}));
     const core = {
       logging: { shouldLogVerbose: () => false },
       channel: {
@@ -444,7 +446,7 @@ describe("Google Chat monitor inbound context", () => {
         },
         turn: {
           buildContext,
-          runResolved,
+          run,
         },
         media: {
           saveMediaBuffer: vi.fn(),
@@ -522,16 +524,18 @@ describe("Google Chat delivery thread routing", () => {
     replyToId: string;
   }): PluginRuntime {
     const buildContext = createGoogleChatBuildContextMock();
-    const runResolved = vi.fn(
+    const run = vi.fn(
       async (params: {
-        resolveTurn: () => {
-          delivery: {
-            deliver: (payload: { text: string; replyToId: string }) => Promise<void>;
+        adapter: {
+          resolveTurn: () => {
+            delivery: {
+              deliver: (payload: { text: string; replyToId: string }) => Promise<void>;
+            };
           };
         };
       }) => {
         if (deliverPayload) {
-          await params.resolveTurn().delivery.deliver(deliverPayload);
+          await params.adapter.resolveTurn().delivery.deliver(deliverPayload);
         }
         return {};
       },
@@ -569,7 +573,7 @@ describe("Google Chat delivery thread routing", () => {
         },
         turn: {
           buildContext,
-          runResolved,
+          run,
         },
         media: {
           saveMediaBuffer: vi.fn(),
