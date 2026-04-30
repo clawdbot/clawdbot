@@ -77,6 +77,9 @@ export const pluginSdkDocMetadata = {
   "command-auth": {
     category: "channel",
   },
+  zalouser: {
+    category: "channel",
+  },
   "command-status": {
     category: "channel",
   },

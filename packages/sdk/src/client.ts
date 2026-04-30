@@ -42,10 +42,16 @@ function resolveGatewayUrl(options: OpenClawOptions): string | undefined {
 function runStatusFromWaitPayload(payload: unknown): RunResult["status"] {
   const record =
     typeof payload === "object" && payload !== null
-      ? (payload as { aborted?: unknown; status?: unknown; stopReason?: unknown })
+      ? (payload as Record<string, unknown> & { aborted?: unknown; status?: unknown })
       : {};
   const status = typeof record.status === "string" ? record.status.toLowerCase() : undefined;
   const stopReason = typeof record.stopReason === "string" ? record.stopReason.toLowerCase() : "";
+  const hasTerminalTimeoutMetadata =
+    readOptionalTimestamp(record.endedAt) !== undefined ||
+    readOptionalString(record.error) !== undefined ||
+    stopReason.length > 0 ||
+    typeof record.livenessState === "string" ||
+    record.yielded === true;
   if (
     status === "aborted" ||
     status === "cancelled" ||
@@ -65,7 +71,12 @@ function runStatusFromWaitPayload(payload: unknown): RunResult["status"] {
     return "completed";
   }
   if (status === "timeout") {
-    if (stopReason === "timeout" || stopReason === "timed_out" || record.aborted === true) {
+    if (
+      stopReason === "timeout" ||
+      stopReason === "timed_out" ||
+      record.aborted === true ||
+      hasTerminalTimeoutMetadata
+    ) {
       return "timed_out";
     }
     return "accepted";

@@ -446,6 +446,37 @@ describe("loadWorkspaceSkillEntries", () => {
       expect(names).toEqual(expect.arrayContaining(["direct-skill", "grouped-skill"]));
     });
 
+    it("does not count invalid grouped candidates against the loaded skill cap", async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      for (const nestedName of ["a", "b"]) {
+        const invalidDir = path.join(workspaceDir, "skills", "00-group", nestedName);
+        await fs.mkdir(invalidDir, { recursive: true });
+        await fs.writeFile(
+          path.join(invalidDir, "SKILL.md"),
+          `---\nname: ${nestedName}\n---\n\n# Invalid\n`,
+          "utf-8",
+        );
+      }
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", "01-valid"),
+        name: "valid-skill",
+        description: "Valid sibling after invalid grouped candidates",
+      });
+
+      const names = loadTestWorkspaceSkillEntries(workspaceDir, {
+        config: {
+          skills: {
+            limits: {
+              maxCandidatesPerRoot: 10,
+              maxSkillsLoadedPerSource: 1,
+            },
+          },
+        },
+      }).map((entry) => entry.skill.name);
+
+      expect(names).toEqual(["valid-skill"]);
+    });
+
     it("does not descend more than two levels (skills/a/b/c/SKILL.md is ignored)", async () => {
       const workspaceDir = await createTempWorkspaceDir();
       await writeSkill({
@@ -516,17 +547,43 @@ describe("loadWorkspaceSkillEntries", () => {
         },
       }).map((entry) => entry.skill.name);
 
-      expect(names).toEqual(expect.arrayContaining(["nested-skill-0", "nested-skill-1"]));
-      expect(names).not.toContain("nested-skill-2");
+      expect(names.filter((name) => name.startsWith("nested-skill-"))).toHaveLength(2);
       expect(
         warn.mock.calls
           .map(([line]) => String(line))
           .some((line) =>
-            line.includes(
-              "Nested skills directory looks suspiciously large, truncating discovery.",
-            ),
+            line.includes("Nested skills directory has many entries, truncating discovery."),
           ),
       ).toBe(true);
+    });
+
+    it("does not spend nested candidate budget on ignored raw entries", async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const groupDir = path.join(workspaceDir, "skills", "group");
+      await fs.mkdir(groupDir, { recursive: true });
+      for (let i = 0; i < 50; i += 1) {
+        await fs.writeFile(path.join(groupDir, `ignored-${String(i).padStart(2, "0")}.txt`), "");
+      }
+      for (const name of ["valid-a", "valid-b", "valid-c"]) {
+        await writeSkill({
+          dir: path.join(groupDir, name),
+          name,
+          description: `${name} nested under a group`,
+        });
+      }
+
+      const names = loadTestWorkspaceSkillEntries(workspaceDir, {
+        config: {
+          skills: {
+            limits: {
+              maxCandidatesPerRoot: 2,
+              maxSkillsLoadedPerSource: 10,
+            },
+          },
+        },
+      }).map((entry) => entry.skill.name);
+
+      expect(names.filter((name) => name.startsWith("valid-"))).toEqual(["valid-a", "valid-b"]);
     });
   });
 });

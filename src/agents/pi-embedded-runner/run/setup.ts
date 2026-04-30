@@ -6,8 +6,6 @@ import type {
   PluginHookBeforeModelResolveEvent,
 } from "../../../plugins/types.js";
 import {
-  CONTEXT_WINDOW_HARD_MIN_TOKENS,
-  CONTEXT_WINDOW_WARN_BELOW_TOKENS,
   evaluateContextWindowGuard,
   formatContextWindowBlockMessage,
   formatContextWindowWarningMessage,
@@ -140,11 +138,7 @@ export function resolveEffectiveRuntimeModel(params: {
     ctxInfo.tokens < (params.runtimeModel.contextWindow ?? Infinity)
       ? { ...params.runtimeModel, contextWindow: ctxInfo.tokens }
       : params.runtimeModel;
-  const ctxGuard = evaluateContextWindowGuard({
-    info: ctxInfo,
-    warnBelowTokens: CONTEXT_WINDOW_WARN_BELOW_TOKENS,
-    hardMinTokens: CONTEXT_WINDOW_HARD_MIN_TOKENS,
-  });
+  const ctxGuard = evaluateContextWindowGuard({ info: ctxInfo });
   const runtimeBaseUrl =
     typeof (params.runtimeModel as { baseUrl?: unknown }).baseUrl === "string"
       ? (params.runtimeModel as { baseUrl: string }).baseUrl
@@ -165,7 +159,7 @@ export function resolveEffectiveRuntimeModel(params: {
       runtimeBaseUrl,
     });
     log.error(
-      `blocked model (context window too small): ${params.provider}/${params.modelId} ctx=${ctxGuard.tokens} (min=${CONTEXT_WINDOW_HARD_MIN_TOKENS}) source=${ctxGuard.source}; ${message}`,
+      `blocked model (context window too small): ${params.provider}/${params.modelId} ctx=${ctxGuard.tokens} (min=${ctxGuard.hardMinTokens}) source=${ctxGuard.source}; ${message}`,
     );
     throw new FailoverError(message, {
       reason: "unknown",

@@ -30,6 +30,7 @@ export function registerStreamingCommands(registry: SlashCommandRegistry): void 
   registry.register({
     name: "bot-streaming",
     description: "一键开关流式消息",
+    c2cOnly: true,
     usage: [
       `/bot-streaming on     开启流式消息`,
       `/bot-streaming off    关闭流式消息`,
@@ -39,10 +40,6 @@ export function registerStreamingCommands(registry: SlashCommandRegistry): void 
       `注意：仅 C2C（私聊）支持流式消息。`,
     ].join("\n"),
     handler: async (ctx) => {
-      if (ctx.type !== "c2c") {
-        return `❌ 流式消息仅支持私聊场景，请在私聊中使用 /bot-streaming 指令`;
-      }
-
       const arg = ctx.args.trim().toLowerCase();
       const currentOn = isStreamingConfigEnabled(ctx.accountConfig?.streaming);
 

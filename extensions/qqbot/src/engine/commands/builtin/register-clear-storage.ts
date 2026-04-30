@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { getHomeDir } from "../../utils/platform.js";
+import { getQQBotMediaPath } from "../../utils/platform.js";
 import type { SlashCommandRegistry } from "../slash-commands.js";
 
 function scanDirectoryFiles(dirPath: string): { filePath: string; size: number }[] {
@@ -75,31 +75,26 @@ function removeEmptyDirs(dirPath: string): void {
 const CLEAR_STORAGE_MAX_DISPLAY = 10;
 
 /**
- * Resolve the canonical downloads directory for an appId under the user's home.
- * Must stay strictly under ~/.openclaw/media/qqbot/downloads/.
+ * Resolve the canonical QQBot downloads directory.
+ *
+ * All inbound attachments and outbound fallback downloads are stored directly
+ * under `~/.openclaw/media/qqbot/downloads/` without appId subdivision.
+ * The clear-storage command therefore cleans the entire downloads root.
  */
-export function resolveQqbotDownloadsDirForApp(appId: string): string {
-  const id = appId.trim();
-  if (!id || id.includes("\0") || /[/\\\n]|\.\./.test(id)) {
-    throw new Error("invalid appId path");
-  }
-  const base = path.join(getHomeDir(), ".openclaw", "media", "qqbot", "downloads");
-  const resolvedBase = path.resolve(base);
-  const target = path.resolve(path.join(resolvedBase, id));
-  if (target === resolvedBase || !target.startsWith(resolvedBase + path.sep)) {
-    throw new Error("invalid appId path");
-  }
-  return target;
+export function resolveQqbotDownloadsDir(): string {
+  return getQQBotMediaPath("downloads");
 }
 
 export function registerClearStorageCommands(registry: SlashCommandRegistry): void {
   registry.register({
     name: "bot-clear-storage",
     description: "清理通过 QQBot 对话产生的下载文件，释放主机磁盘空间",
+    requireAuth: true,
+    c2cOnly: true,
     usage: [
       `/bot-clear-storage`,
       ``,
-      `扫描当前机器人产生的下载文件并列出明细。`,
+      `扫描 QQBot 下载目录下的所有文件并列出明细。`,
       `确认后执行删除，释放主机磁盘空间。`,
       ``,
       `/bot-clear-storage --force   确认执行清理`,
@@ -107,20 +102,9 @@ export function registerClearStorageCommands(registry: SlashCommandRegistry): vo
       `⚠️ 仅在私聊中可用。`,
     ].join("\n"),
     handler: (ctx) => {
-      const { appId, type } = ctx;
-
-      if (type !== "c2c") {
-        return `💡 请在私聊中使用此指令`;
-      }
-
       const isForce = ctx.args.trim() === "--force";
-      let targetDir: string;
-      try {
-        targetDir = resolveQqbotDownloadsDirForApp(appId);
-      } catch {
-        return `❌ 无效的机器人标识，无法解析清理目录。`;
-      }
-      const displayDir = `~/.openclaw/media/qqbot/downloads/${appId}`;
+      const targetDir = resolveQqbotDownloadsDir();
+      const displayDir = `~/.openclaw/media/qqbot/downloads`;
 
       if (!isForce) {
         const files = scanDirectoryFiles(targetDir);

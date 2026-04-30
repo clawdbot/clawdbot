@@ -71,6 +71,7 @@ describe("channel plugin module loader helpers", () => {
 
   it("uses native require for eligible JavaScript modules before falling back to Jiti", async () => {
     const createJiti = vi.fn(() => vi.fn(() => ({ ok: false })));
+    vi.resetModules();
     vi.doMock("jiti", () => ({
       createJiti,
     }));
@@ -95,6 +96,7 @@ describe("channel plugin module loader helpers", () => {
 
   it("creates the runtime-supported Jiti boundary for Windows dist loads", async () => {
     const createJiti = vi.fn(() => vi.fn(() => ({ ok: true })));
+    vi.resetModules();
     vi.doMock("jiti", () => ({
       createJiti,
     }));

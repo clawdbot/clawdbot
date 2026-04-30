@@ -63,6 +63,15 @@ describe("sanitizeForPlainText", () => {
     expect(sanitizeForPlainText('<a href="https://example.com">link</a>')).toBe("link");
   });
 
+  it("keeps stripping tags exposed by malformed tag text", () => {
+    const sanitized = sanitizeForPlainText(
+      "before <<script>script>alert(1)</<script>script> after",
+    );
+
+    expect(sanitized).toBe("before alert(1) after");
+    expect(sanitized).not.toContain("<script");
+  });
+
   it("strips known internal runtime scaffolding tags including underscore names", () => {
     expect(sanitizeForPlainText("ok <previous_response>null</previous_response> done")).toBe(
       "ok  done",

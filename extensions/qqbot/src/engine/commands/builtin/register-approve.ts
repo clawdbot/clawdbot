@@ -7,6 +7,7 @@ export function registerApproveCommands(registry: SlashCommandRegistry): void {
     name: "bot-approve",
     description: "管理命令执行审批配置",
     requireAuth: true,
+    c2cOnly: true,
     usage: [
       `/bot-approve            查看操作指引`,
       `/bot-approve on         开启审批（白名单模式，推荐）`,

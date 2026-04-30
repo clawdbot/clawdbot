@@ -73,7 +73,49 @@ function barnacleContext(
   };
 }
 
-function barnacleGithub(files: ReturnType<typeof file>[]) {
+function barnacleIssueContext(
+  issue: Record<string, unknown>,
+  labels: string[] = [],
+  options: Record<string, unknown> = {},
+) {
+  return {
+    repo: {
+      owner: "openclaw",
+      repo: "openclaw",
+    },
+    payload: {
+      action: options.action ?? "opened",
+      label: options.label,
+      sender: options.sender,
+      issue: {
+        number: 456,
+        title: "OpenClaw issue",
+        body: "",
+        author_association: "CONTRIBUTOR",
+        user: {
+          login: "contributor",
+        },
+        labels: labels.map((name) => ({ name })),
+        ...issue,
+      },
+      comment: options.comment,
+    },
+  };
+}
+
+function barnacleGithub(
+  files: ReturnType<typeof file>[],
+  options: { maintainerLogins?: string[]; repositoryRoles?: Record<string, string> } = {},
+) {
+  const maintainerLogins = new Set(
+    (options.maintainerLogins ?? []).map((login) => login.toLowerCase()),
+  );
+  const repositoryRoles = Object.fromEntries(
+    Object.entries(options.repositoryRoles ?? {}).map(([login, role]) => [
+      login.toLowerCase(),
+      role,
+    ]),
+  );
   const calls = {
     addLabels: [] as Array<{ issue_number: number; labels: string[] }>,
     createComment: [] as Array<{ issue_number: number; body: string }>,
@@ -115,14 +157,25 @@ function barnacleGithub(files: ReturnType<typeof file>[]) {
         listFiles: async () => files,
       },
       repos: {
-        getCollaboratorPermissionLevel: async () => ({
-          data: {
-            role_name: "read",
-          },
-        }),
+        getCollaboratorPermissionLevel: async ({ username }: { username: string }) => {
+          const role = repositoryRoles[username.toLowerCase()] ?? "read";
+          return {
+            data: {
+              permission: role,
+              role_name: role,
+            },
+          };
+        },
       },
       teams: {
-        getMembershipForUserInOrg: async () => {
+        getMembershipForUserInOrg: async ({ username }: { username: string }) => {
+          if (maintainerLogins.has(username.toLowerCase())) {
+            return {
+              data: {
+                state: "active",
+              },
+            };
+          }
           const error = new Error("not found") as Error & { status: number };
           error.status = 404;
           throw error;
@@ -234,7 +287,7 @@ describe("barnacle-auto-response", () => {
     expect(labels).not.toContain(candidateLabels.externalPluginCandidate);
   });
 
-  it("does not add candidate labels to maintainer-authored PRs", async () => {
+  it("does not mutate maintainer-authored PRs", async () => {
     const { calls, github } = barnacleGithub([
       file("ui/src/app.ts"),
       file("src/gateway/server.ts"),
@@ -256,9 +309,12 @@ describe("barnacle-auto-response", () => {
     });
 
     expect(calls.addLabels).toEqual([]);
+    expect(calls.createComment).toEqual([]);
+    expect(calls.removeLabel).toEqual([]);
+    expect(calls.update).toEqual([]);
   });
 
-  it("removes stale Barnacle candidate and PR-limit labels from maintainer-authored PRs", async () => {
+  it("leaves stale Barnacle labels alone on maintainer-authored PRs", async () => {
     const { calls, github } = barnacleGithub([
       file("ui/src/app.ts"),
       file("src/gateway/server.ts"),
@@ -282,12 +338,93 @@ describe("barnacle-auto-response", () => {
       },
     });
 
-    expect(calls.removeLabel).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ name: candidateLabels.dirtyCandidate }),
-        expect.objectContaining({ name: "r: too-many-prs" }),
-      ]),
-    );
+    expect(calls.addLabels).toEqual([]);
+    expect(calls.createComment).toEqual([]);
+    expect(calls.removeLabel).toEqual([]);
+    expect(calls.update).toEqual([]);
+  });
+
+  it("does not mutate maintainer-authored issues", async () => {
+    const { calls, github } = barnacleGithub([]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleIssueContext({
+        title: "TestFlight access",
+        author_association: "OWNER",
+        user: {
+          login: "maintainer",
+        },
+      }),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.addLabels).toEqual([]);
+    expect(calls.createComment).toEqual([]);
+    expect(calls.update).toEqual([]);
+  });
+
+  it("does not action close labels on maintainer-authored issues", async () => {
+    const { calls, github } = barnacleGithub([]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleIssueContext(
+        {
+          title: "Need help with setup",
+          author_association: "MEMBER",
+          user: {
+            login: "maintainer",
+          },
+        },
+        ["r: support"],
+        {
+          action: "labeled",
+          label: { name: "r: support" },
+        },
+      ),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.createComment).toEqual([]);
+    expect(calls.update).toEqual([]);
+  });
+
+  it("does not respond to maintainer comments on contributor items", async () => {
+    const { calls, github } = barnacleGithub([], { maintainerLogins: ["maintainer"] });
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleIssueContext(
+        {
+          title: "Contributor issue",
+          user: {
+            login: "contributor",
+          },
+        },
+        [],
+        {
+          action: "created",
+          comment: {
+            body: "testflight",
+            user: {
+              login: "maintainer",
+              type: "User",
+            },
+          },
+        },
+      ),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.createComment).toEqual([]);
+    expect(calls.update).toEqual([]);
   });
 
   it("does not close automation PRs for the active PR limit", async () => {

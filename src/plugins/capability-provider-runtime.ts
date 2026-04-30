@@ -87,7 +87,6 @@ function resolveCapabilityProviderConfig(params: {
 
 function createCapabilityProviderFallbackLoadOptions(params: {
   compatConfig?: OpenClawConfig;
-  sourceConfig?: OpenClawConfig;
   pluginIds: string[];
   installBundledRuntimeDeps?: boolean;
 }): PluginLoadOptions {
@@ -96,13 +95,14 @@ function createCapabilityProviderFallbackLoadOptions(params: {
     onlyPluginIds: params.pluginIds,
     activate: false,
   };
-  if (
-    params.installBundledRuntimeDeps === false ||
-    params.sourceConfig?.plugins?.enabled === false
-  ) {
+  if (params.installBundledRuntimeDeps === false) {
     loadOptions.installBundledRuntimeDeps = false;
   }
   return loadOptions;
+}
+
+function arePluginsGloballyDisabled(cfg: OpenClawConfig | undefined): boolean {
+  return cfg?.plugins?.enabled === false;
 }
 
 function findProviderById<K extends CapabilityProviderRegistryKey>(
@@ -225,6 +225,10 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
   cfg?: OpenClawConfig;
   installBundledRuntimeDeps?: boolean;
 }): CapabilityProviderForKey<K> | undefined {
+  if (arePluginsGloballyDisabled(params.cfg)) {
+    return undefined;
+  }
+
   const activeRegistry = resolveRuntimePluginRegistry();
   const activeProvider = findProviderById(activeRegistry?.[params.key] ?? [], params.providerId);
   if (activeProvider) {
@@ -247,7 +251,6 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
   });
   const loadOptions = createCapabilityProviderFallbackLoadOptions({
     compatConfig,
-    sourceConfig: params.cfg,
     pluginIds,
     installBundledRuntimeDeps: params.installBundledRuntimeDeps,
   });
@@ -260,6 +263,10 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   cfg?: OpenClawConfig;
   installBundledRuntimeDeps?: boolean;
 }): CapabilityProviderForKey<K>[] {
+  if (arePluginsGloballyDisabled(params.cfg)) {
+    return [];
+  }
+
   const activeRegistry = resolveRuntimePluginRegistry();
   const activeProviders = activeRegistry?.[params.key] ?? [];
   if (
@@ -293,7 +300,6 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   });
   const loadOptions = createCapabilityProviderFallbackLoadOptions({
     compatConfig,
-    sourceConfig: params.cfg,
     pluginIds,
     installBundledRuntimeDeps: params.installBundledRuntimeDeps,
   });

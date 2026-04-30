@@ -10,6 +10,7 @@ on:
         type: choice
         options:
           - all
+          - agent-runtime-boundary
           - config-boundary
           - core-auth-secrets
           - channel-runtime-boundary
@@ -63,6 +64,27 @@ on:
       - "src/agents/sandbox/**"
       - "src/agents/sandbox.ts"
       - "src/agents/sandbox-*.ts"
+      - "src/acp/control-plane/**"
+      - "src/agents/cli-runner/**"
+      - "src/agents/command/**"
+      - "src/agents/pi-embedded-runner/**"
+      - "src/agents/tools/**"
+      - "src/agents/*completion*.ts"
+      - "src/agents/*transport*.ts"
+      - "src/agents/model-*.ts"
+      - "src/agents/openclaw-tools*.ts"
+      - "src/agents/provider-*.ts"
+      - "src/agents/session*.ts"
+      - "src/agents/tool-call*.ts"
+      - "src/auto-reply/reply/agent-runner*.ts"
+      - "src/auto-reply/reply/commands*.ts"
+      - "src/auto-reply/reply/directive-handling*.ts"
+      - "src/auto-reply/reply/dispatch-*.ts"
+      - "src/auto-reply/reply/get-reply-run*.ts"
+      - "src/auto-reply/reply/provider-dispatcher*.ts"
+      - "src/auto-reply/reply/queue*.ts"
+      - "src/auto-reply/reply/reply-run-registry*.ts"
+      - "src/auto-reply/reply/session*.ts"
       - "src/channels/**"
       - "src/auto-reply/reply/post-compaction-context.ts"
       - "src/auto-reply/reply/queue/**"
@@ -125,6 +147,7 @@ jobs:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     outputs:
+      agent: ${{ steps.detect.outputs.agent }}
       channel: ${{ steps.detect.outputs.channel }}
       config: ${{ steps.detect.outputs.config }}
       core_auth_secrets: ${{ steps.detect.outputs.core_auth_secrets }}
@@ -147,6 +170,7 @@ jobs:
         run: |
           set -euo pipefail
 
+          agent=false
           channel=false
           config=false
           core_auth_secrets=false
@@ -160,6 +184,7 @@ jobs:
           session_diagnostics=false
 
           if [[ "${EVENT_NAME}" != "pull_request" ]]; then
+            agent=true
             channel=true
             config=true
             core_auth_secrets=true
@@ -175,6 +200,7 @@ jobs:
             while IFS= read -r file; do
               case "${file}" in
                 .github/codeql/*|.github/workflows/codeql-critical-quality.yml)
+                  agent=true
                   channel=true
                   config=true
                   core_auth_secrets=true
@@ -186,6 +212,9 @@ jobs:
                   plugin_sdk_reply=true
                   provider=true
                   session_diagnostics=true
+                  ;;
+                src/acp/control-plane/*|src/agents/cli-runner/*|src/agents/command/*|src/agents/pi-embedded-runner/*|src/agents/tools/*|src/agents/*completion*.ts|src/agents/*transport*.ts|src/agents/model-*.ts|src/agents/openclaw-tools*.ts|src/agents/provider-*.ts|src/agents/session*.ts|src/agents/tool-call*.ts|src/auto-reply/reply/agent-runner*.ts|src/auto-reply/reply/commands*.ts|src/auto-reply/reply/directive-handling*.ts|src/auto-reply/reply/dispatch-*.ts|src/auto-reply/reply/get-reply-run*.ts|src/auto-reply/reply/provider-dispatcher*.ts|src/auto-reply/reply/queue*.ts|src/auto-reply/reply/reply-run-registry*.ts|src/auto-reply/reply/session*.ts)
+                  agent=true
                   ;;
                 src/auto-reply/reply/post-compaction-context.ts|src/auto-reply/reply/queue/*|src/auto-reply/reply/startup-context.ts|src/commands/doctor-session-*.ts|src/commands/session-store-targets.ts|src/commands/sessions*.ts|src/infra/diagnostic-*.ts|src/infra/diagnostics-timeline.ts|src/infra/session-delivery-queue*.ts|src/logging/diagnostic*.ts)
                   session_diagnostics=true
@@ -255,6 +284,7 @@ jobs:
           fi
 
           {
+            echo "agent=${agent}"
             echo "channel=${channel}"
             echo "config=${config}"
             echo "core_auth_secrets=${core_auth_secrets}"
@@ -362,7 +392,8 @@ jobs:
 
   agent-runtime-boundary:
     name: Critical Quality (agent-runtime-boundary)
-    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
+    needs: quality-shards
+    if: ${{ needs.quality-shards.outputs.agent == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'agent-runtime-boundary') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:

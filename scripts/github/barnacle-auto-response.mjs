@@ -183,6 +183,8 @@ const spamLabel = "r: spam";
 const dirtyLabel = "dirty";
 const badBarnacleLabel = "bad-barnacle";
 const maintainerAuthorLabel = "maintainer";
+const privilegedAuthorAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+const privilegedRepositoryRoles = new Set(["admin", "maintain", "write"]);
 const candidateLabelValues = Object.values(candidateLabels);
 const noisyPrMessage =
   "Closing this PR because it looks dirty (too many unrelated or unexpected changes). This usually happens when a branch picks up unrelated commits or a merge went sideways. Please recreate the PR from a clean branch.";
@@ -607,27 +609,40 @@ function createMaintainerChecker(github, context) {
   };
 }
 
-async function isPrivilegedPullRequestAuthor(github, context, pullRequest, labelSet, isMaintainer) {
-  const authorLogin = pullRequest.user?.login ?? "";
-  if (labelSet.has(maintainerAuthorLabel) || pullRequest.author_association === "OWNER") {
-    return true;
-  }
-  if (authorLogin && (await isMaintainer(authorLogin))) {
-    return true;
-  }
-
+async function hasPrivilegedRepositoryRole(github, context, login) {
   try {
     const permission = await github.rest.repos.getCollaboratorPermissionLevel({
       owner: context.repo.owner,
       repo: context.repo.repo,
-      username: authorLogin,
+      username: login,
     });
     const roleName = (permission?.data?.role_name ?? "").toLowerCase();
-    return roleName === "admin" || roleName === "maintain";
+    const permissionName = (permission?.data?.permission ?? "").toLowerCase();
+    return privilegedRepositoryRoles.has(roleName) || privilegedRepositoryRoles.has(permissionName);
   } catch (error) {
     if (error?.status !== 404) {
       throw error;
     }
+  }
+
+  return false;
+}
+
+async function isPrivilegedActor(github, context, login, isMaintainer) {
+  if (!login) {
+    return false;
+  }
+  return (await isMaintainer(login)) || (await hasPrivilegedRepositoryRole(github, context, login));
+}
+
+async function isPrivilegedTargetAuthor(github, context, target, labelSet, isMaintainer) {
+  const authorLogin = target.user?.login ?? "";
+  const authorAssociation = String(target.author_association ?? "").toUpperCase();
+  if (labelSet.has(maintainerAuthorLabel) || privilegedAuthorAssociations.has(authorAssociation)) {
+    return true;
+  }
+  if (await isPrivilegedActor(github, context, authorLogin, isMaintainer)) {
+    return true;
   }
 
   return false;
@@ -807,6 +822,15 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
     if (comment.user?.type === "Bot" || authorLogin.endsWith("[bot]")) {
       return;
     }
+    if (
+      (await isPrivilegedActor(github, context, authorLogin, isMaintainer)) ||
+      (await isPrivilegedTargetAuthor(github, context, target, labelSet, isMaintainer))
+    ) {
+      core.info(
+        `Skipping Barnacle comment checks for #${target.number} because a maintainer is involved.`,
+      );
+      return;
+    }
 
     const commentBody = comment.body ?? "";
     const responses = [];
@@ -836,6 +860,13 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
         body: responses.join("\n\n"),
       });
     }
+    return;
+  }
+
+  if (await isPrivilegedTargetAuthor(github, context, target, labelSet, isMaintainer)) {
+    core.info(
+      `Skipping Barnacle auto-response checks for #${target.number} because it is maintainer-authored.`,
+    );
     return;
   }
 
@@ -934,22 +965,7 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
       return;
     }
 
-    const isMaintainerAuthoredPullRequest = await isPrivilegedPullRequestAuthor(
-      github,
-      context,
-      pullRequest,
-      labelSet,
-      isMaintainer,
-    );
-    if (isMaintainerAuthoredPullRequest) {
-      await removeLabels(github, context, pullRequest.number, candidateLabelValues, labelSet);
-      await removeLabels(github, context, pullRequest.number, [activePrLimitLabel], labelSet);
-      core.info(
-        `Skipping Barnacle candidate labels for maintainer-authored PR #${pullRequest.number}.`,
-      );
-    } else {
-      await applyPullRequestCandidateLabels(github, context, core, pullRequest, labelSet);
-    }
+    await applyPullRequestCandidateLabels(github, context, core, pullRequest, labelSet);
 
     if (labelSet.has(dirtyLabel)) {
       await github.rest.issues.createComment({

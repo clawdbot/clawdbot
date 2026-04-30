@@ -1,9 +1,12 @@
+import { createRequire } from "node:module";
+import path from "node:path";
 import type {
   DocumentExtractedImage,
   DocumentExtractionRequest,
   DocumentExtractionResult,
   DocumentExtractorPlugin,
 } from "openclaw/plugin-sdk/document-extractor";
+import type * as PdfJsLegacy from "pdfjs-dist/legacy/build/pdf.mjs";
 
 type CanvasLike = {
   toBuffer(type: "image/png"): Buffer;
@@ -37,19 +40,17 @@ type PdfDocument = {
   getPage(pageNumber: number): Promise<PdfPage>;
 };
 
-type PdfJsModule = {
-  getDocument(params: { data: Uint8Array; disableWorker?: boolean }): {
-    promise: Promise<PdfDocument>;
-  };
-};
+type PdfJsModule = typeof PdfJsLegacy;
 
 const CANVAS_MODULE = "@napi-rs/canvas";
 const PDFJS_MODULE = "pdfjs-dist/legacy/build/pdf.mjs";
 const MAX_EXTRACTED_TEXT_CHARS = 200_000;
 const MAX_RENDER_DIMENSION = 10_000;
+const require = createRequire(import.meta.url);
 
 let canvasModulePromise: Promise<CanvasModule> | null = null;
 let pdfJsModulePromise: Promise<PdfJsModule> | null = null;
+let pdfJsStandardFontDataPath: string | null = null;
 
 async function loadCanvasModule(): Promise<CanvasModule> {
   if (!canvasModulePromise) {
@@ -73,6 +74,15 @@ async function loadPdfJsModule(): Promise<PdfJsModule> {
     });
   }
   return pdfJsModulePromise;
+}
+
+function resolvePdfJsStandardFontDataPath(): string {
+  if (!pdfJsStandardFontDataPath) {
+    const pdfJsPackageJsonPath = require.resolve("pdfjs-dist/package.json");
+    pdfJsStandardFontDataPath =
+      path.join(path.dirname(pdfJsPackageJsonPath), "standard_fonts") + "/";
+  }
+  return pdfJsStandardFontDataPath;
 }
 
 function appendTextWithinLimit(parts: string[], pageText: string, currentLength: number): number {
@@ -139,10 +149,11 @@ async function extractPdfContent(
   request: DocumentExtractionRequest,
 ): Promise<DocumentExtractionResult> {
   const pdfJsModule = await loadPdfJsModule();
-  const pdf = await pdfJsModule.getDocument({
+  const pdf = (await pdfJsModule.getDocument({
     data: new Uint8Array(request.buffer),
     disableWorker: true,
-  }).promise;
+    standardFontDataUrl: resolvePdfJsStandardFontDataPath(),
+  }).promise) as PdfDocument;
 
   const effectivePages: number[] = request.pageNumbers
     ? request.pageNumbers.filter((p) => p >= 1 && p <= pdf.numPages).slice(0, request.maxPages)

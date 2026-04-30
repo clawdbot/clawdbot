@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { shouldExpectNativeJitiForJavaScriptTestRuntime } from "../test-utils/jiti-runtime.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import {
   getRegistryJitiMocks,
@@ -36,32 +35,83 @@ describe("doctor-contract-registry getJiti", () => {
     clearPluginDoctorContractRegistryCache();
   });
 
-  it("uses the runtime-supported Jiti boundary on Windows for contract-api modules", () => {
+  it("uses native require on Windows for compatible JavaScript contract-api modules", () => {
     const pluginRoot = makeTempDir();
-    fs.writeFileSync(path.join(pluginRoot, "contract-api.js"), "export default {};\n", "utf-8");
+    fs.writeFileSync(
+      path.join(pluginRoot, "contract-api.js"),
+      "module.exports = { legacyConfigRules: [{ path: ['plugins', 'entries', 'demo', 'legacy'], message: 'legacy demo key' }] };\n",
+      "utf-8",
+    );
     mocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [{ id: "test-plugin", rootDir: pluginRoot }],
       diagnostics: [],
     });
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const expectedTryNative = shouldExpectNativeJitiForJavaScriptTestRuntime();
 
     try {
-      listPluginDoctorLegacyConfigRules({
-        workspaceDir: pluginRoot,
-        env: {},
-      });
+      expect(
+        listPluginDoctorLegacyConfigRules({
+          workspaceDir: pluginRoot,
+          env: {},
+        }),
+      ).toEqual([
+        {
+          path: ["plugins", "entries", "demo", "legacy"],
+          message: "legacy demo key",
+        },
+      ]);
+    } finally {
+      platformSpy.mockRestore();
+    }
+
+    expect(mocks.createJiti).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the Jiti boundary on Windows for TypeScript contract-api modules", () => {
+    const pluginRoot = makeTempDir();
+    const contractApiPath = path.join(pluginRoot, "contract-api.ts");
+    fs.writeFileSync(
+      contractApiPath,
+      "export const legacyConfigRules = [{ path: ['plugins', 'entries', 'demo', 'ts'], message: 'typescript contract' }];\n",
+      "utf-8",
+    );
+    mocks.createJiti.mockImplementation(() => () => ({
+      legacyConfigRules: [
+        {
+          path: ["plugins", "entries", "demo", "ts"],
+          message: "typescript contract",
+        },
+      ],
+    }));
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [{ id: "test-plugin", rootDir: pluginRoot }],
+      diagnostics: [],
+    });
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    try {
+      expect(
+        listPluginDoctorLegacyConfigRules({
+          workspaceDir: pluginRoot,
+          env: {},
+        }),
+      ).toEqual([
+        {
+          path: ["plugins", "entries", "demo", "ts"],
+          message: "typescript contract",
+        },
+      ]);
     } finally {
       platformSpy.mockRestore();
     }
 
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
     expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(
-      pathToFileURL(path.join(pluginRoot, "contract-api.js"), { windows: true }).href,
+      pathToFileURL(contractApiPath, { windows: true }).href,
     );
     expect(mocks.createJiti.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({
-        tryNative: expectedTryNative,
+        tryNative: false,
       }),
     );
   });

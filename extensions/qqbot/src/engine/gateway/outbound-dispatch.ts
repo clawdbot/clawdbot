@@ -42,7 +42,7 @@ import type {
 
 // ============ Config ============
 
-const RESPONSE_TIMEOUT = 120_000;
+const RESPONSE_TIMEOUT = 300_000;
 const TOOL_ONLY_TIMEOUT = 60_000;
 const MAX_TOOL_RENEWALS = 3;
 const TOOL_MEDIA_SEND_TIMEOUT = 45_000;
