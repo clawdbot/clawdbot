@@ -893,6 +893,52 @@ describe("googlechatPlugin outbound cfg threading", () => {
     ]);
   });
 
+  it("preserves explicit thread resources on outbound media sends", async () => {
+    const cfg = createGoogleChatCfg();
+    const account = {
+      accountId: "default",
+      config: {},
+      credentialSource: "inline" as const,
+    };
+    const { fetchRemoteMedia } = setupRuntimeMediaMocks({
+      loadFileName: "unused.png",
+      loadBytes: "should-not-be-used",
+    });
+
+    resolveGoogleChatAccountMock.mockReturnValue(account);
+    resolveGoogleChatOutboundSpaceMock.mockResolvedValue("spaces/AAA");
+    uploadGoogleChatAttachmentMock.mockResolvedValue({
+      attachmentUploadToken: "token-threaded",
+    });
+    sendGoogleChatMessageMock.mockResolvedValue({
+      messageName: "spaces/AAA/messages/msg-threaded-media",
+    });
+
+    await googlechatOutboundAdapter.attachedResults.sendMedia({
+      cfg,
+      to: "spaces/AAA",
+      text: "photo",
+      mediaUrl: "https://example.com/file.png",
+      accountId: "default",
+      threadId: "spaces/AAA/threads/explicit",
+    });
+
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://example.com/file.png",
+      }),
+    );
+    expect(sendGoogleChatMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account,
+        space: "spaces/AAA",
+        text: "photo",
+        thread: "spaces/AAA/threads/explicit",
+        attachments: [{ attachmentUploadToken: "token-threaded", contentName: "remote.png" }],
+      }),
+    );
+  });
+
   it("sends media without requiring Google Chat runtime initialization", async () => {
     const { loadOutboundMediaFromUrl } = setupRuntimeMediaMocks({
       loadFileName: "image.png",
