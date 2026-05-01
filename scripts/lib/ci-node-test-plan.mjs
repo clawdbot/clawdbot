@@ -137,6 +137,81 @@ function createAgenticCommandSplitShards() {
     .filter((shard) => shard.includePatterns.length > 0);
 }
 
+const GATEWAY_SERVER_BACKED_HTTP_TESTS = new Set([
+  "src/gateway/embeddings-http.test.ts",
+  "src/gateway/models-http.test.ts",
+  "src/gateway/openai-http.test.ts",
+  "src/gateway/openresponses-http.test.ts",
+  "src/gateway/probe.auth.integration.test.ts",
+]);
+
+const GATEWAY_SERVER_EXCLUDED_TESTS = new Set([
+  "src/gateway/gateway.test.ts",
+  "src/gateway/server.startup-matrix-migration.integration.test.ts",
+  "src/gateway/sessions-history-http.test.ts",
+]);
+
+function isGatewayServerTestFile(file) {
+  return (
+    file.startsWith("src/gateway/") &&
+    !file.startsWith("src/gateway/server-methods/") &&
+    !GATEWAY_SERVER_EXCLUDED_TESTS.has(file) &&
+    (file.includes("server") || GATEWAY_SERVER_BACKED_HTTP_TESTS.has(file))
+  );
+}
+
+function resolveGatewayServerShardName(file) {
+  const name = relative("src/gateway", file).replaceAll("\\", "/");
+  if (
+    GATEWAY_SERVER_BACKED_HTTP_TESTS.has(file) ||
+    name.startsWith("server.models") ||
+    name.startsWith("server.talk")
+  ) {
+    return "agentic-control-plane-http-models";
+  }
+  if (
+    name.startsWith("server.agent") ||
+    name.startsWith("server.chat") ||
+    name.startsWith("server.sessions")
+  ) {
+    return "agentic-control-plane-agent-chat";
+  }
+  if (
+    name.includes("auth") ||
+    name.includes("device") ||
+    name.includes("node") ||
+    name.includes("roles") ||
+    name.includes("silent") ||
+    name.includes("preauth") ||
+    name.includes("control-plane-rate-limit")
+  ) {
+    return "agentic-control-plane-auth-node";
+  }
+  return "agentic-control-plane-runtime";
+}
+
+function createGatewayServerSplitShards() {
+  const groups = new Map();
+  for (const file of listTestFiles("src/gateway").filter(isGatewayServerTestFile)) {
+    const shardName = resolveGatewayServerShardName(file);
+    groups.set(shardName, [...(groups.get(shardName) ?? []), file]);
+  }
+  return [
+    "agentic-control-plane-agent-chat",
+    "agentic-control-plane-auth-node",
+    "agentic-control-plane-http-models",
+    "agentic-control-plane-runtime",
+  ]
+    .map((shardName) => ({
+      configs: ["test/vitest/vitest.gateway-server.config.ts"],
+      includePatterns: groups.get(shardName) ?? [],
+      requiresDist: false,
+      runner: "blacksmith-4vcpu-ubuntu-2404",
+      shardName,
+    }))
+    .filter((shard) => shard.includePatterns.length > 0);
+}
+
 const SPLIT_NODE_SHARDS = new Map([
   [
     "core-unit-fast",
@@ -225,12 +300,7 @@ const SPLIT_NODE_SHARDS = new Map([
   [
     "agentic",
     [
-      {
-        shardName: "agentic-control-plane",
-        configs: ["test/vitest/vitest.gateway-server.config.ts"],
-        requiresDist: false,
-        runner: "blacksmith-4vcpu-ubuntu-2404",
-      },
+      ...createGatewayServerSplitShards(),
       {
         shardName: "agentic-cli",
         configs: ["test/vitest/vitest.cli.config.ts"],

@@ -253,6 +253,41 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
+  it("continues from the transcript after mid-turn precheck truncation handled the overflow", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: null,
+          preflightRecovery: {
+            route: "truncate_tool_results_only",
+            source: "mid-turn",
+            handled: true,
+            truncatedCount: 2,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        prompt: expect.stringContaining("Continue from the current transcript"),
+      }),
+    );
+    expect(mockedRunEmbeddedAttempt).not.toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ prompt: baseParams.prompt }),
+    );
+    expect(mockedLog.info).toHaveBeenCalledWith(
+      expect.stringContaining("retrying from current transcript"),
+    );
+    expect(result.meta.error).toBeUndefined();
+  });
+
   it("falls back to compaction when early truncate-only recovery does not help", async () => {
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(
@@ -282,6 +317,44 @@ describe("overflow compaction in run loop", () => {
       expect.stringContaining(
         "context overflow detected (attempt 1/3); attempting auto-compaction",
       ),
+    );
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("continues from the transcript after mid-turn precheck compaction", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: makeOverflowError(
+            "Context overflow: prompt too large for the model (mid-turn precheck).",
+          ),
+          promptErrorSource: "precheck",
+          preflightRecovery: { route: "compact_only", source: "mid-turn" },
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted after mid-turn precheck",
+        firstKeptEntryId: "entry-8",
+        tokensBefore: 155000,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        prompt: expect.stringContaining("Continue from the current transcript"),
+      }),
+    );
+    expect(mockedRunEmbeddedAttempt).not.toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ prompt: baseParams.prompt }),
     );
     expect(result.meta.error).toBeUndefined();
   });

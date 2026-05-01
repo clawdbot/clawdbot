@@ -254,7 +254,7 @@ export async function collectStatusScanOverview(params: {
         const channels = await buildChannelsTable(cfg, {
           showSecrets: params.showSecrets,
           sourceConfig,
-          includeSetupRuntimeFallback: params.includeChannelSetupRuntimeFallback !== false,
+          includeSetupFallbackPlugins: params.includeChannelSetupRuntimeFallback !== false,
         });
         params.progress?.tick();
         return { channelsStatus, channelIssues, channels };

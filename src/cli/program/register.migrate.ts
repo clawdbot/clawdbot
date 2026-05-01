@@ -10,12 +10,37 @@ import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatHelpExamples } from "../help-format.js";
 
+function collectMigrationSkill(value: string, previous: string[] | undefined): string[] {
+  return [...(previous ?? []), value];
+}
+
+function readMigrationSkills(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const skills = value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+  return skills.length > 0 ? skills : undefined;
+}
+
+function addMigrationSkillOption(command: Command): Command {
+  return command.option(
+    "--skill <name>",
+    "Select one skill to migrate by name or item id; repeat for multiple skills",
+    collectMigrationSkill,
+  );
+}
+
 function addMigrationOptions(command: Command): Command {
-  return command
-    .option("--from <path>", "Source directory to migrate from")
-    .option("--include-secrets", "Import supported credentials and secrets", false)
-    .option("--overwrite", "Overwrite conflicting target files after item-level backups", false)
-    .option("--json", "Output JSON", false);
+  return addMigrationSkillOption(
+    command
+      .option("--from <path>", "Source directory to migrate from")
+      .option("--include-secrets", "Import supported credentials and secrets", false)
+      .option("--overwrite", "Overwrite conflicting target files after item-level backups", false)
+      .option("--json", "Output JSON", false),
+  );
 }
 
 export function registerMigrateCommand(program: Command) {
@@ -28,6 +53,11 @@ export function registerMigrateCommand(program: Command) {
     .option("--overwrite", "Overwrite conflicting target files after item-level backups", false)
     .option("--dry-run", "Preview only; do not apply changes", false)
     .option("--yes", "Apply without prompting after preview", false)
+    .option(
+      "--skill <name>",
+      "Select one skill to migrate by name or item id; repeat for multiple skills",
+      collectMigrationSkill,
+    )
     .option("--backup-output <path>", "Pre-migration backup archive path or directory")
     .option("--no-backup", "Skip the pre-migration OpenClaw backup")
     .option("--force", "Allow dangerous options such as --no-backup", false)
@@ -56,6 +86,7 @@ export function registerMigrateCommand(program: Command) {
           source: opts.from as string | undefined,
           includeSecrets: Boolean(opts.includeSecrets),
           overwrite: Boolean(opts.overwrite),
+          skills: readMigrationSkills(opts.skill),
           dryRun: Boolean(opts.dryRun),
           yes: Boolean(opts.yes),
           backupOutput: opts.backupOutput as string | undefined,
@@ -87,6 +118,7 @@ export function registerMigrateCommand(program: Command) {
         source: opts.from as string | undefined,
         includeSecrets: Boolean(opts.includeSecrets),
         overwrite: Boolean(opts.overwrite),
+        skills: readMigrationSkills(opts.skill),
         json: Boolean(opts.json),
       });
     });
@@ -106,6 +138,7 @@ export function registerMigrateCommand(program: Command) {
           source: opts.from as string | undefined,
           includeSecrets: Boolean(opts.includeSecrets),
           overwrite: Boolean(opts.overwrite),
+          skills: readMigrationSkills(opts.skill),
           yes: Boolean(opts.yes),
           backupOutput: opts.backupOutput as string | undefined,
           noBackup: opts.backup === false,

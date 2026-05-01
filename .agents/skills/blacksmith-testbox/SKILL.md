@@ -10,6 +10,9 @@ description: Run Blacksmith Testbox for CI-parity checks, secrets, hosted servic
 Use Testbox when you need remote CI parity, injected secrets, hosted services,
 or an OS/runtime image that your local machine cannot provide cheaply.
 
+For OpenClaw, Crabbox is a supported alternative when Blacksmith is unavailable
+or owned cloud capacity is preferable.
+
 Do not default to Testbox for every local test/build loop. If the repo has
 documented local commands for normal iteration, use those first so you keep
 warm caches, local build state, and fast feedback.

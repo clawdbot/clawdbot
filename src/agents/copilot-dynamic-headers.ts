@@ -1,13 +1,7 @@
 import type { Context } from "@mariozechner/pi-ai";
 import { buildCopilotIdeHeaders } from "../plugin-sdk/provider-auth.js";
 
-export {
-  buildCopilotIdeHeaders,
-  COPILOT_EDITOR_PLUGIN_VERSION,
-  COPILOT_EDITOR_VERSION,
-  COPILOT_GITHUB_API_VERSION,
-  COPILOT_USER_AGENT,
-} from "../plugin-sdk/provider-auth.js";
+export { buildCopilotIdeHeaders } from "../plugin-sdk/provider-auth.js";
 
 function inferCopilotInitiator(messages: Context["messages"]): "agent" | "user" {
   const last = messages[messages.length - 1];

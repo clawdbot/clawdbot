@@ -138,6 +138,71 @@ export type ChannelUiMetadata = {
   configUiHints?: Record<string, ConfigUiHint>;
 };
 
+const EXTENSION_SCHEMA_MAX_BYTES = 256 * 1024;
+const EXTENSION_SCHEMA_TOTAL_MAX_BYTES = 2 * 1024 * 1024;
+const EXTENSION_SCHEMA_MAX_ITEMS = 256;
+
+function schemaJsonBytes(schema: JsonSchemaNode): number {
+  try {
+    return Buffer.byteLength(JSON.stringify(schema), "utf-8");
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+function buildOmittedExtensionConfigSchema(kind: "plugin" | "channel", id: string): JsonSchemaNode {
+  return {
+    type: "object",
+    additionalProperties: true,
+    description: `${kind} config schema for ${id} was omitted from the full config.schema response because installed extension schemas exceeded the Gateway response budget.`,
+  };
+}
+
+function limitExtensionSchemas(params: {
+  plugins: PluginUiMetadata[];
+  channels: ChannelUiMetadata[];
+}): { plugins: PluginUiMetadata[]; channels: ChannelUiMetadata[] } {
+  let totalBytes = 0;
+  let includedItems = 0;
+
+  const keepSchema = (schema: JsonSchemaNode): boolean => {
+    const bytes = schemaJsonBytes(schema);
+    if (
+      !Number.isFinite(bytes) ||
+      bytes > EXTENSION_SCHEMA_MAX_BYTES ||
+      totalBytes + bytes > EXTENSION_SCHEMA_TOTAL_MAX_BYTES ||
+      includedItems >= EXTENSION_SCHEMA_MAX_ITEMS
+    ) {
+      return false;
+    }
+    totalBytes += bytes;
+    includedItems += 1;
+    return true;
+  };
+
+  const plugins = params.plugins.map((plugin) => {
+    if (!plugin.configSchema || keepSchema(plugin.configSchema)) {
+      return plugin;
+    }
+    return {
+      ...plugin,
+      configSchema: buildOmittedExtensionConfigSchema("plugin", plugin.id),
+    };
+  });
+
+  const channels = params.channels.map((channel) => {
+    if (!channel.configSchema || keepSchema(channel.configSchema)) {
+      return channel;
+    }
+    return {
+      ...channel,
+      configSchema: buildOmittedExtensionConfigSchema("channel", channel.id),
+    };
+  });
+
+  return { plugins, channels };
+}
+
 function collectExtensionHintKeys(
   hints: ConfigUiHints,
   plugins: PluginUiMetadata[],
@@ -487,8 +552,10 @@ export function buildConfigSchema(params?: {
   cache?: boolean;
 }): ConfigSchemaResponse {
   const base = buildBaseConfigSchema();
-  const plugins = params?.plugins ?? [];
-  const channels = params?.channels ?? [];
+  const { plugins, channels } = limitExtensionSchemas({
+    plugins: params?.plugins ?? [],
+    channels: params?.channels ?? [],
+  });
   if (plugins.length === 0 && channels.length === 0) {
     return base;
   }

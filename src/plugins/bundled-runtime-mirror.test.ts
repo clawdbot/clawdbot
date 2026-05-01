@@ -1,8 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { refreshBundledPluginRuntimeMirrorRoot } from "./bundled-runtime-mirror.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  materializeBundledRuntimeMirrorFile,
+  refreshBundledPluginRuntimeMirrorRoot,
+} from "./bundled-runtime-mirror.js";
 
 const tempRoots: string[] = [];
 
@@ -13,6 +16,7 @@ function makeTempRoot(): string {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const root of tempRoots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -88,5 +92,51 @@ describe("refreshBundledPluginRuntimeMirrorRoot", () => {
 
     expect(fs.lstatSync(path.join(targetRoot, "entry")).isFile()).toBe(true);
     expect(fs.readFileSync(path.join(targetRoot, "entry"), "utf8")).toContain("2");
+  });
+
+  it("replaces stale symlinked mirror roots before creating temp files", () => {
+    const root = makeTempRoot();
+    const sourceRoot = path.join(root, "source");
+    const targetRoot = path.join(root, "target");
+    const staleRoot = path.join(root, "stale-image-layer");
+    fs.mkdirSync(sourceRoot, { recursive: true });
+    fs.mkdirSync(staleRoot, { recursive: true });
+    fs.writeFileSync(path.join(sourceRoot, "fresh.js"), "export const value = 'fresh';\n", "utf8");
+    fs.symlinkSync(staleRoot, targetRoot, "dir");
+
+    expect(
+      refreshBundledPluginRuntimeMirrorRoot({
+        pluginId: "demo",
+        sourceRoot,
+        targetRoot,
+      }),
+    ).toBe(true);
+
+    expect(fs.lstatSync(targetRoot).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(path.join(targetRoot, "fresh.js"), "utf8")).toContain("fresh");
+    expect(fs.existsSync(path.join(staleRoot, "fresh.js"))).toBe(false);
+  });
+
+  it("does not rewrite already materialized hardlinks", () => {
+    const root = makeTempRoot();
+    const sourcePath = path.join(root, "source.js");
+    const targetPath = path.join(root, "target.js");
+    fs.writeFileSync(sourcePath, "export const value = 1;\n", "utf8");
+    fs.linkSync(sourcePath, targetPath);
+    const linkSpy = vi.spyOn(fs, "linkSync");
+    const copySpy = vi.spyOn(fs, "copyFileSync");
+    const renameSpy = vi.spyOn(fs, "renameSync");
+
+    materializeBundledRuntimeMirrorFile(sourcePath, targetPath);
+
+    expect(linkSpy).not.toHaveBeenCalled();
+    expect(copySpy).not.toHaveBeenCalled();
+    expect(renameSpy).not.toHaveBeenCalled();
+    const sourceStat = fs.lstatSync(sourcePath);
+    const targetStat = fs.lstatSync(targetPath);
+    expect({ dev: targetStat.dev, ino: targetStat.ino }).toEqual({
+      dev: sourceStat.dev,
+      ino: sourceStat.ino,
+    });
   });
 });

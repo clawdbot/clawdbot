@@ -1,3 +1,7 @@
+import {
+  summarizeGatewayServiceLayout,
+  type GatewayServiceLayoutSummary,
+} from "../daemon/service-layout.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import { readGatewayServiceState, type GatewayService } from "../daemon/service.js";
 
@@ -9,6 +13,7 @@ export type ServiceStatusSummary = {
   externallyManaged: boolean;
   loadedText: string;
   runtime: GatewayServiceRuntime | undefined;
+  layout?: GatewayServiceLayoutSummary;
 };
 
 export async function readServiceStatusSummary(
@@ -17,6 +22,7 @@ export async function readServiceStatusSummary(
 ): Promise<ServiceStatusSummary> {
   try {
     const state = await readGatewayServiceState(service, { env: process.env });
+    const layout = await summarizeGatewayServiceLayout(state.command);
     const managedByOpenClaw = state.installed;
     const externallyManaged = !managedByOpenClaw && state.running;
     const installed = managedByOpenClaw || externallyManaged;
@@ -33,6 +39,7 @@ export async function readServiceStatusSummary(
       externallyManaged,
       loadedText,
       runtime: state.runtime,
+      ...(layout ? { layout } : {}),
     };
   } catch {
     return {

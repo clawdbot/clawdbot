@@ -6,6 +6,7 @@ import {
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
   hasAnyAuthProfileStoreSource,
   listProfilesForProvider,
@@ -46,7 +47,7 @@ export function hasAuthForProvider(params: { provider: string; agentDir?: string
     return false;
   }
   const store = ensureAuthProfileStore(agentDir, {
-    allowKeychainPrompt: false,
+    externalCli: externalCliDiscoveryForProviderAuth({ provider: params.provider }),
   });
   return listProfilesForProvider(store, params.provider).length > 0;
 }

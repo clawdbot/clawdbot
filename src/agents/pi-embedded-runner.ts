@@ -1,20 +1,9 @@
-export type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 export {
   compactEmbeddedPiSession,
   compactEmbeddedPiSession as compactEmbeddedAgentSession,
 } from "./pi-embedded-runner/compact.queued.js";
-export {
-  applyExtraParamsToAgent,
-  resolveAgentTransportOverride,
-  resolveExtraParams,
-  resolvePreparedExtraParams,
-} from "./pi-embedded-runner/extra-params.js";
+export { applyExtraParamsToAgent } from "./pi-embedded-runner/extra-params.js";
 
-export {
-  getDmHistoryLimitFromSessionKey,
-  getHistoryLimitFromSessionKey,
-  limitHistoryTurns,
-} from "./pi-embedded-runner/history.js";
 export { resolveEmbeddedSessionLane } from "./pi-embedded-runner/lanes.js";
 export {
   runEmbeddedPiAgent,

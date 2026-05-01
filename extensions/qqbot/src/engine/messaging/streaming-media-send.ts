@@ -6,7 +6,6 @@
  */
 
 import type { GatewayAccount } from "../types.js";
-import { normalizeMediaTags } from "../utils/media-tags.js";
 import { normalizePath } from "../utils/platform.js";
 import {
   sendPhoto,
@@ -161,21 +160,6 @@ export function isInsideCodeBlock(text: string, position: number): boolean {
 
 // ============ 媒体标签解析 ============
 
-/**
- * 检测文本是否包含富媒体标签（忽略代码块内的标签）
- */
-export function hasMediaTags(text: string): boolean {
-  const normalized = normalizeMediaTags(text);
-  const regex = createMediaTagRegex();
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(normalized)) !== null) {
-    if (!isInsideCodeBlock(normalized, match.index)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 /** findFirstClosedMediaTag 的返回值 */
 export interface FirstClosedMediaTag {
   /** 标签前的纯文本 */
@@ -193,8 +177,8 @@ export interface FirstClosedMediaTag {
 /**
  * 在文本中查找**第一个**完整闭合的媒体标签
  *
- * 与 splitByMediaTags 不同，此函数只匹配一个标签就停止，
- * 用于流式场景的"循环消费"模式：每次处理一个标签，更新偏移，再找下一个。
+ * 只匹配一个标签就停止，用于流式场景的"循环消费"模式：
+ * 每次处理一个标签，更新偏移，再找下一个。
  *
  * @param text 待检查的文本（应已 normalize 过）
  * @returns 第一个闭合标签的信息，没有则返回 null
@@ -248,160 +232,6 @@ export function findFirstClosedMediaTag(
   }
 
   return null;
-}
-
-/**
- * 媒体标签拆分结果
- */
-export interface MediaSplitResult {
-  /** 是否包含媒体标签 */
-  hasMediaTags: boolean;
-  /** 媒体标签前的纯文本 */
-  textBeforeFirstTag: string;
-  /** 媒体标签后的剩余文本 */
-  textAfterLastTag: string;
-  /** 完整的发送队列（标签间的文本 + 媒体项） */
-  mediaQueue: SendQueueItem[];
-}
-
-/**
- * 将文本按富媒体标签拆分为三部分
- *
- * 用于两个场景：
- * 1. 流式模式：中断-恢复流程（标签前文本 → 结束流式 → 发送媒体 → 新流式 → 标签后文本）
- * 2. 普通模式：构建按顺序发送的队列
- */
-export function splitByMediaTags(
-  text: string,
-  log?: {
-    info?: (msg: string) => void;
-    debug?: (msg: string) => void;
-    error?: (msg: string) => void;
-  },
-): MediaSplitResult {
-  const normalized = normalizeMediaTags(text);
-  const regex = createMediaTagRegex();
-  // 过滤掉代码块内的匹配
-  const matches = [...normalized.matchAll(regex)].filter(
-    (m) => !isInsideCodeBlock(normalized, m.index),
-  );
-
-  if (matches.length === 0) {
-    return {
-      hasMediaTags: false,
-      textBeforeFirstTag: normalized,
-      textAfterLastTag: "",
-      mediaQueue: [],
-    };
-  }
-
-  // 第一个标签前的纯文本
-  const firstMatch = matches[0];
-  const textBeforeFirstTag = normalized
-    .slice(0, firstMatch.index)
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-
-  // 最后一个标签后的纯文本
-  const lastMatch = matches[matches.length - 1];
-  const lastMatchEnd = lastMatch.index + lastMatch[0].length;
-  const textAfterLastTag = normalized
-    .slice(lastMatchEnd)
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-
-  // 构建媒体发送队列
-  const mediaQueue: SendQueueItem[] = [];
-  let lastIndex = firstMatch.index;
-
-  for (const match of matches) {
-    // 标签前的文本（标签之间的间隔文本）
-    const textBetween = normalized
-      .slice(lastIndex, match.index)
-      .replace(/\n{3,}/g, "\n\n")
-      .trim();
-    if (textBetween && lastIndex !== firstMatch.index) {
-      // 只添加非首段的间隔文本（首段由 textBeforeFirstTag 覆盖）
-      mediaQueue.push({ type: "text", content: textBetween });
-    }
-
-    // 解析标签内容
-    const tagName = match[1].toLowerCase();
-    let mediaPath = match[2]?.trim() ?? "";
-
-    // 剥离 MEDIA: 前缀
-    if (mediaPath.startsWith("MEDIA:")) {
-      mediaPath = mediaPath.slice("MEDIA:".length);
-    }
-    mediaPath = normalizePath(mediaPath);
-
-    // 修复路径编码问题
-    mediaPath = fixPathEncoding(mediaPath, log);
-
-    // 根据标签类型加入队列
-    const typeMap: Record<string, SendQueueItem["type"]> = {
-      qqimg: "image",
-      qqvoice: "voice",
-      qqvideo: "video",
-      qqfile: "file",
-      qqmedia: "media",
-    };
-    const itemType = typeMap[tagName] ?? "image";
-    if (mediaPath) {
-      mediaQueue.push({ type: itemType, content: mediaPath });
-      log?.info?.(`Found ${itemType} in <${tagName}>: ${mediaPath.slice(0, 80)}`);
-    }
-
-    lastIndex = match.index + match[0].length;
-  }
-
-  return {
-    hasMediaTags: true,
-    textBeforeFirstTag,
-    textAfterLastTag,
-    mediaQueue,
-  };
-}
-
-/**
- * 从文本中解析出完整的发送队列（含标签前后的纯文本）
- *
- * 与 splitByMediaTags 的区别：
- * - splitByMediaTags 分为 before / queue / after 三段（供流式模式的中断-恢复）
- * - parseMediaTagsToSendQueue 返回一个扁平的完整队列（供普通模式按顺序发送）
- *
- * 适用于 gateway.ts deliver 回调和 outbound.ts sendText。
- */
-export function parseMediaTagsToSendQueue(
-  text: string,
-  log?: {
-    info?: (msg: string) => void;
-    debug?: (msg: string) => void;
-    error?: (msg: string) => void;
-  },
-): { hasMediaTags: boolean; sendQueue: SendQueueItem[] } {
-  const split = splitByMediaTags(text, log);
-
-  if (!split.hasMediaTags) {
-    return { hasMediaTags: false, sendQueue: [] };
-  }
-
-  const sendQueue: SendQueueItem[] = [];
-
-  // 标签前的文本
-  if (split.textBeforeFirstTag) {
-    sendQueue.push({ type: "text", content: split.textBeforeFirstTag });
-  }
-
-  // 媒体队列（含标签间文本）
-  sendQueue.push(...split.mediaQueue);
-
-  // 标签后的文本
-  if (split.textAfterLastTag) {
-    sendQueue.push({ type: "text", content: split.textAfterLastTag });
-  }
-
-  return { hasMediaTags: true, sendQueue };
 }
 
 // ============ 发送队列执行 ============
@@ -525,17 +355,6 @@ export async function executeSendQueue(
       await sendFallbackText(DEFAULT_MEDIA_SEND_ERROR);
     }
   }
-}
-
-/**
- * 从文本中剥离所有媒体标签（用于最终显示）
- */
-export function stripMediaTags(text: string): string {
-  const regex = createMediaTagRegex();
-  return text
-    .replace(regex, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
 }
 
 /**

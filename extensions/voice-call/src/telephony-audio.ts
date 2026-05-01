@@ -1,8 +1,4 @@
-export {
-  convertPcmToMulaw8k,
-  pcmToMulaw,
-  resamplePcmTo8k,
-} from "openclaw/plugin-sdk/realtime-voice";
+export { convertPcmToMulaw8k, resamplePcmTo8k } from "openclaw/plugin-sdk/realtime-voice";
 
 /**
  * Chunk audio buffer into 20ms frames for streaming (8kHz mono mu-law).

@@ -107,17 +107,6 @@ export async function fileExistsAsync(filePath: string): Promise<boolean> {
   }
 }
 
-/** Get file size asynchronously. */
-export async function getFileSizeAsync(filePath: string): Promise<number> {
-  const stat = await fs.promises.stat(filePath);
-  return stat.size;
-}
-
-/** Return true when a file should be treated as large. */
-export function isLargeFile(sizeBytes: number): boolean {
-  return sizeBytes >= LARGE_FILE_THRESHOLD;
-}
-
 /** Format a byte count into a human-readable size string. */
 export function formatFileSize(bytes: number): string {
   if (bytes < 1024) {

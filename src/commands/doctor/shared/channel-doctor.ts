@@ -134,7 +134,7 @@ function safeListReadOnlyChannelPlugins(context: ChannelDoctorLookupContext) {
     return resolveReadOnlyChannelPluginsForConfig(context.cfg, {
       ...(context.env ? { env: context.env } : {}),
       includePersistedAuthState: false,
-      includeSetupRuntimeFallback: true,
+      includeSetupFallbackPlugins: true,
     }).plugins;
   } catch {
     return [];

@@ -105,11 +105,16 @@ function barnacleIssueContext(
 
 function barnacleGithub(
   files: ReturnType<typeof file>[],
-  options: { maintainerLogins?: string[]; repositoryRoles?: Record<string, string> } = {},
+  options: {
+    maintainerLogins?: string[];
+    removeLabelNotFound?: string[];
+    repositoryRoles?: Record<string, string>;
+  } = {},
 ) {
   const maintainerLogins = new Set(
     (options.maintainerLogins ?? []).map((login) => login.toLowerCase()),
   );
+  const removeLabelNotFound = new Set(options.removeLabelNotFound ?? []);
   const repositoryRoles = Object.fromEntries(
     Object.entries(options.repositoryRoles ?? {}).map(([login, role]) => [
       login.toLowerCase(),
@@ -147,6 +152,11 @@ function barnacleGithub(
         },
         removeLabel: async (params: { issue_number: number; name: string }) => {
           calls.removeLabel.push(params);
+          if (removeLabelNotFound.has(params.name)) {
+            const error = new Error("not found") as Error & { status: number };
+            error.status = 404;
+            throw error;
+          }
         },
         update: async (params: { issue_number: number; state?: string }) => {
           calls.update.push(params);
@@ -192,6 +202,7 @@ describe("barnacle-auto-response", () => {
     expect(managedLabelSpecs["r: skill"].description).not.toContain("Clawdhub");
     expect(managedLabelSpecs.dirty.description).toContain("dirty/unrelated");
     expect(managedLabelSpecs["r: support"].description).toContain("support requests");
+    expect(managedLabelSpecs["r: false-positive"].description).toContain("false positive");
     expect(managedLabelSpecs["r: third-party-extension"].description).toContain("ClawHub");
     expect(managedLabelSpecs["r: too-many-prs"].description).toContain("ten active PRs");
 
@@ -394,6 +405,29 @@ describe("barnacle-auto-response", () => {
     expect(calls.update).toEqual([]);
   });
 
+  it("closes issues tagged as false positives", async () => {
+    const { calls, github } = barnacleGithub([]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleIssueContext({}, ["r: false-positive"], {
+        action: "labeled",
+        label: { name: "r: false-positive" },
+        sender: { login: "maintainer", type: "User" },
+      }),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.createComment).toContainEqual(
+      expect.objectContaining({
+        body: expect.stringContaining("false positive"),
+      }),
+    );
+    expect(calls.update).toContainEqual(expect.objectContaining({ state: "closed" }));
+  });
+
   it("does not respond to maintainer comments on contributor items", async () => {
     const { calls, github } = barnacleGithub([], { maintainerLogins: ["maintainer"] });
 
@@ -466,6 +500,56 @@ describe("barnacle-auto-response", () => {
       );
       expect(calls.update).not.toContainEqual(expect.objectContaining({ state: "closed" }));
     }
+  });
+
+  it("removes stale PR-limit labels from GitHub App-authored PRs", async () => {
+    const { calls, github } = barnacleGithub([file("README.md")]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext(
+        {
+          user: {
+            login: "renovate[bot]",
+            type: "Bot",
+          },
+        },
+        ["r: too-many-prs"],
+      ),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).toContainEqual(expect.objectContaining({ name: "r: too-many-prs" }));
+    expect(calls.createComment).toEqual([]);
+    expect(calls.update).toEqual([]);
+  });
+
+  it("does not close GitHub App-authored PRs when stale PR-limit label removal returns 404", async () => {
+    const { calls, github } = barnacleGithub([file("README.md")], {
+      removeLabelNotFound: ["r: too-many-prs"],
+    });
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext(
+        {
+          user: {
+            login: "renovate[bot]",
+            type: "Bot",
+          },
+        },
+        ["r: too-many-prs"],
+      ),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).toContainEqual(expect.objectContaining({ name: "r: too-many-prs" }));
+    expect(calls.createComment).toEqual([]);
+    expect(calls.update).toEqual([]);
   });
 
   it("still adds candidate labels to broad contributor PRs", async () => {

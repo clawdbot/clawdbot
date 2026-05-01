@@ -66,7 +66,7 @@ describe("buildProviderStatusIndex", () => {
 
     expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(
       {},
-      { includeSetupRuntimeFallback: false },
+      { includeSetupFallbackPlugins: false },
     );
     expect(resolveAccount).not.toHaveBeenCalled();
     expect(inspectAccount).toHaveBeenCalledWith({}, "work");

@@ -240,7 +240,7 @@ export async function channelsCapabilitiesCommand(
   }
 
   const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
-    includeSetupRuntimeFallback: true,
+    includeSetupFallbackPlugins: true,
   });
   const selected =
     !rawChannel || rawChannel === "all"

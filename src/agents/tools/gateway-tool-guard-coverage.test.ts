@@ -65,7 +65,35 @@ describe("gateway config mutation guard coverage", () => {
         "agents.list[].id",
         "agents.list[].model",
         "channels.*.requireMention",
+        "messages.visibleReplies",
+        "messages.groupChat.visibleReplies",
       ]),
+    );
+  });
+
+  it("allows visible reply delivery mode edits via config.patch", () => {
+    expectAllowed(
+      {},
+      {
+        messages: {
+          visibleReplies: "automatic",
+          groupChat: { visibleReplies: "automatic" },
+        },
+      },
+    );
+    expectAllowed(
+      {
+        messages: {
+          visibleReplies: "automatic",
+          groupChat: { visibleReplies: "message_tool" },
+        },
+      },
+      {
+        messages: {
+          visibleReplies: "message_tool",
+          groupChat: { visibleReplies: "automatic" },
+        },
+      },
     );
   });
 

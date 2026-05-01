@@ -28,6 +28,26 @@ on:
         required: false
         default: ""
         type: string
+      targeted_docker_lane_group_size:
+        description: Number of targeted Docker lanes to batch into one runner job
+        required: false
+        default: 1
+        type: number
+      published_upgrade_survivor_baseline:
+        description: Published OpenClaw package baseline for the published-upgrade-survivor Docker lane
+        required: false
+        default: openclaw@latest
+        type: string
+      published_upgrade_survivor_baselines:
+        description: Optional exact baseline list for published-upgrade-survivor lane expansion
+        required: false
+        default: ""
+        type: string
+      published_upgrade_survivor_scenarios:
+        description: Optional scenario list for published-upgrade-survivor lane expansion
+        required: false
+        default: ""
+        type: string
       package_artifact_name:
         description: Existing workflow artifact containing openclaw-current.tgz; blank packs the selected ref
         required: false
@@ -71,7 +91,7 @@ on:
       release_test_profile:
         description: Release coverage profile for live/Docker/provider breadth
         required: false
-        default: full
+        default: stable
         type: choice
         options:
           - minimum
@@ -103,6 +123,26 @@ on:
         required: false
         default: ""
         type: string
+      targeted_docker_lane_group_size:
+        description: Number of targeted Docker lanes to batch into one runner job
+        required: false
+        default: 1
+        type: number
+      published_upgrade_survivor_baseline:
+        description: Published OpenClaw package baseline for the published-upgrade-survivor Docker lane
+        required: false
+        default: openclaw@latest
+        type: string
+      published_upgrade_survivor_baselines:
+        description: Optional exact baseline list for published-upgrade-survivor lane expansion
+        required: false
+        default: ""
+        type: string
+      published_upgrade_survivor_scenarios:
+        description: Optional scenario list for published-upgrade-survivor lane expansion
+        required: false
+        default: ""
+        type: string
       package_artifact_name:
         description: Existing workflow artifact containing openclaw-current.tgz; blank packs the selected ref
         required: false
@@ -146,7 +186,7 @@ on:
       release_test_profile:
         description: Release coverage profile for live/Docker/provider breadth
         required: false
-        default: full
+        default: stable
         type: string
     secrets:
       OPENAI_API_KEY:
@@ -374,6 +414,10 @@ jobs:
               add_profile_suite native-live-extensions-xai "full"
 
               add_profile_suite live-gateway-docker "minimum stable full"
+              add_profile_suite live-gateway-anthropic-docker "stable full"
+              add_profile_suite live-gateway-google-docker "stable full"
+              add_profile_suite live-gateway-minimax-docker "stable full"
+              add_profile_suite live-gateway-advisory-docker "full"
               add_profile_suite live-cli-backend-docker "stable full"
               add_profile_suite live-acp-bind-docker "stable full"
               add_profile_suite live-codex-harness-docker "stable full"
@@ -670,6 +714,9 @@ jobs:
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ inputs.published_upgrade_survivor_baselines }}
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
       INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
       DOCKER_E2E_CHUNK: ${{ matrix.chunk_id }}
@@ -815,16 +862,27 @@ jobs:
         shell: bash
         env:
           LANES: ${{ inputs.docker_lanes }}
+          GROUP_SIZE: ${{ inputs.targeted_docker_lane_group_size }}
         run: |
           set -euo pipefail
           groups_json="$(
-            LANES="$LANES" node <<'NODE'
+            LANES="$LANES" GROUP_SIZE="$GROUP_SIZE" node <<'NODE'
           const lanes = [...new Set(String(process.env.LANES || "").split(/[,\s]+/u).map((lane) => lane.trim()).filter(Boolean))];
           if (lanes.length === 0) {
             throw new Error("docker_lanes is required when planning targeted Docker lane groups.");
           }
+          const rawGroupSize = Number.parseInt(process.env.GROUP_SIZE || "1", 10);
+          const groupSize = Number.isFinite(rawGroupSize) && rawGroupSize > 0 ? rawGroupSize : 1;
           const sanitize = (lane) => lane.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "targeted";
-          process.stdout.write(JSON.stringify(lanes.map((lane) => ({ label: sanitize(lane), docker_lanes: lane }))));
+          const groups = [];
+          for (let index = 0; index < lanes.length; index += groupSize) {
+            const groupLanes = lanes.slice(index, index + groupSize);
+            const first = sanitize(groupLanes[0]);
+            const last = sanitize(groupLanes[groupLanes.length - 1]);
+            const label = groupLanes.length === 1 ? first : `${first}--${last}`;
+            groups.push({ label, docker_lanes: groupLanes.join(" ") });
+          }
+          process.stdout.write(JSON.stringify(groups));
           NODE
           )"
           echo "groups_json=${groups_json}" >> "$GITHUB_OUTPUT"
@@ -834,7 +892,7 @@ jobs:
     if: inputs.docker_lanes != ''
     name: Docker E2E targeted lanes (${{ matrix.group.label }})
     runs-on: blacksmith-32vcpu-ubuntu-2404
-    timeout-minutes: 180
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -892,6 +950,9 @@ jobs:
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ inputs.published_upgrade_survivor_baselines }}
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
       INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
       DOCKER_E2E_LANES: ${{ matrix.group.docker_lanes }}
@@ -1468,7 +1529,7 @@ jobs:
     needs: [validate_selected_ref, prepare_live_test_image]
     if: inputs.include_live_suites && inputs.live_model_providers == '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models')
     runs-on: blacksmith-32vcpu-ubuntu-2404
-    timeout-minutes: 75
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -1536,6 +1597,8 @@ jobs:
       FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
       OPENCLAW_LIVE_PROVIDERS: ${{ matrix.providers }}
       OPENCLAW_LIVE_IMAGE: ${{ needs.prepare_live_test_image.outputs.live_image }}
+      OPENCLAW_LIVE_MAX_MODELS: "6"
+      OPENCLAW_LIVE_MODEL_TIMEOUT_MS: "45000"
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
@@ -1611,14 +1674,14 @@ jobs:
 
       - name: Run Docker live model sweep
         if: contains(matrix.profiles, inputs.release_test_profile)
-        run: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-models-docker.sh
+        run: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-models-docker.sh
 
   validate_live_models_docker_targeted:
     name: Docker live models (selected providers)
     needs: [validate_selected_ref, prepare_live_test_image]
     if: inputs.include_live_suites && inputs.live_model_providers != '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models')
     runs-on: blacksmith-32vcpu-ubuntu-2404
-    timeout-minutes: 75
+    timeout-minutes: 45
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -1655,6 +1718,8 @@ jobs:
       FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
       REQUESTED_LIVE_MODEL_PROVIDERS: ${{ inputs.live_model_providers }}
       OPENCLAW_LIVE_IMAGE: ${{ needs.prepare_live_test_image.outputs.live_image }}
+      OPENCLAW_LIVE_MAX_MODELS: "6"
+      OPENCLAW_LIVE_MODEL_TIMEOUT_MS: "45000"
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
@@ -1785,7 +1850,7 @@ jobs:
           done
 
       - name: Run Docker live model sweep
-        run: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-models-docker.sh
+        run: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-models-docker.sh
 
   validate_live_provider_suites:
     needs: validate_selected_ref
@@ -2099,27 +2164,51 @@ jobs:
       matrix:
         include:
           - suite_id: live-gateway-docker
-            label: Docker live gateway
-            command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-gateway-models-docker.sh
-            timeout_minutes: 120
+            label: Docker live gateway OpenAI
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
+            timeout_minutes: 30
             profile_env_only: false
             profiles: minimum stable full
+          - suite_id: live-gateway-anthropic-docker
+            label: Docker live gateway Anthropic
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
+            timeout_minutes: 30
+            profile_env_only: false
+            profiles: stable full
+          - suite_id: live-gateway-google-docker
+            label: Docker live gateway Google
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=google OPENCLAW_LIVE_GATEWAY_MODELS=google/gemini-3.1-pro-preview,google/gemini-3-flash-preview OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
+            timeout_minutes: 30
+            profile_env_only: false
+            profiles: stable full
+          - suite_id: live-gateway-minimax-docker
+            label: Docker live gateway MiniMax
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
+            timeout_minutes: 30
+            profile_env_only: false
+            profiles: stable full
+          - suite_id: live-gateway-advisory-docker
+            label: Docker live gateway advisory providers
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek,fireworks,opencode-go,openrouter,xai,zai OPENCLAW_LIVE_GATEWAY_MAX_MODELS=6 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
+            timeout_minutes: 40
+            profile_env_only: false
+            profiles: full
           - suite_id: live-cli-backend-docker
             label: Docker live CLI backend
-            command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-cli-backend-docker.sh
-            timeout_minutes: 120
+            command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 45m bash .release-harness/scripts/test-live-cli-backend-docker.sh
+            timeout_minutes: 50
             profile_env_only: false
             profiles: stable full
           - suite_id: live-acp-bind-docker
             label: Docker live ACP bind
-            command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-acp-bind-docker.sh
-            timeout_minutes: 120
+            command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 45m bash .release-harness/scripts/test-live-acp-bind-docker.sh
+            timeout_minutes: 50
             profile_env_only: false
             profiles: stable full
           - suite_id: live-codex-harness-docker
             label: Docker live Codex harness
-            command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-codex-harness-docker.sh
-            timeout_minutes: 120
+            command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh
+            timeout_minutes: 40
             profile_env_only: false
             profiles: stable full
     env:

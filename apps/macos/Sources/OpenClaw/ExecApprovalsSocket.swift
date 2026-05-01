@@ -253,12 +253,11 @@ enum ExecApprovalsPromptPresenter {
     }
 
     @MainActor
-    private static func buildAccessoryView(_ request: ExecApprovalPromptRequest) -> NSView {
+    static func buildAccessoryView(_ request: ExecApprovalPromptRequest) -> NSView {
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.spacing = 8
         stack.alignment = .leading
-        stack.translatesAutoresizingMaskIntoConstraints = false
         stack.widthAnchor.constraint(greaterThanOrEqualToConstant: 380).isActive = true
 
         let commandTitle = NSTextField(labelWithString: "Command")
@@ -337,6 +336,10 @@ enum ExecApprovalsPromptPresenter {
         footer.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
         stack.addArrangedSubview(footer)
 
+        // NSAlert reserves accessory space from the view frame, not from Auto Layout constraints.
+        // Give the top-level accessory an explicit frame so its subviews do not paint over the
+        // alert title, message, and buttons while the frame remains zero-sized.
+        stack.frame = NSRect(origin: .zero, size: stack.fittingSize)
         return stack
     }
 

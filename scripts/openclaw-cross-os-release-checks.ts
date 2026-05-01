@@ -1256,27 +1256,8 @@ export function buildRealUpdateEnv(env) {
   return updateEnv;
 }
 
-export function verifyPackagedUpgradeUpdateResult(result, options) {
+export function verifyPackagedUpgradeUpdateResult(result, _options) {
   if (result.exitCode === 0) {
-    return;
-  }
-
-  let payload = null;
-  try {
-    payload = JSON.parse(result.stdout);
-  } catch {
-    payload = null;
-  }
-
-  const steps = Array.isArray(payload?.steps) ? payload.steps : [];
-  const allStepsSucceeded = steps.every((step) => step?.exitCode === 0);
-  const afterVersion = typeof payload?.after?.version === "string" ? payload.after.version : "";
-  if (
-    payload?.status === "ok" &&
-    afterVersion === options.candidateVersion &&
-    allStepsSucceeded &&
-    isSelfSwappedPackageProcessExit(result.stderr)
-  ) {
     return;
   }
 
@@ -1284,15 +1265,6 @@ export function verifyPackagedUpgradeUpdateResult(result, options) {
     `Packaged upgrade failed (${result.exitCode}): ${trimForSummary(
       `${result.stdout}\n${result.stderr}`,
     )}`,
-  );
-}
-
-function isSelfSwappedPackageProcessExit(stderr) {
-  return (
-    typeof stderr === "string" &&
-    stderr.includes("[openclaw] Failed to start CLI:") &&
-    stderr.includes("ERR_MODULE_NOT_FOUND") &&
-    /[\\/]node_modules[\\/]openclaw[\\/]dist[\\/]/u.test(stderr)
   );
 }
 

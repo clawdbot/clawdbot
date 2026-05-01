@@ -72,6 +72,10 @@ describe("collectAppcastSparkleVersionErrors", () => {
 });
 
 describe("packed CLI smoke", () => {
+  it("keeps generated dynamic imports opaque to tsx's source lexer", () => {
+    expect(readFileSync("scripts/release-check.ts", "utf8")).not.toContain("import(");
+  });
+
   it("keeps the expected packaged CLI smoke command list", () => {
     expect(PACKED_CLI_SMOKE_COMMANDS).toEqual([
       ["--help"],
@@ -172,6 +176,7 @@ describe("workspace bootstrap smoke", () => {
       TMPDIR: "/tmp/original-tmp",
       OPENCLAW_NO_ONBOARD: "1",
       OPENCLAW_SUPPRESS_NOTES: "1",
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
       AWS_EC2_METADATA_DISABLED: "true",
       AWS_SHARED_CREDENTIALS_FILE: "/tmp/bootstrap-home/.aws/credentials",
@@ -913,13 +918,25 @@ describe("bundledRuntimeDependencySentinelCandidates", () => {
         "playwright-core",
         { HOME: homeRoot } as NodeJS.ProcessEnv,
       );
+      const realRootCandidates = bundledRuntimeDependencySentinelCandidates(
+        packageRoot,
+        "browser",
+        "playwright-core",
+        { HOME: homeRoot } as NodeJS.ProcessEnv,
+      );
       const externalCandidates = candidates.filter(
         (candidate) =>
           candidate.startsWith(join(homeRoot, ".openclaw", "plugin-runtime-deps")) &&
           candidate.endsWith(join("node_modules", "playwright-core", "package.json")),
       );
+      const realRootExternalCandidates = realRootCandidates.filter(
+        (candidate) =>
+          candidate.startsWith(join(homeRoot, ".openclaw", "plugin-runtime-deps")) &&
+          candidate.endsWith(join("node_modules", "playwright-core", "package.json")),
+      );
 
-      expect(externalCandidates.length).toBeGreaterThanOrEqual(2);
+      expect(externalCandidates).toEqual(realRootExternalCandidates);
+      expect(externalCandidates).toHaveLength(1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

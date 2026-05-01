@@ -338,7 +338,7 @@ export async function getHealthSnapshot(params?: {
   const includeSensitive = params?.includeSensitive !== false;
   const channels: Record<string, ChannelHealthSummary> = {};
   const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
-    includeSetupRuntimeFallback: false,
+    includeSetupFallbackPlugins: false,
   });
   const channelOrder = plugins.map((plugin) => plugin.id);
   const channelLabels: Record<string, string> = {};
@@ -563,7 +563,7 @@ export async function healthCommand(
       : resolvedAgents.filter((agent) => agent.agentId === defaultAgentId);
     const channelBindings = buildChannelAccountBindings(cfg);
     const displayPlugins = listReadOnlyChannelPluginsForConfig(cfg, {
-      includeSetupRuntimeFallback: false,
+      includeSetupFallbackPlugins: false,
     });
     if (debugEnabled) {
       runtime.log(info("[debug] local channel accounts"));

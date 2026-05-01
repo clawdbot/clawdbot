@@ -66,6 +66,56 @@ type SecretResolutionSource =
   | WebSearchCredentialResolutionSource
   | WebFetchCredentialResolutionSource;
 
+const WEB_FETCH_CREDENTIAL_FIELD_NAMES = new Set(["apikey", "key", "token", "secret", "password"]);
+
+function hasCredentialBearingWebFetchValue(
+  value: unknown,
+  defaults: SecretDefaults | undefined,
+  seen = new WeakSet<object>(),
+): boolean {
+  if (hasConfiguredSecretRef(value, defaults)) {
+    return true;
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  if (seen.has(value)) {
+    return false;
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.some((entry) => hasCredentialBearingWebFetchValue(entry, defaults, seen));
+  }
+  return Object.entries(value as Record<string, unknown>).some(([rawKey, entry]) => {
+    const key = rawKey.toLowerCase();
+    if (WEB_FETCH_CREDENTIAL_FIELD_NAMES.has(key) && entry != null && entry !== "") {
+      return true;
+    }
+    return hasCredentialBearingWebFetchValue(entry, defaults, seen);
+  });
+}
+
+function needsRuntimeWebFetchProviderDiscovery(params: {
+  fetch: FetchConfig;
+  rawProvider: string;
+  hasPluginWebFetchConfig: boolean;
+  defaults: SecretDefaults | undefined;
+}): boolean {
+  if (isRecord(params.fetch) && params.fetch.enabled === false) {
+    return false;
+  }
+  if (params.hasPluginWebFetchConfig) {
+    return true;
+  }
+  if (!isRecord(params.fetch)) {
+    return false;
+  }
+  if (params.rawProvider) {
+    return true;
+  }
+  return hasCredentialBearingWebFetchValue(params.fetch, params.defaults);
+}
+
 function hasPluginScopedWebToolConfig(
   config: OpenClawConfig,
   key: "webSearch" | "webFetch",
@@ -679,7 +729,13 @@ export async function resolveRuntimeWebTools(params: {
     providerSource: "none",
     diagnostics: [],
   };
-  if (fetch || hasPluginWebFetchConfig) {
+  const discoverFetchProviders = needsRuntimeWebFetchProviderDiscovery({
+    fetch,
+    rawProvider: rawFetchProvider,
+    hasPluginWebFetchConfig,
+    defaults,
+  });
+  if (discoverFetchProviders) {
     const fetchSurface = await resolveRuntimeWebProviderSurface({
       contract: "webFetchProviders",
       rawProvider: rawFetchProvider,

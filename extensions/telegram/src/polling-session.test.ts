@@ -276,6 +276,9 @@ describe("TelegramPollingSession", () => {
     await session.runUntilAbort();
 
     expect(runMock).toHaveBeenCalledTimes(2);
+    expect(createTelegramBotMock).toHaveBeenCalledWith(
+      expect.objectContaining({ minimumClientTimeoutSeconds: 45 }),
+    );
     expect(computeBackoffMock).toHaveBeenCalledTimes(1);
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
   });

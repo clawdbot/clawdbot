@@ -344,6 +344,23 @@ describe("buildQaRuntimeEnv", () => {
     await expect(wait).resolves.toBeUndefined();
   });
 
+  it("keeps restart offsets stable after stderr output", async () => {
+    const output = __testing.createQaGatewayChildLogCollector();
+    output.push(Buffer.from("gateway ready\n"));
+    output.push(Buffer.from("stderr warning\n"));
+    const offset = output.text().length;
+    const wait = __testing.waitForQaGatewayRestartBoundary({
+      logs: () => output.text(),
+      offset,
+      pollMs: 1,
+      timeoutMs: 100,
+    });
+
+    output.push(Buffer.from("signal SIGUSR1 received\nrestart mode: in-process restart\n"));
+
+    await expect(wait).resolves.toBeUndefined();
+  });
+
   it("times out when a SIGUSR1 restart never reaches the boundary", async () => {
     await expect(
       __testing.waitForQaGatewayRestartBoundary({

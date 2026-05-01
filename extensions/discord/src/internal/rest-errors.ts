@@ -20,21 +20,36 @@ export function readDiscordMessage(body: unknown, fallback: string): string {
   return typeof value === "string" && value.trim() ? value : fallback;
 }
 
-export function readRetryAfter(body: unknown, response: Response): number {
+function readRetryAfterHeader(value: string | null, now = Date.now()): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) {
+    return seconds;
+  }
+  const retryAt = Date.parse(value);
+  return Number.isFinite(retryAt) ? (retryAt - now) / 1000 : undefined;
+}
+
+function coerceRetryAfterSeconds(value: unknown): number | undefined {
+  if (typeof value !== "number" && typeof value !== "string") {
+    return undefined;
+  }
+  const seconds = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(seconds) && seconds >= 0 ? Math.max(0, seconds) : undefined;
+}
+
+export function readRetryAfter(body: unknown, response: Response, fallbackSeconds = 0): number {
   const bodyValue =
     body && typeof body === "object" && "retry_after" in body
       ? (body as { retry_after?: unknown }).retry_after
       : undefined;
-  const headerValue = response.headers.get("Retry-After");
-  const seconds =
-    typeof bodyValue === "number"
-      ? bodyValue
-      : typeof bodyValue === "string"
-        ? Number(bodyValue)
-        : headerValue
-          ? Number(headerValue)
-          : 0;
-  return Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
+  return (
+    coerceRetryAfterSeconds(bodyValue) ??
+    coerceRetryAfterSeconds(readRetryAfterHeader(response.headers.get("Retry-After"))) ??
+    fallbackSeconds
+  );
 }
 
 export class DiscordError extends Error {
@@ -66,7 +81,7 @@ export class RateLimitError extends DiscordError {
   ) {
     super(response, body);
     this.name = "RateLimitError";
-    this.retryAfter = readRetryAfter(body, response);
+    this.retryAfter = readRetryAfter(body, response, 1);
     this.scope = body.global ? "global" : response.headers.get("X-RateLimit-Scope");
     this.bucket = response.headers.get("X-RateLimit-Bucket");
   }

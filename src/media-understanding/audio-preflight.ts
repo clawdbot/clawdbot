@@ -4,6 +4,7 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import type { ActiveMediaModel } from "./active-model.types.js";
 import { isAudioAttachment } from "./attachments.js";
 import { runAudioTranscription } from "./audio-transcription-runner.js";
+import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
 import { normalizeMediaAttachments, resolveMediaAttachmentLocalRoots } from "./runner.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
@@ -57,6 +58,15 @@ export async function transcribeFirstAudio(params: {
     });
     if (!transcript) {
       return undefined;
+    }
+
+    if (audioConfig?.echoTranscript) {
+      await sendTranscriptEcho({
+        ctx,
+        cfg,
+        transcript,
+        format: audioConfig.echoFormat ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT,
+      });
     }
 
     // Mark this attachment as transcribed to avoid double-processing

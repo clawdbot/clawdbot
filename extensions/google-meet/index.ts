@@ -91,6 +91,26 @@ const googleMeetConfigSchema = {
       help: "Command that reads assistant audio from stdin in chrome.audioFormat.",
       advanced: true,
     },
+    "chrome.bargeInInputCommand": {
+      label: "Barge-In Input Command",
+      help: "Optional Gateway-hosted microphone command that writes signed 16-bit little-endian mono PCM for human interruption detection while assistant playback is active.",
+      advanced: true,
+    },
+    "chrome.bargeInRmsThreshold": {
+      label: "Barge-In RMS Threshold",
+      help: "RMS level on chrome.bargeInInputCommand that counts as a human interruption.",
+      advanced: true,
+    },
+    "chrome.bargeInPeakThreshold": {
+      label: "Barge-In Peak Threshold",
+      help: "Peak level on chrome.bargeInInputCommand that counts as a human interruption.",
+      advanced: true,
+    },
+    "chrome.bargeInCooldownMs": {
+      label: "Barge-In Cooldown (ms)",
+      help: "Minimum delay between repeated barge-in clears.",
+      advanced: true,
+    },
     "chrome.audioBridgeCommand": { label: "Audio Bridge Command", advanced: true },
     "chrome.audioBridgeHealthCommand": {
       label: "Audio Bridge Health Command",
@@ -118,7 +138,16 @@ const googleMeetConfigSchema = {
       label: "Voice Call Request Timeout (ms)",
       advanced: true,
     },
-    "voiceCall.dtmfDelayMs": { label: "DTMF Delay (ms)", advanced: true },
+    "voiceCall.dtmfDelayMs": {
+      label: "Legacy DTMF Delay (ms)",
+      help: "Compatibility setting from the old post-connect DTMF flow. Twilio Meet joins now play DTMF before realtime connect.",
+      advanced: true,
+    },
+    "voiceCall.postDtmfSpeechDelayMs": {
+      label: "Legacy Post-DTMF Speech Delay (ms)",
+      help: "Compatibility setting from the old delayed-speech flow. Twilio Meet joins now carry the intro as the initial Voice Call message.",
+      advanced: true,
+    },
     "voiceCall.introMessage": { label: "Voice Call Intro Message", advanced: true },
     "realtime.provider": {
       label: "Realtime Provider",

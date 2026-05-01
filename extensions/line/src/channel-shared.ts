@@ -1,11 +1,6 @@
 import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { hasLineCredentials, parseLineAllowFromId } from "./account-helpers.js";
-import {
-  resolveLineAccount,
-  type ChannelPlugin,
-  type OpenClawConfig,
-  type ResolvedLineAccount,
-} from "./channel-api.js";
+import { type ChannelPlugin, type ResolvedLineAccount } from "./channel-api.js";
 import { lineConfigAdapter } from "./config-adapter.js";
 import { LineChannelConfigSchema } from "./config-schema.js";
 
@@ -51,9 +46,5 @@ export const lineChannelPluginCommon = {
   ChannelPlugin<ResolvedLineAccount>,
   "meta" | "capabilities" | "reload" | "configSchema" | "config"
 >;
-
-export function isLineConfigured(cfg: OpenClawConfig, accountId: string): boolean {
-  return hasLineCredentials(resolveLineAccount({ cfg, accountId }));
-}
 
 export { parseLineAllowFromId };

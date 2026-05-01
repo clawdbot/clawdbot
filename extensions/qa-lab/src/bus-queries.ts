@@ -39,6 +39,11 @@ export function normalizeConversationFromTarget(target: string): {
       conversation: { id: trimmed.slice("channel:".length), kind: "channel" },
     };
   }
+  if (trimmed.startsWith("group:")) {
+    return {
+      conversation: { id: trimmed.slice("group:".length), kind: "group" },
+    };
+  }
   if (trimmed.startsWith("dm:")) {
     return {
       conversation: { id: trimmed.slice("dm:".length), kind: "direct" },

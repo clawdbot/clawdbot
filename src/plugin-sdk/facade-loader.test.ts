@@ -2,10 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveBundledRuntimeDependencyInstallRoot } from "../plugins/bundled-runtime-deps-roots.js";
 import {
   clearBundledRuntimeDependencyNodePaths,
   ensureBundledPluginRuntimeDeps,
-  resolveBundledRuntimeDependencyInstallRoot,
 } from "../plugins/bundled-runtime-deps.js";
 import { shouldExpectNativeJitiForJavaScriptTestRuntime } from "../test-utils/jiti-runtime.js";
 import {

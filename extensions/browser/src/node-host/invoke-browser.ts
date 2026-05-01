@@ -1,5 +1,6 @@
 import fsPromises from "node:fs/promises";
 import { redactCdpUrl } from "../browser/cdp.helpers.js";
+import { loadBrowserConfigForRuntimeRefresh } from "../browser/config-refresh-source.js";
 import { resolveBrowserConfig } from "../browser/config.js";
 import {
   isPersistentBrowserProfileMutation,
@@ -11,7 +12,6 @@ import {
   createBrowserControlContext,
   startBrowserControlServiceFromConfig,
 } from "../control-service.js";
-import { getRuntimeConfig } from "../sdk-config.js";
 import { withTimeout } from "../sdk-node-runtime.js";
 import { detectMime } from "../sdk-setup-tools.js";
 
@@ -44,7 +44,7 @@ function normalizeProfileAllowlist(raw?: string[]): string[] {
 }
 
 function resolveBrowserProxyConfig() {
-  const cfg = getRuntimeConfig();
+  const cfg = loadBrowserConfigForRuntimeRefresh();
   const proxy = cfg.nodeHost?.browserProxy;
   const allowProfiles = normalizeProfileAllowlist(proxy?.allowProfiles);
   const enabled = proxy?.enabled !== false;
@@ -64,7 +64,7 @@ async function ensureBrowserControlService(): Promise<void> {
     return browserControlReady;
   }
   browserControlReady = (async () => {
-    const cfg = getRuntimeConfig();
+    const cfg = loadBrowserConfigForRuntimeRefresh();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     if (!resolved.enabled) {
       throw new Error("browser control disabled");
@@ -231,7 +231,7 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
   }
 
   await ensureBrowserControlService();
-  const cfg = getRuntimeConfig();
+  const cfg = loadBrowserConfigForRuntimeRefresh();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const method = typeof params.method === "string" ? params.method.toUpperCase() : "GET";
   const path = normalizeBrowserRequestPath(pathValue);

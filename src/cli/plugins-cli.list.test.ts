@@ -120,7 +120,7 @@ describe("plugins cli list", () => {
     expect(runtimeLogs.join("\n")).toContain("Plugin registry refreshed: 1/2 enabled");
   });
 
-  it("shows conversation-access hook policy in inspect output", async () => {
+  it("keeps inspect on the static snapshot by default", async () => {
     buildPluginSnapshotReport.mockReturnValue({
       plugins: [createPluginRecord({ id: "openclaw-mem0", name: "Mem0" })],
       diagnostics: [],
@@ -156,12 +156,50 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "inspect", "openclaw-mem0"]);
 
+    expect(buildPluginDiagnosticsReport).not.toHaveBeenCalled();
+    expect(runtimeLogs.join("\n")).toContain("Policy");
+    expect(runtimeLogs.join("\n")).toContain("allowConversationAccess: true");
+  });
+
+  it("runtime-inspects without repairing deps", async () => {
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [createPluginRecord({ id: "openclaw-mem0", name: "Mem0" })],
+      diagnostics: [],
+    });
+    buildPluginInspectReport.mockReturnValue({
+      workspaceDir: "/workspace",
+      plugin: createPluginRecord({ id: "openclaw-mem0", name: "Mem0" }),
+      shape: "hook-only",
+      capabilityMode: "plain",
+      capabilityCount: 1,
+      capabilities: [],
+      typedHooks: [],
+      customHooks: [],
+      tools: [],
+      commands: [],
+      cliCommands: [],
+      services: [],
+      gatewayDiscoveryServices: [],
+      gatewayMethods: [],
+      mcpServers: [],
+      lspServers: [],
+      httpRouteCount: 0,
+      bundleCapabilities: [],
+      diagnostics: [],
+      policy: {
+        allowedModels: [],
+        hasAllowedModelsConfig: false,
+      },
+      usesLegacyBeforeAgentStart: false,
+      compatibility: [],
+    });
+
+    await runPluginsCommand(["plugins", "inspect", "openclaw-mem0", "--runtime"]);
+
     expect(buildPluginDiagnosticsReport).toHaveBeenCalledWith({
       config: {},
       onlyPluginIds: ["openclaw-mem0"],
     });
-    expect(runtimeLogs.join("\n")).toContain("Policy");
-    expect(runtimeLogs.join("\n")).toContain("allowConversationAccess: true");
   });
 
   it("does not runtime-load plugins when inspect target is missing", async () => {

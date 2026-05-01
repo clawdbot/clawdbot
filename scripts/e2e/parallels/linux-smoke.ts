@@ -101,6 +101,8 @@ const defaultOptions = (): LinuxOptions => ({
   vmNameExplicit: false,
 });
 
+const agentModelTimeoutSeconds = Number(process.env.OPENCLAW_PARALLELS_MODEL_TIMEOUT_S || 300);
+
 function usage(): string {
   return `Usage: bash scripts/e2e/parallels-linux-smoke.sh [options]
 
@@ -672,6 +674,14 @@ rm -rf /root/.openclaw/test-bad-plugin`);
 
   private verifyLocalTurn(): void {
     this.guestExec(["openclaw", "models", "set", this.auth.modelId]);
+    this.guestExec([
+      "openclaw",
+      "config",
+      "set",
+      `models.providers.${this.options.provider}.timeoutSeconds`,
+      String(agentModelTimeoutSeconds),
+      "--strict-json",
+    ]);
     this.guestExec([
       "openclaw",
       "config",

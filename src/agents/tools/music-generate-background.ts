@@ -17,6 +17,7 @@ const musicGenerationTaskLifecycle = createMediaGenerationTaskLifecycle({
   eventSource: "music_generation",
   announceType: "music generation task",
   completionLabel: "music",
+  directCompletionDelivery: "disabled",
 });
 
 export const createMusicGenerationTaskRun = (

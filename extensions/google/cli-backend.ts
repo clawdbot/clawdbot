@@ -25,6 +25,7 @@ export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
     },
     bundleMcp: true,
     bundleMcpMode: "gemini-system-settings",
+    nativeToolMode: "always-on",
     config: {
       command: "gemini",
       args: ["--skip-trust", "--output-format", "json", "--prompt", "{prompt}"],

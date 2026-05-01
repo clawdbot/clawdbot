@@ -8,8 +8,6 @@ import {
 } from "./commands-subagents-dispatch.js";
 import type { CommandHandler } from "./commands-types.js";
 
-export { extractMessageText } from "./commands-subagents-text.js";
-
 let actionAgentsPromise: Promise<typeof import("./commands-subagents/action-agents.js")> | null =
   null;
 let actionFocusPromise: Promise<typeof import("./commands-subagents/action-focus.js")> | null =

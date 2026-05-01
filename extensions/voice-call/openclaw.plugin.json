@@ -1,7 +1,9 @@
 {
   "id": "voice-call",
+  "commandAliases": [{ "name": "voicecall" }],
   "activation": {
-    "onStartup": true
+    "onStartup": true,
+    "onCommands": ["voicecall"]
   },
   "channelEnvVars": {
     "voice-call": [
@@ -131,6 +133,32 @@
     },
     "realtime.instructions": {
       "label": "Realtime Instructions",
+      "advanced": true
+    },
+    "realtime.toolPolicy": {
+      "label": "Realtime Tool Policy",
+      "help": "Controls the shared openclaw_agent_consult tool.",
+      "advanced": true
+    },
+    "realtime.fastContext.enabled": {
+      "label": "Enable Fast Realtime Context",
+      "help": "Searches memory/session context before the full consult agent.",
+      "advanced": true
+    },
+    "realtime.fastContext.timeoutMs": {
+      "label": "Fast Context Timeout",
+      "advanced": true
+    },
+    "realtime.fastContext.maxResults": {
+      "label": "Fast Context Result Limit",
+      "advanced": true
+    },
+    "realtime.fastContext.sources": {
+      "label": "Fast Context Sources",
+      "advanced": true
+    },
+    "realtime.fastContext.fallbackToConsult": {
+      "label": "Fallback To Full Consult",
       "advanced": true
     },
     "realtime.providers": {
@@ -450,6 +478,34 @@
               "required": ["type", "name", "description", "parameters"]
             }
           },
+          "fastContext": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "timeoutMs": {
+                "type": "number",
+                "minimum": 1
+              },
+              "maxResults": {
+                "type": "number",
+                "minimum": 1
+              },
+              "sources": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "enum": ["memory", "sessions"]
+                }
+              },
+              "fallbackToConsult": {
+                "type": "boolean"
+              }
+            }
+          },
           "providers": {
             "type": "object",
             "additionalProperties": {
@@ -725,6 +781,8 @@
     "secretInputs": {
       "paths": [
         { "path": "twilio.authToken", "expected": "string" },
+        { "path": "realtime.providers.*.apiKey", "expected": "string" },
+        { "path": "streaming.providers.*.apiKey", "expected": "string" },
         { "path": "tts.providers.*.apiKey", "expected": "string" }
       ]
     }

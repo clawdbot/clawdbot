@@ -182,6 +182,12 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        midTurnPrecheck: z
+          .object({
+            enabled: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
         postIndexSync: z.enum(["off", "async", "await"]).optional(),
         postCompactionSections: z.array(z.string()).optional(),
         model: z.string().optional(),

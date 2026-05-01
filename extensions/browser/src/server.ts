@@ -1,6 +1,13 @@
 import type { Server } from "node:http";
 import express from "express";
+import {
+  createBrowserControlContext,
+  ensureBrowserControlRuntime,
+  getBrowserControlState,
+  stopBrowserControlRuntime,
+} from "./browser-control-state.js";
 import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "./browser/bridge-auth-registry.js";
+import { loadBrowserConfigForRuntimeRefresh } from "./browser/config-refresh-source.js";
 import { resolveBrowserConfig } from "./browser/config.js";
 import {
   ensureBrowserControlAuth,
@@ -9,8 +16,7 @@ import {
 } from "./browser/control-auth.js";
 import { registerBrowserRoutes } from "./browser/routes/index.js";
 import type { BrowserRouteRegistrar } from "./browser/routes/types.js";
-import { createBrowserRuntimeState, stopBrowserRuntime } from "./browser/runtime-lifecycle.js";
-import { type BrowserServerState, createBrowserRouteContext } from "./browser/server-context.js";
+import type { BrowserServerState } from "./browser/server-context.js";
 import {
   installBrowserAuthMiddleware,
   installBrowserCommonMiddleware,
@@ -19,20 +25,21 @@ import { getRuntimeConfig } from "./config/config.js";
 import { createSubsystemLogger } from "./logging/subsystem.js";
 import { isDefaultBrowserPluginEnabled } from "./plugin-enabled.js";
 
-let state: BrowserServerState | null = null;
 const log = createSubsystemLogger("browser");
 const logServer = log.child("server");
 
 export async function startBrowserControlServerFromConfig(): Promise<BrowserServerState | null> {
-  if (state) {
-    return state;
+  const current = getBrowserControlState();
+  if (current?.server) {
+    return current;
   }
 
   const cfg = getRuntimeConfig();
-  if (!isDefaultBrowserPluginEnabled(cfg)) {
+  const browserCfg = loadBrowserConfigForRuntimeRefresh();
+  if (!isDefaultBrowserPluginEnabled(browserCfg)) {
     return null;
   }
-  const resolved = resolveBrowserConfig(cfg.browser, cfg);
+  const resolved = resolveBrowserConfig(browserCfg.browser, browserCfg);
   if (!resolved.enabled) {
     return null;
   }
@@ -70,10 +77,7 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
   installBrowserCommonMiddleware(app);
   installBrowserAuthMiddleware(app, browserAuth);
 
-  const ctx = createBrowserRouteContext({
-    getState: () => state,
-    refreshConfigFromDisk: true,
-  });
+  const ctx = createBrowserControlContext();
   registerBrowserRoutes(app as unknown as BrowserRouteRegistrar, ctx);
 
   const port = resolved.controlPort;
@@ -89,10 +93,11 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
     return null;
   }
 
-  state = await createBrowserRuntimeState({
+  const state = await ensureBrowserControlRuntime({
     server,
     port,
     resolved,
+    owner: "server",
     onWarn: (message) => logServer.warn(message),
   });
   setBridgeAuthForPort(port, browserAuth);
@@ -103,16 +108,12 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
 }
 
 export async function stopBrowserControlServer(): Promise<void> {
-  const current = state;
+  const current = getBrowserControlState();
   if (current?.port) {
     deleteBridgeAuthForPort(current.port);
   }
-  await stopBrowserRuntime({
-    current,
-    getState: () => state,
-    clearState: () => {
-      state = null;
-    },
+  await stopBrowserControlRuntime({
+    requestedBy: "server",
     closeServer: true,
     onWarn: (message) => logServer.warn(message),
   });

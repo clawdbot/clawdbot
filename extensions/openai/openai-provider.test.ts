@@ -785,7 +785,11 @@ describe("buildOpenAIProvider", () => {
       payload,
     });
 
-    expect(mocks.openAIResponsesTransportStreamFn).toHaveBeenCalledTimes(1);
+    expect(mocks.openAIResponsesTransportStreamFn).not.toHaveBeenCalled();
+    expect(result.options?.headers).toMatchObject({
+      originator: "openclaw",
+      "User-Agent": expect.stringMatching(/^openclaw\//u),
+    });
     expect(result.payload.store).toBe(false);
     expect(result.payload.service_tier).toBe("priority");
     expect(result.payload.text).toEqual({ verbosity: "high" });

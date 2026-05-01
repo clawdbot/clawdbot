@@ -342,11 +342,11 @@ export async function runCli(argv: string[] = process.argv) {
     handle?.kill("SIGTERM");
   };
   if (shouldStartProxyForCli(normalizedArgv)) {
-    const [{ getRuntimeConfig }, { startProxy }] = await Promise.all([
+    const [{ readBestEffortConfig }, { startProxy }] = await Promise.all([
       import("../config/io.js"),
       import("../infra/net/proxy/proxy-lifecycle.js"),
     ]);
-    const config = getRuntimeConfig();
+    const config = await readBestEffortConfig();
     proxyHandle = await startProxy(config?.proxy ?? undefined);
   }
 

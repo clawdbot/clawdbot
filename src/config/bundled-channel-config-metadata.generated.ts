@@ -9786,6 +9786,92 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             ],
           },
         },
+        groupPolicy: {
+          type: "string",
+          enum: ["open", "allowlist", "disabled"],
+        },
+        groupAllowFrom: {
+          type: "array",
+          items: {
+            anyOf: [
+              {
+                type: "string",
+              },
+              {
+                type: "number",
+              },
+            ],
+          },
+        },
+        groups: {
+          type: "object",
+          propertyNames: {
+            type: "string",
+          },
+          additionalProperties: {
+            type: "object",
+            properties: {
+              requireMention: {
+                type: "boolean",
+              },
+              tools: {
+                type: "object",
+                properties: {
+                  allow: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                  alsoAllow: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                  deny: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                },
+                additionalProperties: false,
+              },
+              toolsBySender: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    allow: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    alsoAllow: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    deny: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+            },
+            additionalProperties: false,
+          },
+        },
         defaultTo: {
           type: "string",
         },
@@ -9847,6 +9933,92 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                       type: "number",
                     },
                   ],
+                },
+              },
+              groupPolicy: {
+                type: "string",
+                enum: ["open", "allowlist", "disabled"],
+              },
+              groupAllowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              groups: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    requireMention: {
+                      type: "boolean",
+                    },
+                    tools: {
+                      type: "object",
+                      properties: {
+                        allow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        alsoAllow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        deny: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    toolsBySender: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          allow: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          alsoAllow: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          deny: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                  },
+                  additionalProperties: false,
                 },
               },
               defaultTo: {

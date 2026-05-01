@@ -44,6 +44,7 @@ import type { QaTransportAdapter } from "./qa-transport.js";
 export type { QaCliBackendAuthMode } from "./providers/env.js";
 const QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS = 5;
 const QA_GATEWAY_CHILD_RPC_RETRY_HEALTH_TIMEOUT_MS = 60_000;
+const QA_GATEWAY_CHILD_RESTART_BOUNDARY_TIMEOUT_MS = 90_000;
 const QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS = Object.freeze([
   "OPENCLAW_QA_CONVEX_SECRET_CI",
   "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER",
@@ -247,6 +248,18 @@ function isRetryableGatewayCallError(details: string): boolean {
   );
 }
 
+function createQaGatewayChildLogCollector() {
+  const chunks: Buffer[] = [];
+  return {
+    push(chunk: Buffer) {
+      chunks.push(Buffer.from(chunk));
+    },
+    text() {
+      return Buffer.concat(chunks).toString("utf8").trim();
+    },
+  };
+}
+
 async function fetchLocalGatewayHealth(params: {
   baseUrl: string;
   healthPath: "/readyz" | "/healthz";
@@ -276,7 +289,7 @@ async function waitForQaGatewayRestartBoundary(params: {
   pollMs?: number;
   timeoutMs?: number;
 }) {
-  const timeoutMs = params.timeoutMs ?? 30_000;
+  const timeoutMs = params.timeoutMs ?? QA_GATEWAY_CHILD_RESTART_BOUNDARY_TIMEOUT_MS;
   const pollMs = params.pollMs ?? 100;
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
@@ -307,6 +320,7 @@ export const __testing = {
   resolveQaOwnerPluginIdsForProviderIds,
   resolveQaBundledPluginSourceDir,
   resolveQaRuntimeHostVersion,
+  createQaGatewayChildLogCollector,
   createQaBundledPluginsDir,
   stopQaGatewayChildProcessTree,
 };
@@ -574,13 +588,13 @@ export async function startQaGatewayChild(params: {
   };
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
+  const output = createQaGatewayChildLogCollector();
   const stdoutLogPath = path.join(tempRoot, "gateway.stdout.log");
   const stderrLogPath = path.join(tempRoot, "gateway.stderr.log");
   const stdoutLog = createWriteStream(stdoutLogPath, { flags: "a" });
   const stderrLog = createWriteStream(stderrLogPath, { flags: "a" });
 
-  const logs = () =>
-    `${Buffer.concat(stdout).toString("utf8")}\n${Buffer.concat(stderr).toString("utf8")}`.trim();
+  const logs = () => output.text();
   const keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1";
   let gatewayPort = 0;
   let baseUrl = "";
@@ -667,11 +681,13 @@ export async function startQaGatewayChild(params: {
       attemptChild.stdout.on("data", (chunk) => {
         const buffer = Buffer.from(chunk);
         stdout.push(buffer);
+        output.push(buffer);
         stdoutLog.write(buffer);
       });
       attemptChild.stderr.on("data", (chunk) => {
         const buffer = Buffer.from(chunk);
         stderr.push(buffer);
+        output.push(buffer);
         stderrLog.write(buffer);
       });
       child = attemptChild;
@@ -760,11 +776,13 @@ export async function startQaGatewayChild(params: {
       nextChild.stdout.on("data", (chunk) => {
         const buffer = Buffer.from(chunk);
         stdout.push(buffer);
+        output.push(buffer);
         stdoutLog.write(buffer);
       });
       nextChild.stderr.on("data", (chunk) => {
         const buffer = Buffer.from(chunk);
         stderr.push(buffer);
+        output.push(buffer);
         stderrLog.write(buffer);
       });
 

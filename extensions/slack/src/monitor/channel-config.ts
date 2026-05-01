@@ -4,10 +4,9 @@ import {
   resolveChannelEntryMatchWithFallback,
   type ChannelMatchSource,
 } from "openclaw/plugin-sdk/channel-targets";
-import type { SlackReactionNotificationMode } from "openclaw/plugin-sdk/config-types";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { SlackMessageEvent } from "../types.js";
-import { allowListMatches, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
+import { normalizeSlackSlug } from "./allow-list.js";
 
 export type SlackChannelConfigResolved = {
   allowed: boolean;
@@ -38,41 +37,6 @@ function firstDefined<T>(...values: Array<T | undefined>) {
     }
   }
   return undefined;
-}
-
-export function shouldEmitSlackReactionNotification(params: {
-  mode: SlackReactionNotificationMode | undefined;
-  botId?: string | null;
-  messageAuthorId?: string | null;
-  userId: string;
-  userName?: string | null;
-  allowlist?: Array<string | number> | null;
-  allowNameMatching?: boolean;
-}) {
-  const { mode, botId, messageAuthorId, userId, userName, allowlist } = params;
-  const effectiveMode = mode ?? "own";
-  if (effectiveMode === "off") {
-    return false;
-  }
-  if (effectiveMode === "own") {
-    if (!botId || !messageAuthorId) {
-      return false;
-    }
-    return messageAuthorId === botId;
-  }
-  if (effectiveMode === "allowlist") {
-    if (!Array.isArray(allowlist) || allowlist.length === 0) {
-      return false;
-    }
-    const users = normalizeAllowListLower(allowlist);
-    return allowListMatches({
-      allowList: users,
-      id: userId,
-      name: userName ?? undefined,
-      allowNameMatching: params.allowNameMatching,
-    });
-  }
-  return true;
 }
 
 export function resolveSlackChannelLabel(params: { channelId?: string; channelName?: string }) {

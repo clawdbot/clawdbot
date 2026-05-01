@@ -147,6 +147,60 @@ describe("resolvePluginConfigContractsById", () => {
     );
   });
 
+  it("refreshes stale bundled SecretInput contracts from bundled metadata", () => {
+    mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
+      createRegistry([
+        createPluginRecord({
+          id: "voice-call",
+          origin: "bundled",
+          configContracts: {
+            compatibilityMigrationPaths: ["plugins.entries.voice-call.config"],
+            secretInputs: {
+              paths: [{ path: "twilio.authToken", expected: "string" }],
+            },
+          },
+        }),
+      ]),
+    );
+    mocks.findBundledPluginMetadataById.mockReturnValue({
+      manifest: {
+        configContracts: {
+          secretInputs: {
+            paths: [
+              { path: "twilio.authToken", expected: "string" },
+              { path: "realtime.providers.*.apiKey", expected: "string" },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(
+      resolvePluginConfigContractsById({
+        pluginIds: ["voice-call"],
+        fallbackToBundledMetadataForResolvedBundled: true,
+      }),
+    ).toEqual(
+      new Map([
+        [
+          "voice-call",
+          {
+            origin: "bundled",
+            configContracts: {
+              compatibilityMigrationPaths: ["plugins.entries.voice-call.config"],
+              secretInputs: {
+                paths: [
+                  { path: "twilio.authToken", expected: "string" },
+                  { path: "realtime.providers.*.apiKey", expected: "string" },
+                ],
+              },
+            },
+          },
+        ],
+      ]),
+    );
+  });
+
   it("can hydrate missing contracts for plugin ids known to be bundled by runtime discovery", () => {
     mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
       createRegistry([

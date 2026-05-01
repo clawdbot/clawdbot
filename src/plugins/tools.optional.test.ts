@@ -457,6 +457,7 @@ describe("resolvePluginTools optional tools", () => {
 
     expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        installBundledRuntimeDeps: false,
         runtimeOptions: {
           allowGatewaySubagentBinding: true,
         },

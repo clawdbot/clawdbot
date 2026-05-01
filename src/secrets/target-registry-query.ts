@@ -251,12 +251,6 @@ export function listSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
   );
 }
 
-export function isKnownSecretTargetType(value: unknown): value is string {
-  return (
-    typeof value === "string" && getCompiledSecretTargetRegistryState().targetsByType.has(value)
-  );
-}
-
 export function isKnownSecretTargetId(value: unknown): value is string {
   return (
     typeof value === "string" && getCompiledSecretTargetRegistryState().knownTargetIds.has(value)
@@ -396,11 +390,7 @@ export function discoverConfigSecretTargetsByIds(
   return discoverSecretTargetsFromEntries(config, discoveryEntries);
 }
 
-export function discoverAuthProfileSecretTargets(store: unknown): DiscoveredConfigSecretTarget[] {
-  return discoverAuthProfileSecretTargetsByIds(store);
-}
-
-export function discoverAuthProfileSecretTargetsByIds(
+export function discoverAuthProfileSecretTargets(
   store: unknown,
   targetIds?: Iterable<string>,
 ): DiscoveredConfigSecretTarget[] {

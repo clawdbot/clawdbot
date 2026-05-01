@@ -378,7 +378,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `config.apply` validates + replaces the full config payload.
     - `config.schema` returns the live config schema payload used by Control UI and CLI tooling: schema, `uiHints`, version, and generation metadata, including plugin + channel schema metadata when the runtime can load it. The schema includes field `title` / `description` metadata derived from the same labels and help text used by the UI, including nested object, wildcard, array-item, and `anyOf` / `oneOf` / `allOf` composition branches when matching field documentation exists.
     - `config.schema.lookup` returns a path-scoped lookup payload for one config path: normalized path, a shallow schema node, matched hint + `hintPath`, and immediate child summaries for UI/CLI drill-down. Lookup schema nodes keep the user-facing docs and common validation fields (`title`, `description`, `type`, `enum`, `const`, `format`, `pattern`, numeric/string/array/object bounds, and flags like `additionalProperties`, `deprecated`, `readOnly`, `writeOnly`). Child summaries expose `key`, normalized `path`, `type`, `required`, `hasChildren`, plus the matched `hint` / `hintPath`.
-    - `update.run` runs the gateway update flow and schedules a restart only when the update itself succeeded.
+    - `update.run` runs the gateway update flow and schedules a restart only when the update itself succeeded. Package-manager updates force a non-deferred update restart after the package swap so the old Gateway process does not keep lazy-loading from a replaced `dist` tree.
     - `update.status` returns the latest cached update restart sentinel, including the post-restart running version when available.
     - `wizard.start`, `wizard.next`, `wizard.status`, and `wizard.cancel` expose the onboarding wizard over WS RPC.
 
@@ -388,6 +388,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `agents.list` returns configured agent entries, including effective model and runtime metadata.
     - `agents.create`, `agents.update`, and `agents.delete` manage agent records and workspace wiring.
     - `agents.files.list`, `agents.files.get`, and `agents.files.set` manage the bootstrap workspace files exposed for an agent.
+    - `artifacts.list`, `artifacts.get`, and `artifacts.download` expose transcript-derived artifact summaries and downloads for an explicit `sessionKey`, `runId`, or `taskId` scope. Run and task queries resolve the owning session server-side and only return transcript media with matching provenance; unsafe or local URL sources return unsupported downloads instead of fetching server-side.
     - `agent.identity.get` returns the effective assistant identity for an agent or session.
     - `agent.wait` waits for a run to finish and returns the terminal snapshot when available.
 
@@ -442,7 +443,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
 
   <Accordion title="Automation, skills, and tools">
     - Automation: `wake` schedules an immediate or next-heartbeat wake text injection; `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`, `cron.run`, `cron.runs` manage scheduled work.
-    - Skills and tools: `commands.list`, `skills.*`, `tools.catalog`, `tools.effective`.
+    - Skills and tools: `commands.list`, `skills.*`, `tools.catalog`, `tools.effective`, `tools.invoke`.
 
   </Accordion>
 </AccordionGroup>
@@ -500,6 +501,15 @@ enumeration of `src/gateway/server-methods/*.ts`.
     caller-supplied auth or delivery context.
   - The response is session-scoped and reflects what the active conversation can use right now,
     including core, plugin, and channel tools.
+- Operators may call `tools.invoke` (`operator.write`) to invoke one available tool through the
+  same gateway policy path as `/tools/invoke`.
+  - `name` is required. `args`, `sessionKey`, `agentId`, `confirm`, and
+    `idempotencyKey` are optional.
+  - If both `sessionKey` and `agentId` are present, the resolved session agent must match
+    `agentId`.
+  - The response is an SDK-facing envelope with `ok`, `toolName`, optional `output`, and typed
+    `error` fields. Approval or policy refusals return `ok:false` in the payload rather than
+    bypassing the gateway tool policy pipeline.
 - Operators may call `skills.status` (`operator.read`) to fetch the visible
   skill inventory for an agent.
   - `agentId` is optional; omit it to read the default agent workspace.

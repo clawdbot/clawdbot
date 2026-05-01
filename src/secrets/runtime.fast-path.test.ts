@@ -6,7 +6,14 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { clearSecretsRuntimeSnapshot } from "./runtime.js";
 import { asConfig } from "./runtime.test-support.js";
 
-const runtimePrepareImportMock = vi.hoisted(() => vi.fn());
+const { resolveRuntimeWebToolsMock, runtimePrepareImportMock } = vi.hoisted(() => ({
+  resolveRuntimeWebToolsMock: vi.fn(async () => ({
+    search: { providerSource: "none", diagnostics: [] },
+    fetch: { providerSource: "none", diagnostics: [] },
+    diagnostics: [],
+  })),
+  runtimePrepareImportMock: vi.fn(),
+}));
 
 vi.mock("./runtime-prepare.runtime.js", () => {
   runtimePrepareImportMock();
@@ -23,11 +30,7 @@ vi.mock("./runtime-prepare.runtime.js", () => {
     collectAuthStoreAssignments: () => undefined,
     resolveSecretRefValues: async () => new Map(),
     applyResolvedAssignments: () => undefined,
-    resolveRuntimeWebTools: async () => ({
-      search: { providerSource: "none", diagnostics: [] },
-      fetch: { providerSource: "none", diagnostics: [] },
-      diagnostics: [],
-    }),
+    resolveRuntimeWebTools: resolveRuntimeWebToolsMock,
   };
 });
 
@@ -38,6 +41,7 @@ function emptyAuthStore(): AuthProfileStore {
 describe("secrets runtime fast path", () => {
   afterEach(() => {
     runtimePrepareImportMock.mockClear();
+    resolveRuntimeWebToolsMock.mockClear();
     setActivePluginRegistry(createEmptyPluginRegistry());
     clearSecretsRuntimeSnapshot();
     clearRuntimeConfigSnapshot();
@@ -72,6 +76,57 @@ describe("secrets runtime fast path", () => {
     ]);
   });
 
+  it("uses the fast path when web fetch only configures runtime limits", async () => {
+    const { prepareSecretsRuntimeSnapshot } = await import("./runtime.js");
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            fetch: {
+              enabled: true,
+              maxChars: 200_000,
+              maxCharsCap: 2_000_000,
+            },
+          },
+        },
+        plugins: {
+          enabled: true,
+          allow: [],
+          entries: {},
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: emptyAuthStore,
+    });
+
+    expect(runtimePrepareImportMock).not.toHaveBeenCalled();
+    expect(snapshot.webTools.fetch.providerSource).toBe("none");
+  });
+
+  it("uses the fast path when web fetch is explicitly disabled", async () => {
+    const { prepareSecretsRuntimeSnapshot } = await import("./runtime.js");
+
+    await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            fetch: {
+              enabled: false,
+              maxChars: 200_000,
+            },
+          },
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: emptyAuthStore,
+    });
+
+    expect(runtimePrepareImportMock).not.toHaveBeenCalled();
+  });
+
   it("uses the resolver path when an auth profile store contains a SecretRef", async () => {
     const { prepareSecretsRuntimeSnapshot } = await import("./runtime.js");
 
@@ -91,6 +146,27 @@ describe("secrets runtime fast path", () => {
       }),
     });
 
-    expect(runtimePrepareImportMock).toHaveBeenCalledTimes(1);
+    expect(resolveRuntimeWebToolsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps explicit web fetch provider config on the resolver path", async () => {
+    const { prepareSecretsRuntimeSnapshot } = await import("./runtime.js");
+
+    await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            fetch: {
+              provider: "firecrawl",
+            },
+          },
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: emptyAuthStore,
+    });
+
+    expect(resolveRuntimeWebToolsMock).toHaveBeenCalledTimes(1);
   });
 });

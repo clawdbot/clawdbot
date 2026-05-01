@@ -8,12 +8,51 @@ import {
   formatValidationErrors,
   validateModelsListParams,
 } from "../protocol/index.js";
+import type { GatewayRequestContext } from "./shared-types.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 type ModelsListView = "default" | "configured" | "all";
+type GatewayModelCatalog = Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>;
+
+const MODELS_LIST_CATALOG_TIMEOUT_MS = 750;
+let loggedSlowModelsListCatalog = false;
 
 function resolveModelsListView(params: Record<string, unknown>): ModelsListView {
   return typeof params.view === "string" ? (params.view as ModelsListView) : "default";
+}
+
+async function loadModelsListCatalog(
+  context: GatewayRequestContext,
+  view: ModelsListView,
+): Promise<GatewayModelCatalog> {
+  if (view === "all") {
+    return await context.loadGatewayModelCatalog();
+  }
+  let timeout: NodeJS.Timeout | undefined;
+  const timedOut = Symbol("models-list-catalog-timeout");
+  const catalogPromise = context.loadGatewayModelCatalog();
+  const timeoutPromise = new Promise<typeof timedOut>((resolve) => {
+    timeout = setTimeout(() => resolve(timedOut), MODELS_LIST_CATALOG_TIMEOUT_MS);
+    timeout.unref?.();
+  });
+  try {
+    const result = await Promise.race([catalogPromise, timeoutPromise]);
+    if (result === timedOut) {
+      catalogPromise.catch(() => undefined);
+      if (!loggedSlowModelsListCatalog) {
+        loggedSlowModelsListCatalog = true;
+        context.logGateway.debug(
+          `models.list continuing without model catalog after ${MODELS_LIST_CATALOG_TIMEOUT_MS}ms`,
+        );
+      }
+      return [];
+    }
+    return result;
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 export const modelsHandlers: GatewayRequestHandlers = {
@@ -30,12 +69,12 @@ export const modelsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const catalog = await context.loadGatewayModelCatalog();
       const cfg = context.getRuntimeConfig();
       const workspaceDir =
         resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) ??
         resolveDefaultAgentWorkspaceDir();
       const view = resolveModelsListView(params);
+      const catalog = await loadModelsListCatalog(context, view);
       if (view === "all") {
         respond(true, { models: catalog }, undefined);
         return;

@@ -197,10 +197,72 @@ function createEmptyRuntimeWebToolsMetadata(): RuntimeWebToolsMetadata {
   };
 }
 
+const WEB_FETCH_CREDENTIAL_FIELD_NAMES = new Set(["apikey", "key", "token", "secret", "password"]);
+
+function hasCredentialBearingWebFetchValue(
+  value: unknown,
+  defaults: Parameters<typeof coerceSecretRef>[1],
+  seen = new WeakSet<object>(),
+): boolean {
+  if (coerceSecretRef(value, defaults)) {
+    return true;
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  if (seen.has(value)) {
+    return false;
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.some((entry) => hasCredentialBearingWebFetchValue(entry, defaults, seen));
+  }
+  return Object.entries(value as Record<string, unknown>).some(([rawKey, entry]) => {
+    const key = rawKey.toLowerCase();
+    if (WEB_FETCH_CREDENTIAL_FIELD_NAMES.has(key) && entry != null && entry !== "") {
+      return true;
+    }
+    return hasCredentialBearingWebFetchValue(entry, defaults, seen);
+  });
+}
+
+function hasActiveRuntimeWebFetchProviderSurface(
+  fetch: unknown,
+  defaults: Parameters<typeof coerceSecretRef>[1],
+): boolean {
+  if (!fetch || typeof fetch !== "object" || Array.isArray(fetch)) {
+    return false;
+  }
+  const fetchConfig = fetch as Record<string, unknown>;
+  if (fetchConfig.enabled === false) {
+    return false;
+  }
+  if (typeof fetchConfig.provider === "string" && fetchConfig.provider.trim()) {
+    return true;
+  }
+  return hasCredentialBearingWebFetchValue(fetchConfig, defaults);
+}
+
 function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
   const web = config.tools?.web;
-  if (web && typeof web === "object" && ("search" in web || "fetch" in web || "x_search" in web)) {
-    return true;
+  const defaults = config.secrets?.defaults;
+  const fetchExplicitlyDisabled =
+    web &&
+    typeof web === "object" &&
+    !Array.isArray(web) &&
+    typeof (web as Record<string, unknown>).fetch === "object" &&
+    (web as { fetch?: { enabled?: unknown } }).fetch?.enabled === false;
+  if (web && typeof web === "object" && !Array.isArray(web)) {
+    const webRecord = web as Record<string, unknown>;
+    if ("search" in webRecord || "x_search" in webRecord) {
+      return true;
+    }
+    if (
+      "fetch" in webRecord &&
+      hasActiveRuntimeWebFetchProviderSurface(webRecord.fetch, defaults)
+    ) {
+      return true;
+    }
   }
   const entries = config.plugins?.entries;
   if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
@@ -215,7 +277,7 @@ function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
       !!pluginConfig &&
       typeof pluginConfig === "object" &&
       !Array.isArray(pluginConfig) &&
-      ("webSearch" in pluginConfig || "webFetch" in pluginConfig)
+      ("webSearch" in pluginConfig || (!fetchExplicitlyDisabled && "webFetch" in pluginConfig))
     );
   });
 }

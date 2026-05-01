@@ -553,6 +553,8 @@ export async function executePreparedCliRun(
               reason: "timeout",
               provider: params.provider,
               model: context.modelId,
+              sessionId: params.sessionId,
+              lane: params.lane,
               status: resolveFailoverStatus("timeout"),
             });
           }
@@ -562,6 +564,8 @@ export async function executePreparedCliRun(
               reason: "timeout",
               provider: params.provider,
               model: context.modelId,
+              sessionId: params.sessionId,
+              lane: params.lane,
               status: resolveFailoverStatus("timeout"),
             });
           }
@@ -576,6 +580,8 @@ export async function executePreparedCliRun(
             reason,
             provider: params.provider,
             model: context.modelId,
+            sessionId: params.sessionId,
+            lane: params.lane,
             status,
           });
         }

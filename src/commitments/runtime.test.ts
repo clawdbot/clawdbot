@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS } from "./config.js";
 import {
   configureCommitmentExtractionRuntime,
   drainCommitmentExtractionQueue,
@@ -10,7 +11,18 @@ import {
   resetCommitmentExtractionRuntimeForTests,
 } from "./runtime.js";
 import { loadCommitmentStore } from "./store.js";
-import type { CommitmentExtractionItem } from "./types.js";
+import type { CommitmentExtractionBatchResult, CommitmentExtractionItem } from "./types.js";
+
+const runEmbeddedPiAgentMock = vi.hoisted(() => vi.fn());
+const resolveDefaultModelMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../agents/pi-embedded.js", () => ({
+  runEmbeddedPiAgent: runEmbeddedPiAgentMock,
+}));
+
+vi.mock("./model-selection.runtime.js", () => ({
+  resolveCommitmentDefaultModelRef: resolveDefaultModelMock,
+}));
 
 describe("commitment extraction runtime", () => {
   const tmpDirs: string[] = [];
@@ -18,6 +30,9 @@ describe("commitment extraction runtime", () => {
 
   afterEach(async () => {
     resetCommitmentExtractionRuntimeForTests();
+    runEmbeddedPiAgentMock.mockReset();
+    resolveDefaultModelMock.mockReset();
+    vi.useRealTimers();
     vi.unstubAllEnvs();
     await Promise.all(tmpDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
     tmpDirs.length = 0;
@@ -140,5 +155,175 @@ describe("commitment extraction runtime", () => {
       "event:1",
       "event:2",
     ]);
+    expect(store.commitments[0]).not.toHaveProperty("sourceUserText");
+    expect(store.commitments[0]).not.toHaveProperty("sourceAssistantText");
+  });
+
+  it("uses the configured agent model for the hidden extractor run", async () => {
+    const cfg = await createConfig();
+    cfg.agents = {
+      defaults: {
+        model: {
+          primary: "openai-codex/gpt-5.5",
+        },
+      },
+    };
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: '{"candidates":[]}' }],
+    });
+    resolveDefaultModelMock.mockReturnValue({
+      provider: "openai-codex",
+      model: "gpt-5.5",
+    });
+    configureCommitmentExtractionRuntime({
+      forceInTests: true,
+      setTimer: () => ({ unref() {} }) as ReturnType<typeof setTimeout>,
+      clearTimer: () => undefined,
+    });
+
+    expect(
+      enqueueCommitmentExtraction({
+        cfg,
+        nowMs,
+        agentId: "main",
+        sessionKey: "agent:main:discord:channel-1",
+        channel: "discord",
+        userText: "I have an interview tomorrow.",
+        assistantText: "Good luck.",
+      }),
+    ).toBe(true);
+
+    await expect(drainCommitmentExtractionQueue()).resolves.toBe(1);
+    expect(resolveDefaultModelMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        disableTools: true,
+      }),
+    );
+  });
+
+  it("backs off hidden extraction after terminal model or auth failures", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(nowMs);
+    const cfg = await createConfig();
+    const extractBatch = vi.fn(async () => {
+      throw new Error(
+        'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth.',
+      );
+    });
+    configureCommitmentExtractionRuntime({
+      forceInTests: true,
+      extractBatch,
+      setTimer: () => ({ unref() {} }) as ReturnType<typeof setTimeout>,
+      clearTimer: () => undefined,
+    });
+
+    expect(
+      enqueueCommitmentExtraction({
+        cfg,
+        nowMs,
+        agentId: "main",
+        sessionKey: "agent:main:discord:channel-1",
+        channel: "discord",
+        userText: "I have an interview tomorrow.",
+        assistantText: "Good luck.",
+      }),
+    ).toBe(true);
+
+    await expect(drainCommitmentExtractionQueue()).rejects.toThrow("No API key found");
+    expect(extractBatch).toHaveBeenCalledTimes(1);
+    expect(
+      enqueueCommitmentExtraction({
+        cfg,
+        nowMs: nowMs + 1,
+        agentId: "main",
+        sessionKey: "agent:main:discord:channel-1",
+        channel: "discord",
+        userText: "The interview is tomorrow.",
+        assistantText: "I hope it goes well.",
+      }),
+    ).toBe(false);
+    expect(
+      enqueueCommitmentExtraction({
+        cfg,
+        nowMs: nowMs + 1,
+        agentId: "other",
+        sessionKey: "agent:other:discord:channel-2",
+        channel: "discord",
+        userText: "The demo is tomorrow.",
+        assistantText: "I hope it goes well.",
+      }),
+    ).toBe(true);
+
+    vi.setSystemTime(nowMs + 16 * 60_000);
+    expect(
+      enqueueCommitmentExtraction({
+        cfg,
+        nowMs: nowMs + 16 * 60_000,
+        agentId: "main",
+        sessionKey: "agent:main:discord:channel-1",
+        channel: "discord",
+        userText: "The interview is tomorrow.",
+        assistantText: "I hope it goes well.",
+      }),
+    ).toBe(true);
+  });
+
+  it("bounds hidden extraction queue growth before spending extractor tokens", async () => {
+    const cfg = await createConfig();
+    const extractBatch = vi.fn(
+      async (_params: {
+        items: CommitmentExtractionItem[];
+      }): Promise<CommitmentExtractionBatchResult> => ({
+        candidates: [],
+      }),
+    );
+    configureCommitmentExtractionRuntime({
+      forceInTests: true,
+      extractBatch,
+      setTimer: () => ({ unref() {} }) as ReturnType<typeof setTimeout>,
+      clearTimer: () => undefined,
+    });
+
+    for (let index = 0; index < DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS; index += 1) {
+      expect(
+        enqueueCommitmentExtraction({
+          cfg,
+          nowMs: nowMs + index,
+          agentId: "main",
+          sessionKey: "agent:main:telegram:user-1",
+          channel: "telegram",
+          to: "15551234567",
+          sourceMessageId: `m${index}`,
+          userText: `Commitment candidate ${index}`,
+          assistantText: "I will follow up.",
+        }),
+      ).toBe(true);
+    }
+
+    expect(
+      enqueueCommitmentExtraction({
+        cfg,
+        nowMs: nowMs + DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS,
+        agentId: "main",
+        sessionKey: "agent:main:telegram:user-1",
+        channel: "telegram",
+        to: "15551234567",
+        sourceMessageId: "overflow",
+        userText: "Overflow candidate",
+        assistantText: "I will follow up.",
+      }),
+    ).toBe(false);
+
+    await expect(drainCommitmentExtractionQueue()).resolves.toBe(
+      DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS,
+    );
+    const processed = extractBatch.mock.calls.reduce(
+      (count, call) => count + (call[0]?.items.length ?? 0),
+      0,
+    );
+    expect(processed).toBe(DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS);
   });
 });

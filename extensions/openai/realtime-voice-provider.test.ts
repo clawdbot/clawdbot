@@ -66,6 +66,9 @@ type FakeWebSocketInstance = InstanceType<typeof FakeWebSocket>;
 type SentRealtimeEvent = {
   type: string;
   audio?: string;
+  item_id?: string;
+  content_index?: number;
+  audio_end_ms?: number;
   session?: {
     input_audio_format?: string;
     output_audio_format?: string;
@@ -278,5 +281,57 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(socket.closed).toBe(true);
     expect(socket.terminated).toBe(false);
     expect(onClose).toHaveBeenCalledWith("completed");
+  });
+
+  it("truncates externally interrupted playback after an immediate mark acknowledgement", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onAudio = vi.fn();
+    const onClearAudio = vi.fn();
+    let bridge: ReturnType<typeof provider.createBridge>;
+    bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio,
+      onClearAudio,
+      onMark: () => bridge.acknowledgeMark(),
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    await connecting;
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+
+    bridge.setMediaTimestamp(1000);
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "response.audio.delta",
+          item_id: "item_1",
+          delta: Buffer.from("assistant audio").toString("base64"),
+        }),
+      ),
+    );
+    bridge.setMediaTimestamp(1240);
+
+    bridge.handleBargeIn?.({ audioPlaybackActive: true });
+
+    expect(onAudio).toHaveBeenCalledTimes(1);
+    expect(onClearAudio).toHaveBeenCalledTimes(1);
+    expect(parseSent(socket)).toContainEqual({ type: "response.cancel" });
+    expect(parseSent(socket)).toContainEqual({
+      type: "conversation.item.truncate",
+      item_id: "item_1",
+      content_index: 0,
+      audio_end_ms: 240,
+    });
   });
 });

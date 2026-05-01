@@ -3,10 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  clearBundledRuntimeDependencyNodePaths,
-  resolveBundledRuntimeDependencyInstallRoot,
-} from "./bundled-runtime-deps.js";
+import { resolveBundledRuntimeDependencyInstallRoot } from "./bundled-runtime-deps-roots.js";
+import { clearBundledRuntimeDependencyNodePaths } from "./bundled-runtime-deps.js";
 
 const tempDirs: string[] = [];
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;

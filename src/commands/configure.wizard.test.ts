@@ -26,10 +26,15 @@ const mocks = vi.hoisted(() => {
     waitForGatewayReachable: vi.fn(),
     resolveControlUiLinks: vi.fn(),
     summarizeExistingConfig: vi.fn(),
+    promptRemoteGatewayConfig: vi.fn(async (cfg: OpenClawConfig) => ({
+      ...cfg,
+      gateway: { mode: "remote", remote: { url: "wss://gateway.example.test" } },
+    })),
     isCodexNativeWebSearchRelevant: vi.fn(({ config }: { config: OpenClawConfig }) =>
       Boolean(config.auth?.profiles?.["openai-codex:default"]),
     ),
     setupChannels: vi.fn(async (cfg: OpenClawConfig) => cfg),
+    preparePostConfigBundledRuntimeDeps: vi.fn(async () => {}),
   };
 });
 
@@ -98,7 +103,7 @@ vi.mock("./configure.daemon.js", () => ({
 }));
 
 vi.mock("./onboard-remote.js", () => ({
-  promptRemoteGatewayConfig: vi.fn(),
+  promptRemoteGatewayConfig: mocks.promptRemoteGatewayConfig,
 }));
 
 vi.mock("./onboard-skills.js", () => ({
@@ -107,6 +112,10 @@ vi.mock("./onboard-skills.js", () => ({
 
 vi.mock("./onboard-channels.js", () => ({
   setupChannels: mocks.setupChannels,
+}));
+
+vi.mock("./post-config-runtime-deps.js", () => ({
+  preparePostConfigBundledRuntimeDeps: mocks.preparePostConfigBundledRuntimeDeps,
 }));
 
 vi.mock("./onboard-search.js", () => ({
@@ -246,6 +255,26 @@ describe("runConfigureWizard", () => {
         gateway: expect.objectContaining({ mode: "local" }),
       }),
     );
+    expect(mocks.preparePostConfigBundledRuntimeDeps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          gateway: expect.objectContaining({ mode: "local" }),
+        }),
+      }),
+    );
+  });
+
+  it("does not prepare runtime deps for remote gateway config", async () => {
+    setupBaseWizardState();
+    queueWizardPrompts({
+      select: ["remote"],
+      confirm: [],
+      text: "wss://gateway.example.test",
+    });
+
+    await runConfigureWizard({ command: "configure" }, createRuntime());
+
+    expect(mocks.preparePostConfigBundledRuntimeDeps).not.toHaveBeenCalled();
   });
 
   it("keeps startup gateway hint probes bounded", async () => {
@@ -613,6 +642,7 @@ describe("runConfigureWizard", () => {
     // Verify retry happened: first call threw, second call succeeded
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(2);
     expect(mocks.writeConfigFile).toHaveBeenCalledTimes(1);
+    expect(mocks.preparePostConfigBundledRuntimeDeps).toHaveBeenCalledTimes(1);
     // Verify readConfigFileSnapshot was called: initial read, after conflict, after successful write
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(3);
 

@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listDueCommitmentsForSession, loadCommitmentStore, saveCommitmentStore } from "./store.js";
+import {
+  listCommitments,
+  listDueCommitmentsForSession,
+  loadCommitmentStore,
+  saveCommitmentStore,
+} from "./store.js";
 import type { CommitmentRecord } from "./types.js";
 
 describe("commitment store delivery selection", () => {
@@ -16,10 +21,11 @@ describe("commitment store delivery selection", () => {
     tmpDirs.length = 0;
   });
 
-  async function useTempStateDir(): Promise<void> {
+  async function useTempStateDir(): Promise<string> {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-commitments-store-"));
     tmpDirs.push(tmpDir);
     vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
+    return tmpDir;
   }
 
   function commitment(overrides?: Partial<CommitmentRecord>): CommitmentRecord {
@@ -88,5 +94,100 @@ describe("commitment store delivery selection", () => {
 
     const store = await loadCommitmentStore();
     expect(store.commitments).toHaveLength(2);
+  });
+
+  it("expires stale pending commitments instead of leaving them hidden forever", async () => {
+    await useTempStateDir();
+    await saveCommitmentStore(undefined, {
+      version: 1,
+      commitments: [
+        commitment({
+          dueWindow: {
+            earliestMs: nowMs - 5 * 24 * 60 * 60_000,
+            latestMs: nowMs - 4 * 24 * 60 * 60_000,
+            timezone: "America/Los_Angeles",
+          },
+        }),
+      ],
+    });
+
+    await expect(
+      listDueCommitmentsForSession({
+        cfg: { commitments: { enabled: true } },
+        agentId: "main",
+        sessionKey,
+        nowMs,
+      }),
+    ).resolves.toEqual([]);
+
+    const store = await loadCommitmentStore();
+    expect(store.commitments[0]).toMatchObject({
+      id: "cm_interview",
+      status: "expired",
+      expiredAtMs: nowMs,
+      updatedAtMs: nowMs,
+    });
+  });
+
+  it("rewrites legacy source text fields when due commitments are listed", async () => {
+    const tmpDir = await useTempStateDir();
+    const storePath = path.join(tmpDir, "commitments", "commitments.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          commitments: [commitment()],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    await expect(
+      listDueCommitmentsForSession({
+        cfg: { commitments: { enabled: true } },
+        agentId: "main",
+        sessionKey,
+        nowMs,
+      }),
+    ).resolves.toEqual([expect.objectContaining({ id: "cm_interview" })]);
+
+    const store = await loadCommitmentStore();
+    expect(store.commitments[0]).not.toHaveProperty("sourceUserText");
+    expect(store.commitments[0]).not.toHaveProperty("sourceAssistantText");
+    const raw = await fs.readFile(storePath, "utf8");
+    expect(raw).not.toContain("I have an interview tomorrow.");
+    expect(raw).not.toContain("sourceUserText");
+    expect(raw).not.toContain("sourceAssistantText");
+  });
+
+  it("lists expired commitments after expiry transition", async () => {
+    await useTempStateDir();
+    await saveCommitmentStore(undefined, {
+      version: 1,
+      commitments: [
+        commitment({
+          dueWindow: {
+            earliestMs: nowMs - 5 * 24 * 60 * 60_000,
+            latestMs: nowMs - 4 * 24 * 60 * 60_000,
+            timezone: "America/Los_Angeles",
+          },
+        }),
+      ],
+    });
+
+    await listDueCommitmentsForSession({
+      cfg: { commitments: { enabled: true } },
+      agentId: "main",
+      sessionKey,
+      nowMs,
+    });
+
+    await expect(listCommitments({ status: "expired" })).resolves.toEqual([
+      expect.objectContaining({ id: "cm_interview", status: "expired" }),
+    ]);
   });
 });

@@ -188,6 +188,8 @@ export async function runPreparedCliAgent(
         reason,
         provider: params.provider,
         model: context.modelId,
+        sessionId: params.sessionId,
+        lane: params.lane,
         status,
       });
     }

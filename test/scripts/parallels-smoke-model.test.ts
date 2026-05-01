@@ -283,11 +283,15 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
       expect(script, scriptPath).toContain("AgentWorkspaceScript");
       expect(script, scriptPath).toContain("parallels-");
       expect(script, scriptPath).toContain("agents.defaults.skipBootstrap");
+      expect(script, scriptPath).toContain("OPENCLAW_PARALLELS_MODEL_TIMEOUT_S");
+      expect(script, scriptPath).toContain("timeoutSeconds");
     }
 
     const npmUpdateScripts = readFileSync(TS_PATHS.npmUpdateScripts, "utf8");
     expect(npmUpdateScripts).toContain("posixAgentWorkspaceScript");
     expect(npmUpdateScripts).toContain("windowsAgentWorkspaceScript");
+    expect(npmUpdateScripts).toContain("OPENCLAW_PARALLELS_MODEL_TIMEOUT_S");
+    expect(npmUpdateScripts).toContain("timeoutSeconds");
   });
 
   it("clears phase timers and applies phase deadlines to guest commands", () => {
@@ -374,7 +378,9 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
     expect(script).toContain("__OPENCLAW_BACKGROUND_EXIT__");
     expect(script).toContain("__OPENCLAW_LOG_OFFSET__");
     expect(script).toContain("result.status !== 0 && result.status !== 124");
-    expect(script).toContain('start "" /min powershell.exe');
+    expect(script).toContain("Start-Process -FilePath powershell.exe");
+    expect(script).toContain('launchLog.includes("started")');
+    expect(script).toContain("waitForBackgroundMaterialized(pathsScript, 45_000)");
   });
 
   it("returns timed-out host command status when check is disabled", () => {

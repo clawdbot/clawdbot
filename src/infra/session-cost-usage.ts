@@ -39,13 +39,13 @@ import type {
   SessionMessageCounts,
   SessionModelUsage,
   SessionUtcQuarterHourMessageCounts,
+  SessionUtcQuarterHourTokenUsage,
   SessionToolUsage,
   SessionUsageTimePoint,
   SessionUsageTimeSeries,
 } from "./session-cost-usage.types.js";
 
 export type {
-  CostUsageDailyEntry,
   CostUsageSummary,
   CostUsageTotals,
   DiscoveredSession,
@@ -59,6 +59,7 @@ export type {
   SessionMessageCounts,
   SessionModelUsage,
   SessionUtcQuarterHourMessageCounts,
+  SessionUtcQuarterHourTokenUsage,
   SessionToolUsage,
   SessionUsageTimePoint,
   SessionUsageTimeSeries,
@@ -170,6 +171,14 @@ const formatDayKey = (date: Date): string =>
 const formatUtcDayKey = (date: Date): string =>
   `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
 
+const getUtcQuarterHourBucketKey = (
+  date: Date,
+): { date: string; quarterIndex: number; key: string } => {
+  const quarterIndex = Math.floor((date.getUTCHours() * 60 + date.getUTCMinutes()) / 15);
+  const utcDayKey = formatUtcDayKey(date);
+  return { date: utcDayKey, quarterIndex, key: `${utcDayKey}::${quarterIndex}` };
+};
+
 /**
  * Accumulate message-level counts into a bucket (daily or UTC quarter-hour).
  * Avoids duplicating the same logic for both daily and quarter-hour message counts.
@@ -217,15 +226,29 @@ const computeLatencyStats = (values: number[]): SessionLatencyStats | undefined 
   };
 };
 
+const computeUsageTokenTotals = (usage: NormalizedUsage) => {
+  const input = usage.input ?? 0;
+  const output = usage.output ?? 0;
+  const cacheRead = usage.cacheRead ?? 0;
+  const cacheWrite = usage.cacheWrite ?? 0;
+  const componentTotal = input + output + cacheRead + cacheWrite;
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    componentTotal,
+    totalTokens: usage.total ?? componentTotal,
+  };
+};
+
 const applyUsageTotals = (totals: CostUsageTotals, usage: NormalizedUsage) => {
-  totals.input += usage.input ?? 0;
-  totals.output += usage.output ?? 0;
-  totals.cacheRead += usage.cacheRead ?? 0;
-  totals.cacheWrite += usage.cacheWrite ?? 0;
-  const totalTokens =
-    usage.total ??
-    (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-  totals.totalTokens += totalTokens;
+  const usageTotals = computeUsageTokenTotals(usage);
+  totals.input += usageTotals.input;
+  totals.output += usageTotals.output;
+  totals.cacheRead += usageTotals.cacheRead;
+  totals.cacheWrite += usageTotals.cacheWrite;
+  totals.totalTokens += usageTotals.totalTokens;
 };
 
 const applyCostBreakdown = (totals: CostUsageTotals, costBreakdown: CostBreakdown | undefined) => {
@@ -608,6 +631,7 @@ export async function loadSessionCostSummary(params: {
   const dailyMap = new Map<string, { tokens: number; cost: number }>();
   const dailyMessageMap = new Map<string, SessionDailyMessageCounts>();
   const utcQuarterHourMessageMap = new Map<string, SessionUtcQuarterHourMessageCounts>();
+  const utcQuarterHourTokenMap = new Map<string, SessionUtcQuarterHourTokenUsage>();
   const dailyLatencyMap = new Map<string, number[]>();
   const dailyModelUsageMap = new Map<string, SessionDailyModelUsage>();
   const messageCounts: SessionMessageCounts = {
@@ -709,14 +733,10 @@ export async function loadSessionCostSummary(params: {
         dailyMessageMap.set(dayKey, daily);
 
         // Per-quarter-hour message counts for precise hourly stats (UTC-based)
-        const quarterIndex = Math.floor(
-          (entry.timestamp.getUTCHours() * 60 + entry.timestamp.getUTCMinutes()) / 15,
-        );
-        const utcDayKey = formatUtcDayKey(entry.timestamp);
-        const quarterKey = `${utcDayKey}::${quarterIndex}`;
-        const utcQuarterHour = utcQuarterHourMessageMap.get(quarterKey) ?? {
-          date: utcDayKey,
-          quarterIndex,
+        const quarterBucket = getUtcQuarterHourBucketKey(entry.timestamp);
+        const utcQuarterHour = utcQuarterHourMessageMap.get(quarterBucket.key) ?? {
+          date: quarterBucket.date,
+          quarterIndex: quarterBucket.quarterIndex,
           total: 0,
           user: 0,
           assistant: 0,
@@ -725,7 +745,7 @@ export async function loadSessionCostSummary(params: {
           errors: 0,
         };
         accumulateMessageCounts(utcQuarterHour, entry, errorStopReasons);
-        utcQuarterHourMessageMap.set(quarterKey, utcQuarterHour);
+        utcQuarterHourMessageMap.set(quarterBucket.key, utcQuarterHour);
       }
 
       if (!entry.usage) {
@@ -741,11 +761,11 @@ export async function loadSessionCostSummary(params: {
 
       if (entry.timestamp) {
         const dayKey = formatDayKey(entry.timestamp);
-        const entryTokens =
-          (entry.usage.input ?? 0) +
-          (entry.usage.output ?? 0) +
-          (entry.usage.cacheRead ?? 0) +
-          (entry.usage.cacheWrite ?? 0);
+        const entryTokenTotals = computeUsageTokenTotals(entry.usage);
+        // Preserve the legacy dailyBreakdown token basis until daily metrics are
+        // refactored separately. The precise quarter-hour bucket below uses
+        // entryTokenTotals.totalTokens so Usage Mosaic matches session totals.
+        const entryTokens = entryTokenTotals.componentTotal;
         const entryCost =
           entry.costBreakdown?.total ??
           (entry.costBreakdown
@@ -754,6 +774,25 @@ export async function loadSessionCostSummary(params: {
               (entry.costBreakdown.cacheRead ?? 0) +
               (entry.costBreakdown.cacheWrite ?? 0)
             : (entry.costTotal ?? 0));
+
+        const quarterBucket = getUtcQuarterHourBucketKey(entry.timestamp);
+        const utcQuarterHourToken = utcQuarterHourTokenMap.get(quarterBucket.key) ?? {
+          date: quarterBucket.date,
+          quarterIndex: quarterBucket.quarterIndex,
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          totalCost: 0,
+        };
+        utcQuarterHourToken.input += entryTokenTotals.input;
+        utcQuarterHourToken.output += entryTokenTotals.output;
+        utcQuarterHourToken.cacheRead += entryTokenTotals.cacheRead;
+        utcQuarterHourToken.cacheWrite += entryTokenTotals.cacheWrite;
+        utcQuarterHourToken.totalTokens += entryTokenTotals.totalTokens;
+        utcQuarterHourToken.totalCost += entryCost;
+        utcQuarterHourTokenMap.set(quarterBucket.key, utcQuarterHourToken);
 
         const existing = dailyMap.get(dayKey) ?? { tokens: 0, cost: 0 };
         dailyMap.set(dayKey, {
@@ -815,6 +854,10 @@ export async function loadSessionCostSummary(params: {
     utcQuarterHourMessageMap.values(),
   ).toSorted((a, b) => a.date.localeCompare(b.date) || a.quarterIndex - b.quarterIndex);
 
+  const utcQuarterHourTokenUsage: SessionUtcQuarterHourTokenUsage[] = Array.from(
+    utcQuarterHourTokenMap.values(),
+  ).toSorted((a, b) => a.date.localeCompare(b.date) || a.quarterIndex - b.quarterIndex);
+
   const dailyLatency: SessionDailyLatency[] = Array.from(dailyLatencyMap.entries())
     .map(([date, values]) => {
       const stats = computeLatencyStats(values);
@@ -865,6 +908,9 @@ export async function loadSessionCostSummary(params: {
     utcQuarterHourMessageCounts: utcQuarterHourMessageCounts.length
       ? utcQuarterHourMessageCounts
       : undefined,
+    utcQuarterHourTokenUsage: utcQuarterHourTokenUsage.length
+      ? utcQuarterHourTokenUsage
+      : undefined,
     dailyLatency: dailyLatency.length ? dailyLatency : undefined,
     dailyModelUsage: dailyModelUsage.length ? dailyModelUsage : undefined,
     messageCounts,
@@ -901,11 +947,9 @@ export async function loadSessionUsageTimeSeries(params: {
         return;
       }
 
-      const input = entry.usage.input ?? 0;
-      const output = entry.usage.output ?? 0;
-      const cacheRead = entry.usage.cacheRead ?? 0;
-      const cacheWrite = entry.usage.cacheWrite ?? 0;
-      const totalTokens = entry.usage.total ?? input + output + cacheRead + cacheWrite;
+      const { input, output, cacheRead, cacheWrite, totalTokens } = computeUsageTokenTotals(
+        entry.usage,
+      );
       const cost = entry.costTotal ?? 0;
 
       cumulativeTokens += totalTokens;

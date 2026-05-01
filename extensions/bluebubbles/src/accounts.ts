@@ -92,9 +92,3 @@ export function resolveBlueBubblesEffectiveAllowPrivateNetwork(params: {
 }): boolean {
   return resolveBlueBubblesEffectiveAllowPrivateNetworkFromConfig(params);
 }
-
-export function listEnabledBlueBubblesAccounts(cfg: OpenClawConfig): ResolvedBlueBubblesAccount[] {
-  return listBlueBubblesAccountIds(cfg)
-    .map((accountId) => resolveBlueBubblesAccount({ cfg, accountId }))
-    .filter((account) => account.enabled);
-}

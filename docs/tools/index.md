@@ -159,6 +159,10 @@ sessions and logged-in profiles, so add it explicitly with
 `tools.alsoAllow: ["browser"]` or a per-agent
 `agents.list[].tools.alsoAllow: ["browser"]`.
 
+<Note>
+Configuring `tools.exec` or `tools.fs` under a restrictive profile (`messaging`, `minimal`) does not implicitly widen the profile's allowlist. Add explicit `tools.alsoAllow` entries (for example `["exec", "process"]` for exec, or `["read", "write", "edit"]` for fs) when you want a restrictive profile to use those configured sections. OpenClaw logs a startup warning when a config section is present without a matching `alsoAllow` grant.
+</Note>
+
 The `coding` and `messaging` profiles also allow configured bundle MCP tools
 under the plugin key `bundle-mcp`. Add `tools.deny: ["bundle-mcp"]` when you
 want a profile to keep its normal built-ins but hide all configured MCP tools.

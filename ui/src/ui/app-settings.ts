@@ -591,10 +591,11 @@ export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
 }
 
 export function syncUrlWithSessionKey(host: SettingsHost, sessionKey: string, replace: boolean) {
-  if (typeof window === "undefined") {
+  const href = typeof window === "undefined" ? undefined : window.location?.href;
+  if (!href) {
     return;
   }
-  const url = new URL(window.location.href);
+  const url = new URL(href);
   url.searchParams.set("session", sessionKey);
   updateBrowserHistory(url, replace);
 }

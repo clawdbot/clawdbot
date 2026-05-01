@@ -24,6 +24,7 @@ export {
 export type {
   QaBusAttachment,
   QaBusConversation,
+  QaBusConversationKind,
   QaBusCreateThreadInput,
   QaBusDeleteMessageInput,
   QaBusEditMessageInput,

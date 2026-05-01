@@ -307,7 +307,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
 
   for (const plugin of listReadOnlyChannelPluginsForConfig(cfg, {
     includePersistedAuthState: true,
-    includeSetupRuntimeFallback: true,
+    includeSetupFallbackPlugins: true,
   })) {
     if (!plugin.security) {
       continue;

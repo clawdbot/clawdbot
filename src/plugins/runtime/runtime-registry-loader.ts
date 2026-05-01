@@ -92,6 +92,7 @@ export function ensurePluginRegistryLoaded(options?: {
   workspaceDir?: string;
   onlyPluginIds?: string[];
   onlyChannelIds?: string[];
+  installBundledRuntimeDeps?: boolean;
 }): void {
   const scope = options?.scope ?? "all";
   const requestedPluginIdsFromOptions = normalizePluginIdScope(options?.onlyPluginIds);
@@ -174,6 +175,7 @@ export function ensurePluginRegistryLoaded(options?: {
     },
     {
       throwOnLoadError: true,
+      installBundledRuntimeDeps: options?.installBundledRuntimeDeps ?? false,
       ...(hasExplicitPluginIdScope(requestedPluginIds) ||
       shouldForwardChannelScope({ scope, scopedLoad }) ||
       hasNonEmptyPluginIdScope(expectedChannelPluginIds)

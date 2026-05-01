@@ -1,3 +1,5 @@
+export const TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS = 45_000;
+
 const TELEGRAM_REQUEST_TIMEOUTS_MS = {
   // Bound startup/control-plane calls so the gateway cannot report Telegram as
   // healthy while provider startup is still hung on Bot API setup.
@@ -9,7 +11,7 @@ const TELEGRAM_REQUEST_TIMEOUTS_MS = {
   getchat: 15_000,
   getfile: 30_000,
   getme: 15_000,
-  getupdates: 45_000,
+  getupdates: TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS,
   pinchatmessage: 15_000,
   sendanimation: 30_000,
   sendaudio: 30_000,

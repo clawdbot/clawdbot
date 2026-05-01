@@ -333,6 +333,8 @@ export function createOpenClawCodingTools(options?: {
   hasRepliedRef?: { value: boolean };
   /** Allow plugin tools for this run to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
+  /** Runtime-scoped explicit allowlist used to materialize matching plugin tools. */
+  runtimeToolAllowlist?: string[];
   /** If true, the model has native vision capability */
   modelHasVision?: boolean;
   /** Require explicit message targets (no implicit last-route sends). */
@@ -629,6 +631,7 @@ export function createOpenClawCodingTools(options?: {
         groupPolicy,
         sandboxToolPolicy,
         subagentPolicy,
+        options?.runtimeToolAllowlist ? { allow: options.runtimeToolAllowlist } : undefined,
       ]),
       currentChannelId: options?.currentChannelId,
       currentThreadTs: options?.currentThreadTs,

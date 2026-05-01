@@ -175,6 +175,33 @@ describe("command-startup-policy", () => {
     expect(shouldHideCliBannerForCommandPath(["status"], {})).toBe(false);
   });
 
+  it("uses process env banner suppression when startup env is omitted", () => {
+    const originalHideBanner = process.env.OPENCLAW_HIDE_BANNER;
+    try {
+      process.env.OPENCLAW_HIDE_BANNER = "1";
+
+      expect(
+        resolveCliStartupPolicy({
+          commandPath: ["status"],
+          jsonOutputMode: false,
+        }).hideBanner,
+      ).toBe(true);
+      expect(
+        resolveCliStartupPolicy({
+          commandPath: ["status"],
+          jsonOutputMode: false,
+          env: {},
+        }).hideBanner,
+      ).toBe(false);
+    } finally {
+      if (originalHideBanner === undefined) {
+        delete process.env.OPENCLAW_HIDE_BANNER;
+      } else {
+        process.env.OPENCLAW_HIDE_BANNER = originalHideBanner;
+      }
+    }
+  });
+
   it("matches CLI PATH bootstrap policy", () => {
     expect(shouldEnsureCliPathForCommandPath(["status"])).toBe(false);
     expect(shouldEnsureCliPathForCommandPath(["sessions"])).toBe(false);
@@ -190,18 +217,21 @@ describe("command-startup-policy", () => {
       resolveCliStartupPolicy({
         commandPath: ["status"],
         jsonOutputMode: true,
+        env: {},
       }),
     ).toEqual({
       suppressDoctorStdout: true,
       hideBanner: false,
       skipConfigGuard: false,
       loadPlugins: false,
+      pluginRegistry: { scope: "channels", installBundledRuntimeDeps: false },
     });
 
     expect(
       resolveCliStartupPolicy({
         commandPath: ["status"],
         jsonOutputMode: true,
+        env: {},
         routeMode: true,
       }),
     ).toEqual({
@@ -209,6 +239,7 @@ describe("command-startup-policy", () => {
       hideBanner: false,
       skipConfigGuard: true,
       loadPlugins: false,
+      pluginRegistry: { scope: "channels", installBundledRuntimeDeps: false },
     });
   });
 });

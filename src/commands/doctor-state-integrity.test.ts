@@ -62,6 +62,13 @@ function stateIntegrityText(): string {
     .join("\n");
 }
 
+function doctorChangesText(): string {
+  return noteMock.mock.calls
+    .filter((call) => call[1] === "Doctor changes")
+    .map((call) => String(call[0]))
+    .join("\n");
+}
+
 function createAgentDir(agentId: string, includeNestedAgentDir = true) {
   const stateDir = process.env.OPENCLAW_STATE_DIR;
   if (!stateDir) {
@@ -86,7 +93,7 @@ async function runStateIntegrity(cfg: OpenClawConfig) {
 
 function writeSessionStore(
   cfg: OpenClawConfig,
-  sessions: Record<string, { sessionId: string; updatedAt: number }>,
+  sessions: Record<string, { sessionId: string; updatedAt: number } & Record<string, unknown>>,
 ) {
   setupSessionState(cfg, process.env, process.env.HOME ?? "");
   const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
@@ -217,6 +224,70 @@ describe("doctor state integrity oauth dir checks", () => {
 
     expect(text).not.toContain("without a matching agents.list entry");
     expect(text).not.toContain("Examples:");
+  });
+
+  it("warns about tombstoned subagent restart recovery sessions", async () => {
+    const cfg: OpenClawConfig = {};
+    writeSessionStore(cfg, {
+      "agent:main:subagent:wedged-child": {
+        sessionId: "session-wedged-child",
+        updatedAt: Date.now(),
+        abortedLastRun: true,
+        subagentRecovery: {
+          automaticAttempts: 2,
+          lastAttemptAt: Date.now() - 30_000,
+          lastRunId: "run-wedged-child",
+          wedgedAt: Date.now() - 20_000,
+          wedgedReason: "subagent orphan recovery blocked after 2 rapid accepted resume attempts",
+        },
+      },
+    });
+
+    const confirmRuntimeRepair = vi.fn(async () => false);
+    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+
+    const text = stateIntegrityText();
+    expect(text).toContain("automatic restart recovery tombstoned");
+    expect(text).toContain("agent:main:subagent:wedged-child");
+    expect(text).toContain("openclaw tasks maintenance --apply");
+    expect(confirmRuntimeRepair).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("Clear stale aborted recovery flags"),
+      }),
+    );
+  });
+
+  it("clears stale aborted recovery flags for tombstoned subagent sessions when approved", async () => {
+    const cfg: OpenClawConfig = {};
+    const sessionKey = "agent:main:subagent:wedged-child";
+    writeSessionStore(cfg, {
+      [sessionKey]: {
+        sessionId: "session-wedged-child",
+        updatedAt: 0,
+        abortedLastRun: true,
+        subagentRecovery: {
+          automaticAttempts: 2,
+          lastAttemptAt: Date.now() - 30_000,
+          lastRunId: "run-wedged-child",
+          wedgedAt: Date.now() - 20_000,
+          wedgedReason: "subagent orphan recovery blocked after 2 rapid accepted resume attempts",
+        },
+      },
+    });
+
+    const confirmRuntimeRepair = vi.fn(async (params: { message: string }) =>
+      params.message.includes("Clear stale aborted recovery flags"),
+    );
+    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+
+    const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
+    const persisted = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
+      string,
+      { abortedLastRun?: boolean; updatedAt?: number }
+    >;
+    expect(persisted[sessionKey]?.abortedLastRun).toBe(false);
+    expect(persisted[sessionKey]?.updatedAt).toBeGreaterThan(0);
+    expect(doctorChangesText()).toContain("Cleared aborted restart-recovery flags");
   });
 
   it("warns when a case-mismatched agent dir does not resolve to the configured agent path", async () => {

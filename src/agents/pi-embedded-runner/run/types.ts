@@ -68,11 +68,13 @@ export type EmbeddedRunAttemptResult = {
   preflightRecovery?:
     | {
         route: Exclude<PreemptiveCompactionRoute, "fits">;
+        source?: "mid-turn";
         handled: true;
         truncatedCount?: number;
       }
     | {
         route: Exclude<PreemptiveCompactionRoute, "fits">;
+        source?: "mid-turn";
         handled?: false;
       };
   sessionIdUsed: string;

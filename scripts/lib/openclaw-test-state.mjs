@@ -11,6 +11,7 @@ const SCENARIOS = new Set([
   "empty",
   "minimal",
   "update-stable",
+  "upgrade-survivor",
   "gateway-loopback",
   "external-service",
 ]);
@@ -84,6 +85,135 @@ function scenarioConfig(scenario, options = {}) {
         channel: "stable",
       },
       plugins: {},
+    };
+  }
+  if (scenario === "upgrade-survivor") {
+    return {
+      update: {
+        channel: "stable",
+      },
+      gateway: {
+        mode: "local",
+        port: Number(options.port || 18789),
+        bind: "loopback",
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "GATEWAY_AUTH_TOKEN_REF" },
+        },
+        controlUi: {
+          enabled: false,
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            api: "openai-responses",
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            baseUrl: "https://api.openai.com/v1",
+            models: [],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+          },
+          contextTokens: 64000,
+          skills: ["memory"],
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            name: "Main",
+            workspace: "~/workspace",
+            model: {
+              primary: "openai/gpt-4.1-mini",
+            },
+            thinkingDefault: "low",
+            skills: ["memory"],
+            contextTokens: 64000,
+          },
+          {
+            id: "ops",
+            name: "Ops",
+            workspace: "~/workspace/ops",
+            model: {
+              primary: "openai/gpt-4.1-mini",
+            },
+            fastModeDefault: true,
+          },
+        ],
+      },
+      skills: {
+        allowBundled: ["memory", "openclaw-testing"],
+        limits: {
+          maxSkillsInPrompt: 8,
+          maxSkillsPromptChars: 30000,
+        },
+      },
+      plugins: {
+        enabled: true,
+        allow: ["discord", "telegram", "whatsapp", "memory"],
+        entries: {
+          discord: { enabled: true },
+          telegram: { enabled: true },
+          whatsapp: { enabled: true },
+        },
+      },
+      channels: {
+        discord: {
+          enabled: true,
+          token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+          dm: {
+            policy: "allowlist",
+            allowFrom: ["111111111111111111"],
+          },
+          groupPolicy: "allowlist",
+          guilds: {
+            "222222222222222222": {
+              slug: "survivor-guild",
+              channels: {
+                "333333333333333333": {
+                  enabled: true,
+                  requireMention: true,
+                  tools: {
+                    allow: ["message_send"],
+                    deny: ["exec"],
+                  },
+                },
+              },
+            },
+          },
+          threadBindings: {
+            enabled: true,
+            idleHours: 72,
+          },
+        },
+        telegram: {
+          enabled: true,
+          botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+          dmPolicy: "allowlist",
+          allowFrom: ["123456789"],
+          groups: {
+            "-1001234567890": {
+              enabled: true,
+              requireMention: true,
+            },
+          },
+        },
+        whatsapp: {
+          enabled: true,
+          dmPolicy: "allowlist",
+          allowFrom: ["+15555550123"],
+          groups: {
+            "120363000000000000@g.us": {
+              systemPrompt: "Use the existing WhatsApp group prompt.",
+            },
+          },
+        },
+      },
     };
   }
   if (scenario === "gateway-loopback") {
@@ -189,9 +319,12 @@ export function renderShellSnippet(options = {}) {
   const scenario = requireScenario(options.scenario);
   const config = scenarioConfig(scenario, options);
   const env = scenarioEnv(scenario);
-  const template = `/tmp/openclaw-${label}-${scenario}-home.XXXXXX`;
+  const homeTemplate = `openclaw-${label}-${scenario}-home.XXXXXX`;
   const lines = [
-    `OPENCLAW_TEST_STATE_HOME="$(mktemp -d ${shellQuote(template)})"`,
+    'OPENCLAW_TEST_STATE_TMP_ROOT="${OPENCLAW_TEST_STATE_TMPDIR:-${TMPDIR:-/tmp}}"',
+    "export OPENCLAW_TEST_STATE_TMP_ROOT",
+    'mkdir -p "$OPENCLAW_TEST_STATE_TMP_ROOT"',
+    `OPENCLAW_TEST_STATE_HOME="$(mktemp -d "$OPENCLAW_TEST_STATE_TMP_ROOT/${homeTemplate}")"`,
     'export HOME="$OPENCLAW_TEST_STATE_HOME"',
     'export USERPROFILE="$OPENCLAW_TEST_STATE_HOME"',
     'export OPENCLAW_HOME="$OPENCLAW_TEST_STATE_HOME"',
@@ -216,7 +349,7 @@ export function renderShellFunction() {
   local label="$raw_label"
   local scenario="\${2:-empty}"
   case "$scenario" in
-    empty|minimal|update-stable|gateway-loopback|external-service) ;;
+    empty|minimal|update-stable|upgrade-survivor|gateway-loopback|external-service) ;;
     *)
       echo "unknown OpenClaw test-state scenario: $scenario" >&2
       return 1
@@ -230,7 +363,9 @@ export function renderShellFunction() {
     *)
       label="$(printf "%s" "$label" | tr -cs "A-Za-z0-9_.-" "-" | sed -e "s/^-*//" -e "s/-*$//")"
       [ -n "$label" ] || label="state"
-      OPENCLAW_TEST_STATE_HOME="$(mktemp -d "/tmp/openclaw-$label-$scenario-home.XXXXXX")"
+      local tmp_root="\${OPENCLAW_TEST_STATE_TMPDIR:-\${TMPDIR:-/tmp}}"
+      mkdir -p "$tmp_root"
+      OPENCLAW_TEST_STATE_HOME="$(mktemp -d "$tmp_root/openclaw-$label-$scenario-home.XXXXXX")"
       ;;
   esac
   export HOME="$OPENCLAW_TEST_STATE_HOME"
@@ -256,6 +391,181 @@ OPENCLAW_TEST_STATE_JSON
     "channel": "stable"
   },
   "plugins": {}
+}
+OPENCLAW_TEST_STATE_JSON
+      ;;
+    upgrade-survivor)
+      cat > "$OPENCLAW_CONFIG_PATH" <<'OPENCLAW_TEST_STATE_JSON'
+{
+  "update": {
+    "channel": "stable"
+  },
+  "gateway": {
+    "mode": "local",
+    "port": 18789,
+    "bind": "loopback",
+    "auth": {
+      "mode": "token",
+      "token": {
+        "source": "env",
+        "provider": "default",
+        "id": "GATEWAY_AUTH_TOKEN_REF"
+      }
+    },
+    "controlUi": {
+      "enabled": false
+    }
+  },
+  "models": {
+    "providers": {
+      "openai": {
+        "api": "openai-responses",
+        "apiKey": {
+          "source": "env",
+          "provider": "default",
+          "id": "OPENAI_API_KEY"
+        },
+        "baseUrl": "https://api.openai.com/v1",
+        "models": []
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openai/gpt-4.1-mini"
+      },
+      "contextTokens": 64000,
+      "skills": [
+        "memory"
+      ]
+    },
+    "list": [
+      {
+        "id": "main",
+        "default": true,
+        "name": "Main",
+        "workspace": "~/workspace",
+        "model": {
+          "primary": "openai/gpt-4.1-mini"
+        },
+        "thinkingDefault": "low",
+        "skills": [
+          "memory"
+        ],
+        "contextTokens": 64000
+      },
+      {
+        "id": "ops",
+        "name": "Ops",
+        "workspace": "~/workspace/ops",
+        "model": {
+          "primary": "openai/gpt-4.1-mini"
+        },
+        "fastModeDefault": true
+      }
+    ]
+  },
+  "skills": {
+    "allowBundled": [
+      "memory",
+      "openclaw-testing"
+    ],
+    "limits": {
+      "maxSkillsInPrompt": 8,
+      "maxSkillsPromptChars": 30000
+    }
+  },
+  "plugins": {
+    "enabled": true,
+    "allow": [
+      "discord",
+      "telegram",
+      "whatsapp",
+      "memory"
+    ],
+    "entries": {
+      "discord": {
+        "enabled": true
+      },
+      "telegram": {
+        "enabled": true
+      },
+      "whatsapp": {
+        "enabled": true
+      }
+    }
+  },
+  "channels": {
+    "discord": {
+      "enabled": true,
+      "token": {
+        "source": "env",
+        "provider": "default",
+        "id": "DISCORD_BOT_TOKEN"
+      },
+      "dm": {
+        "policy": "allowlist",
+        "allowFrom": [
+          "111111111111111111"
+        ]
+      },
+      "groupPolicy": "allowlist",
+      "guilds": {
+        "222222222222222222": {
+          "slug": "survivor-guild",
+          "channels": {
+            "333333333333333333": {
+              "enabled": true,
+              "requireMention": true,
+              "tools": {
+                "allow": [
+                  "message_send"
+                ],
+                "deny": [
+                  "exec"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "threadBindings": {
+        "enabled": true,
+        "idleHours": 72
+      }
+    },
+    "telegram": {
+      "enabled": true,
+      "botToken": {
+        "source": "env",
+        "provider": "default",
+        "id": "TELEGRAM_BOT_TOKEN"
+      },
+      "dmPolicy": "allowlist",
+      "allowFrom": [
+        "123456789"
+      ],
+      "groups": {
+        "-1001234567890": {
+          "enabled": true,
+          "requireMention": true
+        }
+      }
+    },
+    "whatsapp": {
+      "enabled": true,
+      "dmPolicy": "allowlist",
+      "allowFrom": [
+        "+15555550123"
+      ],
+      "groups": {
+        "120363000000000000@g.us": {
+          "systemPrompt": "Use the existing WhatsApp group prompt."
+        }
+      }
+    }
+  }
 }
 OPENCLAW_TEST_STATE_JSON
       ;;

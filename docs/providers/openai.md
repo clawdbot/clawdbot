@@ -208,6 +208,7 @@ Choose your preferred auth method and follow the setup steps.
     | Model ref | Runtime config | Route | Auth |
     |-----------|----------------|-------|------|
     | `openai-codex/gpt-5.5` | omitted / `runtime: "pi"` | ChatGPT/Codex OAuth through PI | Codex sign-in |
+    | `openai-codex/gpt-5.4-mini` | omitted / `runtime: "pi"` | ChatGPT/Codex OAuth through PI | Codex sign-in |
     | `openai-codex/gpt-5.5` | `runtime: "auto"` | Still PI unless a plugin explicitly claims `openai-codex` | Codex sign-in |
     | `openai/gpt-5.5` | `agentRuntime.id: "codex"` | Codex app-server harness | Codex app-server auth |
 
@@ -216,12 +217,6 @@ Choose your preferred auth method and follow the setup steps.
     `openai-codex/*` model prefix is also the explicit PI route for Codex OAuth.
     It does not select or auto-enable the bundled Codex app-server harness.
     </Note>
-
-    <Warning>
-    `openai-codex/gpt-5.4-mini` is not a supported Codex OAuth route. Use
-    `openai/gpt-5.4-mini` with an OpenAI API key, or use
-    `openai-codex/gpt-5.5` with Codex OAuth.
-    </Warning>
 
     ### Config example
 

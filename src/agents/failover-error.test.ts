@@ -972,4 +972,40 @@ describe("failover-error", () => {
     expect(described.message).toBe("123");
     expect(described.reason).toBeUndefined();
   });
+
+  it("propagates sessionId/lane/provider attribution through FailoverError (#42713)", () => {
+    const err = new FailoverError("all fallbacks exhausted", {
+      reason: "rate_limit",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      profileId: "profile-2",
+      sessionId: "session:browser-abcd",
+      lane: "answer",
+      status: 429,
+    });
+    expect(err.sessionId).toBe("session:browser-abcd");
+    expect(err.lane).toBe("answer");
+    expect(describeFailoverError(err)).toMatchObject({
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      profileId: "profile-2",
+      sessionId: "session:browser-abcd",
+      lane: "answer",
+      reason: "rate_limit",
+      status: 429,
+    });
+  });
+
+  it("coerceToFailoverError carries sessionId/lane from context (#42713)", () => {
+    const err = coerceToFailoverError("rate limit exceeded", {
+      provider: "openai",
+      model: "gpt-5",
+      profileId: "p1",
+      sessionId: "session:browser-1234",
+      lane: "draft",
+    });
+    expect(err?.sessionId).toBe("session:browser-1234");
+    expect(err?.lane).toBe("draft");
+    expect(err?.provider).toBe("openai");
+  });
 });

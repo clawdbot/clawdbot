@@ -57,6 +57,137 @@ export function parseLaneSelection(raw) {
   ];
 }
 
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`;
+}
+
+function sanitizeLaneNameSuffix(value) {
+  return (
+    String(value)
+      .replace(/^openclaw@/u, "")
+      .replace(/[^A-Za-z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "baseline"
+  );
+}
+
+export const UPGRADE_SURVIVOR_SCENARIOS = [
+  "base",
+  "feishu-channel",
+  "bootstrap-persona",
+  "tilde-log-path",
+  "versioned-runtime-deps",
+];
+
+const UPGRADE_SURVIVOR_SCENARIO_ALIASES = new Map([
+  ["reported-issues", UPGRADE_SURVIVOR_SCENARIOS],
+  ["far-reaching", UPGRADE_SURVIVOR_SCENARIOS],
+]);
+
+export function normalizeUpgradeSurvivorBaselineSpec(raw) {
+  const value = String(raw ?? "").trim();
+  if (!value) {
+    return undefined;
+  }
+  const spec = value.startsWith("openclaw@") ? value : `openclaw@${value}`;
+  if (
+    !/^openclaw@(?:beta|latest|[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:[0-9]+|beta\.[0-9]+))?)$/u.test(spec)
+  ) {
+    throw new Error(
+      `invalid published upgrade survivor baseline: ${JSON.stringify(
+        value,
+      )}. Expected openclaw@latest, openclaw@beta, or openclaw@YYYY.M.D.`,
+    );
+  }
+  return spec;
+}
+
+export function parseUpgradeSurvivorBaselineSpecs(raw) {
+  if (!raw) {
+    return [];
+  }
+  return [
+    ...new Set(
+      String(raw)
+        .split(/[,\s]+/u)
+        .map(normalizeUpgradeSurvivorBaselineSpec)
+        .filter(Boolean),
+    ),
+  ];
+}
+
+export function normalizeUpgradeSurvivorScenario(raw) {
+  const value = String(raw ?? "").trim();
+  if (!value) {
+    return undefined;
+  }
+  if (!UPGRADE_SURVIVOR_SCENARIOS.includes(value)) {
+    throw new Error(
+      `invalid published upgrade survivor scenario: ${JSON.stringify(
+        value,
+      )}. Expected one of: ${UPGRADE_SURVIVOR_SCENARIOS.join(", ")}, reported-issues.`,
+    );
+  }
+  return value;
+}
+
+export function parseUpgradeSurvivorScenarios(raw) {
+  if (!raw) {
+    return [];
+  }
+  return [
+    ...new Set(
+      String(raw)
+        .split(/[,\s]+/u)
+        .map((token) => token.trim())
+        .filter(Boolean)
+        .flatMap((token) => UPGRADE_SURVIVOR_SCENARIO_ALIASES.get(token) ?? [token])
+        .map(normalizeUpgradeSurvivorScenario)
+        .filter(Boolean),
+    ),
+  ];
+}
+
+export function expandUpgradeSurvivorBaselineLanes(poolLanes, rawBaselineSpecs, rawScenarios = "") {
+  const baselineSpecs = parseUpgradeSurvivorBaselineSpecs(rawBaselineSpecs);
+  const scenarios = parseUpgradeSurvivorScenarios(rawScenarios);
+  if (baselineSpecs.length === 0 && scenarios.length === 0) {
+    return poolLanes;
+  }
+  return poolLanes.flatMap((poolLane) => {
+    if (poolLane.name !== "published-upgrade-survivor") {
+      return [poolLane];
+    }
+    const matrixBaselines = baselineSpecs.length > 0 ? baselineSpecs : [undefined];
+    const matrixScenarios = scenarios.length > 0 ? scenarios : [undefined];
+    return matrixBaselines.flatMap((baselineSpec) =>
+      matrixScenarios.map((scenario) => {
+        const suffixParts = [
+          baselineSpec ? sanitizeLaneNameSuffix(baselineSpec) : "",
+          scenario && scenario !== "base" ? sanitizeLaneNameSuffix(scenario) : "",
+        ].filter(Boolean);
+        const suffix = suffixParts.join("-");
+        const name = suffix ? `${poolLane.name}-${suffix}` : poolLane.name;
+        const commandPrefix = [
+          `OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR="$PWD/.artifacts/upgrade-survivor/${name}"`,
+          baselineSpec ? `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${shellQuote(baselineSpec)}` : "",
+          scenario ? `OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=${shellQuote(scenario)}` : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        return Object.assign({}, poolLane, {
+          cacheKey: poolLane.cacheKey
+            ? suffix
+              ? `${poolLane.cacheKey}-${suffix}`
+              : poolLane.cacheKey
+            : name,
+          command: commandPrefix ? `${commandPrefix} ${poolLane.command}` : poolLane.command,
+          name,
+        });
+      }),
+    );
+  });
+}
+
 export function dedupeLanes(poolLanes) {
   const byName = new Map();
   for (const poolLane of poolLanes) {
@@ -141,11 +272,13 @@ export function lanesNeedOpenClawPackage(poolLanes) {
 }
 
 export function findLaneByName(name) {
-  return dedupeLanes([
-    ...allReleasePathLanes({ includeOpenWebUI: true }),
-    ...mainLanes,
-    ...tailLanes,
-  ]).find((poolLane) => poolLane.name === name);
+  return dedupeLanes(
+    expandUpgradeSurvivorBaselineLanes(
+      [...allReleasePathLanes({ includeOpenWebUI: true }), ...mainLanes, ...tailLanes],
+      process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
+      process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
+    ),
+  ).find((poolLane) => poolLane.name === name);
 }
 
 export function laneCredentialRequirements(poolLane) {
@@ -207,25 +340,56 @@ export function buildPlanJson(params) {
 export function resolveDockerE2ePlan(options) {
   const retriedMainLanes = applyLiveRetries(mainLanes, options.liveRetries);
   const retriedTailLanes = applyLiveRetries(tailLanes, options.liveRetries);
+  const upgradeSurvivorBaselines = options.upgradeSurvivorBaselines ?? "";
+  const upgradeSurvivorScenarios = options.upgradeSurvivorScenarios ?? "";
+  const unexpandedSelectableLanes = dedupeLanes([
+    ...allReleasePathLanes({ includeOpenWebUI: options.includeOpenWebUI }),
+    ...retriedMainLanes,
+    ...retriedTailLanes,
+  ]);
+  const selectableLanes = dedupeLanes(
+    expandUpgradeSurvivorBaselineLanes(
+      unexpandedSelectableLanes,
+      upgradeSurvivorBaselines,
+      upgradeSurvivorScenarios,
+    ),
+  );
   const releaseLanes =
     options.selectedLaneNames.length === 0 && options.profile === RELEASE_PATH_PROFILE
       ? options.planReleaseAll
-        ? allReleasePathLanes({ includeOpenWebUI: options.includeOpenWebUI })
-        : releasePathChunkLanes(options.releaseChunk, {
-            includeOpenWebUI: options.includeOpenWebUI,
-          })
+        ? expandUpgradeSurvivorBaselineLanes(
+            allReleasePathLanes({ includeOpenWebUI: options.includeOpenWebUI }),
+            upgradeSurvivorBaselines,
+            upgradeSurvivorScenarios,
+          )
+        : expandUpgradeSurvivorBaselineLanes(
+            releasePathChunkLanes(options.releaseChunk, {
+              includeOpenWebUI: options.includeOpenWebUI,
+            }),
+            upgradeSurvivorBaselines,
+            upgradeSurvivorScenarios,
+          )
       : undefined;
   const selectedLanes =
     options.selectedLaneNames.length > 0
-      ? selectNamedLanes(
-          dedupeLanes([
-            ...allReleasePathLanes({ includeOpenWebUI: options.includeOpenWebUI }),
-            ...retriedMainLanes,
-            ...retriedTailLanes,
-          ]),
-          options.selectedLaneNames,
-          "OPENCLAW_DOCKER_ALL_LANES",
-        )
+      ? options.selectedLaneNames.flatMap((selectedName) => {
+          const expandedLane = selectableLanes.find((poolLane) => poolLane.name === selectedName);
+          if (expandedLane) {
+            return [expandedLane];
+          }
+          const unexpandedLane = unexpandedSelectableLanes.find(
+            (poolLane) => poolLane.name === selectedName,
+          );
+          if (unexpandedLane) {
+            return expandUpgradeSurvivorBaselineLanes(
+              [unexpandedLane],
+              upgradeSurvivorBaselines,
+              upgradeSurvivorScenarios,
+            );
+          }
+          selectNamedLanes(selectableLanes, [selectedName], "OPENCLAW_DOCKER_ALL_LANES");
+          return [];
+        })
       : undefined;
   const configuredLanes = selectedLanes
     ? selectedLanes

@@ -1,4 +1,4 @@
-import { createHmac, randomBytes } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { NextcloudTalkWebhookHeaders } from "./types.js";
 
@@ -25,14 +25,23 @@ export function verifyNextcloudTalkSignature(params: {
     .update(random + body)
     .digest("hex");
 
-  if (signature.length !== expected.length) {
-    return false;
-  }
-  let result = 0;
-  for (let i = 0; i < signature.length; i++) {
-    result |= signature.charCodeAt(i) ^ expected.charCodeAt(i);
-  }
-  return result === 0;
+  const expectedBuf = Buffer.from(expected, "utf8");
+  const signatureBuf = Buffer.from(signature, "utf8");
+
+  // Pad to equal length before constant-time comparison to prevent
+  // leaking length information via early-return timing.
+  // Note: digest("hex") always produces lowercase ASCII (64 bytes for SHA-256),
+  // so expectedBuf is always 64 bytes — no variable-length concern on the expected side.
+  const maxLen = Math.max(expectedBuf.length, signatureBuf.length);
+  const paddedExpected = Buffer.alloc(maxLen);
+  const paddedSignature = Buffer.alloc(maxLen);
+  expectedBuf.copy(paddedExpected);
+  signatureBuf.copy(paddedSignature);
+
+  // Use crypto.timingSafeEqual instead of manual XOR loop to avoid
+  // potential JIT-optimisation timing leaks in the JavaScript engine.
+  const timingResult = timingSafeEqual(paddedExpected, paddedSignature);
+  return expectedBuf.length === signatureBuf.length && timingResult;
 }
 
 /**

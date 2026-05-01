@@ -243,7 +243,7 @@ describe("external cli oauth resolution", () => {
     expect(credential).toBeNull();
   });
 
-  it("bootstraps the default codex profile from Codex CLI credentials when missing locally", () => {
+  it("bootstraps the default codex profile from Codex CLI credentials when in scope", () => {
     mocks.readCodexCliCredentialsCached.mockReturnValue(
       makeOAuthCredential({
         provider: "openai-codex",
@@ -254,7 +254,9 @@ describe("external cli oauth resolution", () => {
       }),
     );
 
-    const profiles = resolveExternalCliAuthProfiles(makeStore());
+    const profiles = resolveExternalCliAuthProfiles(makeStore(), {
+      providerIds: ["openai-codex"],
+    });
 
     expect(profiles).toEqual([
       {
@@ -318,7 +320,9 @@ describe("external cli oauth resolution", () => {
       expires: Date.now() + 5 * 24 * 60 * 60_000,
     });
 
-    const profiles = resolveExternalCliAuthProfiles(makeStore());
+    const profiles = resolveExternalCliAuthProfiles(makeStore(), {
+      providerIds: ["claude-cli"],
+    });
 
     expect(profiles).toEqual([
       {
@@ -342,6 +346,51 @@ describe("external cli oauth resolution", () => {
     expect(mocks.readCodexCliCredentialsCached).not.toHaveBeenCalled();
     expect(mocks.readClaudeCliCredentialsCached).not.toHaveBeenCalled();
     expect(mocks.readMiniMaxCliCredentialsCached).not.toHaveBeenCalled();
+  });
+
+  it("does not scan missing external CLI profiles without an explicit scope", () => {
+    mocks.readClaudeCliCredentialsCached.mockReturnValue({
+      type: "oauth",
+      provider: "anthropic",
+      access: "claude-cli-access",
+      refresh: "claude-cli-refresh",
+      expires: Date.now() + 5 * 24 * 60 * 60_000,
+    });
+
+    const profiles = resolveExternalCliAuthProfiles(makeStore());
+
+    expect(profiles).toEqual([]);
+    expect(mocks.readClaudeCliCredentialsCached).not.toHaveBeenCalled();
+  });
+
+  it("refreshes a stored external CLI profile without an explicit scope", () => {
+    mocks.readClaudeCliCredentialsCached.mockReturnValue({
+      type: "oauth",
+      provider: "anthropic",
+      access: "claude-cli-fresh-access",
+      refresh: "claude-cli-fresh-refresh",
+      expires: Date.now() + 5 * 24 * 60 * 60_000,
+    });
+
+    const profiles = resolveExternalCliAuthProfiles(
+      makeStore(CLAUDE_CLI_PROFILE_ID, {
+        type: "oauth",
+        provider: "claude-cli",
+        access: "claude-cli-stale-access",
+        refresh: "claude-cli-stale-refresh",
+        expires: Date.now() - 5_000,
+      }),
+    );
+
+    expect(profiles).toEqual([
+      {
+        profileId: CLAUDE_CLI_PROFILE_ID,
+        credential: expect.objectContaining({
+          provider: "claude-cli",
+          access: "claude-cli-fresh-access",
+        }),
+      },
+    ]);
   });
 
   it("passes non-prompting keychain policy to scoped Claude CLI credential reads", () => {
@@ -412,7 +461,9 @@ describe("external cli oauth resolution", () => {
       expires: Date.now() + 5 * 24 * 60 * 60_000,
     });
 
-    const profiles = resolveExternalCliAuthProfiles(makeStore());
+    const profiles = resolveExternalCliAuthProfiles(makeStore(), {
+      providerIds: ["claude-cli"],
+    });
 
     expect(profiles).toEqual([]);
   });

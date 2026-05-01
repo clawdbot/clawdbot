@@ -88,6 +88,7 @@ export class RequestClient {
     this.scheduler = new RestScheduler<RequestData>(
       {
         maxConcurrency: this.options.scheduler?.maxConcurrency ?? DEFAULT_MAX_CONCURRENT_WORKERS,
+        maxRateLimitRetries: this.options.scheduler?.maxRateLimitRetries ?? 3,
         maxQueueSize: this.options.maxQueueSize ?? defaultOptions.maxQueueSize,
       },
       async (request) =>
@@ -167,7 +168,7 @@ export class RequestClient {
         const rateLimitBody = isDiscordRateLimitBody(parsed) ? parsed : undefined;
         throw new RateLimitError(response, {
           message: readDiscordMessage(rateLimitBody, "Rate limited"),
-          retry_after: readRetryAfter(rateLimitBody, response),
+          retry_after: readRetryAfter(rateLimitBody, response, 1),
           code: readDiscordCode(rateLimitBody),
           global: Boolean(rateLimitBody?.global),
         });

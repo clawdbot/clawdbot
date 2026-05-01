@@ -47,8 +47,6 @@ export type MediaUnderstandingModelDecision = {
   reason?: string;
 };
 
-export type MediaUnderstandingAttemptOutcome = MediaUnderstandingModelDecision["outcome"];
-
 export type MediaUnderstandingAttachmentDecision = {
   attachmentIndex: number;
   attempts: MediaUnderstandingModelDecision[];

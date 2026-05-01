@@ -18,17 +18,16 @@ export async function loadSqliteVecExtension(params: {
   extensionPath?: string;
 }): Promise<{ ok: boolean; extensionPath?: string; error?: string }> {
   try {
-    const sqliteVec = await loadSqliteVecModule();
     const resolvedPath = normalizeOptionalString(params.extensionPath);
-    const extensionPath = resolvedPath ?? sqliteVec.getLoadablePath();
-
     params.db.enableLoadExtension(true);
     if (resolvedPath) {
-      params.db.loadExtension(extensionPath);
-    } else {
-      sqliteVec.load(params.db);
+      params.db.loadExtension(resolvedPath);
+      return { ok: true, extensionPath: resolvedPath };
     }
 
+    const sqliteVec = await loadSqliteVecModule();
+    const extensionPath = sqliteVec.getLoadablePath();
+    sqliteVec.load(params.db);
     return { ok: true, extensionPath };
   } catch (err) {
     const message = formatErrorMessage(err);

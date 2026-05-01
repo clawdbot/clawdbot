@@ -375,6 +375,18 @@ export const ToolsEffectiveParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const ToolsInvokeParamsSchema = Type.Object(
+  {
+    name: NonEmptyString,
+    args: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+    sessionKey: Type.Optional(NonEmptyString),
+    agentId: Type.Optional(NonEmptyString),
+    confirm: Type.Optional(Type.Boolean()),
+    idempotencyKey: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
 export const ToolCatalogProfileSchema = Type.Object(
   {
     id: Type.Union([
@@ -464,6 +476,36 @@ export const ToolsEffectiveResultSchema = Type.Object(
     agentId: NonEmptyString,
     profile: NonEmptyString,
     groups: Type.Array(ToolsEffectiveGroupSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const ToolsInvokeErrorSchema = Type.Object(
+  {
+    code: NonEmptyString,
+    message: NonEmptyString,
+    details: Type.Optional(Type.Unknown()),
+  },
+  { additionalProperties: false },
+);
+
+export const ToolsInvokeResultSchema = Type.Object(
+  {
+    ok: Type.Boolean(),
+    toolName: NonEmptyString,
+    output: Type.Optional(Type.Unknown()),
+    requiresApproval: Type.Optional(Type.Boolean()),
+    approvalId: Type.Optional(NonEmptyString),
+    source: Type.Optional(
+      Type.Union([
+        Type.Literal("core"),
+        Type.Literal("plugin"),
+        Type.Literal("mcp"),
+        Type.Literal("channel"),
+        Type.String(),
+      ]),
+    ),
+    error: Type.Optional(ToolsInvokeErrorSchema),
   },
   { additionalProperties: false },
 );

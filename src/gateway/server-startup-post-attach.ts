@@ -8,6 +8,7 @@ import type { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import type { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
+import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
@@ -579,6 +580,15 @@ export async function startGatewayPostAttachRuntime(
     };
     logChannels: { info: (msg: string) => void; error: (msg: string) => void };
     unavailableGatewayMethods: Set<string>;
+    loadStartupPlugins?: () => Awaitable<{
+      pluginRegistry: PluginRegistry;
+      gatewayMethods: string[];
+    }>;
+    onStartupPluginsLoading?: () => void;
+    onStartupPluginsLoaded?: (result: {
+      pluginRegistry: PluginRegistry;
+      gatewayMethods: string[];
+    }) => Awaitable<void>;
     getCronService?: () => PluginHookGatewayCronService | null | undefined;
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
     onSidecarsReady?: () => void;
@@ -595,6 +605,16 @@ export async function startGatewayPostAttachRuntime(
     }
   });
 
+  let pluginRegistry = params.pluginRegistry;
+  if (!params.minimalTestGateway && params.loadStartupPlugins) {
+    params.onStartupPluginsLoading?.();
+    const loaded = await measureStartup(params.startupTrace, "plugins.runtime-post-bind", () =>
+      params.loadStartupPlugins!(),
+    );
+    pluginRegistry = loaded.pluginRegistry;
+    await params.onStartupPluginsLoaded?.(loaded);
+  }
+
   await measureStartup(params.startupTrace, "post-attach.log", () =>
     runtimeDeps.logGatewayStartup({
       cfg: params.cfgAtStart,
@@ -602,7 +622,7 @@ export async function startGatewayPostAttachRuntime(
       bindHosts: params.bindHosts,
       port: params.port,
       tlsEnabled: params.tlsEnabled,
-      loadedPluginIds: params.pluginRegistry.plugins
+      loadedPluginIds: pluginRegistry.plugins
         .filter((plugin) => plugin.status === "loaded")
         .map((plugin) => plugin.id),
       log: params.log,
@@ -640,13 +660,13 @@ export async function startGatewayPostAttachRuntime(
         );
 
   const sidecarsPromise = params.minimalTestGateway
-    ? Promise.resolve({ pluginServices: null })
+    ? Promise.resolve({ pluginServices: null, pluginRegistry })
     : new Promise<void>((resolve) => setImmediate(resolve)).then(async () => {
         params.log.info("starting channels and sidecars...");
         const result = await measureStartup(params.startupTrace, "sidecars.total", () =>
           runtimeDeps.startGatewaySidecars({
             cfg: params.gatewayPluginConfigAtStart,
-            pluginRegistry: params.pluginRegistry,
+            pluginRegistry,
             defaultWorkspaceDir: params.defaultWorkspaceDir,
             deps: params.deps,
             startChannels: params.startChannels,
@@ -663,15 +683,15 @@ export async function startGatewayPostAttachRuntime(
         params.onSidecarsReady?.();
         params.startupTrace?.mark("sidecars.ready");
         params.log.info("gateway ready");
-        return result;
+        return { ...result, pluginRegistry };
       });
 
   void sidecarsPromise
-    .then(async () => {
+    .then(async (sidecarsResult) => {
       if (params.minimalTestGateway) {
         return;
       }
-      if (!hasGatewayStartHooks(params.pluginRegistry)) {
+      if (!hasGatewayStartHooks(sidecarsResult.pluginRegistry)) {
         return;
       }
       await new Promise<void>((resolve) => setImmediate(resolve));

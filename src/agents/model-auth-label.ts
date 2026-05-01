@@ -1,6 +1,7 @@
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
   loadAuthProfileStoreWithoutExternalProfiles,
   resolveAuthProfileDisplayLabel,
@@ -28,7 +29,11 @@ export function resolveModelAuthLabel(params: {
     params.includeExternalProfiles === false
       ? loadAuthProfileStoreWithoutExternalProfiles(params.agentDir)
       : ensureAuthProfileStore(params.agentDir, {
-          allowKeychainPrompt: false,
+          externalCli: externalCliDiscoveryForProviderAuth({
+            cfg: params.cfg,
+            provider: providerKey,
+            preferredProfile: params.sessionEntry?.authProfileOverride,
+          }),
         });
   const profileOverride = params.sessionEntry?.authProfileOverride?.trim();
   const order = resolveAuthProfileOrder({

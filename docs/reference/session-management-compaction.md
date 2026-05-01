@@ -272,6 +272,20 @@ reopen cost, not raw archival: OpenClaw still runs normal semantic compaction,
 and it requires `truncateAfterCompaction` so the compacted summary can become a
 new successor transcript.
 
+For embedded Pi runs, `agents.defaults.compaction.midTurnPrecheck.enabled: true`
+adds an opt-in tool-loop guard. After a tool result is appended and before the
+next model call, OpenClaw estimates the prompt pressure using the same preflight
+budget logic used at turn start. If the context no longer fits, the guard does
+not compact inside Pi's `transformContext` hook. It raises a structured
+mid-turn precheck signal, stops the current prompt submission, and lets the
+outer run loop use the existing recovery path: truncate oversized tool results
+when that is enough, or trigger the configured compaction mode and retry. The
+option is disabled by default and works with both `default` and `safeguard`
+compaction modes, including provider-backed safeguard compaction.
+This is independent of `maxActiveTranscriptBytes`: the byte-size guard runs
+before a turn opens, while mid-turn precheck runs later in the embedded Pi tool
+loop after new tool results have been appended.
+
 ---
 
 ## Compaction settings (`reserveTokens`, `keepRecentTokens`)
@@ -298,6 +312,11 @@ OpenClaw also enforces a safety floor for embedded runs:
   and keeps Pi's recent-tail cut point. Without an explicit keep budget,
   manual compaction remains a hard checkpoint and rebuilt context starts from
   the new summary.
+- Set `agents.defaults.compaction.midTurnPrecheck.enabled: true` to run the
+  optional tool-loop precheck after new tool results and before the next model
+  call. This is a trigger only; summary generation still uses the configured
+  compaction path. It is independent of `maxActiveTranscriptBytes`, which is a
+  turn-start active-transcript byte-size guard.
 - Set `agents.defaults.compaction.maxActiveTranscriptBytes` to a byte value or
   string such as `"20mb"` to run local compaction before a turn when the active
   transcript gets large. This guard is active only when

@@ -1,11 +1,24 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_SEARCH_COUNT,
   buildUnsupportedSearchFilterResponse,
   isoToPerplexityDate,
   normalizeToIsoDate,
   normalizeFreshness,
 } from "./web-search-provider-common.js";
 import { mergeScopedSearchConfig } from "./web-search-provider-config.js";
+import { createWebSearchTool } from "./web-search.js";
+
+describe("web_search tool schema", () => {
+  it("advertises the shared runtime count limit", () => {
+    const tool = createWebSearchTool();
+    const parameters = tool?.parameters as
+      | { properties?: { count?: { maximum?: unknown } } }
+      | undefined;
+
+    expect(parameters?.properties?.count?.maximum).toBe(MAX_SEARCH_COUNT);
+  });
+});
 
 describe("web_search freshness normalization", () => {
   it("accepts Brave shortcut values and maps for Perplexity", () => {

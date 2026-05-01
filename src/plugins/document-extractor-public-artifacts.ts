@@ -2,10 +2,7 @@ import type {
   DocumentExtractorPlugin,
   PluginDocumentExtractorEntry,
 } from "./document-extractor-types.js";
-import {
-  loadBundledPluginPublicArtifactModuleSync,
-  resolveBundledPluginPublicArtifactPath,
-} from "./public-surface-loader.js";
+import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
 
 const DOCUMENT_EXTRACTOR_ARTIFACT_CANDIDATES = [
   "document-extractor.js",
@@ -99,10 +96,4 @@ export function loadBundledDocumentExtractorEntriesFromDir(params: {
     return null;
   }
   return extractors.map((extractor) => Object.assign({}, extractor, { pluginId: params.pluginId }));
-}
-
-export function hasBundledDocumentExtractorPublicArtifact(pluginId: string): boolean {
-  return DOCUMENT_EXTRACTOR_ARTIFACT_CANDIDATES.some((artifactBasename) =>
-    Boolean(resolveBundledPluginPublicArtifactPath({ dirName: pluginId, artifactBasename })),
-  );
 }

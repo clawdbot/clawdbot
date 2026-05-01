@@ -98,23 +98,6 @@ export function writeSupportBundleFile(outputDir: string, file: DiagnosticSuppor
   });
 }
 
-export function copySupportBundleFile(params: {
-  outputDir: string;
-  sourceFile: string;
-  path: string;
-}): DiagnosticSupportBundleContent {
-  const outputPath = resolveSupportBundleFilePath(params.outputDir, params.path);
-  fs.mkdirSync(path.dirname(outputPath), { recursive: true, mode: 0o700 });
-  fs.copyFileSync(params.sourceFile, outputPath, fs.constants.COPYFILE_EXCL);
-  fs.chmodSync(outputPath, 0o600);
-  const stat = fs.statSync(outputPath);
-  return {
-    path: assertSafeBundleRelativePath(params.path),
-    mediaType: "application/x-ndjson",
-    bytes: stat.size,
-  };
-}
-
 export function writeSupportBundleDirectory(params: {
   outputDir: string;
   files: readonly DiagnosticSupportBundleFile[];

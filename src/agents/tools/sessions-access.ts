@@ -6,18 +6,10 @@ import {
   listSpawnedSessionKeys,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxSessionToolsVisibility,
-  resolveSessionToolsVisibility,
 } from "../../plugin-sdk/session-visibility.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-resolution.js";
-
-export type {
-  AgentToAgentPolicy,
-  SessionAccessAction,
-  SessionAccessResult,
-  SessionToolsVisibility,
-} from "../../plugin-sdk/session-visibility.js";
 
 export {
   createAgentToAgentPolicy,
@@ -25,8 +17,6 @@ export {
   createSessionVisibilityGuard,
   listSpawnedSessionKeys,
   resolveEffectiveSessionToolsVisibility,
-  resolveSandboxSessionToolsVisibility,
-  resolveSessionToolsVisibility,
 } from "../../plugin-sdk/session-visibility.js";
 
 export function resolveSandboxedSessionToolContext(params: {

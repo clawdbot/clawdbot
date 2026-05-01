@@ -1,12 +1,7 @@
-import fs from "node:fs";
 import path from "node:path";
 import { type PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { clearPluginSetupRegistryCache } from "../plugins/setup-registry.js";
-import {
-  cleanupTrackedTempDirs,
-  makeTrackedTempDir,
-  mkdirSafeDir,
-} from "../plugins/test-helpers/fs-fixtures.js";
+import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
 
@@ -27,28 +22,6 @@ export function makeIsolatedEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.Proce
     VITEST: "true",
     ...overrides,
   };
-}
-
-export function writePluginManifestFixture(params: {
-  rootDir: string;
-  id: string;
-  channels: string[];
-}): void {
-  mkdirSafeDir(params.rootDir);
-  fs.writeFileSync(
-    path.join(params.rootDir, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id: params.id,
-        channels: params.channels,
-        configSchema: { type: "object" },
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-  fs.writeFileSync(path.join(params.rootDir, "index.ts"), "export default {}", "utf-8");
 }
 
 export function makeRegistry(

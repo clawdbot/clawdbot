@@ -704,6 +704,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
 
   const ownsLab = !params?.lab;
   const startLab = params?.startLab;
+  writeQaSuiteProgress(progressEnabled, "lab start");
   const lab =
     params?.lab ??
     (await requireQaSuiteStartLab(startLab)({
@@ -712,11 +713,18 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       port: 0,
       embeddedGateway: "disabled",
     }));
+  writeQaSuiteProgress(progressEnabled, `lab ready: ${sanitizeQaSuiteProgressValue(lab.baseUrl)}`);
   const transport = createQaTransportAdapter({
     id: transportId,
     state: lab.state,
   });
+  writeQaSuiteProgress(progressEnabled, `provider start: ${providerMode}`);
   const mock = await startQaProviderServer(providerMode);
+  writeQaSuiteProgress(
+    progressEnabled,
+    `provider ready: ${sanitizeQaSuiteProgressValue(mock?.baseUrl ?? "live")}`,
+  );
+  writeQaSuiteProgress(progressEnabled, "gateway start");
   const gateway = await startQaGatewayChild({
     repoRoot,
     providerBaseUrl: mock ? `${mock.baseUrl}/v1` : undefined,
@@ -736,6 +744,10 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       ? (cfg) => applyQaMergePatch(cfg, gatewayConfigPatch) as OpenClawConfig
       : undefined,
   });
+  writeQaSuiteProgress(
+    progressEnabled,
+    `gateway ready: ${sanitizeQaSuiteProgressValue(gateway.baseUrl)}`,
+  );
   lab.setControlUi({
     controlUiProxyTarget: gateway.baseUrl,
     controlUiToken: gateway.token,

@@ -191,6 +191,7 @@ export type {
 export type {
   CliBackendAuthEpochMode,
   CliBackendNormalizeConfigContext,
+  CliBackendNativeToolMode,
   CliBackendPreparedExecution,
   CliBackendPrepareExecutionContext,
   CliBackendPlugin,

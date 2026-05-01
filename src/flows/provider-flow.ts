@@ -13,8 +13,6 @@ export type ProviderSetupFlowOption = FlowOption & {
   onboardingScopes?: ProviderFlowScope[];
 };
 
-export type ProviderModelPickerFlowEntry = FlowOption;
-
 export type ProviderSetupFlowContribution = FlowContribution & {
   kind: "provider";
   surface: "setup";

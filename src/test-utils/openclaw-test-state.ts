@@ -10,6 +10,7 @@ export type OpenClawTestStateScenario =
   | "empty"
   | "minimal"
   | "update-stable"
+  | "upgrade-survivor"
   | "gateway-loopback"
   | "external-service";
 
@@ -131,6 +132,33 @@ function scenarioConfig(options: OpenClawTestStateOptions): Record<string, unkno
         channel: "stable",
       },
       plugins: {},
+    };
+  }
+  if (scenario === "upgrade-survivor") {
+    return {
+      update: {
+        channel: "stable",
+      },
+      gateway: {
+        port: options.gateway?.port ?? 18789,
+        bind: "loopback",
+        auth: {
+          mode: "token",
+          token: options.gateway?.token ?? "openclaw-test-token",
+        },
+        controlUi: {
+          enabled: false,
+        },
+      },
+      plugins: {
+        enabled: true,
+        allow: ["discord", "telegram", "whatsapp", "memory"],
+        entries: {
+          discord: { enabled: true },
+          telegram: { enabled: true },
+          whatsapp: { enabled: true },
+        },
+      },
     };
   }
   if (scenario === "gateway-loopback") {

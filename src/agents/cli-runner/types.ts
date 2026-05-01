@@ -29,6 +29,7 @@ export type RunCliAgentParams = {
   thinkLevel?: ThinkLevel;
   timeoutMs: number;
   runId: string;
+  lane?: string;
   jobId?: string;
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -49,6 +50,7 @@ export type RunCliAgentParams = {
   messageProvider?: string;
   agentAccountId?: string;
   senderIsOwner?: boolean;
+  disableTools?: boolean;
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;
   replyOperation?: ReplyOperation;

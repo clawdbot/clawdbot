@@ -74,7 +74,7 @@ describe("status-runtime-shared", () => {
       { gateway: {} },
       {
         activationSourceConfig: { gateway: {} },
-        includeSetupRuntimeFallback: false,
+        includeSetupFallbackPlugins: false,
       },
     );
   });

@@ -1,41 +1,6 @@
 import { resolvePluginWebSearchConfig } from "../../config/plugin-web-search-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
-type ConfiguredWebSearchProvider = NonNullable<
-  NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]
->["provider"];
-
-export type WebSearchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
-  ? Web extends { search?: infer Search }
-    ? Search
-    : undefined
-  : undefined;
-
-function cloneWithDescriptors<T extends object>(value: T | undefined): T {
-  const next = Object.create(Object.getPrototypeOf(value ?? {})) as T;
-  if (value) {
-    Object.defineProperties(next, Object.getOwnPropertyDescriptors(value));
-  }
-  return next;
-}
-
-export function withForcedProvider(
-  config: OpenClawConfig | undefined,
-  provider: ConfiguredWebSearchProvider,
-): OpenClawConfig {
-  const next = cloneWithDescriptors(config ?? {});
-  const tools = cloneWithDescriptors(next.tools ?? {});
-  const web = cloneWithDescriptors(tools.web ?? {});
-  const search = cloneWithDescriptors(web.search ?? {});
-
-  search.provider = provider;
-  web.search = search;
-  tools.web = web;
-  next.tools = tools;
-
-  return next;
-}
-
 export function getTopLevelCredentialValue(searchConfig?: Record<string, unknown>): unknown {
   return searchConfig?.apiKey;
 }
@@ -102,14 +67,6 @@ export function mergeScopedSearchConfig(
   return next;
 }
 
-export function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
-  const search = cfg?.tools?.web?.search;
-  if (!search || typeof search !== "object") {
-    return undefined;
-  }
-  return search as WebSearchConfig;
-}
-
 export function resolveProviderWebSearchPluginConfig(
   config: OpenClawConfig | undefined,
   pluginId: string,
@@ -142,17 +99,4 @@ export function setProviderWebSearchPluginConfigValue(
   const config = ensureObject(entry, "config");
   const webSearch = ensureObject(config, "webSearch");
   webSearch[key] = value;
-}
-
-export function resolveSearchEnabled(params: {
-  search?: WebSearchConfig;
-  sandboxed?: boolean;
-}): boolean {
-  if (typeof params.search?.enabled === "boolean") {
-    return params.search.enabled;
-  }
-  if (params.sandboxed) {
-    return true;
-  }
-  return true;
 }

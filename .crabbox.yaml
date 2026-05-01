@@ -1,0 +1,41 @@
+profile: openclaw-check
+provider: aws
+class: beast
+capacity:
+  market: spot
+  strategy: most-available
+  fallback: on-demand-after-120s
+  regions:
+    - eu-west-1
+actions:
+  workflow: .github/workflows/crabbox-hydrate.yml
+  job: hydrate
+  ref: main
+  runnerLabels:
+    - crabbox
+    - openclaw
+  runnerVersion: latest
+  ephemeral: true
+aws:
+  region: eu-west-1
+  rootGB: 400
+sync:
+  delete: true
+  checksum: false
+  gitSeed: true
+  fingerprint: true
+  baseRef: main
+  exclude:
+    - .artifacts
+    - .codex
+    - .DS_Store
+    - playwright-report
+    - test-results
+env:
+  allow:
+    - CI
+    - NODE_OPTIONS
+    - OPENCLAW_*
+ssh:
+  user: crabbox
+  port: "2222"

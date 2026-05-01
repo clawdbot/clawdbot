@@ -18,6 +18,7 @@ export function ensureRuntimePluginsLoaded(params: {
   const loadOptions = {
     config: params.config,
     workspaceDir,
+    installBundledRuntimeDeps: false,
     runtimeOptions: allowGatewaySubagentBinding
       ? {
           allowGatewaySubagentBinding: true,

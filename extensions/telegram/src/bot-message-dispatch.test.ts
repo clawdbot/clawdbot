@@ -747,31 +747,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("does not materialize native draft tool progress before final-only text", async () => {
-    const draftStream = createTestDraftStream({ previewMode: "draft" });
-    draftStream.materialize.mockResolvedValue(321);
-    createTelegramDraftStream.mockReturnValue(draftStream);
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
-        return { queuedFinal: true };
-      },
-    );
-
-    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
-
-    expect(draftStream.update).toHaveBeenCalledWith("Working…\n• `tool: exec`");
-    expect(draftStream.update).not.toHaveBeenCalledWith("Done");
-    expect(draftStream.materialize).not.toHaveBeenCalled();
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replies: [expect.objectContaining({ text: "Done" })],
-      }),
-    );
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
-  });
-
   it("suppresses Telegram tool progress when explicitly disabled", async () => {
     const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);
@@ -2463,13 +2438,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(createTelegramDraftStream.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
         thread: { id: 777, scope: "dm" },
-        previewTransport: "message",
       }),
     );
     expect(createTelegramDraftStream.mock.calls[1]?.[0]).toEqual(
       expect.objectContaining({
         thread: { id: 777, scope: "dm" },
-        previewTransport: "message",
       }),
     );
   });
@@ -2494,7 +2467,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(createTelegramDraftStream.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
         thread: { id: 777, scope: "dm" },
-        previewTransport: "message",
       }),
     );
     expect(answerDraftStream.materialize).not.toHaveBeenCalled();
@@ -2638,14 +2610,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("keeps DM draft reasoning block updates in preview flow without sending duplicates", async () => {
+  it("keeps DM reasoning block updates in preview flow without sending duplicates", async () => {
     const answerDraftStream = createDraftStream(999);
     let previewRevision = 0;
     const reasoningDraftStream = {
       update: vi.fn(),
       flush: vi.fn().mockResolvedValue(true),
-      messageId: vi.fn().mockReturnValue(undefined),
-      previewMode: vi.fn().mockReturnValue("draft"),
+      messageId: vi.fn().mockReturnValue(111),
       previewRevision: vi.fn().mockImplementation(() => previewRevision),
       clear: vi.fn().mockResolvedValue(undefined),
       stop: vi.fn().mockResolvedValue(undefined),
@@ -2680,10 +2651,16 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({ context: createReasoningStreamContext(), streamMode: "partial" });
 
     expect(editMessageTelegram).toHaveBeenCalledWith(123, 999, "3", expect.any(Object));
-    expect(reasoningDraftStream.update).toHaveBeenCalledWith(
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      111,
       "Reasoning:\nI am counting letters. The total is 3.",
+      expect.any(Object),
     );
-    expect(reasoningDraftStream.flush).toHaveBeenCalled();
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith(
+      "Reasoning:\nI am counting letters...",
+    );
+    expect(reasoningDraftStream.flush).not.toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ text: expect.stringContaining("Reasoning:\nI am") })],
@@ -2691,14 +2668,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("falls back to normal send when DM draft reasoning flush emits no preview update", async () => {
+  it("falls back to normal send when DM reasoning preview has no message id", async () => {
     const answerDraftStream = createDraftStream(999);
     const previewRevision = 0;
     const reasoningDraftStream = {
       update: vi.fn(),
       flush: vi.fn().mockResolvedValue(false),
       messageId: vi.fn().mockReturnValue(undefined),
-      previewMode: vi.fn().mockReturnValue("draft"),
       previewRevision: vi.fn().mockReturnValue(previewRevision),
       clear: vi.fn().mockResolvedValue(undefined),
       stop: vi.fn().mockResolvedValue(undefined),
@@ -2722,7 +2698,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createReasoningStreamContext(), streamMode: "partial" });
 
-    expect(reasoningDraftStream.flush).toHaveBeenCalled();
+    expect(reasoningDraftStream.flush).not.toHaveBeenCalled();
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ text: "Reasoning:\n_step one expanded_" })],

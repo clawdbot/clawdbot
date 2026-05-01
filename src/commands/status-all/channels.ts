@@ -191,7 +191,7 @@ export async function buildChannelsTable(
   opts?: {
     showSecrets?: boolean;
     sourceConfig?: OpenClawConfig;
-    includeSetupRuntimeFallback?: boolean;
+    includeSetupFallbackPlugins?: boolean;
   },
 ): Promise<{
   rows: ChannelRow[];
@@ -210,10 +210,10 @@ export async function buildChannelsTable(
   }> = [];
 
   const sourceConfig = opts?.sourceConfig ?? cfg;
-  const includeSetupRuntimeFallback = opts?.includeSetupRuntimeFallback ?? true;
+  const includeSetupFallbackPlugins = opts?.includeSetupFallbackPlugins ?? true;
   for (const plugin of listReadOnlyChannelPluginsForConfig(cfg, {
     activationSourceConfig: sourceConfig,
-    includeSetupRuntimeFallback,
+    includeSetupFallbackPlugins,
   })) {
     const accountIds = plugin.config.listAccountIds(cfg);
     const defaultAccountId = resolveChannelDefaultAccountId({

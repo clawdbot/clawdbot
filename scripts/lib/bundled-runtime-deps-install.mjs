@@ -1,10 +1,22 @@
 import { spawnSync } from "node:child_process";
 
+const NPM_CONFIG_KEYS_TO_RESET = new Set([
+  "npm_config_global",
+  "npm_config_ignore_scripts",
+  "npm_config_include_workspace_root",
+  "npm_config_location",
+  "npm_config_prefix",
+  "npm_config_workspace",
+  "npm_config_workspaces",
+]);
+
 export function createNestedNpmInstallEnv(env = process.env) {
   const nextEnv = { ...env };
-  delete nextEnv.npm_config_global;
-  delete nextEnv.npm_config_location;
-  delete nextEnv.npm_config_prefix;
+  for (const key of Object.keys(nextEnv)) {
+    if (NPM_CONFIG_KEYS_TO_RESET.has(key.toLowerCase())) {
+      delete nextEnv[key];
+    }
+  }
   return nextEnv;
 }
 
@@ -16,9 +28,11 @@ export function createBundledRuntimeDependencyInstallEnv(env = process.env, opti
     npm_config_fetch_retry_maxtimeout: env.npm_config_fetch_retry_maxtimeout ?? "120000",
     npm_config_fetch_retry_mintimeout: env.npm_config_fetch_retry_mintimeout ?? "10000",
     npm_config_fetch_timeout: env.npm_config_fetch_timeout ?? "300000",
+    npm_config_ignore_scripts: "true",
     npm_config_legacy_peer_deps: "true",
     npm_config_package_lock: "false",
     npm_config_save: "false",
+    npm_config_workspaces: "false",
   };
   if (options.ci) {
     nextEnv.CI = "1";
@@ -41,6 +55,7 @@ export function createBundledRuntimeDependencyInstallArgs(specs = [], options = 
     ...(options.noAudit ? ["--no-audit"] : []),
     ...(options.noFund ? ["--no-fund"] : []),
     "--ignore-scripts",
+    "--workspaces=false",
     ...(options.silent ? ["--silent"] : []),
     ...specs,
   ];

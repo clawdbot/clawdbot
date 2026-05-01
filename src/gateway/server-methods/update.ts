@@ -140,11 +140,13 @@ export const updateHandlers: GatewayRequestHandlers = {
     // Only restart the gateway when the update actually succeeded.
     // Restarting after a failed update leaves the process in a broken state
     // (corrupted node_modules, partial builds) and causes a crash loop.
+    const updateWasPackageSwap = result.status === "ok" && result.mode !== "git";
     const restart =
       result.status === "ok"
         ? scheduleGatewaySigusr1Restart({
-            delayMs: restartDelayMs,
+            delayMs: updateWasPackageSwap ? 0 : restartDelayMs,
             reason: "update.run",
+            skipDeferral: updateWasPackageSwap,
             audit: {
               actor: actor.actor,
               deviceId: actor.deviceId,

@@ -405,7 +405,3 @@ export function applyCompactionDefaults(cfg: OpenClawConfig): OpenClawConfig {
     },
   };
 }
-
-export function resetSessionDefaultsWarningForTests() {
-  defaultWarnState = { warned: false };
-}

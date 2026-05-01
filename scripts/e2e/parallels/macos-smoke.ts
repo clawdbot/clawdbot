@@ -95,6 +95,7 @@ const guestOpenClaw = "/opt/homebrew/bin/openclaw";
 const guestOpenClawEntry = "/opt/homebrew/lib/node_modules/openclaw/openclaw.mjs";
 const guestNode = "/opt/homebrew/bin/node";
 const guestNpm = "/opt/homebrew/bin/npm";
+const agentModelTimeoutSeconds = Number(process.env.OPENCLAW_PARALLELS_MODEL_TIMEOUT_S || 300);
 
 const defaultOptions = (): MacosOptions => ({
   discordChannelId: undefined,
@@ -963,6 +964,15 @@ exit 1`);
 
   private verifyTurn(): void {
     this.guestExec([guestNode, guestOpenClawEntry, "models", "set", this.auth.modelId]);
+    this.guestExec([
+      guestNode,
+      guestOpenClawEntry,
+      "config",
+      "set",
+      `models.providers.${this.options.provider}.timeoutSeconds`,
+      String(agentModelTimeoutSeconds),
+      "--strict-json",
+    ]);
     this.guestExec([
       guestNode,
       guestOpenClawEntry,

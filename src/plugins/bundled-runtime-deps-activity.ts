@@ -1,4 +1,4 @@
-export type BundledRuntimeDepsInstallActivity = {
+type BundledRuntimeDepsInstallActivity = {
   id: number;
   installRoot: string;
   missingSpecs: string[];
@@ -52,10 +52,6 @@ export function beginBundledRuntimeDepsInstall(params: {
 
 export function getActiveBundledRuntimeDepsInstallCount(): number {
   return activeInstalls.size;
-}
-
-export function listActiveBundledRuntimeDepsInstalls(): BundledRuntimeDepsInstallActivity[] {
-  return [...activeInstalls.values()].toSorted((left, right) => left.id - right.id);
 }
 
 export async function waitForBundledRuntimeDepsInstallIdle(

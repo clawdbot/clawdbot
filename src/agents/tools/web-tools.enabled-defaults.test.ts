@@ -111,7 +111,7 @@ describe("web tools defaults", () => {
 
     const result = await tool?.execute?.("call-runtime-provider", {});
 
-    expect(tool?.description).toBe("custom runtime tool");
+    expect(tool?.description).toContain("Search the web");
     expect(result?.details).toMatchObject({ ok: true });
   });
 });

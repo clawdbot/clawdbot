@@ -8,17 +8,20 @@ export function buildEmbeddedAttemptToolRunContext(params: {
   trigger?: EmbeddedRunTrigger;
   jobId?: string;
   memoryFlushWritePath?: string;
+  toolsAllow?: string[];
   trace?: DiagnosticTraceContext;
 }): {
   trigger?: EmbeddedRunTrigger;
   jobId?: string;
   memoryFlushWritePath?: string;
+  runtimeToolAllowlist?: string[];
   trace?: DiagnosticTraceContext;
 } {
   return {
     trigger: params.trigger,
     jobId: params.jobId,
     memoryFlushWritePath: params.memoryFlushWritePath,
+    ...(params.toolsAllow ? { runtimeToolAllowlist: params.toolsAllow } : {}),
     ...(params.trace ? { trace: freezeDiagnosticTraceContext(params.trace) } : {}),
   };
 }

@@ -247,12 +247,3 @@ export function formatQQBotMarkdownImage(url: string, size: ImageSize | null): s
 export function hasQQBotImageSize(markdownImage: string): boolean {
   return /!\[#\d+px\s+#\d+px\]/.test(markdownImage);
 }
-
-/** Extract width and height from QQBot markdown image syntax: `![#Wpx #Hpx](url)`. */
-export function extractQQBotImageSize(markdownImage: string): ImageSize | null {
-  const match = markdownImage.match(/!\[#(\d+)px\s+#(\d+)px\]/);
-  if (match) {
-    return { width: Number.parseInt(match[1], 10), height: Number.parseInt(match[2], 10) };
-  }
-  return null;
-}

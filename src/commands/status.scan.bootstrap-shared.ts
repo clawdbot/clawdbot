@@ -71,15 +71,6 @@ type StatusScanCoreBootstrapParams<TAgentStatus> = {
   getAgentLocalStatuses: (cfg: OpenClawConfig) => Promise<TAgentStatus>;
 };
 
-type StatusScanBootstrapParams<TAgentStatus, TSummary> =
-  StatusScanCoreBootstrapParams<TAgentStatus> & {
-    sourceConfig: OpenClawConfig;
-    getStatusSummary: (params: {
-      config: OpenClawConfig;
-      sourceConfig: OpenClawConfig;
-    }) => Promise<TSummary>;
-  };
-
 export async function createStatusScanCoreBootstrap<TAgentStatus>(
   params: StatusScanCoreBootstrapParams<TAgentStatus>,
 ) {
@@ -129,29 +120,5 @@ export async function createStatusScanCoreBootstrap<TAgentStatus>(
         tailscaleDns: await tailscaleDnsPromise,
         controlUiBasePath: params.cfg.gateway?.controlUi?.basePath,
       }),
-  };
-}
-
-export async function createStatusScanBootstrap<TAgentStatus, TSummary>(
-  params: StatusScanBootstrapParams<TAgentStatus, TSummary>,
-) {
-  const core = await createStatusScanCoreBootstrap<TAgentStatus>({
-    coldStart: params.coldStart,
-    cfg: params.cfg,
-    hasConfiguredChannels: params.hasConfiguredChannels,
-    opts: params.opts,
-    getTailnetHostname: params.getTailnetHostname,
-    getUpdateCheckResult: params.getUpdateCheckResult,
-    getAgentLocalStatuses: params.getAgentLocalStatuses,
-  });
-  const summaryPromise = core.skipColdStartNetworkChecks
-    ? Promise.resolve(buildColdStartStatusSummary() as TSummary)
-    : params.getStatusSummary({
-        config: params.cfg,
-        sourceConfig: params.sourceConfig,
-      });
-  return {
-    ...core,
-    summaryPromise,
   };
 }

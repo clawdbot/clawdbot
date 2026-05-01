@@ -53,7 +53,7 @@ export async function channelsRemoveCommand(
   if (useWizard && prompter) {
     await prompter.intro("Remove channel account");
     const readOnlyPlugins = listReadOnlyChannelPluginsForConfig(cfg, {
-      includeSetupRuntimeFallback: true,
+      includeSetupFallbackPlugins: true,
     });
     const selectedChannel = await prompter.select({
       message: "Channel",
@@ -115,7 +115,7 @@ export async function channelsRemoveCommand(
           cfg,
           runtime,
           rawChannel: lookupChannel,
-          allowInstall: true,
+          allowInstall: false,
         });
       })()
     : null;
@@ -131,6 +131,13 @@ export async function channelsRemoveCommand(
   channel = resolvedChannel;
   const plugin = resolvedPluginState?.plugin ?? getChannelPlugin(resolvedChannel);
   if (!plugin) {
+    if (resolvedPluginState?.catalogEntry) {
+      runtime.error(
+        `Channel plugin "${resolvedPluginState.catalogEntry.id}" is not installed. Run "openclaw channels add --channel ${resolvedPluginState.catalogEntry.id}" first.`,
+      );
+      runtime.exit(1);
+      return;
+    }
     runtime.error(`Unknown channel: ${resolvedChannel}`);
     runtime.exit(1);
     return;

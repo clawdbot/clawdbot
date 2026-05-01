@@ -18,6 +18,10 @@ function parseOptionalNumber(value: string | undefined): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function collectOption(value: string, previous: string[] | undefined): string[] {
+  return [...(previous ?? []), value];
+}
+
 export function registerProxyCli(program: Command) {
   const proxy = program
     .command("proxy")
@@ -49,6 +53,37 @@ export function registerProxyCli(program: Command) {
         commandArgs: cmd,
       });
     });
+
+  proxy
+    .command("validate")
+    .description("Validate the operator-managed network proxy")
+    .option("--json", "Print machine-readable JSON")
+    .option("--proxy-url <url>", "Proxy URL to validate instead of config/env")
+    .option(
+      "--allowed-url <url>",
+      "Destination expected to succeed through the proxy",
+      collectOption,
+    )
+    .option("--denied-url <url>", "Destination expected to be blocked by the proxy", collectOption)
+    .option("--timeout-ms <ms>", "Per-request timeout in milliseconds", parseOptionalNumber)
+    .action(
+      async (opts: {
+        json?: boolean;
+        proxyUrl?: string;
+        allowedUrl?: string[];
+        deniedUrl?: string[];
+        timeoutMs?: number;
+      }) => {
+        const runtime = await loadProxyCliRuntime();
+        await runtime.runProxyValidateCommand({
+          json: opts.json,
+          proxyUrl: opts.proxyUrl,
+          allowedUrls: opts.allowedUrl,
+          deniedUrls: opts.deniedUrl,
+          timeoutMs: opts.timeoutMs,
+        });
+      },
+    );
 
   proxy
     .command("coverage")

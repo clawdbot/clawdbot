@@ -45,6 +45,11 @@ describe("qa model selection runtime", () => {
 
     expect(resolveQaPreferredLiveModel()).toBe("openai/gpt-5.5");
     expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.5");
+    expect(loadAuthProfileStoreForRuntime).toHaveBeenCalledWith(undefined, {
+      readOnly: true,
+      allowKeychainPrompt: false,
+      externalCliProviderIds: ["openai-codex"],
+    });
   });
 
   it("keeps the OpenAI live default when stored OpenAI profiles are available", () => {

@@ -1,12 +1,5 @@
 import type { FailoverReason } from "../../pi-embedded-helpers.js";
 
-export type RunFailoverDecisionAction =
-  | "continue_normal"
-  | "rotate_profile"
-  | "fallback_model"
-  | "surface_error"
-  | "return_error_payload";
-
 export type RunFailoverDecision =
   | {
       action: "continue_normal";

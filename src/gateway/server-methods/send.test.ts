@@ -283,6 +283,37 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("maps gateway asVoice sends onto outbound audioAsVoice payloads", async () => {
+    mockDeliverySuccess("m-voice");
+
+    const { respond } = await runSend({
+      to: "channel:C1",
+      message: "voice note",
+      mediaUrl: "file:///tmp/openclaw-voice.ogg",
+      asVoice: true,
+      channel: "slack",
+      idempotencyKey: "idem-voice",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [
+          expect.objectContaining({
+            text: "voice note",
+            mediaUrl: "file:///tmp/openclaw-voice.ogg",
+            audioAsVoice: true,
+          }),
+        ],
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ messageId: "m-voice" }),
+      undefined,
+      expect.objectContaining({ channel: "slack" }),
+    );
+  });
+
   it("forwards gateway client scopes into outbound delivery", async () => {
     mockDeliverySuccess("m-scope");
 

@@ -485,5 +485,6 @@ function Main {
     return $true
 }
 
-$installSucceeded = Main
+$mainResults = @(Main)
+$installSucceeded = $mainResults.Count -gt 0 -and $mainResults[-1] -eq $true
 Complete-Install -Succeeded:$installSucceeded

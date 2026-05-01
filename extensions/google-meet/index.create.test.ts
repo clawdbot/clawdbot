@@ -12,8 +12,13 @@ import {
 import { CREATE_MEET_FROM_BROWSER_SCRIPT } from "./src/transports/chrome-create.js";
 
 const voiceCallMocks = vi.hoisted(() => ({
-  joinMeetViaVoiceCallGateway: vi.fn(async () => ({ callId: "call-1", dtmfSent: true })),
+  joinMeetViaVoiceCallGateway: vi.fn(async () => ({
+    callId: "call-1",
+    dtmfSent: true,
+    introSent: true,
+  })),
   endMeetVoiceCallGatewayCall: vi.fn(async () => {}),
+  speakMeetViaVoiceCallGateway: vi.fn(async () => {}),
 }));
 
 const fetchGuardMocks = vi.hoisted(() => ({
@@ -31,13 +36,18 @@ const fetchGuardMocks = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: fetchGuardMocks.fetchWithSsrFGuard,
-}));
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: fetchGuardMocks.fetchWithSsrFGuard,
+  };
+});
 
 vi.mock("./src/voice-call-gateway.js", () => ({
   joinMeetViaVoiceCallGateway: voiceCallMocks.joinMeetViaVoiceCallGateway,
   endMeetVoiceCallGatewayCall: voiceCallMocks.endMeetVoiceCallGatewayCall,
+  speakMeetViaVoiceCallGateway: voiceCallMocks.speakMeetViaVoiceCallGateway,
 }));
 
 function setup(

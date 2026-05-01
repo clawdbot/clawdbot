@@ -2138,6 +2138,7 @@ async function runRecallSubagent(params: {
       trigger: "manual",
       toolsAllow: ["memory_recall", "memory_search", "memory_get"],
       disableMessageTool: true,
+      allowGatewaySubagentBinding: true,
       bootstrapContextMode: "lightweight",
       verboseLevel: "off",
       thinkLevel: params.config.thinking,

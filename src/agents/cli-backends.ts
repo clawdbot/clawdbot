@@ -8,6 +8,7 @@ import type {
   CliBackendNormalizeConfigContext,
   CliBundleMcpMode,
   CliBackendPlugin,
+  CliBackendNativeToolMode,
   PluginTextTransforms,
 } from "../plugins/types.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
@@ -37,6 +38,7 @@ export type ResolvedCliBackend = {
   defaultAuthProfileId?: string;
   authEpochMode?: CliBackendAuthEpochMode;
   prepareExecution?: CliBackendPlugin["prepareExecution"];
+  nativeToolMode?: CliBackendNativeToolMode;
 };
 
 export type ResolvedCliBackendLiveTest = {
@@ -60,6 +62,7 @@ type FallbackCliBackendPolicy = {
   defaultAuthProfileId?: string;
   authEpochMode?: CliBackendAuthEpochMode;
   prepareExecution?: CliBackendPlugin["prepareExecution"];
+  nativeToolMode?: CliBackendNativeToolMode;
 };
 
 const FALLBACK_CLI_BACKEND_POLICIES: Record<string, FallbackCliBackendPolicy> = {};
@@ -96,6 +99,7 @@ function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolic
     defaultAuthProfileId: entry.backend.defaultAuthProfileId,
     authEpochMode: entry.backend.authEpochMode,
     prepareExecution: entry.backend.prepareExecution,
+    nativeToolMode: entry.backend.nativeToolMode,
   };
 }
 
@@ -227,6 +231,7 @@ export function resolveCliBackendConfig(
       defaultAuthProfileId: registered.defaultAuthProfileId,
       authEpochMode: registered.authEpochMode,
       prepareExecution: registered.prepareExecution,
+      nativeToolMode: registered.nativeToolMode,
     };
   }
 
@@ -255,6 +260,7 @@ export function resolveCliBackendConfig(
       defaultAuthProfileId: fallbackPolicy.defaultAuthProfileId,
       authEpochMode: fallbackPolicy.authEpochMode,
       prepareExecution: fallbackPolicy.prepareExecution,
+      nativeToolMode: fallbackPolicy.nativeToolMode,
     };
   }
   const mergedFallback = fallbackPolicy?.baseConfig
@@ -280,6 +286,7 @@ export function resolveCliBackendConfig(
     defaultAuthProfileId: fallbackPolicy?.defaultAuthProfileId,
     authEpochMode: fallbackPolicy?.authEpochMode,
     prepareExecution: fallbackPolicy?.prepareExecution,
+    nativeToolMode: fallbackPolicy?.nativeToolMode,
   };
 }
 

@@ -1,13 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-
-export function isStatusCommand(body: string) {
-  const trimmed = normalizeLowercaseStringOrEmpty(body);
-  if (!trimmed) {
-    return false;
-  }
-  return trimmed === "/status" || trimmed === "status" || trimmed.startsWith("/status ");
-}
-
 export function stripMentionsForCommand(
   text: string,
   mentionRegexes: RegExp[],

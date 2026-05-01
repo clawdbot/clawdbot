@@ -167,23 +167,6 @@ function readDotEnvFile(params: {
   return { filePath: params.filePath, entries };
 }
 
-export function loadRuntimeDotEnvFile(filePath: string, opts?: { quiet?: boolean }) {
-  const parsed = readDotEnvFile({
-    filePath,
-    shouldBlockKey: shouldBlockRuntimeDotEnvKey,
-    quiet: opts?.quiet ?? true,
-  });
-  if (!parsed) {
-    return;
-  }
-  for (const { key, value } of parsed.entries) {
-    if (process.env[key] !== undefined) {
-      continue;
-    }
-    process.env[key] = value;
-  }
-}
-
 export function loadWorkspaceDotEnvFile(filePath: string, opts?: { quiet?: boolean }) {
   const parsed = readDotEnvFile({
     filePath,

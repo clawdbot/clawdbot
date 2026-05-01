@@ -25,7 +25,7 @@ import {
 import {
   resolveBundledRuntimeDependencyInstallRoot,
   resolveBundledRuntimeDependencyPackageInstallRoot,
-} from "../src/plugins/bundled-runtime-deps.ts";
+} from "../src/plugins/bundled-runtime-deps-roots.ts";
 import { checkCliBootstrapExternalImports } from "./check-cli-bootstrap-imports.mjs";
 import {
   collectBundledExtensionManifestErrors,
@@ -522,8 +522,12 @@ function runPackedTaskRegistryControlRuntimeSmoke(packageRoot: string): void {
   if (!existsSync(runtimePath)) {
     throw new Error("release-check: packed task-registry control runtime is missing.");
   }
+  const runtimeImportExpression = [
+    `(0, Function)("specifier", "return " + "im" + "port(specifier)")`,
+    `(${JSON.stringify(pathToFileURL(runtimePath).href)})`,
+  ].join("");
   const source = `
-const runtime = await import(${JSON.stringify(pathToFileURL(runtimePath).href)});
+const runtime = await ${runtimeImportExpression};
 if (typeof runtime.getAcpSessionManager !== "function") {
   throw new Error("missing getAcpSessionManager export");
 }

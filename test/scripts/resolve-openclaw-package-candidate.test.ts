@@ -21,6 +21,12 @@ describe("resolve-openclaw-package-candidate", () => {
     expect(() => validateOpenClawPackageSpec("openclaw@2026.04.27")).toThrow(
       "package_spec must be openclaw@beta",
     );
+    expect(() => validateOpenClawPackageSpec("openclaw@npm:other-package")).toThrow(
+      "package_spec must be openclaw@beta",
+    );
+    expect(() => validateOpenClawPackageSpec("openclaw@file:../other-package.tgz")).toThrow(
+      "package_spec must be openclaw@beta",
+    );
   });
 
   it("parses optional empty workflow inputs without rejecting the command line", () => {

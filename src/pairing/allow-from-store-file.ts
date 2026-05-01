@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
-import { readJsonFileWithFallback } from "../plugin-sdk/json-store.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -243,22 +242,34 @@ export async function readAllowFromFileWithExists(params: {
     return { entries: [], exists: false };
   }
 
-  const { value, exists } = await readJsonFileWithFallback<AllowFromStore>(params.filePath, {
-    version: 1,
-    allowFrom: [],
-  });
-  const entries = params.normalizeStore(value);
+  let raw = "";
+  try {
+    raw = await fs.promises.readFile(params.filePath, "utf8");
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === "ENOENT") {
+      return { entries: [], exists: false };
+    }
+    throw err;
+  }
+
+  let entries: string[] = [];
+  try {
+    entries = params.normalizeStore(JSON.parse(raw) as AllowFromStore);
+  } catch {
+    entries = [];
+  }
   setAllowFromFileReadCache({
     cacheNamespace: params.cacheNamespace,
     filePath: params.filePath,
     entry: {
-      exists,
+      exists: true,
       mtimeMs: stat.mtimeMs,
       size: stat.size,
       entries,
     },
   });
-  return { entries, exists };
+  return { entries, exists: true };
 }
 
 export function readAllowFromFileSyncWithExists(params: {
@@ -272,7 +283,7 @@ export function readAllowFromFileSyncWithExists(params: {
   } catch (err) {
     const code = (err as { code?: string }).code;
     if (code !== "ENOENT") {
-      return { entries: [], exists: false };
+      throw err;
     }
   }
 
@@ -296,7 +307,7 @@ export function readAllowFromFileSyncWithExists(params: {
     if (code === "ENOENT") {
       return { entries: [], exists: false };
     }
-    return { entries: [], exists: false };
+    throw err;
   }
 
   try {

@@ -1,8 +1,5 @@
-import { CHANNEL_IDS, listChatChannelAliases } from "../channels/ids.js";
-import {
-  listRegisteredChannelPluginAliases,
-  listRegisteredChannelPluginIds,
-} from "../channels/registry.js";
+import { CHANNEL_IDS } from "../channels/ids.js";
+import { listRegisteredChannelPluginIds } from "../channels/registry.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   type InternalMessageChannel,
@@ -15,8 +12,6 @@ export type DeliverableMessageChannel = ChannelId;
 
 export type GatewayMessageChannel = DeliverableMessageChannel;
 
-export type GatewayAgentChannelHint = GatewayMessageChannel;
-
 export function normalizeMessageChannel(raw?: string | null): string | undefined {
   return normalizeMessageChannelCore(raw);
 }
@@ -25,25 +20,13 @@ const listPluginChannelIds = (): string[] => {
   return listRegisteredChannelPluginIds();
 };
 
-const listPluginChannelAliases = (): string[] => {
-  return listRegisteredChannelPluginAliases();
-};
-
 export const listDeliverableMessageChannels = (): ChannelId[] =>
   Array.from(new Set([...CHANNEL_IDS, ...listPluginChannelIds()]));
 
-export const listGatewayMessageChannels = (): GatewayMessageChannel[] => [
+const listGatewayMessageChannels = (): GatewayMessageChannel[] => [
   ...listDeliverableMessageChannels(),
   INTERNAL_MESSAGE_CHANNEL,
 ];
-
-export const listGatewayAgentChannelAliases = (): string[] =>
-  Array.from(new Set([...listChatChannelAliases(), ...listPluginChannelAliases()]));
-
-export const listGatewayAgentChannelValues = (): string[] =>
-  Array.from(
-    new Set([...listGatewayMessageChannels(), "last", ...listGatewayAgentChannelAliases()]),
-  );
 
 export function isGatewayMessageChannel(value: string): value is GatewayMessageChannel {
   return listGatewayMessageChannels().includes(value as GatewayMessageChannel);

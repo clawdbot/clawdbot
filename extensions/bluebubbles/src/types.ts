@@ -86,6 +86,14 @@ export type BlueBubblesAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: Record<string, unknown>;
+  /**
+   * When an inbound reply lands without `replyToBody`/`replyToSender` and the
+   * in-memory reply cache misses (e.g., multi-instance deployments sharing
+   * one BlueBubbles account, after process restarts, or after long-lived
+   * cache eviction), fetch the original message from the BlueBubbles HTTP API
+   * as a best-effort fallback. Default: false.
+   */
+  replyContextApiFallback?: boolean;
   /** Max outbound media size in MB. */
   mediaMaxMb?: number;
   /**
@@ -163,19 +171,6 @@ export function normalizeBlueBubblesServerUrl(raw: string): string {
   }
   const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
   return withScheme.replace(/\/+$/, "");
-}
-
-export function buildBlueBubblesApiUrl(params: {
-  baseUrl: string;
-  path: string;
-  password?: string;
-}): string {
-  const normalized = normalizeBlueBubblesServerUrl(params.baseUrl);
-  const url = new URL(params.path, `${normalized}/`);
-  if (params.password) {
-    url.searchParams.set("password", params.password);
-  }
-  return url.toString();
 }
 
 // Overridable guard for testing; production code uses fetchWithSsrFGuard.

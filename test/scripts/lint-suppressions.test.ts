@@ -122,7 +122,7 @@ describe("production lint suppressions", () => {
       "src/plugins/host-hooks.ts|typescript/no-unnecessary-type-parameters|1",
       "src/plugins/lazy-service-module.ts|typescript/no-unnecessary-type-parameters|1",
       "src/plugins/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/plugins/runtime/runtime-plugin-boundary.ts|typescript/no-unnecessary-type-parameters|2",
+      "src/plugins/runtime/runtime-plugin-boundary.ts|typescript/no-unnecessary-type-parameters|1",
       "src/plugins/runtime/types-channel.ts|typescript/no-unnecessary-type-parameters|1",
       "src/plugins/types.ts|typescript/no-unnecessary-type-parameters|1",
       "src/tasks/task-flow-registry.store.sqlite.ts|typescript/no-unnecessary-type-parameters|1",

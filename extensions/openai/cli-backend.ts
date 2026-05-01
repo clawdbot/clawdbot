@@ -20,6 +20,7 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
     },
     bundleMcp: true,
     bundleMcpMode: "codex-config-overrides",
+    nativeToolMode: "always-on",
     config: {
       command: "codex",
       args: [

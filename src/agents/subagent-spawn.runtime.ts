@@ -1,4 +1,3 @@
-export { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinking.js";
 export {
   DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
@@ -22,11 +21,8 @@ export {
   mergeDeliveryContext,
   normalizeDeliveryContext,
 } from "../utils/delivery-context.shared.js";
-export { resolveConversationDeliveryTarget } from "../utils/delivery-context.js";
-export { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 export { resolveAgentConfig } from "./agent-scope.js";
 export { AGENT_LANE_SUBAGENT } from "./lanes.js";
-export { resolveSubagentSpawnModelSelection } from "./model-selection.js";
 export { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 export { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
 export {

@@ -1,6 +1,11 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import process from "node:process";
+import { getRuntimeConfig } from "../config/config.js";
+import {
+  runProxyValidation,
+  type ProxyValidationResult,
+} from "../infra/net/proxy/proxy-validation.js";
 import { ensureDebugProxyCa } from "../proxy-capture/ca.js";
 import { buildDebugProxyCoverageReport } from "../proxy-capture/coverage.js";
 import { resolveDebugProxySettings, applyDebugProxyEnv } from "../proxy-capture/env.js";
@@ -112,6 +117,135 @@ export async function runDebugProxyRunCommand(opts: {
   } finally {
     await server.stop();
     getDebugProxyCaptureStore(settings.dbPath, settings.blobDir).endSession(sessionId);
+  }
+}
+
+function redactProxyUrl(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    const url = new URL(value);
+    if (url.username || url.password) {
+      url.username = "redacted";
+      url.password = "redacted";
+    }
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return "<invalid proxy URL>";
+  }
+}
+
+function redactProxyValidationResult(result: ProxyValidationResult): ProxyValidationResult {
+  return {
+    ...result,
+    config: {
+      ...result.config,
+      proxyUrl: redactProxyUrl(result.config.proxyUrl),
+    },
+  };
+}
+
+function formatProxyCheckLine(check: ProxyValidationResult["checks"][number]): string {
+  const icon = check.ok ? "✓" : "✗";
+  const paddedKind = check.kind.padEnd(7, " ");
+  const status = check.status === undefined ? "" : ` HTTP ${check.status}`;
+  return `  ${icon} ${paddedKind} ${check.url}${status}`;
+}
+
+function formatProxyValidationNextSteps(result: ProxyValidationResult): string[] {
+  if (result.ok) {
+    return [];
+  }
+  if (result.config.errors.some((error) => error.includes("proxy.enabled"))) {
+    return [
+      "Enable proxy.enabled with proxy.proxyUrl or OPENCLAW_PROXY_URL, or pass --proxy-url for an explicit one-off validation.",
+    ];
+  }
+  if (result.config.errors.length > 0) {
+    return [
+      "Fix proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url so it uses a reachable http:// proxy.",
+    ];
+  }
+  if (result.checks.some((check) => !check.ok && check.kind === "allowed")) {
+    return [
+      "Confirm the proxy is reachable from this deployment context and permits the allowed destinations.",
+    ];
+  }
+  if (result.checks.some((check) => !check.ok && check.kind === "denied")) {
+    return [
+      "Update the proxy ACL so denied destinations are blocked, or pass the expected --denied-url values.",
+    ];
+  }
+  return [
+    "Review the failed checks above and update proxy configuration or validation destinations.",
+  ];
+}
+
+function formatProxyValidationText(result: ProxyValidationResult): string {
+  const redactedProxyUrl = redactProxyUrl(result.config.proxyUrl);
+  const lines = [
+    `Proxy validation ${result.ok ? "passed" : "failed"}`,
+    "",
+    "Proxy",
+    `  Source: ${result.config.source}`,
+    `  URL:    ${redactedProxyUrl ?? "not configured"}`,
+  ];
+
+  if (result.config.errors.length > 0) {
+    lines.push("", "Problems");
+    for (const error of result.config.errors) {
+      lines.push(`  - ${error}`);
+    }
+  }
+
+  if (result.checks.length > 0) {
+    lines.push("", "Checks");
+    for (const check of result.checks) {
+      lines.push(formatProxyCheckLine(check));
+      if (check.error) {
+        lines.push(`    ${check.error}`);
+      }
+    }
+  }
+
+  const nextSteps = formatProxyValidationNextSteps(result);
+  if (nextSteps.length > 0) {
+    lines.push("", "Next steps");
+    for (const nextStep of nextSteps) {
+      lines.push(`  ${nextStep}`);
+    }
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+export async function runProxyValidateCommand(opts: {
+  json?: boolean;
+  proxyUrl?: string;
+  allowedUrls?: string[];
+  deniedUrls?: string[];
+  timeoutMs?: number;
+}) {
+  const config = getRuntimeConfig();
+  const result = await runProxyValidation({
+    config: config?.proxy,
+    env: process.env,
+    proxyUrlOverride: opts.proxyUrl,
+    allowedUrls: opts.allowedUrls,
+    deniedUrls: opts.deniedUrls,
+    timeoutMs: opts.timeoutMs,
+  });
+  const outputResult = redactProxyValidationResult(result);
+  process.stdout.write(
+    opts.json === true
+      ? `${JSON.stringify(outputResult, null, 2)}\n`
+      : formatProxyValidationText(outputResult),
+  );
+  if (!result.ok) {
+    process.exitCode = 1;
   }
 }
 

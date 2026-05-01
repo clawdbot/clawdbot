@@ -1,12 +1,5 @@
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 
-export function normalizeSlackToken(raw?: unknown): string | undefined {
-  return normalizeResolvedSecretInputString({
-    value: raw,
-    path: "channels.slack.*.token",
-  });
-}
-
 export function resolveSlackBotToken(
   raw?: unknown,
   path = "channels.slack.botToken",

@@ -25,6 +25,7 @@ import { readSessionMessages } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
+import { CommandLane } from "../../process/lanes.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -366,23 +367,6 @@ function estimatePromptTokensFromSessionTranscript(params: {
   } catch {
     return undefined;
   }
-}
-
-export async function readPromptTokensFromSessionLog(
-  sessionId?: string,
-  sessionEntry?: SessionEntry,
-  sessionKey?: string,
-  opts?: { storePath?: string },
-): Promise<SessionTranscriptUsageSnapshot | undefined> {
-  const snapshot = await readSessionLogSnapshot({
-    sessionId,
-    sessionEntry,
-    sessionKey,
-    opts,
-    includeByteSize: false,
-    includeUsage: true,
-  });
-  return snapshot.usage;
 }
 
 export async function runPreflightCompactionIfNeeded(params: {
@@ -834,6 +818,8 @@ export async function runMemoryFlushIfNeeded(params: {
         params.cfg,
       ),
       runId: flushRunId,
+      sessionId: activeSessionEntry?.sessionId ?? params.followupRun.run.sessionId,
+      lane: CommandLane.Main,
       run: async (provider, model, runOptions) => {
         const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
           run: params.followupRun.run,

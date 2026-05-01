@@ -451,6 +451,8 @@ vi.mock("openclaw/plugin-sdk/error-runtime", async () => {
 
 vi.mock(buildDiscordSourceModuleId("accounts.js"), () => ({
   resolveDiscordAccount: resolveDiscordAccountMock,
+  resolveDiscordAccountAllowFrom: () => undefined,
+  resolveDiscordAccountDmPolicy: () => undefined,
 }));
 
 vi.mock(buildDiscordSourceModuleId("probe.js"), () => ({

@@ -30,6 +30,7 @@ import {
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
+import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
 
 type FakeWrappedStream = {
   result: () => Promise<unknown>;
@@ -79,6 +80,24 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
     expect(
       applyEmbeddedAttemptToolsAllow(tools, [" cron ", "READ"]).map((tool) => tool.name),
     ).toEqual(["cron", "read"]);
+  });
+});
+
+describe("buildEmbeddedAttemptToolRunContext", () => {
+  it("carries runtime toolsAllow into coding tool construction", () => {
+    expect(
+      buildEmbeddedAttemptToolRunContext({
+        trigger: "manual",
+        jobId: "job-1",
+        memoryFlushWritePath: "memory/log.md",
+        toolsAllow: ["memory_search", "memory_get"],
+      }),
+    ).toMatchObject({
+      trigger: "manual",
+      jobId: "job-1",
+      memoryFlushWritePath: "memory/log.md",
+      runtimeToolAllowlist: ["memory_search", "memory_get"],
+    });
   });
 });
 

@@ -51,6 +51,10 @@ const ALLOWED_GATEWAY_CONFIG_PATHS = [
   "channels.*.*.*.requireMention",
   "channels.*.*.*.*.requireMention",
   "channels.*.*.*.*.*.requireMention",
+  // Visible reply delivery mode is a bounded message UX setting, not a secret
+  // or privilege boundary. Let agents repair silent group/channel rooms.
+  "messages.visibleReplies",
+  "messages.groupChat.visibleReplies",
 ] as const;
 
 /** @internal Exposed for regression tests only; do not import from runtime code. */

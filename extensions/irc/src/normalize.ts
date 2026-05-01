@@ -65,22 +65,6 @@ export function normalizeIrcAllowlist(entries?: Array<string | number>): string[
   return (entries ?? []).map((entry) => normalizeIrcAllowEntry(String(entry))).filter(Boolean);
 }
 
-export function formatIrcSenderId(message: IrcInboundMessage): string {
-  const base = message.senderNick.trim();
-  const user = message.senderUser?.trim();
-  const host = message.senderHost?.trim();
-  if (user && host) {
-    return `${base}!${user}@${host}`;
-  }
-  if (user) {
-    return `${base}!${user}`;
-  }
-  if (host) {
-    return `${base}@${host}`;
-  }
-  return base;
-}
-
 export function buildIrcAllowlistCandidates(
   message: IrcInboundMessage,
   params?: { allowNameMatching?: boolean },

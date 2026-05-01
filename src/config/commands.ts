@@ -4,7 +4,7 @@ import type { ChannelId } from "../channels/plugins/types.public.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type { NativeCommandsSetting } from "./types.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
-export { isCommandFlagEnabled, isRestartEnabled, type CommandFlagKey } from "./commands.flags.js";
+export { isCommandFlagEnabled, isRestartEnabled } from "./commands.flags.js";
 
 function resolveAutoDefault(
   providerId: ChannelId | undefined,

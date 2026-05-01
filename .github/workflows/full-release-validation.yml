@@ -29,7 +29,7 @@ on:
       release_profile:
         description: Release coverage profile for live/Docker/provider breadth
         required: false
-        default: full
+        default: stable
         type: choice
         options:
           - minimum
@@ -88,7 +88,7 @@ permissions:
 
 concurrency:
   group: full-release-validation-${{ inputs.ref }}-${{ inputs.rerun_group }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ inputs.ref == 'main' && inputs.rerun_group == 'all' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -222,6 +222,14 @@ jobs:
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
+            cancel_child() {
+              if [[ -n "${run_id:-}" ]]; then
+                echo "Cancelling child workflow ${workflow}: ${run_id}" >&2
+                gh run cancel "$run_id" >/dev/null 2>&1 || true
+              fi
+            }
+            trap cancel_child EXIT INT TERM
+
             while true; do
               status="$(gh run view "$run_id" --json status --jq '.status')"
               if [[ "$status" == "completed" ]]; then
@@ -306,6 +314,14 @@ jobs:
 
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
+
+            cancel_child() {
+              if [[ -n "${run_id:-}" ]]; then
+                echo "Cancelling child workflow ${workflow}: ${run_id}" >&2
+                gh run cancel "$run_id" >/dev/null 2>&1 || true
+              fi
+            }
+            trap cancel_child EXIT INT TERM
 
             while true; do
               status="$(gh run view "$run_id" --json status --jq '.status')"
@@ -396,6 +412,14 @@ jobs:
 
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
+
+            cancel_child() {
+              if [[ -n "${run_id:-}" ]]; then
+                echo "Cancelling child workflow ${workflow}: ${run_id}" >&2
+                gh run cancel "$run_id" >/dev/null 2>&1 || true
+              fi
+            }
+            trap cancel_child EXIT INT TERM
 
             while true; do
               status="$(gh run view "$run_id" --json status --jq '.status')"
@@ -500,6 +524,14 @@ jobs:
 
           echo "Dispatched npm-telegram-beta-e2e.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
           echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
+
+          cancel_child() {
+            if [[ -n "${run_id:-}" ]]; then
+              echo "Cancelling child workflow npm-telegram-beta-e2e.yml: ${run_id}" >&2
+              gh run cancel "$run_id" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cancel_child EXIT INT TERM
 
           while true; do
             status="$(gh run view "$run_id" --json status --jq '.status')"

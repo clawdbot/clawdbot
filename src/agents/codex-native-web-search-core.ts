@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
+import { externalCliDiscoveryForProviderAuth } from "./auth-profiles/external-cli-discovery.js";
 import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
@@ -56,7 +57,15 @@ export function hasAvailableCodexAuth(params: {
   if (params.agentDir) {
     try {
       if (
-        listProfilesForProvider(ensureAuthProfileStore(params.agentDir), "openai-codex").length > 0
+        listProfilesForProvider(
+          ensureAuthProfileStore(params.agentDir, {
+            externalCli: externalCliDiscoveryForProviderAuth({
+              cfg: params.config,
+              provider: "openai-codex",
+            }),
+          }),
+          "openai-codex",
+        ).length > 0
       ) {
         return true;
       }

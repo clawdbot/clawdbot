@@ -1,8 +1,11 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { readStoreAllowFromForDmPolicy } from "openclaw/plugin-sdk/security-runtime";
 import {
   allowListMatches,
   normalizeAllowList,
   normalizeAllowListLower,
+  normalizeSlackAllowOwnerEntry,
   resolveSlackAllowListMatch,
   resolveSlackUserAllowed,
 } from "./allow-list.js";
@@ -24,8 +27,20 @@ type SlackAllowFromCacheState = {
   pairingPending?: Promise<ResolvedAllowFromLists>;
 };
 
+type SlackChannelMembersCacheEntry = {
+  expiresAtMs: number;
+  members?: Set<string>;
+  pending?: Promise<Set<string>>;
+};
+
 let slackAllowFromCache = new WeakMap<SlackMonitorContext, SlackAllowFromCacheState>();
+let slackChannelMembersCache = new WeakMap<
+  SlackMonitorContext,
+  Map<string, SlackChannelMembersCacheEntry>
+>();
 const DEFAULT_PAIRING_ALLOW_FROM_CACHE_TTL_MS = 5000;
+const DEFAULT_CHANNEL_MEMBERS_CACHE_TTL_MS = 60_000;
+const CHANNEL_MEMBERS_CACHE_MAX = 512;
 
 function getPairingAllowFromCacheTtlMs(): number {
   const raw = process.env.OPENCLAW_SLACK_PAIRING_ALLOWFROM_CACHE_TTL_MS?.trim();
@@ -39,6 +54,18 @@ function getPairingAllowFromCacheTtlMs(): number {
   return Math.max(0, Math.floor(parsed));
 }
 
+function getChannelMembersCacheTtlMs(): number {
+  const raw = process.env.OPENCLAW_SLACK_CHANNEL_MEMBERS_CACHE_TTL_MS?.trim();
+  if (!raw) {
+    return DEFAULT_CHANNEL_MEMBERS_CACHE_TTL_MS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_CHANNEL_MEMBERS_CACHE_TTL_MS;
+  }
+  return Math.max(0, Math.floor(parsed));
+}
+
 function getAllowFromCacheState(ctx: SlackMonitorContext): SlackAllowFromCacheState {
   const existing = slackAllowFromCache.get(ctx);
   if (existing) {
@@ -47,6 +74,28 @@ function getAllowFromCacheState(ctx: SlackMonitorContext): SlackAllowFromCacheSt
   const next: SlackAllowFromCacheState = {};
   slackAllowFromCache.set(ctx, next);
   return next;
+}
+
+function getChannelMembersCache(
+  ctx: SlackMonitorContext,
+): Map<string, SlackChannelMembersCacheEntry> {
+  const existing = slackChannelMembersCache.get(ctx);
+  if (existing) {
+    return existing;
+  }
+  const next = new Map<string, SlackChannelMembersCacheEntry>();
+  slackChannelMembersCache.set(ctx, next);
+  return next;
+}
+
+function pruneChannelMembersCache(cache: Map<string, SlackChannelMembersCacheEntry>): void {
+  while (cache.size > CHANNEL_MEMBERS_CACHE_MAX) {
+    const oldest = cache.keys().next();
+    if (oldest.done) {
+      return;
+    }
+    cache.delete(oldest.value);
+  }
 }
 
 function buildBaseAllowFrom(ctx: SlackMonitorContext): ResolvedAllowFromLists {
@@ -131,6 +180,10 @@ export async function resolveSlackEffectiveAllowFrom(
 
 export function clearSlackAllowFromCacheForTest(): void {
   slackAllowFromCache = new WeakMap<SlackMonitorContext, SlackAllowFromCacheState>();
+  slackChannelMembersCache = new WeakMap<
+    SlackMonitorContext,
+    Map<string, SlackChannelMembersCacheEntry>
+  >();
 }
 
 export function isSlackSenderAllowListed(params: {
@@ -149,6 +202,128 @@ export function isSlackSenderAllowListed(params: {
       allowNameMatching,
     })
   );
+}
+
+async function fetchSlackChannelMemberIds(
+  ctx: SlackMonitorContext,
+  channelId: string,
+): Promise<Set<string>> {
+  const members = new Set<string>();
+  let cursor: string | undefined;
+  do {
+    const response = await ctx.app.client.conversations.members({
+      token: ctx.botToken,
+      channel: channelId,
+      limit: 999,
+      ...(cursor ? { cursor } : {}),
+    });
+    for (const member of normalizeAllowListLower(response.members)) {
+      members.add(member);
+    }
+    const nextCursor = response.response_metadata?.next_cursor?.trim();
+    cursor = nextCursor ? nextCursor : undefined;
+  } while (cursor);
+  return members;
+}
+
+async function resolveSlackChannelMemberIds(
+  ctx: SlackMonitorContext,
+  channelId: string,
+): Promise<Set<string>> {
+  const cache = getChannelMembersCache(ctx);
+  const key = `${ctx.accountId}:${channelId}`;
+  const ttlMs = getChannelMembersCacheTtlMs();
+  const nowMs = Date.now();
+  const cached = cache.get(key);
+  if (ttlMs > 0 && cached?.members && cached.expiresAtMs >= nowMs) {
+    return cached.members;
+  }
+  if (cached?.pending) {
+    return await cached.pending;
+  }
+
+  const pending = fetchSlackChannelMemberIds(ctx, channelId);
+  cache.set(key, {
+    expiresAtMs: ttlMs > 0 ? nowMs + ttlMs : 0,
+    pending,
+  });
+  pruneChannelMembersCache(cache);
+  try {
+    const members = await pending;
+    if (ttlMs > 0) {
+      cache.set(key, {
+        expiresAtMs: Date.now() + ttlMs,
+        members,
+      });
+      pruneChannelMembersCache(cache);
+    } else {
+      cache.delete(key);
+    }
+    return members;
+  } finally {
+    const latest = cache.get(key);
+    if (latest?.pending === pending) {
+      cache.delete(key);
+    }
+  }
+}
+
+function resolveExplicitSlackOwnerIds(allowFromLower: string[]): string[] {
+  const ownerIds = new Set<string>();
+  for (const entry of allowFromLower) {
+    const ownerId = normalizeSlackAllowOwnerEntry(entry);
+    if (ownerId) {
+      ownerIds.add(ownerId);
+    }
+  }
+  return [...ownerIds];
+}
+
+export async function authorizeSlackBotRoomMessage(params: {
+  ctx: SlackMonitorContext;
+  channelId: string;
+  senderId: string;
+  senderName?: string;
+  channelUsers?: Array<string | number>;
+  allowFromLower: string[];
+}): Promise<boolean> {
+  const channelUserAllowList = normalizeAllowListLower(params.channelUsers).filter(
+    (entry) => entry !== "*",
+  );
+  if (
+    channelUserAllowList.length > 0 &&
+    allowListMatches({
+      allowList: channelUserAllowList,
+      id: params.senderId,
+      name: params.senderName,
+      allowNameMatching: params.ctx.allowNameMatching,
+    })
+  ) {
+    return true;
+  }
+
+  const explicitOwnerIds = resolveExplicitSlackOwnerIds(params.allowFromLower);
+  if (explicitOwnerIds.length === 0) {
+    logVerbose(
+      `slack: drop bot message ${params.senderId} in ${params.channelId} (no explicit owner id for presence check)`,
+    );
+    return false;
+  }
+
+  try {
+    const channelMemberIds = await resolveSlackChannelMemberIds(params.ctx, params.channelId);
+    if (explicitOwnerIds.some((ownerId) => channelMemberIds.has(ownerId))) {
+      return true;
+    }
+    logVerbose(
+      `slack: drop bot message ${params.senderId} in ${params.channelId} (no owner present)`,
+    );
+  } catch (error) {
+    logVerbose(
+      `slack: drop bot message ${params.senderId} in ${params.channelId} (owner presence lookup failed: ${formatErrorMessage(error)})`,
+    );
+  }
+  return false;
 }
 
 export type SlackSystemEventAuthResult = {

@@ -78,6 +78,47 @@ describe("resolveSourceReplyDeliveryMode", () => {
       }),
     ).toBe("automatic");
   });
+
+  it("falls back to automatic when message tool is unavailable", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "group" },
+        messageToolAvailable: false,
+      }),
+    ).toBe("automatic");
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: globalToolOnlyReplyConfig,
+        ctx: { ChatType: "direct" },
+        messageToolAvailable: false,
+      }),
+    ).toBe("automatic");
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "channel" },
+        requested: "message_tool_only",
+        messageToolAvailable: false,
+      }),
+    ).toBe("automatic");
+  });
+
+  it("keeps message-tool-only delivery when message tool availability is unknown", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "group" },
+        messageToolAvailable: true,
+      }),
+    ).toBe("message_tool_only");
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "channel" },
+      }),
+    ).toBe("message_tool_only");
+  });
 });
 
 describe("resolveSourceReplyVisibilityPolicy", () => {
@@ -218,6 +259,36 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
       suppressHookUserDelivery: true,
       suppressHookReplyLifecycle: true,
       suppressTyping: false,
+    });
+  });
+  it("keeps delivery automatic when message-tool-only mode cannot send visibly", () => {
+    expect(
+      resolveSourceReplyVisibilityPolicy({
+        cfg: emptyConfig,
+        ctx: { ChatType: "group" },
+        sendPolicy: "allow",
+        messageToolAvailable: false,
+      }),
+    ).toMatchObject({
+      sourceReplyDeliveryMode: "automatic",
+      suppressAutomaticSourceDelivery: false,
+      suppressDelivery: false,
+      suppressHookUserDelivery: false,
+      deliverySuppressionReason: "",
+    });
+    expect(
+      resolveSourceReplyVisibilityPolicy({
+        cfg: emptyConfig,
+        ctx: { ChatType: "channel" },
+        requested: "message_tool_only",
+        sendPolicy: "allow",
+        messageToolAvailable: false,
+      }),
+    ).toMatchObject({
+      sourceReplyDeliveryMode: "automatic",
+      suppressAutomaticSourceDelivery: false,
+      suppressDelivery: false,
+      deliverySuppressionReason: "",
     });
   });
 });

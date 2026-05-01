@@ -11,6 +11,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
+      - ".github/actions/ensure-base-commit/**"
       - ".github/workflows/opengrep-precise.yml"
       - ".github/workflows/opengrep-precise-full.yml"
       - ".semgrepignore"
@@ -42,9 +43,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
           persist-credentials: false
-          # `scripts/run-opengrep.sh --changed` diffs base...HEAD.
-          fetch-depth: 0
+          submodules: false
+
+      - name: Ensure PR base commit
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event.pull_request.base.ref }}
 
       - name: Install opengrep
         env:

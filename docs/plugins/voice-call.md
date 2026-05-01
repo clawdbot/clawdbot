@@ -96,7 +96,7 @@ skips starting the runtime. Commands, RPC calls, and agent tools still
 return the exact missing provider configuration when used.
 
 <Note>
-Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twilio.authToken` and `plugins.entries.voice-call.config.tts.providers.*.apiKey` resolve through the standard SecretRef surface; see [SecretRef credential surface](/reference/secretref-credential-surface).
+Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twilio.authToken`, `plugins.entries.voice-call.config.realtime.providers.*.apiKey`, `plugins.entries.voice-call.config.streaming.providers.*.apiKey`, and `plugins.entries.voice-call.config.tts.providers.*.apiKey` resolve through the standard SecretRef surface; see [SecretRef credential surface](/reference/secretref-credential-surface).
 </Note>
 
 ```json5
@@ -210,6 +210,7 @@ Current runtime behaviour:
 - Bundled realtime voice providers: Google Gemini Live (`google`) and OpenAI (`openai`), registered by their provider plugins.
 - Provider-owned raw config lives under `realtime.providers.<providerId>`.
 - Voice Call exposes the shared `openclaw_agent_consult` realtime tool by default. The realtime model can call it when the caller asks for deeper reasoning, current information, or normal OpenClaw tools.
+- `realtime.fastContext.enabled` is default-off. When enabled, Voice Call first searches indexed memory/session context for the consult question and returns those snippets to the realtime model within `realtime.fastContext.timeoutMs` before falling back to the full consult agent only if `realtime.fastContext.fallbackToConsult` is true.
 - If `realtime.provider` points at an unregistered provider, or no realtime voice provider is registered at all, Voice Call logs a warning and skips realtime media instead of failing the whole plugin.
 - Consult session keys reuse the existing voice session when available, then fall back to the caller/callee phone number so follow-up consult calls keep context during the call.
 
@@ -297,6 +298,7 @@ Current runtime behavior:
 - `streaming.provider` is optional. If unset, Voice Call uses the first registered realtime transcription provider.
 - Bundled realtime transcription providers: Deepgram (`deepgram`), ElevenLabs (`elevenlabs`), Mistral (`mistral`), OpenAI (`openai`), and xAI (`xai`), registered by their provider plugins.
 - Provider-owned raw config lives under `streaming.providers.<providerId>`.
+- After Twilio sends an accepted stream `start` message, Voice Call registers the stream immediately, queues inbound media through the transcription provider while the provider connects, and starts the initial greeting only after realtime transcription is ready.
 - If `streaming.provider` points at an unregistered provider, or none is registered, Voice Call logs a warning and skips media streaming instead of failing the whole plugin.
 
 ### Streaming provider examples
@@ -609,6 +611,11 @@ openclaw voicecall latency                      # summarize turn latency from lo
 openclaw voicecall expose --mode funnel
 ```
 
+When the Gateway is already running, operational `voicecall` commands delegate
+to the Gateway-owned voice-call runtime so the CLI does not bind a second
+webhook server. If no Gateway is reachable, the commands fall back to a
+standalone CLI runtime.
+
 `latency` reads `calls.jsonl` from the default voice-call storage path.
 Use `--file <path>` to point at a different log and `--last <n>` to limit
 analysis to the last N records (default 200). Output includes p50/p90/p99
@@ -618,27 +625,183 @@ for turn latency and listen-wait times.
 
 Tool name: `voice_call`.
 
-| Action          | Args                      |
-| --------------- | ------------------------- |
-| `initiate_call` | `message`, `to?`, `mode?` |
-| `continue_call` | `callId`, `message`       |
-| `speak_to_user` | `callId`, `message`       |
-| `send_dtmf`     | `callId`, `digits`        |
-| `end_call`      | `callId`                  |
-| `get_status`    | `callId`                  |
+| Action          | Args                                       |
+| --------------- | ------------------------------------------ |
+| `initiate_call` | `message`, `to?`, `mode?`, `dtmfSequence?` |
+| `continue_call` | `callId`, `message`                        |
+| `speak_to_user` | `callId`, `message`                        |
+| `send_dtmf`     | `callId`, `digits`                         |
+| `end_call`      | `callId`                                   |
+| `get_status`    | `callId`                                   |
 
 This repo ships a matching skill doc at `skills/voice-call/SKILL.md`.
 
 ## Gateway RPC
 
-| Method               | Args                      |
-| -------------------- | ------------------------- |
-| `voicecall.initiate` | `to?`, `message`, `mode?` |
-| `voicecall.continue` | `callId`, `message`       |
-| `voicecall.speak`    | `callId`, `message`       |
-| `voicecall.dtmf`     | `callId`, `digits`        |
-| `voicecall.end`      | `callId`                  |
-| `voicecall.status`   | `callId`                  |
+| Method               | Args                                       |
+| -------------------- | ------------------------------------------ |
+| `voicecall.initiate` | `to?`, `message`, `mode?`, `dtmfSequence?` |
+| `voicecall.continue` | `callId`, `message`                        |
+| `voicecall.speak`    | `callId`, `message`                        |
+| `voicecall.dtmf`     | `callId`, `digits`                         |
+| `voicecall.end`      | `callId`                                   |
+| `voicecall.status`   | `callId`                                   |
+
+`dtmfSequence` is only valid with `mode: "conversation"`. Notify-mode calls
+should use `voicecall.dtmf` after the call exists if they need post-connect
+digits.
+
+## Troubleshooting
+
+### Setup fails webhook exposure
+
+Run setup from the same environment that runs the Gateway:
+
+```bash
+openclaw voicecall setup
+openclaw voicecall setup --json
+```
+
+For `twilio`, `telnyx`, and `plivo`, `webhook-exposure` must be green. A
+configured `publicUrl` still fails when it points at local or private network
+space, because the carrier cannot call back into those addresses. Do not use
+`localhost`, `127.0.0.1`, `0.0.0.0`, `10.x`, `172.16.x`-`172.31.x`,
+`192.168.x`, `169.254.x`, `fc00::/7`, or `fd00::/8` as `publicUrl`.
+
+Use one public exposure path:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          publicUrl: "https://voice.example.com/voice/webhook",
+          // or
+          tunnel: { provider: "ngrok" },
+          // or
+          tailscale: { mode: "funnel", path: "/voice/webhook" },
+        },
+      },
+    },
+  },
+}
+```
+
+After changing config, restart or reload the Gateway, then run:
+
+```bash
+openclaw voicecall setup
+openclaw voicecall smoke
+```
+
+`voicecall smoke` is a dry run unless you pass `--yes`.
+
+### Provider credentials fail
+
+Check the selected provider and the required credential fields:
+
+- Twilio: `twilio.accountSid`, `twilio.authToken`, and `fromNumber`, or
+  `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_FROM_NUMBER`.
+- Telnyx: `telnyx.apiKey`, `telnyx.connectionId`, `telnyx.publicKey`, and
+  `fromNumber`.
+- Plivo: `plivo.authId`, `plivo.authToken`, and `fromNumber`.
+
+Credentials must exist on the Gateway host. Editing a local shell profile does
+not affect an already running Gateway until it restarts or reloads its
+environment.
+
+### Calls start but provider webhooks do not arrive
+
+Confirm the provider console points at the exact public webhook URL:
+
+```text
+https://voice.example.com/voice/webhook
+```
+
+Then inspect runtime state:
+
+```bash
+openclaw voicecall status --call-id <id>
+openclaw voicecall tail
+openclaw logs --follow
+```
+
+Common causes:
+
+- `publicUrl` points at a different path than `serve.path`.
+- The tunnel URL changed after the Gateway started.
+- A proxy forwards the request but strips or rewrites host/proto headers.
+- Firewall or DNS routes the public hostname somewhere other than the Gateway.
+- The Gateway was restarted without the Voice Call plugin enabled.
+
+When a reverse proxy or tunnel is in front of the Gateway, set
+`webhookSecurity.allowedHosts` to the public hostname, or use
+`webhookSecurity.trustedProxyIPs` for a known proxy address. Use
+`webhookSecurity.trustForwardingHeaders` only when the proxy boundary is under
+your control.
+
+### Signature verification fails
+
+Provider signatures are checked against the public URL OpenClaw reconstructs
+from the incoming request. If signatures fail:
+
+- Confirm the provider webhook URL exactly matches `publicUrl`, including
+  scheme, host, and path.
+- For ngrok free-tier URLs, update `publicUrl` when the tunnel hostname changes.
+- Ensure the proxy preserves the original host and proto headers, or configure
+  `webhookSecurity.allowedHosts`.
+- Do not enable `skipSignatureVerification` outside local testing.
+
+### Google Meet Twilio joins fail
+
+Google Meet uses this plugin for Twilio dial-in joins. First verify Voice Call:
+
+```bash
+openclaw voicecall setup
+openclaw voicecall smoke --to "+15555550123"
+```
+
+Then verify the Google Meet transport explicitly:
+
+```bash
+openclaw googlemeet setup --transport twilio
+```
+
+If Voice Call is green but the Meet participant never joins, check the Meet
+dial-in number, PIN, and `--dtmf-sequence`. The phone call can be healthy while
+the meeting rejects or ignores an incorrect DTMF sequence.
+
+Google Meet passes the Meet DTMF sequence and intro text to `voicecall.start`.
+For Twilio calls, Voice Call serves the DTMF TwiML first, redirects back to the
+webhook, then opens the realtime media stream so the saved intro is generated
+after the phone participant has joined the meeting.
+
+Use `openclaw logs --follow` for the live phase trace. A healthy Twilio Meet
+join logs this order:
+
+- Google Meet delegates the Twilio join to Voice Call.
+- Voice Call stores pre-connect DTMF TwiML.
+- Twilio initial TwiML is consumed and served before realtime handling.
+- Voice Call serves realtime TwiML for the Twilio call.
+- The realtime bridge starts with the initial greeting queued.
+
+`openclaw voicecall tail` still shows persisted call records; it is useful for
+call state and transcripts, but not every webhook/realtime transition appears
+there.
+
+### Realtime call has no speech
+
+Confirm only one audio mode is enabled. `realtime.enabled` and
+`streaming.enabled` cannot both be true.
+
+For realtime Twilio calls, also verify:
+
+- A realtime provider plugin is loaded and registered.
+- `realtime.provider` is unset or names a registered provider.
+- The provider API key is available to the Gateway process.
+- `openclaw logs --follow` shows realtime TwiML served, the realtime bridge
+  started, and the initial greeting queued.
 
 ## Related
 

@@ -121,11 +121,6 @@ export function canonicalizePathForSecurity(pathname: string): SecurityPathCanon
   };
 }
 
-export function hasSecurityPathCanonicalizationAnomaly(pathname: string): boolean {
-  const canonical = canonicalizePathForSecurity(pathname);
-  return canonical.malformedEncoding || canonical.decodePassLimitReached;
-}
-
 const normalizedPrefixesCache = new WeakMap<readonly string[], readonly string[]>();
 
 function getNormalizedPrefixes(prefixes: readonly string[]): readonly string[] {

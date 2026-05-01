@@ -32,6 +32,7 @@ vi.mock("./register.status-health-sessions.js", () => ({
     program.command("status");
     program.command("health");
     program.command("sessions");
+    program.command("commitments");
     const tasks = program.command("tasks");
     tasks.command("show");
   },
@@ -86,6 +87,7 @@ describe("command-registry", () => {
     expect(names).toContain("backup");
     expect(names).toContain("mcp");
     expect(names).toContain("sessions");
+    expect(names).toContain("commitments");
     expect(names).toContain("tasks");
     expect(names).not.toContain("agent");
     expect(names).not.toContain("crestodian");
@@ -159,7 +161,20 @@ describe("command-registry", () => {
     expect(names).toContain("status");
     expect(names).toContain("health");
     expect(names).toContain("sessions");
+    expect(names).toContain("commitments");
     expect(names).toContain("tasks");
+  });
+
+  it("can eagerly register the status/session command group repeatedly for completion", async () => {
+    const program = createProgram();
+
+    for (const name of ["status", "health", "sessions", "commitments", "tasks"]) {
+      await expect(registerCoreCliByName(program, testProgramContext, name)).resolves.toBe(true);
+    }
+
+    const names = namesOf(program);
+    expect(names.filter((name) => name === "commitments")).toHaveLength(1);
+    expect(names.filter((name) => name === "tasks")).toHaveLength(1);
   });
 
   it("replaces placeholders when loading a grouped entry by secondary command name", async () => {

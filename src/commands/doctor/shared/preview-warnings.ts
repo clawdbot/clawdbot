@@ -1,4 +1,8 @@
+import { pickSandboxToolPolicy } from "../../../agents/sandbox-tool-policy.js";
+import { isToolAllowedByPolicies } from "../../../agents/tool-policy-match.js";
+import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/tool-policy.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { AgentToolsConfig, ToolsConfig } from "../../../config/types.tools.js";
 
 type ChannelDoctorModule = typeof import("./channel-doctor.js");
 
@@ -75,6 +79,109 @@ function hasConfiguredSafeBins(cfg: OpenClawConfig): boolean {
   });
 }
 
+type VisibleReplyPolicyProvenance = "default" | "global-explicit" | "group-explicit";
+
+function resolveMessageToolAvailability(params: {
+  globalTools?: ToolsConfig;
+  agentTools?: AgentToolsConfig;
+}): boolean {
+  const profile = params.agentTools?.profile ?? params.globalTools?.profile;
+  const profileAlsoAllow = Array.isArray(params.agentTools?.alsoAllow)
+    ? params.agentTools.alsoAllow
+    : Array.isArray(params.globalTools?.alsoAllow)
+      ? params.globalTools.alsoAllow
+      : undefined;
+  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), profileAlsoAllow);
+  return isToolAllowedByPolicies("message", [
+    profilePolicy,
+    pickSandboxToolPolicy(params.globalTools),
+    pickSandboxToolPolicy(params.agentTools),
+  ]);
+}
+
+function collectMessageToolUnavailableTargets(cfg: OpenClawConfig): string[] {
+  const agents = cfg.agents?.list ?? [];
+  if (agents.length === 0) {
+    return resolveMessageToolAvailability({ globalTools: cfg.tools })
+      ? []
+      : ["default tool policy"];
+  }
+  return agents.flatMap((agent) =>
+    resolveMessageToolAvailability({ globalTools: cfg.tools, agentTools: agent.tools })
+      ? []
+      : [`agent "${agent.id}"`],
+  );
+}
+
+function resolveGroupVisibleReplyProvenance(cfg: OpenClawConfig): {
+  path: "messages.groupChat.visibleReplies" | "messages.visibleReplies";
+  provenance: VisibleReplyPolicyProvenance;
+  value: "automatic" | "message_tool";
+} {
+  const groupVisibleReplies = cfg.messages?.groupChat?.visibleReplies;
+  if (groupVisibleReplies) {
+    return {
+      path: "messages.groupChat.visibleReplies",
+      provenance: "group-explicit",
+      value: groupVisibleReplies,
+    };
+  }
+  const globalVisibleReplies = cfg.messages?.visibleReplies;
+  if (globalVisibleReplies) {
+    return {
+      path: "messages.visibleReplies",
+      provenance: "global-explicit",
+      value: globalVisibleReplies,
+    };
+  }
+  return {
+    path: "messages.groupChat.visibleReplies",
+    provenance: "default",
+    value: "message_tool",
+  };
+}
+
+function formatTargets(targets: string[]): string {
+  if (targets.length <= 2) {
+    return targets.join(" and ");
+  }
+  return `${targets.slice(0, 2).join(", ")}, and ${targets.length - 2} more`;
+}
+
+export function collectVisibleReplyToolPolicyWarnings(cfg: OpenClawConfig): string[] {
+  const targets = collectMessageToolUnavailableTargets(cfg);
+  if (targets.length === 0) {
+    return [];
+  }
+  const groupPolicy = resolveGroupVisibleReplyProvenance(cfg);
+  const warnings: string[] = [];
+  if (groupPolicy.value === "message_tool") {
+    if (groupPolicy.provenance === "default" && !hasChannels(cfg)) {
+      return warnings;
+    }
+    const targetSummary = formatTargets(targets);
+    if (groupPolicy.provenance === "default") {
+      warnings.push(
+        `- messages.groupChat.visibleReplies defaults to "message_tool", but the message tool is unavailable for ${targetSummary}; OpenClaw falls back to automatic group/channel replies to avoid silent responses. Enable the message tool or set messages.groupChat.visibleReplies explicitly.`,
+      );
+    } else {
+      warnings.push(
+        `- ${groupPolicy.path} is set to "message_tool", but the message tool is unavailable for ${targetSummary}; OpenClaw falls back to automatic visible replies, so normal replies may post to the source chat. Enable the message tool or set ${groupPolicy.path} to "automatic".`,
+      );
+    }
+  }
+
+  const globalVisibleReplies = cfg.messages?.visibleReplies;
+  if (globalVisibleReplies === "message_tool" && groupPolicy.path !== "messages.visibleReplies") {
+    warnings.push(
+      `- messages.visibleReplies is set to "message_tool", but the message tool is unavailable for ${formatTargets(
+        targets,
+      )}; OpenClaw falls back to automatic direct-chat replies, so normal replies may post to the source chat. Enable the message tool or set messages.visibleReplies to "automatic".`,
+    );
+  }
+  return warnings;
+}
+
 export async function collectDoctorPreviewWarnings(params: {
   cfg: OpenClawConfig;
   doctorFixCommand: string;
@@ -84,6 +191,8 @@ export async function collectDoctorPreviewWarnings(params: {
   const env = params.env ?? process.env;
   const hasChannelConfig = hasChannels(params.cfg);
   const hasPluginConfig = hasPlugins(params.cfg);
+
+  warnings.push(...collectVisibleReplyToolPolicyWarnings(params.cfg));
 
   const channelPluginRuntime =
     hasChannelConfig && hasExplicitChannelPluginBlockerConfig(params.cfg)
@@ -145,6 +254,8 @@ export async function collectDoctorPreviewWarnings(params: {
     const { collectCodexRouteWarnings } = await import("./codex-route-warnings.js");
     warnings.push(...collectCodexRouteWarnings({ cfg: params.cfg, env }));
   }
+  const { collectCodexNativeAssetWarnings } = await import("./codex-native-assets.js");
+  warnings.push(...(await collectCodexNativeAssetWarnings({ cfg: params.cfg, env })));
 
   if (hasPluginLoadPaths(params.cfg)) {
     const { collectBundledPluginLoadPathWarnings, scanBundledPluginLoadPathMigrations } =

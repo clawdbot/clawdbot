@@ -549,7 +549,24 @@
   }
 }
 
-.agent-chat__input > textarea {
+.agent-chat__composer-combobox {
+  display: flex;
+  flex-direction: column;
+}
+
+.agent-chat__sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.agent-chat__composer-combobox > textarea {
   width: 100%;
   min-height: 40px;
   max-height: 150px;
@@ -565,11 +582,11 @@
   box-sizing: border-box;
 }
 
-.agent-chat__input > textarea:focus-visible {
+.agent-chat__composer-combobox > textarea:focus-visible {
   box-shadow: none;
 }
 
-.agent-chat__input > textarea::placeholder {
+.agent-chat__composer-combobox > textarea::placeholder {
   color: var(--muted);
 }
 

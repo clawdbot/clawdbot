@@ -8,6 +8,7 @@ import { isRestartEnabled } from "../config/commands.flags.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import {
   deferGatewayRestartUntilIdle,
@@ -15,6 +16,8 @@ import {
   resolveGatewayRestartDeferralTimeoutMs,
   setGatewaySigusr1RestartPolicy,
 } from "../infra/restart.js";
+import { pruneUnknownBundledRuntimeDepsRoots } from "../plugins/bundled-runtime-deps-roots.js";
+import { repairBundledRuntimeDepsPackagePlanAsync } from "../plugins/bundled-runtime-deps.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import {
   activateSecretsRuntimeSnapshot,
@@ -61,6 +64,48 @@ type GatewayReloadLog = {
 const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
 const CHANNEL_RELOAD_DEFERRAL_POLL_MS = 500;
 const CHANNEL_RELOAD_STILL_PENDING_WARN_MS = 30_000;
+
+async function planPluginRuntimeDepsForHotReload(params: {
+  nextConfig: OpenClawConfig;
+  logReload: GatewayReloadLog;
+}): Promise<void> {
+  const packageRoot = resolveOpenClawPackageRootSync({
+    argv1: process.argv[1],
+    cwd: process.cwd(),
+    moduleUrl: import.meta.url,
+  });
+  if (!packageRoot) {
+    return;
+  }
+  try {
+    pruneUnknownBundledRuntimeDepsRoots({
+      env: process.env,
+      warn: params.logReload.warn,
+    });
+    const startedAt = Date.now();
+    const result = await repairBundledRuntimeDepsPackagePlanAsync({
+      packageRoot,
+      config: params.nextConfig,
+      includeConfiguredChannels: true,
+      env: process.env,
+      warn: params.logReload.warn,
+      onProgress: params.logReload.info,
+    });
+    if (result.repairedSpecs.length > 0) {
+      params.logReload.info(
+        `config hot reload prepared bundled runtime dependencies in ${Date.now() - startedAt}ms: ${result.repairedSpecs.join(", ")}`,
+      );
+    } else if (result.reusedSpecs && result.reusedSpecs.length > 0) {
+      params.logReload.info(
+        `config hot reload reused bundled runtime dependencies in ${Date.now() - startedAt}ms: ${result.reusedSpecs.join(", ")}`,
+      );
+    }
+  } catch (error) {
+    params.logReload.warn(
+      `config hot reload bundled runtime dependency planning failed; runtime load will verify without repair: ${String(error)}`,
+    );
+  }
+}
 
 function abortActiveAgentRunsAfterConfigRecovery(params: {
   reason: string;
@@ -260,6 +305,13 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     resetDirectoryCache();
 
+    if (plan.planPluginRuntimeDeps) {
+      await planPluginRuntimeDepsForHotReload({
+        nextConfig,
+        logReload: params.logReload,
+      });
+    }
+
     if (plan.restartCron) {
       state.cronState.cron.stop();
       nextState.cronState = buildGatewayCronService({
@@ -447,6 +499,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
         phase: "reload",
         reason: `reload-${reason}`,
         configPath: snapshot.path,
+        issues: [...snapshot.issues, ...snapshot.legacyIssues],
       });
     },
     subscribeToWrites: params.subscribeToWrites,

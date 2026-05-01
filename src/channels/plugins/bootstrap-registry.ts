@@ -73,10 +73,6 @@ export function* iterateBootstrapChannelPlugins(): IterableIterator<ChannelPlugi
   }
 }
 
-export function listBootstrapChannelPlugins(): readonly ChannelPlugin[] {
-  return [...iterateBootstrapChannelPlugins()];
-}
-
 export function getBootstrapChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
   const resolvedId = resolveBootstrapChannelId(id);
   if (!resolvedId) {

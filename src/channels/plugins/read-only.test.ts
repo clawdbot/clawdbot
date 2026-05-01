@@ -479,7 +479,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -505,7 +505,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -537,7 +537,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -584,7 +584,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -624,7 +624,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -654,7 +654,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -832,7 +832,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -857,7 +857,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env, EXTERNAL_CHAT_TOKEN: "configured" },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -901,7 +901,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env, [envVar]: "configured" },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -927,7 +927,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env, [envVar]: "configured" },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -975,7 +975,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env, [envVar]: "configured" },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -1005,7 +1005,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
           EXTERNAL_CHAT_TOKEN: "configured",
           workspaceDir: "workspace-env-value",
         },
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -1041,7 +1041,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -1070,7 +1070,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       } as never,
       {
         env: { ...process.env },
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 

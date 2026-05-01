@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -899,6 +902,38 @@ describe("maybeRepairGatewayServiceConfig", () => {
       expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
       expect(mocks.stage).not.toHaveBeenCalled();
       expect(mocks.install).not.toHaveBeenCalled();
+    });
+  });
+
+  it("warns when the gateway service entrypoint resolves to a source checkout", async () => {
+    await withEnvAsync({}, async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-service-layout-"));
+      try {
+        await fs.mkdir(path.join(root, ".git"), { recursive: true });
+        await fs.mkdir(path.join(root, "src"), { recursive: true });
+        await fs.mkdir(path.join(root, "extensions"), { recursive: true });
+        await fs.mkdir(path.join(root, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(root, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "0.0.0-test" }),
+          "utf8",
+        );
+        const entrypoint = path.join(root, "dist", "index.js");
+        await fs.writeFile(entrypoint, "export {};\n", "utf8");
+        mocks.readCommand.mockResolvedValue(createGatewayCommand(entrypoint));
+        mocks.auditGatewayServiceConfig.mockResolvedValue({ ok: true, issues: [] });
+        mocks.buildGatewayInstallPlan.mockResolvedValue(createGatewayCommand(entrypoint));
+
+        await runRepair({ gateway: {} });
+
+        expect(mocks.note).toHaveBeenCalledWith(
+          expect.stringContaining("resolves to a source checkout"),
+          "Gateway service config",
+        );
+        expect(mocks.install).not.toHaveBeenCalled();
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
     });
   });
 });

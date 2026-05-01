@@ -100,11 +100,3 @@ export function sanitizeEnvVars(
 
   return { allowed, blocked, warnings };
 }
-
-export function getBlockedPatterns(): string[] {
-  return BLOCKED_ENV_VAR_PATTERNS.map((pattern) => pattern.source);
-}
-
-export function getAllowedPatterns(): string[] {
-  return ALLOWED_ENV_VAR_PATTERNS.map((pattern) => pattern.source);
-}

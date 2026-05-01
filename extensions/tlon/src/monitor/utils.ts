@@ -385,12 +385,3 @@ export function isSummarizationRequest(messageText: string): boolean {
   ];
   return patterns.some((pattern) => pattern.test(messageText));
 }
-
-export function formatChangesDate(daysAgo = 5): string {
-  const now = new Date();
-  const targetDate = new Date(now.getTime() - daysAgo * 24 * 60 * 60 * 1000);
-  const year = targetDate.getFullYear();
-  const month = targetDate.getMonth() + 1;
-  const day = targetDate.getDate();
-  return `~${year}.${month}.${day}..20.19.51..9b9d`;
-}

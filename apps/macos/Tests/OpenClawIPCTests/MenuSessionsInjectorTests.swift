@@ -35,7 +35,9 @@ struct MenuSessionsInjectorTests {
         menu.addItem(NSMenuItem(title: "Send Heartbeats", action: nil, keyEquivalent: ""))
 
         injector.injectForTesting(into: menu)
-        #expect(menu.items.contains { $0.tag == 9_415_557 })
+        let contextItem = menu.items.first { $0.tag == 9_415_557 && $0.title == "Context" }
+        #expect(contextItem != nil)
+        #expect(contextItem?.submenu != nil)
     }
 
     @Test func `injects session rows`() throws {
@@ -114,8 +116,12 @@ struct MenuSessionsInjectorTests {
         menu.addItem(NSMenuItem(title: "Settings…", action: nil, keyEquivalent: ""))
 
         injector.injectForTesting(into: menu)
-        #expect(menu.items.contains { $0.tag == 9_415_557 })
+        let contextItem = try #require(menu.items.first { $0.tag == 9_415_557 && $0.title == "Context" })
+        let contextSubmenu = try #require(contextItem.submenu)
+        #expect(menu.items.filter { $0.tag == 9_415_557 && $0.title == "Context" }.count == 1)
         #expect(menu.items.contains { $0.tag == 9_415_557 && $0.isSeparatorItem })
+        #expect(contextSubmenu.items.compactMap { $0.representedObject as? String }.filter { ["main", "discord:group:alpha"].contains($0) }.count == 2)
+        #expect(contextSubmenu.items.allSatisfy { $0.title != "Usage cost (30 days)" })
         let sendHeartbeatsIndex = try #require(menu.items.firstIndex(where: { $0.title == "Send Heartbeats" }))
         let openDashboardIndex = try #require(menu.items.firstIndex(where: { $0.title == "Open Dashboard" }))
         let firstInjectedIndex = try #require(menu.items.firstIndex(where: { $0.tag == 9_415_557 }))
@@ -160,9 +166,57 @@ struct MenuSessionsInjectorTests {
 
         injector.injectForTesting(into: menu)
 
+        let contextItem = menu.items.first { $0.tag == 9_415_557 && $0.title == "Context" }
+        #expect(contextItem?.submenu?.items.allSatisfy { $0.title != "Usage cost (30 days)" } == true)
         let usageCostItem = menu.items.first { $0.title == "Usage cost (30 days)" }
         #expect(usageCostItem != nil)
         #expect(usageCostItem?.submenu != nil)
         #expect(usageCostItem?.submenu?.delegate == nil)
+    }
+
+    @Test func `node status text distinguishes paired disconnected nodes`() {
+        let pairedDisconnected = Self.node(id: "paired", paired: true, connected: false)
+        let unpairedDisconnected = Self.node(id: "unpaired", paired: false, connected: false)
+        let connected = Self.node(id: "connected", paired: true, connected: true)
+
+        #expect(NodeMenuEntryFormatter.roleText(pairedDisconnected) == "paired · disconnected")
+        #expect(NodeMenuEntryFormatter.roleText(unpairedDisconnected) == "unpaired · disconnected")
+        #expect(NodeMenuEntryFormatter.roleText(connected) == "paired · connected")
+    }
+
+    @Test func `sorted node entries include paired disconnected nodes`() {
+        let injector = MenuSessionsInjector()
+        defer { NodesStore.shared.nodes = [] }
+        NodesStore.shared.nodes = [
+            Self.node(id: "ignored", paired: false, connected: false, displayName: "Ignored"),
+            Self.node(id: "paired", paired: true, connected: false, displayName: "MacBook"),
+            Self.node(id: "connected", paired: true, connected: true, displayName: "iPhone"),
+        ]
+
+        let entries = injector.testingSortedNodeEntries()
+        #expect(entries.map(\.nodeId) == ["connected", "paired"])
+    }
+
+    private static func node(
+        id: String,
+        paired: Bool,
+        connected: Bool,
+        displayName: String? = nil) -> NodeInfo
+    {
+        NodeInfo(
+            nodeId: id,
+            displayName: displayName ?? id,
+            platform: "macOS 26.3.1",
+            version: nil,
+            coreVersion: nil,
+            uiVersion: nil,
+            deviceFamily: "Mac",
+            modelIdentifier: nil,
+            remoteIp: nil,
+            caps: nil,
+            commands: nil,
+            permissions: nil,
+            paired: paired,
+            connected: connected)
     }
 }

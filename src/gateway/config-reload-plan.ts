@@ -20,6 +20,7 @@ export type GatewayReloadPlan = {
   restartHealthMonitor: boolean;
   restartChannels: Set<ChannelKind>;
   disposeMcpRuntimes: boolean;
+  planPluginRuntimeDeps: boolean;
   noopPaths: string[];
 };
 
@@ -122,6 +123,24 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
   { prefix: "canvasHost", kind: "restart" },
 ];
 
+const PLUGIN_RUNTIME_DEPS_PLAN_PREFIXES = [
+  "auth.order",
+  "auth.profiles",
+  "channels",
+  "models.providers",
+  "plugins",
+  "agents.list",
+  "agents.defaults.imageGenerationModel",
+  "agents.defaults.imageModel",
+  "agents.defaults.memorySearch",
+  "agents.defaults.model",
+  "agents.defaults.models",
+  "agents.defaults.musicGenerationModel",
+  "agents.defaults.pdfModel",
+  "agents.defaults.subagents.model",
+  "agents.defaults.videoGenerationModel",
+] as const;
+
 let cachedReloadRules: ReloadRule[] | null = null;
 let cachedRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
 let cachedActiveRegistryVersion = -1;
@@ -211,6 +230,12 @@ function isPluginInstallTimestampPath(path: string): boolean {
   return /^plugins\.installs\..+\.(installedAt|resolvedAt)$/.test(path);
 }
 
+function shouldPlanPluginRuntimeDepsForPath(path: string): boolean {
+  return PLUGIN_RUNTIME_DEPS_PLAN_PREFIXES.some(
+    (prefix) => path === prefix || path.startsWith(`${prefix}.`),
+  );
+}
+
 function getPluginInstallRecords(config: unknown): Record<string, unknown> {
   if (!isPlainObject(config)) {
     return {};
@@ -288,6 +313,7 @@ export function buildGatewayReloadPlan(
     restartHealthMonitor: false,
     restartChannels: new Set(),
     disposeMcpRuntimes: false,
+    planPluginRuntimeDeps: false,
     noopPaths: [],
   };
 
@@ -328,6 +354,9 @@ export function buildGatewayReloadPlan(
     if (isTimestampNoop) {
       plan.noopPaths.push(path);
       continue;
+    }
+    if (shouldPlanPluginRuntimeDepsForPath(path)) {
+      plan.planPluginRuntimeDeps = true;
     }
     const rule = matchRule(path);
     if (!rule) {

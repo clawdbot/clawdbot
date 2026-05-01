@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
   listProfilesForProvider,
   type AuthProfileStore,
@@ -29,7 +30,7 @@ export function hasAuthForModelProvider(params: {
   const store =
     params.store ??
     ensureAuthProfileStore(params.agentDir, {
-      allowKeychainPrompt: false,
+      externalCli: externalCliDiscoveryForProviderAuth({ cfg: params.cfg, provider }),
     });
   if (listProfilesForProvider(store, provider).length > 0) {
     return true;
@@ -43,9 +44,6 @@ export function createProviderAuthChecker(params: {
   agentDir?: string;
   env?: NodeJS.ProcessEnv;
 }): (provider: string) => boolean {
-  const store = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-  });
   const authCache = new Map<string, boolean>();
   return (provider: string) => {
     const key = normalizeProviderId(provider);
@@ -59,7 +57,6 @@ export function createProviderAuthChecker(params: {
       workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       env: params.env,
-      store,
     });
     authCache.set(key, value);
     return value;

@@ -1,8 +1,7 @@
 import type { RuntimeEnv } from "../runtime.js";
-import {
-  ensureCliPluginRegistryLoaded,
-  resolvePluginRegistryScopeForCommandPath,
-} from "./plugin-registry-loader.js";
+import type { CliPluginRegistryPolicy } from "./command-catalog.js";
+import { resolveCliCommandPathPolicy } from "./command-path-policy.js";
+import { ensureCliPluginRegistryLoaded } from "./plugin-registry-loader.js";
 
 let configGuardModulePromise: Promise<typeof import("./program/config-guard.js")> | undefined;
 
@@ -18,6 +17,7 @@ export async function ensureCliCommandBootstrap(params: {
   skipConfigGuard?: boolean;
   allowInvalid?: boolean;
   loadPlugins?: boolean;
+  pluginRegistry?: CliPluginRegistryPolicy;
 }) {
   if (!params.skipConfigGuard) {
     const { ensureConfigReady } = await loadConfigGuardModule();
@@ -31,8 +31,15 @@ export async function ensureCliCommandBootstrap(params: {
   if (!params.loadPlugins) {
     return;
   }
+  const pluginRegistryLoadPolicy =
+    params.pluginRegistry ?? resolveCliCommandPathPolicy(params.commandPath).pluginRegistry;
   await ensureCliPluginRegistryLoaded({
-    scope: resolvePluginRegistryScopeForCommandPath(params.commandPath),
+    scope: pluginRegistryLoadPolicy.scope,
     routeLogsToStderr: params.suppressDoctorStdout,
+    ...(pluginRegistryLoadPolicy.installBundledRuntimeDeps !== undefined
+      ? {
+          installBundledRuntimeDeps: pluginRegistryLoadPolicy.installBundledRuntimeDeps,
+        }
+      : {}),
   });
 }

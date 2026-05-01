@@ -83,6 +83,7 @@ cat ~/.openclaw/openclaw.json
     - OpenCode provider override warnings (`models.providers.opencode` / `models.providers.opencode-go`).
     - Codex OAuth shadowing warnings (`models.providers.openai-codex`).
     - OAuth TLS prerequisites check for OpenAI Codex OAuth profiles.
+    - Plugin/tool allowlist warnings when `plugins.allow` is restrictive but tool policy still asks for wildcard or plugin-owned tools.
     - Legacy on-disk state migration (sessions/agent dir/WhatsApp auth).
     - Legacy plugin manifest contract key migration (`speechProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`, `webSearchProviders` → `contracts`).
     - Legacy cron store migration (`jobId`, `schedule.cron`, top-level delivery/payload fields, payload `provider`, simple `notify: true` webhook fallback jobs).
@@ -93,6 +94,7 @@ cat ~/.openclaw/openclaw.json
   <Accordion title="State and integrity">
     - Session lock file inspection and stale lock cleanup.
     - Session transcript repair for duplicated prompt-rewrite branches created by affected 2026.4.24 builds.
+    - Wedged subagent restart-recovery tombstone detection, with `--fix` support for clearing stale aborted recovery flags so startup does not keep treating the child as restart-aborted.
     - State integrity and permissions checks (sessions, transcripts, state dir).
     - Config file permission checks (chmod 600) when running locally.
     - Model auth health: checks OAuth expiry, can refresh expiring tokens, and reports auth-profile cooldown/disabled states.
@@ -162,6 +164,11 @@ That stages grounded durable candidates into the short-term dreaming store while
     If the config contains legacy value shapes (for example `messages.ackReaction` without a channel-specific override), doctor normalizes them into the current schema.
 
     That includes legacy Talk flat fields. Current public Talk config is `talk.provider` + `talk.providers.<provider>`. Doctor rewrites old `talk.voiceId` / `talk.voiceAliases` / `talk.modelId` / `talk.outputFormat` / `talk.apiKey` shapes into the provider map.
+
+    Doctor also warns when `plugins.allow` is non-empty and tool policy uses
+    wildcard or plugin-owned tool entries. `tools.allow: ["*"]` only matches tools
+    from plugins that actually load; it does not bypass the exclusive plugin
+    allowlist.
 
   </Accordion>
   <Accordion title="2. Legacy config key migrations">
@@ -335,7 +342,7 @@ That stages grounded durable candidates into the short-term dreaming store while
   <Accordion title="7b. Bundled plugin runtime deps">
     Doctor verifies runtime dependencies only for bundled plugins that are active in the current config or enabled by their bundled manifest default, for example `plugins.entries.discord.enabled: true`, legacy `channels.discord.enabled: true`, configured `models.providers.*` / agent model refs, or a default-enabled bundled plugin without provider ownership. If any are missing, doctor reports the packages and installs them in `openclaw doctor --fix` / `openclaw doctor --repair` mode. External plugins still use `openclaw plugins install` / `openclaw plugins update`; doctor does not install dependencies for arbitrary plugin paths.
 
-    During doctor repair, bundled runtime-dependency npm installs report spinner progress in TTY sessions and periodic line progress in piped/headless output. The Gateway and local CLI can also repair active bundled plugin runtime dependencies on demand before importing a bundled plugin. These installs are scoped to the plugin runtime install root, run with scripts disabled, do not write a package lock, and are guarded by an install-root lock so concurrent CLI or Gateway starts do not mutate the same `node_modules` tree at the same time.
+    During doctor repair, bundled runtime-dependency npm installs report spinner progress in TTY sessions and periodic line progress in piped/headless output. Gateway startup and config reload enter plugin-plan mode before importing bundled plugin runtime modules; normal runtime imports are verify-only and do not spawn package-manager repair. These installs are scoped to the plugin runtime install root, run with scripts disabled, do not write a package lock, and are guarded by an install-root lock so concurrent CLI or Gateway starts do not mutate the same `node_modules` tree at the same time. Stale legacy locks from killed Docker/container starts are reclaimed when their owner metadata cannot prove a current process incarnation and the lock files are old.
 
   </Accordion>
   <Accordion title="8. Gateway service migrations and cleanup hints">

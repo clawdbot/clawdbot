@@ -56,6 +56,7 @@ export function createWorkspaceBootstrapSmokeEnv(env, homeDir, overrides = {}) {
     OPENCLAW_HOME: homeDir,
     OPENCLAW_NO_ONBOARD: "1",
     OPENCLAW_SUPPRESS_NOTES: "1",
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
     OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
     AWS_EC2_METADATA_DISABLED: "true",
     AWS_SHARED_CREDENTIALS_FILE: join(homeDir, ".aws", "credentials"),
@@ -135,8 +136,9 @@ export function runInstalledWorkspaceBootstrapSmoke(params) {
     const workspaceDir = join(homeDir, ".openclaw", "workspace");
     const missingFiles = collectMissingBootstrapWorkspaceFiles(workspaceDir);
     if (missingFiles.length > 0) {
+      const outputDetails = combinedOutput.length > 0 ? `\nCommand output:\n${combinedOutput}` : "";
       throw new Error(
-        `installed workspace bootstrap did not create required files in ${workspaceDir}: ${missingFiles.join(", ")}`,
+        `installed workspace bootstrap did not create required files in ${workspaceDir}: ${missingFiles.join(", ")}${outputDetails}`,
       );
     }
   } finally {

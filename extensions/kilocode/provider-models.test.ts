@@ -1,6 +1,27 @@
 import { describe, expect, it, vi } from "vitest";
 import { discoverKilocodeModels, KILOCODE_MODELS_URL } from "./provider-models.js";
 
+const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
+  fetchWithSsrFGuardMock: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+}));
+
+type MockKilocodeFetchResponse = {
+  ok: boolean;
+  status?: number;
+  json?: () => Promise<unknown>;
+};
+
+type MockKilocodeFetch = ((
+  url: string,
+  init?: RequestInit,
+) => Promise<MockKilocodeFetchResponse>) & {
+  mock: { calls: unknown[][] };
+};
+
 function makeGatewayModel(overrides: Record<string, unknown> = {}) {
   return {
     id: "anthropic/claude-sonnet-4",
@@ -51,20 +72,24 @@ function makeAutoModel(overrides: Record<string, unknown> = {}) {
   });
 }
 
-async function withFetchPathTest(
-  mockFetch: ReturnType<typeof vi.fn>,
-  runAssertions: () => Promise<void>,
-) {
+async function withFetchPathTest(mockFetch: MockKilocodeFetch, runAssertions: () => Promise<void>) {
   const origNodeEnv = process.env.NODE_ENV;
   const origVitest = process.env.VITEST;
+  const release = vi.fn(async () => {});
   delete process.env.NODE_ENV;
   delete process.env.VITEST;
 
-  vi.stubGlobal("fetch", mockFetch);
+  fetchWithSsrFGuardMock.mockImplementation(
+    async (params: { url: string; init?: RequestInit }) => ({
+      response: await mockFetch(params.url, params.init),
+      release,
+    }),
+  );
 
   try {
     await runAssertions();
   } finally {
+    fetchWithSsrFGuardMock.mockReset();
     if (origNodeEnv === undefined) {
       delete process.env.NODE_ENV;
     } else {
@@ -75,7 +100,6 @@ async function withFetchPathTest(
     } else {
       process.env.VITEST = origVitest;
     }
-    vi.unstubAllGlobals();
   }
 }
 
@@ -111,6 +135,14 @@ describe("discoverKilocodeModels (fetch path)", () => {
     await withFetchPathTest(mockFetch, async () => {
       const models = await discoverKilocodeModels();
 
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: KILOCODE_MODELS_URL,
+          init: expect.objectContaining({
+            headers: { Accept: "application/json" },
+          }),
+        }),
+      );
       expect(mockFetch).toHaveBeenCalledWith(
         KILOCODE_MODELS_URL,
         expect.objectContaining({

@@ -22,9 +22,13 @@ const fetchGuardMocks = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: fetchGuardMocks.fetchWithSsrFGuard,
-}));
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: fetchGuardMocks.fetchWithSsrFGuard,
+  };
+});
 
 function captureStdout() {
   let output = "";
@@ -591,6 +595,39 @@ describe("google-meet CLI", () => {
     } finally {
       stdout.restore();
       rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts --json on session status", async () => {
+    const stdout = captureStdout();
+    try {
+      await setupCli({
+        runtime: {
+          status: () => ({
+            found: true,
+            sessions: [
+              {
+                id: "meet_1",
+                url: "https://meet.google.com/abc-defg-hij",
+                state: "active",
+                transport: "twilio",
+                mode: "realtime",
+                participantIdentity: "Twilio PSTN participant",
+                createdAt: "2026-04-25T00:00:00.000Z",
+                updatedAt: "2026-04-25T00:00:01.000Z",
+                realtime: { enabled: true, provider: "openai", toolPolicy: "safe-read-only" },
+                notes: [],
+              },
+            ],
+          }),
+        },
+      }).parseAsync(["googlemeet", "status", "--json"], { from: "user" });
+      expect(JSON.parse(stdout.output())).toMatchObject({
+        found: true,
+        sessions: [{ id: "meet_1", transport: "twilio" }],
+      });
+    } finally {
+      stdout.restore();
     }
   });
 

@@ -7,8 +7,6 @@ import { readStringValue } from "../shared/string-coerce.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-export type PersistedSubagentRegistryVersion = 1 | 2;
-
 type PersistedSubagentRegistryV1 = {
   version: 1;
   runs: Record<string, LegacySubagentRunRecord>;

@@ -56,7 +56,6 @@ function commitment(overrides?: Partial<CommitmentRecord>): CommitmentRecord {
       latestMs: Date.parse("2026-04-30T23:00:00.000Z"),
       timezone: "America/Los_Angeles",
     },
-    sourceUserText: "I have an interview tomorrow.",
     createdAtMs: Date.parse("2026-04-29T16:00:00.000Z"),
     updatedAtMs: Date.parse("2026-04-29T16:00:00.000Z"),
     attempts: 0,

@@ -135,6 +135,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }));
   }
 
+  const { collectPluginToolAllowlistWarnings } =
+    await import("./doctor/shared/plugin-tool-allowlist-warnings.js");
+  const pluginToolAllowlistWarnings = collectPluginToolAllowlistWarnings({
+    cfg: candidate,
+    env: process.env,
+  });
+  if (pluginToolAllowlistWarnings.length > 0) {
+    note(sanitizeDoctorNote(pluginToolAllowlistWarnings.join("\n")), "Doctor warnings");
+  }
+
   if (params.runtime && params.prompter) {
     const { maybeRepairBundledPluginRuntimeDeps } =
       await import("./doctor-bundled-plugin-runtime-deps.js");

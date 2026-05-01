@@ -120,10 +120,12 @@ const codexAppServerApprovalPolicySchema = z.enum([
 ]);
 const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 const codexAppServerApprovalsReviewerSchema = z.enum(["user", "auto_review", "guardian_subagent"]);
-const codexAppServerServiceTierSchema = z.preprocess(
-  (value) => (value === null ? null : resolveServiceTier(value)),
-  z.enum(["fast", "flex"]).nullable().optional(),
-);
+const codexAppServerServiceTierSchema = z
+  .preprocess(
+    (value) => (value === null ? null : resolveServiceTier(value)),
+    z.enum(["fast", "flex"]).nullable().optional(),
+  )
+  .optional();
 
 const codexPluginConfigSchema = z
   .object({

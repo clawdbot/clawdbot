@@ -4,6 +4,32 @@ on:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
+    inputs:
+      backfill_stale_closures:
+        description: "Close currently stale-eligible issues and PRs with the Barnacle app"
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: "List matching stale-eligible items without closing them"
+        required: false
+        type: boolean
+        default: true
+      include_issues:
+        description: "Include stale-eligible issues in the backfill"
+        required: false
+        type: boolean
+        default: true
+      include_prs:
+        description: "Include stale-eligible pull requests in the backfill"
+        required: false
+        type: boolean
+        default: true
+      max_closures:
+        description: "Maximum items to close when dry_run is false"
+        required: false
+        type: number
+        default: 50
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -12,6 +38,7 @@ permissions: {}
 
 jobs:
   stale:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.backfill_stale_closures != true }}
     permissions:
       issues: write
       pull-requests: write
@@ -35,10 +62,10 @@ jobs:
         uses: actions/stale@v10
         with:
           repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
-          days-before-issue-stale: 7
-          days-before-issue-close: 5
-          days-before-pr-stale: 5
-          days-before-pr-close: 3
+          days-before-issue-stale: 14
+          days-before-issue-close: 7
+          days-before-pr-stale: 14
+          days-before-pr-close: 7
           stale-issue-label: stale
           stale-pr-label: stale
           exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle
@@ -95,7 +122,7 @@ jobs:
           days-before-issue-stale: -1
           days-before-issue-close: -1
           days-before-pr-stale: 27
-          days-before-pr-close: 3
+          days-before-pr-close: 7
           stale-pr-label: stale
           exempt-pr-labels: maintainer,no-stale,bad-barnacle
           operations-per-run: 2000
@@ -139,10 +166,10 @@ jobs:
         uses: actions/stale@v10
         with:
           repo-token: ${{ steps.app-token-fallback.outputs.token }}
-          days-before-issue-stale: 7
-          days-before-issue-close: 5
-          days-before-pr-stale: 5
-          days-before-pr-close: 3
+          days-before-issue-stale: 14
+          days-before-issue-close: 7
+          days-before-pr-stale: 14
+          days-before-pr-close: 7
           stale-issue-label: stale
           stale-pr-label: stale
           exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle
@@ -197,7 +224,7 @@ jobs:
           days-before-issue-stale: -1
           days-before-issue-close: -1
           days-before-pr-stale: 27
-          days-before-pr-close: 3
+          days-before-pr-close: 7
           stale-pr-label: stale
           exempt-pr-labels: maintainer,no-stale,bad-barnacle
           operations-per-run: 2000
@@ -213,7 +240,253 @@ jobs:
             If you believe this PR should be revived, post in #clawtributors on Discord to talk to a maintainer.
             That channel is the escape hatch for high-quality PRs that get auto-closed.
 
+  backfill-stale-closures:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.backfill_stale_closures == true }}
+    permissions:
+      issues: write
+      pull-requests: write
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+      - name: Backfill stale closures
+        uses: actions/github-script@v9
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          INCLUDE_ISSUES: ${{ inputs.include_issues }}
+          INCLUDE_PRS: ${{ inputs.include_prs }}
+          MAX_CLOSURES: ${{ inputs.max_closures }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const dayMs = 24 * 60 * 60 * 1000;
+            const dryRun = process.env.DRY_RUN !== "false";
+            const includeIssues = process.env.INCLUDE_ISSUES !== "false";
+            const includePrs = process.env.INCLUDE_PRS !== "false";
+            const maxClosures = Math.max(0, Number(process.env.MAX_CLOSURES || "50"));
+            const nowMs = Date.now();
+            const { owner, repo } = context.repo;
+
+            const issueExemptLabels = new Set([
+              "enhancement",
+              "maintainer",
+              "pinned",
+              "security",
+              "no-stale",
+              "bad-barnacle",
+            ]);
+            const prExemptLabels = new Set(["maintainer", "no-stale", "bad-barnacle"]);
+            const maintainerAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+            const maintainerLogins = new Set([
+              "altaywtf",
+              "BunsDev",
+              "cpojer",
+              "gumadeiras",
+              "hydro13",
+              "hxy91819",
+              "jalehman",
+              "joshavant",
+              "joshp123",
+              "mbelinky",
+              "mukhtharcm",
+              "ngutman",
+              "obviyus",
+              "odysseus0",
+              "onutc",
+              "osolmaz",
+              "sebslight",
+              "sliverp",
+              "steipete",
+              "thewilloftheshadow",
+              "tyler6204",
+              "velvet-shark",
+              "vignesh07",
+              "vincentkoc",
+              "visionik",
+            ].map(login => login.toLowerCase()));
+
+            const issueCloseMessage = [
+              "Closing due to inactivity.",
+              "If this is still an issue, please retry on the latest OpenClaw release and share updated details.",
+              "If you are absolutely sure it still happens on the latest release, open a new issue with fresh steps to reproduce.",
+            ].join("\n");
+            const prCloseMessage = [
+              "Closing due to inactivity.",
+              "If you believe this PR should be revived, post in #clawtributors on Discord to talk to a maintainer.",
+              "That channel is the escape hatch for high-quality PRs that get auto-closed.",
+            ].join("\n");
+
+            const hasAny = (labels, exemptLabels) => {
+              for (const label of labels) {
+                if (exemptLabels.has(label)) {
+                  return true;
+                }
+              }
+              return false;
+            };
+            const isOlderThan = (dateString, days) => {
+              const timestamp = Date.parse(dateString);
+              return Number.isFinite(timestamp) && timestamp < nowMs - days * dayMs;
+            };
+
+            const candidates = [];
+            const skipped = {
+              missingStale: 0,
+              exemptLabel: 0,
+              maintainerAuthor: 0,
+              maintainerAssignee: 0,
+              notOldEnough: 0,
+              disabledType: 0,
+            };
+
+            for await (const response of github.paginate.iterator(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: "open",
+              sort: "updated",
+              direction: "asc",
+              per_page: 100,
+            })) {
+              for (const item of response.data) {
+                const isPr = Boolean(item.pull_request);
+                if ((isPr && !includePrs) || (!isPr && !includeIssues)) {
+                  skipped.disabledType += 1;
+                  continue;
+                }
+
+                const labels = new Set((item.labels || []).map(label => label.name));
+                if (!labels.has("stale")) {
+                  skipped.missingStale += 1;
+                  continue;
+                }
+
+                const exemptLabels = isPr ? prExemptLabels : issueExemptLabels;
+                if (hasAny(labels, exemptLabels)) {
+                  skipped.exemptLabel += 1;
+                  continue;
+                }
+
+                if (maintainerAssociations.has(item.author_association)) {
+                  skipped.maintainerAuthor += 1;
+                  continue;
+                }
+
+                const assigned = (item.assignees || []).length > 0;
+                const assignedToMaintainer = (item.assignees || []).some(assignee =>
+                  maintainerLogins.has(assignee.login.toLowerCase()),
+                );
+                if (assignedToMaintainer) {
+                  skipped.maintainerAssignee += 1;
+                  continue;
+                }
+
+                let eligible = false;
+                let lane = "";
+                if (isPr && assigned) {
+                  lane = "assigned-pr";
+                  eligible = isOlderThan(item.created_at, 34) && isOlderThan(item.updated_at, 7);
+                } else if (isPr) {
+                  lane = "unassigned-pr";
+                  eligible = isOlderThan(item.updated_at, 7);
+                } else if (assigned) {
+                  lane = "assigned-issue";
+                  eligible = isOlderThan(item.updated_at, 10);
+                } else {
+                  lane = "unassigned-issue";
+                  eligible = isOlderThan(item.updated_at, 7);
+                }
+
+                if (!eligible) {
+                  skipped.notOldEnough += 1;
+                  continue;
+                }
+
+                candidates.push({
+                  number: item.number,
+                  title: item.title,
+                  lane,
+                  isPr,
+                  assigned,
+                  createdAt: item.created_at,
+                  updatedAt: item.updated_at,
+                  authorAssociation: item.author_association,
+                  url: item.html_url,
+                });
+              }
+            }
+
+            const countsByLane = candidates.reduce((counts, candidate) => {
+              counts[candidate.lane] = (counts[candidate.lane] || 0) + 1;
+              return counts;
+            }, {});
+            const selected = candidates.slice(0, maxClosures);
+
+            core.info(`Dry run: ${dryRun}`);
+            core.info(`Candidates: ${candidates.length}`);
+            core.info(`Selected: ${selected.length}`);
+            core.info(`Counts by lane: ${JSON.stringify(countsByLane)}`);
+            core.info(`Skipped: ${JSON.stringify(skipped)}`);
+            for (const candidate of selected) {
+              core.info(`${dryRun ? "Would close" : "Closing"} ${candidate.lane} #${candidate.number}: ${candidate.title} (${candidate.url})`);
+            }
+
+            await core.summary
+              .addHeading("Stale Closure Backfill")
+              .addRaw(`Dry run: ${dryRun}\n\n`)
+              .addRaw(`Candidates: ${candidates.length}\n\n`)
+              .addRaw(`Selected: ${selected.length}\n\n`)
+              .addCodeBlock(JSON.stringify({ countsByLane, skipped }, null, 2), "json")
+              .addTable([
+                [
+                  { data: "Lane", header: true },
+                  { data: "Number", header: true },
+                  { data: "Title", header: true },
+                  { data: "URL", header: true },
+                ],
+                ...selected.map(candidate => [
+                  candidate.lane,
+                  String(candidate.number),
+                  candidate.title,
+                  candidate.url,
+                ]),
+              ])
+              .write();
+
+            if (dryRun) {
+              return;
+            }
+
+            for (const candidate of selected) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: candidate.number,
+                body: candidate.isPr ? prCloseMessage : issueCloseMessage,
+              });
+
+              if (candidate.isPr) {
+                await github.rest.pulls.update({
+                  owner,
+                  repo,
+                  pull_number: candidate.number,
+                  state: "closed",
+                });
+              } else {
+                await github.rest.issues.update({
+                  owner,
+                  repo,
+                  issue_number: candidate.number,
+                  state: "closed",
+                  state_reason: "not_planned",
+                });
+              }
+            }
+
   lock-closed-issues:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.backfill_stale_closures != true }}
     permissions:
       issues: write
     runs-on: blacksmith-16vcpu-ubuntu-2404

@@ -179,6 +179,63 @@ describe("config schema", () => {
     expect(res.uiHints["channels.matrix.accessToken"]?.sensitive).toBe(true);
   });
 
+  it("omits a single oversized plugin schema from the full schema response", () => {
+    const res = buildConfigSchema({
+      cache: false,
+      plugins: [
+        {
+          id: "huge",
+          name: "Huge",
+          configSchema: {
+            type: "object",
+            properties: {
+              huge: {
+                type: "string",
+                description: `oversized-marker-${"x".repeat(300_000)}`,
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const serialized = JSON.stringify(res);
+    expect(serialized).not.toContain("oversized-marker");
+    const lookup = lookupConfigSchema(res, "plugins.entries.huge.config");
+    expect(lookup?.schema).toMatchObject({
+      type: "object",
+      additionalProperties: true,
+      description: expect.stringContaining("omitted"),
+    });
+  });
+
+  it("omits later plugin schemas after the aggregate extension schema budget is exhausted", () => {
+    const res = buildConfigSchema({
+      cache: false,
+      plugins: Array.from({ length: 40 }, (_, index) => ({
+        id: `plugin-${index}`,
+        configSchema: {
+          type: "object",
+          properties: {
+            value: {
+              type: "string",
+              description: `schema-${index}-${"x".repeat(60_000)}`,
+            },
+          },
+        },
+      })),
+    });
+
+    const first = lookupConfigSchema(res, "plugins.entries.plugin-0.config.value");
+    const last = lookupConfigSchema(res, "plugins.entries.plugin-39.config");
+    expect(first?.schema).toMatchObject({ type: "string" });
+    expect(last?.schema).toMatchObject({
+      type: "object",
+      additionalProperties: true,
+      description: expect.stringContaining("omitted"),
+    });
+  });
+
   it("looks up plugin config paths for slash-delimited plugin ids", () => {
     const res = buildConfigSchema({
       plugins: [

@@ -9,6 +9,7 @@ import { createThrowingRuntime } from "./onboard-non-interactive.test-helpers.js
 import type { installGatewayDaemonNonInteractive } from "./onboard-non-interactive/local/daemon-install.js";
 
 const ensureWorkspaceAndSessionsMock = vi.fn(async (..._args: unknown[]) => {});
+const preparePostConfigBundledRuntimeDepsMock = vi.hoisted(() => vi.fn(async () => {}));
 const testConfigStore = new Map<string, OpenClawConfig>();
 type InstallGatewayDaemonResult = Awaited<ReturnType<typeof installGatewayDaemonNonInteractive>>;
 const installGatewayDaemonNonInteractiveMock = vi.hoisted(() =>
@@ -129,6 +130,10 @@ vi.mock("./onboard-non-interactive/local/daemon-install.js", () => ({
 
 vi.mock("./health.js", () => ({
   healthCommand: healthCommandMock,
+}));
+
+vi.mock("./post-config-runtime-deps.js", () => ({
+  preparePostConfigBundledRuntimeDeps: preparePostConfigBundledRuntimeDepsMock,
 }));
 
 vi.mock("../daemon/service.js", () => ({
@@ -316,6 +321,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     gatewayServiceMock.isLoaded.mockClear();
     gatewayServiceMock.readRuntime.mockClear();
     readLastGatewayErrorLineMock.mockClear();
+    preparePostConfigBundledRuntimeDepsMock.mockClear();
   });
 
   it("writes gateway token auth into config", async () => {
@@ -350,6 +356,14 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(cfg?.tools?.profile).toBe("coding");
       expect(cfg?.gateway?.auth?.mode).toBe("token");
       expect(cfg?.gateway?.auth?.token).toBe(token);
+      expect(preparePostConfigBundledRuntimeDepsMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: expect.objectContaining({
+            gateway: expect.objectContaining({ mode: "local" }),
+          }),
+          runtime,
+        }),
+      );
     });
   }, 60_000);
 
@@ -408,6 +422,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(cfg.gateway?.mode).toBe("remote");
       expect(cfg.gateway?.remote?.url).toBe(`ws://127.0.0.1:${port}`);
       expect(cfg.gateway?.remote?.token).toBe(token);
+      expect(preparePostConfigBundledRuntimeDepsMock).not.toHaveBeenCalled();
     });
   }, 60_000);
 
@@ -587,6 +602,35 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(parsed.diagnostics?.service?.runtimeStatus).toBe("running");
       expect(parsed.diagnostics?.service?.pid).toBe(4242);
       expect(parsed.diagnostics?.lastGatewayError).toContain("required secrets are unavailable");
+    });
+  }, 60_000);
+
+  it("classifies daemon health ECONNREFUSED failures with a recovery command", async () => {
+    await withStateDir("state-local-daemon-health-refused-", async (stateDir) => {
+      waitForGatewayReachableMock = vi.fn(async () => ({
+        ok: false,
+        detail: "connect ECONNREFUSED 127.0.0.1:18789",
+      }));
+      gatewayServiceMock.readRuntime.mockResolvedValueOnce({
+        status: "stopped",
+        state: "failed",
+        pid: 0,
+      });
+      readLastGatewayErrorLineMock.mockResolvedValueOnce("");
+
+      const { runtimeWithCapture, readCapturedJson } = createJsonCaptureRuntime();
+      await expectLocalJsonSetupFailure(stateDir, runtimeWithCapture);
+
+      const parsed = JSON.parse(readCapturedJson()) as {
+        ok: boolean;
+        phase: string;
+        classification?: string;
+        hints?: string[];
+      };
+      expect(parsed.ok).toBe(false);
+      expect(parsed.phase).toBe("gateway-health");
+      expect(parsed.classification).toBe("service-stopped");
+      expect(parsed.hints).toContain("Fix: run `openclaw gateway restart`.");
     });
   }, 60_000);
 

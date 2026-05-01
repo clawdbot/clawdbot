@@ -610,6 +610,11 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   const gifPlayback = readBooleanParam(params, "gifPlayback") ?? false;
   const forceDocument =
     readBooleanParam(params, "forceDocument") ?? readBooleanParam(params, "asDocument") ?? false;
+  const asVoice =
+    readBooleanParam(params, "asVoice") ??
+    readBooleanParam(params, "audioAsVoice") ??
+    parsed.audioAsVoice ??
+    false;
   const bestEffort = readBooleanParam(params, "bestEffort");
   const silent = readBooleanParam(params, "silent");
 
@@ -696,6 +701,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     message,
     mediaUrl: mediaUrl || undefined,
     mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : undefined,
+    asVoice,
     gifPlayback,
     forceDocument,
     bestEffort: bestEffort ?? undefined,

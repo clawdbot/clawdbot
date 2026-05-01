@@ -217,13 +217,13 @@ function resolvePluginDoctorContracts(params?: {
   });
 
   const entries: PluginDoctorContractEntry[] = [];
-  const selectedPluginIds = params?.pluginIds ? new Set(params.pluginIds) : null;
+  const scopedPluginIds = params?.pluginIds ? new Set(params.pluginIds) : null;
   for (const record of manifestRegistry.plugins) {
     if (
-      selectedPluginIds &&
-      !selectedPluginIds.has(record.id) &&
-      !record.channels.some((channelId) => selectedPluginIds.has(channelId)) &&
-      !record.providers.some((providerId) => selectedPluginIds.has(providerId))
+      scopedPluginIds &&
+      !scopedPluginIds.has(record.id) &&
+      !record.channels.some((channelId) => scopedPluginIds.has(channelId)) &&
+      !record.providers.some((providerId) => scopedPluginIds.has(providerId))
     ) {
       continue;
     }

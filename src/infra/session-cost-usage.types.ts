@@ -89,6 +89,21 @@ export type SessionUtcQuarterHourMessageCounts = {
   errors: number;
 };
 
+export type SessionUtcQuarterHourTokenUsage = {
+  date: string; // YYYY-MM-DD (UTC)
+  quarterIndex: number; // 0-95, UTC quarter-hour bucket (index = floor((utcH * 60 + utcM) / 15))
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  // Uses the same token total basis as CostUsageTotals: usage.total when present,
+  // otherwise input + output + cacheRead + cacheWrite. This intentionally differs
+  // from legacy dailyBreakdown.tokens, which preserves its existing component-sum
+  // behavior until daily usage buckets are refactored separately.
+  totalTokens: number;
+  totalCost: number;
+};
+
 export type SessionLatencyStats = {
   count: number;
   avgMs: number;
@@ -142,6 +157,7 @@ export type SessionCostSummary = CostUsageTotals & {
   dailyBreakdown?: SessionDailyUsage[]; // Per-day token/cost breakdown
   dailyMessageCounts?: SessionDailyMessageCounts[];
   utcQuarterHourMessageCounts?: SessionUtcQuarterHourMessageCounts[]; // UTC quarter-hour buckets for precise hourly stats
+  utcQuarterHourTokenUsage?: SessionUtcQuarterHourTokenUsage[]; // UTC quarter-hour buckets for precise token mosaic stats
   dailyLatency?: SessionDailyLatency[];
   dailyModelUsage?: SessionDailyModelUsage[];
   messageCounts?: SessionMessageCounts;

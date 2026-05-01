@@ -64,6 +64,7 @@ function createReadinessHarness(params: {
   startedAgoMs: number;
   accounts: Record<string, Partial<ChannelAccountSnapshot>>;
   getStartupPending?: () => boolean;
+  getStartupPendingReason?: Parameters<typeof createReadinessChecker>[0]["getStartupPendingReason"];
   getEventLoopHealth?: Parameters<typeof createReadinessChecker>[0]["getEventLoopHealth"];
   cacheTtlMs?: number;
 }) {
@@ -75,6 +76,7 @@ function createReadinessHarness(params: {
       channelManager: manager,
       startedAt,
       getStartupPending: params.getStartupPending,
+      getStartupPendingReason: params.getStartupPendingReason,
       getEventLoopHealth: params.getEventLoopHealth,
       cacheTtlMs: params.cacheTtlMs,
     }),
@@ -102,6 +104,22 @@ describe("createReadinessChecker", () => {
       expect(readiness()).toEqual({
         ready: false,
         failing: ["startup-sidecars"],
+        uptimeMs: 300_000,
+      });
+    });
+  });
+
+  it("reports the current startup pending reason", () => {
+    withReadinessClock(() => {
+      const { readiness } = createReadinessHarness({
+        startedAgoMs: 5 * 60_000,
+        accounts: {},
+        getStartupPending: () => true,
+        getStartupPendingReason: () => "plugin-runtime-deps",
+      });
+      expect(readiness()).toEqual({
+        ready: false,
+        failing: ["plugin-runtime-deps"],
         uptimeMs: 300_000,
       });
     });

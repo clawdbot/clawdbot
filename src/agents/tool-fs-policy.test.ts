@@ -64,21 +64,32 @@ describe("resolveEffectiveToolFsRootExpansionAllowed", () => {
     expect(resolveEffectiveToolFsRootExpansionAllowed({ cfg, agentId: "main" })).toBe(false);
   });
 
-  it("re-enables root expansion when tools.fs explicitly allows non-workspace reads", () => {
+  it("does not re-enable root expansion from tools.fs alone under messaging profile (#47487)", () => {
     const cfg: OpenClawConfig = {
       tools: {
         profile: "messaging",
         fs: { workspaceOnly: false },
       },
     };
-    expect(resolveEffectiveToolFsRootExpansionAllowed({ cfg, agentId: "main" })).toBe(true);
+    expect(resolveEffectiveToolFsRootExpansionAllowed({ cfg, agentId: "main" })).toBe(false);
   });
 
-  it("treats an explicit tools.fs block as a filesystem opt-in", () => {
+  it("does not treat an explicit tools.fs block as a filesystem opt-in (#47487)", () => {
     const cfg: OpenClawConfig = {
       tools: {
         profile: "messaging",
         fs: {},
+      },
+    };
+    expect(resolveEffectiveToolFsRootExpansionAllowed({ cfg, agentId: "main" })).toBe(false);
+  });
+
+  it("re-enables root expansion when alsoAllow explicitly includes read (#47487)", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        profile: "messaging",
+        alsoAllow: ["read"],
+        fs: { workspaceOnly: false },
       },
     };
     expect(resolveEffectiveToolFsRootExpansionAllowed({ cfg, agentId: "main" })).toBe(true);

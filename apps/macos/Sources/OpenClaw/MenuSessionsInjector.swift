@@ -176,99 +176,31 @@ extension MenuSessionsInjector {
         let channelState = ControlChannel.shared.state
 
         var cursor = insertIndex
-        var headerView: NSView?
-
-        if let snapshot = self.cachedSnapshot {
-            let now = Date()
-            let mainKey = self.mainSessionKey
-            let rows = snapshot.rows.filter { row in
-                if row.key == "main", mainKey != "main" { return false }
-                if row.key == mainKey { return true }
-                guard let updatedAt = row.updatedAt else { return false }
-                return now.timeIntervalSince(updatedAt) <= self.activeWindowSeconds
-            }.sorted { lhs, rhs in
-                if lhs.key == mainKey { return true }
-                if rhs.key == mainKey { return false }
-                return (lhs.updatedAt ?? .distantPast) > (rhs.updatedAt ?? .distantPast)
-            }
-            if !rows.isEmpty {
-                let previewKeys = rows.prefix(20).map(\.key)
-                let task = Task {
-                    await SessionMenuPreviewLoader.prewarm(sessionKeys: previewKeys, maxItems: 10)
-                }
-                self.previewTasks.append(task)
-            }
-
-            let headerItem = NSMenuItem()
-            headerItem.tag = self.tag
-            headerItem.isEnabled = false
-            let statusText = self
-                .cachedErrorText ?? (isConnected ? nil : self.controlChannelStatusText(for: channelState))
-            let hosted = self.makeHostedView(
-                rootView: AnyView(MenuSessionsHeaderView(
-                    count: rows.count,
-                    statusText: statusText)),
-                width: width,
-                highlighted: false)
-            headerItem.view = hosted
-            headerView = hosted
-            menu.insertItem(headerItem, at: cursor)
-            cursor += 1
-
-            if rows.isEmpty {
-                menu.insertItem(
-                    self.makeMessageItem(text: "No active sessions", symbolName: "minus", width: width),
-                    at: cursor)
-                cursor += 1
-            } else {
-                for row in rows {
-                    let item = NSMenuItem()
-                    item.tag = self.tag
-                    item.isEnabled = true
-                    item.submenu = self.buildSubmenu(for: row, storePath: snapshot.storePath)
-                    item.view = self.makeHostedView(
-                        rootView: AnyView(SessionMenuLabelView(row: row, width: width)),
-                        width: width,
-                        highlighted: true)
-                    menu.insertItem(item, at: cursor)
-                    cursor += 1
-                }
-            }
-        } else {
-            let headerItem = NSMenuItem()
-            headerItem.tag = self.tag
-            headerItem.isEnabled = false
-            let statusText = isConnected
-                ? (self.cachedErrorText ?? "Loading sessions…")
-                : self.controlChannelStatusText(for: channelState)
-            let hosted = self.makeHostedView(
-                rootView: AnyView(MenuSessionsHeaderView(
-                    count: 0,
-                    statusText: statusText)),
-                width: width,
-                highlighted: false)
-            headerItem.view = hosted
-            headerView = hosted
-            menu.insertItem(headerItem, at: cursor)
-            cursor += 1
-
-            if !isConnected {
-                menu.insertItem(
-                    self.makeMessageItem(
-                        text: "Connect the gateway to see sessions",
-                        symbolName: "bolt.slash",
-                        width: width),
-                    at: cursor)
-                cursor += 1
-            }
-        }
+        let item = NSMenuItem(title: "Context", action: nil, keyEquivalent: "")
+        item.tag = self.tag
+        item.isEnabled = true
+        item.submenu = self.buildContextSubmenu(
+            width: width,
+            isConnected: isConnected,
+            channelState: channelState)
+        let hosted = self.makeHostedView(
+            rootView: AnyView(ContextRootMenuLabelView(
+                subtitle: self.contextRootSubtitle(
+                    isConnected: isConnected,
+                    channelState: channelState),
+                width: width)),
+            width: width,
+            highlighted: true)
+        item.view = hosted
+        menu.insertItem(item, at: cursor)
+        cursor += 1
 
         cursor = self.insertUsageSection(into: menu, at: cursor, width: width)
         cursor = self.insertCostUsageSection(into: menu, at: cursor, width: width)
 
-        DispatchQueue.main.async { [weak self, weak headerView] in
-            guard let self, let headerView else { return }
-            self.captureMenuWidthIfAvailable(from: headerView)
+        DispatchQueue.main.async { [weak self, weak hosted] in
+            guard let self, let hosted else { return }
+            self.captureMenuWidthIfAvailable(from: hosted)
         }
     }
 
@@ -344,6 +276,125 @@ extension MenuSessionsInjector {
         }
 
         _ = cursor
+    }
+
+    private func buildContextSubmenu(
+        width: CGFloat,
+        isConnected: Bool,
+        channelState: ControlChannel.ConnectionState) -> NSMenu
+    {
+        let menu = NSMenu()
+        let width = max(300, width)
+        var cursor = 0
+
+        if let snapshot = self.cachedSnapshot {
+            let rows = self.activeRows(from: snapshot)
+            if !rows.isEmpty {
+                let previewKeys = rows.prefix(20).map(\.key)
+                let task = Task {
+                    await SessionMenuPreviewLoader.prewarm(sessionKeys: previewKeys, maxItems: 10)
+                }
+                self.previewTasks.append(task)
+            }
+
+            let headerItem = NSMenuItem()
+            headerItem.tag = self.tag
+            headerItem.isEnabled = false
+            let statusText = self.cachedErrorText
+                ?? (isConnected ? nil : self.controlChannelStatusText(for: channelState))
+            headerItem.view = self.makeHostedView(
+                rootView: AnyView(MenuSessionsHeaderView(
+                    count: rows.count,
+                    statusText: statusText)),
+                width: width,
+                highlighted: false)
+            menu.insertItem(headerItem, at: cursor)
+            cursor += 1
+
+            if rows.isEmpty {
+                menu.insertItem(
+                    self.makeMessageItem(text: "No active sessions", symbolName: "minus", width: width),
+                    at: cursor)
+                cursor += 1
+            } else {
+                for row in rows {
+                    let item = NSMenuItem()
+                    item.tag = self.tag
+                    item.isEnabled = true
+                    item.representedObject = row.key
+                    item.submenu = self.buildSubmenu(for: row, storePath: snapshot.storePath)
+                    item.view = self.makeHostedView(
+                        rootView: AnyView(SessionMenuLabelView(row: row, width: width)),
+                        width: width,
+                        highlighted: true)
+                    menu.insertItem(item, at: cursor)
+                    cursor += 1
+                }
+            }
+        } else {
+            let headerItem = NSMenuItem()
+            headerItem.tag = self.tag
+            headerItem.isEnabled = false
+            let statusText = isConnected
+                ? (self.cachedErrorText ?? "Loading sessions…")
+                : self.controlChannelStatusText(for: channelState)
+            headerItem.view = self.makeHostedView(
+                rootView: AnyView(MenuSessionsHeaderView(
+                    count: 0,
+                    statusText: statusText)),
+                width: width,
+                highlighted: false)
+            menu.insertItem(headerItem, at: cursor)
+            cursor += 1
+
+            if !isConnected {
+                menu.insertItem(
+                    self.makeMessageItem(
+                        text: "Connect the gateway to see sessions",
+                        symbolName: "bolt.slash",
+                        width: width),
+                    at: cursor)
+                cursor += 1
+            }
+        }
+
+        _ = cursor
+        return menu
+    }
+
+    private func contextRootSubtitle(
+        isConnected: Bool,
+        channelState: ControlChannel.ConnectionState) -> String
+    {
+        if let snapshot = self.cachedSnapshot {
+            return self.sessionsSubtitle(count: self.activeRows(from: snapshot).count)
+        }
+
+        if isConnected {
+            return self.cachedErrorText ?? "Loading…"
+        }
+
+        return self.controlChannelStatusText(for: channelState)
+    }
+
+    private func activeRows(from snapshot: SessionStoreSnapshot) -> [SessionRow] {
+        let now = Date()
+        let mainKey = self.mainSessionKey
+        return snapshot.rows.filter { row in
+            if row.key == "main", mainKey != "main" { return false }
+            if row.key == mainKey { return true }
+            guard let updatedAt = row.updatedAt else { return false }
+            return now.timeIntervalSince(updatedAt) <= self.activeWindowSeconds
+        }.sorted { lhs, rhs in
+            if lhs.key == mainKey { return true }
+            if rhs.key == mainKey { return false }
+            return (lhs.updatedAt ?? .distantPast) > (rhs.updatedAt ?? .distantPast)
+        }
+    }
+
+    private func sessionsSubtitle(count: Int) -> String {
+        if count == 1 { return "1 session · 24h" }
+        return "\(count) sessions · 24h"
     }
 
     private func insertUsageSection(into menu: NSMenu, at cursor: Int, width: CGFloat) -> Int {
@@ -1156,7 +1207,7 @@ extension MenuSessionsInjector {
     }
 
     private func sortedNodeEntries() -> [NodeInfo] {
-        let entries = self.nodesStore.nodes.filter(\.isConnected)
+        let entries = self.nodesStore.nodes.filter { $0.isConnected || $0.isPaired }
         return entries.sorted { lhs, rhs in
             if lhs.isConnected != rhs.isConnected { return lhs.isConnected }
             if lhs.isPaired != rhs.isPaired { return lhs.isPaired }
@@ -1238,6 +1289,10 @@ extension MenuSessionsInjector {
 
     func testingFindNodesInsertIndex(in menu: NSMenu) -> Int? {
         self.findNodesInsertIndex(in: menu)
+    }
+
+    func testingSortedNodeEntries() -> [NodeInfo] {
+        self.sortedNodeEntries()
     }
 }
 #endif

@@ -1039,6 +1039,7 @@ describe("active-memory plugin", () => {
       "If memory_recall is unavailable, use memory_search and memory_get.",
     );
     expect(runParams?.toolsAllow).toEqual(["memory_recall", "memory_search", "memory_get"]);
+    expect(runParams?.allowGatewaySubagentBinding).toBe(true);
     expect(runParams?.prompt).toContain(
       "When searching for preference or habit recall, use a permissive recall limit or memory_search threshold before deciding that no useful memory exists.",
     );

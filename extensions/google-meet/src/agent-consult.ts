@@ -3,7 +3,6 @@ import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-ru
 import {
   buildRealtimeVoiceAgentConsultWorkingResponse,
   consultRealtimeVoiceAgent,
-  REALTIME_VOICE_AGENT_CONSULT_TOOL,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   resolveRealtimeVoiceAgentConsultTools,
   resolveRealtimeVoiceAgentConsultToolsAllow,
@@ -14,7 +13,6 @@ import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type { GoogleMeetConfig, GoogleMeetToolPolicy } from "./config.js";
 
 export const GOOGLE_MEET_AGENT_CONSULT_TOOL_NAME = REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME;
-export const GOOGLE_MEET_AGENT_CONSULT_TOOL = REALTIME_VOICE_AGENT_CONSULT_TOOL;
 
 const GOOGLE_MEET_CONSULT_SYSTEM_PROMPT = [
   "You are a behind-the-scenes consultant for a live meeting voice agent.",

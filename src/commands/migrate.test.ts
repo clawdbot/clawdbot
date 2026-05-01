@@ -5,6 +5,10 @@ import type { RuntimeEnv } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   backupCreateCommand: vi.fn(),
+  cancelSymbol: Symbol("cancel"),
+  clackCancel: vi.fn(),
+  clackIsCancel: vi.fn(),
+  multiselect: vi.fn(),
   promptYesNo: vi.fn(),
   provider: {
     id: "hermes",
@@ -25,6 +29,12 @@ vi.mock("../config/paths.js", () => ({
 
 vi.mock("../cli/prompt.js", () => ({
   promptYesNo: mocks.promptYesNo,
+}));
+
+vi.mock("@clack/prompts", () => ({
+  cancel: mocks.clackCancel,
+  isCancel: mocks.clackIsCancel,
+  multiselect: mocks.multiselect,
 }));
 
 vi.mock("../plugins/migration-provider-runtime.js", () => ({
@@ -56,6 +66,56 @@ function plan(overrides: Partial<MigrationPlan> = {}): MigrationPlan {
   };
 }
 
+function codexSkillPlan(overrides: Partial<MigrationPlan> = {}): MigrationPlan {
+  const items: MigrationPlan["items"] = [
+    {
+      id: "skill:alpha",
+      kind: "skill",
+      action: "copy",
+      status: "planned",
+      source: "/tmp/codex/skills/alpha",
+      target: "/tmp/openclaw/workspace/skills/alpha",
+      details: {
+        skillName: "alpha",
+        sourceLabel: "Codex CLI skill",
+      },
+    },
+    {
+      id: "skill:beta",
+      kind: "skill",
+      action: "copy",
+      status: "planned",
+      source: "/tmp/codex/skills/beta",
+      target: "/tmp/openclaw/workspace/skills/beta",
+      details: {
+        skillName: "beta",
+        sourceLabel: "Personal AgentSkill",
+      },
+    },
+    {
+      id: "archive:config.toml",
+      kind: "archive",
+      action: "archive",
+      status: "planned",
+    },
+  ];
+  return {
+    providerId: "codex",
+    source: "/tmp/codex",
+    summary: {
+      total: 3,
+      planned: 3,
+      migrated: 0,
+      skipped: 0,
+      conflicts: 0,
+      errors: 0,
+      sensitive: 0,
+    },
+    items,
+    ...overrides,
+  };
+}
+
 const runtime: RuntimeEnv = {
   log: vi.fn(),
   error: vi.fn(),
@@ -75,6 +135,10 @@ describe("migrateApplyCommand", () => {
     });
     mocks.provider.plan.mockReset();
     mocks.provider.apply.mockReset();
+    mocks.multiselect.mockReset();
+    mocks.clackCancel.mockReset();
+    mocks.clackIsCancel.mockReset();
+    mocks.clackIsCancel.mockImplementation((value) => value === mocks.cancelSymbol);
     mocks.promptYesNo.mockReset();
     mocks.backupCreateCommand.mockReset();
     mocks.backupCreateCommand.mockResolvedValue({ archivePath: "/tmp/openclaw-backup.tgz" });
@@ -124,6 +188,52 @@ describe("migrateApplyCommand", () => {
     expect(mocks.promptYesNo).toHaveBeenCalledWith("Apply this migration now?", false);
     expect(mocks.backupCreateCommand).toHaveBeenCalled();
     expect(mocks.provider.apply).toHaveBeenCalledWith(expect.any(Object), planned);
+  });
+
+  it("prompts for Codex skills before interactive default apply", async () => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      configurable: true,
+      value: true,
+    });
+    const planned = codexSkillPlan();
+    mocks.provider.plan.mockResolvedValue(planned);
+    mocks.multiselect.mockResolvedValue(["skill:alpha"]);
+    mocks.promptYesNo.mockResolvedValue(true);
+    mocks.provider.apply.mockImplementation(async (_ctx, selectedPlan: MigrationPlan) => ({
+      ...selectedPlan,
+      summary: { ...selectedPlan.summary, planned: 0, migrated: 2 },
+      items: selectedPlan.items.map((item) =>
+        item.status === "planned" ? { ...item, status: "migrated" as const } : item,
+      ),
+    }));
+
+    await migrateDefaultCommand(runtime, { provider: "codex" });
+
+    expect(mocks.multiselect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("Select Codex skills"),
+        initialValues: ["skill:alpha", "skill:beta"],
+        required: false,
+        options: expect.arrayContaining([
+          expect.objectContaining({ value: "skill:alpha", label: "alpha" }),
+          expect.objectContaining({ value: "skill:beta", label: "beta" }),
+        ]),
+      }),
+    );
+    expect(mocks.promptYesNo).toHaveBeenCalledWith("Apply this migration now?", false);
+    const appliedPlan = mocks.provider.apply.mock.calls[0]?.[1] as MigrationPlan;
+    expect(appliedPlan.summary).toMatchObject({ planned: 2, skipped: 1, conflicts: 0 });
+    expect(appliedPlan.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "skill:alpha", status: "planned" }),
+        expect.objectContaining({
+          id: "skill:beta",
+          status: "skipped",
+          reason: "not selected for migration",
+        }),
+        expect.objectContaining({ id: "archive:config.toml", status: "planned" }),
+      ]),
+    );
   });
 
   it("does not apply when interactive apply confirmation is declined", async () => {
@@ -233,6 +343,67 @@ describe("migrateApplyCommand", () => {
     );
     expect(mocks.backupCreateCommand).not.toHaveBeenCalled();
     expect(mocks.provider.apply).not.toHaveBeenCalled();
+  });
+
+  it("filters explicit Codex skills before apply conflict checks", async () => {
+    const planned = codexSkillPlan({
+      summary: {
+        total: 3,
+        planned: 2,
+        migrated: 0,
+        skipped: 0,
+        conflicts: 1,
+        errors: 0,
+        sensitive: 0,
+      },
+      items: [
+        {
+          id: "skill:alpha",
+          kind: "skill",
+          action: "copy",
+          status: "planned",
+          details: { skillName: "alpha" },
+        },
+        {
+          id: "skill:beta",
+          kind: "skill",
+          action: "copy",
+          status: "conflict",
+          reason: "target exists",
+          details: { skillName: "beta" },
+        },
+        {
+          id: "archive:config.toml",
+          kind: "archive",
+          action: "archive",
+          status: "planned",
+        },
+      ],
+    });
+    mocks.provider.plan.mockResolvedValue(planned);
+    mocks.provider.apply.mockImplementation(async (_ctx, selectedPlan: MigrationPlan) => ({
+      ...selectedPlan,
+      summary: { ...selectedPlan.summary, planned: 0, migrated: 2 },
+      items: selectedPlan.items.map((item) =>
+        item.status === "planned" ? { ...item, status: "migrated" as const } : item,
+      ),
+    }));
+
+    await migrateApplyCommand(runtime, { provider: "codex", yes: true, skills: ["alpha"] });
+
+    const appliedPlan = mocks.provider.apply.mock.calls[0]?.[1] as MigrationPlan;
+    expect(appliedPlan.summary).toMatchObject({ planned: 2, skipped: 1, conflicts: 0 });
+    expect(appliedPlan.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "skill:alpha", status: "planned" }),
+        expect.objectContaining({
+          id: "skill:beta",
+          status: "skipped",
+          reason: "not selected for migration",
+        }),
+      ]),
+    );
+    expect(mocks.backupCreateCommand).toHaveBeenCalled();
   });
 
   it("creates a verified backup before applying a conflict-free migration", async () => {

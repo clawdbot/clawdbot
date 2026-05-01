@@ -1,7 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  createEffectiveEnableStateResolver,
-  createPluginEnableStateResolver,
   resolveMemorySlotDecisionShared,
   resolvePluginActivationDecisionShared,
   toPluginActivationState,
@@ -54,11 +52,6 @@ export function resolvePluginActivationState(params: {
 }
 export const hasExplicitPluginConfig = hasExplicitPluginConfigShared;
 
-export const resolveEnableState = createPluginEnableStateResolver<
-  NormalizedPluginsConfig,
-  PluginOrigin
->(resolvePluginActivationState);
-
 export const isBundledChannelEnabledByChannelConfig = isBundledChannelEnabledByChannelConfigShared;
 
 type PolicyEffectiveActivationParams = {
@@ -71,11 +64,6 @@ type PolicyEffectiveActivationParams = {
   sourceRootConfig?: OpenClawConfig;
   autoEnabledReason?: string;
 };
-
-export const resolveEffectiveEnableState =
-  createEffectiveEnableStateResolver<PolicyEffectiveActivationParams>(
-    resolveEffectivePluginActivationState,
-  );
 
 export function resolveEffectivePluginActivationState(
   params: PolicyEffectiveActivationParams,

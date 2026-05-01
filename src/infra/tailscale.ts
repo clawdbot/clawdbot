@@ -179,18 +179,6 @@ export async function getTailscaleBinary(): Promise<string> {
   return cachedTailscaleBinary ?? "tailscale";
 }
 
-export async function readTailscaleStatusJson(
-  exec: typeof runExec = runExec,
-  opts?: { timeoutMs?: number },
-): Promise<Record<string, unknown>> {
-  const tailscaleBin = await getTailscaleBinary();
-  const { stdout } = await exec(tailscaleBin, ["status", "--json"], {
-    timeoutMs: opts?.timeoutMs ?? 5000,
-    maxBuffer: 400_000,
-  });
-  return stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
-}
-
 export async function ensureGoInstalled(
   exec: typeof runExec = runExec,
   prompt: typeof promptYesNo = promptYesNo,

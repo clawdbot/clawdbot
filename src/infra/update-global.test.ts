@@ -484,6 +484,26 @@ describe("update global helpers", () => {
     });
   });
 
+  it("flags global package roots that resolve into source checkouts", async () => {
+    await withTempDir({ prefix: "openclaw-update-global-source-checkout-" }, async (base) => {
+      const checkoutRoot = path.join(base, "checkout");
+      const globalRoot = path.join(base, "prefix", "lib", "node_modules");
+      const packageRoot = path.join(globalRoot, "openclaw");
+      await fs.mkdir(path.join(checkoutRoot, ".git"), { recursive: true });
+      await fs.mkdir(path.join(checkoutRoot, "src"), { recursive: true });
+      await fs.mkdir(path.join(checkoutRoot, "extensions"), { recursive: true });
+      await fs.writeFile(path.join(checkoutRoot, "pnpm-workspace.yaml"), "packages: []\n", "utf8");
+      await writeGlobalPackageJson(checkoutRoot, "2026.4.27");
+      await fs.mkdir(globalRoot, { recursive: true });
+      await fs.symlink(checkoutRoot, packageRoot, "dir");
+      const realCheckoutRoot = await fs.realpath(checkoutRoot);
+
+      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
+        `global package root resolves to source checkout: ${realCheckoutRoot}`,
+      );
+    });
+  });
+
   it("does not require private QA sidecars when the inventory is missing", async () => {
     await withTempDir({ prefix: "openclaw-update-global-legacy-" }, async (packageRoot) => {
       await writeGlobalPackageJson(packageRoot);

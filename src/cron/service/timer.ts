@@ -1291,17 +1291,6 @@ async function applyStartupCatchupOutcomes(
   });
 }
 
-export async function runDueJobs(state: CronServiceState) {
-  if (!state.store) {
-    return;
-  }
-  const now = state.deps.nowMs();
-  const due = collectRunnableJobs(state, now);
-  for (const job of due) {
-    await executeJob(state, job, now, { forced: false });
-  }
-}
-
 export async function executeJobCore(
   state: CronServiceState,
   job: CronJob,

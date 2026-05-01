@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../../config/types.js";
 import { buildMemorySystemPromptAddition } from "../../../context-engine/delegate.js";
 import {
   clearMemoryPluginState,
@@ -29,6 +30,7 @@ import {
   buildEmbeddedSubscriptionParams,
   cleanupEmbeddedAttemptResources,
 } from "./attempt.subscription-cleanup.js";
+import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 
 const hoisted = getHoisted();
 const embeddedSessionId = "embedded-session";
@@ -37,6 +39,11 @@ const seedMessage = { role: "user", content: "seed", timestamp: 1 } as AgentMess
 const doneMessage = { role: "assistant", content: "done", timestamp: 2 } as unknown as AgentMessage;
 type AfterTurnPromptCacheCall = { runtimeContext?: { promptCache?: Record<string, unknown> } };
 type TrajectoryEvent = { type?: string; data?: Record<string, unknown> };
+type ToolResultGuardInstallParams = {
+  midTurnPrecheck?: {
+    onMidTurnPrecheck?: (request: MidTurnPrecheckRequest) => void;
+  };
+};
 
 function createTestContextEngine(params: Partial<AttemptContextEngine>): AttemptContextEngine {
   return {
@@ -275,6 +282,44 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
     expect(contextCompiled?.data?.prompt).toBe("");
     expect(contextCompiled?.data?.systemPrompt).toContain("internal heartbeat event");
+  });
+
+  it("skips blank visible prompts with replay history before provider submission", async () => {
+    const sessionPrompt = vi.fn(async () => {
+      throw new Error("blank prompt should not be submitted");
+    });
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        prompt: "  \n\t  ",
+      },
+      sessionPrompt,
+    });
+
+    expect(sessionPrompt).not.toHaveBeenCalled();
+    expect(result.finalPromptText).toBeUndefined();
+    expect(result.promptError).toBeFalsy();
+    expect(result.messagesSnapshot).toEqual([
+      expect.objectContaining({ role: "user", content: "seed" }),
+    ]);
+    const trajectoryEvents = (
+      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    expect(trajectoryEvents.some((event) => event.type === "prompt.submitted")).toBe(false);
+    expect(trajectoryEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "prompt.skipped",
+          data: expect.objectContaining({ reason: "blank_user_prompt" }),
+        }),
+      ]),
+    );
   });
 
   it("keeps gateway model runs independent from agent context and session history", async () => {
@@ -768,5 +813,137 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(hoisted.releaseWsSessionMock).toHaveBeenCalledWith("embedded-session", {
       allowPool: false,
     });
+  });
+});
+
+describe("runEmbeddedAttempt context engine mid-turn precheck integration", () => {
+  const sessionKey = "agent:main:guildchat:channel:midturn-precheck";
+  const tempPaths: string[] = [];
+
+  beforeEach(() => {
+    resetEmbeddedAttemptHarness();
+    clearMemoryPluginState();
+  });
+
+  afterEach(async () => {
+    await cleanupTempPaths(tempPaths);
+    clearMemoryPluginState();
+    vi.restoreAllMocks();
+  });
+
+  it("keeps mid-turn precheck out of the context-engine-owned compaction hook", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: {
+        ...createContextEngineBootstrapAndAssemble(),
+        info: { ownsCompaction: true },
+      },
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        config: {
+          agents: {
+            defaults: {
+              compaction: {
+                mode: "safeguard",
+                midTurnPrecheck: { enabled: true },
+              },
+            },
+          },
+        } as OpenClawConfig,
+      },
+    });
+
+    expect(hoisted.installContextEngineLoopHookMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ midTurnPrecheck: expect.anything() }),
+    );
+  });
+
+  it("recovers when Pi persists the mid-turn precheck as an assistant error", async () => {
+    hoisted.installToolResultContextGuardMock.mockImplementation((...args: unknown[]) => {
+      const params = args[0] as ToolResultGuardInstallParams;
+      params.midTurnPrecheck?.onMidTurnPrecheck?.({
+        route: "compact_only",
+        estimatedPromptTokens: 9000,
+        promptBudgetBeforeReserve: 7000,
+        overflowTokens: 2000,
+        toolResultReducibleChars: 0,
+        effectiveReserveTokens: 1000,
+      });
+      return () => {};
+    });
+
+    const syntheticPiError = {
+      role: "assistant",
+      content: [{ type: "text", text: "" }],
+      stopReason: "error",
+      errorMessage: "Context overflow: prompt too large for the model (mid-turn precheck).",
+      timestamp: 3,
+    } as unknown as AgentMessage;
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        config: {
+          agents: {
+            defaults: {
+              compaction: {
+                mode: "safeguard",
+                midTurnPrecheck: { enabled: true },
+              },
+            },
+          },
+        } as OpenClawConfig,
+      },
+      sessionMessages: [seedMessage],
+      sessionPrompt: async (session) => {
+        session.messages = [...session.messages, syntheticPiError];
+      },
+    });
+
+    expect(result.promptErrorSource).toBe("precheck");
+    expect(result.preflightRecovery).toEqual({ route: "compact_only", source: "mid-turn" });
+    expect(result.messagesSnapshot).toEqual([seedMessage]);
+  });
+});
+
+describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
+  const sessionKey = "agent:main:guildchat:channel:tool-result-guard-budget";
+  const tempPaths: string[] = [];
+
+  beforeEach(() => {
+    resetEmbeddedAttemptHarness();
+    clearMemoryPluginState();
+  });
+
+  afterEach(async () => {
+    await cleanupTempPaths(tempPaths);
+    clearMemoryPluginState();
+    vi.restoreAllMocks();
+  });
+
+  it("uses the resolved contextTokenBudget before model contextWindow", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        contextTokenBudget: 1_000_000,
+        model: {
+          api: "openai-completions",
+          provider: "openai",
+          compat: {},
+          contextWindow: 200_000,
+          input: ["text"],
+        } as never,
+      },
+    });
+
+    expect(hoisted.installToolResultContextGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextWindowTokens: 1_000_000,
+      }),
+    );
   });
 });

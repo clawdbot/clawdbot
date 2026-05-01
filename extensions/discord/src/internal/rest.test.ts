@@ -153,6 +153,154 @@ describe("RequestClient", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
+  it("retries queued rate limit responses after the learned reset", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const responses = [
+      Promise.resolve(
+        createJsonResponse(
+          { message: "Rate limited", retry_after: 0.1, global: false },
+          {
+            status: 429,
+            headers: {
+              "X-RateLimit-Bucket": "channel-messages",
+              "X-RateLimit-Limit": "1",
+              "X-RateLimit-Remaining": "0",
+            },
+          },
+        ),
+      ),
+      Promise.resolve(
+        createJsonResponse(
+          { id: "retried" },
+          {
+            headers: {
+              "X-RateLimit-Bucket": "channel-messages",
+              "X-RateLimit-Limit": "1",
+              "X-RateLimit-Remaining": "1",
+            },
+          },
+        ),
+      ),
+    ];
+    const fetchSpy = vi.fn(async () => {
+      const response = responses.shift();
+      if (!response) {
+        throw new Error("unexpected request");
+      }
+      return await response;
+    });
+    const client = new RequestClient("test-token", { fetch: fetchSpy });
+
+    const request = client.get("/channels/c1/messages");
+    await Promise.resolve();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(client.queueSize).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(99);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(request).resolves.toEqual({ id: "retried" });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(client.queueSize).toBe(0);
+    expect(client.getSchedulerMetrics().buckets).toEqual([]);
+  });
+
+  it("honors maxRateLimitRetries for queued requests", async () => {
+    const fetchSpy = vi.fn(async () =>
+      createJsonResponse(
+        { message: "Rate limited", retry_after: 0.1, global: false },
+        {
+          status: 429,
+          headers: { "X-RateLimit-Bucket": "channel-messages" },
+        },
+      ),
+    );
+    const client = new RequestClient("test-token", {
+      fetch: fetchSpy,
+      scheduler: { maxRateLimitRetries: 0 },
+    });
+
+    await expect(client.get("/channels/c1/messages")).rejects.toMatchObject({
+      name: "RateLimitError",
+      retryAfter: 0.1,
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(client.queueSize).toBe(0);
+  });
+
+  it("does not requeue an active rate limit after the queue is cleared", async () => {
+    const response = createDeferred<Response>();
+    const fetchSpy = vi.fn(async () => {
+      if (fetchSpy.mock.calls.length > 1) {
+        throw new Error("unexpected retry after clearQueue");
+      }
+      return await response.promise;
+    });
+    const client = new RequestClient("test-token", { fetch: fetchSpy });
+
+    const request = client.get("/channels/c1/messages");
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    expect(client.queueSize).toBe(1);
+
+    client.clearQueue();
+    expect(client.queueSize).toBe(1);
+
+    response.resolve(
+      createJsonResponse(
+        { message: "Rate limited", retry_after: 0, global: false },
+        {
+          status: 429,
+          headers: { "X-RateLimit-Bucket": "channel-messages" },
+        },
+      ),
+    );
+
+    await expect(request).rejects.toMatchObject({
+      name: "RateLimitError",
+      retryAfter: 0,
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(client.queueSize).toBe(0);
+  });
+
+  it("retries queued global rate limits after Retry-After", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const responses = [
+      Promise.resolve(
+        createJsonResponse(
+          { message: "Rate limited", retry_after: 0.1, global: true },
+          {
+            status: 429,
+            headers: { "X-RateLimit-Global": "true" },
+          },
+        ),
+      ),
+      Promise.resolve(createJsonResponse({ id: "after-global" })),
+    ];
+    const fetchSpy = vi.fn(async () => {
+      const response = responses.shift();
+      if (!response) {
+        throw new Error("unexpected request");
+      }
+      return await response;
+    });
+    const client = new RequestClient("test-token", { fetch: fetchSpy });
+
+    const request = client.get("/channels/c1/messages");
+    await Promise.resolve();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(99);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(request).resolves.toEqual({ id: "after-global" });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
   it("preserves Discord error codes on rate limit errors", async () => {
     const client = new RequestClient("test-token", {
       queueRequests: false,
@@ -172,6 +320,43 @@ describe("RequestClient", () => {
       name: "RateLimitError",
       discordCode: 30034,
       retryAfter: 60,
+    });
+  });
+
+  it("parses HTTP-date Retry-After headers on rate limit errors", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-01T12:00:00.000Z"));
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(JSON.stringify({ message: "Slow down", global: false }), {
+          status: 429,
+          headers: { "Retry-After": "Fri, 01 May 2026 12:00:05 GMT" },
+        }),
+    });
+
+    await expect(client.get("/channels/c1/messages")).rejects.toMatchObject({
+      name: "RateLimitError",
+      retryAfter: 5,
+    });
+  });
+
+  it("falls back to Retry-After when the rate limit body value is malformed", async () => {
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(
+          JSON.stringify({ message: "Slow down", retry_after: "not-a-number", global: false }),
+          {
+            status: 429,
+            headers: { "Retry-After": "7" },
+          },
+        ),
+    });
+
+    await expect(client.get("/channels/c1/messages")).rejects.toMatchObject({
+      name: "RateLimitError",
+      retryAfter: 7,
     });
   });
 

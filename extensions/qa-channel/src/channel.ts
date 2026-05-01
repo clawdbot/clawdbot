@@ -64,8 +64,8 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
       inferTargetChatType: ({ to }) => parseQaTarget(to).chatType,
       targetResolver: {
         looksLikeId: (raw) =>
-          /^((dm|channel):|thread:[^/]+\/)/i.test(raw.trim()) || raw.trim().length > 0,
-        hint: "<dm:user|channel:room|thread:room/thread>",
+          /^((dm|channel|group):|thread:[^/]+\/)/i.test(raw.trim()) || raw.trim().length > 0,
+        hint: "<dm:user|channel:room|group:room|thread:room/thread>",
       },
       resolveOutboundSessionRoute: ({
         cfg,
@@ -83,7 +83,12 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
           channel: CHANNEL_ID,
           accountId,
           peer: {
-            kind: parsed.chatType === "direct" ? "direct" : "channel",
+            kind:
+              parsed.chatType === "direct"
+                ? "direct"
+                : parsed.chatType === "group"
+                  ? "group"
+                  : "channel",
             id: buildQaTarget(parsed),
           },
           chatType: parsed.chatType,
@@ -98,6 +103,18 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
           canRecoverCurrentThread: ({ route }) =>
             route.chatType !== "direct" || (cfg.session?.dmScope ?? "main") !== "main",
         });
+      },
+      resolveSessionConversation: ({ rawId }) => {
+        const parsed = parseQaTarget(rawId);
+        if (parsed.chatType === "direct") {
+          return null;
+        }
+        return {
+          id: parsed.conversationId,
+          threadId: parsed.threadId,
+          baseConversationId: parsed.conversationId,
+          parentConversationCandidates: [parsed.conversationId],
+        };
       },
     },
     status: qaChannelStatus,

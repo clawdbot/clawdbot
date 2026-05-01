@@ -34,7 +34,3 @@ export function listAuthProfileStorePaths(config: OpenClawConfig, stateDir: stri
 
   return [...paths];
 }
-
-export function collectAuthStorePaths(config: OpenClawConfig, stateDir: string): string[] {
-  return listAuthProfileStorePaths(config, stateDir);
-}

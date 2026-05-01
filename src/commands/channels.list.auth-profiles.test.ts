@@ -135,7 +135,7 @@ describe("channels list auth profiles", () => {
 
     expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(
       expect.any(Object),
-      expect.objectContaining({ includeSetupRuntimeFallback: true }),
+      expect.objectContaining({ includeSetupFallbackPlugins: true }),
     );
     const payload = JSON.parse(runtime.log.mock.calls[0]?.[0] as string) as {
       chat?: Record<string, string[]>;
@@ -175,7 +175,7 @@ describe("channels list auth profiles", () => {
 
     expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(
       expect.any(Object),
-      expect.objectContaining({ includeSetupRuntimeFallback: true }),
+      expect.objectContaining({ includeSetupFallbackPlugins: true }),
     );
     const output = stripAnsi(runtime.log.mock.calls[0]?.[0] as string);
     expect(output).toContain("Chat channels:");

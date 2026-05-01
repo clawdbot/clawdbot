@@ -9,6 +9,14 @@ import { isSignalSenderAllowed, type SignalSender } from "../identity.js";
 type SignalDmPolicy = "open" | "pairing" | "allowlist" | "disabled";
 type SignalGroupPolicy = "open" | "allowlist" | "disabled";
 
+function isSignalGroupAllowed(groupId: string | undefined, allowEntries: string[]): boolean {
+  if (!groupId) {
+    return false;
+  }
+  const candidates = new Set([groupId, `group:${groupId}`, `signal:group:${groupId}`]);
+  return allowEntries.some((entry) => candidates.has(entry));
+}
+
 export async function resolveSignalAccessState(params: {
   accountId: string;
   dmPolicy: SignalDmPolicy;
@@ -16,12 +24,17 @@ export async function resolveSignalAccessState(params: {
   allowFrom: string[];
   groupAllowFrom: string[];
   sender: SignalSender;
+  groupId?: string;
 }) {
   const storeAllowFrom = await readStoreAllowFromForDmPolicy({
     provider: "signal",
     accountId: params.accountId,
     dmPolicy: params.dmPolicy,
   });
+  const isSenderAllowed = (allowEntries: string[]) =>
+    isSignalSenderAllowed(params.sender, allowEntries);
+  const isSenderOrGroupAllowed = (allowEntries: string[]) =>
+    isSenderAllowed(allowEntries) || isSignalGroupAllowed(params.groupId, allowEntries);
   const resolveAccessDecision = (isGroup: boolean) =>
     resolveDmGroupAccessWithLists({
       isGroup,
@@ -30,11 +43,12 @@ export async function resolveSignalAccessState(params: {
       allowFrom: params.allowFrom,
       groupAllowFrom: params.groupAllowFrom,
       storeAllowFrom,
-      isSenderAllowed: (allowEntries) => isSignalSenderAllowed(params.sender, allowEntries),
+      isSenderAllowed: isGroup ? isSenderOrGroupAllowed : isSenderAllowed,
     });
   const dmAccess = resolveAccessDecision(false);
   return {
     resolveAccessDecision,
+    isGroupAllowed: isSenderOrGroupAllowed,
     dmAccess,
     effectiveDmAllow: dmAccess.effectiveAllowFrom,
     effectiveGroupAllow: dmAccess.effectiveGroupAllowFrom,

@@ -323,14 +323,3 @@ export function resolveGatewayProbeCredentialsFromConfig(params: {
     remoteTokenFallback: "remote-only",
   });
 }
-
-export function resolveGatewayDriftCheckCredentialsFromConfig(params: {
-  cfg: OpenClawConfig;
-}): ResolvedGatewayCredentials {
-  return resolveGatewayCredentialsFromConfig({
-    cfg: params.cfg,
-    env: {} as NodeJS.ProcessEnv,
-    modeOverride: "local",
-    localTokenPrecedence: "config-first",
-  });
-}

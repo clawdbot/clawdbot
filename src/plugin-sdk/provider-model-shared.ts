@@ -39,7 +39,6 @@ export type {
   ProviderEndpointResolution,
 } from "../agents/provider-attribution.js";
 export type { ProviderPlugin } from "../plugins/types.js";
-export type { KilocodeModelCatalogEntry } from "../plugins/provider-model-kilocode.js";
 
 export { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 export {

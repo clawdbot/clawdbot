@@ -67,24 +67,6 @@ export function parseTarget(to: string): ParsedTarget {
 }
 
 /**
- * Map a parsed target type to a ChatScope for API calls.
- *
- * Channel and DM targets are not C2C/Group scoped and should be handled
- * separately by the caller.
- *
- * @returns `'c2c'` or `'group'`, or `undefined` for channel targets.
- */
-export function targetToChatScope(target: ParsedTarget): "c2c" | "group" | undefined {
-  if (target.type === "c2c") {
-    return "c2c";
-  }
-  if (target.type === "group") {
-    return "group";
-  }
-  return undefined;
-}
-
-/**
  * Normalize a QQ Bot target string into the canonical `qqbot:...` form.
  *
  * Returns `undefined` when the target does not look like a QQ Bot address.

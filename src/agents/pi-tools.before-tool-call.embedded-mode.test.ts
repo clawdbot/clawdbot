@@ -83,6 +83,34 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.CANCELLED);
   });
 
+  it("reports approval-required tools without opening an approval request", async () => {
+    runBeforeToolCallMock.mockResolvedValue({
+      requireApproval: {
+        pluginId: "test-plugin",
+        title: "Needs approval",
+        description: "Review before running",
+        severity: "info",
+      },
+      params: { adjusted: true },
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "exec",
+      params: { command: "ls" },
+      toolCallId: "call-report",
+      approvalMode: "report",
+    });
+
+    expect(result).toEqual({
+      blocked: true,
+      kind: "failure",
+      deniedReason: "plugin-approval",
+      reason: "Review before running",
+      params: { command: "ls" },
+    });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("sends approval to gateway when NOT in embedded mode", async () => {
     setEmbeddedMode(false);
 

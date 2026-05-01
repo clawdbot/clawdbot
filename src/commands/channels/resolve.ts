@@ -139,10 +139,15 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
         cfg,
         runtime,
         rawChannel: explicitChannel,
-        allowInstall: true,
+        allowInstall: false,
         supports: (plugin) => Boolean(plugin.resolver?.resolveTargets),
       })
     : null;
+  if (explicitChannel && resolvedExplicit?.catalogEntry && !resolvedExplicit.plugin) {
+    throw new Error(
+      `Channel plugin "${resolvedExplicit.catalogEntry.id}" is not installed. Run "openclaw channels add --channel ${resolvedExplicit.catalogEntry.id}" first.`,
+    );
+  }
   if (resolvedExplicit?.configChanged) {
     cfg = resolvedExplicit.cfg;
     const shouldMovePluginInstalls = Boolean(

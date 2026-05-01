@@ -13,13 +13,6 @@ type FeishuMentionLike = {
   name?: string;
 };
 
-/**
- * Escape regex metacharacters so user-controlled mention fields are treated literally.
- */
-export function escapeRegExp(input: string): string {
-  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 export function isFeishuBroadcastMention(mention: FeishuMentionLike): boolean {
   const normalizedKey = mention.key?.trim().toLowerCase();
   if (normalizedKey === "@all" || normalizedKey === "@_all") {
@@ -84,20 +77,6 @@ export function isMentionForwardRequest(event: FeishuMessageEvent, botOpenId?: s
 }
 
 /**
- * Extract message body from text (remove @ placeholders)
- */
-export function extractMessageBody(text: string, allMentionKeys: string[]): string {
-  let result = text;
-
-  // Remove all @ placeholders
-  for (const key of allMentionKeys) {
-    result = result.replace(new RegExp(escapeRegExp(key), "g"), "");
-  }
-
-  return result.replace(/\s+/g, " ").trim();
-}
-
-/**
  * Format @mention for text message
  */
 export function formatMentionForText(target: MentionTarget): string {
@@ -105,24 +84,10 @@ export function formatMentionForText(target: MentionTarget): string {
 }
 
 /**
- * Format @everyone for text message
- */
-export function formatMentionAllForText(): string {
-  return `<at user_id="all">Everyone</at>`;
-}
-
-/**
  * Format @mention for card message (lark_md)
  */
 export function formatMentionForCard(target: MentionTarget): string {
   return `<at id=${target.openId}></at>`;
-}
-
-/**
- * Format @everyone for card message
- */
-export function formatMentionAllForCard(): string {
-  return `<at id=all></at>`;
 }
 
 /**

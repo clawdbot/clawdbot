@@ -204,6 +204,29 @@ describe("sendMessage", () => {
     );
   });
 
+  it("maps voice media sends onto outbound audioAsVoice payloads", async () => {
+    await sendMessage({
+      cfg: {},
+      channel: "forum",
+      to: "123456",
+      content: "voice note",
+      mediaUrl: "file:///tmp/openclaw-voice.ogg",
+      asVoice: true,
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [
+          expect.objectContaining({
+            text: "voice note",
+            mediaUrl: "file:///tmp/openclaw-voice.ogg",
+            audioAsVoice: true,
+          }),
+        ],
+      }),
+    );
+  });
+
   it("applies mirror matrix semantics for MEDIA and silent token variants", async () => {
     const matrix: Array<{
       name: string;

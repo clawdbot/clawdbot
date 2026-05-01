@@ -75,8 +75,14 @@ export function buildOpenAICodexForwardCompatExpectation(
         : isGpt54Mini
           ? { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 }
           : OPENAI_CODEX_TEMPLATE_MODEL.cost,
-    contextWindow: isGpt54 ? 1_050_000 : isGpt55 ? 400_000 : isSpark ? 128_000 : 272000,
-    ...(isGpt54 || isGpt55 ? { contextTokens: 272_000 } : {}),
+    contextWindow: isGpt54
+      ? 1_050_000
+      : isGpt55 || isGpt54Mini
+        ? 400_000
+        : isSpark
+          ? 128_000
+          : 272000,
+    ...(isGpt54 || isGpt55 || isGpt54Mini ? { contextTokens: 272_000 } : {}),
     maxTokens: 128000,
   };
 }

@@ -611,7 +611,7 @@ describe("bundled channel entry shape guards", () => {
 
     process.env.OPENCLAW_PLUGIN_STAGE_DIR = stageRoot;
     const { resolveBundledRuntimeDependencyInstallRoot } =
-      await import("../../plugins/bundled-runtime-deps.js");
+      await import("../../plugins/bundled-runtime-deps-roots.js");
     const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginDir);
     const depRoot = path.join(installRoot, "node_modules", "alpha-runtime-dep");
     fs.mkdirSync(depRoot, { recursive: true });
@@ -708,7 +708,7 @@ describe("bundled channel entry shape guards", () => {
 
     process.env.OPENCLAW_PLUGIN_STAGE_DIR = stageRoot;
     const { resolveBundledRuntimeDependencyInstallRoot } =
-      await import("../../plugins/bundled-runtime-deps.js");
+      await import("../../plugins/bundled-runtime-deps-roots.js");
     const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginDir);
     const depRoot = path.join(installRoot, "node_modules", "alpha-runtime-dep");
     fs.mkdirSync(depRoot, { recursive: true });

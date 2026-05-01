@@ -225,13 +225,13 @@ describe("openai codex provider", () => {
             access:
               "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC1kZXZpY2UtMTIzIn19.signature",
             refresh: "device-refresh-token",
+            accountId: "acct-device-123",
           },
         },
       ],
       defaultModel: "openai-codex/gpt-5.5",
     });
     expect(result?.profiles[0]?.credential).not.toHaveProperty("idToken");
-    expect(result?.profiles[0]?.credential).not.toHaveProperty("accountId");
   });
 
   it("does not log the device pairing code in remote mode", async () => {
@@ -439,7 +439,7 @@ describe("openai codex provider", () => {
     });
   });
 
-  it("does not resolve gpt-5.4-mini through the Codex OAuth route", () => {
+  it("resolves gpt-5.4-mini through the Codex OAuth route", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
     const model = provider.resolveDynamicModel?.({
@@ -447,14 +447,25 @@ describe("openai codex provider", () => {
       modelId: "gpt-5.4-mini",
       modelRegistry: createSingleModelRegistry(
         createCodexTemplate({
-          id: "gpt-5.1-codex-mini",
-          cost: { input: 0.25, output: 2, cacheRead: 0.025, cacheWrite: 0 },
+          id: "gpt-5.4",
+          cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+          contextWindow: 1_050_000,
+          contextTokens: 272_000,
         }),
         null,
       ) as never,
     } as never);
 
-    expect(model).toBeUndefined();
+    expect(model).toMatchObject({
+      id: "gpt-5.4-mini",
+      name: "gpt-5.4-mini",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      contextWindow: 400_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+      cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
+    });
   });
 
   it("augments catalog with gpt-5.5-pro and gpt-5.4 native metadata", () => {
@@ -503,9 +514,12 @@ describe("openai codex provider", () => {
         cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
       }),
     );
-    expect(entries).not.toContainEqual(
+    expect(entries).toContainEqual(
       expect.objectContaining({
         id: "gpt-5.4-mini",
+        contextWindow: 400_000,
+        contextTokens: 272_000,
+        cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
       }),
     );
   });

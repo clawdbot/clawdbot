@@ -103,6 +103,19 @@ describe("agent defaults schema", () => {
     expect(result.compaction?.maxActiveTranscriptBytes).toBe("20mb");
   });
 
+  it("accepts compaction.midTurnPrecheck.enabled", () => {
+    const result = AgentDefaultsSchema.parse({
+      compaction: {
+        mode: "safeguard",
+        midTurnPrecheck: {
+          enabled: true,
+        },
+      },
+    })!;
+
+    expect(result.compaction?.midTurnPrecheck?.enabled).toBe(true);
+  });
+
   it("accepts focused contextLimits on defaults and agent entries", () => {
     const defaults = AgentDefaultsSchema.parse({
       contextLimits: {

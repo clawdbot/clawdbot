@@ -399,6 +399,7 @@ export async function runBeforeToolCallHook(args: {
   toolCallId?: string;
   ctx?: HookContext;
   signal?: AbortSignal;
+  approvalMode?: "request" | "report";
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
@@ -501,6 +502,18 @@ export async function runBeforeToolCallHook(args: {
       };
     }
     if (trustedPolicyResult?.requireApproval) {
+      if (args.approvalMode === "report") {
+        return {
+          blocked: true,
+          kind: "failure",
+          deniedReason: "plugin-approval",
+          reason:
+            trustedPolicyResult.requireApproval.description ||
+            trustedPolicyResult.requireApproval.title ||
+            "Plugin approval required",
+          params,
+        };
+      }
       return await requestPluginToolApproval({
         approval: trustedPolicyResult.requireApproval,
         toolName,
@@ -537,6 +550,18 @@ export async function runBeforeToolCallHook(args: {
     }
 
     if (hookResult?.requireApproval) {
+      if (args.approvalMode === "report") {
+        return {
+          blocked: true,
+          kind: "failure",
+          deniedReason: "plugin-approval",
+          reason:
+            hookResult.requireApproval.description ||
+            hookResult.requireApproval.title ||
+            "Plugin approval required",
+          params: policyAdjustedParams,
+        };
+      }
       return await requestPluginToolApproval({
         approval: hookResult.requireApproval,
         toolName,

@@ -62,11 +62,6 @@ export function collectConfigServiceEnvVars(cfg?: OpenClawConfig): Record<string
   return collectConfigEnvVarsByTarget(cfg);
 }
 
-/** @deprecated Use `collectConfigRuntimeEnvVars` or `collectConfigServiceEnvVars`. */
-export function collectConfigEnvVars(cfg?: OpenClawConfig): Record<string, string> {
-  return collectConfigRuntimeEnvVars(cfg);
-}
-
 export function createConfigRuntimeEnv(
   cfg: OpenClawConfig,
   baseEnv: NodeJS.ProcessEnv = process.env,

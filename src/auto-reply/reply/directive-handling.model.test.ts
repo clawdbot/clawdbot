@@ -10,6 +10,10 @@ vi.mock("../../agents/auth-profiles.js", () => ({
   clearRuntimeAuthProfileStoreSnapshots: () => {
     authProfilesStoreMock.profiles = {};
   },
+  externalCliDiscoveryForProviderAuth: () => ({
+    mode: "scoped",
+    allowKeychainPrompt: false,
+  }),
   ensureAuthProfileStore: () => ({
     version: 1,
     profiles: authProfilesStoreMock.profiles,
@@ -501,6 +505,8 @@ describe("/model chat UX", () => {
     try {
       await withEnvAsync(
         {
+          ANTHROPIC_API_KEY: undefined,
+          ANTHROPIC_OAUTH_TOKEN: undefined,
           OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
           OPENCLAW_STATE_DIR: stateDir,
           WORKSPACE_MODEL_CREDENTIALS: credentialPath,

@@ -46,6 +46,8 @@ export type ModelFallbackDecisionParams = {
     | "candidate_failed"
     | "candidate_succeeded";
   runId?: string;
+  sessionId?: string;
+  lane?: string;
   requestedProvider: string;
   requestedModel: string;
   candidate: ModelCandidate;
@@ -145,6 +147,8 @@ export function logModelFallbackDecision(
     event: "model_fallback_decision",
     tags: ["error_handling", "model_fallback", params.decision],
     runId: params.runId,
+    sessionId: params.sessionId,
+    lane: params.lane,
     decision: params.decision,
     requestedProvider: params.requestedProvider,
     requestedModel: params.requestedModel,

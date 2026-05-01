@@ -14,12 +14,7 @@ import {
 import { escapeRegExp } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
 import type { ExplicitMentionSignal } from "./mentions.types.js";
-export type {
-  BuildMentionRegexes,
-  ExplicitMentionSignal,
-  MatchesMentionPatterns,
-  MatchesMentionWithExplicit,
-} from "./mentions.types.js";
+export type { ExplicitMentionSignal } from "./mentions.types.js";
 
 function deriveMentionPatterns(identity?: { name?: string; emoji?: string }) {
   const patterns: string[] = [];

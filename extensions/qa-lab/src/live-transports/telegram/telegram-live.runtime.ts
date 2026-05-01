@@ -376,6 +376,13 @@ function resolveTelegramQaCanaryTimeoutMs(env: NodeJS.ProcessEnv = process.env) 
   );
 }
 
+function resolveTelegramQaScenarioTimeoutMs(
+  fallbackMs: number,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  return parsePositiveTelegramQaEnvMs(env, "OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS", fallbackMs);
+}
+
 function formatTelegramQaTimeoutSeconds(timeoutMs: number) {
   return `${Math.round(timeoutMs / 1_000)}s`;
 }
@@ -1308,6 +1315,9 @@ export async function runTelegramQaLive(params: {
           );
           assertLeaseHealthy();
           const scenarioRun = scenario.buildRun(sutUsername);
+          const scenarioTimeoutMs = scenarioRun.expectReply
+            ? resolveTelegramQaScenarioTimeoutMs(scenario.timeoutMs)
+            : scenario.timeoutMs;
           try {
             const requestStartedAtMs = Date.now();
             const sent = await sendGroupMessage(
@@ -1322,7 +1332,7 @@ export async function runTelegramQaLive(params: {
             const matched = await waitForObservedMessage({
               token: runtimeEnv.driverToken,
               initialOffset: driverOffset,
-              timeoutMs: scenario.timeoutMs,
+              timeoutMs: scenarioTimeoutMs,
               observedMessages,
               observationScenarioId: scenario.id,
               observationScenarioTitle: scenario.title,
@@ -1368,7 +1378,7 @@ export async function runTelegramQaLive(params: {
             if (!scenarioRun.expectReply) {
               const details = formatErrorMessage(error);
               if (
-                details === `timed out after ${scenario.timeoutMs}ms waiting for Telegram message`
+                details === `timed out after ${scenarioTimeoutMs}ms waiting for Telegram message`
               ) {
                 const result = {
                   id: scenario.id,
@@ -1537,6 +1547,7 @@ export const __testing = {
   parseTelegramQaProgressBooleanEnv,
   parseTelegramQaCredentialPayload,
   resolveTelegramQaCanaryTimeoutMs,
+  resolveTelegramQaScenarioTimeoutMs,
   resolveTelegramQaRuntimeEnv,
   sanitizeTelegramQaProgressValue,
   shouldLogTelegramQaLiveProgress,

@@ -65,34 +65,3 @@ export function readJsonPointer(
   }
   return current;
 }
-
-export function setJsonPointer(
-  root: Record<string, unknown>,
-  pointer: string,
-  value: unknown,
-): void {
-  if (!pointer.startsWith("/")) {
-    throw new Error(`Invalid JSON pointer "${pointer}".`);
-  }
-
-  const tokens = pointer
-    .slice(1)
-    .split("/")
-    .map((token) => decodeJsonPointerToken(token));
-
-  let current: Record<string, unknown> = root;
-  for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens[index];
-    const isLast = index === tokens.length - 1;
-    if (isLast) {
-      current[token] = value;
-      return;
-    }
-    const child = current[token];
-    const next: Record<string, unknown> = isJsonObject(child) ? child : {};
-    if (next !== child) {
-      current[token] = next;
-    }
-    current = next;
-  }
-}

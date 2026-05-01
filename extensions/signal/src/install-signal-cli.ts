@@ -27,6 +27,8 @@ type ReleaseResponse = {
 };
 
 const MAX_SIGNAL_CLI_ARCHIVE_BYTES = 256 * 1024 * 1024;
+const SIGNAL_CLI_DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
+const SIGNAL_CLI_RELEASE_INFO_TIMEOUT_MS = 30_000;
 
 export type SignalInstallResult = {
   ok: boolean;
@@ -111,11 +113,19 @@ export function pickAsset(
   return archives[0];
 }
 
-async function downloadToFile(url: string, dest: string, maxRedirects = 5): Promise<void> {
+/** @internal Exported for testing. */
+export async function downloadToFile(
+  url: string,
+  dest: string,
+  maxRedirects = 5,
+  maxBytes = MAX_SIGNAL_CLI_ARCHIVE_BYTES,
+): Promise<void> {
+  let completed = false;
   const { response, release } = await fetchWithSsrFGuard({
     url,
     maxRedirects,
     requireHttps: true,
+    timeoutMs: SIGNAL_CLI_DOWNLOAD_TIMEOUT_MS,
     capture: false,
     auditContext: "signal-cli-install-archive",
   });
@@ -124,14 +134,24 @@ async function downloadToFile(url: string, dest: string, maxRedirects = 5): Prom
       throw new Error(`HTTP ${response.status || "?"} downloading file`);
     }
 
+    const rawLength = response.headers.get("content-length");
+    if (rawLength !== null) {
+      const declaredLength = Number(rawLength);
+      if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+        throw new Error(
+          `signal-cli archive exceeds the ${maxBytes}-byte download cap (declared ${declaredLength}).`,
+        );
+      }
+    }
+
     let totalBytes = 0;
     const body = response.body;
     const readable = isNodeReadableStream(body) ? body : Readable.fromWeb(body as never);
     const limiter = new Transform({
       transform(chunk: unknown, _encoding, callback) {
         totalBytes += chunkByteLength(chunk);
-        if (totalBytes > MAX_SIGNAL_CLI_ARCHIVE_BYTES) {
-          callback(new Error("signal-cli archive exceeds 256 MiB limit"));
+        if (totalBytes > maxBytes) {
+          callback(new Error(`signal-cli archive exceeded the ${maxBytes}-byte download cap.`));
           return;
         }
         callback(null, chunk);
@@ -140,8 +160,12 @@ async function downloadToFile(url: string, dest: string, maxRedirects = 5): Prom
 
     const out = createWriteStream(dest);
     await pipeline(readable, limiter, out);
+    completed = true;
   } finally {
     await release();
+    if (!completed) {
+      await fs.rm(dest, { force: true }).catch(() => undefined);
+    }
   }
 }
 
@@ -245,12 +269,16 @@ async function installSignalCliViaBrew(runtime: RuntimeEnv): Promise<SignalInsta
 // Direct download install (used when an official native asset is available)
 // ---------------------------------------------------------------------------
 
-async function installSignalCliFromRelease(runtime: RuntimeEnv): Promise<SignalInstallResult> {
+/** @internal Exported for testing. */
+export async function installSignalCliFromRelease(
+  runtime: RuntimeEnv,
+): Promise<SignalInstallResult> {
   const apiUrl = "https://api.github.com/repos/AsamK/signal-cli/releases/latest";
   const { response, release } = await fetchWithSsrFGuard({
     url: apiUrl,
     maxRedirects: 5,
     requireHttps: true,
+    timeoutMs: SIGNAL_CLI_RELEASE_INFO_TIMEOUT_MS,
     capture: false,
     auditContext: "signal-cli-release-info",
     init: {

@@ -33,6 +33,7 @@ import {
   applyMusicGenerationModelConfigDefaults,
   buildMediaReferenceDetails,
   buildTaskRunDetails,
+  hasGenerationToolAvailability,
   normalizeMediaReferenceInputs,
   readBooleanToolParam,
   readGenerationTimeoutMs,
@@ -495,11 +496,15 @@ export function createMusicGenerateTool(options?: {
   scheduleBackgroundWork?: MusicGenerateBackgroundScheduler;
 }): AnyAgentTool | null {
   const cfg: OpenClawConfig = options?.config ?? getRuntimeConfig();
-  const musicGenerationModelConfig = resolveMusicGenerationModelConfigForTool({
-    cfg,
-    agentDir: options?.agentDir,
-  });
-  if (!musicGenerationModelConfig) {
+  if (
+    !hasGenerationToolAvailability({
+      cfg,
+      agentDir: options?.agentDir,
+      modelConfig: cfg.agents?.defaults?.musicGenerationModel,
+      providers: () => listRuntimeMusicGenerationProviders({ config: cfg }),
+      providerKey: "musicGenerationProviders",
+    })
+  ) {
     return null;
   }
 
@@ -523,16 +528,24 @@ export function createMusicGenerateTool(options?: {
     execute: async (_toolCallId, rawArgs) => {
       const args = rawArgs as Record<string, unknown>;
       const action = resolveAction(args);
-      const effectiveCfg =
-        applyMusicGenerationModelConfigDefaults(cfg, musicGenerationModelConfig) ?? cfg;
 
       if (action === "list") {
-        return createMusicGenerateListActionResult(effectiveCfg);
+        return createMusicGenerateListActionResult(cfg);
       }
 
       if (action === "status") {
         return createMusicGenerateStatusActionResult(options?.agentSessionKey);
       }
+
+      const musicGenerationModelConfig = resolveMusicGenerationModelConfigForTool({
+        cfg,
+        agentDir: options?.agentDir,
+      });
+      if (!musicGenerationModelConfig) {
+        throw new ToolInputError("No music-generation model configured.");
+      }
+      const effectiveCfg =
+        applyMusicGenerationModelConfigDefaults(cfg, musicGenerationModelConfig) ?? cfg;
 
       const duplicateGuardResult = createMusicGenerateDuplicateGuardResult(
         options?.agentSessionKey,

@@ -90,7 +90,7 @@ describe("buildOfficialChannelCatalog", () => {
           name: "openclaw-plugin-yuanbao",
           openclaw: expect.objectContaining({
             channel: expect.objectContaining({
-              id: "openclaw-plugin-yuanbao",
+              id: "yuanbao",
               label: "Yuanbao",
             }),
             install: {

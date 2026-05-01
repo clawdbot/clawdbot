@@ -93,6 +93,7 @@ vi.mock("../pi-tools.abort.js", () => ({
 }));
 
 vi.mock("../auth-profiles.js", () => ({
+  externalCliDiscoveryForProviderAuth: () => undefined,
   ensureAuthProfileStore: (agentDir?: string) => {
     if (!agentDir) {
       return { version: 1, profiles: {} };

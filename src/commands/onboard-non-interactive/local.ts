@@ -15,6 +15,7 @@ import {
   waitForGatewayReachable,
 } from "../onboard-helpers.js";
 import type { OnboardOptions } from "../onboard-types.js";
+import { preparePostConfigBundledRuntimeDeps } from "../post-config-runtime-deps.js";
 import { applyNonInteractiveGatewayConfig } from "./local/gateway-config.js";
 import {
   type GatewayHealthFailureDiagnostics,
@@ -209,6 +210,7 @@ export async function runNonInteractiveLocalSetup(params: {
     ...(baseHash !== undefined ? { baseHash } : {}),
   });
   logConfigUpdated(runtime);
+  await preparePostConfigBundledRuntimeDeps({ config: nextConfig, runtime });
 
   await ensureWorkspaceAndSessions(workspaceDir, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),

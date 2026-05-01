@@ -52,6 +52,7 @@ Available sections:
 Notes:
 
 - Choosing where the Gateway runs always updates `gateway.mode`. You can select "Continue" without other sections if that is all you need.
+- After local config writes, configure materializes newly required bundled plugin runtime dependencies. This is a narrow package-manager repair step, not a full `openclaw doctor` run. Remote gateway config does not install local plugin dependencies.
 - Channel-oriented services (Slack/Discord/Matrix/Microsoft Teams) prompt for channel/room allowlists during setup. You can enter names or IDs; the wizard resolves names to IDs when possible.
 - If you run the daemon install step, token auth requires a token, and `gateway.auth.token` is SecretRef-managed, configure validates the SecretRef but does not persist resolved plaintext token values into supervisor service environment metadata.
 - If token auth requires a token and the configured token SecretRef is unresolved, configure blocks daemon install with actionable remediation guidance.

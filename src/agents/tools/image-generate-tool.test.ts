@@ -297,6 +297,7 @@ describe("createImageGenerateTool", () => {
   });
 
   it("infers the canonical OpenAI image model from provider readiness without explicit config", () => {
+    vi.stubEnv("OPENAI_API_KEY", "openai-test");
     const isConfigured = vi.fn(({ agentDir }: { agentDir?: string }) => agentDir === "/tmp/agent");
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
       {

@@ -19,3 +19,15 @@ export function buildDeepSeekModelDefinition(
     api: "openai-completions",
   };
 }
+
+const DEEPSEEK_V4_MODEL_IDS = new Set(["deepseek-v4-flash", "deepseek-v4-pro"]);
+
+export function isDeepSeekV4ModelId(modelId: string): boolean {
+  return DEEPSEEK_V4_MODEL_IDS.has(modelId.toLowerCase());
+}
+
+export function isDeepSeekV4ModelRef(model: { provider?: string; id?: unknown }): boolean {
+  return (
+    model.provider === "deepseek" && typeof model.id === "string" && isDeepSeekV4ModelId(model.id)
+  );
+}

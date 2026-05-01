@@ -832,6 +832,146 @@ example
     expect(sorted[3]?.errors).toBe(1); // stopReason "error"
   });
 
+  it("captures UTC quarter-hour token usage buckets without proportional allocation", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-token-hourly-"));
+    const sessionFile = path.join(root, "session.jsonl");
+    const entries = [
+      {
+        type: "message",
+        timestamp: "2026-03-15T06:30:00.000Z",
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.2",
+          usage: {
+            input: 5,
+            output: 7,
+            cache_read: 3,
+            cache_creation_input_tokens: 2,
+            totalTokens: 25,
+            cost: { total: 0.025 },
+          },
+        },
+      },
+      {
+        type: "message",
+        timestamp: "2026-03-15T06:35:00.000Z",
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.2",
+          usage: {
+            input: 1,
+            output: 2,
+            cache_read: 3,
+            cache_creation_input_tokens: 4,
+            cost: { total: 0.01 },
+          },
+        },
+      },
+      {
+        type: "message",
+        timestamp: "2026-03-15T23:59:00.000Z",
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.2",
+          usage: { input: 2, output: 3, totalTokens: 9, cost: { total: 0.009 } },
+        },
+      },
+    ];
+
+    await fs.writeFile(
+      sessionFile,
+      entries.map((entry) => JSON.stringify(entry)).join("\n"),
+      "utf-8",
+    );
+
+    const summary = await loadSessionCostSummary({ sessionFile });
+    const tokenBuckets = summary?.utcQuarterHourTokenUsage;
+    expect(tokenBuckets).toBeDefined();
+    expect(tokenBuckets).toHaveLength(2);
+
+    const sorted = [...(tokenBuckets ?? [])].toSorted((a, b) => a.quarterIndex - b.quarterIndex);
+    expect(sorted[0]).toMatchObject({
+      date: "2026-03-15",
+      quarterIndex: 26,
+      input: 6,
+      output: 9,
+      cacheRead: 6,
+      cacheWrite: 6,
+      totalTokens: 35,
+    });
+    expect(sorted[0]?.totalCost).toBeCloseTo(0.035, 6);
+    expect(sorted[1]).toMatchObject({
+      date: "2026-03-15",
+      quarterIndex: 95,
+      input: 2,
+      output: 3,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 9,
+    });
+    expect(sorted[1]?.totalCost).toBeCloseTo(0.009, 6);
+  });
+
+  it("splits UTC quarter-hour token usage buckets across UTC day boundaries", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-token-midnight-"));
+    const sessionFile = path.join(root, "session.jsonl");
+    const entries = [
+      {
+        type: "message",
+        timestamp: "2026-03-15T23:59:00.000Z",
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.2",
+          usage: { input: 2, output: 3, totalTokens: 9, cost: { total: 0.009 } },
+        },
+      },
+      {
+        type: "message",
+        timestamp: "2026-03-16T00:00:00.000Z",
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.2",
+          usage: { input: 4, output: 5, totalTokens: 11, cost: { total: 0.011 } },
+        },
+      },
+    ];
+
+    await fs.writeFile(
+      sessionFile,
+      entries.map((entry) => JSON.stringify(entry)).join("\n"),
+      "utf-8",
+    );
+
+    const summary = await loadSessionCostSummary({ sessionFile });
+    expect(summary?.utcQuarterHourTokenUsage).toEqual([
+      {
+        date: "2026-03-15",
+        quarterIndex: 95,
+        input: 2,
+        output: 3,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 9,
+        totalCost: 0.009,
+      },
+      {
+        date: "2026-03-16",
+        quarterIndex: 0,
+        input: 4,
+        output: 5,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 11,
+        totalCost: 0.011,
+      },
+    ]);
+  });
+
   it("returns undefined utcQuarterHourMessageCounts when session has no messages", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-empty-hourly-"));
     const sessionFile = path.join(root, "session.jsonl");
@@ -840,6 +980,7 @@ example
 
     const summary = await loadSessionCostSummary({ sessionFile });
     expect(summary?.utcQuarterHourMessageCounts).toBeUndefined();
+    expect(summary?.utcQuarterHourTokenUsage).toBeUndefined();
   });
 
   it("preserves totals and cumulative values when downsampling timeseries", async () => {

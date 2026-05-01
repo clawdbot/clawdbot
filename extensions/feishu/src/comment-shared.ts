@@ -1,5 +1,4 @@
 import {
-  asOptionalRecord,
   hasNonEmptyString as sharedHasNonEmptyString,
   isRecord as sharedIsRecord,
   normalizeOptionalString,
@@ -24,8 +23,6 @@ export const readString = readStringValue;
 export const normalizeString = normalizeOptionalString;
 
 export const isRecord = sharedIsRecord;
-
-export const asRecord = asOptionalRecord;
 
 export const hasNonEmptyString = sharedHasNonEmptyString;
 
@@ -357,10 +354,6 @@ export function parseCommentContentElements(params: {
     linkedDocuments,
     botMentioned,
   };
-}
-
-export function extractCommentElementText(element: unknown): string | undefined {
-  return parseCommentContentElements({ elements: [element] }).plainText;
 }
 
 export function extractReplyText(

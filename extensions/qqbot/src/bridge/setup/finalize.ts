@@ -12,13 +12,6 @@ function isQQBotAccountConfigured(cfg: OpenClawConfig, accountId: string): boole
   return Boolean(account.appId && account.clientSecret);
 }
 
-export async function detectQQBotConfigured(
-  cfg: OpenClawConfig,
-  accountId: string,
-): Promise<boolean> {
-  return isQQBotAccountConfigured(cfg, accountId);
-}
-
 async function linkViaQrCode(params: {
   cfg: OpenClawConfig;
   accountId: string;

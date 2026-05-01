@@ -30,7 +30,6 @@ const secretRefKeyMock = vi.hoisted(() => vi.fn(() => "env:default:OPENCLAW_GATE
 const randomTokenMock = vi.hoisted(() => vi.fn(() => "generated-token"));
 
 vi.mock("./gateway-install-token.persist.runtime.js", () => ({
-  readConfigFileSnapshot: readConfigFileSnapshotMock,
   readConfigFileSnapshotForWrite: readConfigFileSnapshotForWriteMock,
   replaceConfigFile: replaceConfigFileMock,
 }));

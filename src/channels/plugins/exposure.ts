@@ -21,9 +21,3 @@ export function isChannelVisibleInSetup(
 ): boolean {
   return resolveChannelExposure(meta).setup;
 }
-
-export function isChannelVisibleInDocs(
-  meta: Pick<ChannelMeta, "exposure" | "showConfigured" | "showInSetup">,
-): boolean {
-  return resolveChannelExposure(meta).docs;
-}

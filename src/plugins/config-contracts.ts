@@ -143,18 +143,19 @@ export function resolvePluginConfigContractsById(params: {
       const existing = matches.get(pluginId);
       const shouldHydrateBundledMatch =
         existing &&
-        !existing.configContracts.secretInputs &&
         ((params.fallbackToBundledMetadataForResolvedBundled && existing.origin === "bundled") ||
           fallbackBundledPluginIds.has(pluginId));
       if (shouldHydrateBundledMatch) {
         const bundled = findBundledPluginMetadataById(pluginId);
-        if (bundled?.manifest.configContracts?.secretInputs) {
+        if (bundled?.manifest.configContracts) {
           matches.set(pluginId, {
             origin: fallbackBundledPluginIds.has(pluginId) ? "bundled" : existing.origin,
             configContracts: {
               ...bundled.manifest.configContracts,
               ...existing.configContracts,
-              secretInputs: bundled.manifest.configContracts.secretInputs,
+              ...(bundled.manifest.configContracts.secretInputs
+                ? { secretInputs: bundled.manifest.configContracts.secretInputs }
+                : {}),
             },
           });
         }

@@ -106,6 +106,7 @@ export async function resolveTelegramInboundBody(params: {
   senderUsername: string;
   sessionKey?: string;
   resolvedThreadId?: number;
+  replyThreadId?: number;
   routeAgentId?: string;
   effectiveGroupAllow: NormalizedAllowFrom;
   effectiveDmAllow: NormalizedAllowFrom;
@@ -129,6 +130,7 @@ export async function resolveTelegramInboundBody(params: {
     senderUsername,
     sessionKey,
     resolvedThreadId,
+    replyThreadId,
     routeAgentId,
     effectiveGroupAllow,
     effectiveDmAllow,
@@ -216,6 +218,12 @@ export async function resolveTelegramInboundBody(params: {
     try {
       const { transcribeFirstAudio } = await loadMediaUnderstandingRuntime();
       const tempCtx: MsgContext = {
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: `telegram:${chatId}`,
+        AccountId: accountId,
+        MessageThreadId: replyThreadId,
         MediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
         MediaTypes:
           allMedia.length > 0

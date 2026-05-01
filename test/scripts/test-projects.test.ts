@@ -602,6 +602,20 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes commitment model-selection runtime edits away from broad gateway dependents", () => {
+    expect(
+      resolveChangedTestTargetPlan([
+        "src/agents/model-selection.test.ts",
+        "src/commitments/model-selection.runtime.ts",
+        "src/commitments/runtime.test.ts",
+        "src/commitments/runtime.ts",
+      ]),
+    ).toEqual({
+      mode: "targets",
+      targets: ["src/agents/model-selection.test.ts", "src/commitments/runtime.test.ts"],
+    });
+  });
+
   it("routes provider auth choice edits to focused auth-choice tests", () => {
     expect(resolveChangedTestTargetPlan(["src/plugins/provider-auth-choice.ts"])).toEqual({
       mode: "targets",

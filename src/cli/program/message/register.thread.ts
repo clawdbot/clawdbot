@@ -77,5 +77,3 @@ export function registerMessageThreadCommands(message: Command, helpers: Message
       await helpers.runMessageAction("thread-reply", opts);
     });
 }
-
-export const __test__ = { resolveThreadCreateRequest };

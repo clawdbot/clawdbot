@@ -2,6 +2,12 @@ import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES,
   type RealtimeVoiceAgentConsultToolPolicy,
 } from "openclaw/plugin-sdk/realtime-voice";
+import {
+  buildSecretInputSchema,
+  hasConfiguredSecretInput,
+  normalizeResolvedSecretInputString,
+  type SecretInput,
+} from "openclaw/plugin-sdk/secret-input";
 import { z } from "openclaw/plugin-sdk/zod";
 import { TtsAutoSchema, TtsConfigSchema, TtsModeSchema, TtsProviderSchema } from "../api.js";
 import { deepMergeDefined } from "./deep-merge.js";
@@ -39,6 +45,8 @@ export type InboundPolicy = z.infer<typeof InboundPolicySchema>;
 // Provider-Specific Configuration
 // -----------------------------------------------------------------------------
 
+const SecretInputSchema = buildSecretInputSchema();
+
 export const TelnyxConfigSchema = z
   .object({
     /** Telnyx API v2 key */
@@ -56,10 +64,12 @@ export const TwilioConfigSchema = z
     /** Twilio Account SID */
     accountSid: z.string().min(1).optional(),
     /** Twilio Auth Token */
-    authToken: z.string().min(1).optional(),
+    authToken: SecretInputSchema.optional(),
   })
   .strict();
-export type TwilioConfig = z.infer<typeof TwilioConfigSchema>;
+export type TwilioConfig = Omit<z.infer<typeof TwilioConfigSchema>, "authToken"> & {
+  authToken?: SecretInput;
+};
 
 export const PlivoConfigSchema = z
   .object({
@@ -215,6 +225,39 @@ export type VoiceCallRealtimeProvidersConfig = z.infer<
 export const VoiceCallRealtimeToolPolicySchema = z.enum(REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES);
 export type VoiceCallRealtimeToolPolicy = RealtimeVoiceAgentConsultToolPolicy;
 
+export const VoiceCallRealtimeFastContextSourceSchema = z.enum(["memory", "sessions"]);
+export type VoiceCallRealtimeFastContextSource = z.infer<
+  typeof VoiceCallRealtimeFastContextSourceSchema
+>;
+
+export const VoiceCallRealtimeFastContextConfigSchema = z
+  .object({
+    /** Enable bounded memory/session lookup before the full consult agent. */
+    enabled: z.boolean().default(false),
+    /** Hard deadline for the fast context lookup. */
+    timeoutMs: z.number().int().positive().default(800),
+    /** Maximum memory/session hits to inject into the realtime tool result. */
+    maxResults: z.number().int().positive().default(3),
+    /** Indexed sources used by the fast context lookup. */
+    sources: z
+      .array(VoiceCallRealtimeFastContextSourceSchema)
+      .min(1)
+      .default(["memory", "sessions"]),
+    /** Fall back to the full agent consult when fast context has no answer. */
+    fallbackToConsult: z.boolean().default(false),
+  })
+  .strict()
+  .default({
+    enabled: false,
+    timeoutMs: 800,
+    maxResults: 3,
+    sources: ["memory", "sessions"],
+    fallbackToConsult: false,
+  });
+export type VoiceCallRealtimeFastContextConfig = z.infer<
+  typeof VoiceCallRealtimeFastContextConfigSchema
+>;
+
 export const VoiceCallStreamingProvidersConfigSchema = z
   .record(z.string(), z.record(z.string(), z.unknown()))
   .default({});
@@ -236,6 +279,8 @@ export const VoiceCallRealtimeConfigSchema = z
     toolPolicy: VoiceCallRealtimeToolPolicySchema.default("safe-read-only"),
     /** Tool definitions exposed to the realtime provider. */
     tools: z.array(RealtimeToolSchema).default([]),
+    /** Low-latency memory/session context for the consult tool. */
+    fastContext: VoiceCallRealtimeFastContextConfigSchema,
     /** Provider-owned raw config blobs keyed by provider id. */
     providers: VoiceCallRealtimeProvidersConfigSchema,
   })
@@ -245,6 +290,13 @@ export const VoiceCallRealtimeConfigSchema = z
     instructions: DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS,
     toolPolicy: "safe-read-only",
     tools: [],
+    fastContext: {
+      enabled: false,
+      timeoutMs: 800,
+      maxResults: 3,
+      sources: ["memory", "sessions"],
+      fallbackToConsult: false,
+    },
     providers: {},
   });
 export type VoiceCallRealtimeConfig = z.infer<typeof VoiceCallRealtimeConfigSchema>;
@@ -393,13 +445,15 @@ export const VoiceCallConfigSchema = z
   .strict();
 
 export type VoiceCallConfig = z.infer<typeof VoiceCallConfigSchema>;
-type DeepPartial<T> =
-  T extends Array<infer U>
+type DeepPartial<T> = T extends SecretInput
+  ? T
+  : T extends Array<infer U>
     ? DeepPartial<U>[]
     : T extends object
       ? { [K in keyof T]?: DeepPartial<T[K]> }
       : T;
 export type VoiceCallConfigInput = DeepPartial<VoiceCallConfig>;
+const TWILIO_AUTH_TOKEN_PATH = "plugins.entries.voice-call.config.twilio.authToken";
 
 // -----------------------------------------------------------------------------
 // Configuration Helpers
@@ -458,6 +512,15 @@ function sanitizeVoiceCallProviderConfigs(
   );
 }
 
+export function resolveTwilioAuthToken(
+  config: Pick<VoiceCallConfig, "twilio">,
+): string | undefined {
+  return normalizeResolvedSecretInputString({
+    value: config.twilio?.authToken,
+    path: TWILIO_AUTH_TOKEN_PATH,
+  });
+}
+
 export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallConfig {
   const defaults = cloneDefaultVoiceCallConfig();
   const serve = { ...defaults.serve, ...config.serve };
@@ -469,6 +532,11 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
   const realtimeProviders = sanitizeVoiceCallProviderConfigs(
     config.realtime?.providers ?? defaults.realtime.providers,
   );
+  const realtimeFastContext = {
+    ...defaults.realtime.fastContext,
+    ...config.realtime?.fastContext,
+    sources: config.realtime?.fastContext?.sources ?? defaults.realtime.fastContext.sources,
+  };
   return {
     ...defaults,
     ...config,
@@ -499,6 +567,7 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
         defaultRealtimeStreamPathForServePath(serve.path ?? defaults.serve.path),
       tools:
         (config.realtime?.tools as RealtimeToolConfig[] | undefined) ?? defaults.realtime.tools,
+      fastContext: realtimeFastContext,
       providers: realtimeProviders,
     },
     tts: normalizeVoiceCallTtsConfig(defaults.tts, config.tts),
@@ -608,7 +677,7 @@ export function validateProviderConfig(config: VoiceCallConfig): {
         "plugins.entries.voice-call.config.twilio.accountSid is required (or set TWILIO_ACCOUNT_SID env)",
       );
     }
-    if (!config.twilio?.authToken) {
+    if (!hasConfiguredSecretInput(config.twilio?.authToken)) {
       errors.push(
         "plugins.entries.voice-call.config.twilio.authToken is required (or set TWILIO_AUTH_TOKEN env)",
       );

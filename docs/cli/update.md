@@ -82,7 +82,11 @@ install method aligned:
 - `beta` → prefers npm dist-tag `beta`, but falls back to `latest` when beta is
   missing or older than the current stable release.
 
-The Gateway core auto-updater (when enabled via config) reuses this same update path.
+The Gateway core auto-updater (when enabled via config) launches the CLI update path
+outside the live Gateway request handler. Control-plane `update.run` package-manager
+updates force a non-deferred update restart after the package swap, because the old
+Gateway process may still have in-memory chunks that point at files removed by the
+new package.
 
 For package-manager installs, `openclaw update` resolves the target package
 version before invoking the package manager. npm global installs use a staged
@@ -151,7 +155,7 @@ If an exact pinned npm plugin update resolves to an artifact whose integrity dif
 <Note>
 Post-update plugin sync failures fail the update result and stop restart follow-up work. Fix the plugin install or update error, then rerun `openclaw update`.
 
-When the updated Gateway starts, enabled bundled plugin runtime dependencies are staged before plugin activation. Update-triggered restarts drain any active runtime-dependency staging before closing the Gateway, so service-manager restarts do not interrupt an in-flight npm install.
+When the updated Gateway starts, enabled bundled plugin runtime dependencies are staged before plugin activation. Package-manager `update.run` restarts bypass the normal idle deferral after the package tree has been swapped, so the old process cannot keep lazy-loading removed chunks. Service-manager restarts still drain runtime-dependency staging before closing the Gateway.
 
 If pnpm bootstrap still fails, the updater stops early with a package-manager-specific error instead of trying `npm run build` inside the checkout.
 </Note>

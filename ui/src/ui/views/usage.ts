@@ -8,9 +8,8 @@ import {
   formatCost,
   formatIsoDate,
   formatTokens,
-  getZonedHour,
   renderUsageMosaic,
-  setToHourEnd,
+  sessionTouchesSelectedHours,
 } from "./usage-metrics.ts";
 import {
   addQueryToken,
@@ -171,35 +170,11 @@ export function renderUsage(props: UsageProps) {
         })
       : sortedSessions;
 
-  const sessionTouchesHours = (session: UsageSessionEntry, hours: number[]): boolean => {
-    if (hours.length === 0) {
-      return true;
-    }
-    const usage = session.usage;
-    const start = usage?.firstActivity ?? session.updatedAt;
-    const end = usage?.lastActivity ?? session.updatedAt;
-    if (!start || !end) {
-      return false;
-    }
-    const startMs = Math.min(start, end);
-    const endMs = Math.max(start, end);
-    let cursor = startMs;
-    while (cursor <= endMs) {
-      const date = new Date(cursor);
-      const hour = getZonedHour(date, filters.timeZone);
-      if (hours.includes(hour)) {
-        return true;
-      }
-      const nextHour = setToHourEnd(date, filters.timeZone);
-      const nextMs = Math.min(nextHour.getTime(), endMs);
-      cursor = nextMs + 1;
-    }
-    return false;
-  };
-
   const hourFilteredSessions =
     filters.selectedHours.length > 0
-      ? dayFilteredSessions.filter((s) => sessionTouchesHours(s, filters.selectedHours))
+      ? dayFilteredSessions.filter((s) =>
+          sessionTouchesSelectedHours(s, filters.selectedHours, filters.timeZone),
+        )
       : dayFilteredSessions;
 
   // Filter sessions by query (client-side)

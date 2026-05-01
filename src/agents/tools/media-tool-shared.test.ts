@@ -1,7 +1,11 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveMediaToolLocalRoots, resolveModelFromRegistry } from "./media-tool-shared.js";
+import {
+  hasGenerationToolAvailability,
+  resolveMediaToolLocalRoots,
+  resolveModelFromRegistry,
+} from "./media-tool-shared.js";
 
 function normalizeHostPath(value: string): string {
   return path.normalize(path.resolve(value));
@@ -97,4 +101,49 @@ describe("resolveModelFromRegistry", () => {
     ]);
     expect(result).toBe(foundModel);
   }, 180_000);
+});
+
+describe("hasGenerationToolAvailability", () => {
+  it("allows generation tools for runtime providers configured without auth", () => {
+    expect(
+      hasGenerationToolAvailability({
+        providerKey: "imageGenerationProviders",
+        providers: [
+          {
+            id: "local-image",
+            defaultModel: "workflow",
+            isConfigured: () => true,
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("omits generation tools when runtime providers are not configured", () => {
+    expect(
+      hasGenerationToolAvailability({
+        providerKey: "imageGenerationProviders",
+        providers: [
+          {
+            id: "local-image",
+            defaultModel: "workflow",
+            isConfigured: () => false,
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps explicit model config sufficient for generation tool registration", () => {
+    const loadProviders = vi.fn(() => []);
+
+    expect(
+      hasGenerationToolAvailability({
+        providerKey: "imageGenerationProviders",
+        modelConfig: { primary: "local-image/workflow" },
+        providers: loadProviders,
+      }),
+    ).toBe(true);
+    expect(loadProviders).not.toHaveBeenCalled();
+  });
 });

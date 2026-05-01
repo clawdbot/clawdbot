@@ -35,7 +35,8 @@ start_kitchen_sink_clawhub_fixture_server() {
   local server_pid="$!"
   echo "$server_pid" >"$server_pid_file"
 
-  for _ in $(seq 1 100); do
+  local wait_attempts="${OPENCLAW_CLAWHUB_FIXTURE_WAIT_ATTEMPTS:-600}"
+  for _ in $(seq 1 "$wait_attempts"); do
     if [[ -s "$server_port_file" ]]; then
       export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$server_port_file")"
       trap 'if [[ -f "'"$server_pid_file"'" ]]; then kill "$(cat "'"$server_pid_file"'")" 2>/dev/null || true; fi' EXIT
@@ -49,6 +50,7 @@ start_kitchen_sink_clawhub_fixture_server() {
   done
 
   cat "$server_log"
+  ps -p "$server_pid" -o pid=,stat=,etime=,command= || true
   echo "Timed out waiting for kitchen-sink ClawHub fixture server." >&2
   return 1
 }
@@ -75,8 +77,8 @@ assert_kitchen_sink_removed() {
 
 run_success_scenario() {
   echo "Testing ${KITCHEN_SINK_LABEL} install from ${KITCHEN_SINK_SPEC}..."
-  configure_kitchen_sink_runtime
   run_logged_print "kitchen-sink-install-${KITCHEN_SINK_LABEL}" node "$OPENCLAW_ENTRY" plugins install "$KITCHEN_SINK_SPEC"
+  configure_kitchen_sink_runtime
   run_logged_print "kitchen-sink-enable-${KITCHEN_SINK_LABEL}" node "$OPENCLAW_ENTRY" plugins enable "$KITCHEN_SINK_ID"
   node "$OPENCLAW_ENTRY" plugins list --json >"/tmp/kitchen-sink-${KITCHEN_SINK_LABEL}-plugins.json"
   node "$OPENCLAW_ENTRY" plugins inspect "$KITCHEN_SINK_ID" --json >"/tmp/kitchen-sink-${KITCHEN_SINK_LABEL}-inspect.json"

@@ -33,6 +33,7 @@ openclaw plugins list --verbose
 openclaw plugins list --json
 openclaw plugins install <path-or-spec>
 openclaw plugins inspect <id>
+openclaw plugins inspect <id> --runtime
 openclaw plugins inspect <id> --json
 openclaw plugins inspect --all
 openclaw plugins info <id>
@@ -234,7 +235,7 @@ directory remains inert so normal packaged installs still use compiled dist.
 
 For runtime hook debugging:
 
-- `openclaw plugins inspect <id> --json` shows registered hooks and diagnostics from a module-loaded inspection pass.
+- `openclaw plugins inspect <id> --runtime --json` shows registered hooks and diagnostics from a module-loaded inspection pass. Runtime inspection never downloads missing bundled runtime dependencies; use `openclaw plugins deps --repair` when repair is needed.
 - `openclaw gateway status --deep --require-rpc` confirms the reachable Gateway, service/process hints, config path, and RPC health.
 - Non-bundled conversation hooks (`llm_input`, `llm_output`, `before_agent_finalize`, `agent_end`) require `plugins.entries.<id>.hooks.allowConversationAccess=true`.
 
@@ -268,6 +269,8 @@ openclaw plugins deps --json
 `plugins deps` inspects the packaged runtime dependency stage for OpenClaw-owned bundled plugins selected by plugin config, enabled/configured channels, configured model providers, or bundled manifest defaults. It is not the install/update path for third-party npm or ClawHub plugins.
 
 Use `--repair` when a packaged install reports missing bundled runtime dependencies during Gateway startup or `plugins doctor`. Repair installs only missing enabled bundled-plugin deps with lifecycle scripts disabled. Use `--prune` to remove stale unknown external runtime-dependency roots left behind by older packaged layouts.
+
+For the full plan, staging, and repair lifecycle, see [Plugin dependency resolution](/plugins/dependency-resolution).
 
 ### Uninstall
 
@@ -319,10 +322,11 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
 
 ```bash
 openclaw plugins inspect <id>
+openclaw plugins inspect <id> --runtime
 openclaw plugins inspect <id> --json
 ```
 
-Deep introspection for a single plugin. Shows identity, load status, source, registered capabilities, hooks, tools, commands, services, gateway methods, HTTP routes, policy flags, diagnostics, install metadata, bundle capabilities, and any detected MCP or LSP server support.
+Inspect shows identity, load status, source, manifest capabilities, policy flags, diagnostics, install metadata, bundle capabilities, and any detected MCP or LSP server support without importing plugin runtime by default. Add `--runtime` to load the plugin module and include registered hooks, tools, commands, services, gateway methods, and HTTP routes. Runtime inspection fails with a repair hint when bundled runtime dependencies are missing; use `openclaw plugins deps --repair` to repair them explicitly.
 
 Each plugin is classified by what it actually registers at runtime:
 

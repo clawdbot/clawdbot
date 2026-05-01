@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { t } from "../../i18n/index.ts";
@@ -132,6 +133,8 @@ export type ChatProps = {
 
 const pinnedMessagesMap = new Map<string, PinnedMessages>();
 const deletedMessagesMap = new Map<string, DeletedMessages>();
+const SLASH_MENU_LISTBOX_ID = "chat-slash-menu-listbox";
+const SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID = "chat-slash-active-announcement";
 
 function getPinnedMessages(sessionKey: string): PinnedMessages {
   return getOrCreateSessionCacheValue(
@@ -478,6 +481,63 @@ function selectSlashArg(
   }
 }
 
+function slashOptionIdSegment(value: string): string {
+  return (
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/gu, "-")
+      .replace(/^-+|-+$/gu, "") || "item"
+  );
+}
+
+function getSlashCommandOptionId(cmd: SlashCommandDef): string {
+  return `chat-slash-option-command-${slashOptionIdSegment(cmd.name)}`;
+}
+
+function getSlashArgOptionId(commandName: string, arg: string): string {
+  return `chat-slash-option-arg-${slashOptionIdSegment(commandName)}-${slashOptionIdSegment(arg)}`;
+}
+
+function isSlashMenuVisible(): boolean {
+  if (!vs.slashMenuOpen) {
+    return false;
+  }
+  if (vs.slashMenuMode === "args") {
+    return Boolean(vs.slashMenuCommand && vs.slashMenuArgItems.length > 0);
+  }
+  return vs.slashMenuItems.length > 0;
+}
+
+function getActiveSlashMenuOptionId(): string | null {
+  if (!isSlashMenuVisible()) {
+    return null;
+  }
+  if (vs.slashMenuMode === "args") {
+    const commandName = vs.slashMenuCommand?.name;
+    const arg = vs.slashMenuArgItems[vs.slashMenuIndex];
+    return commandName && arg ? getSlashArgOptionId(commandName, arg) : null;
+  }
+  const cmd = vs.slashMenuItems[vs.slashMenuIndex];
+  return cmd ? getSlashCommandOptionId(cmd) : null;
+}
+
+function getActiveSlashMenuOptionLabel(): string {
+  if (!isSlashMenuVisible()) {
+    return "";
+  }
+  if (vs.slashMenuMode === "args") {
+    const commandName = vs.slashMenuCommand?.name;
+    const arg = vs.slashMenuArgItems[vs.slashMenuIndex];
+    return commandName && arg ? `/${commandName} ${arg}` : "";
+  }
+  const cmd = vs.slashMenuItems[vs.slashMenuIndex];
+  if (!cmd) {
+    return "";
+  }
+  const command = `/${cmd.name}${cmd.args ? ` ${cmd.args}` : ""}`;
+  return `${command} ${cmd.description}`;
+}
+
 function tokenEstimate(draft: string): string | null {
   if (draft.length < 100) {
     return null;
@@ -605,7 +665,12 @@ function renderSlashMenu(
   // Arg-picker mode: show options for the selected command
   if (vs.slashMenuMode === "args" && vs.slashMenuCommand && vs.slashMenuArgItems.length > 0) {
     return html`
-      <div class="slash-menu" role="listbox" aria-label="Command arguments">
+      <div
+        id=${SLASH_MENU_LISTBOX_ID}
+        class="slash-menu"
+        role="listbox"
+        aria-label="Command arguments"
+      >
         <div class="slash-menu-group">
           <div class="slash-menu-group__label">
             /${vs.slashMenuCommand.name} ${vs.slashMenuCommand.description}
@@ -613,6 +678,7 @@ function renderSlashMenu(
           ${vs.slashMenuArgItems.map(
             (arg, i) => html`
               <div
+                id=${getSlashArgOptionId(vs.slashMenuCommand?.name ?? "", arg)}
                 class="slash-menu-item ${i === vs.slashMenuIndex ? "slash-menu-item--active" : ""}"
                 role="option"
                 aria-selected=${i === vs.slashMenuIndex}
@@ -666,6 +732,7 @@ function renderSlashMenu(
         ${entries.map(
           ({ cmd, globalIdx }) => html`
             <div
+              id=${getSlashCommandOptionId(cmd)}
               class="slash-menu-item ${globalIdx === vs.slashMenuIndex
                 ? "slash-menu-item--active"
                 : ""}"
@@ -696,7 +763,7 @@ function renderSlashMenu(
   const hiddenCount = vs.slashMenuExpanded ? 0 : getHiddenCommandCount();
 
   return html`
-    <div class="slash-menu" role="listbox" aria-label="Slash commands">
+    <div id=${SLASH_MENU_LISTBOX_ID} class="slash-menu" role="listbox" aria-label="Slash commands">
       ${sections}
       ${hiddenCount > 0
         ? html`<button
@@ -1032,6 +1099,9 @@ export function renderChat(props: ChatProps) {
     updateSlashMenu(target.value, requestUpdate);
     props.onDraftChange(target.value);
   };
+  const slashMenuVisible = isSlashMenuVisible();
+  const activeSlashMenuOptionId = getActiveSlashMenuOptionId();
+  const activeSlashMenuOptionLabel = getActiveSlashMenuOptionLabel();
 
   return html`
     <section
@@ -1142,17 +1212,31 @@ export function renderChat(props: ChatProps) {
             `
           : nothing}
 
-        <textarea
-          ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
-          .value=${props.draft}
-          dir=${detectTextDirection(props.draft)}
-          ?disabled=${!props.connected}
-          @keydown=${handleKeyDown}
-          @input=${handleInput}
-          @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
-          placeholder=${placeholder}
-          rows="1"
-        ></textarea>
+        <div class="agent-chat__composer-combobox">
+          <textarea
+            ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
+            .value=${props.draft}
+            dir=${detectTextDirection(props.draft)}
+            ?disabled=${!props.connected}
+            aria-autocomplete="list"
+            aria-controls=${ifDefined(slashMenuVisible ? SLASH_MENU_LISTBOX_ID : undefined)}
+            aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
+            aria-describedby=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
+            @keydown=${handleKeyDown}
+            @input=${handleInput}
+            @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
+            placeholder=${placeholder}
+            rows="1"
+          ></textarea>
+          <span
+            id=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
+            class="agent-chat__sr-only"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            >${activeSlashMenuOptionLabel}</span
+          >
+        </div>
 
         <div class="agent-chat__toolbar">
           <div class="agent-chat__toolbar-left">

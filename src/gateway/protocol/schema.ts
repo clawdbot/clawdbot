@@ -1,5 +1,6 @@
 export * from "./schema/agent.js";
 export * from "./schema/agents-models-skills.js";
+export * from "./schema/artifacts.js";
 export * from "./schema/channels.js";
 export * from "./schema/commands.js";
 export * from "./schema/config.js";

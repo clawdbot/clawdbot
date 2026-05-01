@@ -1,4 +1,4 @@
-export function flattenStringOnlyCompletionContent(content: unknown): unknown {
+function flattenStringOnlyCompletionContent(content: unknown): unknown {
   if (!Array.isArray(content)) {
     return content;
   }

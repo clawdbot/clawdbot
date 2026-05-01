@@ -330,18 +330,3 @@ export function markdownToStory(markdown: string): Story {
 
   return story;
 }
-
-/**
- * Convert plain text to simple story (no markdown parsing)
- */
-export function textToStory(text: string): Story {
-  return [{ inline: [text] }];
-}
-
-/**
- * Check if text contains markdown formatting
- */
-export function hasMarkdown(text: string): boolean {
-  // Check for common markdown patterns
-  return /(\*\*|__|~~|`|^#{1,6}\s|^```|^\s*[-*]\s|\[.*\]\(.*\)|^>\s)/m.test(text);
-}

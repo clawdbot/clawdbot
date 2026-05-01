@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 
 export const DEFAULT_COMMITMENT_EXTRACTION_DEBOUNCE_MS = 15_000;
 export const DEFAULT_COMMITMENT_BATCH_MAX_ITEMS = 8;
+export const DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS = 64;
 export const DEFAULT_COMMITMENT_CONFIDENCE_THRESHOLD = 0.72;
 export const DEFAULT_COMMITMENT_CARE_CONFIDENCE_THRESHOLD = 0.86;
 export const DEFAULT_COMMITMENT_EXTRACTION_TIMEOUT_SECONDS = 45;
@@ -16,6 +17,7 @@ export type ResolvedCommitmentsConfig = {
   extraction: {
     debounceMs: number;
     batchMaxItems: number;
+    queueMaxItems: number;
     confidenceThreshold: number;
     careConfidenceThreshold: number;
     timeoutSeconds: number;
@@ -36,6 +38,7 @@ export function resolveCommitmentsConfig(cfg?: OpenClawConfig): ResolvedCommitme
     extraction: {
       debounceMs: DEFAULT_COMMITMENT_EXTRACTION_DEBOUNCE_MS,
       batchMaxItems: DEFAULT_COMMITMENT_BATCH_MAX_ITEMS,
+      queueMaxItems: DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS,
       confidenceThreshold: DEFAULT_COMMITMENT_CONFIDENCE_THRESHOLD,
       careConfidenceThreshold: DEFAULT_COMMITMENT_CARE_CONFIDENCE_THRESHOLD,
       timeoutSeconds: DEFAULT_COMMITMENT_EXTRACTION_TIMEOUT_SECONDS,

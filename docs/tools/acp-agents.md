@@ -41,7 +41,8 @@ directly to existing OpenClaw channel conversations, use
 
 Usually yes. Fresh installs ship the bundled `acpx` runtime plugin enabled
 by default with a plugin-local pinned `acpx` binary that OpenClaw probes
-and self-repairs on startup. Run `/acp doctor` for a readiness check.
+and self-repairs immediately after the Gateway HTTP listener is live. Run
+`/acp doctor` for a readiness check.
 
 OpenClaw only teaches agents about ACP spawning when ACP is **truly
 usable**: ACP must be enabled, dispatch must not be disabled, the current

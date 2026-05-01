@@ -255,6 +255,20 @@ async function waitForSignalDaemonReady(params: {
   });
 }
 
+const SIGNAL_ATTACHMENT_RPC_RESPONSE_HEADROOM_BYTES = 64 * 1024;
+const SIGNAL_BASE64_OVERHEAD_NUMERATOR = 4;
+const SIGNAL_BASE64_OVERHEAD_DENOMINATOR = 3;
+
+function deriveSignalAttachmentRpcMaxResponseBytes(maxBytes: number): number | undefined {
+  if (!Number.isFinite(maxBytes) || maxBytes <= 0) {
+    return undefined;
+  }
+  const base64Bytes = Math.ceil(
+    (maxBytes * SIGNAL_BASE64_OVERHEAD_NUMERATOR) / SIGNAL_BASE64_OVERHEAD_DENOMINATOR,
+  );
+  return base64Bytes + SIGNAL_ATTACHMENT_RPC_RESPONSE_HEADROOM_BYTES;
+}
+
 async function fetchAttachment(params: {
   baseUrl: string;
   account?: string;
@@ -288,6 +302,7 @@ async function fetchAttachment(params: {
 
   const result = await signalRpcRequest<{ data?: string }>("getAttachment", rpcParams, {
     baseUrl: params.baseUrl,
+    maxResponseBytes: deriveSignalAttachmentRpcMaxResponseBytes(params.maxBytes),
   });
   if (!result?.data) {
     return null;
@@ -489,6 +504,8 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       account,
       abortSignal: daemonLifecycle.abortSignal,
       runtime,
+      // signal-cli can keep the SSE event endpoint idle until the next inbound event.
+      timeoutMs: 0,
       policy: opts.reconnectPolicy,
       onEvent: (event) => {
         void handleEvent(event).catch((err) => {

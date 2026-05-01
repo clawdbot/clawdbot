@@ -5,6 +5,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/ag
 import {
   type AuthProfileCredential,
   type AuthProfileEligibilityReasonCode,
+  externalCliDiscoveryScoped,
   ensureAuthProfileStore,
   listProfilesForProvider,
   resolveAuthProfileDisplayLabel,
@@ -256,7 +257,14 @@ export async function buildProbeTargets(params: {
   options: AuthProbeOptions;
 }): Promise<{ targets: AuthProbeTarget[]; results: AuthProbeResult[] }> {
   const { cfg, agentDir, providers, modelCandidates, options, workspaceDir } = params;
-  const store = ensureAuthProfileStore(agentDir);
+  const store = ensureAuthProfileStore(agentDir, {
+    externalCli: externalCliDiscoveryScoped({
+      config: cfg,
+      allowKeychainPrompt: false,
+      providerIds: providers,
+      profileIds: options.profileIds,
+    }),
+  });
   const providerFilter = options.provider?.trim();
   const providerFilterKey = providerFilter ? normalizeProviderId(providerFilter) : null;
   const profileFilter = new Set((options.profileIds ?? []).map((id) => id.trim()).filter(Boolean));

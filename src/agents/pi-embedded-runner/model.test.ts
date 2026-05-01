@@ -60,9 +60,6 @@ vi.mock("../model-suppression.js", () => {
       ) {
         return true;
       }
-      if (provider === "openai-codex" && id?.trim().toLowerCase() === "gpt-5.4-mini") {
-        return true;
-      }
       return (
         (provider === "qwen" || provider === "modelstudio") &&
         id?.trim().toLowerCase() === "qwen3.6-plus" &&
@@ -76,9 +73,6 @@ vi.mock("../model-suppression.js", () => {
           provider === "openai-codex") &&
         id?.trim().toLowerCase() === "gpt-5.3-codex-spark"
       ) {
-        return true;
-      }
-      if (provider === "openai-codex" && id?.trim().toLowerCase() === "gpt-5.4-mini") {
         return true;
       }
       return false;
@@ -98,9 +92,6 @@ vi.mock("../model-suppression.js", () => {
         isQwenCodingPlanBaseUrl(resolveConfiguredQwenBaseUrl(config))
       ) {
         return "Unknown model: qwen/qwen3.6-plus. qwen3.6-plus is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint or choose qwen/qwen3.5-plus.";
-      }
-      if (provider === "openai-codex" && id?.trim().toLowerCase() === "gpt-5.4-mini") {
-        return "Unknown model: openai-codex/gpt-5.4-mini. gpt-5.4-mini is not supported by the OpenAI Codex OAuth route. Use openai/gpt-5.4-mini with an OpenAI API key or openai-codex/gpt-5.5 with Codex OAuth.";
       }
       if (
         (provider === "openai" ||
@@ -369,7 +360,7 @@ describe("resolveModel", () => {
     );
   });
 
-  it("#74451: suppresses explicitly configured openai-codex/gpt-5.4-mini despite inline entry", () => {
+  it("#74451: resolves explicitly configured openai-codex/gpt-5.4-mini inline entries", () => {
     const cfg = {
       models: {
         providers: {
@@ -391,10 +382,14 @@ describe("resolveModel", () => {
 
     const result = resolveModelForTest("openai-codex", "gpt-5.4-mini", "/tmp/agent", cfg);
 
-    expect(result.model).toBeUndefined();
-    expect(result.error).toBe(
-      "Unknown model: openai-codex/gpt-5.4-mini. gpt-5.4-mini is not supported by the OpenAI Codex OAuth route. Use openai/gpt-5.4-mini with an OpenAI API key or openai-codex/gpt-5.5 with Codex OAuth.",
-    );
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4-mini",
+      api: "openai-codex-responses",
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+    });
   });
 
   it("normalizes Google fallback baseUrls for custom providers", () => {
@@ -1542,15 +1537,17 @@ describe("resolveModel", () => {
     });
   });
 
-  it("does not build an openai-codex fallback for unsupported gpt-5.4-mini", () => {
+  it("builds an openai-codex fallback for gpt-5.4-mini", () => {
     mockOpenAICodexTemplateModel(discoverModels);
 
     const result = resolveModelForTest("openai-codex", "gpt-5.4-mini", "/tmp/agent");
 
-    expect(result.model).toBeUndefined();
-    expect(result.error).toBe(
-      "Unknown model: openai-codex/gpt-5.4-mini. gpt-5.4-mini is not supported by the OpenAI Codex OAuth route. Use openai/gpt-5.4-mini with an OpenAI API key or openai-codex/gpt-5.5 with Codex OAuth.",
-    );
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      ...buildOpenAICodexForwardCompatExpectation("gpt-5.4-mini"),
+      contextWindow: 400_000,
+      contextTokens: 272_000,
+    });
   });
 
   it("does not build an openai-codex fallback for removed gpt-5.3-codex-spark", () => {
@@ -1944,7 +1941,7 @@ describe("resolveModel", () => {
     });
   });
 
-  it("rejects stale discovered openai-codex gpt-5.4-mini rows", () => {
+  it("resolves discovered openai-codex gpt-5.4-mini rows", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "openai-codex",
       modelId: "gpt-5.4-mini",
@@ -1958,10 +1955,14 @@ describe("resolveModel", () => {
 
     const result = resolveModelForTest("openai-codex", "gpt-5.4-mini", "/tmp/agent");
 
-    expect(result.model).toBeUndefined();
-    expect(result.error).toBe(
-      "Unknown model: openai-codex/gpt-5.4-mini. gpt-5.4-mini is not supported by the OpenAI Codex OAuth route. Use openai/gpt-5.4-mini with an OpenAI API key or openai-codex/gpt-5.5 with Codex OAuth.",
-    );
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4-mini",
+      name: "GPT-5.4 Mini",
+      contextWindow: 64_000,
+      input: ["text"],
+    });
   });
 
   it("rejects stale direct openai gpt-5.3-codex-spark discovery rows", () => {

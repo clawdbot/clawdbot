@@ -21,6 +21,11 @@ import type {
 const STORE_VERSION = 1 as const;
 const ROLLING_DAY_MS = 24 * 60 * 60 * 1000;
 
+type LoadedCommitmentStore = {
+  store: CommitmentStoreFile;
+  hadLegacySourceText: boolean;
+};
+
 function defaultCommitmentStorePath(): string {
   return path.join(resolveStateDir(), "commitments", "commitments.json");
 }
@@ -64,7 +69,6 @@ function coerceCommitment(raw: unknown): CommitmentRecord | undefined {
     raw.reason,
     raw.suggestedText,
     raw.dedupeKey,
-    raw.sourceUserText,
   ];
   if (requiredStrings.some((value) => typeof value !== "string" || !value.trim())) {
     return undefined;
@@ -80,10 +84,31 @@ function coerceCommitment(raw: unknown): CommitmentRecord | undefined {
   ) {
     return undefined;
   }
-  return raw as CommitmentRecord;
+  const commitment = { ...raw } as CommitmentRecord;
+  return stripLegacySourceText(commitment);
 }
 
-export async function loadCommitmentStore(storePath?: string): Promise<CommitmentStoreFile> {
+function hasLegacySourceText(raw: unknown): boolean {
+  return isRecord(raw) && ("sourceUserText" in raw || "sourceAssistantText" in raw);
+}
+
+function stripLegacySourceText(commitment: CommitmentRecord): CommitmentRecord {
+  const stripped = { ...commitment };
+  // The extraction prompt can read the source turn, but delivery state should
+  // not persist or replay raw conversation text into later heartbeat turns.
+  delete stripped.sourceUserText;
+  delete stripped.sourceAssistantText;
+  return stripped;
+}
+
+function sanitizeStoreForWrite(store: CommitmentStoreFile): CommitmentStoreFile {
+  return {
+    ...store,
+    commitments: store.commitments.map(stripLegacySourceText),
+  };
+}
+
+async function loadCommitmentStoreInternal(storePath?: string): Promise<LoadedCommitmentStore> {
   const resolved = resolveCommitmentStorePath(storePath);
   try {
     const raw = await fs.promises.readFile(resolved, "utf-8");
@@ -93,21 +118,30 @@ export async function loadCommitmentStore(storePath?: string): Promise<Commitmen
       parsed.version !== STORE_VERSION ||
       !Array.isArray(parsed.commitments)
     ) {
-      return emptyStore();
+      return { store: emptyStore(), hadLegacySourceText: false };
     }
+    let hadLegacySourceText = false;
     return {
-      version: STORE_VERSION,
-      commitments: parsed.commitments.flatMap((entry) => {
-        const coerced = coerceCommitment(entry);
-        return coerced ? [coerced] : [];
-      }),
+      store: {
+        version: STORE_VERSION,
+        commitments: parsed.commitments.flatMap((entry) => {
+          hadLegacySourceText ||= hasLegacySourceText(entry);
+          const coerced = coerceCommitment(entry);
+          return coerced ? [coerced] : [];
+        }),
+      },
+      hadLegacySourceText,
     };
   } catch (err) {
     if ((err as { code?: unknown })?.code === "ENOENT") {
-      return emptyStore();
+      return { store: emptyStore(), hadLegacySourceText: false };
     }
     throw err;
   }
+}
+
+export async function loadCommitmentStore(storePath?: string): Promise<CommitmentStoreFile> {
+  return (await loadCommitmentStoreInternal(storePath)).store;
 }
 
 export async function saveCommitmentStore(
@@ -118,7 +152,7 @@ export async function saveCommitmentStore(
   const dir = path.dirname(resolved);
   await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
   await fs.promises.chmod(dir, 0o700).catch(() => undefined);
-  const json = JSON.stringify(store, null, 2);
+  const json = JSON.stringify(sanitizeStoreForWrite(store), null, 2);
   const tmp = `${resolved}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   await fs.promises.writeFile(tmp, json, { encoding: "utf-8", mode: 0o600 });
   await fs.promises.chmod(tmp, 0o600).catch(() => undefined);
@@ -182,12 +216,43 @@ function candidateToRecord(params: {
     },
     ...(params.item.sourceMessageId ? { sourceMessageId: params.item.sourceMessageId } : {}),
     ...(params.item.sourceRunId ? { sourceRunId: params.item.sourceRunId } : {}),
-    sourceUserText: params.item.userText,
-    ...(params.item.assistantText ? { sourceAssistantText: params.item.assistantText } : {}),
     createdAtMs: params.nowMs,
     updatedAtMs: params.nowMs,
     attempts: 0,
   };
+}
+
+function expireAfterMs(): number {
+  return DEFAULT_COMMITMENT_EXPIRE_AFTER_HOURS * 60 * 60 * 1000;
+}
+
+function expireStaleCommitmentsInStore(store: CommitmentStoreFile, nowMs: number): boolean {
+  const staleAfterMs = expireAfterMs();
+  let changed = false;
+  store.commitments = store.commitments.map((commitment) => {
+    if (
+      !isActiveStatus(commitment.status) ||
+      commitment.dueWindow.latestMs + staleAfterMs >= nowMs
+    ) {
+      return commitment;
+    }
+    changed = true;
+    return {
+      ...commitment,
+      status: "expired",
+      expiredAtMs: nowMs,
+      updatedAtMs: nowMs,
+    };
+  });
+  return changed;
+}
+
+async function loadCommitmentStoreWithExpiredMarked(nowMs: number): Promise<CommitmentStoreFile> {
+  const { store, hadLegacySourceText } = await loadCommitmentStoreInternal();
+  if (expireStaleCommitmentsInStore(store, nowMs) || hadLegacySourceText) {
+    await saveCommitmentStore(undefined, store);
+  }
+  return store;
 }
 
 export async function listPendingCommitmentsForScope(params: {
@@ -196,9 +261,9 @@ export async function listPendingCommitmentsForScope(params: {
   nowMs?: number;
   limit?: number;
 }): Promise<CommitmentRecord[]> {
-  const store = await loadCommitmentStore();
-  const scopeKey = buildCommitmentScopeKey(params.scope);
   const nowMs = params.nowMs ?? Date.now();
+  const store = await loadCommitmentStoreWithExpiredMarked(nowMs);
+  const scopeKey = buildCommitmentScopeKey(params.scope);
   const limit = params.limit ?? 20;
   return store.commitments
     .filter(
@@ -227,8 +292,8 @@ export async function upsertInferredCommitments(params: {
   if (params.candidates.length === 0) {
     return [];
   }
-  const store = await loadCommitmentStore();
   const nowMs = params.nowMs ?? Date.now();
+  const store = await loadCommitmentStoreWithExpiredMarked(nowMs);
   const created: CommitmentRecord[] = [];
   const scopeKey = buildCommitmentScopeKey(params.item);
 
@@ -298,8 +363,8 @@ export async function listDueCommitmentsForSession(params: {
   if (!resolved.enabled) {
     return [];
   }
-  const store = await loadCommitmentStore();
   const nowMs = params.nowMs ?? Date.now();
+  const store = await loadCommitmentStoreWithExpiredMarked(nowMs);
   const remainingToday =
     resolved.maxPerDay -
     countSentCommitmentsForSession({
@@ -316,7 +381,7 @@ export async function listDueCommitmentsForSession(params: {
     remainingToday,
     DEFAULT_COMMITMENT_MAX_PER_HEARTBEAT,
   );
-  const expireAfterMs = DEFAULT_COMMITMENT_EXPIRE_AFTER_HOURS * 60 * 60 * 1000;
+  const staleAfterMs = expireAfterMs();
   return store.commitments
     .filter(
       (commitment) =>
@@ -324,7 +389,7 @@ export async function listDueCommitmentsForSession(params: {
         commitment.sessionKey === params.sessionKey &&
         isActiveStatus(commitment.status) &&
         commitment.dueWindow.earliestMs <= nowMs &&
-        commitment.dueWindow.latestMs + expireAfterMs >= nowMs &&
+        commitment.dueWindow.latestMs + staleAfterMs >= nowMs &&
         (commitment.status !== "snoozed" || (commitment.snoozedUntilMs ?? 0) <= nowMs),
     )
     .toSorted(
@@ -343,16 +408,16 @@ export async function listDueCommitmentSessionKeys(params: {
   if (!resolved.enabled) {
     return [];
   }
-  const store = await loadCommitmentStore();
   const nowMs = params.nowMs ?? Date.now();
-  const expireAfterMs = DEFAULT_COMMITMENT_EXPIRE_AFTER_HOURS * 60 * 60 * 1000;
+  const store = await loadCommitmentStoreWithExpiredMarked(nowMs);
+  const staleAfterMs = expireAfterMs();
   const keys = new Set<string>();
   for (const commitment of store.commitments) {
     if (
       commitment.agentId === params.agentId &&
       isActiveStatus(commitment.status) &&
       commitment.dueWindow.earliestMs <= nowMs &&
-      commitment.dueWindow.latestMs + expireAfterMs >= nowMs &&
+      commitment.dueWindow.latestMs + staleAfterMs >= nowMs &&
       (commitment.status !== "snoozed" || (commitment.snoozedUntilMs ?? 0) <= nowMs) &&
       countSentCommitmentsForSession({
         store,
@@ -436,7 +501,7 @@ export async function listCommitments(params?: {
   status?: CommitmentStatus;
   agentId?: string;
 }): Promise<CommitmentRecord[]> {
-  const store = await loadCommitmentStore();
+  const store = await loadCommitmentStoreWithExpiredMarked(Date.now());
   return store.commitments
     .filter(
       (commitment) =>

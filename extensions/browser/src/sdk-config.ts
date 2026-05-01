@@ -3,6 +3,7 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runti
 export {
   getRuntimeConfig,
   getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 export { replaceConfigFile } from "openclaw/plugin-sdk/config-mutation";
 export {

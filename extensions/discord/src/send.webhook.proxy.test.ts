@@ -129,4 +129,63 @@ describe("sendWebhookMessageDiscord proxy support", () => {
     expect(globalFetchMock).toHaveBeenCalled();
     globalFetchMock.mockRestore();
   });
+
+  it("throws typed rate limit errors for webhook 429 responses", async () => {
+    const globalFetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ message: "Slow down", retry_after: 0.25, global: false }), {
+        status: 429,
+      }),
+    );
+
+    const cfg = {
+      channels: {
+        discord: {
+          token: "Bot test-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      sendWebhookMessageDiscord("hello", {
+        cfg,
+        accountId: "default",
+        webhookId: "123",
+        webhookToken: "abc",
+        wait: true,
+      }),
+    ).rejects.toMatchObject({
+      name: "RateLimitError",
+      status: 429,
+      retryAfter: 0.25,
+    });
+    globalFetchMock.mockRestore();
+  });
+
+  it("throws typed status errors for webhook server failures", async () => {
+    const globalFetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("upstream unavailable", { status: 503 }));
+
+    const cfg = {
+      channels: {
+        discord: {
+          token: "Bot test-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      sendWebhookMessageDiscord("hello", {
+        cfg,
+        accountId: "default",
+        webhookId: "123",
+        webhookToken: "abc",
+        wait: true,
+      }),
+    ).rejects.toMatchObject({
+      name: "DiscordError",
+      status: 503,
+    });
+    globalFetchMock.mockRestore();
+  });
 });

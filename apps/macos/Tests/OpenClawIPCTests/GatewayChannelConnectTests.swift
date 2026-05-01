@@ -4,6 +4,30 @@ import Testing
 @testable import OpenClaw
 
 struct GatewayChannelConnectTests {
+    private final class TLSFailureSession: WebSocketSessioning, GatewayTLSFailureProviding, @unchecked Sendable {
+        private var failure: GatewayTLSValidationFailure?
+
+        init(failure: GatewayTLSValidationFailure) {
+            self.failure = failure
+        }
+
+        func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
+            _ = url
+            let task = GatewayTestWebSocketTask(receiveHook: { _, receiveIndex in
+                if receiveIndex == 0 {
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                throw URLError(.userCancelledAuthentication)
+            })
+            return WebSocketTaskBox(task: task)
+        }
+
+        func consumeLastTLSFailure() -> GatewayTLSValidationFailure? {
+            defer { self.failure = nil }
+            return self.failure
+        }
+    }
+
     private enum FakeResponse {
         case helloOk(delayMs: Int)
         case invalid(delayMs: Int)
@@ -105,6 +129,30 @@ struct GatewayChannelConnectTests {
             #expect(error.canRetryWithDeviceToken)
             #expect(error.recommendedNextStep == .updateAuthConfiguration)
             #expect(error.recommendedNextStepCode == GatewayConnectRecoveryNextStep.updateAuthConfiguration.rawValue)
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
+    @Test func `connect maps user cancelled authentication with cached TLS failure`() async throws {
+        let failure = GatewayTLSValidationFailure(
+            kind: .pinMismatch,
+            host: "gateway.example.ts.net",
+            storeKey: "gateway.example.ts.net:443",
+            expectedFingerprint: "old",
+            observedFingerprint: "new",
+            systemTrustOk: true)
+        let session = TLSFailureSession(failure: failure)
+        let channel = try GatewayChannelActor(
+            url: #require(URL(string: "wss://gateway.example.ts.net")),
+            token: nil,
+            session: WebSocketSessionBox(session: session))
+
+        do {
+            try await channel.connect()
+            Issue.record("expected GatewayTLSValidationError")
+        } catch let error as GatewayTLSValidationError {
+            #expect(error.failure == failure)
         } catch {
             Issue.record("unexpected error: \(error)")
         }

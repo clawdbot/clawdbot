@@ -605,25 +605,36 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
       });
     });
 
-    it("does not claim unsupported codex mini models", () => {
+    it("claims codex mini models through the Codex OAuth route", () => {
       const provider = requireProviderContractProvider("openai-codex");
       const model = provider.resolveDynamicModel?.({
         provider: "openai-codex",
         modelId: "gpt-5.4-mini",
         modelRegistry: {
           find: (_provider: string, id: string) =>
-            id === "gpt-5.1-codex-mini"
+            id === "gpt-5.4"
               ? createModel({
                   id,
                   api: "openai-codex-responses",
                   provider: "openai-codex",
                   baseUrl: "https://chatgpt.com/backend-api",
+                  cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+                  contextWindow: 272_000,
+                  maxTokens: 128_000,
                 })
               : null,
         } as never,
       });
 
-      expect(model).toBeUndefined();
+      expect(model).toMatchObject({
+        id: "gpt-5.4-mini",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        contextWindow: 400_000,
+        contextTokens: 272_000,
+        maxTokens: 128_000,
+        cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
+      });
     });
 
     it("owns codex transport defaults", () => {

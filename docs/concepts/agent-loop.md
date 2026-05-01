@@ -32,6 +32,7 @@ wired end-to-end.
    - resolves model + auth profile and builds the pi session
    - subscribes to pi events and streams assistant/tool deltas
    - enforces timeout -> aborts run if exceeded
+   - for Codex app-server turns, aborts an accepted turn that stops producing app-server progress before a terminal event
    - returns payloads + usage metadata
 4. `subscribeEmbeddedPiSession` bridges pi-agent-core events to OpenClaw `agent` stream:
    - tool events => `stream: "tool"`

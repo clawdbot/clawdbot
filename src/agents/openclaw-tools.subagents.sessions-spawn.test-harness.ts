@@ -133,18 +133,6 @@ export function getCallGatewayMock(): Mock {
   return hoisted.callGatewayMock;
 }
 
-export function getGatewayRequests(): Array<GatewayRequest> {
-  return getCallGatewayMock().mock.calls.map((call: unknown[]) => call[0] as GatewayRequest);
-}
-
-export function getGatewayMethods(): Array<string | undefined> {
-  return getGatewayRequests().map((request) => request.method);
-}
-
-export function findGatewayRequest(method: string): GatewayRequest | undefined {
-  return getGatewayRequests().find((request) => request.method === method);
-}
-
 export async function waitForSessionsSpawnEvent(
   label: string,
   predicate: () => boolean,

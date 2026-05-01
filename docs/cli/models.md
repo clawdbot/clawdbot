@@ -56,6 +56,11 @@ Notes:
   rows from plugin manifests or bundled provider catalog metadata even when you
   have not authenticated with that provider yet. Those rows still show as
   unavailable until matching auth is configured.
+- `models list` keeps the control plane responsive while provider catalog
+  discovery is slow. The default and configured views fall back to configured or
+  synthetic model rows after a short wait and let discovery finish in the
+  background. Use `--all` when you need the exact full discovered catalog and
+  are willing to wait for provider discovery.
 - Broad `models list --all` merges manifest catalog rows over registry rows
   without loading provider runtime supplement hooks. Provider-filtered manifest
   fast paths use only providers marked `static`; providers marked `refreshable`

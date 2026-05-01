@@ -2,6 +2,7 @@ import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceAudioFormat,
+  RealtimeVoiceBargeInOptions,
   RealtimeVoiceCloseReason,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceRole,
@@ -26,6 +27,7 @@ export type RealtimeVoiceBridgeSession = {
   connect(): Promise<void>;
   sendAudio(audio: Buffer): void;
   sendUserMessage(text: string): void;
+  handleBargeIn(options?: RealtimeVoiceBargeInOptions): void;
   setMediaTimestamp(ts: number): void;
   submitToolResult(callId: string, result: unknown, options?: RealtimeVoiceToolResultOptions): void;
   triggerGreeting(instructions?: string): void;
@@ -67,6 +69,7 @@ export function createRealtimeVoiceBridgeSession(
     connect: () => requireBridge().connect(),
     sendAudio: (audio) => requireBridge().sendAudio(audio),
     sendUserMessage: (text) => requireBridge().sendUserMessage?.(text),
+    handleBargeIn: (options) => requireBridge().handleBargeIn?.(options),
     setMediaTimestamp: (ts) => requireBridge().setMediaTimestamp(ts),
     submitToolResult: (callId, result, options) =>
       requireBridge().submitToolResult(callId, result, options),

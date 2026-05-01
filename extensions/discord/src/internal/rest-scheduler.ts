@@ -1,4 +1,4 @@
-import { readRetryAfter } from "./rest-errors.js";
+import { RateLimitError, readRetryAfter } from "./rest-errors.js";
 import { createBucketKey, createRouteKey, readHeaderNumber, readResetAt } from "./rest-routes.js";
 
 export type RequestQuery = Record<string, string | number | boolean>;
@@ -6,8 +6,10 @@ export type ScheduledRequest<TData> = {
   method: string;
   path: string;
   data?: TData;
+  generation: number;
   query?: RequestQuery;
   routeKey: string;
+  retryCount: number;
   resolve: (value?: unknown) => void;
   reject: (reason?: unknown) => void;
 };
@@ -26,6 +28,7 @@ type BucketState<TData> = {
 
 export type RestSchedulerOptions = {
   maxConcurrency: number;
+  maxRateLimitRetries: number;
   maxQueueSize: number;
 };
 
@@ -37,6 +40,7 @@ export class RestScheduler<TData> {
   private drainTimer: NodeJS.Timeout | undefined;
   private globalRateLimitUntil = 0;
   private invalidRequestTimestamps: Array<{ at: number; status: number }> = [];
+  private queueGeneration = 0;
   private queuedRequests = 0;
   private routeBuckets = new Map<string, string>();
 
@@ -58,7 +62,14 @@ export class RestScheduler<TData> {
     const bucket = this.getBucket(this.routeBuckets.get(routeKey) ?? routeKey);
     return new Promise((resolve, reject) => {
       this.queuedRequests += 1;
-      bucket.pending.push({ ...params, routeKey, resolve, reject });
+      bucket.pending.push({
+        ...params,
+        generation: this.queueGeneration,
+        routeKey,
+        retryCount: 0,
+        resolve,
+        reject,
+      });
       this.drainQueues();
     });
   }
@@ -69,6 +80,7 @@ export class RestScheduler<TData> {
   }
 
   clearQueue(): void {
+    this.queueGeneration += 1;
     if (this.drainTimer) {
       clearTimeout(this.drainTimer);
       this.drainTimer = undefined;
@@ -77,6 +89,7 @@ export class RestScheduler<TData> {
   }
 
   abortPending(): void {
+    this.queueGeneration += 1;
     this.rejectPending(new DOMException("Aborted", "AbortError"));
   }
 
@@ -117,6 +130,10 @@ export class RestScheduler<TData> {
 
   private get maxConcurrentWorkers(): number {
     return Math.max(1, Math.floor(this.options.maxConcurrency));
+  }
+
+  private get maxRateLimitRetries(): number {
+    return Math.max(0, Math.floor(this.options.maxRateLimitRetries));
   }
 
   private getBucket(key: string): BucketState<TData> {
@@ -220,7 +237,7 @@ export class RestScheduler<TData> {
       return;
     }
     bucket.rateLimitHits += 1;
-    const retryAfterMs = Math.max(0, readRetryAfter(parsed, response) * 1000);
+    const retryAfterMs = Math.max(0, readRetryAfter(parsed, response, 1) * 1000);
     const retryAt = Date.now() + retryAfterMs;
     if (response.headers.get("X-RateLimit-Global") === "true" || isGlobalRateLimit(parsed)) {
       this.globalRateLimitUntil = Math.max(this.globalRateLimitUntil, retryAt);
@@ -337,14 +354,21 @@ export class RestScheduler<TData> {
     queued: ScheduledRequest<TData>,
     bucket: BucketState<TData>,
   ): Promise<void> {
+    let requeued = false;
     try {
       queued.resolve(await this.executor(queued));
     } catch (error) {
+      if (error instanceof RateLimitError && this.requeueRateLimitedRequest(queued)) {
+        requeued = true;
+        return;
+      }
       queued.reject(error);
     } finally {
       bucket.active = Math.max(0, bucket.active - 1);
       this.activeWorkers = Math.max(0, this.activeWorkers - 1);
-      this.queuedRequests = Math.max(0, this.queuedRequests - 1);
+      if (!requeued) {
+        this.queuedRequests = Math.max(0, this.queuedRequests - 1);
+      }
       if (bucket.active === 0 && bucket.pending.length === 0) {
         for (const routeKey of bucket.routeKeys) {
           if (this.routeBuckets.get(routeKey) === routeKey) {
@@ -354,6 +378,21 @@ export class RestScheduler<TData> {
       }
       this.drainQueues();
     }
+  }
+
+  private requeueRateLimitedRequest(queued: ScheduledRequest<TData>): boolean {
+    if (
+      queued.generation !== this.queueGeneration ||
+      queued.retryCount >= this.maxRateLimitRetries
+    ) {
+      return false;
+    }
+    const bucketKey = this.routeBuckets.get(queued.routeKey) ?? queued.routeKey;
+    this.getBucket(bucketKey).pending.push({
+      ...queued,
+      retryCount: queued.retryCount + 1,
+    });
+    return true;
   }
 
   private rejectPending(error: Error | DOMException): void {

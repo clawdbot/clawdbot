@@ -28,7 +28,7 @@ export interface PendingSessionDeliveryDrainDecision {
   bypassBackoff?: boolean;
 }
 
-export const MAX_SESSION_DELIVERY_RETRIES = 5;
+const MAX_SESSION_DELIVERY_RETRIES = 5;
 
 const BACKOFF_MS: readonly number[] = [5_000, 25_000, 120_000, 600_000];
 const drainInProgress = new Map<string, boolean>();
@@ -61,7 +61,7 @@ function releaseRecoveryEntry(entryId: string): void {
   entriesInProgress.delete(entryId);
 }
 
-export function computeSessionDeliveryBackoffMs(retryCount: number): number {
+function computeSessionDeliveryBackoffMs(retryCount: number): number {
   if (retryCount <= 0) {
     return 0;
   }

@@ -113,10 +113,10 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       sweepScript.indexOf("run_success_scenario()"),
       sweepScript.indexOf("run_failure_scenario()"),
     );
-    expect(successScenario.indexOf("configure_kitchen_sink_runtime")).toBeLessThan(
-      successScenario.indexOf('plugins install "$KITCHEN_SINK_SPEC"'),
-    );
     expect(successScenario.indexOf('plugins install "$KITCHEN_SINK_SPEC"')).toBeLessThan(
+      successScenario.indexOf("configure_kitchen_sink_runtime"),
+    );
+    expect(successScenario.indexOf("configure_kitchen_sink_runtime")).toBeLessThan(
       successScenario.indexOf('plugins enable "$KITCHEN_SINK_ID"'),
     );
     expect(sweepScript).toContain("run_failure_scenario");
@@ -295,6 +295,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
         include_repo_e2e: false,
         live_models_only: false,
         ref: "${{ needs.preflight.outputs.checkout_revision }}",
+        targeted_docker_lane_group_size: 4,
       },
     });
     expect(dockerSuite.secrets).toBeUndefined();
@@ -320,7 +321,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     });
     expect(fullReleaseWorkflow.concurrency).toEqual({
       group: "full-release-validation-${{ inputs.ref }}-${{ inputs.rerun_group }}",
-      "cancel-in-progress": false,
+      "cancel-in-progress": "${{ inputs.ref == 'main' && inputs.rerun_group == 'all' }}",
     });
     expect(releaseChecksWorkflow.jobs.resolve_target["runs-on"]).toBe("ubuntu-24.04");
     expect(releaseChecksWorkflow.jobs.prepare_release_package["runs-on"]).toBe("ubuntu-24.04");

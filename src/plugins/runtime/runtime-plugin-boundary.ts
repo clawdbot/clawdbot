@@ -11,13 +11,6 @@ type PluginRuntimeRecord = {
   source: string;
 };
 
-type CachedPluginBoundaryLoaderParams = {
-  pluginId: string;
-  entryBaseName: string;
-  required?: boolean;
-  missingLabel?: string;
-};
-
 export function readPluginBoundaryConfigSafely() {
   try {
     return getRuntimeConfig();
@@ -129,49 +122,4 @@ export function loadPluginBoundaryModuleWithJiti<TModule>(
   loaders: PluginJitiLoaderCache,
 ): TModule {
   return getPluginBoundaryJiti(modulePath, loaders)(modulePath) as TModule;
-}
-
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic plugin boundary loaders use caller-supplied module types.
-export function createCachedPluginBoundaryModuleLoader<TModule>(
-  params: CachedPluginBoundaryLoaderParams,
-): () => TModule | null {
-  let cachedModulePath: string | null = null;
-  let cachedModule: TModule | null = null;
-  const loaders: PluginJitiLoaderCache = new Map();
-
-  return () => {
-    const missingLabel = params.missingLabel ?? `${params.pluginId} plugin runtime`;
-    const record = resolvePluginRuntimeRecord(
-      params.pluginId,
-      params.required
-        ? () => {
-            throw new Error(`${missingLabel} is unavailable: missing plugin '${params.pluginId}'`);
-          }
-        : undefined,
-    );
-    if (!record) {
-      return null;
-    }
-    const modulePath = resolvePluginRuntimeModulePath(
-      record,
-      params.entryBaseName,
-      params.required
-        ? () => {
-            throw new Error(
-              `${missingLabel} is unavailable: missing ${params.entryBaseName} for plugin '${params.pluginId}'`,
-            );
-          }
-        : undefined,
-    );
-    if (!modulePath) {
-      return null;
-    }
-    if (cachedModule && cachedModulePath === modulePath) {
-      return cachedModule;
-    }
-    const loaded = loadPluginBoundaryModuleWithJiti<TModule>(modulePath, loaders);
-    cachedModulePath = modulePath;
-    cachedModule = loaded;
-    return loaded;
-  };
 }

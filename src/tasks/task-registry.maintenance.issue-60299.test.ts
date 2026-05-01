@@ -195,6 +195,40 @@ describe("task-registry maintenance issue #60299", () => {
     expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
   });
 
+  it("marks subagent tasks lost when their child session recovery is tombstoned", async () => {
+    const childSessionKey = "agent:main:subagent:wedged-child";
+    const task = makeStaleTask({
+      runtime: "subagent",
+      runId: "run-wedged-child",
+      childSessionKey,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      sessionStore: {
+        [childSessionKey]: {
+          sessionId: "session-wedged-child",
+          updatedAt: Date.now(),
+          abortedLastRun: false,
+          subagentRecovery: {
+            automaticAttempts: 2,
+            lastAttemptAt: Date.now() - 30_000,
+            lastRunId: "run-wedged-child",
+            wedgedAt: Date.now() - 20_000,
+            wedgedReason: "subagent orphan recovery blocked after 2 rapid accepted resume attempts",
+          },
+        },
+      },
+    });
+
+    expect(previewTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({
+      status: "lost",
+      error: "subagent orphan recovery blocked after 2 rapid accepted resume attempts",
+    });
+  });
+
   it("does not mark cron tasks lost when the current process is not the cron runtime authority", async () => {
     const task = makeStaleTask({
       runtime: "cron",

@@ -44,10 +44,12 @@ struct NodeMenuEntryFormatter {
     }
 
     static func roleText(_ entry: NodeInfo) -> String {
-        if entry.isConnected { return "connected" }
-        if self.isGateway(entry) { return "disconnected" }
-        if entry.isPaired { return "paired" }
-        return "unpaired"
+        if self.isGateway(entry) {
+            return entry.isConnected ? "connected" : "disconnected"
+        }
+        let pairing = entry.isPaired ? "paired" : "unpaired"
+        let connection = entry.isConnected ? "connected" : "disconnected"
+        return "\(pairing) · \(connection)"
     }
 
     static func detailLeft(_ entry: NodeInfo) -> String {

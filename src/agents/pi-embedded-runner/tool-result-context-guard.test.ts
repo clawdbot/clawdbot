@@ -2,6 +2,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
+import { MidTurnPrecheckSignal } from "./run/midturn-precheck.js";
 import {
   CONTEXT_LIMIT_TRUNCATION_NOTICE,
   formatContextLimitTruncationNotice,
@@ -100,6 +101,36 @@ async function applyGuardToContext(
   installToolResultContextGuard({
     agent,
     contextWindowTokens,
+  });
+  return await agent.transformContext?.(contextForNextCall, new AbortController().signal);
+}
+
+async function applyMidTurnPrecheckGuardToContext(
+  agent: { transformContext?: (messages: AgentMessage[], signal: AbortSignal) => unknown },
+  contextForNextCall: AgentMessage[],
+  options: {
+    contextWindowTokens?: number;
+    contextTokenBudget?: number;
+    reserveTokens?: number;
+    toolResultMaxChars?: number;
+    prePromptMessageCount?: number;
+    systemPrompt?: string;
+  } = {},
+) {
+  const contextWindowTokens = options.contextWindowTokens ?? options.contextTokenBudget ?? 20_000;
+  installToolResultContextGuard({
+    agent,
+    contextWindowTokens,
+    midTurnPrecheck: {
+      enabled: true,
+      contextTokenBudget: options.contextTokenBudget ?? contextWindowTokens,
+      reserveTokens: () => options.reserveTokens ?? 10_000,
+      toolResultMaxChars: options.toolResultMaxChars,
+      getSystemPrompt: () => options.systemPrompt,
+      ...(options.prePromptMessageCount !== undefined
+        ? { getPrePromptMessageCount: () => options.prePromptMessageCount as number }
+        : {}),
+    },
   });
   return await agent.transformContext?.(contextForNextCall, new AbortController().signal);
 }
@@ -248,6 +279,66 @@ describe("installToolResultContextGuard", () => {
     )) as AgentMessage[];
 
     expectPiStyleTruncation(getToolResultText(transformed[0]));
+  });
+
+  it("raises a structured mid-turn precheck signal after a new tool result overflows", async () => {
+    const agent = makeGuardableAgent();
+    const contextForNextCall = [
+      makeUser("prompt already in history"),
+      makeToolResult("call_big", "x".repeat(80_000)),
+    ];
+
+    await expect(
+      applyMidTurnPrecheckGuardToContext(agent, contextForNextCall, {
+        contextWindowTokens: 200_000,
+        contextTokenBudget: 20_000,
+        reserveTokens: 12_000,
+        toolResultMaxChars: 16_000,
+        prePromptMessageCount: 1,
+      }),
+    ).rejects.toMatchObject({
+      name: "MidTurnPrecheckSignal",
+      request: expect.objectContaining({
+        route: "compact_then_truncate",
+        overflowTokens: expect.any(Number),
+        toolResultReducibleChars: expect.any(Number),
+      }),
+    });
+  });
+
+  it("does not run mid-turn precheck when no new tool result was appended", async () => {
+    const agent = makeGuardableAgent();
+    const contextForNextCall = [makeUser("u".repeat(80_000))];
+
+    const transformed = await applyMidTurnPrecheckGuardToContext(agent, contextForNextCall, {
+      contextWindowTokens: 200_000,
+      contextTokenBudget: 20_000,
+      reserveTokens: 12_000,
+      prePromptMessageCount: 0,
+    });
+
+    expect(transformed).toBe(contextForNextCall);
+  });
+
+  it("uses compact_only route when mid-turn overflow is not reducible by tool truncation", async () => {
+    const agent = makeGuardableAgent();
+    const contextForNextCall = [
+      makeUser("u".repeat(80_000)),
+      makeToolResult("call_small", "small output"),
+    ];
+
+    try {
+      await applyMidTurnPrecheckGuardToContext(agent, contextForNextCall, {
+        contextWindowTokens: 200_000,
+        contextTokenBudget: 20_000,
+        reserveTokens: 12_000,
+        prePromptMessageCount: 1,
+      });
+      throw new Error("expected mid-turn precheck signal");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MidTurnPrecheckSignal);
+      expect((err as MidTurnPrecheckSignal).request.route).toBe("compact_only");
+    }
   });
 });
 

@@ -37,7 +37,7 @@ describe("external CLI auth scope", () => {
     expect(scope?.providerIds).not.toContain("minimax-portal");
   });
 
-  it("collects model, auth order, media model, and runtime signals", () => {
+  it("collects active model, auth order, media model, and runtime signals", () => {
     const cfg = {
       auth: {
         order: {
@@ -53,6 +53,9 @@ describe("external CLI auth scope", () => {
           imageGenerationModel: "minimax-portal/image-01",
           cliBackends: {
             "claude-cli": { command: "claude" },
+          },
+          models: {
+            "claude-cli/claude-opus-4-7": { alias: "opus" },
           },
         },
         list: [
@@ -74,13 +77,29 @@ describe("external CLI auth scope", () => {
         "openai",
         "openai-codex",
         "minimax-portal",
-        "claude-cli",
         "codex-app-server",
         "opencode-go",
         "z.ai",
         "zai",
       ]),
     );
+    expect(scope?.providerIds).not.toContain("claude-cli");
     expect(scope?.profileIds).toContain("openai-codex:default");
+  });
+
+  it("includes a CLI provider only when it is the active runtime", () => {
+    const scope = resolveExternalCliAuthScopeFromConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          agentRuntime: { id: "claude-cli" },
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+        },
+      },
+    });
+
+    expect(scope?.providerIds).toContain("claude-cli");
   });
 });

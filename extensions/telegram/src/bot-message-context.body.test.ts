@@ -153,8 +153,9 @@ describe("resolveTelegramInboundBody", () => {
     const result = await resolveTelegramBody({
       cfg: {
         channels: { telegram: {} },
-        tools: { media: { audio: { enabled: true } } },
+        tools: { media: { audio: { enabled: true, echoTranscript: true } } },
       } as never,
+      accountId: "primary",
       msg: {
         message_id: 10,
         date: 1_700_000_010,
@@ -167,10 +168,54 @@ describe("resolveTelegramInboundBody", () => {
     });
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+    expect(transcribeFirstAudioMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          Provider: "telegram",
+          Surface: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "telegram:42",
+          AccountId: "primary",
+        }),
+      }),
+    );
     expect(result).toMatchObject({
       bodyText: '[Audio transcript (machine-generated, untrusted)]: "hello from a voice note"',
     });
     expect(result?.bodyText).not.toContain("<media:audio>");
+  });
+
+  it("passes DM topic thread IDs through audio preflight context", async () => {
+    transcribeFirstAudioMock.mockReset();
+    transcribeFirstAudioMock.mockResolvedValueOnce("hello from a threaded dm voice note");
+
+    await resolveTelegramBody({
+      cfg: {
+        channels: { telegram: {} },
+        tools: { media: { audio: { enabled: true, echoTranscript: true } } },
+      } as never,
+      accountId: "primary",
+      msg: {
+        message_id: 12,
+        message_thread_id: 77,
+        date: 1_700_000_012,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        voice: { file_id: "voice-dm-topic-1" },
+        entities: [],
+      } as never,
+      allMedia: [{ path: "/tmp/voice-dm-topic.ogg", contentType: "audio/ogg" }],
+      replyThreadId: 77,
+    });
+
+    expect(transcribeFirstAudioMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          OriginatingTo: "telegram:42",
+          MessageThreadId: 77,
+        }),
+      }),
+    );
   });
 
   it("escapes transcript text before embedding it in the audio framing", async () => {

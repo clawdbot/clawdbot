@@ -38,6 +38,17 @@ import {
   AgentsFilesSetParamsSchema,
   type AgentsFilesSetResult,
   AgentsFilesSetResultSchema,
+  type ArtifactsDownloadParams,
+  ArtifactsDownloadParamsSchema,
+  type ArtifactsDownloadResult,
+  type ArtifactsGetParams,
+  ArtifactsGetParamsSchema,
+  type ArtifactsGetResult,
+  type ArtifactsListParams,
+  ArtifactsListParamsSchema,
+  type ArtifactsListResult,
+  type ArtifactSummary,
+  ArtifactSummarySchema,
   type AgentsListParams,
   AgentsListParamsSchema,
   type AgentsListResult,
@@ -300,6 +311,9 @@ import {
   type ToolsEffectiveParams,
   ToolsEffectiveParamsSchema,
   type ToolsEffectiveResult,
+  type ToolsInvokeParams,
+  ToolsInvokeParamsSchema,
+  type ToolsInvokeResult,
   type Snapshot,
   SnapshotSchema,
   type StateVersion,
@@ -366,6 +380,12 @@ export const validateAgentsFilesGetParams = ajv.compile<AgentsFilesGetParams>(
 );
 export const validateAgentsFilesSetParams = ajv.compile<AgentsFilesSetParams>(
   AgentsFilesSetParamsSchema,
+);
+export const validateArtifactsListParams =
+  ajv.compile<ArtifactsListParams>(ArtifactsListParamsSchema);
+export const validateArtifactsGetParams = ajv.compile<ArtifactsGetParams>(ArtifactsGetParamsSchema);
+export const validateArtifactsDownloadParams = ajv.compile<ArtifactsDownloadParams>(
+  ArtifactsDownloadParamsSchema,
 );
 export const validateNodePairRequestParams = ajv.compile<NodePairRequestParams>(
   NodePairRequestParamsSchema,
@@ -517,6 +537,7 @@ export const validateToolsCatalogParams = ajv.compile<ToolsCatalogParams>(ToolsC
 export const validateToolsEffectiveParams = ajv.compile<ToolsEffectiveParams>(
   ToolsEffectiveParamsSchema,
 );
+export const validateToolsInvokeParams = ajv.compile<ToolsInvokeParams>(ToolsInvokeParamsSchema);
 export const validateSkillsBinsParams = ajv.compile<SkillsBinsParams>(SkillsBinsParamsSchema);
 export const validateSkillsInstallParams =
   ajv.compile<SkillsInstallParams>(SkillsInstallParamsSchema);
@@ -684,6 +705,10 @@ export {
   SessionsDeleteParamsSchema,
   SessionsCompactParamsSchema,
   SessionsUsageParamsSchema,
+  ArtifactSummarySchema,
+  ArtifactsListParamsSchema,
+  ArtifactsGetParamsSchema,
+  ArtifactsDownloadParamsSchema,
   ConfigGetParamsSchema,
   ConfigSetParamsSchema,
   ConfigApplyParamsSchema,
@@ -741,6 +766,7 @@ export {
   SkillsStatusParamsSchema,
   ToolsCatalogParamsSchema,
   ToolsEffectiveParamsSchema,
+  ToolsInvokeParamsSchema,
   SkillsInstallParamsSchema,
   SkillsSearchParamsSchema,
   SkillsSearchResultSchema,
@@ -845,6 +871,13 @@ export type {
   AgentsFilesGetResult,
   AgentsFilesSetParams,
   AgentsFilesSetResult,
+  ArtifactSummary,
+  ArtifactsListParams,
+  ArtifactsListResult,
+  ArtifactsGetParams,
+  ArtifactsGetResult,
+  ArtifactsDownloadParams,
+  ArtifactsDownloadResult,
   AgentsListParams,
   AgentsListResult,
   CommandsListParams,
@@ -855,6 +888,8 @@ export type {
   ToolsCatalogResult,
   ToolsEffectiveParams,
   ToolsEffectiveResult,
+  ToolsInvokeParams,
+  ToolsInvokeResult,
   SkillsBinsParams,
   SkillsBinsResult,
   SkillsSearchParams,

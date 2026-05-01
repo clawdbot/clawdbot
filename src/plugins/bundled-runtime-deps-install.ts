@@ -6,7 +6,6 @@ import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { beginBundledRuntimeDepsInstall } from "./bundled-runtime-deps-activity.js";
 import {
   BUNDLED_RUNTIME_DEPS_LOCK_DIR,
-  withBundledRuntimeDepsFilesystemLock,
   withBundledRuntimeDepsFilesystemLockAsync,
 } from "./bundled-runtime-deps-lock.js";
 import {
@@ -14,6 +13,7 @@ import {
   ensureNpmInstallExecutionManifest,
   isRuntimeDepsPlanMaterialized,
   removeLegacyRuntimeDepsManifest,
+  removeRuntimeDepsNodeModulesSymlink,
 } from "./bundled-runtime-deps-materialization.js";
 import {
   createBundledRuntimeDepsInstallArgs,
@@ -33,10 +33,6 @@ export type BundledRuntimeDepsInstallParams = {
   installSpecs?: string[];
   warn?: (message: string) => void;
 };
-
-function withBundledRuntimeDepsInstallRootLock<T>(installRoot: string, run: () => T): T {
-  return withBundledRuntimeDepsFilesystemLock(installRoot, BUNDLED_RUNTIME_DEPS_LOCK_DIR, run);
-}
 
 async function withBundledRuntimeDepsInstallRootLockAsync<T>(
   installRoot: string,
@@ -164,6 +160,9 @@ function createBundledRuntimeDepsInstallContext(params: {
   const installEnv = createBundledRuntimeDepsInstallEnv(params.env, {
     cacheDir: path.join(installExecutionRoot, ".openclaw-npm-cache"),
   });
+  if (!isolatedExecutionRoot) {
+    removeRuntimeDepsNodeModulesSymlink(params.installRoot);
+  }
   const runner = resolveBundledRuntimeDepsPackageManagerRunner({
     installExecutionRoot,
     env: installEnv,
@@ -285,12 +284,13 @@ export function installBundledRuntimeDeps(params: {
   installSpecs?: string[];
   env: NodeJS.ProcessEnv;
   warn?: (message: string) => void;
+  force?: boolean;
 }): void {
   const installSpecs = normalizeRuntimeDepSpecs(params.installSpecs ?? params.missingSpecs);
   if (installSpecs.length === 0) {
     return;
   }
-  if (isRuntimeDepsPlanMaterialized(params.installRoot, installSpecs)) {
+  if (!params.force && isRuntimeDepsPlanMaterialized(params.installRoot, installSpecs)) {
     removeLegacyRuntimeDepsManifest(params.installRoot);
     return;
   }
@@ -326,12 +326,13 @@ export async function installBundledRuntimeDepsAsync(params: {
   env: NodeJS.ProcessEnv;
   warn?: (message: string) => void;
   onProgress?: (message: string) => void;
+  force?: boolean;
 }): Promise<void> {
   const installSpecs = normalizeRuntimeDepSpecs(params.installSpecs ?? params.missingSpecs);
   if (installSpecs.length === 0) {
     return;
   }
-  if (isRuntimeDepsPlanMaterialized(params.installRoot, installSpecs)) {
+  if (!params.force && isRuntimeDepsPlanMaterialized(params.installRoot, installSpecs)) {
     removeLegacyRuntimeDepsManifest(params.installRoot);
     return;
   }
@@ -360,46 +361,6 @@ export async function installBundledRuntimeDepsAsync(params: {
   }
 }
 
-export function repairBundledRuntimeDepsInstallRoot(params: {
-  installRoot: string;
-  missingSpecs: string[];
-  installSpecs: string[];
-  env: NodeJS.ProcessEnv;
-  installDeps?: (params: BundledRuntimeDepsInstallParams) => void;
-  warn?: (message: string) => void;
-}): { installSpecs: string[] } {
-  return withBundledRuntimeDepsInstallRootLock(params.installRoot, () => {
-    const installSpecs = normalizeRuntimeDepSpecs(params.installSpecs);
-    const install =
-      params.installDeps ??
-      ((installParams) =>
-        installBundledRuntimeDeps({
-          installRoot: installParams.installRoot,
-          missingSpecs: installParams.missingSpecs,
-          installSpecs: installParams.installSpecs,
-          env: params.env,
-          warn: params.warn,
-        }));
-    const finishActivity = beginBundledRuntimeDepsInstall({
-      installRoot: params.installRoot,
-      missingSpecs: installSpecs,
-      installSpecs,
-    });
-    ensureNpmInstallExecutionManifest(params.installRoot, installSpecs);
-    try {
-      install({
-        installRoot: params.installRoot,
-        missingSpecs: installSpecs,
-        installSpecs,
-      });
-    } finally {
-      finishActivity();
-    }
-    removeLegacyRuntimeDepsManifest(params.installRoot);
-    return { installSpecs };
-  });
-}
-
 export async function repairBundledRuntimeDepsInstallRootAsync(params: {
   installRoot: string;
   missingSpecs: string[];
@@ -421,6 +382,7 @@ export async function repairBundledRuntimeDepsInstallRootAsync(params: {
           env: params.env,
           warn: params.warn,
           onProgress: params.onProgress,
+          force: true,
         }));
     const finishActivity = beginBundledRuntimeDepsInstall({
       installRoot: params.installRoot,

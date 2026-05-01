@@ -1,4 +1,4 @@
-export { startGatewayEarlyRuntime } from "./server-startup-early.js";
+export { startGatewayEarlyRuntime, startGatewayPluginDiscovery } from "./server-startup-early.js";
 export {
   __testing,
   startGatewayPostAttachRuntime,

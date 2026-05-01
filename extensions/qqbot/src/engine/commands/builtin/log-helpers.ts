@@ -238,32 +238,6 @@ function tailFileLines(
   }
 }
 
-function normalizeCommandAllowlistEntry(entry: unknown): string {
-  if (
-    typeof entry === "string" ||
-    typeof entry === "number" ||
-    typeof entry === "boolean" ||
-    typeof entry === "bigint"
-  ) {
-    return `${entry}`
-      .trim()
-      .replace(/^qqbot:\s*/i, "")
-      .trim();
-  }
-  return "";
-}
-
-export function hasExplicitCommandAllowlist(accountConfig?: Record<string, unknown>): boolean {
-  const allowFrom = accountConfig?.allowFrom;
-  if (!Array.isArray(allowFrom) || allowFrom.length === 0) {
-    return false;
-  }
-  return allowFrom.every((entry) => {
-    const normalized = normalizeCommandAllowlistEntry(entry);
-    return normalized.length > 0 && normalized !== "*";
-  });
-}
-
 /**
  * Build the /bot-logs result: collect recent log files, write them to a temp file.
  */

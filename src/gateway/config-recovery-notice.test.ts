@@ -26,6 +26,22 @@ describe("config recovery notice", () => {
     );
   });
 
+  it("includes rejected validation details when available", () => {
+    expect(
+      formatConfigRecoveryNotice({
+        phase: "startup",
+        reason: "startup-invalid-config",
+        configPath: "/home/test/.openclaw/openclaw.json",
+        issues: [
+          { path: "agents.defaults.execution", message: "Unrecognized key: execution" },
+          { path: "gateway.auth.password.source", message: "Required" },
+        ],
+      }),
+    ).toContain(
+      "Rejected validation details: agents.defaults.execution: Unrecognized key: execution; gateway.auth.password.source: Required.",
+    );
+  });
+
   it("queues the notice for the main agent session", () => {
     expect(
       enqueueConfigRecoveryNotice({
@@ -33,11 +49,14 @@ describe("config recovery notice", () => {
         phase: "reload",
         reason: "reload-invalid-config",
         configPath: "/home/test/.openclaw/openclaw.json",
+        issues: [{ path: "gateway.mode", message: "Expected string" }],
       }),
     ).toBe(true);
 
     expect(peekSystemEvents("agent:main:main")).toHaveLength(1);
-    expect(drainSystemEvents("agent:main:main")[0]).toContain(
+    const notice = drainSystemEvents("agent:main:main")[0];
+    expect(notice).toContain("gateway.mode: Expected string");
+    expect(notice).toContain(
       "Do not write openclaw.json again unless you validate the full config first.",
     );
   });

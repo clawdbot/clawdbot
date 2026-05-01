@@ -14,6 +14,7 @@ export function resolveQaLiveFrontierPreferredModel() {
     const store = loadAuthProfileStoreForRuntime(undefined, {
       readOnly: true,
       allowKeychainPrompt: false,
+      externalCliProviderIds: ["openai-codex"],
     });
     if (listProfilesForProvider(store, "openai").length > 0) {
       return undefined;

@@ -2,10 +2,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveBundledRuntimeDependencyInstallRoot } from "./bundled-runtime-deps.js";
+import type { BundledRuntimeDepsInstallParams } from "./bundled-runtime-deps-install.js";
+import { resolveBundledRuntimeDependencyInstallRoot } from "./bundled-runtime-deps-roots.js";
 import { materializeBundledRuntimeMirrorFile } from "./bundled-runtime-mirror.js";
-import { prepareBundledPluginRuntimeRoot } from "./bundled-runtime-root.js";
-import { writeGeneratedRuntimeDepsManifest } from "./test-helpers/bundled-runtime-deps-fixtures.js";
+import {
+  clearPreparedBundledPluginRuntimeLoadRoots,
+  prepareBundledPluginRuntimeLoadRoot,
+  prepareBundledPluginRuntimeRoot,
+} from "./bundled-runtime-root.js";
+import {
+  writeGeneratedRuntimeDepsManifest,
+  writeInstalledRuntimeDepPackage,
+} from "./test-helpers/bundled-runtime-deps-fixtures.js";
 
 const tempRoots: string[] = [];
 
@@ -17,6 +25,7 @@ function makeTempRoot(): string {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  clearPreparedBundledPluginRuntimeLoadRoots();
   for (const root of tempRoots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -54,6 +63,29 @@ describe("prepareBundledPluginRuntimeRoot", () => {
 
     expect(() => materializeBundledRuntimeMirrorFile(source, target)).toThrow("ENOSPC");
     expect(fs.readFileSync(target, "utf8")).toBe("export const value = 'old';\n");
+  });
+
+  it("reuses existing hardlinked mirror files without rewriting them", () => {
+    const root = makeTempRoot();
+    const source = path.join(root, "source.js");
+    const target = path.join(root, "mirror", "source.js");
+    fs.writeFileSync(source, "export const value = 'stable';\n", "utf8");
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.linkSync(source, target);
+    const initialTargetStat = fs.statSync(target, { bigint: true });
+
+    const linkSpy = vi.spyOn(fs, "linkSync");
+    const copySpy = vi.spyOn(fs, "copyFileSync");
+    const removeSpy = vi.spyOn(fs, "rmSync");
+
+    materializeBundledRuntimeMirrorFile(source, target);
+
+    const reusedTargetStat = fs.statSync(target, { bigint: true });
+    expect(reusedTargetStat.dev).toBe(initialTargetStat.dev);
+    expect(reusedTargetStat.ino).toBe(initialTargetStat.ino);
+    expect(linkSpy).not.toHaveBeenCalled();
+    expect(copySpy).not.toHaveBeenCalled();
+    expect(removeSpy).not.toHaveBeenCalled();
   });
 
   it("materializes root JavaScript chunks in external mirrors", () => {
@@ -600,6 +632,103 @@ describe("prepareBundledPluginRuntimeRoot", () => {
     expect(preparedAgain).toEqual(prepared);
     expect(reusedStat.mtimeMs).toBe(initialStat.mtimeMs);
     expect(fs.readFileSync(mirrorEntry, "utf8")).toContain("v1");
+  });
+
+  it("verifies runtime deps before returning a memoized prepared root", () => {
+    const packageRoot = makeTempRoot();
+    const stageDir = makeTempRoot();
+    const pluginRoot = path.join(packageRoot, "dist", "extensions", "whatsapp");
+    const env = { ...process.env, OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.27", type: "module" }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(pluginRoot, "index.js"), "export const marker = 'v1';\n", "utf8");
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/whatsapp",
+          version: "1.0.0",
+          type: "module",
+          dependencies: { "whatsapp-runtime": "1.0.0" },
+          openclaw: { extensions: ["./index.js"] },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
+    const installDeps = vi.fn((installParams: BundledRuntimeDepsInstallParams) => {
+      const installSpecs = installParams.installSpecs ?? [];
+      for (const spec of installSpecs) {
+        const atIndex = spec.lastIndexOf("@");
+        writeInstalledRuntimeDepPackage(
+          installParams.installRoot,
+          spec.slice(0, atIndex),
+          spec.slice(atIndex + 1),
+        );
+      }
+      writeGeneratedRuntimeDepsManifest(installParams.installRoot, installSpecs);
+    });
+
+    const prepared = prepareBundledPluginRuntimeLoadRoot({
+      pluginId: "whatsapp",
+      pluginRoot,
+      modulePath: path.join(pluginRoot, "index.js"),
+      env,
+      installDeps,
+      memoizePreparedRoot: true,
+    });
+    fs.rmSync(path.join(installRoot, "node_modules"), { recursive: true, force: true });
+    fs.rmSync(path.join(installRoot, "package.json"), { force: true });
+
+    const preparedAgain = prepareBundledPluginRuntimeLoadRoot({
+      pluginId: "whatsapp",
+      pluginRoot,
+      modulePath: path.join(pluginRoot, "index.js"),
+      env,
+      installDeps,
+      memoizePreparedRoot: true,
+    });
+
+    expect(preparedAgain).toEqual(prepared);
+    expect(installDeps).toHaveBeenCalledTimes(2);
+  });
+
+  it("includes earlier staging failures when verify-only runtime deps still fail", () => {
+    const packageRoot = makeTempRoot();
+    const stageDir = makeTempRoot();
+    const pluginRoot = path.join(packageRoot, "dist", "extensions", "whatsapp");
+    const env = { ...process.env, OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(path.join(pluginRoot, "index.js"), "export {};\n", "utf8");
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/whatsapp",
+        version: "1.0.0",
+        type: "module",
+        dependencies: { "whatsapp-runtime": "1.0.0" },
+      }),
+      "utf8",
+    );
+
+    expect(() =>
+      prepareBundledPluginRuntimeRoot({
+        pluginId: "whatsapp",
+        pluginRoot,
+        modulePath: path.join(pluginRoot, "index.js"),
+        env,
+        installMissingDeps: false,
+        previousRepairError: new Error("offline registry"),
+      }),
+    ).toThrow(
+      /bundled runtime dependencies missing.*whatsapp-runtime@1\.0\.0.*previous bundled runtime dependency staging failure: offline registry/s,
+    );
   });
 
   it("refreshes external runtime mirrors when source files change", async () => {

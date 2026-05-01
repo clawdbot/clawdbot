@@ -104,17 +104,7 @@ export function readSessionMessages(
   }
 
   const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
-  const hasTreeEntries = lines.some((line) => {
-    if (!line.trim()) {
-      return false;
-    }
-    try {
-      const parsed = JSON.parse(line) as { type?: unknown; id?: unknown; parentId?: unknown };
-      return parsed.type !== "session" && typeof parsed.id === "string" && "parentId" in parsed;
-    } catch {
-      return false;
-    }
-  });
+  const hasTreeEntries = lines.some(hasSessionTreeEntry);
   let branchEntries: SessionEntry[] | null = null;
   if (hasTreeEntries) {
     try {
@@ -166,39 +156,138 @@ export function readSessionMessages(
     }
     try {
       const parsed = JSON.parse(line);
-      if (parsed?.message) {
+      const message = parsedSessionEntryToMessage(parsed, messageSeq + 1);
+      if (message) {
         messageSeq += 1;
-        messages.push(
-          attachOpenClawTranscriptMeta(parsed.message, {
-            ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
-            seq: messageSeq,
-          }),
-        );
-        continue;
-      }
-
-      // Compaction entries are not "message" records, but they're useful context for debugging.
-      // Emit a lightweight synthetic message that the Web UI can render as a divider.
-      if (parsed?.type === "compaction") {
-        const ts = typeof parsed.timestamp === "string" ? Date.parse(parsed.timestamp) : Number.NaN;
-        const timestamp = Number.isFinite(ts) ? ts : Date.now();
-        messageSeq += 1;
-        messages.push({
-          role: "system",
-          content: [{ type: "text", text: "Compaction" }],
-          timestamp,
-          __openclaw: {
-            kind: "compaction",
-            id: typeof parsed.id === "string" ? parsed.id : undefined,
-            seq: messageSeq,
-          },
-        });
+        messages.push(message);
       }
     } catch {
       // ignore bad lines
     }
   }
   return messages;
+}
+
+export type ReadRecentSessionMessagesOptions = {
+  maxMessages: number;
+  maxBytes?: number;
+  maxLines?: number;
+};
+
+const RECENT_SESSION_MESSAGES_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
+
+export function readRecentSessionMessages(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  opts?: ReadRecentSessionMessagesOptions,
+): unknown[] {
+  const maxMessages = Math.max(0, Math.floor(opts?.maxMessages ?? 0));
+  if (maxMessages === 0) {
+    return [];
+  }
+
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
+  if (!filePath) {
+    return [];
+  }
+
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(filePath);
+  } catch {
+    return [];
+  }
+  if (stat.size === 0) {
+    return [];
+  }
+
+  const maxBytes = Math.max(
+    1024,
+    Math.floor(opts?.maxBytes ?? RECENT_SESSION_MESSAGES_DEFAULT_MAX_BYTES),
+  );
+  const readLen = Math.min(stat.size, maxBytes);
+  const readStart = Math.max(0, stat.size - readLen);
+  const maxLines = Math.max(maxMessages, Math.floor(opts?.maxLines ?? maxMessages * 20 + 20));
+
+  return (
+    withOpenTranscriptFd(filePath, (fd) => {
+      const buf = Buffer.alloc(readLen);
+      const bytesRead = fs.readSync(fd, buf, 0, readLen, readStart);
+      if (bytesRead <= 0) {
+        return [];
+      }
+      const chunk = buf.toString("utf-8", 0, bytesRead);
+      const lines = chunk
+        .split(/\r?\n/)
+        .slice(readStart > 0 ? 1 : 0)
+        .filter((line) => line.trim().length > 0)
+        .slice(-maxLines);
+
+      if (lines.some(hasSessionTreeEntry)) {
+        return readSessionMessages(sessionId, storePath, sessionFile).slice(-maxMessages);
+      }
+
+      const messages: unknown[] = [];
+      let messageSeq = 0;
+      for (const line of lines) {
+        try {
+          const parsed = JSON.parse(line);
+          const message = parsedSessionEntryToMessage(parsed, messageSeq + 1);
+          if (message) {
+            messageSeq += 1;
+            messages.push(message);
+          }
+        } catch {
+          // ignore bad tail lines
+        }
+      }
+      return messages.slice(-maxMessages);
+    }) ?? []
+  );
+}
+
+function hasSessionTreeEntry(line: string): boolean {
+  if (!line.trim()) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(line) as { type?: unknown; id?: unknown; parentId?: unknown };
+    return parsed.type !== "session" && typeof parsed.id === "string" && "parentId" in parsed;
+  } catch {
+    return false;
+  }
+}
+
+function parsedSessionEntryToMessage(parsed: unknown, seq: number): unknown {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const entry = parsed as Record<string, unknown>;
+  if (entry.message) {
+    return attachOpenClawTranscriptMeta(entry.message, {
+      ...(typeof entry.id === "string" ? { id: entry.id } : {}),
+      seq,
+    });
+  }
+
+  // Compaction entries are not "message" records, but they're useful context for debugging.
+  // Emit a lightweight synthetic message that the Web UI can render as a divider.
+  if (entry.type === "compaction") {
+    const ts = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
+    const timestamp = Number.isFinite(ts) ? ts : Date.now();
+    return {
+      role: "system",
+      content: [{ type: "text", text: "Compaction" }],
+      timestamp,
+      __openclaw: {
+        kind: "compaction",
+        id: typeof entry.id === "string" ? entry.id : undefined,
+        seq,
+      },
+    };
+  }
+  return null;
 }
 
 export {
@@ -637,6 +726,39 @@ export function readLatestSessionUsageFromTranscript(
       return null;
     }
     const chunk = fs.readFileSync(fd, "utf-8");
+    return extractLatestUsageFromTranscriptChunk(chunk);
+  });
+}
+
+export function readRecentSessionUsageFromTranscript(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  agentId: string | undefined,
+  maxBytes: number,
+): SessionTranscriptUsageSnapshot | null {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
+  if (!filePath) {
+    return null;
+  }
+
+  return withOpenTranscriptFd(filePath, (fd) => {
+    const stat = fs.fstatSync(fd);
+    if (stat.size === 0) {
+      return null;
+    }
+    const readLen = Math.min(stat.size, Math.max(1024, Math.floor(maxBytes)));
+    const readStart = Math.max(0, stat.size - readLen);
+    const buf = Buffer.alloc(readLen);
+    const bytesRead = fs.readSync(fd, buf, 0, readLen, readStart);
+    if (bytesRead <= 0) {
+      return null;
+    }
+    const chunk = buf
+      .toString("utf-8", 0, bytesRead)
+      .split(/\r?\n/)
+      .slice(readStart > 0 ? 1 : 0)
+      .join("\n");
     return extractLatestUsageFromTranscriptChunk(chunk);
   });
 }

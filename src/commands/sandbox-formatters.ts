@@ -14,20 +14,6 @@ export function formatImageMatch(matches: boolean): string {
   return matches ? "✓" : "⚠️  mismatch";
 }
 
-/**
- * Type guard and counter utilities
- */
-
-export type ContainerItem = {
-  running: boolean;
-  imageMatch: boolean;
-  containerName: string;
-  sessionKey: string;
-  image: string;
-  createdAtMs: number;
-  lastUsedAtMs: number;
-};
-
 export function countRunning(items: readonly { running: boolean }[]): number {
   return items.filter((item) => item.running).length;
 }

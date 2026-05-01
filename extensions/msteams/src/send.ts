@@ -1,7 +1,6 @@
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";
-import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import {
   classifyMSTeamsSendError,
   formatMSTeamsSendErrorHint,
@@ -635,23 +634,4 @@ export async function deleteMessageMSTeams(
   log.info("deleted proactive message", { conversationId, activityId });
 
   return { conversationId };
-}
-
-/**
- * List all known conversation references (for debugging/CLI).
- */
-export async function listMSTeamsConversations(): Promise<
-  Array<{
-    conversationId: string;
-    userName?: string;
-    conversationType?: string;
-  }>
-> {
-  const store = createMSTeamsConversationStoreFs();
-  const all = await store.list();
-  return all.map(({ conversationId, reference }) => ({
-    conversationId,
-    userName: reference.user?.name,
-    conversationType: reference.conversation?.conversationType,
-  }));
 }

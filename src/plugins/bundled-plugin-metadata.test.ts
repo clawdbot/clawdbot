@@ -35,6 +35,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "diagnostics-otel",
   "diagnostics-prometheus",
   "diffs",
+  "file-transfer",
   "google-meet",
   "llm-task",
   "lobster",
@@ -52,6 +53,7 @@ const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "bonjour",
   "browser",
   "device-pair",
+  "file-transfer",
   "memory-core",
   "phone-control",
   "talk-voice",
@@ -377,6 +379,15 @@ describe("bundled plugin metadata", () => {
     expect(startupPluginIds.toSorted((left, right) => left.localeCompare(right))).toEqual(
       EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS,
     );
+  });
+
+  it("scopes Voice Call CLI activation to the voicecall command", () => {
+    const entry = listRepoBundledPluginManifests().find(
+      ({ manifest }) => manifest.id === "voice-call",
+    );
+
+    expect(entry?.manifest.commandAliases).toContainEqual({ name: "voicecall" });
+    expect(entry?.manifest.activation?.onCommands).toContain("voicecall");
   });
 
   it("keeps empty-config Gateway startup narrower than declared startup sidecars", () => {

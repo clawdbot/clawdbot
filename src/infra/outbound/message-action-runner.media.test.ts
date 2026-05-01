@@ -233,6 +233,36 @@ describe("runMessageAction media behavior", () => {
     vi.mocked(loadWebMedia).mockImplementation(actualLoadWebMedia);
   });
 
+  it("forwards asVoice from send actions into core delivery", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: workspacePlugin,
+        },
+      ]),
+    );
+
+    const result = await runDrySend({
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "workspace",
+        target: "12345678",
+        message: "voice note",
+        media: "https://example.com/voice.ogg",
+        asVoice: true,
+      },
+    });
+
+    expect(result.kind).toBe("send");
+    expect(channelResolutionMocks.executeSendAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        asVoice: true,
+      }),
+    );
+  });
+
   describe("sendAttachment hydration", () => {
     const cfg = {
       channels: {

@@ -4,6 +4,10 @@ import { normalizeGatewayEvent } from "./normalize.js";
 import { GatewayClientTransport, isConnectableTransport } from "./transport.js";
 import type {
   AgentRunParams,
+  ArtifactQuery,
+  ArtifactsDownloadResult,
+  ArtifactsGetResult,
+  ArtifactsListResult,
   GatewayEvent,
   GatewayRequestOptions,
   OpenClawEvent,
@@ -14,6 +18,8 @@ import type {
   SessionCreateParams,
   SessionSendParams,
   SessionTarget,
+  ToolInvokeParams,
+  ToolInvokeResult,
 } from "./types.js";
 
 const MAX_REPLAY_RUNS = 100;
@@ -183,6 +189,20 @@ type ChatProjection = {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+}
+
+function hasArtifactQueryScope(params: unknown): params is ArtifactQuery {
+  const record = asRecord(params);
+  return [record.sessionKey, record.runId, record.taskId].some(
+    (value) => typeof value === "string" && value.trim().length > 0,
+  );
+}
+
+function requireArtifactQueryScope(api: string, params: unknown): ArtifactQuery {
+  if (!hasArtifactQueryScope(params)) {
+    throw new Error(`${api} requires one of sessionKey, runId, or taskId`);
+  }
+  return params;
 }
 
 function readChatProjection(event: OpenClawEvent): ChatProjection | undefined {
@@ -746,10 +766,15 @@ export class ToolsNamespace extends RpcNamespace {
     return await this.call("effective", params);
   }
 
-  async invoke(name: string, params?: unknown): Promise<unknown> {
-    void name;
-    void params;
-    return unsupportedGatewayApi("oc.tools.invoke");
+  async invoke(name: string, params?: ToolInvokeParams): Promise<ToolInvokeResult> {
+    return await this.call("invoke", {
+      name,
+      ...(params?.args ? { args: params.args } : {}),
+      ...(params?.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      ...(params?.agentId ? { agentId: params.agentId } : {}),
+      ...(typeof params?.confirm === "boolean" ? { confirm: params.confirm } : {}),
+      ...(params?.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+    });
   }
 }
 
@@ -758,19 +783,22 @@ export class ArtifactsNamespace extends RpcNamespace {
     super(client, "artifacts");
   }
 
-  async list(params?: unknown): Promise<unknown> {
-    void params;
-    return unsupportedGatewayApi("oc.artifacts.list");
+  async list(params: ArtifactQuery): Promise<ArtifactsListResult> {
+    return await this.call("list", requireArtifactQueryScope("oc.artifacts.list", params));
   }
 
-  async get(id: string): Promise<unknown> {
-    void id;
-    return unsupportedGatewayApi("oc.artifacts.get");
+  async get(id: string, params: ArtifactQuery): Promise<ArtifactsGetResult> {
+    return await this.call("get", {
+      ...requireArtifactQueryScope("oc.artifacts.get", params),
+      artifactId: id,
+    });
   }
 
-  async download(id: string): Promise<unknown> {
-    void id;
-    return unsupportedGatewayApi("oc.artifacts.download");
+  async download(id: string, params: ArtifactQuery): Promise<ArtifactsDownloadResult> {
+    return await this.call("download", {
+      ...requireArtifactQueryScope("oc.artifacts.download", params),
+      artifactId: id,
+    });
   }
 }
 

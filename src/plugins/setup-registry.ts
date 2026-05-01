@@ -419,10 +419,10 @@ export function resolvePluginSetupRegistry(params?: {
   pluginIds?: readonly string[];
 }): PluginSetupRegistry {
   const env = params?.env ?? process.env;
-  const selectedPluginIds = params?.pluginIds
+  const scopedPluginIds = params?.pluginIds
     ? new Set(params.pluginIds.map((pluginId) => pluginId.trim()).filter(Boolean))
     : null;
-  if (selectedPluginIds && selectedPluginIds.size === 0) {
+  if (scopedPluginIds && scopedPluginIds.size === 0) {
     const empty = {
       providers: [],
       cliBackends: [],
@@ -449,7 +449,7 @@ export function resolvePluginSetupRegistry(params?: {
   });
 
   for (const record of manifestRegistry.plugins) {
-    if (selectedPluginIds && !selectedPluginIds.has(record.id)) {
+    if (scopedPluginIds && !scopedPluginIds.has(record.id)) {
       continue;
     }
     if (record.setup?.requiresRuntime === false) {

@@ -1,7 +1,5 @@
 export {
   isAudioAttachment,
-  isImageAttachment,
-  isVideoAttachment,
   normalizeAttachments,
   resolveAttachmentKind,
 } from "./attachments.normalize.js";

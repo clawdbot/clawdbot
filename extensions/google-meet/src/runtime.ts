@@ -21,7 +21,11 @@ import type {
   GoogleMeetJoinResult,
   GoogleMeetSession,
 } from "./transports/types.js";
-import { endMeetVoiceCallGatewayCall, joinMeetViaVoiceCallGateway } from "./voice-call-gateway.js";
+import {
+  endMeetVoiceCallGatewayCall,
+  joinMeetViaVoiceCallGateway,
+  speakMeetViaVoiceCallGateway,
+} from "./voice-call-gateway.js";
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -129,7 +133,11 @@ function evaluateSpeechReadiness(session: GoogleMeetSession): {
 function collectChromeAudioCommands(config: GoogleMeetConfig): string[] {
   const commands = config.chrome.audioBridgeCommand
     ? [config.chrome.audioBridgeCommand[0]]
-    : [config.chrome.audioInputCommand?.[0], config.chrome.audioOutputCommand?.[0]];
+    : [
+        config.chrome.audioInputCommand?.[0],
+        config.chrome.audioOutputCommand?.[0],
+        config.chrome.bargeInInputCommand?.[0],
+      ];
   return [...new Set(commands.filter((value): value is string => Boolean(value?.trim())))];
 }
 
@@ -301,6 +309,7 @@ export class GoogleMeetRuntime {
       return { session: reusable, spoken };
     }
     const createdAt = nowIso();
+    let delegatedTwilioSpoken = false;
 
     const session: GoogleMeetSession = {
       id: `meet_${randomUUID()}`,
@@ -398,14 +407,23 @@ export class GoogleMeetRuntime {
               config: this.params.config,
               dialInNumber,
               dtmfSequence,
+              logger: this.params.logger,
+              message:
+                mode === "realtime"
+                  ? (request.message ??
+                    this.params.config.voiceCall.introMessage ??
+                    this.params.config.realtime.introMessage)
+                  : undefined,
             })
           : undefined;
+        delegatedTwilioSpoken = Boolean(voiceCallResult?.introSent);
         session.twilio = {
           dialInNumber,
           pinProvided: Boolean(request.pin ?? this.params.config.twilio.defaultPin),
           dtmfSequence,
           voiceCallId: voiceCallResult?.callId,
           dtmfSent: voiceCallResult?.dtmfSent,
+          introSent: voiceCallResult?.introSent,
         };
         if (voiceCallResult?.callId) {
           this.#sessionStops.set(session.id, async () => {
@@ -428,9 +446,11 @@ export class GoogleMeetRuntime {
 
     this.#sessions.set(session.id, session);
     const spoken =
-      mode === "realtime" && speechInstructions
-        ? (await this.speak(session.id, speechInstructions)).spoken
-        : false;
+      transport === "twilio"
+        ? delegatedTwilioSpoken
+        : mode === "realtime" && speechInstructions
+          ? (await this.speak(session.id, speechInstructions)).spoken
+          : false;
     return { session, spoken };
   }
 
@@ -458,6 +478,20 @@ export class GoogleMeetRuntime {
     const session = this.#sessions.get(sessionId);
     if (!session) {
       return { found: false, spoken: false };
+    }
+    if (session.transport === "twilio" && session.twilio?.voiceCallId) {
+      await speakMeetViaVoiceCallGateway({
+        config: this.params.config,
+        callId: session.twilio.voiceCallId,
+        message:
+          instructions ||
+          this.params.config.voiceCall.introMessage ||
+          this.params.config.realtime.introMessage ||
+          "",
+      });
+      session.twilio.introSent = true;
+      session.updatedAt = nowIso();
+      return { found: true, spoken: true, session };
     }
     await this.#refreshBrowserHealthForChromeSession(session);
     const speak = this.#sessionSpeakers.get(sessionId);

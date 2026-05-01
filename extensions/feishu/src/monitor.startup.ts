@@ -72,11 +72,3 @@ export async function fetchBotIdentityForMonitor(
   }
   return {};
 }
-
-export async function fetchBotOpenIdForMonitor(
-  account: ResolvedFeishuAccount,
-  options: FetchBotOpenIdOptions = {},
-): Promise<string | undefined> {
-  const identity = await fetchBotIdentityForMonitor(account, options);
-  return identity.botOpenId;
-}

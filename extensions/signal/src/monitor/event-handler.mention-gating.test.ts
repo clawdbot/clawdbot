@@ -134,6 +134,32 @@ describe("signal mention gating", () => {
     expect(getCapturedCtx()?.WasMentioned).toBe(false);
   });
 
+  it("allows explicitly configured Signal groups by group id without a mention", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: {
+            inbound: { debounceMs: 0 },
+            groupChat: { mentionPatterns: ["@bot"] },
+          },
+          channels: {
+            signal: {
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["group:g1"],
+              groups: { g1: {} },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["group:g1"],
+      }),
+    );
+
+    await handler(makeGroupEvent({ message: "hello everyone" }));
+    expect(capturedCtx).toBeTruthy();
+    expect(getCapturedCtx()?.WasMentioned).toBe(false);
+  });
+
   it("records pending history for skipped group messages", async () => {
     const { handler, groupHistories } = createMentionGatedHistoryHandler();
     await handler(makeGroupEvent({ message: "hello from alice" }));

@@ -205,6 +205,7 @@ vi.mock("../agents/pi-tools.before-tool-call.js", () => ({
 
 const { authorizeHttpGatewayConnect } = await import("./auth.js");
 const { handleToolsInvokeHttpRequest } = await import("./tools-invoke-http.js");
+const { toolsInvokeHandlers } = await import("./server-methods/tools-invoke.js");
 
 let pluginHttpHandlers: Array<(req: IncomingMessage, res: ServerResponse) => Promise<boolean>> = [];
 
@@ -378,6 +379,21 @@ const expectOkInvokeResponse = async (res: Response) => {
   const body = await res.json();
   expect(body.ok).toBe(true);
   return body as { ok: boolean; result?: Record<string, unknown> };
+};
+
+const invokeToolsRpc = async (params: Record<string, unknown>, scopes = ["operator.write"]) => {
+  const respond = vi.fn();
+  await toolsInvokeHandlers["tools.invoke"]({
+    params,
+    respond: respond as never,
+    context: { getRuntimeConfig: () => cfg } as never,
+    client: { connect: { role: "operator", scopes } } as never,
+    req: { type: "req", id: "req-rpc-1", method: "tools.invoke" },
+    isWebchatConnect: () => false,
+  });
+  return respond.mock.calls[0] as
+    | [boolean, { ok?: boolean; toolName?: string; output?: unknown; error?: unknown }?, unknown?]
+    | undefined;
 };
 
 const setMainAllowedTools = (params: {
@@ -899,5 +915,103 @@ describe("POST /tools/invoke", () => {
     const body = await expectOkInvokeResponse(res);
     expect(body.result).toEqual({ ok: true, result: "browser" });
     expect(lastCreateOpenClawToolsContext?.disablePluginTools).toBe(false);
+  });
+});
+
+describe("tools.invoke Gateway RPC", () => {
+  it("invokes a tool through the SDK-facing RPC envelope", async () => {
+    allowAgentsListForMain();
+
+    const call = await invokeToolsRpc({
+      name: "agents_list",
+      args: {},
+      sessionKey: "main",
+      idempotencyKey: "rpc-tool-test",
+    });
+
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toMatchObject({
+      ok: true,
+      toolName: "agents_list",
+      output: { ok: true, result: [] },
+      source: "core",
+    });
+    expect(lastCreateOpenClawToolsContext?.allowGatewaySubagentBinding).toBe(true);
+    expect(hookMocks.runBeforeToolCallHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalMode: "report",
+        toolName: "agents_list",
+        toolCallId: "rpc-rpc-tool-test",
+        ctx: expect.objectContaining({
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        }),
+      }),
+    );
+  });
+
+  it("returns typed approval-needed refusal when the policy hook blocks", async () => {
+    setMainAllowedTools({ allow: ["tools_invoke_test"] });
+    hookMocks.runBeforeToolCallHook.mockResolvedValueOnce({
+      blocked: true,
+      deniedReason: "plugin-approval",
+      reason: "Plugin approval required",
+      params: { mode: "ok" },
+    });
+
+    const call = await invokeToolsRpc({
+      name: "tools_invoke_test",
+      args: { mode: "ok" },
+      sessionKey: "main",
+      confirm: false,
+    });
+
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toMatchObject({
+      ok: false,
+      toolName: "tools_invoke_test",
+      requiresApproval: true,
+      error: {
+        code: "requires_approval",
+        message: "Plugin approval required",
+      },
+    });
+  });
+
+  it("rejects mismatched session and agent scope", async () => {
+    cfg = {
+      agents: {
+        list: [
+          { id: "main", default: true, tools: { allow: ["agents_list"] } },
+          { id: "other", tools: { allow: ["agents_list"] } },
+        ],
+      },
+    };
+
+    const call = await invokeToolsRpc({
+      name: "agents_list",
+      sessionKey: "agent:main:main",
+      agentId: "other",
+    });
+
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toMatchObject({
+      ok: false,
+      toolName: "agents_list",
+      error: {
+        code: "validation_error",
+        message: 'agent id "other" does not match session agent "main"',
+      },
+    });
+  });
+
+  it("rejects malformed params at the RPC boundary", async () => {
+    const call = await invokeToolsRpc({ name: "" });
+
+    expect(call?.[0]).toBe(false);
+    expect(call?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("invalid tools.invoke params"),
+    });
   });
 });

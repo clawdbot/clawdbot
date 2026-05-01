@@ -4,7 +4,12 @@ import {
   readAcpSessionEntry,
   type AcpSessionStoreEntry,
 } from "../acp/runtime/session-meta.js";
+import {
+  formatSubagentRecoveryWedgedReason,
+  isSubagentRecoveryWedgedEntry,
+} from "../agents/subagent-recovery-state.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronJobActive } from "../cron/active-jobs.js";
 import { readCronRunLogEntriesSync, resolveCronRunLogPath } from "../cron/run-log.js";
@@ -19,7 +24,7 @@ import {
   sweepExpiredPluginStateEntries,
 } from "../plugin-state/plugin-state-store.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { deriveSessionChatType } from "../sessions/session-chat-type.js";
+import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -179,6 +184,18 @@ function findSessionEntryByKey(store: Record<string, unknown>, sessionKey: strin
     }
   }
   return undefined;
+}
+
+function findTaskSessionEntry(task: TaskRecord): SessionEntry | undefined {
+  const childSessionKey = task.childSessionKey?.trim();
+  if (!childSessionKey) {
+    return undefined;
+  }
+  const agentId = taskRegistryMaintenanceRuntime.parseAgentSessionKey(childSessionKey)?.agentId;
+  const storePath = taskRegistryMaintenanceRuntime.resolveStorePath(undefined, { agentId });
+  const store = taskRegistryMaintenanceRuntime.loadSessionStore(storePath);
+  const entry = findSessionEntryByKey(store, childSessionKey);
+  return entry && typeof entry === "object" ? (entry as SessionEntry) : undefined;
 }
 
 function isActiveTask(task: TaskRecord): boolean {
@@ -369,18 +386,29 @@ function hasBackingSession(task: TaskRecord): boolean {
   }
   if (task.runtime === "subagent" || task.runtime === "cli") {
     if (task.runtime === "cli") {
-      const chatType = deriveSessionChatType(childSessionKey);
+      const chatType = deriveSessionChatTypeFromKey(childSessionKey);
       if (chatType === "channel" || chatType === "group" || chatType === "direct") {
         return false;
       }
     }
-    const agentId = taskRegistryMaintenanceRuntime.parseAgentSessionKey(childSessionKey)?.agentId;
-    const storePath = taskRegistryMaintenanceRuntime.resolveStorePath(undefined, { agentId });
-    const store = taskRegistryMaintenanceRuntime.loadSessionStore(storePath);
-    return Boolean(findSessionEntryByKey(store, childSessionKey));
+    const entry = findTaskSessionEntry(task);
+    if (task.runtime === "subagent" && isSubagentRecoveryWedgedEntry(entry)) {
+      return false;
+    }
+    return Boolean(entry);
   }
 
   return true;
+}
+
+function resolveTaskLostError(task: TaskRecord): string {
+  if (task.runtime === "subagent") {
+    const entry = findTaskSessionEntry(task);
+    if (entry && isSubagentRecoveryWedgedEntry(entry)) {
+      return formatSubagentRecoveryWedgedReason(entry);
+    }
+  }
+  return "backing session missing";
 }
 
 function shouldMarkLost(task: TaskRecord, now: number): boolean {
@@ -614,7 +642,7 @@ function markTaskLost(task: TaskRecord, now: number): TaskRecord {
       taskId: task.taskId,
       endedAt: task.endedAt ?? now,
       lastEventAt: now,
-      error: task.error ?? "backing session missing",
+      error: task.error ?? resolveTaskLostError(task),
       cleanupAfter,
     }) ?? task;
   void taskRegistryMaintenanceRuntime.maybeDeliverTaskTerminalUpdate(updated.taskId);
@@ -662,7 +690,7 @@ function projectTaskLost(task: TaskRecord, now: number): TaskRecord {
     status: "lost",
     endedAt: task.endedAt ?? now,
     lastEventAt: now,
-    error: task.error ?? "backing session missing",
+    error: task.error ?? resolveTaskLostError(task),
   };
   return {
     ...projected,

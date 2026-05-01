@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import Foundation
 import Observation
+import OpenClawKit
 import SwiftUI
 
 /// Menu contents for the OpenClaw menu bar extra.
@@ -14,6 +15,7 @@ struct MenuContent: View {
     private let heartbeatStore = HeartbeatStore.shared
     private let controlChannel = ControlChannel.shared
     private let activityStore = WorkActivityStore.shared
+    private let nodesStore = NodesStore.shared
     @Bindable private var pairingPrompter = NodePairingApprovalPrompter.shared
     @Bindable private var devicePairingPrompter = DevicePairingApprovalPrompter.shared
     @Environment(\.openSettings) private var openSettings
@@ -44,6 +46,9 @@ struct MenuContent: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(self.connectionLabel)
                     self.statusLine(label: self.healthStatus.label, color: self.healthStatus.color)
+                    if let macNodeStatus = self.macNodeStatus {
+                        self.statusLine(label: macNodeStatus.label, color: macNodeStatus.color)
+                    }
                     if self.pairingPrompter.pendingCount > 0 {
                         let repairCount = self.pairingPrompter.pendingRepairCount
                         let repairSuffix = repairCount > 0 ? " · \(repairCount) repair" : ""
@@ -349,6 +354,31 @@ struct MenuContent: View {
             alert.informativeText = error.localizedDescription
             alert.runModal()
         }
+    }
+
+    private var macNodeStatus: (label: String, color: Color)? {
+        guard self.state.connectionMode != .unconfigured else { return nil }
+        guard case .connected = self.controlChannel.state else { return nil }
+
+        let deviceId = DeviceIdentityStore.loadOrCreate().deviceId
+        if let entry = self.nodesStore.nodes.first(where: { $0.nodeId == deviceId }) {
+            guard entry.isConnected else {
+                return ("Mac capabilities offline", .orange)
+            }
+            let commands = Set(entry.commands ?? [])
+            let missingRequiredCommands = [
+                OpenClawSystemCommand.notify.rawValue,
+                OpenClawSystemCommand.run.rawValue,
+                OpenClawSystemCommand.which.rawValue,
+            ].filter { !commands.contains($0) }
+            if !missingRequiredCommands.isEmpty {
+                return ("Mac capabilities incomplete", .orange)
+            }
+            return nil
+        }
+
+        guard !self.nodesStore.isLoading, !self.nodesStore.nodes.isEmpty else { return nil }
+        return ("Mac capabilities offline", .orange)
     }
 
     private var healthStatus: (label: String, color: Color) {

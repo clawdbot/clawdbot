@@ -34,7 +34,7 @@ export function buildProviderSummaryMetadataIndex(
 ): Map<ChannelId, ProviderSummaryMetadata> {
   return new Map(
     listReadOnlyChannelPluginsForConfig(cfg, {
-      includeSetupRuntimeFallback: false,
+      includeSetupFallbackPlugins: false,
     }).map((plugin) => [
       plugin.id,
       {
@@ -96,7 +96,7 @@ export async function buildProviderStatusIndex(
   const map = new Map<string, ProviderAccountStatus>();
 
   for (const plugin of listReadOnlyChannelPluginsForConfig(cfg, {
-    includeSetupRuntimeFallback: false,
+    includeSetupFallbackPlugins: false,
   })) {
     const accountIds = plugin.config.listAccountIds(cfg);
     for (const accountId of accountIds) {

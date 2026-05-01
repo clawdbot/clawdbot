@@ -17,6 +17,7 @@ describe("codex plugin", () => {
     const registerAgentHarness = vi.fn();
     const registerCommand = vi.fn();
     const registerMediaUnderstandingProvider = vi.fn();
+    const registerMigrationProvider = vi.fn();
     const registerProvider = vi.fn();
     const on = vi.fn();
     const onConversationBindingResolved = vi.fn();
@@ -32,6 +33,7 @@ describe("codex plugin", () => {
         registerAgentHarness,
         registerCommand,
         registerMediaUnderstandingProvider,
+        registerMigrationProvider,
         registerProvider,
         on,
         onConversationBindingResolved,
@@ -54,6 +56,10 @@ describe("codex plugin", () => {
     expect(registerCommand.mock.calls[0]?.[0]).toMatchObject({
       name: "codex",
       description: "Inspect and control the Codex app-server harness",
+    });
+    expect(registerMigrationProvider.mock.calls[0]?.[0]).toMatchObject({
+      id: "codex",
+      label: "Codex",
     });
     expect(on).toHaveBeenCalledWith("inbound_claim", expect.any(Function));
     expect(onConversationBindingResolved).toHaveBeenCalledWith(expect.any(Function));

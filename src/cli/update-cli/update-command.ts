@@ -9,12 +9,14 @@ import {
 } from "../../commands/doctor-completion.js";
 import { doctorCommand } from "../../commands/doctor.js";
 import {
+  ConfigMutationConflictError,
   readConfigFileSnapshot,
   replaceConfigFile,
   resolveGatewayPort,
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "../../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
@@ -1117,12 +1119,49 @@ async function persistRequestedUpdateChannel(params: {
       channel: params.requestedChannel,
     },
   };
+  try {
+    await replaceConfigFile({
+      nextConfig: next,
+      baseHash: params.configSnapshot.hash,
+    });
+    return createUpdatedChannelSnapshot(params.configSnapshot, next);
+  } catch (error) {
+    if (!(error instanceof ConfigMutationConflictError)) {
+      throw error;
+    }
+  }
+
+  const refreshed = await readConfigFileSnapshot();
+  if (!refreshed.valid) {
+    return refreshed;
+  }
+  const refreshedChannel = normalizeUpdateChannel(refreshed.config.update?.channel);
+  if (refreshedChannel === params.requestedChannel) {
+    return refreshed;
+  }
+  const refreshedNext = {
+    ...refreshed.sourceConfig,
+    update: {
+      ...refreshed.sourceConfig.update,
+      channel: params.requestedChannel,
+    },
+  };
   await replaceConfigFile({
-    nextConfig: next,
-    baseHash: params.configSnapshot.hash,
+    nextConfig: refreshedNext,
+    baseHash: refreshed.hash,
   });
+  return createUpdatedChannelSnapshot(refreshed, refreshedNext);
+}
+
+function createUpdatedChannelSnapshot(
+  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
+  next: OpenClawConfig,
+): Awaited<ReturnType<typeof readConfigFileSnapshot>> {
+  if (!snapshot.valid) {
+    return snapshot;
+  }
   return {
-    ...params.configSnapshot,
+    ...snapshot,
     hash: undefined,
     parsed: next,
     sourceConfig: asResolvedSourceConfig(next),

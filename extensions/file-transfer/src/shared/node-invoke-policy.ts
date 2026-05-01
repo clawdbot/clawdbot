@@ -506,13 +506,24 @@ function policyDeniedResult(input: {
   };
 }
 
-async function runWritePreflight(input: {
+type PreflightResult =
+  | {
+      ok: true;
+      payload: Record<string, unknown> | null;
+      canonicalPath: string;
+    }
+  | {
+      ok: false;
+      result: OpenClawPluginNodeInvokePolicyResult;
+    };
+
+async function invokePreflight(input: {
   ctx: OpenClawPluginNodeInvokePolicyContext;
   op: FileTransferAuditOp;
   params: Record<string, unknown>;
   requestedPath: string;
   startedAt: number;
-}): Promise<OpenClawPluginNodeInvokePolicyResult | null> {
+}): Promise<PreflightResult> {
   const nodeDisplayName = input.ctx.node?.displayName;
   const preflight = await input.ctx.invokeNode({
     params: {
@@ -533,10 +544,13 @@ async function runWritePreflight(input: {
     });
     return {
       ok: false,
-      code: preflight.code,
-      message: `${input.op} failed: ${preflight.message}`,
-      details: preflight.details,
-      unavailable: true,
+      result: {
+        ok: false,
+        code: preflight.code,
+        message: `${input.op} failed: ${preflight.message}`,
+        details: preflight.details,
+        unavailable: true,
+      },
     };
   }
 
@@ -553,100 +567,31 @@ async function runWritePreflight(input: {
       errorMessage: typeof payload.message === "string" ? payload.message : undefined,
       durationMs: Date.now() - input.startedAt,
     });
-    return preflight;
+    return { ok: false, result: preflight };
   }
 
   const canonicalPath =
     payload && typeof payload.path === "string" && payload.path
       ? payload.path
       : input.requestedPath;
-  if (canonicalPath === input.requestedPath) {
-    return null;
-  }
-
-  const policy = evaluateFilePolicy({
-    nodeId: input.ctx.nodeId,
-    nodeDisplayName,
-    kind: "write",
-    path: canonicalPath,
-    pluginConfig: input.ctx.pluginConfig,
-  });
-  if (policy.ok) {
-    return null;
-  }
-
-  await appendFileTransferAudit({
-    op: input.op,
-    nodeId: input.ctx.nodeId,
-    nodeDisplayName,
-    requestedPath: input.requestedPath,
-    canonicalPath,
-    decision: "denied:symlink_escape",
-    errorCode: policy.code,
-    reason: policy.reason,
-    durationMs: Date.now() - input.startedAt,
-  });
-  return {
-    ok: false,
-    code: "SYMLINK_TARGET_DENIED",
-    message: `${input.op} SYMLINK_TARGET_DENIED: requested path resolved to ${canonicalPath} which is not allowed by policy`,
-  };
+  return { ok: true, payload, canonicalPath };
 }
 
-async function runFileFetchPreflight(input: {
+async function runPathPreflight(input: {
   ctx: OpenClawPluginNodeInvokePolicyContext;
   op: FileTransferAuditOp;
+  kind: FilePolicyKind;
   params: Record<string, unknown>;
   requestedPath: string;
   startedAt: number;
 }): Promise<OpenClawPluginNodeInvokePolicyResult | null> {
-  const nodeDisplayName = input.ctx.node?.displayName;
-  const preflight = await input.ctx.invokeNode({
-    params: {
-      ...input.params,
-      preflightOnly: true,
-    },
-  });
+  const preflight = await invokePreflight(input);
   if (!preflight.ok) {
-    await appendFileTransferAudit({
-      op: input.op,
-      nodeId: input.ctx.nodeId,
-      nodeDisplayName,
-      requestedPath: input.requestedPath,
-      decision: "error",
-      errorCode: preflight.code,
-      errorMessage: preflight.message,
-      durationMs: Date.now() - input.startedAt,
-    });
-    return {
-      ok: false,
-      code: preflight.code,
-      message: `${input.op} failed: ${preflight.message}`,
-      details: preflight.details,
-      unavailable: true,
-    };
+    return preflight.result;
   }
 
-  const payload = readResultPayload(preflight);
-  if (payload?.ok === false) {
-    await appendFileTransferAudit({
-      op: input.op,
-      nodeId: input.ctx.nodeId,
-      nodeDisplayName,
-      requestedPath: input.requestedPath,
-      canonicalPath: typeof payload.canonicalPath === "string" ? payload.canonicalPath : undefined,
-      decision: "error",
-      errorCode: typeof payload.code === "string" ? payload.code : undefined,
-      errorMessage: typeof payload.message === "string" ? payload.message : undefined,
-      durationMs: Date.now() - input.startedAt,
-    });
-    return preflight;
-  }
-
-  const canonicalPath =
-    payload && typeof payload.path === "string" && payload.path
-      ? payload.path
-      : input.requestedPath;
+  const nodeDisplayName = input.ctx.node?.displayName;
+  const { canonicalPath } = preflight;
   if (canonicalPath === input.requestedPath) {
     return null;
   }
@@ -654,7 +599,7 @@ async function runFileFetchPreflight(input: {
   const policy = evaluateFilePolicy({
     nodeId: input.ctx.nodeId,
     nodeDisplayName,
-    kind: "read",
+    kind: input.kind,
     path: canonicalPath,
     pluginConfig: input.ctx.pluginConfig,
   });
@@ -687,59 +632,17 @@ async function runDirFetchPreflight(input: {
   requestedPath: string;
   startedAt: number;
 }): Promise<OpenClawPluginNodeInvokePolicyResult | null> {
-  const nodeDisplayName = input.ctx.node?.displayName;
-  const preflight = await input.ctx.invokeNode({
-    params: {
-      ...input.params,
-      preflightOnly: true,
-    },
-  });
+  const preflight = await invokePreflight(input);
   if (!preflight.ok) {
-    await appendFileTransferAudit({
-      op: input.op,
-      nodeId: input.ctx.nodeId,
-      nodeDisplayName,
-      requestedPath: input.requestedPath,
-      decision: "error",
-      errorCode: preflight.code,
-      errorMessage: preflight.message,
-      durationMs: Date.now() - input.startedAt,
-    });
-    return {
-      ok: false,
-      code: preflight.code,
-      message: `${input.op} failed: ${preflight.message}`,
-      details: preflight.details,
-      unavailable: true,
-    };
+    return preflight.result;
   }
 
-  const payload = readResultPayload(preflight);
-  if (payload?.ok === false) {
-    await appendFileTransferAudit({
-      op: input.op,
-      nodeId: input.ctx.nodeId,
-      nodeDisplayName,
-      requestedPath: input.requestedPath,
-      canonicalPath: typeof payload.canonicalPath === "string" ? payload.canonicalPath : undefined,
-      decision: "error",
-      errorCode: typeof payload.code === "string" ? payload.code : undefined,
-      errorMessage: typeof payload.message === "string" ? payload.message : undefined,
-      durationMs: Date.now() - input.startedAt,
-    });
-    return preflight;
-  }
-
-  const canonicalPath =
-    payload && typeof payload.path === "string" && payload.path
-      ? payload.path
-      : input.requestedPath;
   return await validateDirFetchEntries({
     ctx: input.ctx,
     op: input.op,
     requestedPath: input.requestedPath,
-    canonicalPath,
-    entries: payload?.entries,
+    canonicalPath: preflight.canonicalPath,
+    entries: preflight.payload?.entries,
     startedAt: input.startedAt,
     phase: "preflight",
   });
@@ -780,9 +683,10 @@ async function handleFileTransferInvoke(
     maxBytes: gate.maxBytes,
   });
   if (command === "file.fetch") {
-    const preflightDeny = await runFileFetchPreflight({
+    const preflightDeny = await runPathPreflight({
       ctx,
       op,
+      kind: "read",
       params: forwardedParams,
       requestedPath,
       startedAt,
@@ -791,9 +695,10 @@ async function handleFileTransferInvoke(
       return preflightDeny;
     }
   } else if (command === "file.write") {
-    const preflightDeny = await runWritePreflight({
+    const preflightDeny = await runPathPreflight({
       ctx,
       op,
+      kind: "write",
       params: forwardedParams,
       requestedPath,
       startedAt,

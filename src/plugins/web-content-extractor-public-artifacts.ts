@@ -1,7 +1,4 @@
-import {
-  loadBundledPluginPublicArtifactModuleSync,
-  resolveBundledPluginPublicArtifactPath,
-} from "./public-surface-loader.js";
+import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
 import type {
   PluginWebContentExtractorEntry,
   WebContentExtractorPlugin,
@@ -82,10 +79,4 @@ export function loadBundledWebContentExtractorEntriesFromDir(params: {
     return null;
   }
   return extractors.map((extractor) => Object.assign({}, extractor, { pluginId: params.pluginId }));
-}
-
-export function hasBundledWebContentExtractorPublicArtifact(pluginId: string): boolean {
-  return WEB_CONTENT_EXTRACTOR_ARTIFACT_CANDIDATES.some((artifactBasename) =>
-    Boolean(resolveBundledPluginPublicArtifactPath({ dirName: pluginId, artifactBasename })),
-  );
 }

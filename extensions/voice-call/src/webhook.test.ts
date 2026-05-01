@@ -1,7 +1,11 @@
 import { request, type IncomingMessage } from "node:http";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
+import {
+  VoiceCallConfigSchema,
+  type VoiceCallConfig,
+  type VoiceCallConfigInput,
+} from "./config.js";
 import type { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import type { TwilioProvider } from "./providers/twilio.js";
@@ -59,18 +63,35 @@ type TwilioProviderTestDouble = VoiceCallProvider &
     | "clearTtsQueue"
   >;
 
-const createConfig = (overrides: Partial<VoiceCallConfig> = {}): VoiceCallConfig => {
+const createConfig = (overrides: VoiceCallConfigInput = {}): VoiceCallConfig => {
   const base = VoiceCallConfigSchema.parse({});
   base.serve.port = 0;
 
-  return {
+  const merged = {
     ...base,
     ...overrides,
     serve: {
       ...base.serve,
       ...overrides.serve,
     },
+    realtime: {
+      ...base.realtime,
+      ...overrides.realtime,
+      tools: overrides.realtime?.tools ?? base.realtime.tools,
+      fastContext: {
+        ...base.realtime.fastContext,
+        ...overrides.realtime?.fastContext,
+        sources: overrides.realtime?.fastContext?.sources ?? base.realtime.fastContext.sources,
+      },
+      providers: overrides.realtime?.providers ?? base.realtime.providers,
+    },
   };
+  const parsed = VoiceCallConfigSchema.parse({
+    ...merged,
+    serve: { ...merged.serve, port: merged.serve.port === 0 ? 1 : merged.serve.port },
+  });
+  parsed.serve.port = merged.serve.port;
+  return parsed;
 };
 
 const createCall = (startedAt: number): CallRecord => ({
@@ -679,6 +700,71 @@ describe("VoiceCallWebhookServer replay handling", () => {
     },
   );
 
+  it("serves initial provider TwiML before the realtime shortcut", async () => {
+    const parseWebhookEvent = vi.fn(() => ({ events: [], statusCode: 200 }));
+    const consumeInitialTwiML = vi.fn(
+      () =>
+        '<Response><Play digits="ww123456#" /><Redirect method="POST">https://example.test</Redirect></Response>',
+    );
+    const buildTwiMLPayload = vi.fn(() => ({
+      statusCode: 200,
+      headers: { "Content-Type": "text/xml" },
+      body: '<Response><Connect><Stream url="wss://example.test/voice/stream/realtime/token" /></Connect></Response>',
+    }));
+    const twilioProvider: VoiceCallProvider = {
+      ...provider,
+      name: "twilio",
+      verifyWebhook: () => ({ ok: true, verifiedRequestKey: "twilio:req:rt-stored" }),
+      parseWebhookEvent,
+      consumeInitialTwiML,
+    };
+    const { manager, processEvent } = createManager([]);
+    const config = createConfig({
+      provider: "twilio",
+      inboundPolicy: "disabled",
+      realtime: {
+        enabled: true,
+        streamPath: "/voice/stream/realtime",
+        instructions: "Be helpful.",
+        toolPolicy: "safe-read-only",
+        tools: [],
+        providers: {},
+      },
+    });
+    const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
+    server.setRealtimeHandler({
+      buildTwiMLPayload,
+      getStreamPathPattern: () => "/voice/stream/realtime",
+      handleWebSocketUpgrade: () => {},
+      registerToolHandler: () => {},
+      setPublicUrl: () => {},
+    } as unknown as RealtimeCallHandler);
+
+    try {
+      const baseUrl = await server.start();
+      const requestUrl = requireBoundRequestUrl(server, baseUrl);
+      requestUrl.searchParams.set("callId", "call-1");
+      const response = await fetch(requestUrl.toString(), {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          "x-twilio-signature": "sig",
+        },
+        body: "CallSid=CA123&Direction=outbound-api&CallStatus=in-progress&From=%2B15550001111&To=%2B15550002222",
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.text();
+      expect(body).toContain('<Play digits="ww123456#"');
+      expect(consumeInitialTwiML).toHaveBeenCalledTimes(1);
+      expect(buildTwiMLPayload).not.toHaveBeenCalled();
+      expect(parseWebhookEvent).not.toHaveBeenCalled();
+      expect(processEvent).not.toHaveBeenCalled();
+    } finally {
+      await server.stop();
+    }
+  });
+
   it("rejects non-allowlisted inbound realtime calls before creating a stream token", async () => {
     const buildTwiMLPayload = vi.fn(() => ({
       statusCode: 200,
@@ -1159,7 +1245,7 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
       processEvent: vi.fn(),
     } as unknown as CallManager;
 
-    let currentStreamSid: string | null = "MZ-new";
+    let currentStreamSid: string | null = "MZ-old";
     const twilioProvider = createTwilioStreamingProvider({
       registerCallStream: (_callSid: string, streamSid: string) => {
         currentStreamSid = streamSid;
@@ -1195,16 +1281,23 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
       config: {
         onDisconnect?: (providerCallId: string, streamSid: string) => void;
         onConnect?: (providerCallId: string, streamSid: string) => void;
+        onTranscriptionReady?: (providerCallId: string, streamSid: string) => void;
       };
     };
     if (!mediaHandler) {
       throw new Error("expected webhook server to expose a media stream handler");
     }
 
-    mediaHandler.config.onConnect?.("CA-stream-1", "MZ-new");
     mediaHandler.config.onDisconnect?.("CA-stream-1", "MZ-old");
+    await vi.advanceTimersByTimeAsync(1_000);
+    mediaHandler.config.onConnect?.("CA-stream-1", "MZ-new");
     await vi.advanceTimersByTimeAsync(2_100);
     expect(endCall).not.toHaveBeenCalled();
+    expect(speakInitialMessage).not.toHaveBeenCalled();
+
+    mediaHandler.config.onTranscriptionReady?.("CA-stream-1", "MZ-new");
+    expect(speakInitialMessage).toHaveBeenCalledTimes(1);
+    expect(speakInitialMessage).toHaveBeenCalledWith("CA-stream-1");
 
     mediaHandler.config.onDisconnect?.("CA-stream-1", "MZ-new");
     await vi.advanceTimersByTimeAsync(2_100);

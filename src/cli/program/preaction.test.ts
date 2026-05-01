@@ -243,7 +243,9 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["agent", "hi"],
     });
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "all" });
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "all",
+    });
   });
 
   it("loads plugins for json local agent runs", async () => {
@@ -257,7 +259,9 @@ describe("registerPreActionHooks", () => {
       commandPath: ["agent", "hi"],
       suppressDoctorStdout: true,
     });
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "all" });
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "all",
+    });
   });
 
   it("keeps setup alias and channels add manifest-first", async () => {
@@ -506,7 +510,9 @@ describe("registerPreActionHooks", () => {
       processArgv: ["node", "openclaw", "channels", "send", "--json"],
     });
 
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "configured-channels",
+    });
     expect(stderrDuringPluginLoad).toBe(true);
     // Flag must be restored after plugin loading completes
     expect(loggingState.forceConsoleToStderr).toBe(false);

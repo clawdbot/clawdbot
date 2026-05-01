@@ -1,1 +1,4 @@
-export * from "../../agents/command/session.js";
+export {
+  buildExplicitSessionIdSessionKey,
+  resolveSessionKeyForRequest,
+} from "../../agents/command/session.js";

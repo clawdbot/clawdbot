@@ -154,8 +154,17 @@ export type RealtimeVoiceBridge = {
   setMediaTimestamp(ts: number): void;
   sendUserMessage?(text: string): void;
   triggerGreeting?(instructions?: string): void;
+  handleBargeIn?(options?: RealtimeVoiceBargeInOptions): void;
   submitToolResult(callId: string, result: unknown, options?: RealtimeVoiceToolResultOptions): void;
   acknowledgeMark(): void;
   close(): void;
   isConnected(): boolean;
+};
+
+export type RealtimeVoiceBargeInOptions = {
+  /**
+   * The caller has already confirmed assistant audio is still playing in its output sink.
+   * This lets providers interrupt output even when the sink cannot provide real playback marks.
+   */
+  audioPlaybackActive?: boolean;
 };

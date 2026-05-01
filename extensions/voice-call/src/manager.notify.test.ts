@@ -37,6 +37,15 @@ class DelayedPlayTtsProvider extends FakeProvider {
   }
 }
 
+class FailStartListeningProvider extends FakeProvider {
+  override async startListening(
+    input: Parameters<FakeProvider["startListening"]>[0],
+  ): Promise<void> {
+    this.startListeningCalls.push(input);
+    throw new Error("synthetic start listening failure");
+  }
+}
+
 function requireCall(
   manager: Awaited<ReturnType<typeof createManagerHarness>>["manager"],
   callId: string,
@@ -264,6 +273,37 @@ describe("CallManager notify and mapping", () => {
       }),
     ]);
     expect(requireCall(manager, callId).state).toBe("listening");
+  });
+
+  it("logs fire-and-forget initial-message failures instead of leaking unhandled rejections", async () => {
+    const provider = new FailStartListeningProvider("twilio");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { manager } = await createManagerHarness({ streaming: { enabled: false } }, provider);
+
+      const callId = await initiateCallWithMessage(
+        manager,
+        "+15550000013",
+        "Twilio hello",
+        "conversation",
+      );
+      await answerCall(manager, callId, "evt-initial-message-start-listening-fails");
+
+      expectFirstPlayTtsText(provider, "Twilio hello");
+      expect(provider.startListeningCalls).toEqual([
+        expect.objectContaining({
+          callId,
+          providerCallId: "call-uuid",
+        }),
+      ]);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `[voice-call] Failed to speak initial message for call ${callId}: synthetic start listening failure`,
+        ),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("preserves initialMessage after a failed first playback and retries on next trigger", async () => {

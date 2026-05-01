@@ -1,4 +1,3 @@
-import { resolveModelDisplayName } from "../../../agents/model-selection-display.js";
 import { resolveStoredSubagentCapabilities } from "../../../agents/subagent-capabilities.js";
 import type { ResolvedSubagentController } from "../../../agents/subagent-control.js";
 import { subagentRuns } from "../../../agents/subagent-registry-memory.js";
@@ -11,11 +10,7 @@ import {
   resolveMainSessionAlias,
   stripToolMessages,
 } from "../../../agents/tools/sessions-helpers.js";
-import type { resolveStorePath as resolveStorePathFn } from "../../../config/sessions/paths.js";
-import type { loadSessionStore as loadSessionStoreFn } from "../../../config/sessions/store-load.js";
-import type { SessionEntry } from "../../../config/sessions/types.js";
 import { callGateway } from "../../../gateway/call.js";
-import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { looksLikeSessionId } from "../../../sessions/session-id.js";
@@ -23,17 +18,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../../shared/string-coerce.js";
-import {
-  formatDurationCompact,
-  formatTokenUsageDisplay,
-  truncateLine,
-} from "../../../shared/subagents-format.js";
 import { resolveCommandSurfaceChannel, resolveChannelAccountId } from "../channel-context.js";
 import { extractMessageText, type ChatMessage } from "../commands-subagents-text.js";
 import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
 import {
   formatRunLabel,
-  formatRunStatus,
   resolveSubagentTargetFromRuns,
   type SubagentTargetResolution,
 } from "../subagents-utils.js";
@@ -45,11 +34,11 @@ export type { ChatMessage } from "../commands-subagents-text.js";
 export const COMMAND = "/subagents";
 export const COMMAND_KILL = "/kill";
 export const COMMAND_STEER = "/steer";
-export const COMMAND_TELL = "/tell";
-export const COMMAND_FOCUS = "/focus";
-export const COMMAND_UNFOCUS = "/unfocus";
-export const COMMAND_AGENTS = "/agents";
-export const ACTIONS = new Set([
+const COMMAND_TELL = "/tell";
+const COMMAND_FOCUS = "/focus";
+const COMMAND_UNFOCUS = "/unfocus";
+const COMMAND_AGENTS = "/agents";
+const ACTIONS = new Set([
   "list",
   "kill",
   "log",
@@ -64,81 +53,8 @@ export const ACTIONS = new Set([
 ]);
 
 export const RECENT_WINDOW_MINUTES = 30;
-const SUBAGENT_TASK_PREVIEW_MAX = 110;
-export const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
 
-function compactLine(value: string) {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-function formatTaskPreview(value: string) {
-  return truncateLine(compactLine(value), SUBAGENT_TASK_PREVIEW_MAX);
-}
-
-export function resolveDisplayStatus(
-  entry: SubagentRunRecord,
-  options?: { pendingDescendants?: number },
-) {
-  const pendingDescendants = Math.max(0, options?.pendingDescendants ?? 0);
-  if (pendingDescendants > 0) {
-    const childLabel = pendingDescendants === 1 ? "child" : "children";
-    return `active (waiting on ${pendingDescendants} ${childLabel})`;
-  }
-  const status = formatRunStatus(entry);
-  return status === "error" ? "failed" : status;
-}
-
-export function formatSubagentListLine(params: {
-  entry: SubagentRunRecord;
-  index: number;
-  runtimeMs: number;
-  sessionEntry?: SessionEntry;
-  pendingDescendants?: number;
-}) {
-  const usageText = formatTokenUsageDisplay(params.sessionEntry);
-  const label = truncateLine(formatRunLabel(params.entry, { maxLength: 48 }), 48);
-  const task = formatTaskPreview(params.entry.task);
-  const runtime = formatDurationCompact(params.runtimeMs) ?? "n/a";
-  const status = resolveDisplayStatus(params.entry, {
-    pendingDescendants: params.pendingDescendants,
-  });
-  return `${params.index}. ${label} (${resolveModelDisplayName({
-    runtimeProvider:
-      typeof params.sessionEntry?.modelProvider === "string"
-        ? params.sessionEntry.modelProvider
-        : null,
-    runtimeModel: typeof params.sessionEntry?.model === "string" ? params.sessionEntry.model : null,
-    overrideProvider:
-      typeof params.sessionEntry?.providerOverride === "string"
-        ? params.sessionEntry.providerOverride
-        : null,
-    overrideModel:
-      typeof params.sessionEntry?.modelOverride === "string"
-        ? params.sessionEntry.modelOverride
-        : null,
-    fallbackModel: params.entry.model,
-  })}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${
-    normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label)
-      ? ` - ${task}`
-      : ""
-  }`;
-}
-
-function formatTimestamp(valueMs?: number) {
-  if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
-    return "n/a";
-  }
-  return new Date(valueMs).toISOString();
-}
-
-export function formatTimestampWithAge(valueMs?: number) {
-  if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
-    return "n/a";
-  }
-  return `${formatTimestamp(valueMs)} (${formatTimeAgo(Date.now() - valueMs, { fallback: "n/a" })})`;
-}
-
-export type SubagentsAction =
+type SubagentsAction =
   | "list"
   | "kill"
   | "log"
@@ -394,27 +310,4 @@ export function formatLogLines(messages: ChatMessage[]) {
     lines.push(`${label}: ${extracted.text}`);
   }
   return lines;
-}
-
-export type SessionStoreCache = Map<string, Record<string, SessionEntry>>;
-
-export function loadSubagentSessionEntry(
-  params: SubagentsCommandParams,
-  childKey: string,
-  loaders: {
-    loadSessionStore: typeof loadSessionStoreFn;
-    resolveStorePath: typeof resolveStorePathFn;
-  },
-  storeCache?: SessionStoreCache,
-) {
-  const parsed = parseAgentSessionKey(childKey);
-  const storePath = loaders.resolveStorePath(params.cfg.session?.store, {
-    agentId: parsed?.agentId,
-  });
-  let store = storeCache?.get(storePath);
-  if (!store) {
-    store = loaders.loadSessionStore(storePath);
-    storeCache?.set(storePath, store);
-  }
-  return { storePath, store, entry: store[childKey] };
 }

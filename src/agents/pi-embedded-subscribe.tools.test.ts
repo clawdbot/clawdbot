@@ -64,6 +64,39 @@ describe("sanitizeToolResult", () => {
     expect(text).toContain("model");
   });
 
+  it("redacts Link-like payment credential fields in tool result payloads", () => {
+    const result = {
+      content: [
+        {
+          type: "text",
+          text: '{"shared_payment_token":"spt_abcdefghijklmnopqrstuvwxyz","paymentCredential":"paycred_abcdefghijklmnopqrstuvwxyz","card_number":"4242424242424242","cvc":"123","amount":"4200"}',
+        },
+      ],
+      details: {
+        structuredContent: {
+          sharedPaymentToken: "spt_zyxwvutsrqponmlkjihgfedcba",
+          cardNumber: "4000056655665556",
+          amount: "4200",
+        },
+      },
+    };
+    const sanitized = sanitizeToolResult(result) as {
+      content: Array<{ text: string }>;
+      details: {
+        structuredContent: { sharedPaymentToken: string; cardNumber: string; amount: string };
+      };
+    };
+    const serialized = JSON.stringify(sanitized);
+    expect(serialized).not.toContain("spt_abcdefghijklmnopqrstuvwxyz");
+    expect(serialized).not.toContain("paycred_abcdefghijklmnopqrstuvwxyz");
+    expect(serialized).not.toContain("4242424242424242");
+    expect(serialized).not.toContain("123");
+    expect(serialized).not.toContain("spt_zyxwvutsrqponmlkjihgfedcba");
+    expect(serialized).not.toContain("4000056655665556");
+    expect(sanitized.content[0]?.text).toContain('"amount":"4200"');
+    expect(sanitized.details.structuredContent.amount).toBe("4200");
+  });
+
   it("redacts ENV-style credential assignments", () => {
     const result = {
       content: [

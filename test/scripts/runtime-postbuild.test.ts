@@ -91,8 +91,10 @@ describe("runtime postbuild static assets", () => {
 
     writeLegacyCliExitCompatChunks({ rootDir });
 
-    await expect(
-      fs.readFile(path.join(rootDir, "dist", "memory-state-CcqRgDZU.js"), "utf8"),
-    ).resolves.toContain("function hasMemoryRuntime()");
+    for (const chunk of ["memory-state-CcqRgDZU.js", "memory-state-DwGdReW4.js"]) {
+      await expect(fs.readFile(path.join(rootDir, "dist", chunk), "utf8")).resolves.toContain(
+        "function hasMemoryRuntime()",
+      );
+    }
   });
 });

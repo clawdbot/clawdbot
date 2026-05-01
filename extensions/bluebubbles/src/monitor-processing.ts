@@ -60,6 +60,7 @@ import {
   resolveBlueBubblesMessageId,
   resolveReplyContextFromCache,
 } from "./monitor-reply-cache.js";
+import { fetchBlueBubblesReplyContext } from "./monitor-reply-fetch.js";
 import {
   hasBlueBubblesSelfChatCopy,
   rememberBlueBubblesSelfChatCopy,
@@ -1235,11 +1236,17 @@ async function processMessageAfterDedupe(
             mediaTypes.push(saved.contentType);
           }
         } catch (err) {
-          logVerbose(
-            core,
-            runtime,
-            `attachment download failed guid=${sanitizeForLog(attachment.guid)} err=${sanitizeForLog(err)}`,
+          // Promote to runtime.error so silently-dropped inbound images are
+          // visible at default log level, while keeping verbose detail for
+          // debug sessions. Sanitize both fields — BB attachment GUIDs are
+          // user-influenced and the error chain can carry the password
+          // (see sanitizeForLog above).
+          const safeGuid = sanitizeForLog(attachment.guid, 80);
+          const safeErr = sanitizeForLog(err);
+          runtime.error?.(
+            `[bluebubbles] attachment download failed guid=${safeGuid} err=${safeErr}`,
           );
+          logVerbose(core, runtime, `attachment download failed guid=${safeGuid} err=${safeErr}`);
         }
       }
     }
@@ -1275,6 +1282,49 @@ async function processMessageAfterDedupe(
           core,
           runtime,
           `reply-context cache hit replyToId=${replyToId} sender=${replyToSender ?? ""} body="${preview}"`,
+        );
+      }
+    }
+  }
+
+  // Opt-in fallback: if the in-memory cache missed and the BB credentials are
+  // available, ask the BlueBubbles HTTP API for the original message. Useful
+  // when multiple OpenClaw instances share one BB account, after a restart,
+  // or when the cache TTL has evicted the message. Best-effort, never throws.
+  if (
+    replyToId &&
+    (!replyToBody || !replyToSender) &&
+    baseUrl &&
+    password &&
+    account.config.replyContextApiFallback === true
+  ) {
+    const fetched = await fetchBlueBubblesReplyContext({
+      accountId: account.accountId,
+      replyToId,
+      baseUrl,
+      password,
+      accountConfig: account.config,
+      chatGuid: message.chatGuid,
+      chatIdentifier: message.chatIdentifier,
+      chatId: message.chatId,
+    });
+    if (fetched) {
+      if (!replyToBody && fetched.body) {
+        replyToBody = fetched.body;
+      }
+      if (!replyToSender && fetched.sender) {
+        replyToSender = fetched.sender;
+      }
+      if (core.logging.shouldLogVerbose()) {
+        // Run the body preview through sanitizeForLog so the redaction regex
+        // (?password=, ?token=, Authorization: …) catches credential-shaped
+        // strings that may appear in user message bodies, matching the
+        // hygiene of adjacent verbose log lines in this file.
+        const preview = sanitizeForLog((fetched.body ?? "").replace(/\s+/g, " "), 120);
+        logVerbose(
+          core,
+          runtime,
+          `reply-context API fallback replyToId=${sanitizeForLog(replyToId)} sender=${sanitizeForLog(fetched.sender ?? "")} body="${preview}"`,
         );
       }
     }

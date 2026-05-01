@@ -41,7 +41,7 @@ import {
   resolveSlackAllowListMatch,
   resolveSlackUserAllowed,
 } from "../allow-list.js";
-import { resolveSlackEffectiveAllowFrom } from "../auth.js";
+import { authorizeSlackBotRoomMessage, resolveSlackEffectiveAllowFrom } from "../auth.js";
 import { resolveSlackChannelConfig } from "../channel-config.js";
 import { stripSlackMentionsForCommandDetection } from "../commands.js";
 import {
@@ -271,6 +271,7 @@ export async function prepareSlackMessage(params: {
     isRoom,
     isRoomish,
     channelConfig,
+    allowBots,
     isBotMessage,
   } = conversation;
   const authorization = await authorizeSlackInboundMessage({
@@ -392,6 +393,21 @@ export async function prepareSlackMessage(params: {
     : true;
   if (isRoom && !channelUserAuthorized) {
     logVerbose(`Blocked unauthorized slack sender ${senderId} (not in channel users)`);
+    return null;
+  }
+  if (
+    isRoom &&
+    isBotMessage &&
+    allowBots &&
+    !(await authorizeSlackBotRoomMessage({
+      ctx,
+      channelId: message.channel,
+      senderId,
+      senderName: senderNameForAuth,
+      channelUsers: channelConfig?.users,
+      allowFromLower,
+    }))
+  ) {
     return null;
   }
 

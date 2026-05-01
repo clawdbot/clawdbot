@@ -18,7 +18,7 @@ vi.mock("../../../plugins/host-hook-state.js", () => hostHookStateMocks);
 
 import {
   forgetPromptBuildDrainCacheForRun,
-  hasPromptSubmissionContent,
+  resolvePromptSubmissionSkipReason,
   resolveAttemptPrependSystemContext,
   resolvePromptBuildHookResult,
 } from "./attempt.prompt-helpers.js";
@@ -73,42 +73,64 @@ describe("resolveAttemptPrependSystemContext", () => {
   });
 });
 
-describe("hasPromptSubmissionContent", () => {
-  it("rejects empty prompt submissions without history or images", () => {
+describe("resolvePromptSubmissionSkipReason", () => {
+  it("skips empty prompt submissions without history or images", () => {
     expect(
-      hasPromptSubmissionContent({
+      resolvePromptSubmissionSkipReason({
         prompt: "   ",
         messages: [],
         imageCount: 0,
       }),
-    ).toBe(false);
+    ).toBe("empty_prompt_history_images");
   });
 
-  it("allows blank prompt submissions when replay history has content", () => {
+  it("skips blank visible user prompt submissions even when replay history exists", () => {
     expect(
-      hasPromptSubmissionContent({
+      resolvePromptSubmissionSkipReason({
         prompt: "   ",
         messages: [{ role: "user", content: "previous turn", timestamp: 1 }],
         imageCount: 0,
       }),
-    ).toBe(true);
+    ).toBe("blank_user_prompt");
   });
 
   it("allows text or image prompt submissions", () => {
     expect(
-      hasPromptSubmissionContent({
+      resolvePromptSubmissionSkipReason({
         prompt: "hello",
         messages: [],
         imageCount: 0,
       }),
-    ).toBe(true);
+    ).toBeNull();
     expect(
-      hasPromptSubmissionContent({
+      resolvePromptSubmissionSkipReason({
         prompt: "   ",
         messages: [],
         imageCount: 1,
       }),
-    ).toBe(true);
+    ).toBeNull();
+  });
+
+  it("allows blank prompt on runtimeOnly turns", () => {
+    expect(
+      resolvePromptSubmissionSkipReason({
+        prompt: "",
+        messages: [],
+        runtimeOnly: true,
+        imageCount: 0,
+      }),
+    ).toBeNull();
+  });
+
+  it("treats undefined runtimeOnly as a visible user submission", () => {
+    expect(
+      resolvePromptSubmissionSkipReason({
+        prompt: "",
+        messages: [],
+        runtimeOnly: undefined,
+        imageCount: 0,
+      }),
+    ).toBe("empty_prompt_history_images");
   });
 });
 

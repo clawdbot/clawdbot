@@ -113,7 +113,7 @@ describe("collectStatusScanOverview", () => {
     expect(mocks.buildChannelsTable).toHaveBeenCalledWith(
       expect.any(Object),
       expect.objectContaining({
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
         showSecrets: false,
         sourceConfig: { session: {} },
       }),
@@ -134,7 +134,7 @@ describe("collectStatusScanOverview", () => {
     expect(mocks.buildChannelsTable).toHaveBeenCalledWith(
       expect.any(Object),
       expect.objectContaining({
-        includeSetupRuntimeFallback: false,
+        includeSetupFallbackPlugins: false,
         showSecrets: false,
         sourceConfig: { session: {} },
       }),

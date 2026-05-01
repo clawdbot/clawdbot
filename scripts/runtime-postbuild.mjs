@@ -16,6 +16,10 @@ export const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
     dest: "dist/memory-state-CcqRgDZU.js",
     contents: "export function hasMemoryRuntime() {\n  return false;\n}\n",
   },
+  {
+    dest: "dist/memory-state-DwGdReW4.js",
+    contents: "export function hasMemoryRuntime() {\n  return false;\n}\n",
+  },
 ];
 
 /**

@@ -74,7 +74,7 @@ describe("channelsResolveCommand", () => {
     });
   });
 
-  it("persists install-on-demand channel setup before resolving explicit targets", async () => {
+  it("uses installed channel plugins for explicit target resolution without installing", async () => {
     const resolveTargets = vi.fn().mockResolvedValue([
       {
         input: "friends",
@@ -83,19 +83,11 @@ describe("channelsResolveCommand", () => {
         name: "Friends",
       },
     ]);
-    const installedCfg = {
-      channels: {},
-      plugins: {
-        entries: {
-          whatsapp: { enabled: true },
-        },
-      },
-    };
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
-      cfg: installedCfg,
+      cfg: { channels: {} },
       channelId: "whatsapp",
-      configChanged: true,
-      pluginInstalled: true,
+      configChanged: false,
+      pluginInstalled: false,
       plugin: {
         id: "whatsapp",
         resolver: { resolveTargets },
@@ -113,27 +105,41 @@ describe("channelsResolveCommand", () => {
     expect(mocks.resolveInstallableChannelPlugin).toHaveBeenCalledWith(
       expect.objectContaining({
         rawChannel: "whatsapp",
-        allowInstall: true,
+        allowInstall: false,
       }),
     );
-    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
-      nextConfig: installedCfg,
-      baseHash: "config-1",
-    });
-    expect(mocks.refreshPluginRegistryAfterConfigMutation).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: installedCfg,
-        reason: "source-changed",
-      }),
-    );
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    expect(mocks.refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
     expect(resolveTargets).toHaveBeenCalledWith(
       expect.objectContaining({
-        cfg: installedCfg,
+        cfg: { channels: {} },
         inputs: ["friends"],
         kind: "group",
       }),
     );
     expect(runtime.log).toHaveBeenCalledWith("friends -> 120363000000@g.us (Friends)");
+  });
+
+  it("tells users to add an explicit catalog channel before resolving", async () => {
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: {} },
+      channelId: "external-chat",
+      catalogEntry: { id: "external-chat" },
+      configChanged: false,
+      pluginInstalled: false,
+    });
+
+    await expect(
+      channelsResolveCommand(
+        {
+          channel: "external-chat",
+          entries: ["friends"],
+        },
+        runtime,
+      ),
+    ).rejects.toThrow(
+      'Channel plugin "external-chat" is not installed. Run "openclaw channels add --channel external-chat" first.',
+    );
   });
 
   it("uses the auto-enabled config snapshot for omitted channel resolution", async () => {

@@ -4,7 +4,6 @@ import {
   type ElevatedLevel,
   normalizeFastMode,
   normalizeElevatedLevel,
-  normalizeNoticeLevel,
   normalizeReasoningLevel,
   normalizeTraceLevel,
   normalizeThinkLevel,
@@ -157,24 +156,6 @@ export function extractFastDirective(body?: string): {
   return {
     cleaned: extracted.cleaned,
     fastMode: extracted.level,
-    rawLevel: extracted.rawLevel,
-    hasDirective: extracted.hasDirective,
-  };
-}
-
-export function extractNoticeDirective(body?: string): {
-  cleaned: string;
-  noticeLevel?: NoticeLevel;
-  rawLevel?: string;
-  hasDirective: boolean;
-} {
-  if (!body) {
-    return { cleaned: "", hasDirective: false };
-  }
-  const extracted = extractLevelDirective(body, ["notice", "notices"], normalizeNoticeLevel);
-  return {
-    cleaned: extracted.cleaned,
-    noticeLevel: extracted.level,
     rawLevel: extracted.rawLevel,
     hasDirective: extracted.hasDirective,
   };

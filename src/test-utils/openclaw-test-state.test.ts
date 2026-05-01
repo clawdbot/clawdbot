@@ -161,6 +161,26 @@ describe("openclaw test state", () => {
     );
   });
 
+  it("creates upgrade survivor fixture state", async () => {
+    await withOpenClawTestState(
+      {
+        scenario: "upgrade-survivor",
+      },
+      async (state) => {
+        const config = JSON.parse(await fs.readFile(state.configPath, "utf8"));
+        expect(config).toMatchObject({
+          update: {
+            channel: "stable",
+          },
+          plugins: {
+            enabled: true,
+            allow: ["discord", "telegram", "whatsapp", "memory"],
+          },
+        });
+      },
+    );
+  });
+
   it("keeps external-service env scoped to the fixture", async () => {
     const previousPolicy = process.env.OPENCLAW_SERVICE_REPAIR_POLICY;
 

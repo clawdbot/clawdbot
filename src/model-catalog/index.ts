@@ -1,7 +1,4 @@
-export {
-  compareModelCatalogSourceAuthority,
-  mergeModelCatalogRowsByAuthority,
-} from "./authority.js";
+export { mergeModelCatalogRowsByAuthority } from "./authority.js";
 export {
   buildModelCatalogMergeKey,
   buildModelCatalogRef,
@@ -32,7 +29,6 @@ export type {
   ManifestModelCatalogPlugin,
   ManifestModelCatalogRegistry,
   ManifestModelCatalogSuppressionEntry,
-  ManifestModelCatalogSuppressionPlan,
 } from "./manifest-planner.js";
 export type {
   ModelCatalog,

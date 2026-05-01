@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { VoiceCallConfig } from "./config.js";
 import type { CallManagerContext } from "./manager/context.js";
@@ -350,7 +351,11 @@ export class CallManager {
       return;
     }
 
-    void this.speakInitialMessage(call.providerCallId);
+    void this.speakInitialMessage(call.providerCallId).catch((err) => {
+      console.warn(
+        `[voice-call] Failed to speak initial message for call ${call.callId}: ${formatErrorMessage(err)}`,
+      );
+    });
   }
 
   /**

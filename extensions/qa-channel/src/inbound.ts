@@ -77,7 +77,12 @@ export async function handleQaInbound(params: {
     channel: params.channelId,
     accountId: params.account.accountId,
     peer: {
-      kind: inbound.conversation.kind === "direct" ? "direct" : "channel",
+      kind:
+        inbound.conversation.kind === "direct"
+          ? "direct"
+          : inbound.conversation.kind === "group"
+            ? "group"
+            : "channel",
       id: target,
     },
   });
@@ -113,10 +118,7 @@ export async function handleQaInbound(params: {
     BodyForAgent: inbound.text,
     RawBody: inbound.text,
     CommandBody: inbound.text,
-    From: buildQaTarget({
-      chatType: inbound.conversation.kind,
-      conversationId: inbound.senderId,
-    }),
+    From: target,
     To: target,
     SessionKey: route.sessionKey,
     AccountId: route.accountId ?? params.account.accountId,
@@ -127,10 +129,9 @@ export async function handleQaInbound(params: {
       inbound.conversation.title ||
       inbound.senderName ||
       inbound.conversation.id,
-    GroupSubject:
-      inbound.conversation.kind === "channel"
-        ? inbound.threadTitle || inbound.conversation.title || inbound.conversation.id
-        : undefined,
+    GroupSubject: isGroup
+      ? inbound.threadTitle || inbound.conversation.title || inbound.conversation.id
+      : undefined,
     GroupChannel: inbound.conversation.kind === "channel" ? inbound.conversation.id : undefined,
     NativeChannelId: inbound.conversation.id,
     MessageThreadId: inbound.threadId,

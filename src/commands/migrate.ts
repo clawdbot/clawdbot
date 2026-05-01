@@ -1,3 +1,4 @@
+import { cancel, isCancel, multiselect } from "@clack/prompts";
 import { promptYesNo } from "../cli/prompt.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { redactMigrationPlan } from "../plugin-sdk/migration.js";
@@ -5,9 +6,18 @@ import { resolvePluginMigrationProviders } from "../plugins/migration-provider-r
 import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
+import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
 import { runMigrationApply } from "./migrate/apply.js";
 import { formatMigrationPlan } from "./migrate/output.js";
 import { createMigrationPlan, resolveMigrationProvider } from "./migrate/providers.js";
+import {
+  applyMigrationSelectedSkillItemIds,
+  applyMigrationSkillSelection,
+  formatMigrationSkillSelectionHint,
+  formatMigrationSkillSelectionLabel,
+  getMigrationSkillSelectionValue,
+  getSelectableMigrationSkillItems,
+} from "./migrate/selection.js";
 import type {
   MigrateApplyOptions,
   MigrateCommonOptions,
@@ -15,6 +25,51 @@ import type {
 } from "./migrate/types.js";
 
 export type { MigrateApplyOptions, MigrateCommonOptions, MigrateDefaultOptions };
+
+function selectMigrationSkills(plan: MigrationPlan, opts: MigrateCommonOptions): MigrationPlan {
+  return applyMigrationSkillSelection(plan, opts.skills);
+}
+
+async function promptCodexMigrationSkillSelection(
+  runtime: RuntimeEnv,
+  plan: MigrationPlan,
+  opts: MigrateCommonOptions & { yes?: boolean },
+): Promise<MigrationPlan | null> {
+  if (
+    plan.providerId !== "codex" ||
+    opts.yes ||
+    opts.json ||
+    opts.skills !== undefined ||
+    !process.stdin.isTTY
+  ) {
+    return plan;
+  }
+  const skillItems = getSelectableMigrationSkillItems(plan);
+  if (skillItems.length === 0) {
+    return plan;
+  }
+  const selected = await multiselect<string>({
+    message: stylePromptMessage("Select Codex skills to migrate into this agent"),
+    options: skillItems.map((item) => {
+      const hint = formatMigrationSkillSelectionHint(item);
+      return {
+        value: getMigrationSkillSelectionValue(item),
+        label: formatMigrationSkillSelectionLabel(item),
+        hint: hint === undefined ? undefined : stylePromptHint(hint),
+      };
+    }),
+    initialValues: skillItems.map(getMigrationSkillSelectionValue),
+    required: false,
+  });
+  if (isCancel(selected)) {
+    cancel(stylePromptTitle("Migration cancelled.") ?? "Migration cancelled.");
+    runtime.log("Migration cancelled.");
+    return null;
+  }
+  const selectedPlan = applyMigrationSelectedSkillItemIds(plan, new Set(selected));
+  runtime.log(`Selected ${selected.length} of ${skillItems.length} Codex skills for migration.`);
+  return selectedPlan;
+}
 
 export async function migrateListCommand(runtime: RuntimeEnv, opts: { json?: boolean } = {}) {
   const providers = resolvePluginMigrationProviders({ cfg: getRuntimeConfig() }).map(
@@ -51,7 +106,10 @@ export async function migratePlanCommand(
   if (!providerId) {
     throw new Error("Migration provider is required.");
   }
-  const plan = await createMigrationPlan(runtime, { ...opts, provider: providerId });
+  const plan = selectMigrationSkills(
+    await createMigrationPlan(runtime, { ...opts, provider: providerId }),
+    opts,
+  );
   if (opts.json) {
     writeRuntimeJson(runtime, redactMigrationPlan(plan));
   } else {
@@ -92,14 +150,18 @@ export async function migrateApplyCommand(
     if (opts.json) {
       return plan;
     }
+    const selectedPlan = await promptCodexMigrationSkillSelection(runtime, plan, opts);
+    if (!selectedPlan) {
+      return plan;
+    }
     const ok = await promptYesNo("Apply this migration now?", false);
     if (!ok) {
       runtime.log("Migration cancelled.");
-      return plan;
+      return selectedPlan;
     }
     return await runMigrationApply({
       runtime,
-      opts: { ...opts, provider: providerId, yes: true, preflightPlan: plan },
+      opts: { ...opts, provider: providerId, yes: true, preflightPlan: selectedPlan },
       providerId,
       provider,
     });
@@ -131,7 +193,10 @@ export async function migrateDefaultCommand(
   }
   const plan =
     opts.json && opts.yes && !opts.dryRun
-      ? await createMigrationPlan(runtime, { ...opts, provider: providerId })
+      ? selectMigrationSkills(
+          await createMigrationPlan(runtime, { ...opts, provider: providerId }),
+          opts,
+        )
       : await migratePlanCommand(runtime, {
           ...opts,
           provider: providerId,
@@ -148,11 +213,22 @@ export async function migrateDefaultCommand(
       runtime.log("Re-run with --yes to apply this migration non-interactively.");
       return plan;
     }
+    const selectedPlan = await promptCodexMigrationSkillSelection(runtime, plan, opts);
+    if (!selectedPlan) {
+      return plan;
+    }
     const ok = await promptYesNo("Apply this migration now?", false);
     if (!ok) {
       runtime.log("Migration cancelled.");
-      return plan;
+      return selectedPlan;
     }
+    return await migrateApplyCommand(runtime, {
+      ...opts,
+      provider: providerId,
+      yes: true,
+      json: opts.json,
+      preflightPlan: selectedPlan,
+    });
   }
   return await migrateApplyCommand(runtime, {
     ...opts,

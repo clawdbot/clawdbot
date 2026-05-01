@@ -12,6 +12,7 @@ export type OAuthCredentials = {
   enterpriseUrl?: string;
   projectId?: string;
   accountId?: string;
+  chatgptPlanType?: string;
   idToken?: string;
 };
 

@@ -464,15 +464,6 @@ export function createCodexNativeWebSearchWrapper(
     });
   };
 }
-export function createCodexDefaultTransportWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) =>
-    underlying(model, context, {
-      ...options,
-      transport: options?.transport ?? "auto",
-    });
-}
-
 export function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -498,10 +489,12 @@ export function createOpenAIAttributionHeadersWrapper(
     if (!attributionProvider) {
       return underlying(model, context, options);
     }
-    const streamFn =
-      attributionProvider === "openai-codex"
-        ? (opts?.codexNativeTransportStreamFn ?? createOpenAIResponsesTransportStreamFn())
-        : underlying;
+    const shouldCreateCodexTransport =
+      attributionProvider === "openai-codex" &&
+      (baseStreamFn === undefined || baseStreamFn === streamSimple);
+    const streamFn = shouldCreateCodexTransport
+      ? (opts?.codexNativeTransportStreamFn ?? createOpenAIResponsesTransportStreamFn())
+      : underlying;
     return streamFn(model, context, {
       ...options,
       headers: resolveProviderRequestPolicyConfig({

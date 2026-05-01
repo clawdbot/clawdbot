@@ -101,6 +101,7 @@ export async function collectInstalledGlobalPackageErrors(params: {
   expectedVersion?: string | null;
 }): Promise<string[]> {
   const errors: string[] = [];
+  errors.push(...(await collectSourceCheckoutInstallErrors(params.packageRoot)));
   const installedVersion = await readPackageVersion(params.packageRoot);
   if (params.expectedVersion && installedVersion !== params.expectedVersion) {
     errors.push(
@@ -115,6 +116,18 @@ export async function collectInstalledGlobalPackageErrors(params: {
     })),
   );
   return errors;
+}
+
+async function collectSourceCheckoutInstallErrors(packageRoot: string): Promise<string[]> {
+  const realPackageRoot = await tryRealpath(packageRoot);
+  const hasSourceCheckoutShape =
+    ((await pathExists(path.join(realPackageRoot, ".git"))) ||
+      (await pathExists(path.join(realPackageRoot, "pnpm-workspace.yaml")))) &&
+    (await pathExists(path.join(realPackageRoot, "src"))) &&
+    (await pathExists(path.join(realPackageRoot, "extensions")));
+  return hasSourceCheckoutShape
+    ? [`global package root resolves to source checkout: ${realPackageRoot}`]
+    : [];
 }
 
 function shouldRequirePackagedDistInventory(version: string | null | undefined): boolean {

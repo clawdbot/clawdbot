@@ -11,11 +11,22 @@ describe("proxy cli", () => {
     expect(proxy?.commands.map((command) => command.name())).toEqual([
       "start",
       "run",
+      "validate",
       "coverage",
       "sessions",
       "query",
       "blob",
       "purge",
+    ]);
+
+    const validate = proxy?.commands.find((command) => command.name() === "validate");
+    expect(validate?.description()).toBe("Validate the operator-managed network proxy");
+    expect(validate?.options.map((option) => option.long)).toEqual([
+      "--json",
+      "--proxy-url",
+      "--allowed-url",
+      "--denied-url",
+      "--timeout-ms",
     ]);
   });
 });

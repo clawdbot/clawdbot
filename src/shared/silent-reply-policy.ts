@@ -1,7 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.js";
 
 export type SilentReplyPolicy = "allow" | "disallow";
-export type SilentReplyMode = "allow" | "rewrite";
 export type SilentReplyConversationType = "direct" | "group" | "internal";
 export type SilentReplyPolicyShape = Partial<
   Record<SilentReplyConversationType, SilentReplyPolicy>

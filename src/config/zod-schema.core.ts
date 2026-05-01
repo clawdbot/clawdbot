@@ -369,18 +369,6 @@ export const ModelProviderSchema = z
   })
   .strict();
 
-export const BedrockDiscoverySchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    region: z.string().optional(),
-    providerFilter: z.array(z.string()).optional(),
-    refreshInterval: z.number().int().nonnegative().optional(),
-    defaultContextWindow: z.number().int().positive().optional(),
-    defaultMaxTokens: z.number().int().positive().optional(),
-  })
-  .strict()
-  .optional();
-
 const ModelPricingConfigSchema = z
   .object({
     enabled: z.boolean().optional(),

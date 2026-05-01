@@ -248,7 +248,6 @@ async function sendSystemRunCompleted(
   });
 }
 
-export { formatSystemRunAllowlistMissMessage } from "./exec-policy.js";
 export { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 
 async function parseSystemRunPhase(

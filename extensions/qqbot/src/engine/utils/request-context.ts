@@ -58,18 +58,3 @@ export function runWithRequestContext<T>(ctx: RequestContext, fn: () => T): T {
 export function getRequestContext(): RequestContext | undefined {
   return store.getStore();
 }
-
-/**
- * Convenience accessor for the current request's fully qualified
- * delivery target.
- */
-export function getRequestTarget(): string | undefined {
-  return store.getStore()?.target;
-}
-
-/**
- * Convenience accessor for the current request's account ID.
- */
-export function getRequestAccountId(): string | undefined {
-  return store.getStore()?.accountId;
-}

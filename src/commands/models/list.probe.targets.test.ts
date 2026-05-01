@@ -74,6 +74,10 @@ vi.mock("./shared.js", () => ({
 }));
 
 vi.mock("../../agents/auth-profiles.js", () => ({
+  externalCliDiscoveryScoped: (params: Record<string, unknown> = {}) => ({
+    mode: "scoped",
+    ...params,
+  }),
   ensureAuthProfileStore: (agentDir?: string) =>
     agentDir === "/tmp/coder-agent" && mockAgentStore ? mockAgentStore : mockStore,
   listProfilesForProvider: (store: AuthProfileStore, provider: string) =>
@@ -400,27 +404,29 @@ describe("buildProbeTargets reason codes", () => {
       order: {},
     };
 
-    const defaultPlan = await buildProbeTargets({
-      cfg: {} as OpenClawConfig,
-      providers: ["anthropic"],
-      modelCandidates: ["anthropic/claude-sonnet-4-6"],
-      options: {
-        timeoutMs: 5_000,
-        concurrency: 1,
-        maxTokens: 16,
-      },
-    });
-    const agentPlan = await buildProbeTargets({
-      cfg: {} as OpenClawConfig,
-      agentDir: "/tmp/coder-agent",
-      providers: ["anthropic"],
-      modelCandidates: ["anthropic/claude-sonnet-4-6"],
-      options: {
-        timeoutMs: 5_000,
-        concurrency: 1,
-        maxTokens: 16,
-      },
-    });
+    const { defaultPlan, agentPlan } = await withClearedAnthropicEnv(async () => ({
+      defaultPlan: await buildProbeTargets({
+        cfg: {} as OpenClawConfig,
+        providers: ["anthropic"],
+        modelCandidates: ["anthropic/claude-sonnet-4-6"],
+        options: {
+          timeoutMs: 5_000,
+          concurrency: 1,
+          maxTokens: 16,
+        },
+      }),
+      agentPlan: await buildProbeTargets({
+        cfg: {} as OpenClawConfig,
+        agentDir: "/tmp/coder-agent",
+        providers: ["anthropic"],
+        modelCandidates: ["anthropic/claude-sonnet-4-6"],
+        options: {
+          timeoutMs: 5_000,
+          concurrency: 1,
+          maxTokens: 16,
+        },
+      }),
+    }));
 
     expect(defaultPlan.targets).toEqual([]);
     expect(agentPlan.results).toEqual([]);

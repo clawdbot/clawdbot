@@ -32,14 +32,6 @@ export function extractDiscordChannelId(sessionKey?: string | null): string | nu
   return match ? match[1] : null;
 }
 
-export function extractDiscordThreadId(sessionKey?: string | null): string | null {
-  if (!sessionKey) {
-    return null;
-  }
-  const match = sessionKey.match(/discord:(?:channel|group):\d+:thread:(\d+)/);
-  return match ? match[1] : null;
-}
-
 function extractDiscordSessionKind(sessionKey?: string | null): "channel" | "group" | "dm" | null {
   if (!sessionKey) {
     return null;
@@ -220,16 +212,8 @@ export function createDiscordNativeApprovalAdapter(
 }
 
 let cachedDiscordApprovalCapability: ReturnType<typeof createDiscordApprovalCapability> | undefined;
-let cachedDiscordNativeApprovalAdapter:
-  | ReturnType<typeof createDiscordNativeApprovalAdapter>
-  | undefined;
 
 export function getDiscordApprovalCapability() {
   cachedDiscordApprovalCapability ??= createDiscordApprovalCapability();
   return cachedDiscordApprovalCapability;
-}
-
-export function getDiscordNativeApprovalAdapter() {
-  cachedDiscordNativeApprovalAdapter ??= createDiscordNativeApprovalAdapter();
-  return cachedDiscordNativeApprovalAdapter;
 }

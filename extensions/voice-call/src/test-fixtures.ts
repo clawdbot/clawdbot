@@ -50,6 +50,13 @@ export function createVoiceCallBaseConfig(params?: {
       instructions: DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS,
       toolPolicy: "safe-read-only",
       tools: [],
+      fastContext: {
+        enabled: false,
+        timeoutMs: 800,
+        maxResults: 3,
+        sources: ["memory", "sessions"],
+        fallbackToConsult: false,
+      },
       providers: {},
     },
     skipSignatureVerification: false,

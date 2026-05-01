@@ -43,6 +43,10 @@ otherwise -> reply
 For group/channel rooms, OpenClaw defaults to `messages.groupChat.visibleReplies: "message_tool"`.
 That means the agent still processes the turn and can update memory/session state, but its normal final answer is not automatically posted back into the room. To speak visibly, the agent uses `message(action=send)`.
 
+If the message tool is unavailable under the active tool policy, OpenClaw falls
+back to automatic visible replies instead of silently suppressing the response.
+`openclaw doctor` warns about this mismatch.
+
 For direct chats and any other source turn, use `messages.visibleReplies: "message_tool"` to apply the same tool-only visible-reply behavior globally. `messages.groupChat.visibleReplies` remains the more specific override for group/channel rooms.
 
 This replaces the old pattern of forcing the model to answer `NO_REPLY` for most lurk-mode turns. In tool-only mode, doing nothing visible simply means not calling the message tool.
@@ -60,6 +64,9 @@ To restore legacy automatic final replies for group/channel rooms:
   },
 }
 ```
+
+The gateway hot-reloads `messages` config after the file is saved. Restart only
+when file watching or config reload is disabled in the deployment.
 
 To require visible output to go through the message tool for every source chat:
 
@@ -254,6 +261,7 @@ Control how group/room messages are handled per channel:
   <Accordion title="Per-channel notes">
     - `groupPolicy` is separate from mention-gating (which requires @mentions).
     - WhatsApp/Telegram/Signal/iMessage/Microsoft Teams/Zalo: use `groupAllowFrom` (fallback: explicit `allowFrom`).
+    - Signal: `groupAllowFrom` can match either the inbound Signal group id or the sender phone/UUID.
     - DM pairing approvals (`*-allowFrom` store entries) apply to DM access only; group sender authorization stays explicit to group allowlists.
     - Discord: allowlist uses `channels.discord.guilds.<id>.channels`.
     - Slack: allowlist uses `channels.slack.channels`.
@@ -328,6 +336,7 @@ Replying to a bot message counts as an implicit mention when the channel support
     - Surfaces that provide explicit mentions still pass; patterns are a fallback.
     - Per-agent override: `agents.list[].groupChat.mentionPatterns` (useful when multiple agents share a group).
     - Mention gating is only enforced when mention detection is possible (native mentions or `mentionPatterns` are configured).
+    - Allowlisting a group or sender does not disable mention gating; set that group's `requireMention` to `false` when all messages should trigger.
     - Group chat prompt context carries the resolved silent-reply instruction every turn; workspace files should not duplicate `NO_REPLY` mechanics.
     - Groups where silent replies are allowed treat clean empty or reasoning-only model turns as silent, equivalent to `NO_REPLY`. Direct chats do the same only when direct silent replies are explicitly allowed; otherwise empty replies remain failed agent turns.
     - Discord defaults live in `channels.discord.guilds."*"` (overridable per guild/channel).

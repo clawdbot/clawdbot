@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/proxy-capture";
 import type {
   RealtimeVoiceAudioFormat,
+  RealtimeVoiceBargeInOptions,
   RealtimeVoiceBridge,
   RealtimeVoiceBrowserSession,
   RealtimeVoiceBrowserSessionCreateRequest,
@@ -77,6 +78,10 @@ type RealtimeEvent = {
   item_id?: string;
   call_id?: string;
   name?: string;
+  response?: {
+    id?: string;
+    status?: string;
+  };
   error?: unknown;
 };
 
@@ -141,6 +146,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private pendingAudio: Buffer[] = [];
   private markQueue: string[] = [];
   private responseStartTimestamp: number | null = null;
+  private responseActive = false;
   private latestMediaTimestamp = 0;
   private lastAssistantItemId: string | null = null;
   private toolCallBuffers = new Map<string, { name: string; callId: string; args: string }>();
@@ -216,10 +222,6 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       return;
     }
     this.markQueue.shift();
-    if (this.markQueue.length === 0) {
-      this.responseStartTimestamp = null;
-      this.lastAssistantItemId = null;
-    }
   }
 
   close(): void {
@@ -483,18 +485,23 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         }
         return;
 
+      case "response.created":
+        this.responseActive = true;
+        return;
+
       case "response.audio.delta": {
         if (!event.delta) {
           return;
         }
         const audio = base64ToBuffer(event.delta);
         this.config.onAudio(audio);
-        if (this.responseStartTimestamp === null) {
+        if (event.item_id && event.item_id !== this.lastAssistantItemId) {
+          this.lastAssistantItemId = event.item_id;
+          this.responseStartTimestamp = this.latestMediaTimestamp;
+        } else if (this.responseStartTimestamp === null) {
           this.responseStartTimestamp = this.latestMediaTimestamp;
         }
-        if (event.item_id) {
-          this.lastAssistantItemId = event.item_id;
-        }
+        this.responseActive = true;
         this.sendMark();
         return;
       }
@@ -525,6 +532,10 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         if (event.delta) {
           this.config.onTranscript?.("user", event.delta, false);
         }
+        return;
+
+      case "response.done":
+        this.responseActive = false;
         return;
 
       case "response.function_call_arguments.delta": {
@@ -576,21 +587,29 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
   }
 
-  private handleBargeIn(): void {
-    if (this.markQueue.length > 0 && this.responseStartTimestamp !== null) {
-      const elapsedMs = this.latestMediaTimestamp - this.responseStartTimestamp;
-      if (this.lastAssistantItemId) {
-        this.sendEvent({
-          type: "conversation.item.truncate",
-          item_id: this.lastAssistantItemId,
-          content_index: 0,
-          audio_end_ms: Math.max(0, elapsedMs),
-        });
-      }
+  handleBargeIn(options?: RealtimeVoiceBargeInOptions): void {
+    const assistantItemId = this.lastAssistantItemId;
+    const responseStartTimestamp = this.responseStartTimestamp;
+    const shouldInterruptProvider =
+      responseStartTimestamp !== null &&
+      assistantItemId !== null &&
+      (this.markQueue.length > 0 || options?.audioPlaybackActive === true);
+    if (options?.audioPlaybackActive === true && this.responseActive) {
+      this.sendEvent({ type: "response.cancel" });
+    }
+    if (shouldInterruptProvider) {
+      const elapsedMs = this.latestMediaTimestamp - responseStartTimestamp;
+      this.sendEvent({
+        type: "conversation.item.truncate",
+        item_id: assistantItemId,
+        content_index: 0,
+        audio_end_ms: Math.max(0, elapsedMs),
+      });
       this.config.onClearAudio();
       this.markQueue = [];
       this.lastAssistantItemId = null;
       this.responseStartTimestamp = null;
+      this.responseActive = false;
       return;
     }
     this.config.onClearAudio();

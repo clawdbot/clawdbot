@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatConfigIssueLine,
   formatConfigIssueLines,
+  formatConfigIssueSummary,
   normalizeConfigIssue,
   normalizeConfigIssuePath,
   normalizeConfigIssues,
@@ -45,6 +46,20 @@ describe("config issue format", () => {
         "-",
       ),
     ).toBe("- gateway.\\nbind: bad\\r\\n\\tvalue");
+  });
+
+  it("formats concise issue summaries", () => {
+    expect(formatConfigIssueSummary([])).toBeNull();
+    expect(
+      formatConfigIssueSummary(
+        [
+          { path: "", message: "root broken" },
+          { path: "gateway.auth.password.source", message: "Required" },
+          { path: "agents.defaults.execution", message: "Unrecognized key" },
+        ],
+        { maxIssues: 2 },
+      ),
+    ).toBe("<root>: root broken; gateway.auth.password.source: Required; and 1 more");
   });
 
   it("normalizes issue metadata for machine output", () => {

@@ -24,6 +24,27 @@ describe("resolveCodexAuthIdentity", () => {
     });
   });
 
+  it("extracts account and plan metadata from the JWT auth claim", () => {
+    const identity = resolveCodexAuthIdentity({
+      accessToken: createJwt({
+        "https://api.openai.com/profile": {
+          email: "jwt-user@example.com",
+        },
+        "https://api.openai.com/auth": {
+          chatgpt_account_id: "acct-123",
+          chatgpt_plan_type: "prolite",
+        },
+      }),
+    });
+
+    expect(identity).toEqual({
+      accountId: "acct-123",
+      chatgptPlanType: "prolite",
+      email: "jwt-user@example.com",
+      profileName: "jwt-user@example.com",
+    });
+  });
+
   it("falls back to credential email before synthetic ids", () => {
     const identity = resolveCodexAuthIdentity({
       accessToken: createJwt({}),

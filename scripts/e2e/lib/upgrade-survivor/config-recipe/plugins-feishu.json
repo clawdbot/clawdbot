@@ -1,0 +1,18 @@
+{
+  "enabled": true,
+  "allow": ["discord", "feishu", "memory", "telegram", "whatsapp"],
+  "entries": {
+    "discord": {
+      "enabled": true
+    },
+    "feishu": {
+      "enabled": true
+    },
+    "telegram": {
+      "enabled": true
+    },
+    "whatsapp": {
+      "enabled": true
+    }
+  }
+}

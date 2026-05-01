@@ -26,6 +26,7 @@ export function createBundledRuntimeDepsInstallEnv(
   const nextEnv: NodeJS.ProcessEnv = {
     ...createSafeNpmInstallEnv(env, {
       ...options,
+      ignoreWorkspaces: true,
       legacyPeerDeps: true,
       packageLock: true,
     }),
@@ -41,7 +42,12 @@ export function createBundledRuntimeDepsInstallEnv(
 }
 
 export function createBundledRuntimeDepsInstallArgs(): string[] {
-  return [...createSafeNpmInstallArgs({ noAudit: true, noFund: true }), "--omit=dev"];
+  return createSafeNpmInstallArgs({
+    ignoreWorkspaces: true,
+    noAudit: true,
+    noFund: true,
+    omitDev: true,
+  });
 }
 
 function createBundledRuntimeDepsPnpmInstallArgs(params: { storeDir: string }): string[] {

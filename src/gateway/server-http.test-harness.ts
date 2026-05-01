@@ -3,7 +3,7 @@ import { expect, vi } from "vitest";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createGatewayRequest, createHooksConfig } from "./hooks-test-helpers.js";
-import { canonicalizePathVariant, isProtectedPluginRoutePath } from "./security-path.js";
+import { canonicalizePathVariant } from "./security-path.js";
 import { createGatewayHttpServer } from "./server-http.js";
 import { createHooksRequestHandler } from "./server/hooks-request-handler.js";
 import { withTempConfig } from "./test-temp-config.js";
@@ -310,8 +310,4 @@ export async function expectAuthorizedVariants(params: {
     expect(response.res.statusCode, variant.label).toBe(200);
     expect(response.getBody(), variant.label).toContain('"route":"channel-canonicalized"');
   }
-}
-
-export function defaultProtectedPluginRoutePath(pathname: string): boolean {
-  return isProtectedPluginRoutePath(pathname);
 }

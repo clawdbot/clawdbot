@@ -4,7 +4,7 @@ import {
   recoverConfigFromLastKnownGood,
   recoverConfigFromJsonRootSuffix,
 } from "../config/io.js";
-import { formatConfigIssueLines } from "../config/issue-format.js";
+import { formatConfigIssueLines, formatConfigIssueSummary } from "../config/issue-format.js";
 import { asResolvedSourceConfig, materializeRuntimeConfig } from "../config/materialize.js";
 import { replaceConfigFile } from "../config/mutate.js";
 import { isNixMode } from "../config/paths.js";
@@ -157,6 +157,15 @@ function resolveGatewayStartupConfigWithoutInvalidModelProviders(params: {
   };
 }
 
+function collectConfigSnapshotIssueDetails(snapshot: ConfigFileSnapshot) {
+  return [...snapshot.issues, ...snapshot.legacyIssues];
+}
+
+function formatConfigRecoveryLogIssueSuffix(snapshot: ConfigFileSnapshot): string {
+  const summary = formatConfigIssueSummary(collectConfigSnapshotIssueDetails(snapshot));
+  return summary ? `; Rejected validation details: ${summary}.` : "";
+}
+
 function resolveGatewayStartupConfigWithoutInvalidPluginEntries(params: {
   snapshot: ConfigFileSnapshot;
   log: GatewayStartupLog;
@@ -229,6 +238,8 @@ export async function loadGatewayStartupConfigSnapshot(params: {
       }
     }
     if (!configSnapshot.valid) {
+      const rejectedSnapshot = configSnapshot;
+      const rejectedConfigIssues = collectConfigSnapshotIssueDetails(rejectedSnapshot);
       const canRecoverFromLastKnownGood = shouldAttemptLastKnownGoodRecovery(configSnapshot);
       const recovered = canRecoverFromLastKnownGood
         ? await recoverConfigFromLastKnownGood({
@@ -244,7 +255,7 @@ export async function loadGatewayStartupConfigSnapshot(params: {
       if (recovered) {
         wroteConfig = true;
         params.log.warn(
-          `gateway: invalid config was restored from last-known-good backup: ${configSnapshot.path}`,
+          `gateway: invalid config was restored from last-known-good backup: ${rejectedSnapshot.path}${formatConfigRecoveryLogIssueSuffix(rejectedSnapshot)}`,
         );
         snapshotRead = await measure("config.snapshot.recovery-read", () =>
           readConfigFileSnapshotWithPluginMetadata({ measure }),
@@ -257,6 +268,7 @@ export async function loadGatewayStartupConfigSnapshot(params: {
             phase: "startup",
             reason: "startup-invalid-config",
             configPath: configSnapshot.path,
+            issues: rejectedConfigIssues,
           });
         }
       }

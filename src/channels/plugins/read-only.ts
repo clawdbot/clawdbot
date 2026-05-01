@@ -115,7 +115,7 @@ type ReadOnlyChannelPluginOptions = {
   workspaceDir?: string;
   activationSourceConfig?: OpenClawConfig;
   includePersistedAuthState?: boolean;
-  includeSetupRuntimeFallback?: boolean;
+  includeSetupFallbackPlugins?: boolean;
 };
 
 type ReadOnlyChannelPluginResolution = {
@@ -676,7 +676,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
 
   addChannelPlugins(byId, listChannelPlugins());
 
-  if (options.includeSetupRuntimeFallback === true) {
+  if (options.includeSetupFallbackPlugins === true) {
     for (const channelId of configuredChannelIds) {
       if (byId.has(channelId)) {
         continue;
@@ -713,7 +713,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
         .filter((record) => externalPluginIdSet.has(record.id))
         .map((record) => [record.id, record.channels] as const),
     );
-    if (missingConfiguredChannelIds.length > 0 && options.includeSetupRuntimeFallback === true) {
+    if (missingConfiguredChannelIds.length > 0 && options.includeSetupFallbackPlugins === true) {
       const missingChannelIdSet = new Set(missingConfiguredChannelIds);
       const ownedMissingChannelIdsByPluginId = new Map(
         [...ownedChannelIdsByPluginId].map(

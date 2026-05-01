@@ -593,6 +593,7 @@ API key auth, and dynamic model resolution.
             connect: async () => {},
             sendAudio: () => {},
             setMediaTimestamp: () => {},
+            handleBargeIn: () => {},
             submitToolResult: () => {},
             acknowledgeMark: () => {},
             close: () => {},
@@ -600,6 +601,10 @@ API key auth, and dynamic model resolution.
           }),
         });
         ```
+
+        Implement `handleBargeIn` when a transport can detect that a human is
+        interrupting assistant playback and the provider supports truncating or
+        clearing the active audio response.
       </Tab>
       <Tab title="Media understanding">
         ```typescript

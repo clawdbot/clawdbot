@@ -44,7 +44,7 @@ describeChannelCatalogEntryContract({
 });
 
 describeChannelCatalogEntryContract({
-  channelId: "openclaw-plugin-yuanbao",
+  channelId: "yuanbao",
   npmSpec: "openclaw-plugin-yuanbao@2.11.0",
   alias: "yb",
 });

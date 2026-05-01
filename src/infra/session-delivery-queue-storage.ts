@@ -121,7 +121,7 @@ function resolveQueueEntryPaths(
   };
 }
 
-export async function ensureSessionDeliveryQueueDir(stateDir?: string): Promise<string> {
+async function ensureSessionDeliveryQueueDir(stateDir?: string): Promise<string> {
   const queueDir = resolveSessionDeliveryQueueDir(stateDir);
   await fs.promises.mkdir(queueDir, { recursive: true, mode: 0o700 });
   await fs.promises.mkdir(resolveFailedDir(stateDir), { recursive: true, mode: 0o700 });

@@ -230,13 +230,6 @@ export function runWithDiagnosticTraceContext<T>(
   return getDiagnosticTraceScopeState().storage.run(freezeDiagnosticTraceContext(trace), callback);
 }
 
-export function runWithNewDiagnosticTraceContext<T>(
-  input: DiagnosticTraceContextInput,
-  callback: () => T,
-): T {
-  return runWithDiagnosticTraceContext(createDiagnosticTraceContext(input), callback);
-}
-
 export function resetDiagnosticTraceContextForTest(): void {
   getDiagnosticTraceScopeState().storage.disable();
 }

@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import { getQaBusState, pollQaBus } from "./bus-client.js";
+import { buildQaTarget, getQaBusState, parseQaTarget, pollQaBus } from "./bus-client.js";
 
 async function startJsonServer(
   handler: (req: { url?: string | undefined }) => { statusCode?: number; body: string },
@@ -38,6 +38,19 @@ describe("qa-bus client", () => {
 
   afterEach(async () => {
     await Promise.all(stops.splice(0).map((stop) => stop()));
+  });
+
+  it("roundtrips explicit group targets", () => {
+    expect(parseQaTarget("group:ops-room")).toEqual({
+      chatType: "group",
+      conversationId: "ops-room",
+    });
+    expect(
+      buildQaTarget({
+        chatType: "group",
+        conversationId: "ops-room",
+      }),
+    ).toBe("group:ops-room");
   });
 
   it("rejects malformed JSON responses instead of throwing from the stream callback", async () => {

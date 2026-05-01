@@ -1,7 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import { isProxyReasoningUnsupportedModelHint } from "../../plugin-sdk/provider-model-shared.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
 import { resolveProviderRequestPolicy } from "../provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
@@ -108,7 +107,9 @@ export function createOpenRouterWrapper(
 }
 
 export function isProxyReasoningUnsupported(modelId: string): boolean {
-  return isProxyReasoningUnsupportedModelHint(modelId);
+  const trimmed = normalizeOptionalLowercaseString(modelId);
+  const slashIndex = trimmed?.indexOf("/") ?? -1;
+  return slashIndex > 0 && trimmed?.slice(0, slashIndex) === "x-ai";
 }
 
 export function createKilocodeWrapper(

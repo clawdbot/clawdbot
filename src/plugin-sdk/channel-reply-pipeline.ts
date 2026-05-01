@@ -28,6 +28,7 @@ export function resolveChannelSourceReplyDeliveryMode(params: {
   cfg: OpenClawConfig;
   ctx: SourceReplyDeliveryModeContext;
   requested?: SourceReplyDeliveryMode;
+  messageToolAvailable?: boolean;
 }): SourceReplyDeliveryMode {
   return resolveSourceReplyDeliveryMode(params);
 }

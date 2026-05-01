@@ -1010,10 +1010,13 @@ public actor GatewayChannelActor {
 
     /// Wrap low-level URLSession/WebSocket errors with context so UI can surface them.
     private func wrap(_ error: Error, context: String) -> Error {
-        if error is GatewayConnectAuthError || error is GatewayResponseError || error is GatewayDecodingError {
+        if error is GatewayConnectAuthError || error is GatewayResponseError || error is GatewayDecodingError || error is GatewayTLSValidationError {
             return error
         }
         if let urlError = error as? URLError {
+            if let failure = (self.session as? GatewayTLSFailureProviding)?.consumeLastTLSFailure() {
+                return GatewayTLSValidationError(failure: failure, context: context)
+            }
             let desc = urlError.localizedDescription.isEmpty ? "cancelled" : urlError.localizedDescription
             return NSError(
                 domain: URLError.errorDomain,

@@ -16,6 +16,8 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       findBundledPluginMetadataById("voice-call")?.manifest.configContracts?.secretInputs?.paths,
     ).toEqual([
       { path: "twilio.authToken", expected: "string" },
+      { path: "realtime.providers.*.apiKey", expected: "string" },
+      { path: "streaming.providers.*.apiKey", expected: "string" },
       { path: "tts.providers.*.apiKey", expected: "string" },
     ]);
     const config = {
@@ -26,6 +28,20 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
             config: {
               twilio: {
                 authToken: envRef("TWILIO_AUTH_TOKEN"),
+              },
+              realtime: {
+                providers: {
+                  google: {
+                    apiKey: envRef("GEMINI_API_KEY"),
+                  },
+                },
+              },
+              streaming: {
+                providers: {
+                  openai: {
+                    apiKey: envRef("OPENAI_API_KEY"),
+                  },
+                },
               },
               tts: {
                 providers: {
@@ -54,6 +70,8 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       }).get("voice-call")?.configContracts.secretInputs?.paths,
     ).toEqual([
       { path: "twilio.authToken", expected: "string" },
+      { path: "realtime.providers.*.apiKey", expected: "string" },
+      { path: "streaming.providers.*.apiKey", expected: "string" },
       { path: "tts.providers.*.apiKey", expected: "string" },
     ]);
     const context = createResolverContext({
@@ -73,6 +91,8 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       warnings: context.warnings,
     }).toEqual({
       assignments: [
+        "plugins.entries.voice-call.config.realtime.providers.google.apiKey",
+        "plugins.entries.voice-call.config.streaming.providers.openai.apiKey",
         "plugins.entries.voice-call.config.tts.providers.elevenlabs.apiKey",
         "plugins.entries.voice-call.config.tts.providers.openai.apiKey",
         "plugins.entries.voice-call.config.twilio.authToken",

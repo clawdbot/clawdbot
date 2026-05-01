@@ -185,12 +185,6 @@ function testExecutable(cmd: string, args: string[]): Promise<boolean> {
   });
 }
 
-/** Reset ffmpeg detection state, mainly for tests. */
-export function resetFfmpegCache(): void {
-  _ffmpegPath = undefined;
-  _ffmpegCheckPromise = null;
-}
-
 // ---- silk-wasm detection ----
 
 let _silkWasmAvailable: boolean | null = null;
@@ -271,14 +265,6 @@ export function isLocalPath(p: string): boolean {
     return true;
   }
   return false;
-}
-
-/** Looser local-path heuristic used for markdown-extracted paths. */
-export function looksLikeLocalPath(p: string): boolean {
-  if (isLocalPath(p)) {
-    return true;
-  }
-  return /^(?:Users|home|tmp|var|private|[A-Z]:)/i.test(p);
 }
 
 // ---- QQBot media path resolution ----

@@ -65,13 +65,6 @@ export function resolveMaxBytes(params: {
   return DEFAULT_MAX_BYTES[params.capability];
 }
 
-export function resolveCapabilityConfig(
-  cfg: OpenClawConfig,
-  capability: MediaUnderstandingCapability,
-): MediaUnderstandingConfig | undefined {
-  return cfg.tools?.media?.[capability];
-}
-
 export function resolveScopeDecision(params: {
   scope?: MediaUnderstandingScopeConfig;
   ctx: MsgContext;

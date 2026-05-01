@@ -66,7 +66,7 @@ export type ResolvedAgentRoute = {
     | "default";
 };
 
-export { DEFAULT_ACCOUNT_ID, DEFAULT_AGENT_ID } from "./session-key.js";
+export { DEFAULT_ACCOUNT_ID } from "./session-key.js";
 
 export function deriveLastRoutePolicy(params: {
   sessionKey: string;

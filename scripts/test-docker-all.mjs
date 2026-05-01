@@ -222,6 +222,24 @@ function githubWorkflowRerunCommand(laneNames, ref) {
       )}`,
     );
   }
+  if (process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC) {
+    fields.push(
+      "-f",
+      `published_upgrade_survivor_baseline=${shellQuote(process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC)}`,
+    );
+  }
+  if (process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS) {
+    fields.push(
+      "-f",
+      `published_upgrade_survivor_baselines=${shellQuote(process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS)}`,
+    );
+  }
+  if (process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS) {
+    fields.push(
+      "-f",
+      `published_upgrade_survivor_scenarios=${shellQuote(process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS)}`,
+    );
+  }
   if (process.env.OPENCLAW_DOCKER_E2E_BARE_IMAGE) {
     fields.push(
       "-f",
@@ -250,6 +268,9 @@ function buildLaneRerunCommand(name, baseEnv) {
     ["OPENCLAW_DOCKER_E2E_BARE_IMAGE", baseEnv.OPENCLAW_DOCKER_E2E_BARE_IMAGE],
     ["OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE", baseEnv.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE],
     ["OPENCLAW_CURRENT_PACKAGE_TGZ", baseEnv.OPENCLAW_CURRENT_PACKAGE_TGZ],
+    ["OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC", baseEnv.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC],
+    ["OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS", baseEnv.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS],
+    ["OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS", baseEnv.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS],
   ];
   if (baseEnv.OPENCLAW_DOCKER_ALL_PNPM_COMMAND) {
     env.push(["OPENCLAW_DOCKER_ALL_PNPM_COMMAND", baseEnv.OPENCLAW_DOCKER_ALL_PNPM_COMMAND]);
@@ -1118,6 +1139,8 @@ async function main() {
     releaseChunk,
     selectedLaneNames,
     timingStore,
+    upgradeSurvivorBaselines: process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
+    upgradeSurvivorScenarios: process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
   });
 
   if (planJson) {

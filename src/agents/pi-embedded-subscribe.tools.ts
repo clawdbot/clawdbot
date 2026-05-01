@@ -1,6 +1,6 @@
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
-import { redactToolPayloadText } from "../logging/redact.js";
+import { redactSensitiveFieldValue, redactToolPayloadText } from "../logging/redact.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import { pluginRegistrationContractRegistry } from "../plugins/contracts/registry.js";
 import {
@@ -133,7 +133,10 @@ function redactStringsDeep(value: unknown, seen = new WeakSet<object>()): unknow
     seen.add(value);
     const out: Record<string, unknown> = {};
     for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-      out[key] = redactStringsDeep(child, seen);
+      out[key] =
+        typeof child === "string"
+          ? redactSensitiveFieldValue(key, child)
+          : redactStringsDeep(child, seen);
     }
     return out;
   }

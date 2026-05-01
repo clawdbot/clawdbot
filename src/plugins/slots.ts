@@ -35,17 +35,6 @@ export function hasKind(kind: PluginKind | PluginKind[] | undefined, target: Plu
   return Array.isArray(kind) ? kind.includes(target) : kind === target;
 }
 
-/**
- * Returns the slot key for a single-kind plugin.
- * For multi-kind plugins use `slotKeysForPluginKind` instead.
- */
-export function slotKeyForPluginKind(kind?: PluginKind): PluginSlotKey | null {
-  if (!kind) {
-    return null;
-  }
-  return SLOT_BY_KIND[kind] ?? null;
-}
-
 /** Order-insensitive equality check for two kind values (string or array). */
 export function kindsEqual(
   a: PluginKind | PluginKind[] | undefined,

@@ -1,6 +1,7 @@
 export {
   getRuntimeConfig,
   getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
   replaceConfigFile,
   type BrowserConfig,
   type BrowserProfileConfig,

@@ -39,6 +39,7 @@ import { decodeDataUrl } from "./image-tool.helpers.js";
 import {
   applyImageGenerationModelConfigDefaults,
   buildMediaReferenceDetails,
+  hasGenerationToolAvailability,
   isCapabilityProviderConfigured,
   normalizeMediaReferenceInputs,
   readGenerationTimeoutMs,
@@ -567,16 +568,17 @@ export function createImageGenerateTool(options?: {
   fsPolicy?: ToolFsPolicy;
 }): AnyAgentTool | null {
   const cfg = options?.config ?? getRuntimeConfig();
-  const imageGenerationModelConfig = resolveImageGenerationModelConfigForTool({
-    cfg,
-    agentDir: options?.agentDir,
-  });
-  if (!imageGenerationModelConfig) {
+  if (
+    !hasGenerationToolAvailability({
+      cfg,
+      agentDir: options?.agentDir,
+      modelConfig: cfg.agents?.defaults?.imageGenerationModel,
+      providers: () => listRuntimeImageGenerationProviders({ config: cfg }),
+      providerKey: "imageGenerationProviders",
+    })
+  ) {
     return null;
   }
-  const effectiveCfg =
-    applyImageGenerationModelConfigDefaults(cfg, imageGenerationModelConfig) ?? cfg;
-  const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
   const sandboxConfig =
     options?.sandbox && options.sandbox.root.trim()
       ? {
@@ -596,7 +598,7 @@ export function createImageGenerateTool(options?: {
       const params = args as Record<string, unknown>;
       const action = resolveAction(params);
       if (action === "list") {
-        const runtimeProviders = listRuntimeImageGenerationProviders({ config: effectiveCfg });
+        const runtimeProviders = listRuntimeImageGenerationProviders({ config: cfg });
         const providers = runtimeProviders.map((provider) =>
           Object.assign(
             { id: provider.id },
@@ -607,7 +609,7 @@ export function createImageGenerateTool(options?: {
               configured: isCapabilityProviderConfigured({
                 providers: runtimeProviders,
                 provider,
-                cfg: effectiveCfg,
+                cfg,
                 agentDir: options?.agentDir,
               }),
               authEnvVars: getImageGenerationProviderAuthEnvVars(provider.id),
@@ -657,6 +659,16 @@ export function createImageGenerateTool(options?: {
         };
       }
 
+      const imageGenerationModelConfig = resolveImageGenerationModelConfigForTool({
+        cfg,
+        agentDir: options?.agentDir,
+      });
+      if (!imageGenerationModelConfig) {
+        throw new ToolInputError("No image-generation model configured.");
+      }
+      const effectiveCfg =
+        applyImageGenerationModelConfigDefaults(cfg, imageGenerationModelConfig) ?? cfg;
+      const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
       const prompt = readStringParam(params, "prompt", { required: true });
       const imageInputs = normalizeReferenceImages(params);
       const model = readStringParam(params, "model");

@@ -111,11 +111,7 @@ function collectPendingMediaFromInternalEvents(
   return pending;
 }
 
-export type {
-  BlockReplyChunking,
-  SubscribeEmbeddedPiSessionParams,
-  ToolResultFormat,
-} from "./pi-embedded-subscribe.types.js";
+export type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 
 export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionParams) {
   const reasoningMode = params.reasoningMode ?? "off";

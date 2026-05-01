@@ -42,6 +42,10 @@ import {
 } from "../plugins/current-plugin-metadata-snapshot.js";
 import { runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
+import {
+  pinActivePluginChannelRegistry,
+  pinActivePluginHttpRouteRegistry,
+} from "../plugins/runtime.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -85,9 +89,16 @@ import {
   loadGatewayStartupConfigSnapshot,
   prepareGatewayStartupConfig,
 } from "./server-startup-config.js";
-import { prepareGatewayPluginBootstrap } from "./server-startup-plugins.js";
+import {
+  loadGatewayStartupPluginRuntime,
+  prepareGatewayPluginBootstrap,
+} from "./server-startup-plugins.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailable-methods.js";
-import { startGatewayEarlyRuntime, startGatewayPostAttachRuntime } from "./server-startup.js";
+import {
+  startGatewayEarlyRuntime,
+  startGatewayPluginDiscovery,
+  startGatewayPostAttachRuntime,
+} from "./server-startup.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { attachGatewayWsHandlers } from "./server-ws-runtime.js";
 import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
@@ -487,6 +498,7 @@ export async function startGatewayServer(
     enqueueSystemEvent(`[${code}] ${message}`, {
       sessionKey: resolveMainSessionKey(cfg),
       contextKey: code,
+      trusted: false,
     });
   };
   const activateRuntimeSecrets = createRuntimeSecretsActivator({
@@ -577,6 +589,7 @@ export async function startGatewayServer(
       pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot,
       minimalTestGateway,
       log,
+      loadRuntimePlugins: false,
     }),
   );
   const {
@@ -586,6 +599,7 @@ export async function startGatewayServer(
     startupPluginIds,
     pluginLookUpTable,
     baseMethods,
+    runtimePluginsLoaded,
   } = pluginBootstrap;
   setCurrentPluginMetadataSnapshot(pluginLookUpTable, { config: gatewayPluginConfigAtStart });
   if (pluginLookUpTable) {
@@ -710,6 +724,7 @@ export async function startGatewayServer(
   const serverStartedAt = Date.now();
   const readinessEventLoopHealth = createGatewayEventLoopHealthMonitor();
   let startupSidecarsReady = minimalTestGateway;
+  let startupPendingReason = "startup-sidecars";
   const channelManager = createChannelManager({
     getRuntimeConfig: () =>
       applyPluginAutoEnable({
@@ -726,6 +741,7 @@ export async function startGatewayServer(
     channelManager,
     startedAt: serverStartedAt,
     getStartupPending: () => !startupSidecarsReady,
+    getStartupPendingReason: () => startupPendingReason,
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
   });
   log.info("starting HTTP server...");
@@ -970,6 +986,59 @@ export async function startGatewayServer(
       stopChannel,
       logChannels,
     });
+    const attachedGatewayExtraHandlers = {
+      ...pluginRegistry.gatewayHandlers,
+      ...extraHandlers,
+    };
+    let attachedPluginGatewayHandlerKeys = new Set(Object.keys(pluginRegistry.gatewayHandlers));
+    const replaceAttachedPluginRuntime = (loaded: {
+      pluginRegistry: typeof pluginRegistry;
+      gatewayMethods: string[];
+    }) => {
+      pluginRegistry = loaded.pluginRegistry;
+      baseGatewayMethods = loaded.gatewayMethods;
+      runtimeState.gatewayMethods.splice(
+        0,
+        runtimeState.gatewayMethods.length,
+        ...listActiveGatewayMethods(baseGatewayMethods),
+      );
+      for (const key of attachedPluginGatewayHandlerKeys) {
+        delete attachedGatewayExtraHandlers[key];
+      }
+      Object.assign(attachedGatewayExtraHandlers, pluginRegistry.gatewayHandlers);
+      attachedPluginGatewayHandlerKeys = new Set(Object.keys(pluginRegistry.gatewayHandlers));
+      pinActivePluginHttpRouteRegistry(pluginRegistry);
+      pinActivePluginChannelRegistry(pluginRegistry);
+    };
+    const refreshAttachedGatewayDiscovery = async (nextPluginRegistry: typeof pluginRegistry) => {
+      if (minimalTestGateway) {
+        return;
+      }
+      try {
+        const stopPreviousDiscovery = runtimeState.bonjourStop;
+        runtimeState.bonjourStop = null;
+        if (stopPreviousDiscovery) {
+          try {
+            await stopPreviousDiscovery();
+          } catch (err) {
+            logDiscovery.warn(
+              `gateway discovery stop failed before plugin refresh: ${String(err)}`,
+            );
+          }
+        }
+        runtimeState.bonjourStop = await startGatewayPluginDiscovery({
+          minimalTestGateway,
+          cfgAtStart,
+          port,
+          gatewayTls,
+          tailscaleMode,
+          logDiscovery,
+          pluginRegistry: nextPluginRegistry,
+        });
+      } catch (err) {
+        logDiscovery.warn(`gateway discovery refresh failed after plugin load: ${String(err)}`);
+      }
+    };
 
     const canvasHostServerPort = (canvasHostServer as CanvasHostServer | null)?.port;
 
@@ -1050,9 +1119,9 @@ export async function startGatewayServer(
         : () => {};
 
     if (!minimalTestGateway) {
-      if (deferredConfiguredChannelPluginIds.length > 0) {
+      if (runtimePluginsLoaded && deferredConfiguredChannelPluginIds.length > 0) {
         const { reloadDeferredGatewayPlugins } = await import("./server-plugin-bootstrap.js");
-        ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = reloadDeferredGatewayPlugins({
+        const loaded = reloadDeferredGatewayPlugins({
           cfg: gatewayPluginConfigAtStart,
           activationSourceConfig: startupActivationSourceConfig,
           workspaceDir: defaultWorkspaceDir,
@@ -1062,8 +1131,9 @@ export async function startGatewayServer(
           pluginIds: startupPluginIds,
           pluginLookUpTable,
           logDiagnostics: false,
-        }));
-        runtimeState.gatewayMethods = listActiveGatewayMethods(baseGatewayMethods);
+        });
+        replaceAttachedPluginRuntime(loaded);
+        await refreshAttachedGatewayDiscovery(loaded.pluginRegistry);
       }
     }
 
@@ -1088,7 +1158,7 @@ export async function startGatewayServer(
       logGateway: log,
       logHealth,
       logWsControl,
-      extraHandlers: { ...pluginRegistry.gatewayHandlers, ...extraHandlers },
+      extraHandlers: attachedGatewayExtraHandlers,
       broadcast,
       context: gatewayRequestContext,
     });
@@ -1123,6 +1193,26 @@ export async function startGatewayServer(
         logHooks,
         logChannels,
         unavailableGatewayMethods,
+        loadStartupPlugins: runtimePluginsLoaded
+          ? undefined
+          : () =>
+              loadGatewayStartupPluginRuntime({
+                cfg: gatewayPluginConfigAtStart,
+                activationSourceConfig: startupActivationSourceConfig,
+                workspaceDir: defaultWorkspaceDir,
+                log,
+                baseMethods,
+                startupPluginIds,
+                pluginLookUpTable,
+              }),
+        onStartupPluginsLoading: () => {
+          startupPendingReason = "plugin-runtime-deps";
+        },
+        onStartupPluginsLoaded: async (loaded) => {
+          replaceAttachedPluginRuntime(loaded);
+          startupPendingReason = "startup-sidecars";
+          await refreshAttachedGatewayDiscovery(loaded.pluginRegistry);
+        },
         getCronService: () =>
           runtimeState?.cronState.cron as PluginHookGatewayCronService | undefined,
         onPluginServices: (pluginServices) => {

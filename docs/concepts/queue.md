@@ -114,6 +114,7 @@ keys.
 
 - If commands seem stuck, enable verbose logs and look for “queued for …ms” lines to confirm the queue is draining.
 - If you need queue depth, enable verbose logs and watch for queue timing lines.
+- Codex app-server runs that accept a turn and then stop emitting progress are interrupted by the Codex adapter so the active session lane can release instead of waiting for the outer run timeout.
 - When diagnostics are enabled, sessions that remain in `processing` past `diagnostics.stuckSessionWarnMs` log a stuck-session warning. Active embedded runs, active reply operations, and active lane tasks remain warning-only by default; stale startup bookkeeping with no active session work can release the affected session lane so queued work drains.
 
 ## Related

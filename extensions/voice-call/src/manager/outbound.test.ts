@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   addTranscriptEntryMock,
   clearMaxDurationTimerMock,
+  generateDtmfRedirectTwimlMock,
   generateNotifyTwimlMock,
   getCallByProviderCallIdMock,
   mapVoiceToPollyMock,
@@ -12,6 +13,7 @@ const {
 } = vi.hoisted(() => ({
   addTranscriptEntryMock: vi.fn(),
   clearMaxDurationTimerMock: vi.fn(),
+  generateDtmfRedirectTwimlMock: vi.fn(),
   generateNotifyTwimlMock: vi.fn(),
   getCallByProviderCallIdMock: vi.fn(),
   mapVoiceToPollyMock: vi.fn(),
@@ -45,6 +47,7 @@ vi.mock("../voice-mapping.js", () => ({
 }));
 
 vi.mock("./twiml.js", () => ({
+  generateDtmfRedirectTwiml: generateDtmfRedirectTwimlMock,
   generateNotifyTwiml: generateNotifyTwimlMock,
 }));
 
@@ -69,6 +72,7 @@ describe("voice-call outbound helpers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mapVoiceToPollyMock.mockReturnValue("Polly.Joanna");
+    generateDtmfRedirectTwimlMock.mockReturnValue("<DtmfRedirect />");
     generateNotifyTwimlMock.mockReturnValue("<Response />");
   });
 
@@ -167,6 +171,81 @@ describe("voice-call outbound helpers", () => {
     });
     expect(ctx.providerCallIdMap.get("provider-1")).toBe(callId);
     expect(persistCallRecordMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("initiates conversation calls with pre-connect DTMF TwiML", async () => {
+    const initiateProviderCall = vi.fn(async () => ({ providerCallId: "provider-1" }));
+    const ctx = {
+      activeCalls: new Map(),
+      providerCallIdMap: new Map(),
+      provider: { name: "twilio", initiateCall: initiateProviderCall },
+      config: {
+        maxConcurrentCalls: 3,
+        outbound: { defaultMode: "conversation" },
+        fromNumber: "+14155550100",
+      },
+      storePath: "/tmp/voice-call.json",
+      webhookUrl: "https://example.com/webhook",
+    };
+
+    const result = await initiateCall(ctx as never, "+14155550123", "session-1", {
+      mode: "conversation",
+      message: "hello meet",
+      dtmfSequence: "ww123456#",
+    });
+
+    expect(result).toEqual({
+      callId: expect.any(String),
+      success: true,
+    });
+    const callId = result.callId;
+
+    expect(generateDtmfRedirectTwimlMock).toHaveBeenCalledWith(
+      "ww123456#",
+      "https://example.com/webhook",
+    );
+    expect(initiateProviderCall).toHaveBeenCalledWith({
+      callId,
+      from: "+14155550100",
+      to: "+14155550123",
+      webhookUrl: "https://example.com/webhook",
+      inlineTwiml: undefined,
+      preConnectTwiml: "<DtmfRedirect />",
+    });
+    expect(ctx.activeCalls.get(callId)?.metadata).toMatchObject({
+      initialMessage: "hello meet",
+      mode: "conversation",
+    });
+  });
+
+  it("rejects DTMF sequences outside conversation mode", async () => {
+    const initiateProviderCall = vi.fn(async () => ({ providerCallId: "provider-1" }));
+    const ctx = {
+      activeCalls: new Map(),
+      providerCallIdMap: new Map(),
+      provider: { name: "twilio", initiateCall: initiateProviderCall },
+      config: {
+        maxConcurrentCalls: 3,
+        outbound: { defaultMode: "notify" },
+        fromNumber: "+14155550100",
+      },
+      storePath: "/tmp/voice-call.json",
+      webhookUrl: "https://example.com/webhook",
+    };
+
+    await expect(
+      initiateCall(ctx as never, "+14155550123", "session-1", {
+        message: "hello",
+        dtmfSequence: "123456#",
+      }),
+    ).resolves.toEqual({
+      callId: "",
+      success: false,
+      error: "dtmfSequence requires conversation mode",
+    });
+
+    expect(initiateProviderCall).not.toHaveBeenCalled();
+    expect(ctx.activeCalls.size).toBe(0);
   });
 
   it("fails initiateCall cleanly when provider initiation throws", async () => {

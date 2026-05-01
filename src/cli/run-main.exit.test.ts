@@ -177,7 +177,7 @@ vi.mock("./progress.js", () => ({
 }));
 
 vi.mock("../config/io.js", () => ({
-  getRuntimeConfig: loadConfigMock,
+  readBestEffortConfig: loadConfigMock,
 }));
 
 vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({

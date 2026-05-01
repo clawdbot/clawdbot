@@ -9,6 +9,7 @@ import {
   handleCodexConversationBindingResolved,
   handleCodexConversationInboundClaim,
 } from "./src/conversation-binding.js";
+import { buildCodexMigrationProvider } from "./src/migration/provider.js";
 
 export default definePluginEntry({
   id: "codex",
@@ -28,6 +29,7 @@ export default definePluginEntry({
     api.registerMediaUnderstandingProvider(
       buildCodexMediaUnderstandingProvider({ pluginConfig: api.pluginConfig }),
     );
+    api.registerMigrationProvider(buildCodexMigrationProvider());
     api.registerCommand(createCodexCommand({ pluginConfig: api.pluginConfig }));
     api.on("inbound_claim", (event, ctx) =>
       handleCodexConversationInboundClaim(event, ctx, {

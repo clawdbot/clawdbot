@@ -35,6 +35,8 @@ export type CliBackendPreparedExecution = {
 
 export type CliBackendAuthEpochMode = "combined" | "profile-only";
 
+export type CliBackendNativeToolMode = "none" | "always-on";
+
 export type CliBackendNormalizeConfigContext = {
   config?: OpenClawConfig;
   backendId: string;
@@ -139,4 +141,11 @@ export type CliBackendPlugin = {
     | CliBackendPreparedExecution
     | null
     | undefined;
+  /**
+   * Whether this CLI backend can expose native tools outside OpenClaw's tool
+   * catalog. Backends that cannot provide a true no-tools mode must mark
+   * themselves as `always-on` so callers that require disabled tools fail
+   * closed instead of launching a native harness.
+   */
+  nativeToolMode?: CliBackendNativeToolMode;
 };

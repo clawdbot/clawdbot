@@ -16,6 +16,65 @@ public struct GatewayTLSParams: Sendable {
     }
 }
 
+public enum GatewayTLSValidationFailureKind: String, Sendable {
+    case pinMismatch
+    case certificateUnavailable
+    case untrustedCertificate
+}
+
+public struct GatewayTLSValidationFailure: Equatable, Sendable {
+    public let kind: GatewayTLSValidationFailureKind
+    public let host: String
+    public let storeKey: String?
+    public let expectedFingerprint: String?
+    public let observedFingerprint: String?
+    public let systemTrustOk: Bool
+
+    public init(
+        kind: GatewayTLSValidationFailureKind,
+        host: String,
+        storeKey: String?,
+        expectedFingerprint: String?,
+        observedFingerprint: String?,
+        systemTrustOk: Bool)
+    {
+        self.kind = kind
+        self.host = host
+        self.storeKey = storeKey
+        self.expectedFingerprint = expectedFingerprint
+        self.observedFingerprint = observedFingerprint
+        self.systemTrustOk = systemTrustOk
+    }
+}
+
+public struct GatewayTLSValidationError: LocalizedError, Sendable {
+    public let failure: GatewayTLSValidationFailure
+    public let context: String
+
+    public init(failure: GatewayTLSValidationFailure, context: String) {
+        self.failure = failure
+        self.context = context
+    }
+
+    public var errorDescription: String? {
+        let prefix = self.context.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch self.failure.kind {
+        case .pinMismatch:
+            let expected = self.failure.expectedFingerprint ?? "unknown"
+            let observed = self.failure.observedFingerprint ?? "unknown"
+            return "\(prefix): TLS certificate pin mismatch for \(self.failure.host) (expected \(expected), observed \(observed))"
+        case .certificateUnavailable:
+            return "\(prefix): TLS certificate unavailable for \(self.failure.host)"
+        case .untrustedCertificate:
+            return "\(prefix): TLS certificate is not trusted for \(self.failure.host)"
+        }
+    }
+}
+
+public protocol GatewayTLSFailureProviding: AnyObject {
+    func consumeLastTLSFailure() -> GatewayTLSValidationFailure?
+}
+
 public enum GatewayTLSStore {
     private static let keychainService = "ai.openclaw.tls-pinning"
 
@@ -33,6 +92,15 @@ public enum GatewayTLSStore {
 
     public static func saveFingerprint(_ value: String, stableID: String) {
         _ = GenericPasswordKeychainStore.saveString(value, service: self.keychainService, account: stableID)
+    }
+
+    @discardableResult
+    public static func replaceFingerprint(_ value: String, stableID: String) -> Bool {
+        guard GenericPasswordKeychainStore.saveString(value, service: self.keychainService, account: stableID) else {
+            return false
+        }
+        self.clearLegacyFingerprint(stableID: stableID)
+        return true
     }
 
     @discardableResult
@@ -87,8 +155,10 @@ public enum GatewayTLSStore {
     }
 }
 
-public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLSessionDelegate, @unchecked Sendable {
+public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLSessionDelegate, GatewayTLSFailureProviding, @unchecked Sendable {
     private let params: GatewayTLSParams
+    private let failureLock = NSLock()
+    private var lastTLSFailure: GatewayTLSValidationFailure?
     private lazy var session: URLSession = {
         let config = URLSessionConfiguration.default
         config.waitsForConnectivity = true
@@ -98,6 +168,26 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
     public init(params: GatewayTLSParams) {
         self.params = params
         super.init()
+    }
+
+    public func consumeLastTLSFailure() -> GatewayTLSValidationFailure? {
+        self.failureLock.lock()
+        defer { self.failureLock.unlock() }
+        let failure = self.lastTLSFailure
+        self.lastTLSFailure = nil
+        return failure
+    }
+
+    private func recordTLSFailure(_ failure: GatewayTLSValidationFailure) {
+        self.failureLock.lock()
+        self.lastTLSFailure = failure
+        self.failureLock.unlock()
+    }
+
+    private func clearTLSFailure() {
+        self.failureLock.lock()
+        self.lastTLSFailure = nil
+        self.failureLock.unlock()
     }
 
     public func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
@@ -118,12 +208,23 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
             return
         }
 
+        let host = challenge.protectionSpace.host
+        let systemTrustOk = SecTrustEvaluateWithError(trust, nil)
         let expected = self.params.expectedFingerprint.map(normalizeFingerprint)
-        if let fingerprint = certificateFingerprint(trust) {
+        let fingerprint = certificateFingerprint(trust)
+        if let fingerprint {
             if let expected {
                 if fingerprint == expected {
+                    self.clearTLSFailure()
                     completionHandler(.useCredential, URLCredential(trust: trust))
                 } else {
+                    self.recordTLSFailure(GatewayTLSValidationFailure(
+                        kind: .pinMismatch,
+                        host: host,
+                        storeKey: self.params.storeKey,
+                        expectedFingerprint: expected,
+                        observedFingerprint: fingerprint,
+                        systemTrustOk: systemTrustOk))
                     completionHandler(.cancelAuthenticationChallenge, nil)
                 }
                 return
@@ -132,15 +233,23 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
                 if let storeKey = params.storeKey {
                     GatewayTLSStore.saveFingerprint(fingerprint, stableID: storeKey)
                 }
+                self.clearTLSFailure()
                 completionHandler(.useCredential, URLCredential(trust: trust))
                 return
             }
         }
 
-        let ok = SecTrustEvaluateWithError(trust, nil)
-        if ok || !self.params.required {
+        if systemTrustOk || !self.params.required {
+            self.clearTLSFailure()
             completionHandler(.useCredential, URLCredential(trust: trust))
         } else {
+            self.recordTLSFailure(GatewayTLSValidationFailure(
+                kind: fingerprint == nil ? .certificateUnavailable : .untrustedCertificate,
+                host: host,
+                storeKey: self.params.storeKey,
+                expectedFingerprint: expected,
+                observedFingerprint: fingerprint,
+                systemTrustOk: false))
             completionHandler(.cancelAuthenticationChallenge, nil)
         }
     }

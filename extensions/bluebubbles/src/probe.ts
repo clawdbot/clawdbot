@@ -133,11 +133,6 @@ export function isMacOS26OrHigher(accountId?: string): boolean {
   return major !== null && major >= 26;
 }
 
-/** Clear the server info cache (for testing) */
-export function clearServerInfoCache(): void {
-  serverInfoCache.clear();
-}
-
 export async function probeBlueBubbles(params: {
   baseUrl?: string | null;
   password?: string | null;

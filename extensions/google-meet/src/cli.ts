@@ -1935,6 +1935,7 @@ export function registerGoogleMeetCli(params: {
   root
     .command("status")
     .argument("[session-id]", "Meet session ID")
+    .option("--json", "Print JSON output", false)
     .action(async (sessionId?: string) => {
       const rt = await params.ensureRuntime();
       writeStdoutJson(rt.status(sessionId));

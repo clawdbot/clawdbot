@@ -48,8 +48,11 @@ import {
 } from "./provider.commands.js";
 import { logDiscordResolvedConfig } from "./provider.config-log.js";
 import {
-  clearDiscordNativeCommands,
   formatDiscordDeployErrorDetails,
+  formatDiscordDeployErrorMessage,
+} from "./provider.deploy-errors.js";
+import {
+  clearDiscordNativeCommands,
   runDiscordCommandDeployInBackground,
 } from "./provider.deploy.js";
 import { createDiscordProviderInteractionSurface } from "./provider.interactions.js";
@@ -644,6 +647,7 @@ export const __testing = {
   resolveDiscordRestFetch,
   resolveThreadBindingsEnabled: resolveThreadBindingsEnabledForTesting,
   formatDiscordDeployErrorDetails,
+  formatDiscordDeployErrorMessage,
   setFetchDiscordApplicationId(mock?: typeof fetchDiscordApplicationId) {
     fetchDiscordApplicationIdForTesting = mock;
   },

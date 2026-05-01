@@ -26,6 +26,9 @@ describe("config compaction settings", () => {
         enabled: true,
         maxRetries: 2,
       },
+      midTurnPrecheck: {
+        enabled: true,
+      },
       memoryFlush: {
         enabled: false,
         model: "ollama/qwen3:8b",
@@ -44,6 +47,7 @@ describe("config compaction settings", () => {
     expect(compaction?.identifierInstructions).toBe("Keep ticket IDs unchanged.");
     expect(compaction?.qualityGuard?.enabled).toBe(true);
     expect(compaction?.qualityGuard?.maxRetries).toBe(2);
+    expect(compaction?.midTurnPrecheck?.enabled).toBe(true);
     expect(compaction?.memoryFlush?.enabled).toBe(false);
     expect(compaction?.memoryFlush?.model).toBe("ollama/qwen3:8b");
     expect(compaction?.memoryFlush?.softThresholdTokens).toBe(1234);

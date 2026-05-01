@@ -149,6 +149,9 @@ const QA_STREAMING_PROMPT_RE = /(?:partial|quiet) streaming qa check/i;
 const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
 const QA_TOOL_PROGRESS_ERROR_PROMPT_RE = /tool progress error qa check/i;
 const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress qa check/i;
+const QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE = /qa group visible reply tool check/i;
+const QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE =
+  /qa group message unavailable fallback check/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback worker/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
@@ -1324,6 +1327,21 @@ async function buildResponsesPayload(
         text: secondExactMarkerDirective,
       },
     ]);
+  }
+  if (QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE.test(allInputText)) {
+    const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-TOOL-OK";
+    if (!toolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "send",
+        message: marker,
+      });
+    }
+    return buildAssistantEvents("");
+  }
+  if (QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE.test(allInputText)) {
+    return buildAssistantEvents(
+      exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-FALLBACK-OK",
+    );
   }
   if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
     return buildAssistantEvents(exactReplyDirective);

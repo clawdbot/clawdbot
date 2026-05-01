@@ -324,6 +324,54 @@ describe("resolveBlueBubblesAccount", () => {
     expect(resolved.baseUrl).toBe("http://localhost:1234");
   });
 
+  it("inherits channel-level replyContextApiFallback for accounts that omit the flag (#71820)", () => {
+    // Codex P2: a per-account `.default(false)` would clobber channel-level
+    // `replyContextApiFallback: true` during the merge, so multi-account
+    // operators flipping the global toggle would silently get nothing
+    // unless they duplicated the flag under every `accounts.<id>` block.
+    // Verify the runtime resolver actually picks up the channel value.
+    const resolved = resolveBlueBubblesAccount({
+      cfg: {
+        channels: {
+          bluebubbles: {
+            replyContextApiFallback: true,
+            accounts: {
+              work: {
+                serverUrl: "http://localhost:1234",
+                password: "secret", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.config.replyContextApiFallback).toBe(true);
+  });
+
+  it("lets account-level replyContextApiFallback override channel-level (#71820)", () => {
+    const resolved = resolveBlueBubblesAccount({
+      cfg: {
+        channels: {
+          bluebubbles: {
+            replyContextApiFallback: true,
+            accounts: {
+              work: {
+                serverUrl: "http://localhost:1234",
+                password: "secret", // pragma: allowlist secret
+                replyContextApiFallback: false,
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.config.replyContextApiFallback).toBe(false);
+  });
+
   it("strips stale legacy private-network aliases after canonical normalization", () => {
     const resolved = resolveBlueBubblesAccount({
       cfg: {
@@ -461,6 +509,53 @@ describe("BlueBubblesConfigSchema", () => {
     });
 
     expect(parsed.success).toBe(true);
+  });
+
+  it("does not materialize a per-account default for replyContextApiFallback (#71820)", () => {
+    // Codex review: a per-account `.default(false)` would clobber a
+    // channel-level `replyContextApiFallback: true` during account merge,
+    // forcing operators to duplicate the flag under every `accounts.<id>`.
+    // The schema is `.optional()` (no default) so account-level absence
+    // means "inherit from channel".
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      replyContextApiFallback: true,
+      accounts: {
+        work: {
+          serverUrl: "http://localhost:1234",
+          password: "secret", // pragma: allowlist secret
+        },
+      },
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) {
+      return;
+    }
+    const accountConfig = (
+      parsed.data as { accounts?: { work?: { replyContextApiFallback?: boolean } } }
+    ).accounts?.work;
+    expect(accountConfig?.replyContextApiFallback).toBeUndefined();
+  });
+
+  it("accepts explicit replyContextApiFallback at channel and account scope", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      replyContextApiFallback: true,
+      accounts: {
+        work: {
+          replyContextApiFallback: false,
+        },
+      },
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) {
+      return;
+    }
+    expect((parsed.data as { replyContextApiFallback?: boolean }).replyContextApiFallback).toBe(
+      true,
+    );
+    expect(
+      (parsed.data as { accounts?: { work?: { replyContextApiFallback?: boolean } } }).accounts
+        ?.work?.replyContextApiFallback,
+    ).toBe(false);
   });
 });
 

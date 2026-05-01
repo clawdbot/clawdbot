@@ -1,5 +1,10 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { buildPeakErrorHours } from "./usage-metrics.ts";
+import {
+  buildPeakErrorHours,
+  buildUsageMosaicStats,
+  getHourAndWeekdayForUtcQuarterBucket,
+  sessionTouchesSelectedHours,
+} from "./usage-metrics.ts";
 import type { UsageSessionEntry } from "./usageTypes.ts";
 
 /**
@@ -75,11 +80,9 @@ describe("buildPeakErrorHours", () => {
     expect(result.length).toBeGreaterThan(0);
     expect(result.length).toBeLessThanOrEqual(5);
 
-    // Verify that hour mappings are correct by checking all returned entries
-    const _hourSet = new Set(result.map((r) => r.label));
-    // The hours present should correspond to UTC hours 0, 1, 9, 23
+    // The hours present should correspond to UTC hours 0, 1, 9, 23.
     // formatHourLabel uses Date.setHours so labels depend on locale,
-    // but we can verify error rates and sub info
+    // but we can verify error rates and sub info.
     const highestRate = result[0];
     expect(highestRate).toBeDefined();
     // hour 0: 5/10 = 50%, hour 23: 4/8 = 50%, hour 9: 3/15 = 20%, hour 1: 2/20 = 10%
@@ -268,5 +271,151 @@ describe("buildPeakErrorHours", () => {
       return sum + (match ? Number.parseInt(match[1], 10) : 0);
     }, 0);
     expect(totalErrors).toBe(3);
+  });
+});
+
+describe("usage mosaic token buckets", () => {
+  const makeSessionWithTokenBuckets = (
+    buckets: Array<{
+      date: string;
+      quarterIndex: number;
+      totalTokens: number;
+      input?: number;
+      output?: number;
+      cacheRead?: number;
+      cacheWrite?: number;
+    }>,
+  ): UsageSessionEntry =>
+    ({
+      key: "token-bucket-session",
+      usage: {
+        totalTokens: buckets.reduce((sum, bucket) => sum + bucket.totalTokens, 0),
+        totalCost: 0,
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+        firstActivity: Date.parse("2026-02-01T10:00:00.000Z"),
+        lastActivity: Date.parse("2026-02-01T12:00:00.000Z"),
+        utcQuarterHourTokenUsage: buckets.map((bucket) => ({
+          date: bucket.date,
+          quarterIndex: bucket.quarterIndex,
+          input: bucket.input ?? 0,
+          output: bucket.output ?? bucket.totalTokens,
+          cacheRead: bucket.cacheRead ?? 0,
+          cacheWrite: bucket.cacheWrite ?? 0,
+          totalTokens: bucket.totalTokens,
+          totalCost: 0,
+        })),
+      },
+    }) as unknown as UsageSessionEntry;
+
+  it("maps UTC quarter-hour buckets and rejects invalid bucket coordinates", () => {
+    expect(getHourAndWeekdayForUtcQuarterBucket("2026-02-01", 40, "utc")).toEqual({
+      hour: 10,
+      weekday: 0,
+    });
+    expect(getHourAndWeekdayForUtcQuarterBucket("2026-02-01", -1, "utc")).toBeNull();
+    expect(getHourAndWeekdayForUtcQuarterBucket("2026-02-01", 96, "utc")).toBeNull();
+    expect(getHourAndWeekdayForUtcQuarterBucket("2026-13-01", 40, "utc")).toBeNull();
+    expect(getHourAndWeekdayForUtcQuarterBucket("not-a-date", 40, "utc")).toBeNull();
+  });
+
+  it("uses local timezone mapping for UTC quarter-hour buckets", () => {
+    vi.spyOn(Date.prototype, "getHours").mockImplementation(function (this: Date) {
+      return (this.getUTCHours() + 8) % 24;
+    });
+    vi.spyOn(Date.prototype, "getDay").mockReturnValue(1);
+
+    expect(getHourAndWeekdayForUtcQuarterBucket("2026-02-01", 68, "local")).toEqual({
+      hour: 1,
+      weekday: 1,
+    });
+  });
+
+  it("uses precise token buckets instead of spreading session totals across the session span", () => {
+    const session = makeSessionWithTokenBuckets([
+      { date: "2026-02-01", quarterIndex: 40, totalTokens: 10_000 },
+    ]);
+
+    const stats = buildUsageMosaicStats([session], "utc");
+
+    expect(stats.totalTokens).toBe(10_000);
+    expect(stats.hourTotals[10]).toBe(10_000);
+    expect(stats.hourTotals[11]).toBe(0);
+  });
+
+  it("filters selected hours by precise token buckets before falling back to session span", () => {
+    const session = makeSessionWithTokenBuckets([
+      { date: "2026-02-01", quarterIndex: 40, totalTokens: 10_000 },
+    ]);
+
+    expect(sessionTouchesSelectedHours(session, [10], "utc")).toBe(true);
+    expect(sessionTouchesSelectedHours(session, [11], "utc")).toBe(false);
+  });
+
+  it("preserves legacy session-span hour filtering when token buckets are absent", () => {
+    const session = {
+      key: "legacy-span-session",
+      usage: {
+        totalTokens: 100,
+        totalCost: 0,
+        input: 0,
+        output: 100,
+        cacheRead: 0,
+        cacheWrite: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+        firstActivity: Date.parse("2026-02-01T10:00:00.000Z"),
+        lastActivity: Date.parse("2026-02-01T11:00:00.000Z"),
+      },
+    } as unknown as UsageSessionEntry;
+
+    expect(sessionTouchesSelectedHours(session, [10], "utc")).toBe(true);
+    expect(sessionTouchesSelectedHours(session, [11], "utc")).toBe(true);
+    expect(sessionTouchesSelectedHours(session, [12], "utc")).toBe(false);
+  });
+
+  it("falls back to session span when token buckets contain no valid positive tokens", () => {
+    const session = {
+      key: "empty-token-bucket-session",
+      usage: {
+        totalTokens: 100,
+        totalCost: 0,
+        input: 0,
+        output: 100,
+        cacheRead: 0,
+        cacheWrite: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+        firstActivity: Date.parse("2026-02-01T11:00:00.000Z"),
+        lastActivity: Date.parse("2026-02-01T11:00:00.000Z"),
+        utcQuarterHourTokenUsage: [
+          {
+            date: "2026-02-01",
+            quarterIndex: 40,
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            totalCost: 0,
+          },
+        ],
+      },
+    } as unknown as UsageSessionEntry;
+
+    expect(sessionTouchesSelectedHours(session, [11], "utc")).toBe(true);
   });
 });

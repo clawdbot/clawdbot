@@ -432,6 +432,14 @@ export type AgentCompactionQualityGuardConfig = {
   maxRetries?: number;
 };
 
+export type AgentCompactionMidTurnPrecheckConfig = {
+  /**
+   * Enable structured context pressure checks after tool results are appended
+   * and before the next Pi model call. Default: false.
+   */
+  enabled?: boolean;
+};
+
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
@@ -453,6 +461,8 @@ export type AgentCompactionConfig = {
   identifierInstructions?: string;
   /** Optional quality-audit retries for safeguard compaction summaries. */
   qualityGuard?: AgentCompactionQualityGuardConfig;
+  /** Mid-turn precheck for tool-loop context pressure. Default: disabled. */
+  midTurnPrecheck?: AgentCompactionMidTurnPrecheckConfig;
   /** Post-compaction session memory index sync mode. */
   postIndexSync?: AgentCompactionPostIndexSyncMode;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */

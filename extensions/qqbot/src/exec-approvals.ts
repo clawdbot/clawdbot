@@ -215,15 +215,4 @@ const qqbotExecApprovalProfile = createChannelExecApprovalProfile({
 export const isQQBotExecApprovalClientEnabled = qqbotExecApprovalProfile.isClientEnabled;
 export const isQQBotExecApprovalApprover = qqbotExecApprovalProfile.isApprover;
 export const isQQBotExecApprovalAuthorizedSender = qqbotExecApprovalProfile.isAuthorizedSender;
-export const resolveQQBotExecApprovalTarget = qqbotExecApprovalProfile.resolveTarget;
 export const shouldHandleQQBotExecApprovalRequest = qqbotExecApprovalProfile.shouldHandleRequest;
-
-export function isQQBotExecApprovalHandlerConfigured(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): boolean {
-  return isChannelExecApprovalClientEnabledFromConfig({
-    enabled: resolveQQBotExecApprovalConfig(params)?.enabled,
-    approverCount: getQQBotExecApprovalApprovers(params).length,
-  });
-}

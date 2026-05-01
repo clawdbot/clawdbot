@@ -30,6 +30,10 @@ const ensureAuthProfileStore = vi.hoisted(() =>
 const listProfilesForProvider = vi.hoisted(() => vi.fn(() => []));
 const upsertAuthProfile = vi.hoisted(() => vi.fn());
 vi.mock("../agents/auth-profiles.js", () => ({
+  externalCliDiscoveryForProviderAuth: () => ({
+    mode: "scoped",
+    allowKeychainPrompt: false,
+  }),
   ensureAuthProfileStore,
   listProfilesForProvider,
   upsertAuthProfile,

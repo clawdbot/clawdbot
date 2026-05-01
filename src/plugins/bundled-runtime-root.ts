@@ -1,13 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { BundledRuntimeDepsInstallParams } from "./bundled-runtime-deps-install.js";
+import { withBundledRuntimeDepsFilesystemLock } from "./bundled-runtime-deps-lock.js";
 import {
-  ensureBundledPluginRuntimeDeps,
   resolveBundledRuntimeDependencyInstallRootPlan,
   resolveBundledRuntimeDependencyPackageRoot,
+} from "./bundled-runtime-deps-roots.js";
+import {
+  ensureBundledPluginRuntimeDeps,
   registerBundledRuntimeDependencyNodePath,
-  withBundledRuntimeDepsFilesystemLock,
-  type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps.js";
 import {
   markBundledRuntimeDistMirrorPrepared,
@@ -28,6 +30,72 @@ export type PreparedBundledPluginRuntimeLoadRoot = {
   setupModulePath?: string;
 };
 
+const preparedRuntimeLoadRoots = new Map<string, PreparedBundledPluginRuntimeLoadRoot>();
+
+function createPreparedRuntimeLoadRootKey(params: {
+  pluginId: string;
+  pluginRoot: string;
+  modulePath: string;
+  setupModulePath?: string;
+  env: NodeJS.ProcessEnv;
+}): string {
+  const installRootPlan = resolveBundledRuntimeDependencyInstallRootPlan(params.pluginRoot, {
+    env: params.env,
+  });
+  return JSON.stringify({
+    pluginId: params.pluginId,
+    pluginRoot: path.resolve(params.pluginRoot),
+    modulePath: path.resolve(params.modulePath),
+    setupModulePath: params.setupModulePath ? path.resolve(params.setupModulePath) : "",
+    installRoot: path.resolve(installRootPlan.installRoot),
+    searchRoots: installRootPlan.searchRoots.map((root) => path.resolve(root)),
+  });
+}
+
+export function clearPreparedBundledPluginRuntimeLoadRoots(): void {
+  preparedRuntimeLoadRoots.clear();
+}
+
+function registerBundledRuntimeLoadRootAliases(params: {
+  pluginRoot: string;
+  installRoot: string;
+  searchRoots: readonly string[];
+  registerRuntimeAliasRoot?: (rootDir: string) => void;
+}): void {
+  if (path.resolve(params.installRoot) === path.resolve(params.pluginRoot)) {
+    ensureOpenClawPluginSdkAlias(path.dirname(path.dirname(params.pluginRoot)));
+    return;
+  }
+  const packageRoot = resolveBundledRuntimeDependencyPackageRoot(params.pluginRoot);
+  if (packageRoot) {
+    registerBundledRuntimeDependencyNodePath(packageRoot);
+    params.registerRuntimeAliasRoot?.(packageRoot);
+  }
+  for (const searchRoot of params.searchRoots) {
+    registerBundledRuntimeDependencyNodePath(searchRoot);
+    params.registerRuntimeAliasRoot?.(searchRoot);
+  }
+}
+
+function formatRuntimeDepsError(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  return String(error);
+}
+
+function appendPreviousRuntimeDepsRepairError(params: {
+  error: unknown;
+  previousRepairError?: unknown;
+}): never {
+  if (params.previousRepairError === undefined) {
+    throw params.error;
+  }
+  throw new Error(
+    `${formatRuntimeDepsError(params.error)}; previous bundled runtime dependency staging failure: ${formatRuntimeDepsError(params.previousRepairError)}`,
+  );
+}
+
 export function isBuiltBundledPluginRuntimeRoot(pluginRoot: string): boolean {
   const extensionsDir = path.dirname(pluginRoot);
   const buildDir = path.dirname(extensionsDir);
@@ -42,9 +110,42 @@ export function prepareBundledPluginRuntimeRoot(params: {
   pluginRoot: string;
   modulePath: string;
   env?: NodeJS.ProcessEnv;
+  installMissingDeps?: boolean;
+  previousRepairError?: unknown;
   logInstalled?: (installedSpecs: readonly string[]) => void;
 }): { pluginRoot: string; modulePath: string } {
   return prepareBundledPluginRuntimeLoadRoot(params);
+}
+
+function ensureBundledRuntimeLoadRootDeps(params: {
+  pluginId: string;
+  pluginRoot: string;
+  env: NodeJS.ProcessEnv;
+  config?: OpenClawConfig;
+  installMissingDeps?: boolean;
+  previousRepairError?: unknown;
+  installDeps?: (params: BundledRuntimeDepsInstallParams) => void;
+  logInstalled?: (installedSpecs: readonly string[]) => void;
+}): void {
+  let depsInstallResult: ReturnType<typeof ensureBundledPluginRuntimeDeps>;
+  try {
+    depsInstallResult = ensureBundledPluginRuntimeDeps({
+      pluginId: params.pluginId,
+      pluginRoot: params.pluginRoot,
+      env: params.env,
+      config: params.config,
+      installMissingDeps: params.installMissingDeps,
+      installDeps: params.installDeps,
+    });
+  } catch (error) {
+    appendPreviousRuntimeDepsRepairError({
+      error,
+      previousRepairError: params.previousRepairError,
+    });
+  }
+  if (depsInstallResult.installedSpecs.length > 0) {
+    params.logInstalled?.(depsInstallResult.installedSpecs);
+  }
 }
 
 export function prepareBundledPluginRuntimeLoadRoot(params: {
@@ -54,8 +155,11 @@ export function prepareBundledPluginRuntimeLoadRoot(params: {
   setupModulePath?: string;
   env?: NodeJS.ProcessEnv;
   config?: OpenClawConfig;
+  installMissingDeps?: boolean;
+  previousRepairError?: unknown;
   installDeps?: (params: BundledRuntimeDepsInstallParams) => void;
   registerRuntimeAliasRoot?: (rootDir: string) => void;
+  memoizePreparedRoot?: boolean;
   logInstalled?: (installedSpecs: readonly string[]) => void;
 }): PreparedBundledPluginRuntimeLoadRoot {
   const env = params.env ?? process.env;
@@ -63,39 +167,48 @@ export function prepareBundledPluginRuntimeLoadRoot(params: {
     env,
   });
   const installRoot = installRootPlan.installRoot;
-  const depsInstallResult = ensureBundledPluginRuntimeDeps({
-    pluginId: params.pluginId,
-    pluginRoot: params.pluginRoot,
-    env,
-    config: params.config,
-    installDeps: params.installDeps,
-  });
-  if (depsInstallResult.installedSpecs.length > 0) {
-    params.logInstalled?.(depsInstallResult.installedSpecs);
+  const cacheKey = createPreparedRuntimeLoadRootKey({ ...params, env });
+  const cached = params.memoizePreparedRoot ? preparedRuntimeLoadRoots.get(cacheKey) : undefined;
+  if (cached) {
+    ensureBundledRuntimeLoadRootDeps({ ...params, env });
+    registerBundledRuntimeLoadRootAliases({
+      pluginRoot: params.pluginRoot,
+      installRoot,
+      searchRoots: installRootPlan.searchRoots,
+      registerRuntimeAliasRoot: params.registerRuntimeAliasRoot,
+    });
+    return cached;
   }
+  ensureBundledRuntimeLoadRootDeps({ ...params, env });
   if (path.resolve(installRoot) === path.resolve(params.pluginRoot)) {
-    ensureOpenClawPluginSdkAlias(path.dirname(path.dirname(params.pluginRoot)));
-    return {
+    registerBundledRuntimeLoadRootAliases({
+      pluginRoot: params.pluginRoot,
+      installRoot,
+      searchRoots: installRootPlan.searchRoots,
+      registerRuntimeAliasRoot: params.registerRuntimeAliasRoot,
+    });
+    const prepared = {
       pluginRoot: params.pluginRoot,
       modulePath: params.modulePath,
       ...(params.setupModulePath ? { setupModulePath: params.setupModulePath } : {}),
     };
+    if (params.memoizePreparedRoot) {
+      preparedRuntimeLoadRoots.set(cacheKey, prepared);
+    }
+    return prepared;
   }
-  const packageRoot = resolveBundledRuntimeDependencyPackageRoot(params.pluginRoot);
-  if (packageRoot) {
-    registerBundledRuntimeDependencyNodePath(packageRoot);
-    params.registerRuntimeAliasRoot?.(packageRoot);
-  }
-  for (const searchRoot of installRootPlan.searchRoots) {
-    registerBundledRuntimeDependencyNodePath(searchRoot);
-    params.registerRuntimeAliasRoot?.(searchRoot);
-  }
+  registerBundledRuntimeLoadRootAliases({
+    pluginRoot: params.pluginRoot,
+    installRoot,
+    searchRoots: installRootPlan.searchRoots,
+    registerRuntimeAliasRoot: params.registerRuntimeAliasRoot,
+  });
   const mirrorRoot = mirrorBundledPluginRuntimeRoot({
     pluginId: params.pluginId,
     pluginRoot: params.pluginRoot,
     installRoot,
   });
-  return {
+  const prepared = {
     pluginRoot: mirrorRoot,
     modulePath: remapBundledPluginRuntimePath({
       source: params.modulePath,
@@ -112,6 +225,10 @@ export function prepareBundledPluginRuntimeLoadRoot(params: {
         }
       : {}),
   };
+  if (params.memoizePreparedRoot) {
+    preparedRuntimeLoadRoots.set(cacheKey, prepared);
+  }
+  return prepared;
 }
 
 function remapBundledPluginRuntimePath(params: {

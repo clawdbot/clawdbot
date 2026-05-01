@@ -23,6 +23,13 @@ describe("parallels npm update smoke", () => {
     expect(script).toContain("Windows update timed out");
   });
 
+  it("keeps macOS sudo fallback update scripts readable by the desktop user", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain('macosExecArgs.indexOf("-u")');
+    expect(script).toContain('"/usr/sbin/chown", sudoUser, scriptPath');
+  });
+
   it("scrubs future plugin entries before invoking old same-guest updaters", () => {
     const script = readFileSync(UPDATE_SCRIPTS_PATH, "utf8");
 

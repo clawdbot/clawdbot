@@ -9,6 +9,11 @@ const clientState = vi.hoisted(() => ({
   stopAndWaitSpy: vi.fn(async () => undefined),
 }));
 
+const bootstrapState = vi.hoisted(() => ({
+  url: "ws://127.0.0.1:18789",
+  auth: { token: "secret" as string | undefined, password: undefined as string | undefined },
+}));
+
 class MockGatewayClient {
   private readonly opts: Record<string, unknown>;
 
@@ -50,8 +55,8 @@ class MockGatewayClient {
 
 vi.mock("./client-bootstrap.js", () => ({
   resolveGatewayClientBootstrap: vi.fn(async () => ({
-    url: "ws://127.0.0.1:18789",
-    auth: { token: "secret", password: undefined },
+    url: bootstrapState.url,
+    auth: bootstrapState.auth,
   })),
 }));
 
@@ -69,6 +74,8 @@ describe("withOperatorApprovalsGatewayClient", () => {
     clientState.requestSpy.mockReset().mockResolvedValue(undefined);
     clientState.stopSpy.mockReset();
     clientState.stopAndWaitSpy.mockReset().mockResolvedValue(undefined);
+    bootstrapState.url = "ws://127.0.0.1:18789";
+    bootstrapState.auth = { token: "secret", password: undefined };
   });
 
   it("waits for hello before running the callback and stops cleanly", async () => {
@@ -86,11 +93,41 @@ describe("withOperatorApprovalsGatewayClient", () => {
     );
 
     expect(clientState.options?.scopes).toEqual(["operator.approvals"]);
+    expect(clientState.options?.deviceIdentity).toBeNull();
     expect(clientState.requestSpy).toHaveBeenCalledWith("exec.approval.resolve", {
       id: "req-123",
       decision: "allow-once",
     });
     expect(clientState.stopAndWaitSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps device identity for remote shared-auth approval clients", async () => {
+    bootstrapState.url = "wss://gateway.example/ws";
+
+    await withOperatorApprovalsGatewayClient(
+      {
+        config: {} as never,
+        clientDisplayName: "Matrix approval (@owner:example.org)",
+      },
+      async () => undefined,
+    );
+
+    expect(clientState.options).not.toHaveProperty("deviceIdentity", null);
+    expect(clientState.options?.deviceIdentity).toBeUndefined();
+  });
+
+  it("keeps device identity for loopback approval clients without shared auth", async () => {
+    bootstrapState.auth = { token: undefined, password: undefined };
+
+    await withOperatorApprovalsGatewayClient(
+      {
+        config: {} as never,
+        clientDisplayName: "Matrix approval (@owner:example.org)",
+      },
+      async () => undefined,
+    );
+
+    expect(clientState.options?.deviceIdentity).toBeUndefined();
   });
 
   it("surfaces close failures before hello", async () => {

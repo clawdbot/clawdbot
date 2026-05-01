@@ -566,7 +566,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     });
   });
 
-  it("accepts a successful packaged update followed by the old self-swapped process import miss", () => {
+  it("rejects a successful packaged update followed by an old self-swapped process import miss", () => {
     expect(() =>
       verifyPackagedUpgradeUpdateResult(
         {
@@ -581,7 +581,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         },
         { candidateVersion: "2026.4.27" },
       ),
-    ).not.toThrow();
+    ).toThrow(/Packaged upgrade failed/u);
   });
 
   it("rejects packaged update failures before the candidate package lands", () => {

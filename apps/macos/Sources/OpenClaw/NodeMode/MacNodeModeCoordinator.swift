@@ -10,6 +10,7 @@ final class MacNodeModeCoordinator {
     private var task: Task<Void, Never>?
     private let runtime = MacNodeRuntime()
     private let session = GatewayNodeSession()
+    private var autoRepairedTLSFingerprintsByStoreKey: [String: String] = [:]
 
     func start() {
         guard self.task == nil else { return }
@@ -58,8 +59,10 @@ final class MacNodeModeCoordinator {
                 try? await Task.sleep(nanoseconds: 200_000_000)
             }
 
+            var attemptedURL: URL?
             do {
                 let config = try await GatewayEndpointStore.shared.requireConfig()
+                attemptedURL = config.url
                 let caps = self.currentCaps()
                 let commands = self.currentCommands(caps: caps)
                 let permissions = await self.currentPermissions()
@@ -109,6 +112,10 @@ final class MacNodeModeCoordinator {
                 retryDelay = 1_000_000_000
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             } catch {
+                if await self.autoRepairStaleTLSPinIfNeeded(error: error, url: attemptedURL) {
+                    retryDelay = 1_000_000_000
+                    continue
+                }
                 self.logger.error("mac node gateway connect failed: \(error.localizedDescription, privacy: .public)")
                 try? await Task.sleep(nanoseconds: min(retryDelay, 10_000_000_000))
                 retryDelay = min(retryDelay * 2, 10_000_000_000)
@@ -188,11 +195,49 @@ final class MacNodeModeCoordinator {
         Self.resolvedCommands(caps: caps)
     }
 
+    nonisolated static func tlsPinStoreKey(for url: URL) -> String {
+        let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? "gateway"
+        let port = url.port ?? 443
+        return "\(host):\(port)"
+    }
+
+    nonisolated static func shouldAutoRepairStaleTLSPin(url: URL, failure: GatewayTLSValidationFailure) -> Bool {
+        guard failure.kind == .pinMismatch else { return false }
+        guard url.scheme?.lowercased() == "wss" else { return false }
+        guard failure.storeKey == nil || failure.storeKey == self.tlsPinStoreKey(for: url) else { return false }
+        guard let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !host.isEmpty
+        else { return false }
+
+        if LoopbackHost.isLoopback(host) {
+            return failure.systemTrustOk
+        }
+
+        // Tailscale Serve uses publicly trusted, rotating certificates for *.ts.net names.
+        // A stale legacy leaf pin should not leave the companion app half-connected forever.
+        if host == "ts.net" || host.hasSuffix(".ts.net") {
+            return failure.systemTrustOk
+        }
+
+        return false
+    }
+
+    private func autoRepairStaleTLSPinIfNeeded(error: Error, url: URL?) async -> Bool {
+        guard let tlsError = error as? GatewayTLSValidationError, let url else { return false }
+        guard Self.shouldAutoRepairStaleTLSPin(url: url, failure: tlsError.failure) else { return false }
+        let storeKey = tlsError.failure.storeKey ?? Self.tlsPinStoreKey(for: url)
+        guard let observedFingerprint = tlsError.failure.observedFingerprint else { return false }
+        guard self.autoRepairedTLSFingerprintsByStoreKey[storeKey] != observedFingerprint else { return false }
+
+        guard GatewayTLSStore.replaceFingerprint(observedFingerprint, stableID: storeKey) else { return false }
+        self.autoRepairedTLSFingerprintsByStoreKey[storeKey] = observedFingerprint
+        self.logger.info("replaced stale gateway TLS pin storeKey=\(storeKey, privacy: .public)")
+        await self.session.disconnect()
+        return true
+    }
+
     private func buildSessionBox(url: URL) -> WebSocketSessionBox? {
         guard url.scheme?.lowercased() == "wss" else { return nil }
-        let host = url.host ?? "gateway"
-        let port = url.port ?? 443
-        let stableID = "\(host):\(port)"
+        let stableID = Self.tlsPinStoreKey(for: url)
         let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
         let params = GatewayTLSParams(
             required: true,

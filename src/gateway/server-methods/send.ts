@@ -390,6 +390,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       message?: string;
       mediaUrl?: string;
       mediaUrls?: string[];
+      asVoice?: boolean;
       gifPlayback?: boolean;
       channel?: string;
       accountId?: string;
@@ -469,7 +470,14 @@ export const sendHandlers: GatewayRequestHandlers = {
         });
         const deliveryTarget = idLikeTarget?.to ?? resolvedTarget.to;
         const outboundDeps = context.deps ? createOutboundSendDeps(context.deps) : undefined;
-        const outboundPayloads = [{ text: message, mediaUrl, mediaUrls }];
+        const outboundPayloads = [
+          {
+            text: message,
+            mediaUrl,
+            mediaUrls,
+            ...(request.asVoice === true ? { audioAsVoice: true } : {}),
+          },
+        ];
         const outboundPayloadPlan = createOutboundPayloadPlan(outboundPayloads);
         const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPayloadPlan);
         const mirrorText = mirrorProjection.text;

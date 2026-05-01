@@ -48,6 +48,7 @@ describe("ensureRuntimePluginsLoaded", () => {
 
     expect(hoisted.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
       config: {} as never,
+      installBundledRuntimeDeps: false,
       workspaceDir: "/tmp/workspace",
       runtimeOptions: {
         allowGatewaySubagentBinding: true,
@@ -63,6 +64,7 @@ describe("ensureRuntimePluginsLoaded", () => {
 
     expect(hoisted.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
       config: {} as never,
+      installBundledRuntimeDeps: false,
       workspaceDir: "/tmp/workspace",
       runtimeOptions: undefined,
     });
@@ -78,6 +80,7 @@ describe("ensureRuntimePluginsLoaded", () => {
 
     expect(hoisted.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
       config: {} as never,
+      installBundledRuntimeDeps: false,
       workspaceDir: "/tmp/workspace",
       runtimeOptions: {
         allowGatewaySubagentBinding: true,

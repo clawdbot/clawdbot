@@ -90,7 +90,7 @@ describe("scanStatus", () => {
     expect(mocks.buildChannelsTable).toHaveBeenCalledWith(
       expect.objectContaining({ marker: "resolved" }),
       expect.objectContaining({
-        includeSetupRuntimeFallback: false,
+        includeSetupFallbackPlugins: false,
         sourceConfig: expect.objectContaining({ marker: "source" }),
       }),
     );
@@ -117,7 +117,7 @@ describe("scanStatus", () => {
     );
     expect(mocks.buildChannelsTable).toHaveBeenCalledWith(
       expect.any(Object),
-      expect.objectContaining({ includeSetupRuntimeFallback: false }),
+      expect.objectContaining({ includeSetupFallbackPlugins: false }),
     );
   });
 
@@ -145,7 +145,7 @@ describe("scanStatus", () => {
     );
     expect(mocks.buildChannelsTable).toHaveBeenCalledWith(
       expect.any(Object),
-      expect.objectContaining({ includeSetupRuntimeFallback: true }),
+      expect.objectContaining({ includeSetupFallbackPlugins: true }),
     );
   });
 

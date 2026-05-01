@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => ({
 
 const READ_ONLY_CHANNEL_DOCTOR_OPTIONS = {
   includePersistedAuthState: false,
-  includeSetupRuntimeFallback: true,
+  includeSetupFallbackPlugins: true,
 } as const;
 
 vi.mock("../../../channels/plugins/registry.js", () => ({

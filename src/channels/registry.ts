@@ -84,10 +84,6 @@ export function listRegisteredChannelPluginIds(): ChannelId[] {
   });
 }
 
-export function listRegisteredChannelPluginAliases(): string[] {
-  return listRegisteredChannelPluginEntries().flatMap((entry) => entry.plugin.meta?.aliases ?? []);
-}
-
 export function getRegisteredChannelPluginMeta(
   id: string,
 ): Pick<ChannelMeta, "aliases" | "markdownCapable"> | null {

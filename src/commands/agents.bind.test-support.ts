@@ -44,13 +44,7 @@ vi.mock("./agents.command-shared.js", () => ({
 
 export const runtime = createTestRuntime();
 
-let agentsCommandModulePromise: Promise<typeof import("./agents.js")> | undefined;
 let agentsBindCommandModulePromise: Promise<typeof import("./agents.commands.bind.js")> | undefined;
-
-export async function loadFreshAgentsCommandModuleForTest() {
-  agentsCommandModulePromise ??= import("./agents.js");
-  return await agentsCommandModulePromise;
-}
 
 export async function loadFreshAgentsBindCommandModuleForTest() {
   agentsBindCommandModulePromise ??= import("./agents.commands.bind.js");

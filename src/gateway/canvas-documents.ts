@@ -304,29 +304,6 @@ export async function createCanvasDocument(
   return manifest;
 }
 
-export async function loadCanvasDocumentManifest(
-  documentId: string,
-  options?: { stateDir?: string; canvasRootDir?: string },
-): Promise<CanvasDocumentManifest | null> {
-  const id = normalizeCanvasDocumentId(documentId);
-  const manifestPath = path.join(
-    resolveCanvasDocumentDir(id, {
-      stateDir: options?.stateDir,
-      rootDir: options?.canvasRootDir,
-    }),
-    "manifest.json",
-  );
-  try {
-    const raw = await fs.readFile(manifestPath, "utf8");
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as CanvasDocumentManifest)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
 export function resolveCanvasDocumentAssets(
   manifest: CanvasDocumentManifest,
   options?: { baseUrl?: string; stateDir?: string; canvasRootDir?: string },

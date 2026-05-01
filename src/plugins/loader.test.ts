@@ -22,10 +22,8 @@ import {
   type DetachedTaskLifecycleRuntime,
 } from "../tasks/detached-task-runtime-state.js";
 import { withEnv } from "../test-utils/env.js";
-import {
-  resolveBundledRuntimeDependencyInstallRootPlan,
-  type BundledRuntimeDepsInstallParams,
-} from "./bundled-runtime-deps.js";
+import type { BundledRuntimeDepsInstallParams } from "./bundled-runtime-deps-install.js";
+import { resolveBundledRuntimeDependencyInstallRootPlan } from "./bundled-runtime-deps-roots.js";
 import { ensureOpenClawPluginSdkAlias } from "./bundled-runtime-root.js";
 import { clearPluginCommands } from "./command-registry-state.js";
 import { getPluginCommandSpecs } from "./command-specs.js";

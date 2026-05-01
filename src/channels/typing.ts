@@ -76,12 +76,15 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     startGuard.reset();
     keepaliveLoop.stop();
     clearTtlTimer();
-    await fireStart();
-    if (startGuard.isTripped()) {
-      return;
-    }
-    keepaliveLoop.start();
-    startTtlTimer(); // Start TTL safety timer
+    const startPromise = fireStart();
+    void startPromise.then(() => {
+      if (closed || startGuard.isTripped()) {
+        return;
+      }
+      keepaliveLoop.start();
+      startTtlTimer();
+    });
+    await Promise.resolve();
   };
 
   const fireStop = () => {

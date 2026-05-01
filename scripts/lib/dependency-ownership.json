@@ -96,6 +96,11 @@
       "class": "core-runtime",
       "risk": ["file-sniffing", "untrusted-files"]
     },
+    "global-agent": {
+      "owner": "core:proxy",
+      "class": "core-runtime",
+      "risk": ["network", "proxy"]
+    },
     "https-proxy-agent": {
       "owner": "core:proxy",
       "class": "core-runtime",

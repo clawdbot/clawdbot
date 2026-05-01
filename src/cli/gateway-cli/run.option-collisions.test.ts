@@ -1,6 +1,8 @@
 import path from "node:path";
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
@@ -42,6 +44,9 @@ const writeDiagnosticStabilityBundleForFailureSync = vi.fn((_reason: string, _er
 const controlUiState = vi.hoisted(() => ({
   root: "/tmp/openclaw-control-ui" as string | null,
 }));
+const withoutSupervisorEnv = Object.fromEntries(
+  SUPERVISOR_HINT_ENV_VARS.map((key) => [key, undefined]),
+) as Record<string, string | undefined>;
 
 const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
@@ -113,6 +118,14 @@ vi.mock("../../infra/ports.js", () => ({
 vi.mock("../../infra/restart-sentinel.js", () => ({
   writeRestartSentinel: (payload: unknown) => writeRestartSentinel(payload),
 }));
+
+vi.mock("../../infra/supervisor-markers.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/supervisor-markers.js")>();
+  return {
+    ...actual,
+    detectRespawnSupervisor: () => null,
+  };
+});
 
 vi.mock("../../logging/console.js", () => ({
   setConsoleSubsystemFilter: (filters: string[]) => setConsoleSubsystemFilter(filters),
@@ -317,9 +330,11 @@ describe("gateway run option collisions", () => {
     });
     startGatewayServer.mockRejectedValueOnce(err);
 
-    await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
-      "__exit__:0",
-    );
+    await withEnvAsync(withoutSupervisorEnv, async () => {
+      await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
+        "__exit__:0",
+      );
+    });
 
     expect(writeDiagnosticStabilityBundleForFailureSync).not.toHaveBeenCalled();
   });
@@ -410,7 +425,7 @@ describe("gateway run option collisions", () => {
       },
     });
     expect(gatewayLogMessages).toContain(
-      "gateway: restored invalid effective config from last-known-good backup: /tmp/openclaw-test-missing-config.json",
+      "gateway: restored invalid effective config from last-known-good backup: /tmp/openclaw-test-missing-config.json; Rejected validation details: <root>: JSON5 parse failed.",
     );
     expect(startGatewayServer).toHaveBeenCalledWith(
       19170,

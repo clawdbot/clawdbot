@@ -20,15 +20,6 @@ export const BLUEBUBBLES_ACTIONS = {
   sendAttachment: { gate: "sendAttachment" },
 } as const satisfies Partial<Record<ChannelMessageActionName, BlueBubblesActionSpec>>;
 
-const BLUEBUBBLES_ACTION_SPECS = BLUEBUBBLES_ACTIONS as Record<
-  keyof typeof BLUEBUBBLES_ACTIONS,
-  BlueBubblesActionSpec
->;
-
 export const BLUEBUBBLES_ACTION_NAMES = Object.keys(
   BLUEBUBBLES_ACTIONS,
 ) as (keyof typeof BLUEBUBBLES_ACTIONS)[];
-
-export const BLUEBUBBLES_GROUP_ACTIONS = new Set<ChannelMessageActionName>(
-  BLUEBUBBLES_ACTION_NAMES.filter((action) => BLUEBUBBLES_ACTION_SPECS[action]?.groupOnly),
-);

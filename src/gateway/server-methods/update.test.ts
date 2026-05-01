@@ -276,7 +276,34 @@ describe("update.run restart scheduling", () => {
     );
   });
 
-  it("blocks unmanaged global installs before package mutation when restart is unavailable", async () => {
+  it("forces an immediate restart after successful package-manager updates", async () => {
+    resolveUpdateInstallSurfaceMock.mockResolvedValueOnce({
+      kind: "global",
+      mode: "npm",
+      root: "/tmp/openclaw-global",
+      packageRoot: "/tmp/openclaw-global",
+    });
+
+    let payload:
+      | { ok: boolean; result?: { status?: string; reason?: string; mode?: string } }
+      | undefined;
+
+    await invokeUpdateRun({}, (_ok: boolean, response: unknown) => {
+      payload = response as typeof payload;
+    });
+
+    expect(runGatewayUpdateMock).toHaveBeenCalledTimes(1);
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        delayMs: 0,
+        reason: "update.run",
+        skipDeferral: true,
+      }),
+    );
+    expect(payload?.ok).toBe(true);
+  });
+
+  it("blocks global package installs when the gateway cannot restart afterward", async () => {
     isRestartEnabledMock.mockReturnValue(false);
     detectRespawnSupervisorMock.mockReturnValue(null);
     resolveUpdateInstallSurfaceMock.mockResolvedValueOnce({

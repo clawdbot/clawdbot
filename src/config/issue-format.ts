@@ -1,13 +1,17 @@
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import type { ConfigValidationIssue } from "./types.js";
 
-type ConfigIssueLineInput = {
+export type ConfigIssueLineInput = {
   path?: string | null;
   message: string;
 };
 
 type ConfigIssueFormatOptions = {
   normalizeRoot?: boolean;
+};
+
+type ConfigIssueSummaryOptions = ConfigIssueFormatOptions & {
+  maxIssues?: number;
 };
 
 export function normalizeConfigIssuePath(path: string | null | undefined): string {
@@ -65,4 +69,24 @@ export function formatConfigIssueLines(
   opts?: ConfigIssueFormatOptions,
 ): string[] {
   return issues.map((issue) => formatConfigIssueLine(issue, marker, opts));
+}
+
+export function formatConfigIssueSummary(
+  issues: ReadonlyArray<ConfigIssueLineInput>,
+  opts: ConfigIssueSummaryOptions = {},
+): string | null {
+  if (issues.length === 0) {
+    return null;
+  }
+  const maxIssueCandidate = Math.floor(opts.maxIssues ?? 5);
+  const maxIssues = Number.isFinite(maxIssueCandidate) ? Math.max(1, maxIssueCandidate) : 5;
+  const visibleIssues = issues.slice(0, maxIssues);
+  const lines = formatConfigIssueLines(visibleIssues, "", {
+    normalizeRoot: opts.normalizeRoot ?? true,
+  });
+  const hiddenIssueCount = issues.length - visibleIssues.length;
+  if (hiddenIssueCount <= 0) {
+    return lines.join("; ");
+  }
+  return `${lines.join("; ")}; and ${hiddenIssueCount} more`;
 }

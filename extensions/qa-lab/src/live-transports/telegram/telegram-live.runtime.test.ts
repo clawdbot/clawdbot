@@ -114,6 +114,20 @@ describe("telegram live qa runtime", () => {
     ).toBe(30_000);
   });
 
+  it("normalizes the Telegram QA scenario timeout env", () => {
+    expect(__testing.resolveTelegramQaScenarioTimeoutMs(45_000, {})).toBe(45_000);
+    expect(
+      __testing.resolveTelegramQaScenarioTimeoutMs(45_000, {
+        OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS: "180000",
+      }),
+    ).toBe(180_000);
+    expect(
+      __testing.resolveTelegramQaScenarioTimeoutMs(45_000, {
+        OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS: "nope",
+      }),
+    ).toBe(45_000);
+  });
+
   it("sanitizes and truncates Telegram live progress details", () => {
     expect(__testing.sanitizeTelegramQaProgressValue("scenario\nid\tvalue")).toBe(
       "scenario id value",

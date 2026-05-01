@@ -1,10 +1,8 @@
 #!/usr/bin/env node
 // Runs after install to keep packaged dist safe and compatible.
-// Bundled extension runtime dependencies are extension-owned. Do not install
-// every bundled extension dependency during core package install unless the
-// legacy eager-install escape hatch is explicitly enabled; `openclaw doctor
-// --fix` owns the repair path for extensions that are actually used.
-import { spawnSync } from "node:child_process";
+// Bundled extension runtime dependencies are extension-owned. `openclaw doctor
+// --fix` and `openclaw plugins deps --repair` own the repair path for plugins
+// that are actually used.
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -24,28 +22,12 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, posix, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import {
-  createBundledRuntimeDependencyInstallArgs,
-  createBundledRuntimeDependencyInstallEnv,
-  createNestedNpmInstallEnv,
-  runBundledRuntimeDependencyNpmInstall,
-} from "./lib/bundled-runtime-deps-install.mjs";
-import { resolveNpmRunner } from "./npm-runner.mjs";
-
-export {
-  createBundledRuntimeDependencyInstallArgs,
-  createBundledRuntimeDependencyInstallEnv,
-  createNestedNpmInstallEnv,
-};
-
-export const BUNDLED_PLUGIN_INSTALL_TARGETS = [];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_EXTENSIONS_DIR = join(__dirname, "..", "dist", "extensions");
 const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
 const DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION";
-const EAGER_BUNDLED_PLUGIN_DEPS_ENV = "OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
 const BAILEYS_MEDIA_FILE = join(
   "node_modules",
@@ -475,54 +457,6 @@ function dependencySentinelPath(depName) {
   return join("node_modules", ...depName.split("/"), "package.json");
 }
 
-const KNOWN_NATIVE_PLATFORMS = new Set([
-  "aix",
-  "android",
-  "darwin",
-  "freebsd",
-  "linux",
-  "openbsd",
-  "sunos",
-  "win32",
-]);
-const KNOWN_NATIVE_ARCHES = new Set(["arm", "arm64", "ia32", "ppc64", "riscv64", "s390x", "x64"]);
-
-function packageNameTokens(name) {
-  return name
-    .toLowerCase()
-    .split(/[/@._-]+/u)
-    .filter(Boolean);
-}
-
-function optionalDependencyTargetsRuntime(name, params = {}) {
-  const platform = params.platform ?? process.platform;
-  const arch = params.arch ?? process.arch;
-  const tokens = new Set(packageNameTokens(name));
-  const hasNativePlatformToken = [...tokens].some((token) => KNOWN_NATIVE_PLATFORMS.has(token));
-  const hasNativeArchToken = [...tokens].some((token) => KNOWN_NATIVE_ARCHES.has(token));
-  return hasNativePlatformToken && hasNativeArchToken && tokens.has(platform) && tokens.has(arch);
-}
-
-function runtimeDepNeedsInstall(params) {
-  const packageJsonPath = join(params.packageRoot, params.dep.sentinelPath);
-  if (!params.existsSync(packageJsonPath)) {
-    return true;
-  }
-
-  try {
-    const packageJson = params.readJson(packageJsonPath);
-    return Object.keys(packageJson.optionalDependencies ?? {}).some(
-      (childName) =>
-        optionalDependencyTargetsRuntime(childName, {
-          arch: params.arch,
-          platform: params.platform,
-        }) && !params.existsSync(join(params.packageRoot, dependencySentinelPath(childName))),
-    );
-  } catch {
-    return true;
-  }
-}
-
 function collectRuntimeDeps(packageJson) {
   return {
     ...packageJson.dependencies,
@@ -535,17 +469,7 @@ export function discoverBundledPluginRuntimeDeps(params = {}) {
   const pathExists = params.existsSync ?? existsSync;
   const readDir = params.readdirSync ?? readdirSync;
   const readJsonFile = params.readJson ?? readJson;
-  const deps = new Map(
-    BUNDLED_PLUGIN_INSTALL_TARGETS.map((target) => [
-      target.name,
-      {
-        name: target.name,
-        version: target.version,
-        sentinelPath: dependencySentinelPath(target.name),
-        pluginIds: [...(target.pluginIds ?? [])],
-      },
-    ]),
-  );
+  const deps = new Map();
 
   if (!pathExists(extensionsDir)) {
     return [...deps.values()].toSorted((a, b) => a.name.localeCompare(b.name));
@@ -592,10 +516,6 @@ export function discoverBundledPluginRuntimeDeps(params = {}) {
       }),
     )
     .toSorted((a, b) => a.name.localeCompare(b.name));
-}
-
-function shouldEagerInstallBundledPluginDeps(env = process.env) {
-  return env?.[EAGER_BUNDLED_PLUGIN_DEPS_ENV]?.trim() === "1";
 }
 
 export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
@@ -890,7 +810,6 @@ export function runBundledPluginPostinstall(params = {}) {
   const env = params.env ?? process.env;
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
   const extensionsDir = params.extensionsDir ?? join(packageRoot, "dist", "extensions");
-  const spawn = params.spawnSync ?? spawnSync;
   const pathExists = params.existsSync ?? existsSync;
   const log = params.log ?? console;
   if (env?.[DISABLE_POSTINSTALL_ENV]?.trim()) {
@@ -940,67 +859,6 @@ export function runBundledPluginPostinstall(params = {}) {
   ) {
     return;
   }
-  if (!shouldEagerInstallBundledPluginDeps(env)) {
-    applyBundledPluginRuntimeHotfixes({
-      packageRoot,
-      existsSync: pathExists,
-      readFileSync: params.readFileSync,
-      writeFileSync: params.writeFileSync,
-      log,
-    });
-    return;
-  }
-  const runtimeDeps =
-    params.runtimeDeps ??
-    discoverBundledPluginRuntimeDeps({ extensionsDir, existsSync: pathExists });
-  const missingSpecs = runtimeDeps
-    .filter((dep) =>
-      runtimeDepNeedsInstall({
-        dep,
-        existsSync: pathExists,
-        packageRoot,
-        arch: params.arch,
-        platform: params.platform,
-        readJson: params.readJson ?? readJson,
-      }),
-    )
-    .map((dep) => `${dep.name}@${dep.version}`);
-
-  if (missingSpecs.length === 0) {
-    applyBundledPluginRuntimeHotfixes({
-      packageRoot,
-      existsSync: pathExists,
-      readFileSync: params.readFileSync,
-      writeFileSync: params.writeFileSync,
-      log,
-    });
-    return;
-  }
-
-  try {
-    const installEnv = createBundledRuntimeDependencyInstallEnv(env);
-    const npmRunner =
-      params.npmRunner ??
-      resolveNpmRunner({
-        env: installEnv,
-        execPath: params.execPath,
-        existsSync: pathExists,
-        platform: params.platform,
-        comSpec: params.comSpec,
-        npmArgs: createBundledRuntimeDependencyInstallArgs(missingSpecs),
-      });
-    runBundledRuntimeDependencyNpmInstall({
-      cwd: packageRoot,
-      npmRunner,
-      env: npmRunner.env ?? installEnv,
-      spawnSyncImpl: spawn,
-    });
-    log.log(`[postinstall] installed bundled plugin deps: ${missingSpecs.join(", ")}`);
-  } catch (e) {
-    // Non-fatal: gateway will surface the missing dep via doctor.
-    log.warn(`[postinstall] could not install bundled plugin deps: ${String(e)}`);
-  }
-
   applyBundledPluginRuntimeHotfixes({
     packageRoot,
     existsSync: pathExists,

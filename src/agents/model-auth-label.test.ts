@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
+  externalCliDiscoveryForProviderAuth: vi.fn(() => undefined),
   loadAuthProfileStoreWithoutExternalProfiles: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
   resolveAuthProfileDisplayLabel: vi.fn(),
@@ -12,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./auth-profiles.js", () => ({
   ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+  externalCliDiscoveryForProviderAuth: mocks.externalCliDiscoveryForProviderAuth,
   loadAuthProfileStoreWithoutExternalProfiles: mocks.loadAuthProfileStoreWithoutExternalProfiles,
   resolveAuthProfileOrder: mocks.resolveAuthProfileOrder,
   resolveAuthProfileDisplayLabel: mocks.resolveAuthProfileDisplayLabel,
@@ -35,6 +37,8 @@ describe("resolveModelAuthLabel", () => {
       ({ resolveModelAuthLabel } = await import("./model-auth-label.js"));
     }
     mocks.ensureAuthProfileStore.mockReset();
+    mocks.externalCliDiscoveryForProviderAuth.mockReset();
+    mocks.externalCliDiscoveryForProviderAuth.mockReturnValue(undefined);
     mocks.loadAuthProfileStoreWithoutExternalProfiles.mockReset();
     mocks.resolveAuthProfileOrder.mockReset();
     mocks.resolveAuthProfileDisplayLabel.mockReset();

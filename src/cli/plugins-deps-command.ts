@@ -1,12 +1,11 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { pruneUnknownBundledRuntimeDepsRoots } from "../plugins/bundled-runtime-deps-roots.js";
 import {
-  createBundledRuntimeDepsInstallSpecs,
-  pruneUnknownBundledRuntimeDepsRoots,
-  repairBundledRuntimeDepsInstallRootAsync,
-  resolveBundledRuntimeDependencyPackageInstallRootPlan,
-  scanBundledPluginRuntimeDeps,
+  createBundledRuntimeDepsPackagePlan,
+  repairBundledRuntimeDepsPackagePlanAsync,
+  type BundledRuntimeDepsPackagePlan,
 } from "../plugins/bundled-runtime-deps.js";
 import { defaultRuntime } from "../runtime.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
@@ -35,9 +34,7 @@ function formatRuntimeDepOwners(pluginIds: readonly string[]): string {
   return pluginIds.length > 0 ? pluginIds.join(", ") : "-";
 }
 
-function formatRuntimeDepConflicts(
-  conflicts: ReturnType<typeof scanBundledPluginRuntimeDeps>["conflicts"],
-) {
+function formatRuntimeDepConflicts(conflicts: BundledRuntimeDepsPackagePlan["conflicts"]) {
   return conflicts.map((conflict) => ({
     name: conflict.name,
     versions: conflict.versions,
@@ -77,26 +74,23 @@ export async function runPluginsDepsCommand(params: {
         warn,
       })
     : undefined;
-  const scanRuntimeDeps = () =>
-    scanBundledPluginRuntimeDeps({
+  const createRuntimeDepsPlan = () =>
+    createBundledRuntimeDepsPackagePlan({
       packageRoot,
       config: params.config,
       includeConfiguredChannels: true,
       env: process.env,
     });
-  let scan = scanRuntimeDeps();
-  const installRootPlan = resolveBundledRuntimeDependencyPackageInstallRootPlan(packageRoot, {
-    env: process.env,
-  });
-  let installSpecs = createBundledRuntimeDepsInstallSpecs({ deps: scan.deps });
-  let missingSpecs = createBundledRuntimeDepsInstallSpecs({ deps: scan.missing });
+  let plan = createRuntimeDepsPlan();
   let repairedSpecs: string[] = [];
+  let reusedSpecs: string[] = [];
+  let reusedFromRoot: string | undefined;
 
-  if (params.options.repair && missingSpecs.length > 0) {
-    const result = await repairBundledRuntimeDepsInstallRootAsync({
-      installRoot: installRootPlan.installRoot,
-      missingSpecs,
-      installSpecs,
+  if (params.options.repair && plan.missingSpecs.length > 0) {
+    const result = await repairBundledRuntimeDepsPackagePlanAsync({
+      packageRoot,
+      config: params.config,
+      includeConfiguredChannels: true,
       env: process.env,
       warn,
       onProgress: (message) => {
@@ -105,24 +99,26 @@ export async function runPluginsDepsCommand(params: {
         }
       },
     });
-    repairedSpecs = result.installSpecs;
-    scan = scanRuntimeDeps();
-    installSpecs = createBundledRuntimeDepsInstallSpecs({ deps: scan.deps });
-    missingSpecs = createBundledRuntimeDepsInstallSpecs({ deps: scan.missing });
+    repairedSpecs = result.repairedSpecs;
+    reusedSpecs = result.reusedSpecs ?? [];
+    reusedFromRoot = result.reusedFromRoot;
+    plan = createRuntimeDepsPlan();
   }
 
   if (params.options.json) {
     defaultRuntime.writeJson({
       packageRoot,
-      installRoot: installRootPlan.installRoot,
-      installRootExternal: installRootPlan.external,
-      searchRoots: installRootPlan.searchRoots,
-      deps: scan.deps,
-      missing: scan.missing,
-      conflicts: formatRuntimeDepConflicts(scan.conflicts),
-      installSpecs,
-      missingSpecs,
+      installRoot: plan.installRootPlan.installRoot,
+      installRootExternal: plan.installRootPlan.external,
+      searchRoots: plan.installRootPlan.searchRoots,
+      deps: plan.deps,
+      missing: plan.missing,
+      conflicts: formatRuntimeDepConflicts(plan.conflicts),
+      installSpecs: plan.installSpecs,
+      missingSpecs: plan.missingSpecs,
       repairedSpecs,
+      ...(reusedSpecs.length > 0 ? { reusedSpecs } : {}),
+      ...(reusedFromRoot ? { reusedFromRoot } : {}),
       warnings,
       ...(pruned ? { pruned } : {}),
     });
@@ -132,8 +128,8 @@ export async function runPluginsDepsCommand(params: {
   const lines = [
     theme.heading("Bundled Plugin Runtime Deps"),
     `${theme.muted("Package root:")} ${shortenHomePath(packageRoot)}`,
-    `${theme.muted("Install root:")} ${shortenHomePath(installRootPlan.installRoot)}${
-      installRootPlan.external ? theme.muted(" (external)") : ""
+    `${theme.muted("Install root:")} ${shortenHomePath(plan.installRootPlan.installRoot)}${
+      plan.installRootPlan.external ? theme.muted(" (external)") : ""
     }`,
   ];
   if (pruned) {
@@ -143,17 +139,17 @@ export async function runPluginsDepsCommand(params: {
       }`,
     );
   }
-  if (scan.conflicts.length > 0) {
+  if (plan.conflicts.length > 0) {
     lines.push("");
     lines.push(theme.error("Version conflicts:"));
-    for (const conflict of scan.conflicts) {
+    for (const conflict of plan.conflicts) {
       const owners = conflict.versions
         .map((version) => `${version}: ${conflict.pluginIdsByVersion.get(version)?.join(", ")}`)
         .join("; ");
       lines.push(`- ${conflict.name}: ${owners}`);
     }
   }
-  if (scan.deps.length === 0) {
+  if (plan.deps.length === 0) {
     lines.push("");
     lines.push(theme.muted("No packaged bundled runtime deps are required for this checkout."));
     defaultRuntime.log(lines.join("\n"));
@@ -163,12 +159,14 @@ export async function runPluginsDepsCommand(params: {
   lines.push("");
   lines.push(
     `${theme.muted("Status:")} ${
-      scan.missing.length === 0 ? theme.success("materialized") : theme.warn("missing")
+      plan.missing.length === 0 ? theme.success("materialized") : theme.warn("missing")
     }`,
   );
   if (repairedSpecs.length > 0) {
     lines.push(`${theme.muted("Repaired:")} ${repairedSpecs.join(", ")}`);
-  } else if (params.options.repair && scan.conflicts.length > 0) {
+  } else if (reusedSpecs.length > 0) {
+    lines.push(`${theme.muted("Reused:")} ${reusedSpecs.join(", ")}`);
+  } else if (params.options.repair && plan.conflicts.length > 0) {
     lines.push(theme.warn("Repair skipped because runtime dependency versions conflict."));
   }
   lines.push("");
@@ -181,10 +179,10 @@ export async function runPluginsDepsCommand(params: {
         { key: "Status", header: "Status", minWidth: 12 },
         { key: "Plugins", header: "Plugins", minWidth: 24, flex: true },
       ],
-      rows: scan.deps.map((dep) => ({
+      rows: plan.deps.map((dep) => ({
         Name: dep.name,
         Version: dep.version,
-        Status: scan.missing.some(
+        Status: plan.missing.some(
           (missing) => missing.name === dep.name && missing.version === dep.version,
         )
           ? theme.warn("missing")

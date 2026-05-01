@@ -77,6 +77,10 @@ export type RunHeartbeatOnceOptions = {
   heartbeat?: { target?: string };
 };
 
+type RuntimeRunEmbeddedPiAgent = (
+  params: import("../../agents/pi-embedded-runner/run/params.js").RunEmbeddedPiAgentParams,
+) => Promise<import("../../agents/pi-embedded-runner/types.js").EmbeddedPiRunResult>;
+
 /** Core runtime helpers exposed to trusted native plugins. */
 export type PluginRuntimeCore = {
   version: string;
@@ -135,8 +139,8 @@ export type PluginRuntimeCore = {
     resolveThinkingPolicy: (
       params: PluginRuntimeThinkingPolicyRequest,
     ) => PluginRuntimeThinkingPolicy;
-    runEmbeddedAgent: import("../../agents/pi-embedded-runtime.types.js").RunEmbeddedAgentFn;
-    runEmbeddedPiAgent: import("../../agents/pi-embedded-runtime.types.js").RunEmbeddedPiAgentFn;
+    runEmbeddedAgent: RuntimeRunEmbeddedPiAgent;
+    runEmbeddedPiAgent: RuntimeRunEmbeddedPiAgent;
     resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {

@@ -26,6 +26,7 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
     },
     bundleMcp: true,
     bundleMcpMode: "claude-config-file",
+    nativeToolMode: "always-on",
     config: {
       command: "claude",
       args: [

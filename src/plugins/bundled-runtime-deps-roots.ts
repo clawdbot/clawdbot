@@ -12,13 +12,13 @@ import {
 
 const DEFAULT_UNKNOWN_RUNTIME_DEPS_ROOTS_TO_KEEP = 20;
 const DEFAULT_UNKNOWN_RUNTIME_DEPS_MIN_AGE_MS = 10 * 60_000;
+const PACKAGE_KEY_PATH_HASH_RE = /^openclaw-.+-([0-9a-f]{12})$/u;
+const LEGACY_VERSIONED_RUNTIME_DEPS_ROOT_RE =
+  /^openclaw-\d{4}\.\d+\.\d+(?:-[0-9A-Za-z.]+)*-[A-Za-z][A-Za-z0-9_-]*$/u;
 
-export type BundledRuntimeDepsInstallRoot = {
+export type BundledRuntimeDepsInstallRootPlan = {
   installRoot: string;
   external: boolean;
-};
-
-export type BundledRuntimeDepsInstallRootPlan = BundledRuntimeDepsInstallRoot & {
   searchRoots: string[];
 };
 
@@ -53,7 +53,9 @@ function isPackagedBundledPluginRoot(pluginRoot: string): boolean {
 }
 
 function createPathHash(value: string): string {
-  return createHash("sha256").update(path.resolve(value)).digest("hex").slice(0, 12);
+  // Hash the OS-canonical (realpath) form so symlinked / junctioned
+  // packageRoots converge on a single staging directory across call sites.
+  return createHash("sha256").update(realpathOrResolve(value)).digest("hex").slice(0, 12);
 }
 
 function sanitizePathSegment(value: string): string {
@@ -143,6 +145,19 @@ export function pruneUnknownBundledRuntimeDepsRoots(
   let scanned = 0;
   let removed = 0;
   let skippedLocked = 0;
+  const removeRoot = (root: string): void => {
+    const lockDir = path.join(root, BUNDLED_RUNTIME_DEPS_LOCK_DIR);
+    if (fs.existsSync(lockDir) && !removeRuntimeDepsLockIfStale(lockDir, nowMs)) {
+      skippedLocked += 1;
+      return;
+    }
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+      removed += 1;
+    } catch (error) {
+      params.warn?.(`failed to remove stale bundled runtime deps root ${root}: ${String(error)}`);
+    }
+  };
 
   for (const baseDir of resolveBundledRuntimeDepsExternalBaseDirs(env)) {
     let entries: fs.Dirent[];
@@ -163,37 +178,99 @@ export function pruneUnknownBundledRuntimeDepsRoots(
       })
       .filter((entry): entry is { root: string; mtimeMs: number } => entry !== null)
       .toSorted((left, right) => right.mtimeMs - left.mtimeMs);
+    const legacyVersionedRoots = entries
+      .filter(
+        (entry) => entry.isDirectory() && isLegacyVersionedBundledRuntimeDepsRootName(entry.name),
+      )
+      .map((entry) => path.join(baseDir, entry.name))
+      .toSorted((left, right) => left.localeCompare(right));
     scanned += unknownRoots.length;
+    scanned += legacyVersionedRoots.length;
 
     for (const [index, entry] of unknownRoots.entries()) {
       const ageMs = nowMs - entry.mtimeMs;
       if (index < maxRootsToKeep && ageMs < minAgeMs) {
         continue;
       }
-      const lockDir = path.join(entry.root, BUNDLED_RUNTIME_DEPS_LOCK_DIR);
-      if (fs.existsSync(lockDir) && !removeRuntimeDepsLockIfStale(lockDir, nowMs)) {
-        skippedLocked += 1;
-        continue;
-      }
-      try {
-        fs.rmSync(entry.root, { recursive: true, force: true });
-        removed += 1;
-      } catch (error) {
-        params.warn?.(
-          `failed to remove stale bundled runtime deps root ${entry.root}: ${String(error)}`,
-        );
-      }
+      removeRoot(entry.root);
+    }
+
+    for (const root of legacyVersionedRoots) {
+      removeRoot(root);
     }
   }
 
   return { scanned, removed, skippedLocked };
 }
 
-function resolveExternalBundledRuntimeDepsInstallRoot(params: {
-  pluginRoot: string;
-  env: NodeJS.ProcessEnv;
-}): string {
-  return resolveExternalBundledRuntimeDepsInstallRoots(params).at(-1)!;
+function isLegacyVersionedBundledRuntimeDepsRootName(name: string): boolean {
+  return (
+    name.startsWith("openclaw-") &&
+    readPackageKeyPathHash(name) === null &&
+    LEGACY_VERSIONED_RUNTIME_DEPS_ROOT_RE.test(name)
+  );
+}
+
+export function listSiblingExternalBundledRuntimeDepsRoots(params: {
+  installRoot: string;
+  env?: NodeJS.ProcessEnv;
+}): string[] {
+  const env = params.env ?? process.env;
+  const installRoot = path.resolve(params.installRoot);
+  const installRootHash = readPackageKeyPathHash(path.basename(installRoot));
+  if (!installRootHash) {
+    return [];
+  }
+  const candidateParents = resolveBundledRuntimeDepsExternalBaseDirs(env);
+  const seenParents = new Set<string>();
+  const candidates: { root: string; mtimeMs: number; name: string }[] = [];
+
+  for (const parentDir of candidateParents) {
+    const resolvedParent = path.resolve(parentDir);
+    if (seenParents.has(resolvedParent)) {
+      continue;
+    }
+    seenParents.add(resolvedParent);
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(parentDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (
+        !entry.isDirectory() ||
+        !entry.name.startsWith("openclaw-") ||
+        readPackageKeyPathHash(entry.name) !== installRootHash
+      ) {
+        continue;
+      }
+      const root = path.join(parentDir, entry.name);
+      if (path.resolve(root) === installRoot) {
+        continue;
+      }
+      try {
+        candidates.push({
+          root,
+          mtimeMs: fs.statSync(root).mtimeMs,
+          name: entry.name,
+        });
+      } catch {
+        // Ignore roots that disappear while we are scanning for reusable deps.
+      }
+    }
+  }
+
+  return candidates
+    .toSorted((left, right) => {
+      const timeOrder = right.mtimeMs - left.mtimeMs;
+      return timeOrder === 0 ? left.name.localeCompare(right.name) : timeOrder;
+    })
+    .map((entry) => entry.root);
+}
+
+function readPackageKeyPathHash(packageKey: string): string | null {
+  return PACKAGE_KEY_PATH_HASH_RE.exec(packageKey)?.[1] ?? null;
 }
 
 function resolveExternalBundledRuntimeDepsInstallRoots(params: {
@@ -281,12 +358,7 @@ export function resolveBundledRuntimeDependencyPackageInstallRootPlan(
     !isSourceCheckoutRoot(packageRoot)
   ) {
     return createBundledRuntimeDepsInstallRootPlan({
-      installRoot:
-        externalRoots.at(-1) ??
-        resolveExternalBundledRuntimeDepsInstallRoot({
-          pluginRoot: path.join(packageRoot, "dist", "extensions", "__package__"),
-          env,
-        }),
+      installRoot: externalRoots.at(-1)!,
       searchRoots: externalRoots,
       external: true,
     });
@@ -299,12 +371,7 @@ export function resolveBundledRuntimeDependencyPackageInstallRootPlan(
     });
   }
   return createBundledRuntimeDepsInstallRootPlan({
-    installRoot:
-      externalRoots.at(-1) ??
-      resolveExternalBundledRuntimeDepsInstallRoot({
-        pluginRoot: path.join(packageRoot, "dist", "extensions", "__package__"),
-        env,
-      }),
+    installRoot: externalRoots.at(-1)!,
     searchRoots: externalRoots,
     external: true,
   });
@@ -330,12 +397,7 @@ export function resolveBundledRuntimeDependencyInstallRootPlan(
     isPackagedBundledPluginRoot(pluginRoot)
   ) {
     return createBundledRuntimeDepsInstallRootPlan({
-      installRoot:
-        externalRoots.at(-1) ??
-        resolveExternalBundledRuntimeDepsInstallRoot({
-          pluginRoot,
-          env,
-        }),
+      installRoot: externalRoots.at(-1)!,
       searchRoots: externalRoots,
       external: true,
     });
@@ -348,12 +410,7 @@ export function resolveBundledRuntimeDependencyInstallRootPlan(
     });
   }
   return createBundledRuntimeDepsInstallRootPlan({
-    installRoot:
-      externalRoots.at(-1) ??
-      resolveExternalBundledRuntimeDepsInstallRoot({
-        pluginRoot,
-        env,
-      }),
+    installRoot: externalRoots.at(-1)!,
     searchRoots: externalRoots,
     external: true,
   });
@@ -364,18 +421,4 @@ export function resolveBundledRuntimeDependencyInstallRoot(
   options: { env?: NodeJS.ProcessEnv; forceExternal?: boolean } = {},
 ): string {
   return resolveBundledRuntimeDependencyInstallRootPlan(pluginRoot, options).installRoot;
-}
-
-export function resolveBundledRuntimeDependencyInstallRootInfo(
-  pluginRoot: string,
-  options: { env?: NodeJS.ProcessEnv; forceExternal?: boolean } = {},
-): BundledRuntimeDepsInstallRoot {
-  const { installRoot, external } = resolveBundledRuntimeDependencyInstallRootPlan(
-    pluginRoot,
-    options,
-  );
-  return {
-    installRoot,
-    external,
-  };
 }

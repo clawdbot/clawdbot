@@ -1,8 +1,5 @@
 import { normalizeToolParameterSchema } from "./pi-tools-parameter-schema.js";
-export {
-  resolveOpenAIStrictToolSetting,
-  resolvesToNativeOpenAIStrictTools,
-} from "./openai-strict-tool-setting.js";
+export { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js";
 
 type ToolWithParameters = {
   name?: unknown;

@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness";
 import {
   buildAgentRuntimePlan,
+  embeddedAgentLog,
   nativeHookRelayTesting,
   onAgentEvent,
   resetAgentEventsForTest,
@@ -363,11 +364,59 @@ describe("runCodexAppServerAttempt", () => {
     await expect(response).resolves.toEqual({
       success: false,
       contentItems: [
-        { type: "inputText", text: "OpenClaw dynamic tool call timed out after 1ms." },
+        {
+          type: "inputText",
+          text: "OpenClaw dynamic tool call timed out after 1ms while running tool message.",
+        },
       ],
     });
     expect(capturedSignal?.aborted).toBe(true);
     expect(onTimeout).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs process poll timeout context separately from session idle", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const response = __testing.handleDynamicToolCallWithTimeout({
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-timeout",
+        namespace: null,
+        tool: "process",
+        arguments: { action: "poll", sessionId: "rapid-crustacean", timeout: 30_000 },
+      },
+      toolBridge: {
+        handleToolCall: vi.fn(() => new Promise<never>(() => undefined)),
+      },
+      signal: new AbortController().signal,
+      timeoutMs: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(response).resolves.toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: "OpenClaw dynamic tool call timed out after 1ms while waiting for process action=poll sessionId=rapid-crustacean. This is a tool RPC timeout, not a session idle timeout.",
+        },
+      ],
+    });
+    expect(warn).toHaveBeenCalledWith("codex dynamic tool call timed out", {
+      tool: "process",
+      toolCallId: "call-timeout",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      timeoutMs: 1,
+      timeoutKind: "codex_dynamic_tool_rpc",
+      processAction: "poll",
+      processSessionId: "rapid-crustacean",
+      processRequestedTimeoutMs: 30_000,
+      consoleMessage:
+        "codex process tool timeout: action=poll sessionId=rapid-crustacean toolTimeoutMs=1 requestedWaitMs=30000; per-tool-call watchdog, not session idle; repeated lines usually mean process-poll retry churn, not model progress",
+    });
   });
 
   it("releases the session when Codex never completes after a dynamic tool response", async () => {
@@ -441,6 +490,33 @@ describe("runCodexAppServerAttempt", () => {
       { interval: 1 },
     );
     expect(queueAgentHarnessMessage("session-1", "after timeout")).toBe(false);
+  });
+
+  it("releases the session when Codex accepts a turn but never sends progress", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 60_000;
+
+    const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 5 });
+    await harness.waitForMethod("turn/start");
+
+    await expect(run).resolves.toMatchObject({
+      aborted: true,
+      timedOut: true,
+      promptError: "codex app-server turn idle timed out waiting for turn/completed",
+    });
+    await vi.waitFor(
+      () =>
+        expect(harness.request).toHaveBeenCalledWith("turn/interrupt", {
+          threadId: "thread-1",
+          turnId: "turn-1",
+        }),
+      { interval: 1 },
+    );
+    expect(queueAgentHarnessMessage("session-1", "after silent turn")).toBe(false);
   });
 
   it("applies before_prompt_build to Codex developer instructions and turn input", async () => {

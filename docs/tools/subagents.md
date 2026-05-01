@@ -512,6 +512,14 @@ restart-aborted child sessions remain recoverable through the sub-agent
 orphan recovery flow, which sends a synthetic resume message before
 clearing the aborted marker.
 
+Automatic restart recovery is bounded per child session. If the same
+sub-agent child is accepted for orphan recovery repeatedly inside the
+rapid re-wedge window, OpenClaw persists a recovery tombstone on that
+session and stops auto-resuming it on later restarts. Run
+`openclaw tasks maintenance --apply` to reconcile the task record, or
+`openclaw doctor --fix` to clear stale aborted recovery flags on
+tombstoned sessions.
+
 <Note>
 If a sub-agent spawn fails with Gateway `PAIRING_REQUIRED` /
 `scope-upgrade`, check the RPC caller before editing pairing state.

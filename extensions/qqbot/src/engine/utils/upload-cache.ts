@@ -94,14 +94,3 @@ export function setCachedFileInfo(
     `[upload-cache] Cache SET: key=${key.slice(0, 40)}..., ttl=${effectiveTtl}s, uuid=${fileUuid}`,
   );
 }
-
-/** Return cache stats for diagnostics. */
-export function getUploadCacheStats(): { size: number; maxSize: number } {
-  return { size: cache.size, maxSize: MAX_CACHE_SIZE };
-}
-
-/** Clear the upload cache. */
-export function clearUploadCache(): void {
-  cache.clear();
-  debugLog(`[upload-cache] Cache cleared`);
-}

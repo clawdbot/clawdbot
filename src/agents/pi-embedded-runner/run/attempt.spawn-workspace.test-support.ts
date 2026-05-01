@@ -63,6 +63,7 @@ type AttemptSpawnWorkspaceHoisted = {
   subscribeEmbeddedPiSessionMock: Mock<SubscribeEmbeddedPiSessionFn>;
   acquireSessionWriteLockMock: Mock<AcquireSessionWriteLockFn>;
   installToolResultContextGuardMock: UnknownMock;
+  installContextEngineLoopHookMock: UnknownMock;
   flushPendingToolResultsAfterIdleMock: AsyncUnknownMock;
   releaseWsSessionMock: UnknownMock;
   resolveBootstrapContextForRunMock: Mock<() => Promise<BootstrapContext>>;
@@ -117,6 +118,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const ensureGlobalUndiciStreamTimeoutsMock = vi.fn();
   const buildEmbeddedMessageActionDiscoveryInputMock = vi.fn((params: unknown) => params);
   const installToolResultContextGuardMock = vi.fn(() => () => {});
+  const installContextEngineLoopHookMock = vi.fn(() => () => {});
   const flushPendingToolResultsAfterIdleMock = vi.fn(async () => {});
   const releaseWsSessionMock = vi.fn(() => {});
   const subscribeEmbeddedPiSessionMock = vi.fn<SubscribeEmbeddedPiSessionFn>(() =>
@@ -166,6 +168,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     subscribeEmbeddedPiSessionMock,
     acquireSessionWriteLockMock,
     installToolResultContextGuardMock,
+    installContextEngineLoopHookMock,
     flushPendingToolResultsAfterIdleMock,
     releaseWsSessionMock,
     resolveBootstrapContextForRunMock,
@@ -218,7 +221,7 @@ vi.mock("../../sandbox.js", () => ({
 }));
 
 vi.mock("../../session-tool-result-guard-wrapper.js", () => ({
-  guardSessionManager: () => hoisted.sessionManager,
+  guardSessionManager: (sessionManager: unknown) => sessionManager,
 }));
 
 vi.mock("../../pi-embedded-subscribe.js", () => ({
@@ -355,6 +358,8 @@ vi.mock("../tool-result-context-guard.js", async () => {
       `[... ${Math.max(1, Math.floor(truncatedChars))} more characters truncated]`,
     installToolResultContextGuard: (...args: unknown[]) =>
       (hoisted.installToolResultContextGuardMock as (...args: unknown[]) => unknown)(...args),
+    installContextEngineLoopHook: (...args: unknown[]) =>
+      (hoisted.installContextEngineLoopHookMock as (...args: unknown[]) => unknown)(...args),
   };
 });
 
@@ -750,6 +755,7 @@ export function resetEmbeddedAttemptHarness(
     release: async () => {},
   });
   hoisted.installToolResultContextGuardMock.mockReset().mockReturnValue(() => {});
+  hoisted.installContextEngineLoopHookMock.mockReset().mockReturnValue(() => {});
   hoisted.flushPendingToolResultsAfterIdleMock.mockReset().mockResolvedValue(undefined);
   hoisted.releaseWsSessionMock.mockReset().mockReturnValue(undefined);
   hoisted.resolveBootstrapContextForRunMock.mockReset().mockResolvedValue({

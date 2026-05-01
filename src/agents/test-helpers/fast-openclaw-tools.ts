@@ -46,8 +46,10 @@ const coreTools = [
   stubTool("pdf"),
 ];
 
+const createOpenClawToolsMock = vi.fn(() => coreTools.map((tool) => Object.assign({}, tool)));
+
 vi.mock("../openclaw-tools.js", () => ({
-  createOpenClawTools: () => coreTools.map((tool) => Object.assign({}, tool)),
+  createOpenClawTools: createOpenClawToolsMock,
   __testing: {
     setDepsForTest: () => {},
   },

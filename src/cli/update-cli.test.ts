@@ -61,6 +61,15 @@ vi.mock("../infra/openclaw-root.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
+  ConfigMutationConflictError: class ConfigMutationConflictError extends Error {
+    readonly currentHash: string | null;
+
+    constructor(message: string, params: { currentHash: string | null }) {
+      super(message);
+      this.name = "ConfigMutationConflictError";
+      this.currentHash = params.currentHash;
+    }
+  },
   readConfigFileSnapshot: vi.fn(),
   replaceConfigFile: vi.fn(),
   resolveGatewayPort: vi.fn(() => 18789),
@@ -226,7 +235,8 @@ vi.mock("../runtime.js", () => ({
 
 const { runGatewayUpdate } = await import("../infra/update-runner.js");
 const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
-const { readConfigFileSnapshot, replaceConfigFile } = await import("../config/config.js");
+const { ConfigMutationConflictError, readConfigFileSnapshot, replaceConfigFile } =
+  await import("../config/config.js");
 const { checkUpdateStatus, fetchNpmPackageTargetStatus, fetchNpmTagVersion, resolveNpmChannelTag } =
   await import("../infra/update-check.js");
 const { runCommandWithTimeout } = await import("../process/exec.js");
@@ -751,6 +761,78 @@ describe("update-cli", () => {
       expect.objectContaining({
         channel: "dev",
         config: expect.objectContaining({
+          update: expect.objectContaining({ channel: "dev" }),
+        }),
+      }),
+    );
+  });
+
+  it("post-core resume mode retries update channel persistence after config hash drift", async () => {
+    vi.mocked(readConfigFileSnapshot)
+      .mockResolvedValueOnce({
+        ...baseSnapshot,
+        parsed: { update: { channel: "stable" } },
+        resolved: { update: { channel: "stable" } } as OpenClawConfig,
+        sourceConfig: { update: { channel: "stable" } } as OpenClawConfig,
+        runtimeConfig: { update: { channel: "stable" } } as OpenClawConfig,
+        config: { update: { channel: "stable" } } as OpenClawConfig,
+        hash: "stable-hash",
+      })
+      .mockResolvedValueOnce({
+        ...baseSnapshot,
+        parsed: {
+          meta: { lastTouchedVersion: "2026.4.30" },
+          update: { channel: "stable" },
+        },
+        resolved: {
+          meta: { lastTouchedVersion: "2026.4.30" },
+          update: { channel: "stable" },
+        } as OpenClawConfig,
+        sourceConfig: {
+          meta: { lastTouchedVersion: "2026.4.30" },
+          update: { channel: "stable" },
+        } as OpenClawConfig,
+        runtimeConfig: {
+          meta: { lastTouchedVersion: "2026.4.30" },
+          update: { channel: "stable" },
+        } as OpenClawConfig,
+        config: {
+          meta: { lastTouchedVersion: "2026.4.30" },
+          update: { channel: "stable" },
+        } as OpenClawConfig,
+        hash: "newer-hash",
+      });
+    vi.mocked(replaceConfigFile)
+      .mockRejectedValueOnce(
+        new ConfigMutationConflictError("config changed since last load", {
+          currentHash: "newer-hash",
+        }),
+      )
+      .mockResolvedValueOnce({} as Awaited<ReturnType<typeof replaceConfigFile>>);
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "dev",
+        OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL: "dev",
+      },
+      async () => {
+        await updateCommand({ restart: false });
+      },
+    );
+
+    expect(replaceConfigFile).toHaveBeenCalledTimes(2);
+    expect(replaceConfigFile).toHaveBeenLastCalledWith({
+      nextConfig: {
+        meta: { lastTouchedVersion: "2026.4.30" },
+        update: { channel: "dev" },
+      },
+      baseHash: "newer-hash",
+    });
+    expect(syncPluginsForUpdateChannel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          meta: expect.objectContaining({ lastTouchedVersion: "2026.4.30" }),
           update: expect.objectContaining({ channel: "dev" }),
         }),
       }),

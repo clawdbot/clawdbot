@@ -341,6 +341,9 @@ describe("config observe recovery", () => {
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining("Config auto-restored from last-known-good:"),
       );
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("Rejected validation details: gateway.mode: Expected string."),
+      );
       const observe = await readLastObserveEvent(auditPath);
       expect(observe?.restoredFromBackup).toBe(true);
       expect(observe?.restoredBackupPath).toBe(resolveLastKnownGoodConfigPath(configPath));

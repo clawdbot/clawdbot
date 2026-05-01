@@ -18,6 +18,7 @@ import {
   resolvePersistedSelectedModelRef,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
+  resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
   resolveSubagentSpawnModelSelection,
   resolveThinkingDefault,
@@ -1620,6 +1621,33 @@ describe("model-selection", () => {
           ],
         }),
       ).toBe("medium");
+    });
+  });
+});
+
+describe("resolveDefaultModelForAgent", () => {
+  it("uses an agent primary model override before the global default", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+          },
+        },
+        list: [
+          {
+            id: "main",
+            model: {
+              primary: "openai-codex/gpt-5.5",
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(resolveDefaultModelForAgent({ cfg, agentId: "main" })).toEqual({
+      provider: "openai-codex",
+      model: "gpt-5.5",
     });
   });
 });

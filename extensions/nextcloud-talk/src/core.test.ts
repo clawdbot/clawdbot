@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   looksLikeNextcloudTalkTargetId,
   normalizeNextcloudTalkMessagingTarget,
@@ -129,6 +129,99 @@ describe("nextcloud talk core", () => {
         "X-Nextcloud-Talk-Signature": "sig",
       }),
     ).toBeNull();
+  });
+
+  it("rejects tampered bodies, wrong secrets, and tampered signatures", () => {
+    const body = JSON.stringify({ hello: "world" });
+    const generated = generateNextcloudTalkSignature({
+      body,
+      secret: "secret-123",
+    });
+
+    expect(
+      verifyNextcloudTalkSignature({
+        signature: generated.signature,
+        random: generated.random,
+        body: JSON.stringify({ hello: "tampered" }),
+        secret: "secret-123",
+      }),
+    ).toBe(false);
+    expect(
+      verifyNextcloudTalkSignature({
+        signature: generated.signature,
+        random: generated.random,
+        body,
+        secret: "wrong-secret",
+      }),
+    ).toBe(false);
+    expect(
+      verifyNextcloudTalkSignature({
+        signature: "a".repeat(generated.signature.length),
+        random: generated.random,
+        body,
+        secret: "secret-123",
+      }),
+    ).toBe(false);
+  });
+
+  it("takes the first value from array-backed headers", () => {
+    expect(
+      extractNextcloudTalkHeaders({
+        "x-nextcloud-talk-signature": ["sig1", "sig2"],
+        "x-nextcloud-talk-random": ["rand1", "rand2"],
+        "x-nextcloud-talk-backend": ["backend1", "backend2"],
+      }),
+    ).toEqual({
+      signature: "sig1",
+      random: "rand1",
+      backend: "backend1",
+    });
+  });
+
+  it("still runs timingSafeEqual when the supplied signature length mismatches", async () => {
+    const timingSafeEqualMock = vi.fn();
+
+    vi.resetModules();
+    vi.doMock("node:crypto", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:crypto")>();
+      return {
+        ...actual,
+        timingSafeEqual: vi.fn((left: NodeJS.ArrayBufferView, right: NodeJS.ArrayBufferView) => {
+          timingSafeEqualMock(left, right);
+          return actual.timingSafeEqual(left, right);
+        }),
+      };
+    });
+
+    const { generateNextcloudTalkSignature, verifyNextcloudTalkSignature } =
+      await import("./signature.js");
+    const body = JSON.stringify({ hello: "world" });
+    const generated = generateNextcloudTalkSignature({
+      body,
+      secret: "secret-123",
+    });
+    const shortSignature = generated.signature.slice(0, 12);
+
+    expect(
+      verifyNextcloudTalkSignature({
+        signature: shortSignature,
+        random: generated.random,
+        body,
+        secret: "secret-123",
+      }),
+    ).toBe(false);
+
+    expect(timingSafeEqualMock).toHaveBeenCalledOnce();
+    const [leftBuffer, rightBuffer] = timingSafeEqualMock.mock.calls[0] ?? [];
+    expect(Buffer.isBuffer(leftBuffer)).toBe(true);
+    expect(Buffer.isBuffer(rightBuffer)).toBe(true);
+    if (!Buffer.isBuffer(leftBuffer) || !Buffer.isBuffer(rightBuffer)) {
+      throw new TypeError("Expected timingSafeEqual to receive Buffer arguments");
+    }
+    expect(leftBuffer).toHaveLength(rightBuffer.length);
+
+    vi.doUnmock("node:crypto");
+    vi.resetModules();
   });
 
   it("persists replay decisions across guard instances and scopes account namespaces", async () => {

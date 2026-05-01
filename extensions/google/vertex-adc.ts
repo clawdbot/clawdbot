@@ -22,6 +22,10 @@ const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 
 let cachedGoogleVertexAuthorizedUserToken: GoogleVertexAuthorizedUserToken | undefined;
 
+export function resetGoogleVertexAuthorizedUserTokenCacheForTest(): void {
+  cachedGoogleVertexAuthorizedUserToken = undefined;
+}
+
 function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }

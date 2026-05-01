@@ -1,5 +1,6 @@
 export { resolveEffectiveModelFallbacks } from "../../agents/agent-scope.js";
 export { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+export { resolveCronAgentLane } from "../../agents/lanes.js";
 export { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 export { runWithModelFallback } from "../../agents/model-fallback.js";
 export { isCliProvider } from "../../agents/model-selection-cli.js";

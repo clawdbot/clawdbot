@@ -329,6 +329,16 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("sessions_send");
   });
 
+  it("uses provider-neutral web_search prompt metadata", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["web_search"],
+    });
+
+    expect(prompt).toContain("- web_search: Search the web using the configured provider");
+    expect(prompt).not.toContain("Brave API");
+  });
+
   it("documents ACP sessions_spawn agent targeting requirements", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

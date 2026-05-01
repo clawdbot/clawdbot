@@ -79,7 +79,7 @@ describe("security audit channel read-only setup fallback", () => {
       cfg,
       expect.objectContaining({
         includePersistedAuthState: true,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       }),
     );
     expect(report.findings).toEqual(

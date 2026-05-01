@@ -202,7 +202,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     await noteSecurityWarnings(cfg);
     expect(listReadOnlyChannelPluginsForConfigMock).toHaveBeenCalledWith(cfg, {
       includePersistedAuthState: true,
-      includeSetupRuntimeFallback: true,
+      includeSetupFallbackPlugins: true,
     });
     const message = lastMessage();
     expect(message).toContain('config set session.dmScope "per-channel-peer"');
@@ -465,7 +465,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
       {},
       {
         includePersistedAuthState: true,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
     const message = lastMessage();

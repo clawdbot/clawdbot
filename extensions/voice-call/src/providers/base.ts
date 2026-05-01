@@ -44,6 +44,12 @@ export interface VoiceCallProvider {
   parseWebhookEvent(ctx: WebhookContext, options?: WebhookParseOptions): ProviderWebhookParseResult;
 
   /**
+   * Consume one-time TwiML that must be served before shortcut handlers such as
+   * realtime media streams take over the webhook response.
+   */
+  consumeInitialTwiML?: (ctx: WebhookContext) => string | null;
+
+  /**
    * Initiate an outbound call.
    * @returns Provider call ID and status
    */

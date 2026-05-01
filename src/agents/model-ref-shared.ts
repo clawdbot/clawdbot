@@ -2,7 +2,7 @@ import { normalizeProviderModelIdWithManifest } from "../plugins/manifest-model-
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./provider-id.js";
 
-export type StaticModelRef = {
+type StaticModelRef = {
   provider: string;
   model: string;
 };
@@ -42,7 +42,7 @@ export function normalizeStaticProviderModelId(
   );
 }
 
-export function parseStaticModelRef(raw: string, defaultProvider: string): StaticModelRef | null {
+function parseStaticModelRef(raw: string, defaultProvider: string): StaticModelRef | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;

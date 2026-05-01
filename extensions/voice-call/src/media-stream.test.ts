@@ -33,6 +33,20 @@ const flush = async (): Promise<void> => {
   await new Promise((resolve) => setTimeout(resolve, 0));
 };
 
+const createDeferred = (): {
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (error: Error) => void;
+} => {
+  let resolve!: () => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+};
+
 const waitForAbort = (signal: AbortSignal): Promise<void> =>
   new Promise((resolve) => {
     if (signal.aborted) {
@@ -497,6 +511,220 @@ describe("MediaStreamHandler security hardening", () => {
 
       ws.close();
       await waitForClose(ws);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps accepted streams alive while STT readiness exceeds the pre-start timeout", async () => {
+    const sttReady = createDeferred();
+    const sttConnectStarted = createDeferred();
+    const transcriptionReady = createDeferred();
+    const events: string[] = [];
+
+    const session: RealtimeTranscriptionSession = {
+      connect: async () => {
+        events.push("stt-connect-start");
+        sttConnectStarted.resolve();
+        await sttReady.promise;
+        events.push("stt-connect-ready");
+      },
+      sendAudio: () => {},
+      close: () => {},
+      isConnected: () => false,
+    };
+
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: {
+        createSession: () => session,
+        id: "openai",
+        label: "OpenAI",
+        isConfigured: () => true,
+      },
+      providerConfig: {},
+      preStartTimeoutMs: 40,
+      shouldAcceptStream: () => true,
+      onConnect: () => {
+        events.push("onConnect");
+      },
+      onTranscriptionReady: () => {
+        events.push("onTranscriptionReady");
+        transcriptionReady.resolve();
+      },
+    });
+    const server = await startWsServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          streamSid: "MZ-slow-stt",
+          start: { callSid: "CA-slow-stt" },
+        }),
+      );
+
+      await withTimeout(sttConnectStarted.promise);
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(ws.readyState).toBe(WebSocket.OPEN);
+      expect(events).toEqual(["onConnect", "stt-connect-start"]);
+
+      sttReady.resolve();
+      await withTimeout(transcriptionReady.promise);
+      expect(events).toEqual([
+        "onConnect",
+        "stt-connect-start",
+        "stt-connect-ready",
+        "onTranscriptionReady",
+      ]);
+
+      ws.close();
+      await waitForClose(ws);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("forwards early Twilio media into the STT session before readiness", async () => {
+    const sttReady = createDeferred();
+    const sttConnectStarted = createDeferred();
+    const transcriptionReady = createDeferred();
+    const audioReceived = createDeferred();
+    const receivedAudio: Buffer[] = [];
+    let onConnectCalls = 0;
+    let onTranscriptionReadyCalls = 0;
+
+    const session: RealtimeTranscriptionSession = {
+      connect: async () => {
+        sttConnectStarted.resolve();
+        await sttReady.promise;
+      },
+      sendAudio: (audio) => {
+        receivedAudio.push(Buffer.from(audio));
+        audioReceived.resolve();
+      },
+      close: () => {},
+      isConnected: () => false,
+    };
+
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: {
+        createSession: () => session,
+        id: "openai",
+        label: "OpenAI",
+        isConfigured: () => true,
+      },
+      providerConfig: {},
+      shouldAcceptStream: () => true,
+      onConnect: () => {
+        onConnectCalls += 1;
+      },
+      onTranscriptionReady: () => {
+        onTranscriptionReadyCalls += 1;
+        transcriptionReady.resolve();
+      },
+    });
+    const server = await startWsServer(handler);
+    let ws: WebSocket | undefined;
+
+    try {
+      ws = await connectWs(server.url);
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          streamSid: "MZ-early-media",
+          start: { callSid: "CA-early-media" },
+        }),
+      );
+
+      await withTimeout(sttConnectStarted.promise);
+      ws.send(
+        JSON.stringify({
+          event: "media",
+          streamSid: "MZ-early-media",
+          media: { payload: Buffer.from("early").toString("base64") },
+        }),
+      );
+      await withTimeout(audioReceived.promise);
+
+      expect(Buffer.concat(receivedAudio).toString()).toBe("early");
+      expect(onConnectCalls).toBe(1);
+      expect(onTranscriptionReadyCalls).toBe(0);
+
+      sttReady.resolve();
+      await withTimeout(transcriptionReady.promise);
+      expect(onConnectCalls).toBe(1);
+      expect(onTranscriptionReadyCalls).toBe(1);
+    } finally {
+      sttReady.resolve();
+      if (ws) {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.close();
+        }
+        if (ws.readyState !== WebSocket.CLOSED) {
+          await waitForClose(ws).catch(() => {});
+        }
+      }
+      await server.close();
+    }
+  });
+
+  it("closes the media stream and disconnects once when STT readiness fails", async () => {
+    const sttConnectStarted = createDeferred();
+    const onDisconnectReady = createDeferred();
+    const onConnect = vi.fn();
+    const onTranscriptionReady = vi.fn();
+    const onDisconnect = vi.fn(() => {
+      onDisconnectReady.resolve();
+    });
+
+    const session: RealtimeTranscriptionSession = {
+      connect: async () => {
+        sttConnectStarted.resolve();
+        throw new Error("provider unavailable");
+      },
+      sendAudio: () => {},
+      close: vi.fn(),
+      isConnected: () => false,
+    };
+
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: {
+        createSession: () => session,
+        id: "openai",
+        label: "OpenAI",
+        isConfigured: () => true,
+      },
+      providerConfig: {},
+      shouldAcceptStream: () => true,
+      onConnect,
+      onTranscriptionReady,
+      onDisconnect,
+    });
+    const server = await startWsServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          streamSid: "MZ-stt-fail",
+          start: { callSid: "CA-stt-fail" },
+        }),
+      );
+
+      await withTimeout(sttConnectStarted.promise);
+      const closed = await waitForClose(ws);
+      await withTimeout(onDisconnectReady.promise);
+
+      expect(closed.code).toBe(1011);
+      expect(closed.reason).toBe("STT connection failed");
+      expect(onConnect).toHaveBeenCalledTimes(1);
+      expect(onConnect).toHaveBeenCalledWith("CA-stt-fail", "MZ-stt-fail");
+      expect(onTranscriptionReady).not.toHaveBeenCalled();
+      expect(onDisconnect).toHaveBeenCalledTimes(1);
+      expect(onDisconnect).toHaveBeenCalledWith("CA-stt-fail", "MZ-stt-fail");
+      expect(session.close).toHaveBeenCalledTimes(1);
     } finally {
       await server.close();
     }

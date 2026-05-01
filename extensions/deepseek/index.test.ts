@@ -110,6 +110,37 @@ describe("deepseek provider plugin", () => {
     );
   });
 
+  it("advertises max thinking levels for DeepSeek V4 models only", async () => {
+    const provider = await registerSingleProviderPlugin(deepseekPlugin);
+    const resolveThinkingProfile = provider.resolveThinkingProfile!;
+    const expectedV4Levels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+    expect(
+      resolveThinkingProfile({
+        provider: "deepseek",
+        modelId: "deepseek-v4-pro",
+      } as never)?.levels.map((level) => level.id),
+    ).toEqual(expectedV4Levels);
+    expect(
+      resolveThinkingProfile({
+        provider: "deepseek",
+        modelId: "deepseek-v4-flash",
+      } as never)?.defaultLevel,
+    ).toBe("high");
+    expect(
+      resolveThinkingProfile({
+        provider: "deepseek",
+        modelId: "deepseek-v4-flash",
+      } as never)?.levels.map((level) => level.id),
+    ).toEqual(expectedV4Levels);
+    expect(
+      resolveThinkingProfile({ provider: "deepseek", modelId: "deepseek-chat" } as never),
+    ).toBe(undefined);
+    expect(
+      resolveThinkingProfile({ provider: "deepseek", modelId: "deepseek-reasoner" } as never),
+    ).toBe(undefined);
+  });
+
   it("maps thinking levels to DeepSeek V4 payload controls", async () => {
     let capturedPayload: Record<string, unknown> | undefined;
     const baseStreamFn = (

@@ -2,7 +2,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
-import { Type } from "typebox";
 
 export type BraveConfig = {
   mode?: string;
@@ -119,7 +118,6 @@ const BRAVE_SEARCH_LANG_ALIASES: Record<string, string> = {
 };
 
 const BRAVE_UI_LANG_LOCALE = /^([a-z]{2})-([a-z]{2})$/i;
-const MAX_BRAVE_SEARCH_COUNT = 10;
 
 function normalizeBraveSearchLang(value: string | undefined): string | undefined {
   if (!value) {
@@ -225,55 +223,4 @@ export function mapBraveLlmContextResults(
     ),
     siteName: resolveSiteName(entry.url) || undefined,
   }));
-}
-
-export function createBraveSchema() {
-  return Type.Object({
-    query: Type.String({ description: "Search query string." }),
-    count: Type.Optional(
-      Type.Number({
-        description: "Number of results to return (1-10).",
-        minimum: 1,
-        maximum: MAX_BRAVE_SEARCH_COUNT,
-      }),
-    ),
-    country: Type.Optional(
-      Type.String({
-        description:
-          "2-letter country code for region-specific results (e.g., 'DE', 'US', 'ALL'). Default: 'US'.",
-      }),
-    ),
-    language: Type.Optional(
-      Type.String({
-        description: "ISO 639-1 language code for results (e.g., 'en', 'de', 'fr').",
-      }),
-    ),
-    freshness: Type.Optional(
-      Type.String({
-        description: "Filter by time: 'day' (24h), 'week', 'month', or 'year'.",
-      }),
-    ),
-    date_after: Type.Optional(
-      Type.String({
-        description: "Only results published after this date (YYYY-MM-DD).",
-      }),
-    ),
-    date_before: Type.Optional(
-      Type.String({
-        description: "Only results published before this date (YYYY-MM-DD).",
-      }),
-    ),
-    search_lang: Type.Optional(
-      Type.String({
-        description:
-          "Brave language code for search results (e.g., 'en', 'de', 'en-gb', 'zh-hans', 'zh-hant', 'pt-br').",
-      }),
-    ),
-    ui_lang: Type.Optional(
-      Type.String({
-        description:
-          "Locale code for UI elements in language-region format (e.g., 'en-US', 'de-DE', 'fr-FR', 'tr-TR'). Must include region subtag.",
-      }),
-    ),
-  });
 }

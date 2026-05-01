@@ -117,8 +117,11 @@ the maintainer-only release runbook.
   Actions run. The workflow resolves the candidate to
   `package-under-test`, reuses the Docker E2E release scheduler against that
   tarball, and can run Telegram QA against the same tarball with
-  `telegram_mode=mock-openai` or `telegram_mode=live-frontier`.
-  Example: `gh workflow run package-acceptance.yml --ref main -f workflow_ref=main -f source=npm -f package_spec=openclaw@beta -f suite_profile=product -f telegram_mode=mock-openai`
+  `telegram_mode=mock-openai` or `telegram_mode=live-frontier`. When the
+  selected Docker lanes include `published-upgrade-survivor`, the package
+  artifact is the candidate and `published_upgrade_survivor_baseline` selects
+  the published baseline.
+  Example: `gh workflow run package-acceptance.yml --ref main -f workflow_ref=main -f source=npm -f package_spec=openclaw@beta -f suite_profile=product -f published_upgrade_survivor_baseline=openclaw@2026.4.26 -f telegram_mode=mock-openai`
   Common profiles:
   - `smoke`: install/channel/agent, gateway network, and config reload lanes
   - `package`: artifact-native package/update/plugin lanes without OpenWebUI or live ClawHub
@@ -194,7 +197,9 @@ Validation` or from the `main`/release workflow ref so workflow logic and
     `openclaw/releases-private/.github/workflows/openclaw-npm-dist-tags.yml`
     for security, because `npm dist-tag add` still needs `NPM_TOKEN` while the
     public repo keeps OIDC-only publish
-  - public `macOS Release` is validation-only
+  - public `macOS Release` is validation-only; when a tag lives only on a
+    release branch but the workflow is dispatched from `main`, set
+    `public_release_branch=release/YYYY.M.D`
   - real private mac publish must pass successful private mac
     `preflight_run_id` and `validate_run_id`
   - the real publish paths promote prepared artifacts instead of rebuilding
@@ -238,7 +243,7 @@ gh workflow run full-release-validation.yml \
   -f ref=release/YYYY.M.D \
   -f provider=openai \
   -f mode=both \
-  -f release_profile=full \
+  -f release_profile=stable \
   -f evidence_package_spec=openclaw@YYYY.M.D-beta.N
 ```
 
@@ -253,6 +258,9 @@ summary shows `normal_ci` and `release_checks` as successful, and any optional
 `npm_telegram` child is either successful or intentionally skipped. The final
 verifier summary includes slowest-job tables for each child run, so the release
 manager can see the current critical path without downloading logs.
+See [Full release validation](/reference/full-release-validation) for the
+complete stage matrix, exact workflow job names, stable versus full profile
+differences, artifacts, and focused rerun handles.
 Child workflows are dispatched from the trusted ref that runs `Full Release
 Validation`, normally `--ref main`, even when the target `ref` points at an
 older release branch or tag. There is no separate Full Release Validation
@@ -452,7 +460,8 @@ gh workflow run package-acceptance.yml \
   -f workflow_ref=main \
   -f source=npm \
   -f package_spec=openclaw@beta \
-  -f suite_profile=product
+  -f suite_profile=product \
+  -f published_upgrade_survivor_baseline=openclaw@2026.4.26
 ```
 
 Common package profiles:

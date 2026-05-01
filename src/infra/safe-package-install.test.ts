@@ -6,6 +6,7 @@ describe("safe npm install helpers", () => {
     expect(
       createSafeNpmInstallArgs({
         omitDev: true,
+        ignoreWorkspaces: true,
         loglevel: "error",
         noAudit: true,
         noFund: true,
@@ -15,6 +16,7 @@ describe("safe npm install helpers", () => {
       "--omit=dev",
       "--loglevel=error",
       "--ignore-scripts",
+      "--workspaces=false",
       "--no-audit",
       "--no-fund",
     ]);
@@ -25,12 +27,18 @@ describe("safe npm install helpers", () => {
       createSafeNpmInstallEnv(
         {
           PATH: "/usr/bin:/bin",
+          NPM_CONFIG_IGNORE_SCRIPTS: "false",
           npm_config_global: "true",
+          npm_config_include_workspace_root: "true",
+          npm_config_ignore_scripts: "false",
           npm_config_location: "global",
           npm_config_package_lock: "true",
+          npm_config_workspace: "extensions/telegram",
+          npm_config_workspaces: "true",
         },
         {
           cacheDir: "/tmp/openclaw-npm-cache",
+          ignoreWorkspaces: true,
           legacyPeerDeps: true,
           packageLock: false,
           quiet: true,
@@ -49,12 +57,14 @@ describe("safe npm install helpers", () => {
       npm_config_fetch_timeout: "300000",
       npm_config_fund: "false",
       npm_config_global: "false",
+      npm_config_ignore_scripts: "true",
       npm_config_legacy_peer_deps: "true",
       npm_config_location: "project",
       npm_config_loglevel: "error",
       npm_config_package_lock: "false",
       npm_config_progress: "false",
       npm_config_save: "false",
+      npm_config_workspaces: "false",
       npm_config_yes: "true",
     });
   });

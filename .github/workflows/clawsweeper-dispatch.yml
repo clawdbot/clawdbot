@@ -3,6 +3,8 @@ name: ClawSweeper Dispatch
 on:
   issues:
     types: [opened, reopened, edited, labeled, unlabeled]
+  issue_comment:
+    types: [created, edited]
   push:
     branches: [main]
   pull_request_target: # zizmor: ignore[dangerous-triggers] maintainer-owned external dispatch; no checkout or untrusted PR code execution
@@ -18,7 +20,7 @@ concurrency:
 jobs:
   dispatch:
     runs-on: ubuntu-latest
-    if: ${{ !(endsWith(github.actor, '[bot]') && (github.event.action == 'labeled' || github.event.action == 'unlabeled')) }}
+    if: ${{ github.event_name == 'issue_comment' || !(endsWith(github.actor, '[bot]') && (github.event.action == 'labeled' || github.event.action == 'unlabeled')) }}
     env:
       HAS_CLAWSWEEPER_APP_PRIVATE_KEY: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY != '' }}
       CLAWSWEEPER_APP_CLIENT_ID: Iv23liOECG0slfuhz093
@@ -39,8 +41,20 @@ jobs:
           repositories: clawsweeper
           permission-contents: write
 
+      - name: Create target comment token
+        id: target_token
+        if: ${{ github.event_name == 'issue_comment' && env.HAS_CLAWSWEEPER_APP_PRIVATE_KEY == 'true' }}
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          client-id: ${{ env.CLAWSWEEPER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-issues: write
+          permission-pull-requests: read
+
       - name: Dispatch exact ClawSweeper review
-        if: ${{ github.event_name != 'push' }}
+        if: ${{ github.event_name != 'push' && github.event_name != 'issue_comment' }}
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           TARGET_REPO: ${{ github.repository }}
@@ -67,6 +81,60 @@ jobs:
             echo "Dispatched ClawSweeper review."
           else
             echo "::warning::Skipping ClawSweeper dispatch because the configured credential could not dispatch to openclaw/clawsweeper."
+          fi
+
+      - name: Acknowledge and dispatch ClawSweeper comment
+        if: ${{ github.event_name == 'issue_comment' }}
+        env:
+          DISPATCH_TOKEN: ${{ steps.token.outputs.token }}
+          TARGET_TOKEN: ${{ steps.target_token.outputs.token }}
+          TARGET_REPO: ${{ github.repository }}
+          ITEM_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          SOURCE_ACTION: ${{ github.event.action }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DISPATCH_TOKEN" ]; then
+            echo "::notice::Skipping ClawSweeper comment dispatch because no ClawSweeper app token is configured."
+            exit 0
+          fi
+          body_file="$RUNNER_TEMP/clawsweeper-comment-body.txt"
+          printf '%s\n' "$COMMENT_BODY" > "$body_file"
+          if ! grep -Eiq '(^|[[:space:]])@(clawsweeper|openclaw-clawsweeper)\b(\[bot\])?|(^|[[:space:]])/(clawsweeper|review|automerge|autoclose)\b' "$body_file"; then
+            echo "No ClawSweeper command found in comment."
+            exit 0
+          fi
+          if [ -n "$TARGET_TOKEN" ]; then
+            err="$(mktemp)"
+            if GH_TOKEN="$TARGET_TOKEN" gh api -X POST \
+              -H "Accept: application/vnd.github+json" \
+              "repos/$TARGET_REPO/issues/comments/$COMMENT_ID/reactions" \
+              -f content="eyes" 2>"$err" >/dev/null; then
+              echo "Acknowledged ClawSweeper command comment."
+            elif grep -qi "HTTP 422\\|already exists" "$err"; then
+              echo "ClawSweeper command comment already acknowledged."
+            else
+              cat "$err" >&2
+              echo "::warning::Could not acknowledge ClawSweeper command comment."
+            fi
+            rm -f "$err"
+          else
+            echo "::notice::Skipping ClawSweeper comment acknowledgement because no target token is configured."
+          fi
+          payload="$(jq -nc \
+            --arg target_repo "$TARGET_REPO" \
+            --argjson item_number "$ITEM_NUMBER" \
+            --argjson comment_id "$COMMENT_ID" \
+            --arg source_event "issue_comment" \
+            --arg source_action "$SOURCE_ACTION" \
+            '{event_type:"clawsweeper_comment",client_payload:{target_repo:$target_repo,item_number:$item_number,comment_id:$comment_id,source_event:$source_event,source_action:$source_action}}')"
+          if GH_TOKEN="$DISPATCH_TOKEN" gh api repos/openclaw/clawsweeper/dispatches \
+            --method POST \
+            --input - <<< "$payload"; then
+            echo "Dispatched ClawSweeper comment router."
+          else
+            echo "::warning::Skipping ClawSweeper comment dispatch because the configured credential could not dispatch to openclaw/clawsweeper."
           fi
 
       - name: Dispatch ClawSweeper commit review

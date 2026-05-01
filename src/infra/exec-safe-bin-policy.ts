@@ -7,7 +7,6 @@ export {
   normalizeSafeBinProfileFixtures,
   renderDefaultSafeBinsDocText,
   renderSafeBinDeniedFlagsDocBullets,
-  resolveSafeBinDeniedFlags,
   resolveSafeBinProfiles,
   type SafeBinProfile,
   type SafeBinProfileFixture,

@@ -6,23 +6,6 @@ function resolveControllerSessionKey(entry: SubagentRunRecord): string {
   return entry.controllerSessionKey?.trim() || entry.requesterSessionKey;
 }
 
-export function findRunIdsByChildSessionKeyFromRuns(
-  runs: Map<string, SubagentRunRecord>,
-  childSessionKey: string,
-): string[] {
-  const key = childSessionKey.trim();
-  if (!key) {
-    return [];
-  }
-  const runIds: string[] = [];
-  for (const [runId, entry] of runs.entries()) {
-    if (entry.childSessionKey === key) {
-      runIds.push(runId);
-    }
-  }
-  return runIds;
-}
-
 export function listRunsForRequesterFromRuns(
   runs: Map<string, SubagentRunRecord>,
   requesterSessionKey: string,

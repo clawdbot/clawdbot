@@ -11,8 +11,9 @@ title: "Menu bar"
 
 - We surface the current agent work state in the menu bar icon and in the first status row of the menu.
 - Health status is hidden while work is active; it returns when all sessions are idle.
-- The “Nodes” block in the menu lists **devices** only (paired nodes via `node.list`), not client/presence entries.
-- A “Usage” section appears under Context when provider usage snapshots are available.
+- A root “Context” submenu contains recent sessions instead of expanding them directly in the root menu.
+- The “Nodes” block in the root menu lists **devices** only (paired nodes via `node.list`), not client/presence entries.
+- A root “Usage” section appears below Context when provider usage snapshots are available, followed by usage-cost details when available.
 
 ## State model
 
@@ -44,6 +45,14 @@ title: "Menu bar"
 - `workingMain`: badge with glyph, full tint, leg “working” animation.
 - `workingOther`: badge with glyph, muted tint, no scurry.
 - `overridden`: uses the chosen glyph/tint regardless of activity.
+
+## Context submenu
+
+- The root menu shows one “Context” row with a session count/status and opens a submenu.
+- The Context submenu header shows the active session count for the last 24 hours.
+- Each session row keeps its token bar, age, preview, thinking/verbose, reset, compact, and delete actions.
+- Loading, disconnected, and session-load error messages appear inside the Context submenu.
+- Provider usage and usage-cost details stay root-level below Context so they remain glanceable without opening the submenu.
 
 ## Status row text (menu)
 

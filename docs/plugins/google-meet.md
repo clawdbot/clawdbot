@@ -85,11 +85,22 @@ openclaw googlemeet setup --transport chrome-node --mode transcribe
 ```
 
 When Twilio delegation is configured, setup also reports whether the
-`voice-call` plugin and Twilio credentials are ready. Treat any `ok: false`
-check as a blocker for the checked transport and mode before asking an agent to
-join. Use `openclaw googlemeet setup --json` for scripts or machine-readable
-output. Use `--transport chrome`, `--transport chrome-node`, or `--transport twilio`
-to preflight a specific transport before an agent tries it.
+`voice-call` plugin, Twilio credentials, and public webhook exposure are ready.
+Treat any `ok: false` check as a blocker for the checked transport and mode
+before asking an agent to join. Use `openclaw googlemeet setup --json` for
+scripts or machine-readable output. Use `--transport chrome`,
+`--transport chrome-node`, or `--transport twilio` to preflight a specific
+transport before an agent tries it.
+
+For Twilio, always preflight the transport explicitly when the default transport
+is Chrome:
+
+```bash
+openclaw googlemeet setup --transport twilio
+```
+
+That catches missing `voice-call` wiring, Twilio credentials, or unreachable
+webhook exposure before the agent tries to dial the meeting.
 
 Join a meeting:
 
@@ -439,7 +450,8 @@ openclaw googlemeet setup
 ```
 
 When Twilio delegation is wired, `googlemeet setup` includes successful
-`twilio-voice-call-plugin` and `twilio-voice-call-credentials` checks.
+`twilio-voice-call-plugin`, `twilio-voice-call-credentials`, and
+`twilio-voice-call-webhook` checks.
 
 ```bash
 openclaw googlemeet join https://meet.google.com/abc-defg-hij \
@@ -912,6 +924,16 @@ Defaults:
   and writing audio in `chrome.audioFormat`
 - `chrome.audioOutputCommand`: SoX command reading audio in `chrome.audioFormat`
   and writing to CoreAudio `BlackHole 2ch`
+- `chrome.bargeInInputCommand`: optional local microphone command that writes
+  signed 16-bit little-endian mono PCM for human barge-in detection while
+  assistant playback is active. This currently applies to the Gateway-hosted
+  `chrome` command-pair bridge.
+- `chrome.bargeInRmsThreshold: 650`: RMS level that counts as a human
+  interruption on `chrome.bargeInInputCommand`
+- `chrome.bargeInPeakThreshold: 2500`: peak level that counts as a human
+  interruption on `chrome.bargeInInputCommand`
+- `chrome.bargeInCooldownMs: 900`: minimum delay between repeated human
+  interruption clears
 - `realtime.provider: "openai"`
 - `realtime.toolPolicy: "safe-read-only"`
 - `realtime.instructions`: brief spoken replies, with
@@ -934,6 +956,24 @@ Optional overrides:
   chrome: {
     guestName: "OpenClaw Agent",
     waitForInCallMs: 30000,
+    bargeInInputCommand: [
+      "sox",
+      "-q",
+      "-t",
+      "coreaudio",
+      "External Microphone",
+      "-r",
+      "24000",
+      "-c",
+      "1",
+      "-b",
+      "16",
+      "-e",
+      "signed-integer",
+      "-t",
+      "raw",
+      "-",
+    ],
   },
   chromeNode: {
     node: "parallels-macos",
@@ -969,7 +1009,9 @@ Twilio-only config:
 ```
 
 `voiceCall.enabled` defaults to `true`; with Twilio transport it delegates the
-actual PSTN call and DTMF to the Voice Call plugin. If `voice-call` is not
+actual PSTN call, DTMF, and intro greeting to the Voice Call plugin. Voice Call
+plays the DTMF sequence before opening the realtime media stream, then uses the
+saved intro text as the initial realtime greeting. If `voice-call` is not
 enabled, Google Meet can still validate and record the dial plan, but it cannot
 place the Twilio call.
 
@@ -1014,6 +1056,8 @@ a session ended.
   not send the intro/test phrase into the audio bridge.
 - `providerConnected` / `realtimeReady`: realtime voice bridge state
 - `lastInputAt` / `lastOutputAt`: last audio seen from or sent to the bridge
+- `lastSuppressedInputAt` / `suppressedInputBytes`: loopback input ignored while
+  assistant playback is active
 
 ```json
 {
@@ -1115,10 +1159,12 @@ openclaw googlemeet join https://meet.google.com/abc-defg-hij \
 
 Expected Twilio state:
 
-- `googlemeet setup` includes green `twilio-voice-call-plugin` and
-  `twilio-voice-call-credentials` checks.
+- `googlemeet setup` includes green `twilio-voice-call-plugin`,
+  `twilio-voice-call-credentials`, and `twilio-voice-call-webhook` checks.
 - `voicecall` is available in the CLI after Gateway reload.
 - The returned session has `transport: "twilio"` and a `twilio.voiceCallId`.
+- `openclaw logs --follow` shows DTMF TwiML served before realtime TwiML, then a
+  realtime bridge with the initial greeting queued.
 - `googlemeet leave <sessionId>` hangs up the delegated voice call.
 
 ## Troubleshooting
@@ -1267,7 +1313,7 @@ Also verify:
 `googlemeet doctor [session-id]` prints the session, node, in-call state,
 manual action reason, realtime provider connection, `realtimeReady`, audio
 input/output activity, last audio timestamps, byte counters, and browser URL.
-Use `googlemeet status [session-id]` when you need the raw JSON. Use
+Use `googlemeet status [session-id] --json` when you need the raw JSON. Use
 `googlemeet doctor --oauth` when you need to verify Google Meet OAuth refresh
 without exposing tokens; add `--meeting` or `--create-space` when you need a
 Google Meet API proof as well.
@@ -1303,10 +1349,57 @@ export TWILIO_AUTH_TOKEN=...
 export TWILIO_FROM_NUMBER=+15550001234
 ```
 
+`twilio-voice-call-webhook` fails when `voice-call` has no public webhook
+exposure, or when `publicUrl` points at loopback or private network space.
+Set `plugins.entries.voice-call.config.publicUrl` to the public provider URL or
+configure a `voice-call` tunnel/Tailscale exposure.
+
+Loopback and private URLs are not valid for carrier callbacks. Do not use
+`localhost`, `127.0.0.1`, `0.0.0.0`, `10.x`, `172.16.x`-`172.31.x`,
+`192.168.x`, `169.254.x`, `fc00::/7`, or `fd00::/8` as `publicUrl`.
+
+For a stable public URL:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        enabled: true,
+        config: {
+          provider: "twilio",
+          fromNumber: "+15550001234",
+          publicUrl: "https://voice.example.com/voice/webhook",
+        },
+      },
+    },
+  },
+}
+```
+
+For local development, use a tunnel or Tailscale exposure instead of a private
+host URL:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          tunnel: { provider: "ngrok" },
+          // or
+          tailscale: { mode: "funnel", path: "/voice/webhook" },
+        },
+      },
+    },
+  },
+}
+```
+
 Then restart or reload the Gateway and run:
 
 ```bash
-openclaw googlemeet setup
+openclaw googlemeet setup --transport twilio
 openclaw voicecall setup
 openclaw voicecall smoke
 ```
@@ -1339,6 +1432,32 @@ openclaw googlemeet join https://meet.google.com/abc-defg-hij \
 Use leading `w` or commas in `--dtmf-sequence` if the provider needs a pause
 before entering the PIN.
 
+If the phone call is created but the Meet roster never shows the dial-in
+participant:
+
+- Run `openclaw voicecall status --call-id <id>` and confirm the call is still
+  active.
+- Run `openclaw voicecall tail` and check that Twilio webhooks are arriving at
+  the Gateway.
+- Run `openclaw logs --follow` and look for the Twilio Meet sequence: Google
+  Meet delegates the join, Voice Call stores pre-connect DTMF TwiML, serves
+  that initial TwiML, then serves realtime TwiML and starts the realtime bridge
+  with `initialGreeting=queued`.
+- Re-run `openclaw googlemeet setup --transport twilio`; a green setup check is
+  required but does not prove the meeting PIN sequence is correct.
+- Confirm the dial-in number belongs to the same Meet invitation and region as
+  the PIN.
+- Increase the leading pauses in `--dtmf-sequence` if Meet answers slowly, for
+  example `wwww123456#`.
+- If the participant joins but you do not hear the greeting, check
+  `openclaw logs --follow` for realtime TwiML, realtime bridge startup, and
+  `initialGreeting=queued`. The greeting is generated from the initial
+  `voicecall.start` message after the realtime bridge connects.
+
+If webhooks do not arrive, debug the Voice Call plugin first: the provider must
+reach `plugins.entries.voice-call.config.publicUrl` or the configured tunnel.
+See [Voice call troubleshooting](/plugins/voice-call#troubleshooting).
+
 ## Notes
 
 Google Meet's official media API is receive-oriented, so speaking into a Meet
@@ -1358,6 +1477,14 @@ Chrome realtime mode needs `BlackHole 2ch` plus either:
 For clean duplex audio, route Meet output and Meet microphone through separate
 virtual devices or a Loopback-style virtual device graph. A single shared
 BlackHole device can echo other participants back into the call.
+
+With the command-pair Chrome bridge, `chrome.bargeInInputCommand` can listen to a
+separate local microphone and clear assistant playback when the human starts
+talking. This keeps human speech ahead of assistant output even when the shared
+BlackHole loopback input is temporarily suppressed during assistant playback.
+Like `chrome.audioInputCommand` and `chrome.audioOutputCommand`, it is an
+operator-configured local command. Use an explicit trusted command path or
+argument list, and do not point it at scripts from untrusted locations.
 
 `googlemeet speak` triggers the active realtime audio bridge for a Chrome
 session. `googlemeet leave` stops that bridge. For Twilio sessions delegated

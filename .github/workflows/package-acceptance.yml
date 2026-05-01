@@ -64,6 +64,21 @@ on:
         required: false
         default: ""
         type: string
+      published_upgrade_survivor_baseline:
+        description: Published OpenClaw package baseline for the published-upgrade-survivor Docker lane
+        required: false
+        default: openclaw@latest
+        type: string
+      published_upgrade_survivor_baselines:
+        description: Optional baseline list for published-upgrade-survivor; use release-history for last 6 plus key legacy releases
+        required: false
+        default: ""
+        type: string
+      published_upgrade_survivor_scenarios:
+        description: Optional scenario list for published-upgrade-survivor; use reported-issues for known upgrade failure shapes
+        required: false
+        default: ""
+        type: string
       telegram_mode:
         description: Optional Telegram QA lane for the resolved package candidate
         required: true
@@ -126,6 +141,21 @@ on:
         type: string
       docker_lanes:
         description: Comma/space separated Docker lanes when suite_profile=custom
+        required: false
+        default: ""
+        type: string
+      published_upgrade_survivor_baseline:
+        description: Published OpenClaw package baseline for the published-upgrade-survivor Docker lane
+        required: false
+        default: openclaw@latest
+        type: string
+      published_upgrade_survivor_baselines:
+        description: Optional baseline list for published-upgrade-survivor; use release-history for last 6 plus key legacy releases
+        required: false
+        default: ""
+        type: string
+      published_upgrade_survivor_scenarios:
+        description: Optional scenario list for published-upgrade-survivor; use reported-issues for known upgrade failure shapes
         required: false
         default: ""
         type: string
@@ -265,6 +295,8 @@ jobs:
       package_source_sha: ${{ steps.resolve.outputs.package_source_sha }}
       package_sha256: ${{ steps.resolve.outputs.sha256 }}
       package_version: ${{ steps.resolve.outputs.package_version }}
+      published_upgrade_survivor_baselines: ${{ steps.upgrade_survivor_baselines.outputs.baselines }}
+      published_upgrade_survivor_scenarios: ${{ inputs.published_upgrade_survivor_scenarios }}
       telegram_enabled: ${{ steps.profile.outputs.telegram_enabled }}
       telegram_mode: ${{ steps.profile.outputs.telegram_mode }}
     steps:
@@ -354,10 +386,10 @@ jobs:
               docker_lanes="npm-onboard-channel-agent gateway-network config-reload"
               ;;
             package)
-              docker_lanes="npm-onboard-channel-agent doctor-switch update-channel-switch bundled-channel-deps-compat plugins-offline plugin-update"
+              docker_lanes="npm-onboard-channel-agent doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor bundled-channel-deps-compat plugins-offline plugin-update"
               ;;
             product)
-              docker_lanes="npm-onboard-channel-agent doctor-switch update-channel-switch bundled-channel-deps-compat plugins plugin-update mcp-channels cron-mcp-cleanup openai-web-search-minimal openwebui"
+              docker_lanes="npm-onboard-channel-agent doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor bundled-channel-deps-compat plugins plugin-update mcp-channels cron-mcp-cleanup openai-web-search-minimal openwebui"
               include_openwebui=true
               ;;
             full)
@@ -395,6 +427,40 @@ jobs:
             echo "package_artifact_name=${PACKAGE_ARTIFACT_NAME}"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Resolve published upgrade survivor baselines
+        id: upgrade_survivor_baselines
+        env:
+          FALLBACK_BASELINE: ${{ inputs.published_upgrade_survivor_baseline }}
+          REQUESTED_BASELINES: ${{ inputs.published_upgrade_survivor_baselines }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${REQUESTED_BASELINES// }" ]]; then
+            echo "baselines=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          releases_json=""
+          if [[ "$REQUESTED_BASELINES" == *"release-history"* ]]; then
+            releases_json=".artifacts/package-candidate-input/openclaw-releases.json"
+            mkdir -p "$(dirname "$releases_json")"
+            gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName,publishedAt,isPrerelease > "$releases_json"
+          fi
+          args=(
+            --requested "$REQUESTED_BASELINES"
+            --fallback "$FALLBACK_BASELINE"
+            --github-output "$GITHUB_OUTPUT"
+          )
+          if [[ -n "$releases_json" ]]; then
+            args+=(
+              --releases-json "$releases_json"
+              --history-count 6
+              --include-version 2026.4.23
+              --pre-date 2026-03-15T00:00:00Z
+            )
+          fi
+          node scripts/resolve-upgrade-survivor-baselines.mjs "${args[@]}" >/dev/null
+
       - name: Upload package-under-test artifact
         uses: actions/upload-artifact@v7
         with:
@@ -413,6 +479,9 @@ jobs:
           SOURCE: ${{ inputs.source }}
           SUITE_PROFILE: ${{ inputs.suite_profile }}
           WORKFLOW_REF: ${{ inputs.workflow_ref }}
+          PUBLISHED_UPGRADE_SURVIVOR_BASELINE: ${{ inputs.published_upgrade_survivor_baseline }}
+          PUBLISHED_UPGRADE_SURVIVOR_BASELINES: ${{ steps.upgrade_survivor_baselines.outputs.baselines }}
+          PUBLISHED_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
         shell: bash
         run: |
           {
@@ -426,6 +495,9 @@ jobs:
             echo "- Version: \`${PACKAGE_VERSION}\`"
             echo "- SHA-256: \`${PACKAGE_SHA256}\`"
             echo "- Profile: \`${SUITE_PROFILE}\`"
+            echo "- Published upgrade survivor baseline: \`${PUBLISHED_UPGRADE_SURVIVOR_BASELINE}\`"
+            echo "- Published upgrade survivor baselines: \`${PUBLISHED_UPGRADE_SURVIVOR_BASELINES}\`"
+            echo "- Published upgrade survivor scenarios: \`${PUBLISHED_UPGRADE_SURVIVOR_SCENARIOS}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   docker_acceptance:
@@ -438,6 +510,9 @@ jobs:
       include_release_path_suites: ${{ needs.resolve_package.outputs.include_release_path_suites == 'true' }}
       include_openwebui: ${{ needs.resolve_package.outputs.include_openwebui == 'true' }}
       docker_lanes: ${{ needs.resolve_package.outputs.docker_lanes }}
+      published_upgrade_survivor_baseline: ${{ inputs.published_upgrade_survivor_baseline }}
+      published_upgrade_survivor_baselines: ${{ needs.resolve_package.outputs.published_upgrade_survivor_baselines }}
+      published_upgrade_survivor_scenarios: ${{ needs.resolve_package.outputs.published_upgrade_survivor_scenarios }}
       package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}
       include_live_suites: ${{ needs.resolve_package.outputs.include_live_suites == 'true' }}
       live_models_only: false

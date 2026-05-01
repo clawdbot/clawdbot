@@ -319,6 +319,7 @@ function buildPluginReport(
               loadModules,
               activate: false,
               cache: false,
+              installBundledRuntimeDeps: false,
               onlyPluginIds,
             }),
           ),

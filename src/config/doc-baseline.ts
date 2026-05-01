@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { FIELD_HELP } from "./schema.help.js";
 import type { ConfigSchemaResponse } from "./schema.js";
 import { schemaHasChildren } from "./schema.shared.js";
 
@@ -688,12 +687,4 @@ export async function writeConfigDocBaselineArtifacts(params?: {
 
 export function normalizeConfigDocBaselineHelpPath(pathValue: string): string {
   return normalizeBaselinePath(pathValue);
-}
-
-export function getNormalizedFieldHelp(): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(FIELD_HELP)
-      .map(([configPath, help]) => [normalizeBaselinePath(configPath), help] as const)
-      .toSorted(([left], [right]) => left.localeCompare(right)),
-  );
 }

@@ -40,9 +40,11 @@ export type GoogleMeetChromeHealth = {
   audioOutputActive?: boolean;
   lastInputAt?: string;
   lastOutputAt?: string;
+  lastSuppressedInputAt?: string;
   lastClearAt?: string;
   lastInputBytes?: number;
   lastOutputBytes?: number;
+  suppressedInputBytes?: number;
   consecutiveInputErrors?: number;
   lastInputError?: string;
   clearCount?: number;
@@ -86,6 +88,7 @@ export type GoogleMeetSession = {
     dtmfSequence?: string;
     voiceCallId?: string;
     dtmfSent?: boolean;
+    introSent?: boolean;
   };
   notes: string[];
 };

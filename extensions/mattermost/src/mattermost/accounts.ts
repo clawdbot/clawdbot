@@ -139,9 +139,3 @@ export function resolveMattermostReplyToMode(
   }
   return account.config.replyToMode ?? "off";
 }
-
-export function listEnabledMattermostAccounts(cfg: OpenClawConfig): ResolvedMattermostAccount[] {
-  return listMattermostAccountIds(cfg)
-    .map((accountId) => resolveMattermostAccount({ cfg, accountId }))
-    .filter((account) => account.enabled);
-}

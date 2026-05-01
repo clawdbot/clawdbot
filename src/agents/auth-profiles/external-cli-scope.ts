@@ -91,14 +91,8 @@ export function resolveExternalCliAuthScopeFromConfig(
   addProviderScopeFromModelConfig(providerIds, defaults?.videoGenerationModel);
   addProviderScopeFromModelConfig(providerIds, defaults?.musicGenerationModel);
   addProviderScopeFromModelConfig(providerIds, defaults?.pdfModel);
-  for (const modelRef of Object.keys(defaults?.models ?? {})) {
-    addProviderScopeFromModelRef(providerIds, modelRef);
-  }
   addExternalCliRuntimeScope(providerIds, defaults?.agentRuntime?.id);
   addExternalCliRuntimeScope(providerIds, defaults?.embeddedHarness?.runtime);
-  for (const backendId of Object.keys(defaults?.cliBackends ?? {})) {
-    addExternalCliRuntimeScope(providerIds, backendId);
-  }
 
   for (const agent of cfg.agents?.list ?? []) {
     addProviderScopeFromModelConfig(providerIds, agent.model);

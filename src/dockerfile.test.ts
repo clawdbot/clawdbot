@@ -37,7 +37,7 @@ describe("Dockerfile", () => {
       "FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime",
     );
     const caInstallIndex = collapsed.indexOf(
-      "ca-certificates procps hostname curl git lsof openssl",
+      "ca-certificates procps hostname curl git lsof openssl python3",
     );
 
     expect(runtimeIndex).toBeGreaterThan(-1);
@@ -45,6 +45,21 @@ describe("Dockerfile", () => {
     expect(caInstallIndex).toBeLessThan(collapsed.indexOf("RUN chown node:node /app"));
     expect(collapsed).toMatch(/apt-get install -y --no-install-recommends\s+ca-certificates/);
     expect(collapsed).toContain("update-ca-certificates");
+  });
+
+  it("installs python3 in the slim runtime stage for workspace scripts", async () => {
+    const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
+    const runtimeIndex = dockerfile.indexOf(
+      "FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime",
+    );
+    const pythonInstallIndex = dockerfile.indexOf(
+      "ca-certificates procps hostname curl git lsof openssl python3",
+    );
+
+    expect(runtimeIndex).toBeGreaterThan(-1);
+    expect(pythonInstallIndex).toBeGreaterThan(runtimeIndex);
+    expect(pythonInstallIndex).toBeLessThan(dockerfile.indexOf("RUN chown node:node /app"));
+    expect(dockerfile).toContain("ca-certificates procps hostname curl git lsof openssl python3");
   });
 
   it("installs optional browser dependencies after pnpm install", async () => {
@@ -144,6 +159,24 @@ describe("Dockerfile", () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain('== "fpr" {');
     expect(dockerfile).not.toContain('\\"fpr\\"');
+  });
+
+  it("counts primary pub keys before Docker apt fingerprint compare and dearmor", async () => {
+    const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
+    const anchor = dockerfile.indexOf(
+      "curl -fsSL https://download.docker.com/linux/debian/gpg -o /tmp/docker.gpg.asc",
+    );
+    expect(anchor).toBeGreaterThan(-1);
+    const slice = dockerfile.slice(anchor);
+    expect(slice).toContain("docker_gpg_pub_count=");
+    expect(slice).toContain('$1 == "pub"');
+    expect(slice).not.toContain('\\"pub\\"');
+    const pubCountIdx = slice.indexOf("docker_gpg_pub_count=");
+    const fpIdx = slice.indexOf("actual_fingerprint=");
+    const dearmorIdx = slice.indexOf("gpg --dearmor");
+    expect(pubCountIdx).toBeLessThan(fpIdx);
+    expect(fpIdx).toBeLessThan(dearmorIdx);
+    expect(slice).toContain('[ "$docker_gpg_pub_count" != "1" ]');
   });
 
   it("keeps runtime pnpm available", async () => {

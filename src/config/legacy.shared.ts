@@ -18,7 +18,6 @@ export type LegacyConfigMigrationSpec = LegacyConfigMigration & {
 };
 
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 export { isRecord };
@@ -87,53 +86,6 @@ export const mapLegacyAudioTranscription = (value: unknown): Record<string, unkn
     result.timeoutSeconds = timeoutSeconds;
   }
   return result;
-};
-
-export const getAgentsList = (agents: Record<string, unknown> | null) => {
-  const list = agents?.list;
-  return Array.isArray(list) ? list : [];
-};
-
-export const resolveDefaultAgentIdFromRaw = (raw: Record<string, unknown>) => {
-  const agents = getRecord(raw.agents);
-  const list = getAgentsList(agents);
-  const defaultEntry = list.find(
-    (entry): entry is { id: string } =>
-      isRecord(entry) &&
-      entry.default === true &&
-      typeof entry.id === "string" &&
-      normalizeOptionalString(entry.id) !== undefined,
-  );
-  if (defaultEntry) {
-    return normalizeOptionalString(defaultEntry.id) ?? "main";
-  }
-  const routing = getRecord(raw.routing);
-  const routingDefault = normalizeOptionalString(routing?.defaultAgentId) ?? "";
-  if (routingDefault) {
-    return routingDefault;
-  }
-  const firstEntry = list.find(
-    (entry): entry is { id: string } =>
-      isRecord(entry) && normalizeOptionalString(entry.id) !== undefined,
-  );
-  if (firstEntry) {
-    return normalizeOptionalString(firstEntry.id) ?? "main";
-  }
-  return "main";
-};
-
-export const ensureAgentEntry = (list: unknown[], id: string): Record<string, unknown> => {
-  const normalized = id.trim();
-  const existing = list.find(
-    (entry): entry is Record<string, unknown> =>
-      isRecord(entry) && typeof entry.id === "string" && entry.id.trim() === normalized,
-  );
-  if (existing) {
-    return existing;
-  }
-  const created: Record<string, unknown> = { id: normalized };
-  list.push(created);
-  return created;
 };
 
 export const defineLegacyConfigMigration = (

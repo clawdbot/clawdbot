@@ -90,15 +90,16 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
     // so the browser's DST-aware timezone logic handles offset automatically.
     if (usage.utcQuarterHourMessageCounts && usage.utcQuarterHourMessageCounts.length > 0) {
       for (const quarterHour of usage.utcQuarterHourMessageCounts) {
-        const hour =
-          timeZone === "utc"
-            ? Math.floor(quarterHour.quarterIndex / 4)
-            : (() => {
-                const [y, m, d] = quarterHour.date.split("-").map(Number);
-                return new Date(Date.UTC(y, m - 1, d, 0, quarterHour.quarterIndex * 15)).getHours();
-              })();
-        hourErrors[hour] += quarterHour.errors;
-        hourMsgs[hour] += quarterHour.total;
+        const mapped = getHourAndWeekdayForUtcQuarterBucket(
+          quarterHour.date,
+          quarterHour.quarterIndex,
+          timeZone,
+        );
+        if (!mapped) {
+          continue;
+        }
+        hourErrors[mapped.hour] += quarterHour.errors;
+        hourMsgs[mapped.hour] += quarterHour.total;
       }
       continue;
     }
@@ -146,6 +147,42 @@ function getZonedWeekday(date: Date, zone: "local" | "utc"): number {
   return zone === "utc" ? date.getUTCDay() : date.getDay();
 }
 
+function getUtcQuarterHourBucketDate(dateStr: string, quarterIndex: number): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
+  if (!match || !Number.isInteger(quarterIndex) || quarterIndex < 0 || quarterIndex > 95) {
+    return null;
+  }
+  const [, yStr, mStr, dStr] = match;
+  const y = Number(yStr);
+  const m = Number(mStr);
+  const d = Number(dStr);
+  const date = new Date(Date.UTC(y, m - 1, d, 0, quarterIndex * 15));
+  if (
+    Number.isNaN(date.valueOf()) ||
+    date.getUTCFullYear() !== y ||
+    date.getUTCMonth() !== m - 1 ||
+    date.getUTCDate() !== d
+  ) {
+    return null;
+  }
+  return date;
+}
+
+function getHourAndWeekdayForUtcQuarterBucket(
+  dateStr: string,
+  quarterIndex: number,
+  timeZone: "local" | "utc",
+): { hour: number; weekday: number } | null {
+  const date = getUtcQuarterHourBucketDate(dateStr, quarterIndex);
+  if (!date) {
+    return null;
+  }
+  return {
+    hour: getZonedHour(date, timeZone),
+    weekday: getZonedWeekday(date, timeZone),
+  };
+}
+
 function setToHourEnd(date: Date, zone: "local" | "utc"): Date {
   const next = new Date(date);
   if (zone === "utc") {
@@ -154,6 +191,77 @@ function setToHourEnd(date: Date, zone: "local" | "utc"): Date {
     next.setMinutes(59, 59, 999);
   }
   return next;
+}
+
+function forEachSessionTokenUsageBucket(
+  session: UsageSessionEntry,
+  timeZone: "local" | "utc",
+  visitor: (params: { hour: number; weekday: number; tokens: number }) => void,
+): boolean {
+  const buckets = session.usage?.utcQuarterHourTokenUsage;
+  if (!buckets || buckets.length === 0) {
+    return false;
+  }
+  let visited = false;
+  for (const bucket of buckets) {
+    if (bucket.totalTokens <= 0) {
+      continue;
+    }
+    const mapped = getHourAndWeekdayForUtcQuarterBucket(bucket.date, bucket.quarterIndex, timeZone);
+    if (!mapped) {
+      continue;
+    }
+    visited = true;
+    visitor({ hour: mapped.hour, weekday: mapped.weekday, tokens: bucket.totalTokens });
+  }
+  return visited;
+}
+
+function sessionSpanTouchesSelectedHours(
+  session: UsageSessionEntry,
+  hours: number[],
+  timeZone: "local" | "utc",
+): boolean {
+  const usage = session.usage;
+  const start = usage?.firstActivity ?? session.updatedAt;
+  const end = usage?.lastActivity ?? session.updatedAt;
+  if (!start || !end) {
+    return false;
+  }
+  const startMs = Math.min(start, end);
+  const endMs = Math.max(start, end);
+  let cursor = startMs;
+  while (cursor <= endMs) {
+    const date = new Date(cursor);
+    const hour = getZonedHour(date, timeZone);
+    if (hours.includes(hour)) {
+      return true;
+    }
+    const nextHour = setToHourEnd(date, timeZone);
+    const nextMs = Math.min(nextHour.getTime(), endMs);
+    cursor = nextMs + 1;
+  }
+  return false;
+}
+
+function sessionTouchesSelectedHours(
+  session: UsageSessionEntry,
+  hours: number[],
+  timeZone: "local" | "utc",
+): boolean {
+  if (hours.length === 0) {
+    return true;
+  }
+  let touches = false;
+  const hasPreciseTokenBuckets = forEachSessionTokenUsageBucket(session, timeZone, ({ hour }) => {
+    if (hours.includes(hour)) {
+      touches = true;
+    }
+  });
+  if (hasPreciseTokenBuckets) {
+    return touches;
+  }
+  return sessionSpanTouchesSelectedHours(session, hours, timeZone);
 }
 
 function buildUsageMosaicStats(
@@ -171,6 +279,16 @@ function buildUsageMosaicStats(
       continue;
     }
     totalTokens += usage.totalTokens;
+
+    if (
+      forEachSessionTokenUsageBucket(session, timeZone, ({ hour, weekday, tokens }) => {
+        hourTotals[hour] += tokens;
+        weekdayTotals[weekday] += tokens;
+      })
+    ) {
+      hasData = true;
+      continue;
+    }
 
     if (
       !forEachSessionHourSlice(session, timeZone, ({ usage, hour, weekday, share }) => {
@@ -640,10 +758,13 @@ export {
   formatCost,
   formatDayLabel,
   formatFullDate,
+  buildUsageMosaicStats,
   formatHourLabel,
   formatIsoDate,
   formatTokens,
+  getHourAndWeekdayForUtcQuarterBucket,
   getZonedHour,
   renderUsageMosaic,
+  sessionTouchesSelectedHours,
   setToHourEnd,
 };

@@ -305,7 +305,12 @@ async function writeAllowFromState(filePath: string, allowFrom: string[]): Promi
   let stat: Awaited<ReturnType<typeof fs.promises.stat>> | null = null;
   try {
     stat = await fs.promises.stat(filePath);
-  } catch {}
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code !== "ENOENT") {
+      throw err;
+    }
+  }
   setAllowFromFileReadCache({
     cacheNamespace: PAIRING_ALLOW_FROM_CACHE_NAMESPACE,
     filePath,

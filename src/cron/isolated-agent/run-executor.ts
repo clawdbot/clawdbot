@@ -17,6 +17,7 @@ import {
   normalizeVerboseLevel,
   registerAgentRunContext,
   resolveBootstrapWarningSignaturesSeen,
+  resolveCronAgentLane,
   resolveSessionTranscriptPath,
   runCliAgent,
   runWithModelFallback,
@@ -123,6 +124,8 @@ export function createCronPromptExecutor(params: {
       provider: params.liveSelection.provider,
       model: params.liveSelection.model,
       runId: params.cronSession.sessionEntry.sessionId,
+      sessionId: params.cronSession.sessionEntry.sessionId,
+      lane: resolveCronAgentLane(params.lane),
       agentDir: params.agentDir,
       fallbacksOverride: cronFallbacksOverride,
       run: async (providerOverride, modelOverride, runOptions) => {
@@ -150,6 +153,7 @@ export function createCronPromptExecutor(params: {
             thinkLevel: params.thinkLevel,
             timeoutMs: params.timeoutMs,
             runId: params.cronSession.sessionEntry.sessionId,
+            lane: resolveCronAgentLane(params.lane),
             cliSessionId,
             skillsSnapshot: params.skillsSnapshot,
             messageChannel: params.messageChannel,
@@ -164,8 +168,7 @@ export function createCronPromptExecutor(params: {
           );
           return result;
         }
-        const { resolveCronAgentLane, resolveFastModeState, runEmbeddedPiAgent } =
-          await loadCronEmbeddedRuntime();
+        const { resolveFastModeState, runEmbeddedPiAgent } = await loadCronEmbeddedRuntime();
         const currentChannelId = await resolveCurrentChannelTarget({
           channel: params.messageChannel,
           to: params.resolvedDelivery.to,

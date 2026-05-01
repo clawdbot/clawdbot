@@ -1,6 +1,5 @@
 export {
   dedupeDreamDiaryEntries,
-  filterRecallEntriesWithinLookback,
   previewGroundedRemMarkdown,
   previewRemHarness,
   removeBackfillDiaryEntries,

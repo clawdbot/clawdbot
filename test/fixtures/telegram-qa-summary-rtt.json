@@ -1,0 +1,31 @@
+{
+  "credentials": {
+    "kind": "telegram",
+    "source": "env"
+  },
+  "groupId": "-100123",
+  "startedAt": "2026-05-01T00:00:00.000Z",
+  "finishedAt": "2026-05-01T00:00:10.000Z",
+  "cleanupIssues": [],
+  "counts": {
+    "total": 2,
+    "passed": 2,
+    "failed": 0
+  },
+  "scenarios": [
+    {
+      "id": "telegram-canary",
+      "title": "Telegram canary",
+      "status": "pass",
+      "details": "reply matched in 1234ms",
+      "rttMs": 1234
+    },
+    {
+      "id": "telegram-mentioned-message-reply",
+      "title": "Telegram mentioned message gets a reply",
+      "status": "pass",
+      "details": "reply matched in 5678ms",
+      "rttMs": 5678
+    }
+  ]
+}

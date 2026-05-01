@@ -36,13 +36,3 @@ export function stripShippedPluginInstallConfigRecords(config: unknown): unknown
   const { plugins: _plugins, ...rest } = config;
   return plugins === undefined ? rest : { ...rest, plugins };
 }
-
-export function prepareShippedPluginInstallConfigMigration(config: unknown): {
-  config: unknown;
-  installRecords: Record<string, PluginInstallRecord>;
-} {
-  return {
-    config: stripShippedPluginInstallConfigRecords(config),
-    installRecords: extractShippedPluginInstallConfigRecords(config),
-  };
-}

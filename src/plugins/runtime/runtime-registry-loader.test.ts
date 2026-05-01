@@ -162,6 +162,7 @@ describe("ensurePluginRegistryLoaded", () => {
         workspaceDir: "/resolved-workspace",
         onlyPluginIds: ["demo-channel"],
         throwOnLoadError: true,
+        installBundledRuntimeDeps: false,
       }),
     );
   });

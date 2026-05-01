@@ -24,9 +24,15 @@ vi.mock("../../agents/agent-paths.js", () => ({
   resolveOpenClawAgentDir: mocks.resolveOpenClawAgentDir,
 }));
 
-vi.mock("../../agents/auth-profiles.js", () => ({
-  ensureAuthProfileStore: mocks.ensureAuthProfileStore,
-}));
+vi.mock("../../agents/auth-profiles.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/auth-profiles.js")>(
+    "../../agents/auth-profiles.js",
+  );
+  return {
+    ...actual,
+    ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+  };
+});
 
 vi.mock("../../agents/auth-health.js", async () => {
   const actual = await vi.importActual<typeof import("../../agents/auth-health.js")>(
@@ -219,28 +225,31 @@ describe("models.authStatus", () => {
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
       "/tmp/agent",
       expect.objectContaining({
-        allowKeychainPrompt: false,
-        config: expect.any(Object),
-        externalCliProviderIds: expect.arrayContaining(["opencode-go"]),
-        externalCliProfileIds: ["opencode-go:default"],
+        externalCli: expect.objectContaining({
+          mode: "scoped",
+          allowKeychainPrompt: false,
+          config: expect.any(Object),
+          providerIds: expect.arrayContaining(["opencode-go"]),
+          profileIds: ["opencode-go:default"],
+        }),
       }),
     );
     const [, options] = mocks.ensureAuthProfileStore.mock.calls[0] ?? [];
-    expect((options as { externalCliProviderIds?: string[] }).externalCliProviderIds).not.toContain(
-      "claude-cli",
-    );
+    const externalCli = (options as { externalCli?: { providerIds?: string[] } }).externalCli;
+    expect(externalCli?.providerIds).not.toContain("claude-cli");
   });
 
-  it("keeps the auth store overlay unscoped when config has no provider signal", async () => {
+  it("disables external CLI auth overlays when config has no provider signal", async () => {
     await handler(createOptions());
 
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
       "/tmp/agent",
       expect.objectContaining({
-        allowKeychainPrompt: false,
-        config: expect.any(Object),
-        externalCliProviderIds: undefined,
-        externalCliProfileIds: undefined,
+        externalCli: expect.objectContaining({
+          mode: "none",
+          allowKeychainPrompt: false,
+          config: expect.any(Object),
+        }),
       }),
     );
   });

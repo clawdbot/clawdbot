@@ -372,6 +372,7 @@ export function resolveChannelGroupRequireMention(params: {
   accountId?: string | null;
   groupIdCaseInsensitive?: boolean;
   requireMentionOverride?: boolean;
+  configuredGroupDefaultsToNoMention?: boolean;
   overrideOrder?: "before-config" | "after-config";
 }): boolean {
   const { requireMentionOverride, overrideOrder = "after-config" } = params;
@@ -391,6 +392,9 @@ export function resolveChannelGroupRequireMention(params: {
   }
   if (overrideOrder !== "before-config" && typeof requireMentionOverride === "boolean") {
     return requireMentionOverride;
+  }
+  if (params.configuredGroupDefaultsToNoMention && groupConfig) {
+    return false;
   }
   return true;
 }

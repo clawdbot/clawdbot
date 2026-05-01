@@ -14,6 +14,22 @@ import type {
   ProviderWrapStreamFnContext,
 } from "./types.js";
 
+const providerRuntimePluginCache = new WeakMap<
+  OpenClawConfig,
+  Map<string, ProviderPlugin | null>
+>();
+
+type ProviderRuntimePluginLookupParams = {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  applyAutoEnable?: boolean;
+  bundledProviderAllowlistCompat?: boolean;
+  bundledProviderVitestCompat?: boolean;
+  installBundledRuntimeDeps?: boolean;
+};
+
 function matchesProviderId(provider: ProviderPlugin, providerId: string): boolean {
   const normalized = normalizeProviderId(providerId);
   if (!normalized) {
@@ -25,6 +41,33 @@ function matchesProviderId(provider: ProviderPlugin, providerId: string): boolea
   return [...(provider.aliases ?? []), ...(provider.hookAliases ?? [])].some(
     (alias) => normalizeProviderId(alias) === normalized,
   );
+}
+
+function resolveProviderRuntimePluginCacheKey(params: ProviderRuntimePluginLookupParams): string {
+  return JSON.stringify({
+    provider: normalizeLowercaseStringOrEmpty(params.provider),
+    plugins: params.config?.plugins,
+    models: params.config?.models?.providers,
+    workspaceDir: params.workspaceDir ?? "",
+    applyAutoEnable: params.applyAutoEnable ?? null,
+    bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat ?? null,
+    bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? null,
+    installBundledRuntimeDeps: params.installBundledRuntimeDeps ?? null,
+  });
+}
+
+function resolveProviderRuntimePluginCache(
+  params: ProviderRuntimePluginLookupParams,
+): Map<string, ProviderPlugin | null> | undefined {
+  if (!params.config || (params.env && params.env !== process.env)) {
+    return undefined;
+  }
+  let cache = providerRuntimePluginCache.get(params.config);
+  if (!cache) {
+    cache = new Map();
+    providerRuntimePluginCache.set(params.config, cache);
+  }
+  return cache;
 }
 
 function matchesProviderLiteralId(provider: ProviderPlugin, providerId: string): boolean {
@@ -51,7 +94,6 @@ export function resolveProviderPluginsForHooks(params: {
       workspaceDir,
       env,
       activate: false,
-      cache: false,
       applyAutoEnable: params.applyAutoEnable,
       bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat ?? true,
       bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
@@ -65,7 +107,6 @@ export function resolveProviderPluginsForHooks(params: {
     workspaceDir,
     env,
     activate: false,
-    cache: false,
     applyAutoEnable: params.applyAutoEnable,
     bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat ?? true,
     bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
@@ -74,21 +115,19 @@ export function resolveProviderPluginsForHooks(params: {
   return resolved;
 }
 
-export function resolveProviderRuntimePlugin(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  applyAutoEnable?: boolean;
-  bundledProviderAllowlistCompat?: boolean;
-  bundledProviderVitestCompat?: boolean;
-  installBundledRuntimeDeps?: boolean;
-}): ProviderPlugin | undefined {
+export function resolveProviderRuntimePlugin(
+  params: ProviderRuntimePluginLookupParams,
+): ProviderPlugin | undefined {
+  const cache = resolveProviderRuntimePluginCache(params);
+  const cacheKey = cache ? resolveProviderRuntimePluginCacheKey(params) : "";
+  if (cache?.has(cacheKey)) {
+    return cache.get(cacheKey) ?? undefined;
+  }
   const apiOwnerHint = resolveProviderConfigApiOwnerHint({
     provider: params.provider,
     config: params.config,
   });
-  return resolveProviderPluginsForHooks({
+  const plugin = resolveProviderPluginsForHooks({
     config: params.config,
     workspaceDir: params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState(),
     env: params.env,
@@ -105,6 +144,8 @@ export function resolveProviderRuntimePlugin(params: {
     }
     return matchesProviderId(plugin, params.provider);
   });
+  cache?.set(cacheKey, plugin ?? null);
+  return plugin;
 }
 
 export function resolveProviderHookPlugin(params: {
@@ -140,7 +181,9 @@ export function resolveProviderExtraParamsForTransport(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderExtraParamsForTransportContext;
 }) {
-  return resolveProviderHookPlugin(params)?.extraParamsForTransport?.(params.context) ?? undefined;
+  return (
+    resolveProviderRuntimePlugin(params)?.extraParamsForTransport?.(params.context) ?? undefined
+  );
 }
 
 export function resolveProviderAuthProfileId(params: {
@@ -150,7 +193,7 @@ export function resolveProviderAuthProfileId(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderResolveAuthProfileIdContext;
 }): string | undefined {
-  const resolved = resolveProviderHookPlugin(params)?.resolveAuthProfileId?.(params.context);
+  const resolved = resolveProviderRuntimePlugin(params)?.resolveAuthProfileId?.(params.context);
   return typeof resolved === "string" && resolved.trim() ? resolved.trim() : undefined;
 }
 
@@ -171,5 +214,5 @@ export function wrapProviderStreamFn(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderWrapStreamFnContext;
 }) {
-  return resolveProviderHookPlugin(params)?.wrapStreamFn?.(params.context) ?? undefined;
+  return resolveProviderRuntimePlugin(params)?.wrapStreamFn?.(params.context) ?? undefined;
 }

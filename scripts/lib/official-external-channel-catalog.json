@@ -31,7 +31,7 @@
       "kind": "channel",
       "openclaw": {
         "channel": {
-          "id": "openclaw-plugin-yuanbao",
+          "id": "yuanbao",
           "label": "Yuanbao",
           "selectionLabel": "Yuanbao (元宝)",
           "detailLabel": "Yuanbao",

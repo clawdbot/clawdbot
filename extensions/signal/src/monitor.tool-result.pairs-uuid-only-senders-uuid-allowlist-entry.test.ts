@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { describe, expect, it, vi } from "vitest";
 import {
   config,
@@ -10,7 +11,7 @@ import {
 installSignalToolResultTestHooks();
 const { monitorSignalProvider } = await import("./monitor.js");
 
-const { replyMock, sendMock, streamMock, upsertPairingRequestMock } =
+const { replyMock, sendMock, streamMock, signalRpcRequestMock, upsertPairingRequestMock } =
   getSignalToolResultTestMocks();
 
 type MonitorSignalProviderOptions = Parameters<typeof monitorSignalProvider>[0];
@@ -109,9 +110,55 @@ describe("monitorSignalProvider tool results", () => {
       await monitorPromise;
 
       expect(streamMock).toHaveBeenCalledTimes(2);
+      expect(streamMock.mock.calls[0]?.[0]).toMatchObject({ timeoutMs: 0 });
+      expect(streamMock.mock.calls[1]?.[0]).toMatchObject({ timeoutMs: 0 });
     } finally {
       randomSpy.mockRestore();
       vi.useRealTimers();
     }
+  });
+
+  it("sizes attachment RPC response caps from mediaMaxMb", async () => {
+    const abortController = new AbortController();
+    const maxBytes = 2 * 1024 * 1024;
+    const expectedMaxResponseBytes = Math.ceil((maxBytes * 4) / 3) + 64 * 1024;
+
+    replyMock.mockResolvedValue({ text: "ok" });
+    signalRpcRequestMock.mockResolvedValue({ data: Buffer.from("hello").toString("base64") });
+    streamMock.mockImplementation(async ({ onEvent }) => {
+      await onEvent({
+        event: "receive",
+        data: JSON.stringify({
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Ada",
+            timestamp: 1,
+            dataMessage: {
+              message: "",
+              attachments: [{ id: "attachment-1", size: 1_500_000, contentType: "text/plain" }],
+            },
+          },
+        }),
+      });
+      abortController.abort();
+    });
+
+    await monitorSignalProvider({
+      autoStart: false,
+      baseUrl: "http://127.0.0.1:8080",
+      mediaMaxMb: 2,
+      abortSignal: abortController.signal,
+    });
+
+    await flush();
+
+    expect(signalRpcRequestMock).toHaveBeenCalledWith(
+      "getAttachment",
+      expect.objectContaining({ id: "attachment-1", recipient: "+15550001111" }),
+      expect.objectContaining({
+        baseUrl: "http://127.0.0.1:8080",
+        maxResponseBytes: expectedMaxResponseBytes,
+      }),
+    );
   });
 });

@@ -106,17 +106,3 @@ export function readLastCacheTtlTimestamp(
     return null;
   }
 }
-
-export function appendCacheTtlTimestamp(sessionManager: unknown, data: CacheTtlEntryData): void {
-  const sm = sessionManager as {
-    appendCustomEntry?: (customType: string, data: unknown) => void;
-  };
-  if (!sm?.appendCustomEntry) {
-    return;
-  }
-  try {
-    sm.appendCustomEntry(CACHE_TTL_CUSTOM_TYPE, data);
-  } catch {
-    // ignore persistence failures
-  }
-}

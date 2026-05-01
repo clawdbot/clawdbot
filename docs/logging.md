@@ -220,6 +220,10 @@ masked before the line or message is written to disk. Redaction is best-effort:
 it applies to text-bearing message content and log strings, not every
 identifier or binary payload field.
 
+The built-in defaults cover common API credentials and payment-credential field
+names such as card number, CVC/CVV, shared payment token, and payment credential
+when they appear as JSON fields, URL parameters, CLI flags, or assignments.
+
 `logging.redactSensitive: "off"` only disables this general log/transcript
 policy. OpenClaw still redacts safety-boundary payloads that can be shown to UI
 clients, support bundles, diagnostics observers, approval prompts, or agent

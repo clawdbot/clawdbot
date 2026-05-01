@@ -135,9 +135,23 @@ const TELEGRAM_TIMEOUT_FALLBACK_METHODS = new Set([
   "setmycommands",
   "setwebhook",
 ]);
-
 function shouldRetryTimedOutTelegramControlRequest(method: string | null): boolean {
   return method !== null && TELEGRAM_TIMEOUT_FALLBACK_METHODS.has(method);
+}
+
+function resolveTelegramClientTimeoutSeconds(params: {
+  value: unknown;
+  minimum?: number;
+}): number | undefined {
+  const { value, minimum } = params;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const configured = Math.max(1, Math.floor(value));
+  if (typeof minimum !== "number" || !Number.isFinite(minimum)) {
+    return configured;
+  }
+  return Math.max(configured, Math.max(1, Math.floor(minimum)));
 }
 
 export function createTelegramBotCore(
@@ -298,10 +312,10 @@ export function createTelegramBotCore(
     };
   }
 
-  const timeoutSeconds =
-    typeof telegramCfg?.timeoutSeconds === "number" && Number.isFinite(telegramCfg.timeoutSeconds)
-      ? Math.max(1, Math.floor(telegramCfg.timeoutSeconds))
-      : undefined;
+  const timeoutSeconds = resolveTelegramClientTimeoutSeconds({
+    value: telegramCfg?.timeoutSeconds,
+    minimum: opts.minimumClientTimeoutSeconds,
+  });
   const apiRoot = normalizeOptionalString(telegramCfg.apiRoot);
   const normalizedApiRoot = apiRoot ? normalizeTelegramApiRoot(apiRoot) : undefined;
   const client: ApiClientOptions | undefined =

@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { getDefaultLocalRoots } from "../../media/web-media.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
+import { resolveBundledCapabilityProviderIds } from "../../plugins/capability-provider-runtime.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -130,6 +131,11 @@ type CapabilityProvider = {
   defaultModel?: string;
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
 };
+
+type GenerationCapabilityProviderKey =
+  | "imageGenerationProviders"
+  | "videoGenerationProviders"
+  | "musicGenerationProviders";
 
 export function findCapabilityProviderById<T extends CapabilityProvider>(params: {
   providers: T[];
@@ -269,6 +275,33 @@ export function resolveCapabilityModelConfigForTool(params: {
         agentDir: params.agentDir,
       }),
   });
+}
+
+export function hasGenerationToolAvailability(params: {
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+  modelConfig?: AgentModelConfig;
+  providers?: CapabilityProvider[] | (() => CapabilityProvider[]);
+  providerKey: GenerationCapabilityProviderKey;
+}): boolean {
+  if (hasToolModelConfig(coerceToolModelConfig(params.modelConfig))) {
+    return true;
+  }
+  const providers = typeof params.providers === "function" ? params.providers() : params.providers;
+  if (providers) {
+    return providers.some((provider) =>
+      isCapabilityProviderConfigured({
+        providers,
+        provider,
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+      }),
+    );
+  }
+  return resolveBundledCapabilityProviderIds({
+    key: params.providerKey,
+    cfg: params.cfg,
+  }).some((providerId) => hasAuthForProvider({ provider: providerId, agentDir: params.agentDir }));
 }
 
 function formatQuotedList(values: readonly string[]): string {

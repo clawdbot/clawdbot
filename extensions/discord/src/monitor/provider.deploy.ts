@@ -1,146 +1,21 @@
-import { inspect } from "node:util";
-import { warn, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { formatDurationSeconds, warn, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { Client, overwriteApplicationCommands, type RequestClient } from "../internal/discord.js";
 import {
-  Client,
-  overwriteApplicationCommands,
-  RateLimitError,
-  type RequestClient,
-} from "../internal/discord.js";
+  attachDiscordDeployRestContext,
+  attachDiscordDeployRequestBody,
+  formatDiscordDeployErrorDetails,
+  formatDiscordDeployErrorMessage,
+  formatDiscordDeployRateLimitDetails,
+  formatDiscordDeployRateLimitWarning,
+  isDiscordDeployDailyCreateLimit,
+  resolveDiscordDeployRateLimitDetails,
+} from "./provider.deploy-errors.js";
 import { logDiscordStartupPhase } from "./provider.startup-log.js";
-
-const DISCORD_DEPLOY_REJECTED_ENTRY_LIMIT = 3;
-
-type DiscordDeployErrorLike = {
-  status?: unknown;
-  discordCode?: unknown;
-  rawBody?: unknown;
-  deployRequestBody?: unknown;
-};
 
 type RestMethodName = "get" | "post" | "put" | "patch" | "delete";
 type RestMethod = RequestClient[RestMethodName];
 type RestMethodMap = Record<RestMethodName, RestMethod>;
-
-function attachDiscordDeployRequestBody(err: unknown, body: unknown) {
-  if (!err || typeof err !== "object" || body === undefined) {
-    return;
-  }
-  const deployErr = err as DiscordDeployErrorLike;
-  if (deployErr.deployRequestBody === undefined) {
-    deployErr.deployRequestBody = body;
-  }
-}
-
-function stringifyDiscordDeployField(value: unknown): string {
-  if (typeof value === "string") {
-    return JSON.stringify(value);
-  }
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return inspect(value, { depth: 2, breakLength: 120 });
-  }
-}
-
-function readDiscordDeployRejectedFields(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value.filter((entry): entry is string => typeof entry === "string").slice(0, 6);
-  }
-  if (!value || typeof value !== "object") {
-    return [];
-  }
-  return Object.keys(value).slice(0, 6);
-}
-
-function resolveDiscordRejectedDeployEntriesSource(
-  rawBody: unknown,
-): Record<string, unknown> | null {
-  if (!rawBody || typeof rawBody !== "object") {
-    return null;
-  }
-  const payload = rawBody as { errors?: unknown };
-  const errors = payload.errors && typeof payload.errors === "object" ? payload.errors : undefined;
-  const source = errors ?? rawBody;
-  return source && typeof source === "object" ? (source as Record<string, unknown>) : null;
-}
-
-function formatDiscordRejectedDeployEntries(params: {
-  rawBody: unknown;
-  requestBody: unknown;
-}): string[] {
-  const requestBody = Array.isArray(params.requestBody) ? params.requestBody : null;
-  const rejectedEntriesSource = resolveDiscordRejectedDeployEntriesSource(params.rawBody);
-  if (!rejectedEntriesSource || !requestBody || requestBody.length === 0) {
-    return [];
-  }
-  const rawEntries = Object.entries(rejectedEntriesSource).filter(([key]) => /^\d+$/.test(key));
-  return rawEntries.slice(0, DISCORD_DEPLOY_REJECTED_ENTRY_LIMIT).flatMap(([key, value]) => {
-    const index = Number.parseInt(key, 10);
-    if (!Number.isFinite(index) || index < 0 || index >= requestBody.length) {
-      return [];
-    }
-    const command = requestBody[index];
-    if (!command || typeof command !== "object") {
-      return [`#${index} fields=${readDiscordDeployRejectedFields(value).join("|") || "unknown"}`];
-    }
-    const payload = command as {
-      name?: unknown;
-      description?: unknown;
-      options?: unknown;
-    };
-    const parts = [
-      `#${index}`,
-      `fields=${readDiscordDeployRejectedFields(value).join("|") || "unknown"}`,
-    ];
-    if (typeof payload.name === "string" && payload.name.trim().length > 0) {
-      parts.push(`name=${payload.name}`);
-    }
-    if (payload.description !== undefined) {
-      parts.push(`description=${stringifyDiscordDeployField(payload.description)}`);
-    }
-    if (Array.isArray(payload.options) && payload.options.length > 0) {
-      parts.push(`options=${payload.options.length}`);
-    }
-    return [parts.join(" ")];
-  });
-}
-
-export function formatDiscordDeployErrorDetails(err: unknown): string {
-  if (!err || typeof err !== "object") {
-    return "";
-  }
-  const status = (err as DiscordDeployErrorLike).status;
-  const discordCode = (err as DiscordDeployErrorLike).discordCode;
-  const rawBody = (err as DiscordDeployErrorLike).rawBody;
-  const requestBody = (err as DiscordDeployErrorLike).deployRequestBody;
-  const details: string[] = [];
-  if (typeof status === "number") {
-    details.push(`status=${status}`);
-  }
-  if (typeof discordCode === "number" || typeof discordCode === "string") {
-    details.push(`code=${discordCode}`);
-  }
-  if (rawBody !== undefined) {
-    let bodyText = "";
-    try {
-      bodyText = JSON.stringify(rawBody);
-    } catch {
-      bodyText =
-        typeof rawBody === "string" ? rawBody : inspect(rawBody, { depth: 3, breakLength: 120 });
-    }
-    if (bodyText) {
-      const maxLen = 800;
-      const trimmed = bodyText.length > maxLen ? `${bodyText.slice(0, maxLen)}...` : bodyText;
-      details.push(`body=${trimmed}`);
-    }
-  }
-  const rejectedEntries = formatDiscordRejectedDeployEntries({ rawBody, requestBody });
-  if (rejectedEntries.length > 0) {
-    details.push(`rejected=${rejectedEntries.join("; ")}`);
-  }
-  return details.length > 0 ? ` (${details.join(", ")})` : "";
-}
 
 function readDeployRequestBody(data?: unknown): unknown {
   return data && typeof data === "object" && "body" in data
@@ -154,6 +29,7 @@ function wrapDeployRestMethod(params: {
   runtime: RuntimeEnv;
   accountId: string;
   startupStartedAt: number;
+  timeoutMs?: number;
   shouldLogVerbose: () => boolean;
 }) {
   return async (path: string, data?: never, query?: never) => {
@@ -178,11 +54,29 @@ function wrapDeployRestMethod(params: {
       }
       return result;
     } catch (err) {
+      const requestMs = Date.now() - startedAt;
       attachDiscordDeployRequestBody(err, body);
-      const details = formatDiscordDeployErrorDetails(err);
-      params.runtime.error?.(
-        `discord startup [${params.accountId}] native-slash-command-deploy-rest:${params.method}:error ${Math.max(0, Date.now() - params.startupStartedAt)}ms path=${path} requestMs=${Date.now() - startedAt} error=${formatErrorMessage(err)}${details}`,
-      );
+      attachDiscordDeployRestContext(err, {
+        method: params.method,
+        path,
+        requestMs,
+        timeoutMs: params.timeoutMs,
+      });
+      const rateLimitDetails = formatDiscordDeployRateLimitDetails(err);
+      if (rateLimitDetails) {
+        if (params.shouldLogVerbose()) {
+          params.runtime.log?.(
+            warn(
+              `discord startup [${params.accountId}] native-slash-command-deploy-rest:${params.method}:rate-limited ${Math.max(0, Date.now() - params.startupStartedAt)}ms path=${path} requestMs=${requestMs}${rateLimitDetails}`,
+            ),
+          );
+        }
+      } else {
+        const details = formatDiscordDeployErrorDetails(err);
+        params.runtime.error?.(
+          `discord startup [${params.accountId}] native-slash-command-deploy-rest:${params.method}:error ${Math.max(0, Date.now() - params.startupStartedAt)}ms path=${path} requestMs=${requestMs} error=${formatDiscordDeployErrorMessage(err)}${details}`,
+        );
+      }
       throw err;
     }
   };
@@ -203,12 +97,14 @@ function installDeployRestLogging(params: {
     delete: params.rest.delete.bind(params.rest),
   };
   for (const method of Object.keys(original) as RestMethodName[]) {
+    const timeout = (params.rest as { options?: { timeout?: unknown } }).options?.timeout;
     params.rest[method] = wrapDeployRestMethod({
       method,
       original,
       runtime: params.runtime,
       accountId: params.accountId,
       startupStartedAt: params.startupStartedAt,
+      timeoutMs: typeof timeout === "number" ? timeout : undefined,
       shouldLogVerbose: params.shouldLogVerbose,
     }) as RequestClient[typeof method];
   }
@@ -237,10 +133,6 @@ export async function deployDiscordCommands(params: {
   const maxAttempts = 3;
   const maxRetryDelayMs = 15_000;
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
-  const isDailyCreateLimit = (err: unknown) =>
-    err instanceof RateLimitError &&
-    err.discordCode === 30034 &&
-    /daily application command creates/i.test(err.message);
   const restoreDeployRestLogging = installDeployRestLogging({
     rest: params.client.rest,
     runtime: params.runtime,
@@ -254,7 +146,7 @@ export async function deployDiscordCommands(params: {
         await params.client.deployCommands({ mode: "reconcile" });
         return;
       } catch (err) {
-        if (isDailyCreateLimit(err)) {
+        if (isDiscordDeployDailyCreateLimit(err)) {
           params.runtime.log?.(
             warn(
               `discord: native slash command deploy skipped for ${accountId}; daily application command create limit reached. Existing slash commands stay active until Discord resets the quota. Message send/receive is unaffected.`,
@@ -262,31 +154,33 @@ export async function deployDiscordCommands(params: {
           );
           return;
         }
-        if (!(err instanceof RateLimitError) || attempt >= maxAttempts) {
+        const rateLimitDetails = resolveDiscordDeployRateLimitDetails(err);
+        if (!rateLimitDetails || attempt >= maxAttempts) {
           throw err;
         }
-        const retryAfterMs = Math.max(0, Math.ceil(err.retryAfter * 1000));
+        const retryAfterMs = Math.max(0, Math.ceil(rateLimitDetails.retryAfterMs ?? 0));
         if (retryAfterMs > maxRetryDelayMs) {
           params.runtime.log?.(
             warn(
-              `discord: native slash command deploy skipped for ${accountId}; retry_after=${retryAfterMs}ms exceeds startup budget. Existing slash commands stay active. Message send/receive is unaffected.`,
+              `discord: native slash command deploy skipped for ${accountId}; retry after ${formatDurationSeconds(retryAfterMs, { decimals: 1 })} exceeds startup budget. Existing slash commands stay active. Message send/receive is unaffected.`,
             ),
           );
           return;
         }
         if (params.shouldLogVerbose()) {
           params.runtime.log?.(
-            `discord startup [${accountId}] deploy-retry ${Math.max(0, Date.now() - startupStartedAt)}ms attempt=${attempt}/${maxAttempts - 1} retryAfterMs=${retryAfterMs} scope=${err.scope ?? "unknown"} code=${err.discordCode ?? "unknown"}`,
+            `discord startup [${accountId}] deploy-retry ${Math.max(0, Date.now() - startupStartedAt)}ms attempt=${attempt}/${maxAttempts - 1} retryAfterMs=${retryAfterMs} scope=${rateLimitDetails.scope ?? "unknown"} code=${rateLimitDetails.discordCode ?? "unknown"}`,
           );
         }
         await sleep(retryAfterMs);
       }
     }
   } catch (err) {
-    const details = formatDiscordDeployErrorDetails(err);
+    const rateLimitWarning = formatDiscordDeployRateLimitWarning(err, accountId);
     params.runtime.log?.(
       warn(
-        `discord: native slash command deploy warning (not message send): ${formatErrorMessage(err)}${details}`,
+        rateLimitWarning ??
+          `discord: native slash command deploy warning (not message send): ${formatDiscordDeployErrorMessage(err)}${formatDiscordDeployErrorDetails(err)}`,
       ),
     );
   } finally {

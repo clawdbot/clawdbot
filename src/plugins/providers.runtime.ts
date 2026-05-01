@@ -261,7 +261,7 @@ function resolveRuntimeProviderPluginLoadState(
       pluginSdkResolution: params.pluginSdkResolution,
       cache: params.cache ?? true,
       activate: params.activate ?? false,
-      installBundledRuntimeDeps: params.installBundledRuntimeDeps,
+      installBundledRuntimeDeps: params.installBundledRuntimeDeps ?? false,
     },
   );
   return { loadOptions };

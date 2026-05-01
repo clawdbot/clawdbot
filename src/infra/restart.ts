@@ -44,6 +44,7 @@ let pendingRestartTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingRestartDueAt = 0;
 let pendingRestartReason: string | undefined;
 let pendingRestartEmitHooks: RestartEmitHooks | undefined;
+let pendingRestartSkipDeferral = false;
 let pendingRestartPreparing = false;
 const activeDeferralPolls = new Set<ReturnType<typeof setInterval>>();
 
@@ -63,6 +64,7 @@ function clearPendingScheduledRestart(): void {
   pendingRestartDueAt = 0;
   pendingRestartReason = undefined;
   pendingRestartEmitHooks = undefined;
+  pendingRestartSkipDeferral = false;
   pendingRestartPreparing = false;
 }
 
@@ -658,6 +660,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   reason?: string;
   audit?: RestartAuditInfo;
   emitHooks?: RestartEmitHooks;
+  skipDeferral?: boolean;
 }): ScheduledRestart {
   const delayMsRaw =
     typeof opts?.delayMs === "number" && Number.isFinite(opts.delayMs)
@@ -673,6 +676,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   const nowMs = Date.now();
   const cooldownMsApplied = Math.max(0, lastRestartEmittedAt + RESTART_COOLDOWN_MS - nowMs);
   const requestedDueAt = nowMs + delayMs + cooldownMsApplied;
+  const skipDeferral = opts?.skipDeferral === true;
 
   if (hasUnconsumedRestartSignal()) {
     if (shouldPreferRestartReason(reason, emittedRestartReason)) {
@@ -695,7 +699,29 @@ export function scheduleGatewaySigusr1Restart(opts?: {
 
   if (pendingRestartTimer || pendingRestartPreparing) {
     const remainingMs = pendingRestartPreparing ? 0 : Math.max(0, pendingRestartDueAt - nowMs);
-    const shouldPullEarlier = !pendingRestartPreparing && requestedDueAt < pendingRestartDueAt;
+    if (pendingRestartPreparing && skipDeferral && activeDeferralPolls.size > 0) {
+      restartLog.warn(
+        `restart request bypassed active deferral reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} ${formatRestartAudit(opts?.audit)}`,
+      );
+      clearActiveDeferralPolls();
+      pendingRestartReason = reason;
+      pendingRestartEmitHooks = opts?.emitHooks;
+      void emitPreparedGatewayRestart(undefined, reason);
+      return {
+        ok: true,
+        pid: process.pid,
+        signal: "SIGUSR1",
+        delayMs: 0,
+        reason,
+        mode,
+        coalesced: false,
+        cooldownMsApplied,
+      };
+    }
+    const shouldUpgradeToSkipDeferral = skipDeferral && !pendingRestartSkipDeferral;
+    const shouldPullEarlier =
+      !pendingRestartPreparing &&
+      (requestedDueAt < pendingRestartDueAt || shouldUpgradeToSkipDeferral);
     if (shouldPullEarlier) {
       restartLog.warn(
         `restart request rescheduled earlier reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} oldDelayMs=${remainingMs} newDelayMs=${Math.max(0, requestedDueAt - nowMs)} ${formatRestartAudit(opts?.audit)}`,
@@ -705,6 +731,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       if (shouldPreferRestartReason(reason, pendingRestartReason)) {
         pendingRestartReason = reason;
       }
+      pendingRestartSkipDeferral = pendingRestartSkipDeferral || skipDeferral;
       restartLog.warn(
         `restart request coalesced (already scheduled) reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} delayMs=${remainingMs} ${formatRestartAudit(opts?.audit)}`,
       );
@@ -725,15 +752,18 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   pendingRestartDueAt = requestedDueAt;
   pendingRestartReason = reason;
   pendingRestartEmitHooks = opts?.emitHooks;
+  pendingRestartSkipDeferral = skipDeferral;
   pendingRestartTimer = setTimeout(
     () => {
       const scheduledReason = pendingRestartReason;
+      const scheduledSkipDeferral = pendingRestartSkipDeferral;
       pendingRestartTimer = null;
       pendingRestartDueAt = 0;
       pendingRestartReason = undefined;
+      pendingRestartSkipDeferral = false;
       pendingRestartPreparing = true;
       const pendingCheck = preRestartCheck;
-      if (!pendingCheck) {
+      if (scheduledSkipDeferral || !pendingCheck) {
         void emitPreparedGatewayRestart(undefined, scheduledReason);
         return;
       }

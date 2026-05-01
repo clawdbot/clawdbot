@@ -59,9 +59,3 @@ export function combineWhatsAppSendResults(
     providerAccepted: results.some((result) => result.providerAccepted),
   };
 }
-
-export function hasAcceptedWhatsAppSendResult(
-  result: WhatsAppSendResult | undefined,
-): result is WhatsAppSendResult {
-  return result?.providerAccepted === true;
-}

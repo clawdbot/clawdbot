@@ -9,6 +9,7 @@ import {
   collectPackageRuntimeDeps,
   normalizeInstallableRuntimeDepName,
   parseInstallableRuntimeDep,
+  parseInstallableRuntimeDepSpec,
   type RuntimeDepEntry,
 } from "./bundled-runtime-deps-specs.js";
 import {
@@ -30,6 +31,7 @@ export type BundledPluginRuntimeDepsManifest = {
   enabledByDefault: boolean;
   id?: string;
   legacyPluginIds: string[];
+  localMemoryEmbeddingRuntimeDeps: RuntimeDepEntry[];
   modelSupport?: BundledPluginRuntimeDepsModelSupport;
   providers: string[];
 };
@@ -110,6 +112,9 @@ function readBundledPluginRuntimeDepsManifest(
   const manifest = readRuntimeDepsJsonObject(path.join(pluginDir, "openclaw.plugin.json"));
   const channels = manifest?.channels;
   const legacyPluginIds = manifest?.legacyPluginIds;
+  const localMemoryEmbeddingRuntimeDeps = readBundledPluginLocalMemoryEmbeddingRuntimeDeps(
+    manifest?.runtimeDependencies,
+  );
   const modelSupport = readBundledPluginRuntimeDepsModelSupport(manifest?.modelSupport);
   const providers = manifest?.providers;
   const runtimeDepsManifest = {
@@ -123,6 +128,7 @@ function readBundledPluginRuntimeDepsManifest(
           (entry): entry is string => typeof entry === "string" && entry !== "",
         )
       : [],
+    localMemoryEmbeddingRuntimeDeps,
     ...(modelSupport ? { modelSupport } : {}),
     providers: Array.isArray(providers)
       ? providers.filter((entry): entry is string => typeof entry === "string" && entry !== "")
@@ -130,6 +136,24 @@ function readBundledPluginRuntimeDepsManifest(
   };
   cache?.set(pluginDir, runtimeDepsManifest);
   return runtimeDepsManifest;
+}
+
+function readBundledPluginLocalMemoryEmbeddingRuntimeDeps(value: unknown): RuntimeDepEntry[] {
+  if (!isRecord(value)) {
+    return [];
+  }
+  const specs = value.localMemoryEmbedding;
+  if (!Array.isArray(specs)) {
+    return [];
+  }
+  return specs.map((spec) => {
+    if (typeof spec !== "string") {
+      throw new Error(
+        "openclaw.plugin.json runtimeDependencies.localMemoryEmbedding must contain strings",
+      );
+    }
+    return Object.assign(parseInstallableRuntimeDepSpec(spec), { pluginIds: [] });
+  });
 }
 
 function readBundledPluginRuntimeDepsModelSupport(
@@ -353,6 +377,30 @@ function collectConfiguredProviderIds(config: OpenClawConfig): Set<string> {
   return collectConfiguredRuntimeDepsTargets(config).providerIds;
 }
 
+function memorySearchConfigUsesProvider(
+  value: { enabled?: boolean; provider?: string } | undefined,
+  providerId: string,
+): boolean {
+  return (
+    value?.enabled !== false && normalizeOptionalLowercaseString(value?.provider) === providerId
+  );
+}
+
+function isMemoryEmbeddingProviderConfiguredForRuntimeDeps(
+  config: OpenClawConfig | undefined,
+  providerId: string,
+): boolean {
+  if (!config) {
+    return false;
+  }
+  if (memorySearchConfigUsesProvider(config.agents?.defaults?.memorySearch, providerId)) {
+    return true;
+  }
+  return (config.agents?.list ?? []).some((agent) =>
+    memorySearchConfigUsesProvider(agent.memorySearch, providerId),
+  );
+}
+
 function matchesBundledRuntimeDepsModelSupport(
   manifest: BundledPluginRuntimeDepsManifest,
   modelId: string,
@@ -547,16 +595,16 @@ function shouldIncludeBundledPluginRuntimeDeps(params: {
   config?: OpenClawConfig;
   plugins?: NormalizedPluginsConfig;
   pluginIds?: ReadonlySet<string>;
-  selectedPluginIds?: ReadonlySet<string>;
+  exactPluginIds?: ReadonlySet<string>;
   pluginId: string;
   pluginDir: string;
   configuredModelOwnerPluginIds?: ReadonlySet<string>;
   includeConfiguredChannels?: boolean;
   manifestCache?: BundledPluginRuntimeDepsManifestCache;
 }): boolean {
-  if (params.selectedPluginIds) {
+  if (params.exactPluginIds) {
     return (
-      params.selectedPluginIds.has(params.pluginId) &&
+      params.exactPluginIds.has(params.pluginId) &&
       !(
         params.config &&
         params.plugins &&
@@ -610,7 +658,7 @@ export function collectBundledPluginRuntimeDeps(params: {
   extensionsDir: string;
   config?: OpenClawConfig;
   pluginIds?: ReadonlySet<string>;
-  selectedPluginIds?: ReadonlySet<string>;
+  exactPluginIds?: ReadonlySet<string>;
   includeConfiguredChannels?: boolean;
   manifestCache?: BundledPluginRuntimeDepsManifestCache;
   normalizePluginId?: NormalizePluginId;
@@ -654,7 +702,7 @@ export function collectBundledPluginRuntimeDeps(params: {
         config: params.config,
         plugins,
         pluginIds: params.pluginIds,
-        selectedPluginIds: params.selectedPluginIds,
+        exactPluginIds: params.exactPluginIds,
         pluginId,
         pluginDir,
         configuredModelOwnerPluginIds,
@@ -665,20 +713,32 @@ export function collectBundledPluginRuntimeDeps(params: {
       continue;
     }
     includedPluginIds.add(pluginId);
+    const manifest = readBundledPluginRuntimeDepsManifest(pluginDir, manifestCache);
     const packageJson = readRuntimeDepsJsonObject(path.join(pluginDir, "package.json"));
-    if (!packageJson) {
-      continue;
-    }
-    for (const [name, rawVersion] of Object.entries(collectPackageRuntimeDeps(packageJson))) {
-      const dep = parseInstallableRuntimeDep(name, rawVersion);
-      if (!dep) {
-        continue;
+    if (packageJson) {
+      for (const [name, rawVersion] of Object.entries(collectPackageRuntimeDeps(packageJson))) {
+        const dep = parseInstallableRuntimeDep(name, rawVersion);
+        if (!dep) {
+          continue;
+        }
+        const byVersion = versionMap.get(dep.name) ?? new Map<string, Set<string>>();
+        const pluginIds = byVersion.get(dep.version) ?? new Set<string>();
+        pluginIds.add(pluginId);
+        byVersion.set(dep.version, pluginIds);
+        versionMap.set(dep.name, byVersion);
       }
-      const byVersion = versionMap.get(dep.name) ?? new Map<string, Set<string>>();
-      const pluginIds = byVersion.get(dep.version) ?? new Set<string>();
-      pluginIds.add(pluginId);
-      byVersion.set(dep.version, pluginIds);
-      versionMap.set(dep.name, byVersion);
+    }
+    if (
+      manifest.localMemoryEmbeddingRuntimeDeps.length > 0 &&
+      isMemoryEmbeddingProviderConfiguredForRuntimeDeps(params.config, "local")
+    ) {
+      for (const dep of manifest.localMemoryEmbeddingRuntimeDeps) {
+        const byVersion = versionMap.get(dep.name) ?? new Map<string, Set<string>>();
+        const pluginIds = byVersion.get(dep.version) ?? new Set<string>();
+        pluginIds.add(pluginId);
+        byVersion.set(dep.version, pluginIds);
+        versionMap.set(dep.name, byVersion);
+      }
     }
   }
 

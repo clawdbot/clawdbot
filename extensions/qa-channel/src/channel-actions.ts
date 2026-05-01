@@ -65,7 +65,7 @@ function readQaSendTarget(params: Record<string, unknown>) {
   if (!target) {
     return undefined;
   }
-  if (/^(dm|channel):|^thread:[^/]+\/.+/i.test(target)) {
+  if (/^(dm|channel|group):|^thread:[^/]+\/.+/i.test(target)) {
     return target;
   }
   return buildQaTarget({ chatType: "channel", conversationId: target });

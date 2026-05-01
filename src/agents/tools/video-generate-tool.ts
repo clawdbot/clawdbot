@@ -36,6 +36,7 @@ import {
   applyVideoGenerationModelConfigDefaults,
   buildMediaReferenceDetails,
   buildTaskRunDetails,
+  hasGenerationToolAvailability,
   normalizeMediaReferenceInputs,
   readBooleanToolParam,
   readGenerationTimeoutMs,
@@ -802,11 +803,15 @@ export function createVideoGenerateTool(options?: {
   scheduleBackgroundWork?: VideoGenerateBackgroundScheduler;
 }): AnyAgentTool | null {
   const cfg: OpenClawConfig = options?.config ?? getRuntimeConfig();
-  const videoGenerationModelConfig = resolveVideoGenerationModelConfigForTool({
-    cfg,
-    agentDir: options?.agentDir,
-  });
-  if (!videoGenerationModelConfig) {
+  if (
+    !hasGenerationToolAvailability({
+      cfg,
+      agentDir: options?.agentDir,
+      modelConfig: cfg.agents?.defaults?.videoGenerationModel,
+      providers: () => listRuntimeVideoGenerationProviders({ config: cfg }),
+      providerKey: "videoGenerationProviders",
+    })
+  ) {
     return null;
   }
 
@@ -830,17 +835,25 @@ export function createVideoGenerateTool(options?: {
     execute: async (_toolCallId, rawArgs) => {
       const args = rawArgs as Record<string, unknown>;
       const action = resolveAction(args);
-      const effectiveCfg =
-        applyVideoGenerationModelConfigDefaults(cfg, videoGenerationModelConfig) ?? cfg;
-      const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
 
       if (action === "list") {
-        return createVideoGenerateListActionResult(effectiveCfg);
+        return createVideoGenerateListActionResult(cfg);
       }
 
       if (action === "status") {
         return createVideoGenerateStatusActionResult(options?.agentSessionKey);
       }
+
+      const videoGenerationModelConfig = resolveVideoGenerationModelConfigForTool({
+        cfg,
+        agentDir: options?.agentDir,
+      });
+      if (!videoGenerationModelConfig) {
+        throw new ToolInputError("No video-generation model configured.");
+      }
+      const effectiveCfg =
+        applyVideoGenerationModelConfigDefaults(cfg, videoGenerationModelConfig) ?? cfg;
+      const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
 
       const duplicateGuardResult = createVideoGenerateDuplicateGuardResult(
         options?.agentSessionKey,

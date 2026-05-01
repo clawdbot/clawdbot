@@ -90,7 +90,10 @@ describe("tryRouteCli", () => {
       runtime: expect.any(Object),
       commandPath: ["status"],
     });
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "channels" });
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "channels",
+      installBundledRuntimeDeps: false,
+    });
   });
 
   it("keeps logs routed to stderr for routed --json commands", async () => {
@@ -159,7 +162,10 @@ describe("tryRouteCli", () => {
       runtime: expect.any(Object),
       commandPath: ["status"],
     });
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "channels" });
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "channels",
+      installBundledRuntimeDeps: false,
+    });
   });
 
   it("respects OPENCLAW_HIDE_BANNER for routed commands", async () => {

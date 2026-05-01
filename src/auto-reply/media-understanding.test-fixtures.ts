@@ -35,7 +35,3 @@ export function createSuccessfulAudioMediaDecision() {
 export function createSuccessfulImageMediaDecision() {
   return createSuccessfulMediaDecision("image");
 }
-
-export function createSuccessfulVideoMediaDecision() {
-  return createSuccessfulMediaDecision("video");
-}

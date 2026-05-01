@@ -12,20 +12,30 @@ export function resolveSourceReplyDeliveryMode(params: {
   cfg: OpenClawConfig;
   ctx: SourceReplyDeliveryModeContext;
   requested?: SourceReplyDeliveryMode;
+  messageToolAvailable?: boolean;
 }): SourceReplyDeliveryMode {
   if (params.requested) {
-    return params.requested;
+    return params.messageToolAvailable === false && params.requested === "message_tool_only"
+      ? "automatic"
+      : params.requested;
   }
   if (params.ctx.CommandSource === "native") {
     return "automatic";
   }
   const chatType = normalizeChatType(params.ctx.ChatType);
+  let mode: SourceReplyDeliveryMode;
   if (chatType === "group" || chatType === "channel") {
     const configuredMode =
       params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies;
-    return configuredMode === "automatic" ? "automatic" : "message_tool_only";
+    mode = configuredMode === "automatic" ? "automatic" : "message_tool_only";
+  } else {
+    mode =
+      params.cfg.messages?.visibleReplies === "message_tool" ? "message_tool_only" : "automatic";
   }
-  return params.cfg.messages?.visibleReplies === "message_tool" ? "message_tool_only" : "automatic";
+  if (mode === "message_tool_only" && params.messageToolAvailable === false) {
+    return "automatic";
+  }
+  return mode;
 }
 
 export type SourceReplyVisibilityPolicy = {
@@ -47,11 +57,13 @@ export function resolveSourceReplyVisibilityPolicy(params: {
   suppressAcpChildUserDelivery?: boolean;
   explicitSuppressTyping?: boolean;
   shouldSuppressTyping?: boolean;
+  messageToolAvailable?: boolean;
 }): SourceReplyVisibilityPolicy {
   const sourceReplyDeliveryMode = resolveSourceReplyDeliveryMode({
     cfg: params.cfg,
     ctx: params.ctx,
     requested: params.requested,
+    messageToolAvailable: params.messageToolAvailable,
   });
   const sendPolicyDenied = params.sendPolicy === "deny";
   const suppressAutomaticSourceDelivery = sourceReplyDeliveryMode === "message_tool_only";

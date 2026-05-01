@@ -5,42 +5,30 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { beginBundledRuntimeDepsInstall } from "./bundled-runtime-deps-activity.js";
 import {
   installBundledRuntimeDeps,
-  installBundledRuntimeDepsAsync,
-  repairBundledRuntimeDepsInstallRoot,
   repairBundledRuntimeDepsInstallRootAsync,
   type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps-install.js";
 import { readRuntimeDepsJsonObject } from "./bundled-runtime-deps-json.js";
 import {
   BUNDLED_RUNTIME_DEPS_LOCK_DIR,
-  formatRuntimeDepsLockTimeoutMessage,
-  shouldRemoveRuntimeDepsLock,
+  removeRuntimeDepsLockIfStale,
   withBundledRuntimeDepsFilesystemLock,
 } from "./bundled-runtime-deps-lock.js";
 import {
   ensureNpmInstallExecutionManifest,
   isRuntimeDepSatisfiedInAnyRoot,
   isRuntimeDepsPlanMaterialized,
+  linkRuntimeDepsNodeModulesFromRoot,
   removeLegacyRuntimeDepsManifest,
+  removeRuntimeDepsNodeModulesSymlink,
 } from "./bundled-runtime-deps-materialization.js";
 import {
-  createBundledRuntimeDepsInstallArgs,
-  createBundledRuntimeDepsInstallEnv,
-  resolveBundledRuntimeDepsNpmRunner,
-  resolveBundledRuntimeDepsPnpmRunner,
-  type BundledRuntimeDepsNpmRunner,
-} from "./bundled-runtime-deps-package-manager.js";
-import {
   isSourceCheckoutRoot,
-  isWritableDirectory,
+  listSiblingExternalBundledRuntimeDepsRoots,
   pruneUnknownBundledRuntimeDepsRoots,
-  resolveBundledRuntimeDependencyInstallRoot,
-  resolveBundledRuntimeDependencyInstallRootInfo,
   resolveBundledRuntimeDependencyInstallRootPlan,
-  resolveBundledRuntimeDependencyPackageInstallRoot,
   resolveBundledRuntimeDependencyPackageInstallRootPlan,
   resolveBundledRuntimeDependencyPackageRoot,
-  type BundledRuntimeDepsInstallRoot,
   type BundledRuntimeDepsInstallRootPlan,
 } from "./bundled-runtime-deps-roots.js";
 import {
@@ -59,46 +47,30 @@ import {
   parseInstallableRuntimeDep,
   type RuntimeDepEntry,
 } from "./bundled-runtime-deps-specs.js";
-import { normalizePluginsConfigWithResolver } from "./config-normalization-shared.js";
-
-export {
-  createBundledRuntimeDepsInstallArgs,
-  createBundledRuntimeDepsInstallEnv,
-  installBundledRuntimeDeps,
-  installBundledRuntimeDepsAsync,
-  repairBundledRuntimeDepsInstallRoot,
-  repairBundledRuntimeDepsInstallRootAsync,
-  resolveBundledRuntimeDepsNpmRunner,
-  withBundledRuntimeDepsFilesystemLock,
-};
-export type { BundledRuntimeDepsNpmRunner };
-export type { BundledRuntimeDepsInstallParams } from "./bundled-runtime-deps-install.js";
-export type { RuntimeDepEntry } from "./bundled-runtime-deps-specs.js";
-export {
-  isWritableDirectory,
-  pruneUnknownBundledRuntimeDepsRoots,
-  resolveBundledRuntimeDependencyInstallRoot,
-  resolveBundledRuntimeDependencyInstallRootInfo,
-  resolveBundledRuntimeDependencyInstallRootPlan,
-  resolveBundledRuntimeDependencyPackageInstallRoot,
-  resolveBundledRuntimeDependencyPackageInstallRootPlan,
-  resolveBundledRuntimeDependencyPackageRoot,
-};
-export type {
-  BundledRuntimeDepsInstallRoot,
-  BundledRuntimeDepsInstallRootPlan,
-} from "./bundled-runtime-deps-roots.js";
-export type { RuntimeDepConflict } from "./bundled-runtime-deps-selection.js";
-
-export const __testing = {
-  formatRuntimeDepsLockTimeoutMessage,
-  resolveBundledRuntimeDepsPnpmRunner,
-  shouldRemoveRuntimeDepsLock,
-};
+import {
+  normalizePluginsConfigWithResolver,
+  type NormalizePluginId,
+} from "./config-normalization-shared.js";
 
 export type BundledRuntimeDepsEnsureResult = {
   installedSpecs: string[];
 };
+
+export class BundledRuntimeDepsMissingError extends Error {
+  readonly pluginId: string;
+  readonly installRoot: string;
+  readonly missingSpecs: string[];
+
+  constructor(params: { pluginId: string; installRoot: string; missingSpecs: string[] }) {
+    super(
+      `bundled runtime dependencies missing for ${params.pluginId}: ${params.missingSpecs.join(", ")}. Run "openclaw plugins deps --repair" to repair them.`,
+    );
+    this.name = "BundledRuntimeDepsMissingError";
+    this.pluginId = params.pluginId;
+    this.installRoot = params.installRoot;
+    this.missingSpecs = params.missingSpecs;
+  }
+}
 
 export type BundledRuntimeDepsPlan = {
   deps: RuntimeDepEntry[];
@@ -106,6 +78,27 @@ export type BundledRuntimeDepsPlan = {
   conflicts: RuntimeDepConflict[];
   installSpecs: string[];
   installRootPlan: BundledRuntimeDepsInstallRootPlan;
+};
+
+export type BundledRuntimeDepsPackagePlan = BundledRuntimeDepsPlan & {
+  packageRoot: string;
+  missingSpecs: string[];
+};
+
+export type BundledRuntimeDepsPackagePlanParams = {
+  packageRoot: string;
+  config?: OpenClawConfig;
+  pluginIds?: readonly string[];
+  exactPluginIds?: readonly string[];
+  includeConfiguredChannels?: boolean;
+  env?: NodeJS.ProcessEnv;
+};
+
+export type RepairBundledRuntimeDepsPackagePlanResult = {
+  plan: BundledRuntimeDepsPackagePlan;
+  repairedSpecs: string[];
+  reusedSpecs?: string[];
+  reusedFromRoot?: string;
 };
 
 // Packaged bundled plugins (Docker image, npm global install) keep their
@@ -180,7 +173,7 @@ export function clearBundledRuntimeDependencyNodePaths(): void {
   (Module as unknown as { _initPaths?: () => void })._initPaths?.();
 }
 
-export function createBundledRuntimeDepsInstallSpecs(params: {
+function createBundledRuntimeDepsInstallSpecs(params: {
   deps: readonly { name: string; version: string }[];
 }): string[] {
   return params.deps
@@ -205,56 +198,251 @@ function createBundledRuntimeDepsPlan(params: {
   };
 }
 
-export function scanBundledPluginRuntimeDeps(params: {
+function hasPreviousIncompleteInstall(
+  installRoot: string,
+  installSpecs: readonly string[],
+): boolean {
+  return (
+    fs.existsSync(path.join(installRoot, "node_modules")) &&
+    !isRuntimeDepsPlanMaterialized(installRoot, installSpecs)
+  );
+}
+
+function findReusableBundledRuntimeDepsRoot(params: {
+  installRootPlan: BundledRuntimeDepsInstallRootPlan;
+  installSpecs: readonly string[];
+  env: NodeJS.ProcessEnv;
+}): string | null {
+  if (!params.installRootPlan.external || params.installSpecs.length === 0) {
+    return null;
+  }
+  for (const root of listSiblingExternalBundledRuntimeDepsRoots({
+    installRoot: params.installRootPlan.installRoot,
+    env: params.env,
+  })) {
+    if (
+      !hasActiveBundledRuntimeDepsInstallLock(root) &&
+      hasConcreteBundledRuntimeDepsNodeModules(root) &&
+      isRuntimeDepsPlanMaterialized(root, params.installSpecs)
+    ) {
+      return root;
+    }
+  }
+  return null;
+}
+
+function hasActiveBundledRuntimeDepsInstallLock(root: string): boolean {
+  const lockDir = path.join(root, BUNDLED_RUNTIME_DEPS_LOCK_DIR);
+  return fs.existsSync(lockDir) && !removeRuntimeDepsLockIfStale(lockDir, Date.now());
+}
+
+function hasConcreteBundledRuntimeDepsNodeModules(root: string): boolean {
+  try {
+    const stat = fs.lstatSync(path.join(root, "node_modules"));
+    return stat.isDirectory() && !stat.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function arePackageLevelRuntimeDepsAlreadyMaterialized(params: {
+  installRoot: string;
   packageRoot: string;
-  config?: OpenClawConfig;
-  pluginIds?: readonly string[];
-  selectedPluginIds?: readonly string[];
-  includeConfiguredChannels?: boolean;
-  env?: NodeJS.ProcessEnv;
-}): {
-  deps: RuntimeDepEntry[];
-  missing: RuntimeDepEntry[];
-  conflicts: RuntimeDepConflict[];
-} {
-  if (isSourceCheckoutRoot(params.packageRoot)) {
-    return { deps: [], missing: [], conflicts: [] };
-  }
-  const extensionsDir = path.join(params.packageRoot, "dist", "extensions");
-  if (!fs.existsSync(extensionsDir)) {
-    return { deps: [], missing: [], conflicts: [] };
-  }
-  const manifestCache: BundledPluginRuntimeDepsManifestCache = new Map();
-  const normalizePluginId =
-    params.config || params.pluginIds || params.selectedPluginIds
-      ? createBundledRuntimeDepsPluginIdNormalizer({
-          extensionsDir,
-          manifestCache,
-        })
-      : undefined;
-  const { deps, conflicts, pluginIds } = collectBundledPluginRuntimeDeps({
-    extensionsDir,
-    config: params.config,
-    pluginIds: normalizePluginIdSet(params.pluginIds, normalizePluginId),
-    selectedPluginIds: normalizePluginIdSet(params.selectedPluginIds, normalizePluginId),
-    includeConfiguredChannels: params.includeConfiguredChannels,
-    manifestCache,
-    ...(normalizePluginId ? { normalizePluginId } : {}),
+  pluginDeps: readonly RuntimeDepEntry[];
+}): boolean {
+  const installSpecs = createBundledRuntimeDepsInstallSpecs({
+    deps: [...params.pluginDeps, ...collectMirroredPackageRuntimeDeps(params.packageRoot)],
   });
-  const packageRuntimeDeps =
-    pluginIds.length > 0 ? collectMirroredPackageRuntimeDeps(params.packageRoot) : [];
+  return installSpecs.length > 0 && isRuntimeDepsPlanMaterialized(params.installRoot, installSpecs);
+}
+
+function collectPackageLevelRuntimeDepsForPlugin(params: {
+  extensionsDir: string;
+  pluginId: string;
+  pluginDepEntries: readonly RuntimeDepEntry[];
+  config?: OpenClawConfig;
+  manifestCache: BundledPluginRuntimeDepsManifestCache;
+  normalizePluginId?: NormalizePluginId;
+}): { deps: readonly RuntimeDepEntry[]; conflicts: readonly RuntimeDepConflict[] } {
+  if (!params.config) {
+    return { deps: params.pluginDepEntries, conflicts: [] };
+  }
+  return collectBundledPluginRuntimeDeps({
+    extensionsDir: params.extensionsDir,
+    config: params.config,
+    pluginIds: new Set([params.pluginId]),
+    manifestCache: params.manifestCache,
+    ...(params.normalizePluginId ? { normalizePluginId: params.normalizePluginId } : {}),
+  });
+}
+
+type RuntimeDepsReuseResult = { status: "materialized" } | { status: "reused"; sourceRoot: string };
+
+function tryReuseBundledRuntimeDepsRoot(params: {
+  installRootPlan: BundledRuntimeDepsInstallRootPlan;
+  installSpecs: readonly string[];
+  env: NodeJS.ProcessEnv;
+  onProgress?: (message: string) => void;
+}): RuntimeDepsReuseResult | null {
+  const installRoot = params.installRootPlan.installRoot;
+  if (isRuntimeDepsPlanMaterialized(installRoot, params.installSpecs)) {
+    removeLegacyRuntimeDepsManifest(installRoot);
+    return { status: "materialized" };
+  }
+  const reusableRoot = findReusableBundledRuntimeDepsRoot(params);
+  if (!reusableRoot) {
+    return null;
+  }
+  const nodeModulesPath = path.join(installRoot, "node_modules");
+  try {
+    fs.lstatSync(nodeModulesPath);
+    return null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  ensureNpmInstallExecutionManifest(installRoot, params.installSpecs);
+  if (
+    !linkRuntimeDepsNodeModulesFromRoot({
+      sourceRoot: reusableRoot,
+      targetRoot: installRoot,
+    })
+  ) {
+    return null;
+  }
+  if (!isRuntimeDepsPlanMaterialized(installRoot, params.installSpecs)) {
+    removeRuntimeDepsNodeModulesSymlink(installRoot);
+    return null;
+  }
+  params.onProgress?.(`Reusing bundled plugin runtime deps from ${reusableRoot}`);
+  return { status: "reused", sourceRoot: reusableRoot };
+}
+
+export function createBundledRuntimeDepsPackagePlan(
+  params: BundledRuntimeDepsPackagePlanParams,
+): BundledRuntimeDepsPackagePlan {
   const installRootPlan = resolveBundledRuntimeDependencyPackageInstallRootPlan(
     params.packageRoot,
     {
       env: params.env,
     },
   );
+  const emptyPlan = () => {
+    const plan = createBundledRuntimeDepsPlan({
+      deps: [],
+      conflicts: [],
+      installRootPlan,
+    });
+    return {
+      ...plan,
+      packageRoot: params.packageRoot,
+      missingSpecs: [],
+    };
+  };
+  if (isSourceCheckoutRoot(params.packageRoot)) {
+    return emptyPlan();
+  }
+  const extensionsDir = path.join(params.packageRoot, "dist", "extensions");
+  if (!fs.existsSync(extensionsDir)) {
+    return emptyPlan();
+  }
+  const manifestCache: BundledPluginRuntimeDepsManifestCache = new Map();
+  const normalizePluginId =
+    params.config || params.pluginIds || params.exactPluginIds
+      ? createBundledRuntimeDepsPluginIdNormalizer({
+          extensionsDir,
+          manifestCache,
+        })
+      : undefined;
+  const exactPluginIds = normalizePluginIdSet(params.exactPluginIds, normalizePluginId);
+  const scopedPluginIds = normalizePluginIdSet(params.pluginIds, normalizePluginId);
+  const { deps, conflicts, pluginIds } = collectBundledPluginRuntimeDeps({
+    extensionsDir,
+    ...(params.config ? { config: params.config } : {}),
+    ...(exactPluginIds ? { exactPluginIds } : {}),
+    ...(!exactPluginIds && scopedPluginIds ? { pluginIds: scopedPluginIds } : {}),
+    ...(!exactPluginIds && params.includeConfiguredChannels !== undefined
+      ? { includeConfiguredChannels: params.includeConfiguredChannels }
+      : {}),
+    manifestCache,
+    ...(normalizePluginId ? { normalizePluginId } : {}),
+  });
+  const packageRuntimeDeps =
+    pluginIds.length > 0 ? collectMirroredPackageRuntimeDeps(params.packageRoot) : [];
   const plan = createBundledRuntimeDepsPlan({
     deps: [...deps, ...packageRuntimeDeps],
     conflicts,
     installRootPlan,
   });
-  return { deps: plan.deps, missing: plan.missing, conflicts: plan.conflicts };
+  const missing = hasPreviousIncompleteInstall(installRootPlan.installRoot, plan.installSpecs)
+    ? plan.deps
+    : plan.missing;
+  return {
+    ...plan,
+    missing,
+    packageRoot: params.packageRoot,
+    missingSpecs: createBundledRuntimeDepsInstallSpecs({ deps: missing }),
+  };
+}
+
+export async function repairBundledRuntimeDepsPackagePlanAsync(params: {
+  packageRoot: string;
+  config?: OpenClawConfig;
+  pluginIds?: readonly string[];
+  exactPluginIds?: readonly string[];
+  includeConfiguredChannels?: boolean;
+  env: NodeJS.ProcessEnv;
+  installDeps?: (params: BundledRuntimeDepsInstallParams) => Promise<void> | void;
+  onProgress?: (message: string) => void;
+  warn?: (message: string) => void;
+}): Promise<RepairBundledRuntimeDepsPackagePlanResult> {
+  pruneUnknownBundledRuntimeDepsRoots({
+    env: params.env,
+    ...(params.warn ? { warn: params.warn } : {}),
+  });
+  const plan = createBundledRuntimeDepsPackagePlan(params);
+  if (plan.missingSpecs.length === 0) {
+    return { plan, repairedSpecs: [] };
+  }
+  const reuseResult = withBundledRuntimeDepsInstallRootLock(plan.installRootPlan.installRoot, () =>
+    tryReuseBundledRuntimeDepsRoot({
+      installRootPlan: plan.installRootPlan,
+      installSpecs: plan.installSpecs,
+      env: params.env,
+      ...(params.onProgress ? { onProgress: params.onProgress } : {}),
+    }),
+  );
+  if (reuseResult) {
+    const refreshedPlan = createBundledRuntimeDepsPackagePlan(params);
+    return {
+      plan: refreshedPlan,
+      repairedSpecs: [],
+      ...(reuseResult.status === "reused"
+        ? {
+            reusedSpecs: refreshedPlan.installSpecs,
+            reusedFromRoot: reuseResult.sourceRoot,
+          }
+        : {}),
+    };
+  }
+  const result = await repairBundledRuntimeDepsInstallRootAsync({
+    installRoot: plan.installRootPlan.installRoot,
+    missingSpecs: plan.missingSpecs,
+    installSpecs: plan.installSpecs,
+    env: params.env,
+    ...(params.installDeps
+      ? {
+          installDeps: async (installParams) => {
+            await params.installDeps?.(installParams);
+          },
+        }
+      : {}),
+    ...(params.onProgress ? { onProgress: params.onProgress } : {}),
+    ...(params.warn ? { warn: params.warn } : {}),
+  });
+  return { plan, repairedSpecs: result.installSpecs };
 }
 
 export function createBundledRuntimeDependencyAliasMap(params: {
@@ -289,6 +477,7 @@ export function ensureBundledPluginRuntimeDeps(params: {
   pluginRoot: string;
   env: NodeJS.ProcessEnv;
   config?: OpenClawConfig;
+  installMissingDeps?: boolean;
   installDeps?: (params: BundledRuntimeDepsInstallParams) => void;
 }): BundledRuntimeDepsEnsureResult {
   const extensionsDir = path.dirname(params.pluginRoot);
@@ -339,9 +528,30 @@ export function ensureBundledPluginRuntimeDeps(params: {
   const installRoot = installRootPlan.installRoot;
   const packageRoot = resolveBundledRuntimeDependencyPackageRoot(params.pluginRoot);
   const usePackageLevelPlan =
-    packageRoot && path.resolve(installRoot) !== path.resolve(params.pluginRoot);
+    packageRoot &&
+    !isSourceCheckoutRoot(packageRoot) &&
+    path.resolve(installRoot) !== path.resolve(params.pluginRoot);
   let deps = pluginDepEntries;
   if (usePackageLevelPlan && packageRoot) {
+    const requestedPluginPlan = collectPackageLevelRuntimeDepsForPlugin({
+      extensionsDir,
+      pluginId: params.pluginId,
+      pluginDepEntries,
+      ...(params.config ? { config: params.config } : {}),
+      manifestCache,
+      ...(normalizePluginId ? { normalizePluginId } : {}),
+    });
+    if (
+      requestedPluginPlan.conflicts.length === 0 &&
+      arePackageLevelRuntimeDepsAlreadyMaterialized({
+        installRoot,
+        packageRoot,
+        pluginDeps: requestedPluginPlan.deps,
+      })
+    ) {
+      removeLegacyRuntimeDepsManifest(installRoot);
+      return createBundledRuntimeDepsEnsureResult([]);
+    }
     const packagePlan = collectBundledPluginRuntimeDeps({
       extensionsDir,
       ...(params.config ? { config: params.config } : {}),
@@ -374,6 +584,22 @@ export function ensureBundledPluginRuntimeDeps(params: {
       removeLegacyRuntimeDepsManifest(installRoot);
       return createBundledRuntimeDepsEnsureResult([]);
     }
+    if (
+      tryReuseBundledRuntimeDepsRoot({
+        installRootPlan: plan.installRootPlan,
+        installSpecs,
+        env: params.env,
+      })
+    ) {
+      return createBundledRuntimeDepsEnsureResult([]);
+    }
+    if (params.installMissingDeps === false) {
+      throw new BundledRuntimeDepsMissingError({
+        pluginId: params.pluginId,
+        installRoot,
+        missingSpecs: installSpecs,
+      });
+    }
     const isPluginRootInstall = path.resolve(installRoot) === path.resolve(params.pluginRoot);
     const installExecutionRoot = isPluginRootInstall
       ? path.join(installRoot, PLUGIN_ROOT_INSTALL_STAGE_DIR)
@@ -389,6 +615,7 @@ export function ensureBundledPluginRuntimeDeps(params: {
           missingSpecs: installParams.installSpecs ?? installParams.missingSpecs,
           installSpecs: installParams.installSpecs,
           env: params.env,
+          force: true,
         });
       });
     const finishActivity = beginBundledRuntimeDepsInstall({
