@@ -121,50 +121,17 @@ function overrideResolvesUnderPackageBundledRoot(params: {
     .some((trustedRoot) => pathContains(trustedRoot, realOverride));
 }
 
-function runningSourceTypeScriptProcess(): boolean {
-  const argv1 = process.argv[1]?.toLowerCase();
-  if (
-    argv1?.endsWith(".ts") ||
-    argv1?.endsWith(".tsx") ||
-    argv1?.endsWith(".mts") ||
-    argv1?.endsWith(".cts")
-  ) {
-    return true;
-  }
-
-  for (let index = 0; index < process.execArgv.length; index += 1) {
-    const arg = process.execArgv[index]?.toLowerCase();
-    if (!arg) {
-      continue;
-    }
-    if (arg === "tsx" || arg.includes("tsx/register")) {
-      return true;
-    }
-    if ((arg === "--import" || arg === "--loader") && process.execArgv[index + 1]) {
-      const next = process.execArgv[index + 1].toLowerCase();
-      if (next === "tsx" || next.includes("tsx/")) {
-        return true;
-      }
-    }
-  }
-
-  return false;
-}
-
-function resolveBundledDirFromPackageRoot(
-  packageRoot: string,
-  preferSourceCheckout: boolean,
-): string | undefined {
+function resolveBundledDirFromPackageRoot(packageRoot: string): string | undefined {
   const sourceExtensionsDir = path.join(packageRoot, "extensions");
   const builtExtensionsDir = path.join(packageRoot, "dist", "extensions");
   const sourceCheckout = isSourceCheckoutRoot(packageRoot);
   const hasUsableSourceTree = sourceCheckout && hasUsableBundledPluginTree(sourceExtensionsDir);
-  if (preferSourceCheckout && hasUsableSourceTree) {
-    return sourceExtensionsDir;
-  }
   // Local source checkouts stage a runtime-complete bundled plugin tree under
   // dist-runtime/. Prefer that over source extensions only when the paired
   // dist/ tree exists; otherwise wrappers can drift ahead of the last build.
+  // Even when OpenClaw itself runs from TypeScript, bundled plugins should use
+  // compiled JavaScript whenever it is available. Source plugin entries force
+  // jiti onto hot runtime paths such as per-run tool construction.
   const runtimeExtensionsDir = path.join(packageRoot, "dist-runtime", "extensions");
   const hasUsableRuntimeTree = sourceCheckout
     ? hasUsableBundledPluginTree(runtimeExtensionsDir)
@@ -209,8 +176,6 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
     }
   }
 
-  const preferSourceCheckout = runningSourceTypeScriptProcess();
-
   try {
     const argvRoot = resolveOpenClawPackageRootSync({ argv1: process.argv[1] });
     const rejectedOverrideUsesArgvRoot = Boolean(
@@ -227,7 +192,7 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
       (entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index,
     );
     for (const packageRoot of packageRoots) {
-      const bundledDir = resolveBundledDirFromPackageRoot(packageRoot, preferSourceCheckout);
+      const bundledDir = resolveBundledDirFromPackageRoot(packageRoot);
       if (bundledDir) {
         return bundledDir;
       }

@@ -5,6 +5,15 @@
   },
   "enabledByDefault": true,
   "providers": ["qianfan"],
+  "setup": {
+    "providers": [
+      {
+        "id": "qianfan",
+        "authMethods": ["api-key"],
+        "envVars": ["QIANFAN_API_KEY"]
+      }
+    ]
+  },
   "modelCatalog": {
     "providers": {
       "qianfan": {
@@ -45,9 +54,6 @@
     "discovery": {
       "qianfan": "static"
     }
-  },
-  "providerAuthEnvVars": {
-    "qianfan": ["QIANFAN_API_KEY"]
   },
   "providerAuthChoices": [
     {

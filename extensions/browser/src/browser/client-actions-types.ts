@@ -15,5 +15,3 @@ export type BrowserActionPathResult = {
   labelsCount?: number;
   labelsSkipped?: number;
 };
-
-export type BrowserActionTargetOk = { ok: true; targetId: string };

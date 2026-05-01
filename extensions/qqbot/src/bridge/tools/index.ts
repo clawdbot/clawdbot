@@ -9,9 +9,6 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { registerChannelTool } from "./channel.js";
 import { registerRemindTool } from "./remind.js";
 
-export { registerChannelTool } from "./channel.js";
-export { registerRemindTool } from "./remind.js";
-
 export function registerQQBotTools(api: OpenClawPluginApi): void {
   registerChannelTool(api);
   registerRemindTool(api);

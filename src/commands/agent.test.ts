@@ -105,6 +105,7 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
         authProfileId,
         authProfileIdSource: authProfileId ? sessionEntry?.authProfileOverrideSource : undefined,
         thinkLevel: params.resolvedThinkLevel,
+        fastMode: params.fastMode,
         verboseLevel: params.resolvedVerboseLevel,
         timeoutMs: params.timeoutMs,
         runId: params.runId,
@@ -382,6 +383,29 @@ describe("agentCommand", () => {
       expect(parsed.payloads[0].text).toBe("json-reply");
       expect(parsed.payloads[0].mediaUrl).toBe("http://x.test/a.jpg");
       expect(parsed.meta.durationMs).toBe(42);
+    });
+  });
+
+  it("passes configured fast mode to embedded runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, {
+        model: "openai/gpt-5.5",
+        models: {
+          "openai/gpt-5.5": { params: { fastMode: true } },
+        },
+      });
+
+      await agentCommand({ message: "ping", agentId: "main" }, runtime);
+
+      const callArgs = getLastEmbeddedCall();
+      expect(callArgs).toEqual(
+        expect.objectContaining({
+          provider: "openai",
+          model: "gpt-5.5",
+          fastMode: true,
+        }),
+      );
     });
   });
 

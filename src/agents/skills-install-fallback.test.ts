@@ -165,6 +165,65 @@ describe("skills-install fallback edge cases", () => {
     expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
   });
 
+  it("does not use HOMEBREW_PREFIX as a brew bin fallback for go installs", async () => {
+    const envSnapshot = captureEnv(["HOMEBREW_PREFIX"]);
+    try {
+      const maliciousPrefix = path.join(workspaceDir, "evil-brew");
+      process.env.HOMEBREW_PREFIX = maliciousPrefix;
+      mockAvailableBinaries([]);
+      skillsInstallTesting.setDepsForTest({
+        hasBinary: (bin: string) => hasBinaryMock(bin),
+        resolveBrewExecutable: () => "/safe/homebrew/bin/brew",
+      });
+      runCommandWithTimeoutMock.mockResolvedValue({
+        code: 0,
+        stdout: "ok",
+        stderr: "",
+        signal: null,
+        killed: false,
+      });
+      runCommandWithTimeoutMock.mockResolvedValueOnce({
+        code: 0,
+        stdout: "installed go",
+        stderr: "",
+        signal: null,
+        killed: false,
+      });
+      runCommandWithTimeoutMock.mockResolvedValueOnce({
+        code: 1,
+        stdout: "",
+        stderr: "prefix unavailable",
+        signal: null,
+        killed: false,
+      });
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "go-tool-single",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(runCommandWithTimeoutMock).toHaveBeenNthCalledWith(
+        1,
+        ["/safe/homebrew/bin/brew", "install", "go"],
+        expect.objectContaining({ timeoutMs: 300_000 }),
+      );
+      expect(runCommandWithTimeoutMock).toHaveBeenNthCalledWith(
+        2,
+        ["/safe/homebrew/bin/brew", "--prefix"],
+        expect.objectContaining({ timeoutMs: 30_000 }),
+      );
+      const finalCall = runCommandWithTimeoutMock.mock.calls.at(-1) as
+        | [string[], { env?: NodeJS.ProcessEnv }]
+        | undefined;
+      expect(finalCall?.[0]).toEqual(["go", "install", "example.com/tool@latest"]);
+      expect(finalCall?.[1]?.env?.GOBIN).not.toBe(path.join(maliciousPrefix, "bin"));
+    } finally {
+      envSnapshot.restore();
+    }
+  });
+
   it("preserves system uv/python env vars when running uv installs", async () => {
     mockAvailableBinaries(["uv"]);
     runCommandWithTimeoutMock.mockResolvedValueOnce({

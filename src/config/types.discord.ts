@@ -138,6 +138,10 @@ export type DiscordVoiceConfig = {
   daveEncryption?: boolean;
   /** Consecutive decrypt failures before DAVE session reinitialization (default: 24). */
   decryptionFailureTolerance?: number;
+  /** Initial @discordjs/voice Ready wait in milliseconds (default: 30000). */
+  connectTimeoutMs?: number;
+  /** Grace period for Discord voice reconnect signalling after a disconnect (default: 15000). */
+  reconnectGraceMs?: number;
   /** Optional TTS overrides for Discord voice output. */
   tts?: TtsConfig;
 };

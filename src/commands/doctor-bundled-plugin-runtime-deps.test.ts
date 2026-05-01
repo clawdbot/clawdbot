@@ -121,25 +121,42 @@ function expectNoLegacyRuntimeDepsManifest(installRoot: string): void {
   expect(fs.existsSync(path.join(installRoot, ".openclaw-runtime-deps.json"))).toBe(false);
 }
 
-function createNonInteractivePrompter(
-  options: { updateInProgress?: boolean } = {},
+function createNonInteractiveDoctorPrompter(
+  options: {
+    repair?: boolean;
+    updateInProgress?: boolean;
+    confirmAutoFix?: DoctorPrompter["confirmAutoFix"];
+  } = {},
 ): DoctorPrompter {
+  const shouldRepair = options.repair ?? false;
   return {
-    shouldRepair: false,
+    shouldRepair,
     shouldForce: false,
     repairMode: {
-      shouldRepair: false,
+      shouldRepair,
       shouldForce: false,
       nonInteractive: true,
       canPrompt: false,
       updateInProgress: options.updateInProgress ?? false,
     },
     confirm: async () => false,
-    confirmAutoFix: async () => false,
+    confirmAutoFix: options.confirmAutoFix ?? (async () => false),
     confirmAggressiveAutoFix: async () => false,
     confirmRuntimeRepair: async () => false,
     select: async (_params: unknown, fallback: unknown) => fallback,
   } as DoctorPrompter;
+}
+
+function createPlainNonInteractivePrompter(
+  options: { confirmAutoFix?: DoctorPrompter["confirmAutoFix"] } = {},
+): DoctorPrompter {
+  return createNonInteractiveDoctorPrompter(options);
+}
+
+function createNonInteractiveRepairPrompter(
+  options: { updateInProgress?: boolean } = {},
+): DoctorPrompter {
+  return createNonInteractiveDoctorPrompter({ ...options, repair: true });
 }
 
 function createRuntime(options: { logs?: string[]; errors?: string[] } = {}): RuntimeEnv {
@@ -487,7 +504,7 @@ describe("doctor bundled plugin runtime deps", () => {
 
     await maybeRepairBundledPluginRuntimeDeps({
       runtime: createRuntime(),
-      prompter: createNonInteractivePrompter(),
+      prompter: createNonInteractiveRepairPrompter(),
       packageRoot: root,
       config: {
         plugins: { enabled: true },
@@ -499,6 +516,36 @@ describe("doctor bundled plugin runtime deps", () => {
     });
 
     expect(installed).toEqual([]);
+  });
+
+  it("does not repair missing runtime deps during plain non-interactive doctor", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeBundledProviderPlugin(root, "bedrock", ["bedrock"], {
+      "bedrock-only": "1.0.0",
+    });
+    const installed = createInstalledRuntimeDeps();
+    const confirmAutoFix = vi.fn(async () => true);
+
+    await maybeRepairBundledPluginRuntimeDeps({
+      runtime: createRuntime(),
+      prompter: createPlainNonInteractivePrompter({ confirmAutoFix }),
+      packageRoot: root,
+      config: {
+        plugins: {
+          enabled: true,
+          allow: ["bedrock"],
+          entries: { bedrock: { enabled: true } },
+        },
+      },
+      installDeps: (params) => {
+        installed.push(params);
+        materializeRuntimeDeps(params);
+      },
+    });
+
+    expect(installed).toEqual([]);
+    expect(confirmAutoFix).not.toHaveBeenCalled();
   });
 
   it("repairs explicitly enabled provider deps", async () => {
@@ -519,7 +566,7 @@ describe("doctor bundled plugin runtime deps", () => {
 
     await maybeRepairBundledPluginRuntimeDeps({
       runtime: createRuntime(),
-      prompter: createNonInteractivePrompter(),
+      prompter: createNonInteractiveRepairPrompter(),
       packageRoot: root,
       config: {
         plugins: {
@@ -553,7 +600,7 @@ describe("doctor bundled plugin runtime deps", () => {
 
     await maybeRepairBundledPluginRuntimeDeps({
       runtime: createRuntime(),
-      prompter: createNonInteractivePrompter(),
+      prompter: createNonInteractiveRepairPrompter(),
       packageRoot: root,
       config: {
         plugins: { enabled: true },
@@ -588,7 +635,7 @@ describe("doctor bundled plugin runtime deps", () => {
 
     await maybeRepairBundledPluginRuntimeDeps({
       runtime: createRuntime(),
-      prompter: createNonInteractivePrompter(),
+      prompter: createNonInteractiveRepairPrompter(),
       packageRoot: root,
       config: {
         plugins: { enabled: true },
@@ -624,7 +671,7 @@ describe("doctor bundled plugin runtime deps", () => {
     ]);
   });
 
-  it("repairs missing deps during non-interactive doctor", async () => {
+  it("repairs missing deps during doctor --fix --non-interactive", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
     writeJson(path.join(root, "package.json"), { name: "openclaw" });
     writeBundledChannelPlugin(root, "telegram", { grammy: "1.37.0" });
@@ -632,7 +679,7 @@ describe("doctor bundled plugin runtime deps", () => {
 
     await maybeRepairBundledPluginRuntimeDeps({
       runtime: createRuntime(),
-      prompter: createNonInteractivePrompter(),
+      prompter: createNonInteractiveRepairPrompter(),
       packageRoot: root,
       config: {
         plugins: { enabled: true },
@@ -659,7 +706,7 @@ describe("doctor bundled plugin runtime deps", () => {
     expectNoLegacyRuntimeDepsManifest(installRoot);
   });
 
-  it("repairs a previous incomplete runtime deps install during non-interactive doctor", async () => {
+  it("repairs a previous incomplete runtime deps install during doctor --fix --non-interactive", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
     writeJson(path.join(root, "package.json"), { name: "openclaw" });
     writeBundledChannelPlugin(root, "telegram", { grammy: "1.37.0" });
@@ -672,7 +719,7 @@ describe("doctor bundled plugin runtime deps", () => {
 
     await maybeRepairBundledPluginRuntimeDeps({
       runtime: createRuntime(),
-      prompter: createNonInteractivePrompter(),
+      prompter: createNonInteractiveRepairPrompter(),
       packageRoot: root,
       config: {
         plugins: { enabled: true },
@@ -701,7 +748,7 @@ describe("doctor bundled plugin runtime deps", () => {
 
     await maybeRepairBundledPluginRuntimeDeps({
       runtime: createRuntime({ logs }),
-      prompter: createNonInteractivePrompter(),
+      prompter: createNonInteractiveRepairPrompter(),
       packageRoot: root,
       config: {
         plugins: { enabled: true },
@@ -728,7 +775,7 @@ describe("doctor bundled plugin runtime deps", () => {
 
     const repair = maybeRepairBundledPluginRuntimeDeps({
       runtime: createRuntime({ logs }),
-      prompter: createNonInteractivePrompter(),
+      prompter: createNonInteractiveRepairPrompter(),
       packageRoot: root,
       config: {
         plugins: { enabled: true },
@@ -760,7 +807,7 @@ describe("doctor bundled plugin runtime deps", () => {
 
     const repair = maybeRepairBundledPluginRuntimeDeps({
       runtime: { error: () => {}, log: () => {} } as never,
-      prompter: createNonInteractivePrompter(),
+      prompter: createNonInteractiveRepairPrompter(),
       packageRoot: root,
       config: {
         plugins: { enabled: true },
@@ -790,7 +837,7 @@ describe("doctor bundled plugin runtime deps", () => {
 
     await maybeRepairBundledPluginRuntimeDeps({
       runtime: createRuntime(),
-      prompter: createNonInteractivePrompter(),
+      prompter: createNonInteractiveRepairPrompter(),
       packageRoot: root,
       config: {
         plugins: { enabled: true },
@@ -820,7 +867,7 @@ describe("doctor bundled plugin runtime deps", () => {
 
     await maybeRepairBundledPluginRuntimeDeps({
       runtime: createRuntime(),
-      prompter: createNonInteractivePrompter(),
+      prompter: createNonInteractiveRepairPrompter(),
       packageRoot: root,
       config: {
         plugins: {
@@ -851,7 +898,7 @@ describe("doctor bundled plugin runtime deps", () => {
     await expect(
       maybeRepairBundledPluginRuntimeDeps({
         runtime: createRuntime({ errors }),
-        prompter: createNonInteractivePrompter(),
+        prompter: createNonInteractiveRepairPrompter(),
         packageRoot: root,
         config: {
           plugins: { enabled: true },
@@ -876,7 +923,7 @@ describe("doctor bundled plugin runtime deps", () => {
 
     await maybeRepairBundledPluginRuntimeDeps({
       runtime: createRuntime(),
-      prompter: createNonInteractivePrompter({ updateInProgress: true }),
+      prompter: createNonInteractiveRepairPrompter({ updateInProgress: true }),
       packageRoot: root,
       includeConfiguredChannels: true,
       config: {
@@ -909,7 +956,7 @@ describe("doctor bundled plugin runtime deps", () => {
 
     await maybeRepairBundledPluginRuntimeDeps({
       runtime: createRuntime(),
-      prompter: createNonInteractivePrompter(),
+      prompter: createNonInteractiveRepairPrompter(),
       env,
       packageRoot: root,
       config: {
@@ -963,7 +1010,7 @@ describe("doctor bundled plugin runtime deps", () => {
 
     await maybeRepairBundledPluginRuntimeDeps({
       runtime: createRuntime(),
-      prompter: createNonInteractivePrompter(),
+      prompter: createNonInteractiveRepairPrompter(),
       env,
       packageRoot: root,
       config: {
@@ -999,7 +1046,7 @@ describe("doctor bundled plugin runtime deps", () => {
 
     await maybeRepairBundledPluginRuntimeDeps({
       runtime: createRuntime(),
-      prompter: createNonInteractivePrompter(),
+      prompter: createNonInteractiveRepairPrompter(),
       packageRoot: root,
       includeConfiguredChannels: true,
       config: {

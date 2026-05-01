@@ -3,7 +3,7 @@ import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import { expect, vi } from "vitest";
 import type { TranscriptPolicy } from "./transcript-policy.js";
 
-export type SessionEntry = { type: string; customType: string; data: unknown };
+type SessionEntry = { type: string; customType: string; data: unknown };
 export type SanitizeSessionHistoryFn = (params: {
   messages: AgentMessage[];
   modelApi: string;
@@ -14,7 +14,7 @@ export type SanitizeSessionHistoryFn = (params: {
   modelId?: string;
   policy?: TranscriptPolicy;
 }) => Promise<AgentMessage[]>;
-export type SanitizeSessionHistoryMockedHelpers = typeof import("./pi-embedded-helpers.js");
+type SanitizeSessionHistoryMockedHelpers = typeof import("./pi-embedded-helpers.js");
 export type SanitizeSessionHistoryHarness = {
   sanitizeSessionHistory: SanitizeSessionHistoryFn;
   mockedHelpers: SanitizeSessionHistoryMockedHelpers;
@@ -171,7 +171,7 @@ export function expectOpenAIResponsesStrictSanitizeCall(
   );
 }
 
-export function makeSnapshotChangedOpenAIReasoningScenario() {
+function makeSnapshotChangedOpenAIReasoningScenario() {
   const sessionEntries = [
     makeModelSnapshotEntry({
       provider: "anthropic",

@@ -48,6 +48,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     diagnostics: ["OPENCLAW_PLUGIN_SDK_COMPAT_DEPRECATED"],
     tests: [
       "src/plugins/contracts/plugin-sdk-index.test.ts",
+      "src/plugins/contracts/plugin-sdk-root-alias.test.ts",
       "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
     ],
   },

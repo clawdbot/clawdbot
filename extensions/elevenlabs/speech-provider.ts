@@ -294,7 +294,7 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
   }
 }
 
-export async function listElevenLabsVoices(params: {
+async function listElevenLabsVoices(params: {
   apiKey: string;
   baseUrl?: string;
 }): Promise<SpeechVoiceOption[]> {

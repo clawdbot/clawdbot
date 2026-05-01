@@ -31,11 +31,11 @@ export interface SendQueueItem {
 }
 
 /** 统一的媒体标签正则 — 匹配标准化后的 6 种标签 */
-export const MEDIA_TAG_REGEX =
+const MEDIA_TAG_REGEX =
   /<(qqimg|qqvoice|qqvideo|qqfile|qqmedia|img)>([^<>]+)<\/(?:qqimg|qqvoice|qqvideo|qqfile|qqmedia|img)>/gi;
 
 /** 创建一个新的全局标签正则实例（每次调用 reset lastIndex） */
-export function createMediaTagRegex(): RegExp {
+function createMediaTagRegex(): RegExp {
   return new RegExp(MEDIA_TAG_REGEX.source, MEDIA_TAG_REGEX.flags);
 }
 
@@ -70,7 +70,7 @@ export interface MediaSendContext {
  * 此方法在 gateway.ts deliver 回调、outbound.ts sendText、
  * streaming.ts sendMediaQueue 中共用。
  */
-export function fixPathEncoding(
+function fixPathEncoding(
   mediaPath: string,
   log?: { debug?: (msg: string) => void; error?: (msg: string) => void },
 ): string {
@@ -133,7 +133,7 @@ export function fixPathEncoding(
  * @param position 要检测的位置（字符索引）
  * @returns 如果 position 在围栏代码块内返回 true
  */
-export function isInsideCodeBlock(text: string, position: number): boolean {
+function isInsideCodeBlock(text: string, position: number): boolean {
   const fenceRegex = /^(`{3,})[^\n]*$/gm;
   let fenceMatch: RegExpExecArray | null;
   let openFence: { pos: number; ticks: number } | null = null;

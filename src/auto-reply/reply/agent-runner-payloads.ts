@@ -188,26 +188,23 @@ export async function buildReplyPayloads(params: {
   const dedupeRuntime = shouldCheckMessagingToolDedupe
     ? await loadReplyPayloadsDedupeRuntime()
     : null;
-  const suppressMessagingToolReplies =
-    dedupeRuntime?.shouldSuppressMessagingToolReplies({
-      messageProvider: resolveOriginMessageProvider({
-        originatingChannel: params.originatingChannel,
-        provider: params.messageProvider,
-      }),
-      messagingToolSentTargets,
-      originatingTo: resolveOriginMessageTo({
-        originatingTo: params.originatingTo,
-      }),
-      accountId: resolveOriginAccountId({
-        originatingAccountId: params.accountId,
-      }),
-    }) ?? false;
-  // Only dedupe against messaging tool sends for the same origin target.
-  // Cross-target sends (for example posting to another channel) must not
-  // suppress the current conversation's final reply.
-  // If target metadata is unavailable, keep legacy dedupe behavior.
-  const dedupeMessagingToolPayloads =
-    suppressMessagingToolReplies || messagingToolSentTargets.length === 0;
+  const messagingToolPayloadDedupe = dedupeRuntime?.resolveMessagingToolPayloadDedupe({
+    messageProvider: resolveOriginMessageProvider({
+      originatingChannel: params.originatingChannel,
+      provider: params.messageProvider,
+    }),
+    messagingToolSentTargets,
+    originatingTo: resolveOriginMessageTo({
+      originatingTo: params.originatingTo,
+    }),
+    accountId: resolveOriginAccountId({
+      originatingAccountId: params.accountId,
+    }),
+  }) ?? {
+    shouldDedupePayloads: shouldCheckMessagingToolDedupe && messagingToolSentTargets.length === 0,
+    suppressReplies: false,
+  };
+  const dedupeMessagingToolPayloads = messagingToolPayloadDedupe.shouldDedupePayloads;
   const messagingToolSentMediaUrls = dedupeMessagingToolPayloads
     ? await normalizeSentMediaUrlsForDedupe({
         sentMediaUrls: params.messagingToolSentMediaUrls ?? [],
@@ -284,7 +281,7 @@ export async function buildReplyPayloads(params: {
           sentMediaUrls: blockSentMediaUrls,
         })
       : contentSuppressedPayloads;
-  const replyPayloads = suppressMessagingToolReplies
+  const replyPayloads = messagingToolPayloadDedupe.suppressReplies
     ? []
     : filteredPayloads.filter(isRenderablePayload);
 

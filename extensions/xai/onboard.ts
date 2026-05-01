@@ -25,10 +25,6 @@ export function applyXaiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   return xaiPresetAppliers.applyProviderConfig(cfg, "openai-responses");
 }
 
-export function applyXaiResponsesApiConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return xaiPresetAppliers.applyProviderConfig(cfg, "openai-responses");
-}
-
 export function applyXaiConfig(cfg: OpenClawConfig): OpenClawConfig {
   return xaiPresetAppliers.applyConfig(cfg, "openai-responses");
 }

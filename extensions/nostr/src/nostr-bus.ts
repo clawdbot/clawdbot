@@ -24,14 +24,6 @@ import {
 } from "./nostr-state-store.js";
 import { createSeenTracker, type SeenTracker } from "./seen-tracker.js";
 
-export {
-  validatePrivateKey,
-  getPublicKeyFromPrivate,
-  isValidPubkey,
-  normalizePubkey,
-  pubkeyToNpub,
-} from "./nostr-key-utils.js";
-
 // ============================================================================
 // Constants
 // ============================================================================

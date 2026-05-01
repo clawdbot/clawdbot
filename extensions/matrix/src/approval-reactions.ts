@@ -21,13 +21,13 @@ const MATRIX_APPROVAL_REACTION_ORDER = [
   "deny",
 ] as const satisfies readonly ExecApprovalReplyDecision[];
 
-export type MatrixApprovalReactionBinding = {
+type MatrixApprovalReactionBinding = {
   decision: ExecApprovalReplyDecision;
   emoji: string;
   label: string;
 };
 
-export type MatrixApprovalReactionResolution = {
+type MatrixApprovalReactionResolution = {
   approvalId: string;
   decision: ExecApprovalReplyDecision;
 };
@@ -71,7 +71,7 @@ export function buildMatrixApprovalReactionHint(
   return `React here: ${bindings.map((binding) => `${binding.emoji} ${binding.label}`).join(", ")}`;
 }
 
-export function resolveMatrixApprovalReactionDecision(
+function resolveMatrixApprovalReactionDecision(
   reactionKey: string,
   allowedDecisions: readonly ExecApprovalReplyDecision[],
 ): ExecApprovalReplyDecision | null {

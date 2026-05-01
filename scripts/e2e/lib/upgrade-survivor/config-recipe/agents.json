@@ -3,8 +3,7 @@
     "model": {
       "primary": "openai/gpt-4.1-mini"
     },
-    "contextTokens": 64000,
-    "skills": ["memory"]
+    "contextTokens": 64000
   },
   "list": [
     {

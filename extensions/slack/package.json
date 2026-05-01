@@ -5,7 +5,8 @@
   "description": "OpenClaw Slack channel plugin",
   "type": "module",
   "dependencies": {
-    "@slack/bolt": "^4.7.1",
+    "@slack/bolt": "^4.7.2",
+    "@slack/types": "^2.20.1",
     "@slack/web-api": "^7.15.1",
     "https-proxy-agent": "^9.0.0"
   },

@@ -103,7 +103,7 @@ openclaw models set venice/claude-opus-4-6
 List all available models:
 
 ```bash
-openclaw models list | grep venice
+openclaw models list --all --provider venice
 ```
 
 You can also run `openclaw configure`, select **Model/auth**, and choose **Venice AI**.
@@ -189,7 +189,7 @@ DeepSeek provider's thinking controls.
 
 ## Model discovery
 
-OpenClaw automatically discovers models from the Venice API when `VENICE_API_KEY` is set. If the API is unreachable, it falls back to a static catalog.
+OpenClaw ships a manifest-backed Venice seed catalog for read-only model listing. Runtime refresh can still discover models from the Venice API, and falls back to the manifest catalog if the API is unreachable.
 
 The `/models` endpoint is public (no auth needed for listing), but inference requires a valid API key.
 

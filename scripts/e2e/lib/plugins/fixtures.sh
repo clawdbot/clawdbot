@@ -20,6 +20,18 @@ write_fixture_plugin() {
   node scripts/e2e/lib/fixture.mjs plugin "$dir" "$id" "$version" "$method" "$name"
 }
 
+write_fixture_plugin_with_cli() {
+  local dir="$1"
+  local id="$2"
+  local version="$3"
+  local method="$4"
+  local name="$5"
+  local cli_root="$6"
+  local cli_output="$7"
+
+  node scripts/e2e/lib/fixture.mjs plugin-cli "$dir" "$id" "$version" "$method" "$name" "$cli_root" "$cli_output"
+}
+
 write_fixture_manifest() {
   local file="$1"
   local id="$2"

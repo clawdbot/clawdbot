@@ -22,10 +22,6 @@ export type TelegramContext = {
   getFile: TelegramGetFile;
 };
 
-export type TelegramSyntheticContextSource = Pick<TelegramContext, "me"> & {
-  getFile?: TelegramGetFile;
-};
-
 /** Telegram sticker metadata for context enrichment and caching. */
 export interface StickerMetadata {
   /** Emoji associated with the sticker. */

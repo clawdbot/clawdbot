@@ -90,6 +90,7 @@ describe("command-path-policy", () => {
   it("keeps config-only agent commands on config-only startup", () => {
     expectResolvedPolicy(["agent"], {
       loadPlugins: expect.any(Function),
+      pluginRegistry: { scope: "all", installBundledRuntimeDeps: true },
       networkProxy: expect.any(Function),
     });
 

@@ -1,6 +1,6 @@
 import { afterEach, vi } from "vitest";
 
-export const DEBUG_PROXY_ENV_KEYS = [
+const DEBUG_PROXY_ENV_KEYS = [
   "OPENCLAW_DEBUG_PROXY_ENABLED",
   "OPENCLAW_DEBUG_PROXY_DB_PATH",
   "OPENCLAW_DEBUG_PROXY_BLOB_DIR",

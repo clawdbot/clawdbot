@@ -42,7 +42,7 @@ export interface UploadCacheAdapter {
 /** File name sanitizer — injected to avoid importing platform-specific utils. */
 export type SanitizeFileNameFn = (name: string) => string;
 
-export interface MediaApiConfig {
+interface MediaApiConfig {
   logger?: EngineLogger;
   /** Upload cache adapter (optional, omit to disable caching). */
   uploadCache?: UploadCacheAdapter;

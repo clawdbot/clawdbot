@@ -6,6 +6,20 @@
   "enabledByDefault": true,
   "providers": ["stepfun", "stepfun-plan"],
   "autoEnableWhenConfiguredProviders": ["stepfun", "stepfun-plan"],
+  "setup": {
+    "providers": [
+      {
+        "id": "stepfun",
+        "authMethods": ["api-key"],
+        "envVars": ["STEPFUN_API_KEY"]
+      },
+      {
+        "id": "stepfun-plan",
+        "authMethods": ["api-key"],
+        "envVars": ["STEPFUN_API_KEY"]
+      }
+    ]
+  },
   "modelCatalog": {
     "providers": {
       "stepfun": {
@@ -67,10 +81,6 @@
       "stepfun": "static",
       "stepfun-plan": "static"
     }
-  },
-  "providerAuthEnvVars": {
-    "stepfun": ["STEPFUN_API_KEY"],
-    "stepfun-plan": ["STEPFUN_API_KEY"]
   },
   "providerAuthChoices": [
     {

@@ -28,6 +28,19 @@ export type GoogleMeetSpeechBlockedReason =
 export type GoogleMeetChromeHealth = {
   inCall?: boolean;
   micMuted?: boolean;
+  lobbyWaiting?: boolean;
+  leaveReason?: string;
+  captioning?: boolean;
+  captionsEnabledAttempted?: boolean;
+  transcriptLines?: number;
+  lastCaptionAt?: string;
+  lastCaptionSpeaker?: string;
+  lastCaptionText?: string;
+  recentTranscript?: Array<{
+    at?: string;
+    speaker?: string;
+    text: string;
+  }>;
   manualActionRequired?: boolean;
   manualActionReason?: GoogleMeetManualActionReason;
   manualActionMessage?: string;

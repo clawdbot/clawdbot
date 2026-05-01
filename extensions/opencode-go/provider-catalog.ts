@@ -4,8 +4,8 @@ import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared"
 
 const PROVIDER_ID = "opencode-go";
 
-export const OPENCODE_GO_OPENAI_BASE_URL = "https://opencode.ai/zen/go/v1";
-export const OPENCODE_GO_ANTHROPIC_BASE_URL = "https://opencode.ai/zen/go";
+const OPENCODE_GO_OPENAI_BASE_URL = "https://opencode.ai/zen/go/v1";
+const OPENCODE_GO_ANTHROPIC_BASE_URL = "https://opencode.ai/zen/go";
 
 const OPENCODE_GO_SUPPLEMENTAL_MODELS = (
   [

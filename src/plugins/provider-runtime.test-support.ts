@@ -1,6 +1,6 @@
 import { expect } from "vitest";
 
-export const openaiCodexCatalogEntries = [
+const openaiCodexCatalogEntries = [
   { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
   { provider: "openai", id: "gpt-5.2-pro", name: "GPT-5.2 Pro" },
   { provider: "openai", id: "gpt-5-mini", name: "GPT-5 mini" },

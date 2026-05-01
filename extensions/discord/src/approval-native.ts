@@ -160,7 +160,7 @@ function createDiscordApproverDmTargetResolver(configOverride?: DiscordExecAppro
   });
 }
 
-export function createDiscordApprovalCapability(configOverride?: DiscordExecApprovalConfig | null) {
+function createDiscordApprovalCapability(configOverride?: DiscordExecApprovalConfig | null) {
   return createApproverRestrictedNativeApprovalCapability({
     channel: "discord",
     channelLabel: "Discord",

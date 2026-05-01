@@ -37,22 +37,13 @@ const programMocks = vi.hoisted(() => {
   };
 });
 
-export const messageCommand = programMocks.messageCommand as AnyMock;
-export const statusCommand = programMocks.statusCommand as AnyMock;
 export const configureCommand = programMocks.configureCommand as AnyMock;
-export const configureCommandWithSections = programMocks.configureCommandWithSections as AnyMock;
 export const setupCommand = programMocks.setupCommand as AnyMock;
-export const onboardCommand = programMocks.onboardCommand as AnyMock;
 export const setupWizardCommand = programMocks.setupWizardCommand as AnyMock;
 export const callGateway = programMocks.callGateway as AnyMock;
-export const runChannelLogin = programMocks.runChannelLogin as AnyMock;
-export const runChannelLogout = programMocks.runChannelLogout as AnyMock;
 export const runTui = programMocks.runTui as AnyMock;
 export const runCrestodian = programMocks.runCrestodian as AnyMock;
-export const loadAndMaybeMigrateDoctorConfig =
-  programMocks.loadAndMaybeMigrateDoctorConfig as AnyMock;
 export const ensureConfigReady = programMocks.ensureConfigReady as AnyMock;
-export const ensurePluginRegistryLoaded = programMocks.ensurePluginRegistryLoaded as AnyMock;
 
 export const runtime = programMocks.runtime as {
   log: Mock<(...args: unknown[]) => void>;

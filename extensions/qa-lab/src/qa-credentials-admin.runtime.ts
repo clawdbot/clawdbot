@@ -61,7 +61,6 @@ const listCredentialsResponseSchema = z.object({
 
 export type QaCredentialAdminListStatus = z.infer<typeof listStatusSchema>;
 export type QaCredentialRecord = z.infer<typeof credentialRecordSchema>;
-export type QaCredentialListResponse = z.infer<typeof listCredentialsResponseSchema>;
 
 export class QaCredentialAdminError extends Error {
   code: string;
@@ -497,13 +496,3 @@ export async function listQaCredentialSets(options: ListQaCredentialSetsOptions)
     },
   });
 }
-
-export const __testing = {
-  DEFAULT_ENDPOINT_PREFIX,
-  DEFAULT_HTTP_TIMEOUT_MS,
-  normalizeConvexSiteUrl,
-  normalizeEndpointPrefix,
-  normalizeStatus,
-  parsePositiveIntegerEnv,
-  resolveAdminConfig,
-};

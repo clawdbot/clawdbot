@@ -93,13 +93,3 @@ export async function requestXaiWebSearch(params: {
     },
   );
 }
-
-export const __testing = {
-  buildXaiWebSearchPayload,
-  extractXaiWebSearchContent,
-  resolveXaiInlineCitations,
-  resolveXaiSearchConfig,
-  resolveXaiWebSearchModel,
-  requestXaiWebSearch,
-  XAI_DEFAULT_WEB_SEARCH_MODEL,
-} as const;

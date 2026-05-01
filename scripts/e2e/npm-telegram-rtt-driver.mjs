@@ -10,12 +10,12 @@ const timeoutMs = Number(process.env.OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS ??
 const canaryTimeoutMs = Number(
   process.env.OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS ?? String(timeoutMs),
 );
-const scenarioIds = (
-  process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS ?? "telegram-mentioned-message-reply"
-)
-  .split(",")
-  .map((value) => value.trim())
-  .filter(Boolean);
+const scenarioIds = new Set(
+  (process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS ?? "telegram-mentioned-message-reply")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean),
+);
 
 if (!groupId || !driverToken || !sutToken) {
   throw new Error(
@@ -61,10 +61,6 @@ let driverUpdateOffset = 0;
 
 function messageText(message) {
   return message.text ?? message.caption ?? "";
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function flushUpdates(bot) {
@@ -194,7 +190,7 @@ async function main() {
     }),
   );
 
-  if (scenarioIds.includes("telegram-mentioned-message-reply")) {
+  if (scenarioIds.has("telegram-mentioned-message-reply")) {
     const marker = `OPENCLAW_RTT_${Date.now().toString(36)}`;
     scenarios.push(
       await runScenario({

@@ -1,7 +1,7 @@
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildDoubaoCodingProvider, buildDoubaoProvider } from "./provider-catalog.js";
 
-export const volcengineProviderDiscovery: ProviderPlugin[] = [
+const volcengineProviderDiscovery: ProviderPlugin[] = [
   {
     id: "volcengine",
     label: "Volcengine",

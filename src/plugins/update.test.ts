@@ -15,6 +15,7 @@ function appBundledPluginRoot(pluginId: string): string {
 const installPluginFromNpmSpecMock = vi.fn();
 const installPluginFromMarketplaceMock = vi.fn();
 const installPluginFromClawHubMock = vi.fn();
+const installPluginFromGitSpecMock = vi.fn();
 const resolveBundledPluginSourcesMock = vi.fn();
 const runCommandWithTimeoutMock = vi.fn();
 const tempDirs: string[] = [];
@@ -26,6 +27,10 @@ vi.mock("./install.js", () => ({
   PLUGIN_INSTALL_ERROR_CODE: {
     NPM_PACKAGE_NOT_FOUND: "npm_package_not_found",
   },
+}));
+
+vi.mock("./git-install.js", () => ({
+  installPluginFromGitSpec: (...args: unknown[]) => installPluginFromGitSpecMock(...args),
 }));
 
 vi.mock("./marketplace.js", () => ({
@@ -137,6 +142,26 @@ function createClawHubInstallConfig(params: {
           clawhubPackage: params.clawhubPackage,
           clawhubFamily: params.clawhubFamily,
           clawhubChannel: params.clawhubChannel,
+        },
+      },
+    },
+  };
+}
+
+function createGitInstallConfig(params: {
+  pluginId: string;
+  spec: string;
+  installPath: string;
+  commit?: string;
+}): OpenClawConfig {
+  return {
+    plugins: {
+      installs: {
+        [params.pluginId]: {
+          source: "git" as const,
+          spec: params.spec,
+          installPath: params.installPath,
+          ...(params.commit ? { gitCommit: params.commit } : {}),
         },
       },
     },
@@ -277,7 +302,9 @@ describe("updateNpmInstalledPlugins", () => {
     installPluginFromNpmSpecMock.mockReset();
     installPluginFromMarketplaceMock.mockReset();
     installPluginFromClawHubMock.mockReset();
+    installPluginFromGitSpecMock.mockReset();
     resolveBundledPluginSourcesMock.mockReset();
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
     runCommandWithTimeoutMock.mockReset();
   });
 
@@ -1013,6 +1040,97 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
+  it("skips ClawHub plugin update when bundled version is newer", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(
+      new Map([
+        [
+          "whatsapp",
+          {
+            pluginId: "whatsapp",
+            localPath: appBundledPluginRoot("whatsapp"),
+            version: "2026.4.20",
+          },
+        ],
+      ]),
+    );
+
+    const config = createClawHubInstallConfig({
+      pluginId: "whatsapp",
+      installPath: "/tmp/whatsapp",
+      clawhubUrl: "https://clawhub.ai",
+      clawhubPackage: "whatsapp",
+      clawhubFamily: "bundle-plugin",
+      clawhubChannel: "community",
+    });
+    (config.plugins!.installs!.whatsapp as Record<string, unknown>).version = "2026.2.9";
+
+    const warnMessages: string[] = [];
+    const result = await updateNpmInstalledPlugins({
+      config,
+      pluginIds: ["whatsapp"],
+      logger: { warn: (msg) => warnMessages.push(msg) },
+    });
+
+    expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.outcomes).toEqual([
+      expect.objectContaining({
+        pluginId: "whatsapp",
+        status: "skipped",
+        message: expect.stringContaining("bundled version 2026.4.20 is newer"),
+      }),
+    ]);
+    expect(warnMessages).toEqual([expect.stringContaining("bundled version 2026.4.20 is newer")]);
+  });
+
+  it("proceeds with ClawHub plugin update when bundled version is older", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(
+      new Map([
+        [
+          "demo",
+          {
+            pluginId: "demo",
+            localPath: appBundledPluginRoot("demo"),
+            version: "1.0.0",
+          },
+        ],
+      ]),
+    );
+    installPluginFromClawHubMock.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: "/tmp/demo",
+      version: "2.0.0",
+      clawhub: {
+        source: "clawhub",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "demo",
+        clawhubFamily: "code-plugin",
+        clawhubChannel: "official",
+        integrity: "sha256-new",
+        resolvedAt: "2026-04-30T00:00:00.000Z",
+      },
+    });
+
+    const config = createClawHubInstallConfig({
+      pluginId: "demo",
+      installPath: "/tmp/demo",
+      clawhubUrl: "https://clawhub.ai",
+      clawhubPackage: "demo",
+      clawhubFamily: "code-plugin",
+      clawhubChannel: "official",
+    });
+    (config.plugins!.installs!.demo as Record<string, unknown>).version = "1.5.0";
+
+    const result = await updateNpmInstalledPlugins({
+      config,
+      pluginIds: ["demo"],
+    });
+
+    expect(installPluginFromClawHubMock).toHaveBeenCalled();
+    expect(result.changed).toBe(true);
+  });
+
   it("migrates legacy unscoped install keys when a scoped npm package updates", async () => {
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: true,
@@ -1181,6 +1299,50 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
+  it("updates git installs and records resolved commit metadata", async () => {
+    installPluginFromGitSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: "/tmp/demo",
+      version: "1.3.0",
+      extensions: ["index.ts"],
+      git: {
+        url: "https://github.com/acme/demo.git",
+        ref: "main",
+        commit: "def456",
+        resolvedAt: "2026-04-30T00:00:00.000Z",
+      },
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: createGitInstallConfig({
+        pluginId: "demo",
+        installPath: "/tmp/demo",
+        spec: "git:github.com/acme/demo@main",
+        commit: "abc123",
+      }),
+      pluginIds: ["demo"],
+    });
+
+    expect(installPluginFromGitSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "git:github.com/acme/demo@main",
+        expectedPluginId: "demo",
+        mode: "update",
+      }),
+    );
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.installs?.demo).toMatchObject({
+      source: "git",
+      spec: "git:github.com/acme/demo@main",
+      installPath: "/tmp/demo",
+      version: "1.3.0",
+      gitUrl: "https://github.com/acme/demo.git",
+      gitRef: "main",
+      gitCommit: "def456",
+    });
+  });
+
   it("forwards dangerous force unsafe install to plugin update installers", async () => {
     installPluginFromNpmSpecMock.mockResolvedValue(
       createSuccessfulNpmUpdateResult({
@@ -1242,6 +1404,19 @@ describe("updateNpmInstalledPlugins", () => {
       marketplaceSource: "acme/plugins",
       marketplacePlugin: "demo",
     });
+    installPluginFromGitSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: installPath,
+      version: "1.2.0",
+      extensions: ["index.ts"],
+      git: {
+        url: "https://github.com/acme/demo.git",
+        ref: "main",
+        commit: "abc123",
+        resolvedAt: "2026-04-30T00:00:00.000Z",
+      },
+    });
 
     await updateNpmInstalledPlugins({
       config: createNpmInstallConfig({
@@ -1271,6 +1446,14 @@ describe("updateNpmInstalledPlugins", () => {
       }),
       pluginIds: ["demo"],
     });
+    await updateNpmInstalledPlugins({
+      config: createGitInstallConfig({
+        pluginId: "demo",
+        installPath,
+        spec: "git:github.com/acme/demo@main",
+      }),
+      pluginIds: ["demo"],
+    });
 
     expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
       expect.objectContaining({ extensionsDir }),
@@ -1281,12 +1464,16 @@ describe("updateNpmInstalledPlugins", () => {
     expect(installPluginFromMarketplaceMock).toHaveBeenCalledWith(
       expect.objectContaining({ extensionsDir }),
     );
+    expect(installPluginFromGitSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({ extensionsDir }),
+    );
   });
 });
 
 describe("syncPluginsForUpdateChannel", () => {
   beforeEach(() => {
     installPluginFromNpmSpecMock.mockReset();
+    installPluginFromGitSpecMock.mockReset();
     resolveBundledPluginSourcesMock.mockReset();
   });
 

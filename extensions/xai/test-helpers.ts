@@ -2,16 +2,16 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model } from "@mariozechner/pi-ai";
 import { expect } from "vitest";
 
-export type XaiToolPayloadFunction = {
+type XaiToolPayloadFunction = {
   function?: Record<string, unknown>;
 };
 
-export type XaiTestPayload = Record<string, unknown> & {
+type XaiTestPayload = Record<string, unknown> & {
   tools?: Array<{ type?: string; function?: Record<string, unknown> }>;
   input?: unknown[];
 };
 
-export function createXaiToolStreamPayload(): XaiTestPayload {
+function createXaiToolStreamPayload(): XaiTestPayload {
   return {
     reasoning: { effort: "high" },
     tools: [

@@ -23,7 +23,6 @@ type HarnessState = {
       attachOnly?: boolean;
     }
   >;
-  createTargetId: string | null;
   prevGatewayPort: string | undefined;
   prevGatewayToken: string | undefined;
   prevGatewayPassword: string | undefined;
@@ -37,7 +36,6 @@ const state: HarnessState = {
   cfgEvaluateEnabled: true,
   cfgDefaultProfile: "openclaw",
   cfgProfiles: {},
-  createTargetId: null,
   prevGatewayPort: undefined,
   prevGatewayToken: undefined,
   prevGatewayPassword: undefined,
@@ -57,14 +55,6 @@ export function restoreGatewayPortEnv(prevGatewayPort: string | undefined): void
     return;
   }
   process.env.OPENCLAW_GATEWAY_PORT = prevGatewayPort;
-}
-
-export function setBrowserControlServerCreateTargetId(targetId: string | null): void {
-  state.createTargetId = targetId;
-}
-
-export function setBrowserControlServerAttachOnly(attachOnly: boolean): void {
-  state.cfgAttachOnly = attachOnly;
 }
 
 export function setBrowserControlServerEvaluateEnabled(enabled: boolean): void {
@@ -360,10 +350,6 @@ const chromeMcpMocks = vi.hoisted(() => ({
   uploadChromeMcpFile: vi.fn(async () => {}),
 }));
 
-export function getChromeMcpMocks(): Record<string, MockFn> {
-  return chromeMcpMocks as unknown as Record<string, MockFn>;
-}
-
 const chromeUserDataDir = vi.hoisted(() => ({ dir: "/tmp/openclaw" }));
 installChromeUserDataDirHooks(chromeUserDataDir);
 
@@ -434,10 +420,6 @@ vi.mock("../config/config.js", async () => {
 });
 
 const launchCalls = vi.hoisted(() => [] as Array<{ port: number }>);
-
-export function getLaunchCalls() {
-  return launchCalls;
-}
 
 vi.mock("./chrome.js", () => ({
   isChromeCdpReady: vi.fn(async () => state.reachable),
@@ -535,7 +517,6 @@ export async function resetBrowserControlServerTestContext(): Promise<void> {
   state.cfgEvaluateEnabled = true;
   state.cfgDefaultProfile = "openclaw";
   state.cfgProfiles = defaultProfilesForState(state.testPort);
-  state.createTargetId = null;
 
   mockClearAll(pwMocks);
   mockClearAll(cdpMocks);
@@ -583,9 +564,6 @@ export function installBrowserControlServerHooks() {
   beforeEach(async () => {
     vi.useRealTimers();
     cdpMocks.createTargetViaCdp.mockImplementation(async () => {
-      if (state.createTargetId) {
-        return { targetId: state.createTargetId };
-      }
       throw new Error("cdp disabled");
     });
 

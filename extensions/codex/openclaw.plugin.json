@@ -33,6 +33,16 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "codexDynamicToolsProfile": {
+        "type": "string",
+        "enum": ["native-first", "openclaw-compat"],
+        "default": "native-first"
+      },
+      "codexDynamicToolsExclude": {
+        "type": "array",
+        "items": { "type": "string" },
+        "default": []
+      },
       "discovery": {
         "type": "object",
         "additionalProperties": false,
@@ -141,6 +151,16 @@
     }
   },
   "uiHints": {
+    "codexDynamicToolsProfile": {
+      "label": "Dynamic Tools Profile",
+      "help": "Select which OpenClaw dynamic tools are exposed to Codex app-server. native-first omits tools Codex already owns.",
+      "advanced": true
+    },
+    "codexDynamicToolsExclude": {
+      "label": "Dynamic Tool Excludes",
+      "help": "Additional OpenClaw dynamic tool names to omit from Codex app-server turns.",
+      "advanced": true
+    },
     "discovery": {
       "label": "Model Discovery",
       "help": "Plugin-owned controls for discovering Codex app-server models."

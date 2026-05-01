@@ -147,6 +147,7 @@ export const updateHandlers: GatewayRequestHandlers = {
             delayMs: updateWasPackageSwap ? 0 : restartDelayMs,
             reason: "update.run",
             skipDeferral: updateWasPackageSwap,
+            skipCooldown: updateWasPackageSwap,
             audit: {
               actor: actor.actor,
               deviceId: actor.deviceId,

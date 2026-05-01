@@ -1675,23 +1675,21 @@ export function loadGatewaySessionRow(
   });
 }
 
-export function listSessionsFromStore(params: {
-  cfg: OpenClawConfig;
-  storePath: string;
-  store: Record<string, SessionEntry>;
-  modelCatalog?: ModelCatalogEntry[];
-  opts: import("./protocol/index.js").SessionsListParams;
-}): SessionsListResult {
-  const { cfg, storePath, store, opts } = params;
-  const now = Date.now();
-  const sessionListTranscriptUsageMaxBytes = 64 * 1024;
-  const sessionListTranscriptFieldRows = 100;
-  const storeChildSessionsByKey = buildStoreChildSessionIndex(store, now);
+/**
+ * Number of session rows to build per batch before yielding to the event loop.
+ * Keeps the main thread responsive during large session list operations while
+ * avoiding excessive yielding overhead for small stores.
+ */
+const SESSIONS_LIST_YIELD_BATCH_SIZE = 10;
 
+function filterAndSortSessionEntries(params: {
+  store: Record<string, SessionEntry>;
+  opts: import("./protocol/index.js").SessionsListParams;
+  now: number;
+}): [string, SessionEntry][] {
+  const { store, opts, now } = params;
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
-  const includeDerivedTitles = opts.includeDerivedTitles === true;
-  const includeLastMessage = opts.includeLastMessage === true;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
   const label = normalizeOptionalString(opts.label) ?? "";
   const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
@@ -1782,6 +1780,26 @@ export function listSessionsFromStore(params: {
     entries = entries.slice(0, limit);
   }
 
+  return entries;
+}
+
+export function listSessionsFromStore(params: {
+  cfg: OpenClawConfig;
+  storePath: string;
+  store: Record<string, SessionEntry>;
+  modelCatalog?: ModelCatalogEntry[];
+  opts: import("./protocol/index.js").SessionsListParams;
+}): SessionsListResult {
+  const { cfg, storePath, store, opts } = params;
+  const now = Date.now();
+  const sessionListTranscriptUsageMaxBytes = 64 * 1024;
+  const sessionListTranscriptFieldRows = 100;
+  const storeChildSessionsByKey = buildStoreChildSessionIndex(store, now);
+  const includeDerivedTitles = opts.includeDerivedTitles === true;
+  const includeLastMessage = opts.includeLastMessage === true;
+
+  const entries = filterAndSortSessionEntries({ store, opts, now });
+
   const sessions = entries.map(([key, entry], index) => {
     const includeTranscriptFields = index < sessionListTranscriptFieldRows;
     return buildGatewaySessionRow({
@@ -1798,6 +1816,68 @@ export function listSessionsFromStore(params: {
       storeChildSessionsByKey,
     });
   });
+
+  return {
+    ts: now,
+    path: storePath,
+    count: sessions.length,
+    defaults: getSessionDefaults(cfg, params.modelCatalog),
+    sessions,
+  };
+}
+
+/**
+ * Async version of listSessionsFromStore that yields to the event loop between
+ * batches of session row builds. This prevents large session stores from
+ * blocking the event loop during sessions.list requests.
+ *
+ * The synchronous file I/O in readSessionTitleFieldsFromTranscript (head/tail
+ * reads for derived titles and last-message previews) is the dominant blocker.
+ * By yielding every SESSIONS_LIST_YIELD_BATCH_SIZE rows, we keep the event
+ * loop responsive for WebSocket heartbeats, channel I/O, and concurrent RPC.
+ */
+export async function listSessionsFromStoreAsync(params: {
+  cfg: OpenClawConfig;
+  storePath: string;
+  store: Record<string, SessionEntry>;
+  modelCatalog?: ModelCatalogEntry[];
+  opts: import("./protocol/index.js").SessionsListParams;
+}): Promise<SessionsListResult> {
+  const { cfg, storePath, store, opts } = params;
+  const now = Date.now();
+  const sessionListTranscriptUsageMaxBytes = 64 * 1024;
+  const sessionListTranscriptFieldRows = 100;
+  const storeChildSessionsByKey = buildStoreChildSessionIndex(store, now);
+  const includeDerivedTitles = opts.includeDerivedTitles === true;
+  const includeLastMessage = opts.includeLastMessage === true;
+
+  const entries = filterAndSortSessionEntries({ store, opts, now });
+
+  const sessions: GatewaySessionRow[] = [];
+  for (let i = 0; i < entries.length; i++) {
+    const [key, entry] = entries[i];
+    const includeTranscriptFields = i < sessionListTranscriptFieldRows;
+    sessions.push(
+      buildGatewaySessionRow({
+        cfg,
+        storePath,
+        store,
+        key,
+        entry,
+        modelCatalog: params.modelCatalog,
+        now,
+        includeDerivedTitles: includeTranscriptFields && includeDerivedTitles,
+        includeLastMessage: includeTranscriptFields && includeLastMessage,
+        transcriptUsageMaxBytes: sessionListTranscriptUsageMaxBytes,
+        storeChildSessionsByKey,
+      }),
+    );
+    // Yield to the event loop between batches so WebSocket heartbeats,
+    // channel I/O, and concurrent RPC calls are not starved.
+    if ((i + 1) % SESSIONS_LIST_YIELD_BATCH_SIZE === 0 && i + 1 < entries.length) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  }
 
   return {
     ts: now,

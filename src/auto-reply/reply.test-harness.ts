@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, vi, type Mock } from "vitest";
 import { withFastReplyConfig } from "./reply/get-reply-fast-path.js";
 
-export type ReplyRuntimeMocks = {
+type ReplyRuntimeMocks = {
   runEmbeddedPiAgent: Mock;
   loadModelCatalog: Mock;
   webAuthExists: Mock;

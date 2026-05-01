@@ -5,6 +5,7 @@ export const InstallSourceSchema = z.union([
   z.literal("archive"),
   z.literal("path"),
   z.literal("clawhub"),
+  z.literal("git"),
 ]);
 
 export const PluginInstallSourceSchema = z.union([InstallSourceSchema, z.literal("marketplace")]);
@@ -28,6 +29,9 @@ export const InstallRecordShape = {
   clawhubChannel: z
     .union([z.literal("official"), z.literal("community"), z.literal("private")])
     .optional(),
+  gitUrl: z.string().optional(),
+  gitRef: z.string().optional(),
+  gitCommit: z.string().optional(),
 } as const;
 
 export const PluginInstallRecordShape = {

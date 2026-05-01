@@ -1,7 +1,4 @@
-import {
-  REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES,
-  type RealtimeVoiceAgentConsultToolPolicy,
-} from "openclaw/plugin-sdk/realtime-voice";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES } from "openclaw/plugin-sdk/realtime-voice";
 import {
   buildSecretInputSchema,
   hasConfiguredSecretInput,
@@ -39,7 +36,6 @@ export const E164Schema = z
  * - "open": Accept all inbound calls (dangerous!)
  */
 export const InboundPolicySchema = z.enum(["disabled", "allowlist", "pairing", "open"]);
-export type InboundPolicy = z.infer<typeof InboundPolicySchema>;
 
 // -----------------------------------------------------------------------------
 // Provider-Specific Configuration
@@ -67,9 +63,6 @@ export const TwilioConfigSchema = z
     authToken: SecretInputSchema.optional(),
   })
   .strict();
-export type TwilioConfig = Omit<z.infer<typeof TwilioConfigSchema>, "authToken"> & {
-  authToken?: SecretInput;
-};
 
 export const PlivoConfigSchema = z
   .object({
@@ -99,7 +92,6 @@ export const VoiceCallServeConfigSchema = z
   })
   .strict()
   .default({ port: 3334, bind: "127.0.0.1", path: "/voice/webhook" });
-export type VoiceCallServeConfig = z.infer<typeof VoiceCallServeConfigSchema>;
 
 export const VoiceCallTailscaleConfigSchema = z
   .object({
@@ -115,7 +107,6 @@ export const VoiceCallTailscaleConfigSchema = z
   })
   .strict()
   .default({ mode: "off", path: "/voice/webhook" });
-export type VoiceCallTailscaleConfig = z.infer<typeof VoiceCallTailscaleConfigSchema>;
 
 // -----------------------------------------------------------------------------
 // Tunnel Configuration (unified ngrok/tailscale)
@@ -146,7 +137,6 @@ export const VoiceCallTunnelConfigSchema = z
   })
   .strict()
   .default({ provider: "none", allowNgrokFreeTierLoopbackBypass: false });
-export type VoiceCallTunnelConfig = z.infer<typeof VoiceCallTunnelConfigSchema>;
 
 // -----------------------------------------------------------------------------
 // Webhook Security Configuration
@@ -195,7 +185,6 @@ export const OutboundConfigSchema = z
   })
   .strict()
   .default({ defaultMode: "notify", notifyHangupDelaySec: 3 });
-export type OutboundConfig = z.infer<typeof OutboundConfigSchema>;
 
 // -----------------------------------------------------------------------------
 // Realtime Voice Configuration
@@ -218,17 +207,10 @@ export type RealtimeToolConfig = z.infer<typeof RealtimeToolSchema>;
 export const VoiceCallRealtimeProvidersConfigSchema = z
   .record(z.string(), z.record(z.string(), z.unknown()))
   .default({});
-export type VoiceCallRealtimeProvidersConfig = z.infer<
-  typeof VoiceCallRealtimeProvidersConfigSchema
->;
 
 export const VoiceCallRealtimeToolPolicySchema = z.enum(REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES);
-export type VoiceCallRealtimeToolPolicy = RealtimeVoiceAgentConsultToolPolicy;
 
 export const VoiceCallRealtimeFastContextSourceSchema = z.enum(["memory", "sessions"]);
-export type VoiceCallRealtimeFastContextSource = z.infer<
-  typeof VoiceCallRealtimeFastContextSourceSchema
->;
 
 export const VoiceCallRealtimeFastContextConfigSchema = z
   .object({
@@ -261,9 +243,6 @@ export type VoiceCallRealtimeFastContextConfig = z.infer<
 export const VoiceCallStreamingProvidersConfigSchema = z
   .record(z.string(), z.record(z.string(), z.unknown()))
   .default({});
-export type VoiceCallStreamingProvidersConfig = z.infer<
-  typeof VoiceCallStreamingProvidersConfigSchema
->;
 
 export const VoiceCallRealtimeConfigSchema = z
   .object({
@@ -337,7 +316,6 @@ export const VoiceCallStreamingConfigSchema = z
     maxPendingConnectionsPerIp: 4,
     maxConnections: 128,
   });
-export type VoiceCallStreamingConfig = z.infer<typeof VoiceCallStreamingConfigSchema>;
 
 // -----------------------------------------------------------------------------
 // Main Voice Call Configuration

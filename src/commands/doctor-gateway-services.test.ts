@@ -664,7 +664,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(mocks.stage).not.toHaveBeenCalled();
   });
 
-  it("repairs entrypoint mismatch in non-interactive fix mode", async () => {
+  it("skips entrypoint rewrite in non-interactive fix mode", async () => {
     setupGatewayEntrypointRepairScenario({
       currentEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/entry.js",
       installEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/index.js",
@@ -680,8 +680,12 @@ describe("maybeRepairGatewayServiceConfig", () => {
       expect.stringContaining("Gateway service entrypoint does not match the current install."),
       "Gateway service config",
     );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("openclaw gateway install --force"),
+      "Gateway service config",
+    );
     expect(mocks.stage).not.toHaveBeenCalled();
-    expect(mocks.install).toHaveBeenCalledTimes(1);
+    expect(mocks.install).not.toHaveBeenCalled();
   });
 
   it("stages service config repairs during non-interactive update repairs", async () => {

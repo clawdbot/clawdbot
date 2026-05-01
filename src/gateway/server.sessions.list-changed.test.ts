@@ -157,6 +157,76 @@ test("sessions.list uses the gateway model catalog for effective thinking defaul
   );
 });
 
+test("sessions.list yields before responding during bulk transcript hydration", async () => {
+  const { dir } = await createSessionStoreDir();
+  const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {};
+  const now = Date.now();
+  for (let i = 0; i < 11; i += 1) {
+    const sessionId = `sess-list-yield-${i}`;
+    entries[`bulk-${i}`] = sessionStoreEntry(sessionId, { updatedAt: now - i });
+    await fs.writeFile(
+      path.join(dir, `${sessionId}.jsonl`),
+      [
+        JSON.stringify({ type: "session", version: 1, id: sessionId }),
+        JSON.stringify({ message: { role: "user", content: `title ${i}` } }),
+        JSON.stringify({ message: { role: "assistant", content: `last ${i}` } }),
+      ].join("\n"),
+      "utf-8",
+    );
+  }
+  await writeSessionStore({ entries });
+
+  const respond = vi.fn();
+  const sessionsHandlers = await getSessionsHandlers();
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  const request = sessionsHandlers["sessions.list"]({
+    req: {
+      type: "req",
+      id: "req-sessions-list-yield",
+      method: "sessions.list",
+      params: {
+        includeDerivedTitles: true,
+        includeLastMessage: true,
+        limit: 11,
+      },
+    },
+    params: {
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+      limit: 11,
+    },
+    respond,
+    client: null,
+    isWebchatConnect: () => false,
+    context: {
+      getRuntimeConfig,
+      loadGatewayModelCatalog: async () => [],
+      logGateway: {
+        debug: vi.fn(),
+      },
+    } as never,
+  });
+
+  await Promise.resolve();
+  await Promise.resolve();
+
+  expect(respond).not.toHaveBeenCalled();
+  await request;
+  expect(respond).toHaveBeenCalledWith(
+    true,
+    expect.objectContaining({
+      sessions: expect.arrayContaining([
+        expect.objectContaining({
+          key: "agent:main:bulk-0",
+          derivedTitle: "title 0",
+          lastMessagePreview: "last 0",
+        }),
+      ]),
+    }),
+    undefined,
+  );
+});
+
 test("sessions.list does not block on slow model catalog discovery", async () => {
   await createSessionStoreDir();
   await writeSessionStore({

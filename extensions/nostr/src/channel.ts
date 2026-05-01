@@ -205,4 +205,4 @@ export async function getNostrProfileState(accountId: string = DEFAULT_ACCOUNT_I
   return bus.getProfileState();
 }
 
-export { getActiveNostrBuses, getNostrMetrics } from "./gateway.js";
+export { getActiveNostrBuses } from "./gateway.js";

@@ -11,7 +11,7 @@ type DiscordSendRuntime = typeof import("./send.js");
 
 export type DiscordSendFn = DiscordSendRuntime["sendMessageDiscord"];
 export type DiscordVoiceSendFn = DiscordSendRuntime["sendVoiceMessageDiscord"];
-export type DiscordFormattingOptions = {
+type DiscordFormattingOptions = {
   textLimit?: number;
   maxLinesPerMessage?: number;
   tableMode?: NonNullable<Parameters<DiscordSendFn>[2]>["tableMode"];

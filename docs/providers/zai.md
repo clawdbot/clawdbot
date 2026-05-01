@@ -34,9 +34,9 @@ with a Z.AI API key.
         }
         ```
       </Step>
-      <Step title="Verify the model is available">
+      <Step title="Verify the model is listed">
         ```bash
-        openclaw models list --provider zai
+        openclaw models list --all --provider zai
         ```
       </Step>
     </Steps>
@@ -70,9 +70,9 @@ with a Z.AI API key.
         }
         ```
       </Step>
-      <Step title="Verify the model is available">
+      <Step title="Verify the model is listed">
         ```bash
-        openclaw models list --provider zai
+        openclaw models list --all --provider zai
         ```
       </Step>
     </Steps>
@@ -82,7 +82,14 @@ with a Z.AI API key.
 
 ## Built-in catalog
 
-OpenClaw currently seeds the bundled `zai` provider with:
+OpenClaw ships the bundled `zai` provider catalog in the plugin manifest, so read-only
+listing can show known GLM rows without loading provider runtime:
+
+```bash
+openclaw models list --all --provider zai
+```
+
+The manifest-backed catalog currently includes:
 
 | Model ref            | Notes         |
 | -------------------- | ------------- |

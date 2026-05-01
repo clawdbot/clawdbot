@@ -6,6 +6,7 @@ import type { Guild } from "../internal/discord.js";
 import {
   isDiscordGroupAllowedByPolicy,
   resolveDiscordChannelConfigWithFallback,
+  type DiscordChannelConfigResolved,
   resolveDiscordGuildEntry,
   resolveDiscordMemberAccessState,
   resolveDiscordOwnerAccess,
@@ -30,7 +31,9 @@ export async function authorizeDiscordVoiceIngress(params: {
   memberRoleIds: string[];
   ownerAllowFrom?: string[];
   sender: { id: string; name?: string; tag?: string };
-}): Promise<{ ok: true } | { ok: false; message: string }> {
+}): Promise<
+  { ok: true; channelConfig?: DiscordChannelConfigResolved | null } | { ok: false; message: string }
+> {
   const groupPolicy =
     params.groupPolicy ??
     resolveOpenProviderRuntimeGroupPolicy({
@@ -116,6 +119,6 @@ export async function authorizeDiscordVoiceIngress(params: {
     authorizers,
     modeWhenAccessGroupsOff: "configured",
   })
-    ? { ok: true }
+    ? { ok: true, channelConfig }
     : { ok: false, message: "You are not authorized to use this command." };
 }

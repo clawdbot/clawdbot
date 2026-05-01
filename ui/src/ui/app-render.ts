@@ -12,6 +12,7 @@ import {
   resolveAssistantAttachmentAuthToken,
   renderSidebarConnectionStatus,
   renderTopbarThemeModeToggle,
+  createChatSession,
   switchChatSession,
 } from "./app-render.helpers.ts";
 import { warnQueryToken } from "./app-settings.ts";
@@ -2373,8 +2374,7 @@ export function renderApp(state: AppViewState) {
               onDismissSideResult: () => {
                 state.chatSideResult = null;
               },
-              onNewSession: () =>
-                state.handleSendChat("/new", { confirmReset: true, restoreDraft: true }),
+              onNewSession: () => void createChatSession(state),
               onClearHistory: async () => {
                 if (!state.client || !state.connected) {
                   return;

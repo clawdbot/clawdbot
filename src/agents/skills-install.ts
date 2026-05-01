@@ -234,11 +234,6 @@ async function resolveBrewBinDir(timeoutMs: number, brewExe?: string): Promise<s
     }
   }
 
-  const envPrefix = process.env.HOMEBREW_PREFIX?.trim();
-  if (envPrefix) {
-    return path.join(envPrefix, "bin");
-  }
-
   for (const candidate of ["/opt/homebrew/bin", "/usr/local/bin"]) {
     try {
       if (fs.existsSync(candidate)) {

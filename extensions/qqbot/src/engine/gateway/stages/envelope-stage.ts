@@ -13,7 +13,7 @@ import type { QueuedMessage } from "../message-queue.js";
 
 // ─────────────────────────── Envelope body ───────────────────────────
 
-export interface BuildBodyInput {
+interface BuildBodyInput {
   event: QueuedMessage;
   deps: InboundPipelineDeps;
   userContent: string;
@@ -49,7 +49,7 @@ export function buildQuotePart(replyTo?: ReplyToInfo): string {
     : `[Quoted message begins]\nOriginal content unavailable\n[Quoted message ends]\n`;
 }
 
-export interface BuildDynamicCtxInput {
+interface BuildDynamicCtxInput {
   imageUrls: string[];
   uniqueVoicePaths: string[];
   uniqueVoiceUrls: string[];
@@ -94,7 +94,7 @@ export function buildGroupSystemPrompt(
 
 // ─────────────────────────── Media classification ───────────────────────────
 
-export interface MediaClassification {
+interface MediaClassification {
   localMediaPaths: string[];
   localMediaTypes: string[];
   remoteMediaUrls: string[];

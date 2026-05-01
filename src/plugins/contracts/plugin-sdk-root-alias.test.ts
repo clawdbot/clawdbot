@@ -468,6 +468,11 @@ describe("plugin-sdk root alias", () => {
     expect(typeof rootSdk.stringEnum).toBe("function");
     expect(typeof rootSdk.buildChannelConfigSchema).toBe("function");
     expect(typeof rootSdk.normalizeAccountId).toBe("function");
+    expect(typeof rootSdk.createReplyPrefixContext).toBe("function");
+    expect(typeof rootSdk.createReplyPrefixOptions).toBe("function");
+    expect(typeof rootSdk.createTypingCallbacks).toBe("function");
+    expect(typeof rootSdk.createChannelReplyPipeline).toBe("function");
+    expect(typeof rootSdk.resolveChannelSourceReplyDeliveryMode).toBe("function");
     expect(typeof rootSdk.resolvePreferredOpenClawTmpDir).toBe("function");
     expect(typeof rootSdk.default).toBe("object");
     expect(rootSdk.default).toBe(rootSdk);

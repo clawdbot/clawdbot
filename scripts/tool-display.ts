@@ -1,10 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  TOOL_DISPLAY_CONFIG,
-  serializeToolDisplayConfig,
-} from "../src/agents/tool-display-config.js";
+import { TOOL_DISPLAY_CONFIG, type ToolDisplayConfig } from "../src/agents/tool-display-config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -90,4 +87,8 @@ function collectToolNamesFromFile(sourcePath: string, names: Set<string>) {
       names.add(name);
     }
   }
+}
+
+function serializeToolDisplayConfig(config: ToolDisplayConfig = TOOL_DISPLAY_CONFIG): string {
+  return `${JSON.stringify(config, null, 2)}\n`;
 }

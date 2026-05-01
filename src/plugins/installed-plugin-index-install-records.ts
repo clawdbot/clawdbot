@@ -42,6 +42,9 @@ function normalizeInstallRecord(
   setInstallStringField(normalized, "clawhubPackage", record.clawhubPackage);
   setInstallStringField(normalized, "clawhubFamily", record.clawhubFamily);
   setInstallStringField(normalized, "clawhubChannel", record.clawhubChannel);
+  setInstallStringField(normalized, "gitUrl", record.gitUrl);
+  setInstallStringField(normalized, "gitRef", record.gitRef);
+  setInstallStringField(normalized, "gitCommit", record.gitCommit);
   setInstallStringField(normalized, "marketplaceName", record.marketplaceName);
   setInstallStringField(normalized, "marketplaceSource", record.marketplaceSource);
   setInstallStringField(normalized, "marketplacePlugin", record.marketplacePlugin);

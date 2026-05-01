@@ -68,6 +68,27 @@ describe("applyModelProviderToolPolicy", () => {
     expect(toolNames(filtered)).toEqual(["read", "exec"]);
   });
 
+  it("can keep managed web_search for Codex app-server dynamic tools", () => {
+    const filtered = __testing.applyModelProviderToolPolicy(baseTools, {
+      config: {
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              openaiCodex: { enabled: true, mode: "cached" },
+            },
+          },
+        },
+      },
+      modelProvider: "gateway",
+      modelApi: "openai-codex-responses",
+      modelId: "gpt-5.4",
+      suppressManagedWebSearch: false,
+    });
+
+    expect(toolNames(filtered)).toEqual(["read", "web_search", "exec"]);
+  });
+
   it("removes managed web_search for direct Codex models when auth is available", () => {
     const filtered = __testing.applyModelProviderToolPolicy(baseTools, {
       config: {

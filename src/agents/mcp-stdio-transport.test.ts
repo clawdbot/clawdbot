@@ -137,4 +137,50 @@ describe("OpenClawStdioClientTransport", () => {
       result: { ok: true },
     });
   });
+
+  it("rejects send() with EPIPE when child stdin is closed (#75438)", async () => {
+    const child = new MockChildProcess();
+    const brokenStdin = new PassThrough();
+    brokenStdin.write = (_chunk: unknown, cbOrEncoding?: unknown, cb?: unknown) => {
+      const callback =
+        typeof cbOrEncoding === "function" ? cbOrEncoding : typeof cb === "function" ? cb : null;
+      const err = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+      if (callback) {
+        (callback as (err: Error) => void)(err);
+      }
+      return false;
+    };
+    child.stdin = brokenStdin;
+    spawnMock.mockReturnValue(child);
+    const { OpenClawStdioClientTransport } = await import("./mcp-stdio-transport.js");
+
+    const transport = new OpenClawStdioClientTransport({ command: "npx" });
+    const started = transport.start();
+    child.emit("spawn");
+    await started;
+
+    await expect(
+      transport.send({ jsonrpc: "2.0", id: 2, method: "ping" }),
+    ).rejects.toThrow("EPIPE");
+  });
+
+  it("rejects send() when stdin.write throws synchronously (#75438)", async () => {
+    const child = new MockChildProcess();
+    const brokenStdin = new PassThrough();
+    brokenStdin.write = () => {
+      throw Object.assign(new Error("write after end"), { code: "ERR_STREAM_DESTROYED" });
+    };
+    child.stdin = brokenStdin;
+    spawnMock.mockReturnValue(child);
+    const { OpenClawStdioClientTransport } = await import("./mcp-stdio-transport.js");
+
+    const transport = new OpenClawStdioClientTransport({ command: "npx" });
+    const started = transport.start();
+    child.emit("spawn");
+    await started;
+
+    await expect(
+      transport.send({ jsonrpc: "2.0", id: 3, method: "ping" }),
+    ).rejects.toThrow("write after end");
+  });
 });

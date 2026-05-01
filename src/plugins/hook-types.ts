@@ -703,7 +703,8 @@ export type PluginInstallRequestKind =
   | "plugin-dir"
   | "plugin-archive"
   | "plugin-file"
-  | "plugin-npm";
+  | "plugin-npm"
+  | "plugin-git";
 export type PluginInstallSourcePathKind = "file" | "directory";
 
 export type PluginInstallFinding = {

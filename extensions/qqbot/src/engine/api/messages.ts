@@ -28,7 +28,7 @@ import {
 } from "./routes.js";
 import { TokenManager } from "./token.js";
 
-export interface MessageApiConfig {
+interface MessageApiConfig {
   /** Whether the QQ Bot has markdown permission. */
   markdownSupport: boolean;
   /** Logger for diagnostics. */
@@ -291,6 +291,3 @@ export interface Credentials {
   appId: string;
   clientSecret: string;
 }
-
-// Re-export getNextMsgSeq for consumers that import from messages.ts.
-export { getNextMsgSeq } from "./routes.js";

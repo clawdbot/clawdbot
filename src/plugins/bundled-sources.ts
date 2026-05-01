@@ -6,6 +6,7 @@ export type BundledPluginSource = {
   pluginId: string;
   localPath: string;
   npmSpec?: string;
+  version?: string;
   configSchema?: Record<string, unknown>;
   requiresConfig?: boolean;
 };
@@ -62,10 +63,16 @@ export function resolveBundledPluginSources(params: {
       normalizeOptionalString(candidate.packageName) ||
       undefined;
 
+    const version =
+      normalizeOptionalString(candidate.packageVersion) ||
+      normalizeOptionalString(manifest.manifest.version) ||
+      undefined;
+
     bundled.set(pluginId, {
       pluginId,
       localPath: candidate.rootDir,
       npmSpec,
+      version,
       ...(isRecord(manifest.manifest.configSchema)
         ? { configSchema: manifest.manifest.configSchema }
         : {}),

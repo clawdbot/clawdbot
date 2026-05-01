@@ -11,5 +11,4 @@ export {
 export {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
-  doesApprovalRequestMatchChannelAccount,
 } from "openclaw/plugin-sdk/approval-native-runtime";

@@ -145,14 +145,10 @@ export async function resolvePythonExecutablePath(): Promise<string | undefined>
   return undefined;
 }
 
-async function gcloudEnv(): Promise<NodeJS.ProcessEnv | undefined> {
-  if (process.env.CLOUDSDK_PYTHON) {
-    return undefined;
-  }
+async function gcloudEnv(): Promise<NodeJS.ProcessEnv> {
   const pythonPath = await resolvePythonExecutablePath();
-  if (!pythonPath) {
-    return undefined;
-  }
+  // Always override inherited CLOUDSDK_PYTHON so gcloud cannot select a
+  // workspace-controlled interpreter.
   return { CLOUDSDK_PYTHON: pythonPath };
 }
 

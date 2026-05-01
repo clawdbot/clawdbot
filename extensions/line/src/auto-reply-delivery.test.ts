@@ -137,6 +137,42 @@ describe("deliverLineAutoReply", () => {
     expect(createQuickReplyItems).toHaveBeenCalledWith(["A"]);
   });
 
+  it("uses fallback text for quick-reply-only payloads", async () => {
+    const createTextMessageWithQuickReplies = vi.fn((text: string, _quickReplies: string[]) => ({
+      type: "text" as const,
+      text,
+      quickReply: { items: ["A", "B"] },
+    }));
+    const lineData = {
+      quickReplies: ["A", "B"],
+    };
+    const { deps, replyMessageLine, pushMessagesLine } = createDeps({
+      createTextMessageWithQuickReplies:
+        createTextMessageWithQuickReplies as LineAutoReplyDeps["createTextMessageWithQuickReplies"],
+    });
+
+    const result = await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: { text: "", channelData: { line: lineData } },
+      lineData,
+      deps,
+    });
+
+    expect(result.replyTokenUsed).toBe(true);
+    expect(replyMessageLine).toHaveBeenCalledWith(
+      "token",
+      [
+        {
+          type: "text",
+          text: "Options:\n- A\n- B",
+          quickReply: { items: ["A", "B"] },
+        },
+      ],
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
+    );
+    expect(pushMessagesLine).not.toHaveBeenCalled();
+  });
+
   it("sends rich messages before quick-reply text so quick replies remain visible", async () => {
     const createTextMessageWithQuickReplies = vi.fn((text: string, _quickReplies: string[]) => ({
       type: "text" as const,

@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import type { CommandArgValues } from "./commands-args.types.js";
 import type { ThinkingCatalogEntry } from "./thinking.shared.js";
 
-export type { CommandArgValue, CommandArgValues, CommandArgs } from "./commands-args.types.js";
+export type { CommandArgValues, CommandArgs } from "./commands-args.types.js";
 
 export type CommandScope = "text" | "native" | "both";
 

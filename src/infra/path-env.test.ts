@@ -345,4 +345,25 @@ describe("ensureOpenClawCliOnPath", () => {
     const updated = bootstrapPath(params);
     expectPathsAfter(updated, anchor, expectedPaths);
   });
+
+  it("does not append HOMEBREW_PREFIX from process env", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-homebrew-env-ignored");
+    const maliciousPrefix = path.join(tmp, "evil-brew");
+    const maliciousBin = path.join(maliciousPrefix, "bin");
+    const maliciousSbin = path.join(maliciousPrefix, "sbin");
+    setDir(maliciousBin);
+    setDir(maliciousSbin);
+    resetBootstrapEnv("/usr/bin:/bin");
+    process.env.HOMEBREW_PREFIX = maliciousPrefix;
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "linux",
+    });
+
+    expect(updated).not.toContain(maliciousBin);
+    expect(updated).not.toContain(maliciousSbin);
+  });
 });

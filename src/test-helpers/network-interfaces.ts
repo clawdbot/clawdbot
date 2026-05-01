@@ -3,7 +3,7 @@ import type { NetworkInterfacesSnapshot } from "../infra/network-interfaces.js";
 
 type NetworkInterfaceEntry = NonNullable<ReturnType<typeof os.networkInterfaces>[string]>[number];
 
-export type NetworkInterfaceEntryInput = {
+type NetworkInterfaceEntryInput = {
   address: string;
   family: "IPv4" | "IPv6";
   internal?: boolean;

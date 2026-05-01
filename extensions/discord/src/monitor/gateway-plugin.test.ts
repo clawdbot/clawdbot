@@ -102,10 +102,14 @@ describe("createDiscordGatewayPlugin", () => {
     });
   }
 
-  it("includes GuildVoiceStates when voice is enabled by default", () => {
-    expect(resolveDiscordGatewayIntents() & GatewayIntents.GuildVoiceStates).toBe(
-      GatewayIntents.GuildVoiceStates,
-    );
+  it("omits GuildVoiceStates by default for text-only Discord configs", () => {
+    expect(resolveDiscordGatewayIntents() & GatewayIntents.GuildVoiceStates).toBe(0);
+  });
+
+  it("includes GuildVoiceStates when voice is enabled", () => {
+    const intents = resolveDiscordGatewayIntents({ voiceEnabled: true });
+
+    expect(intents & GatewayIntents.GuildVoiceStates).toBe(GatewayIntents.GuildVoiceStates);
   });
 
   it("omits GuildVoiceStates when voice is disabled", () => {
@@ -195,6 +199,22 @@ describe("createDiscordGatewayPlugin", () => {
     const options = (plugin as unknown as { options?: { intents?: number } }).options;
 
     expect((options?.intents ?? 0) & GatewayIntents.GuildVoiceStates).toBe(0);
+  });
+
+  it("omits voice states when Discord voice config is absent", () => {
+    const plugin = createPlugin(undefined, {});
+    const options = (plugin as unknown as { options?: { intents?: number } }).options;
+
+    expect((options?.intents ?? 0) & GatewayIntents.GuildVoiceStates).toBe(0);
+  });
+
+  it("keeps voice states for existing Discord voice config blocks", () => {
+    const plugin = createPlugin(undefined, { voice: {} });
+    const options = (plugin as unknown as { options?: { intents?: number } }).options;
+
+    expect((options?.intents ?? 0) & GatewayIntents.GuildVoiceStates).toBe(
+      GatewayIntents.GuildVoiceStates,
+    );
   });
 
   it("leaves autoInteractions disabled so OpenClaw owns interaction handoff", () => {

@@ -121,7 +121,7 @@ function getDiscordApiRetryAfterMs(
   return Math.min(Math.max(0, err.retryAfter * 1000), retryConfig.maxDelayMs);
 }
 
-export type DiscordFetchOptions = {
+type DiscordFetchOptions = {
   retry?: RetryConfig;
   label?: string;
 };

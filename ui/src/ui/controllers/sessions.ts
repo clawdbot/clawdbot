@@ -37,6 +37,17 @@ type LoadSessionsOverrides = {
   includeUnknown?: boolean;
 };
 
+type CreateSessionParams = {
+  agentId?: string;
+  label?: string;
+  model?: string;
+  parentSessionKey?: string;
+};
+
+type CreateSessionResult = {
+  key?: string;
+};
+
 type SessionsLoadControl = {
   loading: boolean;
   pending: { overrides?: LoadSessionsOverrides } | null;
@@ -420,6 +431,33 @@ export async function patchSession(
   } catch (err) {
     state.sessionsError = String(err);
   }
+}
+
+export async function createSessionAndRefresh(
+  state: SessionsState,
+  params: CreateSessionParams = {},
+  refreshOverrides?: LoadSessionsOverrides,
+): Promise<string | null> {
+  if (!state.client || !state.connected || state.sessionsLoading) {
+    return null;
+  }
+  const client = state.client;
+  let createdKey: string | null = null;
+  try {
+    await withSessionsLoading(state, async () => {
+      const result = await client.request<CreateSessionResult>("sessions.create", params);
+      const key = typeof result?.key === "string" ? result.key.trim() : "";
+      if (!key) {
+        throw new Error("sessions.create returned no key");
+      }
+      createdKey = key;
+      await loadSessions(state, refreshOverrides);
+    });
+  } catch (err) {
+    state.sessionsError = String(err);
+    return null;
+  }
+  return createdKey;
 }
 
 export async function deleteSessionsAndRefresh(

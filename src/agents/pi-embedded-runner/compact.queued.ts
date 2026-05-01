@@ -3,9 +3,10 @@ import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import {
-  captureCompactionCheckpointSnapshot,
+  captureCompactionCheckpointSnapshotAsync,
   cleanupCompactionCheckpointSnapshot,
   persistSessionCompactionCheckpoint,
+  readSessionLeafIdFromTranscriptAsync,
   resolveSessionCompactionCheckpointReason,
   type CapturedCompactionCheckpointSnapshot,
 } from "../../gateway/session-compaction-checkpoints.js";
@@ -115,8 +116,7 @@ export async function compactEmbeddedPiSession(
         // are notified regardless of which engine is active.
         const engineOwnsCompaction = contextEngine.info.ownsCompaction === true;
         checkpointSnapshot = engineOwnsCompaction
-          ? captureCompactionCheckpointSnapshot({
-              sessionManager: SessionManager.open(params.sessionFile),
+          ? await captureCompactionCheckpointSnapshotAsync({
               sessionFile: params.sessionFile,
             })
           : null;
@@ -200,7 +200,7 @@ export async function compactEmbeddedPiSession(
             try {
               const postLeafId =
                 postCompactionLeafId ??
-                SessionManager.open(postCompactionSessionFile).getLeafId() ??
+                (await readSessionLeafIdFromTranscriptAsync(postCompactionSessionFile)) ??
                 undefined;
               const storedCheckpoint = await persistSessionCompactionCheckpoint({
                 cfg: params.config,

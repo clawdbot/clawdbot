@@ -84,6 +84,42 @@ describe("setupCommand", () => {
     });
   });
 
+  it("threads skipOptionalBootstrapFiles into workspace creation", async () => {
+    await withTempHome(async (home) => {
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const configDir = path.join(home, ".openclaw");
+      const configPath = path.join(configDir, "openclaw.json");
+      const deps = createSetupDeps(home);
+      const workspace = path.join(home, "custom-workspace");
+
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          agents: {
+            defaults: {
+              workspace,
+              skipOptionalBootstrapFiles: ["IDENTITY.md", "USER.md"],
+            },
+          },
+        }),
+      );
+
+      await setupCommand(undefined, runtime, deps);
+
+      expect(deps.ensureAgentWorkspace).toHaveBeenCalledWith(
+        expect.objectContaining({
+          dir: workspace,
+          skipOptionalBootstrapFiles: ["IDENTITY.md", "USER.md"],
+        }),
+      );
+    });
+  });
+
   it("treats non-object config roots as empty config", async () => {
     await withTempHome(async (home) => {
       const runtime = {

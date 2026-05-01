@@ -55,10 +55,6 @@ export type PollStartSubtype = {
   answers: PollAnswer[];
 };
 
-export type LegacyPollStartContent = {
-  "m.poll"?: PollStartSubtype;
-};
-
 export type PollStartContent = {
   [M_POLL_START]?: PollStartSubtype;
   [ORG_POLL_START]?: PollStartSubtype;

@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { shouldExpectNativeJitiForJavaScriptTestRuntime } from "../../test-utils/jiti-runtime.js";
 import {
   isJavaScriptModulePath,
   resolveCompiledBundledModulePath,
@@ -122,7 +121,7 @@ describe("channel plugin module loader helpers", () => {
       expect(createJiti).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({
-          tryNative: shouldExpectNativeJitiForJavaScriptTestRuntime(),
+          tryNative: false,
         }),
       );
     } finally {

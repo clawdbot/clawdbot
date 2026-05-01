@@ -197,6 +197,17 @@ Required members:
 <ParamField path="systemPromptAddition" type="string">
   Prepended to the system prompt.
 </ParamField>
+<ParamField path="promptAuthority" type='"assembled" | "preassembly_may_overflow"'>
+  Controls which token estimate the runner uses for preemptive overflow
+  prechecks. Defaults to `"assembled"`, which means only the assembled
+  prompt's estimate is checked — appropriate for engines that return a
+  windowed, self-contained context. Set to `"preassembly_may_overflow"` only
+  when your assembled view can hide overflow risk in the underlying
+  transcript; the runner then takes the maximum of the assembled estimate
+  and the pre-assembly (unwindowed) session-history estimate when deciding
+  whether to preemptively compact. Either way, the messages you return are
+  still what the model sees — `promptAuthority` only affects the precheck.
+</ParamField>
 
 `compact` returns a `CompactResult`. When compaction rotates the active
 transcript, `result.sessionId` and `result.sessionFile` identify the successor

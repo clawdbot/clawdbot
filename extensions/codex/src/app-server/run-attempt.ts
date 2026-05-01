@@ -44,7 +44,11 @@ import {
 } from "./client-factory.js";
 import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
 import { ensureCodexComputerUse } from "./computer-use.js";
-import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import {
+  readCodexPluginConfig,
+  resolveCodexAppServerRuntimeOptions,
+  type CodexPluginConfig,
+} from "./config.js";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
@@ -89,6 +93,15 @@ const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 30_000;
 const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
 const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
+const CODEX_NATIVE_FIRST_DYNAMIC_TOOL_EXCLUDES = [
+  "read",
+  "write",
+  "edit",
+  "apply_patch",
+  "exec",
+  "process",
+  "update_plan",
+] as const;
 const LOG_FIELD_MAX_LENGTH = 160;
 
 type OpenClawCodingToolsOptions = NonNullable<
@@ -319,7 +332,8 @@ export async function runCodexAppServerAttempt(
   } = {},
 ): Promise<EmbeddedRunAttemptResult> {
   const attemptStartedAt = Date.now();
-  const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
+  const pluginConfig = readCodexPluginConfig(options.pluginConfig);
+  const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sandboxSessionKey = params.sessionKey?.trim() || params.sessionId;
@@ -369,6 +383,7 @@ export async function runCodexAppServerAttempt(
     sandbox,
     runAbortController,
     sessionAgentId,
+    pluginConfig,
     onYieldDetected: () => {
       yieldDetected = true;
     },
@@ -1317,6 +1332,7 @@ type DynamicToolBuildParams = {
   sandbox: Awaited<ReturnType<typeof resolveSandboxContext>>;
   runAbortController: AbortController;
   sessionAgentId: string | undefined;
+  pluginConfig: CodexPluginConfig;
   onYieldDetected: () => void;
 };
 
@@ -1372,6 +1388,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     modelAuthMode: resolveModelAuthMode(params.model.provider, params.config, undefined, {
       workspaceDir: input.effectiveWorkspace,
     }),
+    suppressManagedWebSearch: false,
     currentChannelId: params.currentChannelId,
     currentThreadTs: params.currentThreadTs,
     currentMessageId: params.currentMessageId,
@@ -1390,7 +1407,8 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
       input.runAbortController.abort("sessions_yield");
     },
   });
-  const visionFilteredTools = filterToolsForVisionInputs(allTools, {
+  const profiledTools = applyCodexDynamicToolProfile(allTools, input.pluginConfig);
+  const visionFilteredTools = filterToolsForVisionInputs(profiledTools, {
     modelHasVision,
     hasInboundImages: (params.images?.length ?? 0) > 0,
   });
@@ -1409,6 +1427,26 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     modelApi: params.model.api,
     model: params.model,
   });
+}
+
+function applyCodexDynamicToolProfile<T extends { name: string }>(
+  tools: T[],
+  config: CodexPluginConfig,
+): T[] {
+  const excludes = new Set<string>();
+  const profile = config.codexDynamicToolsProfile ?? "native-first";
+  if (profile === "native-first") {
+    for (const name of CODEX_NATIVE_FIRST_DYNAMIC_TOOL_EXCLUDES) {
+      excludes.add(name);
+    }
+  }
+  for (const name of config.codexDynamicToolsExclude ?? []) {
+    const trimmed = name.trim();
+    if (trimmed) {
+      excludes.add(trimmed);
+    }
+  }
+  return excludes.size === 0 ? tools : tools.filter((tool) => !excludes.has(tool.name));
 }
 
 async function withCodexStartupTimeout<T>(params: {
@@ -1584,6 +1622,7 @@ export const __testing = {
   CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
   CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
   buildCodexNativeHookRelayId,
+  applyCodexDynamicToolProfile,
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
   ...createCodexAppServerClientFactoryTestHooks((factory) => {

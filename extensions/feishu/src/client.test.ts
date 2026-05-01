@@ -119,9 +119,23 @@ function readCallOptions(
   return isRecord(call) ? call : {};
 }
 
-function firstWsClientOptions(): { agent?: unknown; wsConfig?: unknown } {
+function firstWsClientOptions(): {
+  agent?: unknown;
+  wsConfig?: unknown;
+  onError?: unknown;
+  onReady?: unknown;
+  onReconnected?: unknown;
+  onReconnecting?: unknown;
+} {
   const options = readCallOptions(wsClientCtorMock, 0);
-  return { agent: options.agent, wsConfig: options.wsConfig };
+  return {
+    agent: options.agent,
+    wsConfig: options.wsConfig,
+    onError: options.onError,
+    onReady: options.onReady,
+    onReconnected: options.onReconnected,
+    onReconnecting: options.onReconnecting,
+  };
 }
 
 beforeAll(async () => {
@@ -349,6 +363,30 @@ describe("createFeishuWSClient proxy handling", () => {
     await createFeishuWSClient(baseAccount);
 
     const options = firstWsClientOptions();
+    expect(options.wsConfig).toEqual({
+      PingInterval: 30,
+      PingTimeout: 3,
+    });
+  });
+
+  it("passes lifecycle callbacks while preserving heartbeat wsConfig defaults", async () => {
+    const onError = vi.fn();
+    const onReady = vi.fn();
+    const onReconnected = vi.fn();
+    const onReconnecting = vi.fn();
+
+    await createFeishuWSClient(baseAccount, {
+      onError,
+      onReady,
+      onReconnected,
+      onReconnecting,
+    });
+
+    const options = firstWsClientOptions();
+    expect(options.onError).toBe(onError);
+    expect(options.onReady).toBe(onReady);
+    expect(options.onReconnected).toBe(onReconnected);
+    expect(options.onReconnecting).toBe(onReconnecting);
     expect(options.wsConfig).toEqual({
       PingInterval: 30,
       PingTimeout: 3,

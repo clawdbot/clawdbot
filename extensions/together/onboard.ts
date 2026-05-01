@@ -21,10 +21,6 @@ const togetherPresetAppliers = createModelCatalogPresetAppliers({
   }),
 });
 
-export function applyTogetherProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return togetherPresetAppliers.applyProviderConfig(cfg);
-}
-
 export function applyTogetherConfig(cfg: OpenClawConfig): OpenClawConfig {
   return togetherPresetAppliers.applyConfig(cfg);
 }

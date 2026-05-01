@@ -10,7 +10,7 @@ import { applyAccountConfig } from "./resolve.js";
 import { DEFAULT_ACCOUNT_ID } from "./resolve.js";
 
 /** Parse an inline "appId:clientSecret" token string. */
-export function parseInlineToken(token: string): { appId: string; clientSecret: string } | null {
+function parseInlineToken(token: string): { appId: string; clientSecret: string } | null {
   const colonIdx = token.indexOf(":");
   if (colonIdx <= 0 || colonIdx === token.length - 1) {
     return null;
@@ -25,7 +25,7 @@ export function parseInlineToken(token: string): { appId: string; clientSecret: 
   return { appId, clientSecret };
 }
 
-export interface SetupInput {
+interface SetupInput {
   token?: string;
   tokenFile?: string;
   useEnv?: boolean;

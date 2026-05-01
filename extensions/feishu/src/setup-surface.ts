@@ -498,8 +498,6 @@ export async function runFeishuLogin(params: {
 // Exported wizard
 // ---------------------------------------------------------------------------
 
-export { feishuSetupAdapter } from "./setup-core.js";
-
 export const feishuSetupWizard: ChannelSetupWizard = {
   channel,
   resolveAccountIdForConfigure: ({ accountOverride, defaultAccountId, cfg }) =>

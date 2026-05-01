@@ -579,6 +579,19 @@ If a deployment needs additional environment isolation, add those variables to
 
 `appServer.clearEnv` only affects the spawned Codex app-server child process.
 
+Codex dynamic tools default to the `native-first` profile. In that mode,
+OpenClaw does not expose dynamic tools that duplicate Codex-native workspace
+operations: `read`, `write`, `edit`, `apply_patch`, `exec`, `process`, and
+`update_plan`. OpenClaw integration tools such as messaging, sessions, media,
+cron, browser, nodes, gateway, and `web_search` remain available.
+
+Supported top-level Codex plugin fields:
+
+| Field                      | Default          | Meaning                                                                                   |
+| -------------------------- | ---------------- | ----------------------------------------------------------------------------------------- |
+| `codexDynamicToolsProfile` | `"native-first"` | Use `"openclaw-compat"` to expose the full OpenClaw dynamic tool set to Codex app-server. |
+| `codexDynamicToolsExclude` | `[]`             | Additional OpenClaw dynamic tool names to omit from Codex app-server turns.               |
+
 Supported `appServer` fields:
 
 | Field               | Default                                  | Meaning                                                                                                                                                                                                                              |

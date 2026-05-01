@@ -1,6 +1,6 @@
 import { isTruthyEnvValue } from "../infra/env.js";
 
-export const LIVE_OK_PROMPT = "Reply with the word ok.";
+const LIVE_OK_PROMPT = "Reply with the word ok.";
 
 export function isLiveTestEnabled(
   extraEnvVars: readonly string[] = [],

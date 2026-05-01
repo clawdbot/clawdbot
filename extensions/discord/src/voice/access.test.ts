@@ -62,7 +62,8 @@ describe("authorizeDiscordVoiceIngress", () => {
       },
     });
 
-    expect(access).toEqual({ ok: true });
+    expect(access).toMatchObject({ ok: true });
+    expect(access.ok && access.channelConfig?.users).toEqual(["discord:u-owner"]);
   });
 
   it("allows slug-keyed guild configs when manager context only has guild name", async () => {
@@ -91,7 +92,7 @@ describe("authorizeDiscordVoiceIngress", () => {
       },
     });
 
-    expect(access).toEqual({ ok: true });
+    expect(access).toMatchObject({ ok: true });
   });
 
   it("allows wildcard guild configs when only the guild id is available", async () => {
@@ -119,7 +120,7 @@ describe("authorizeDiscordVoiceIngress", () => {
       },
     });
 
-    expect(access).toEqual({ ok: true });
+    expect(access).toMatchObject({ ok: true });
   });
 
   it("blocks commands when channel id is unavailable for an allowlisted channel", async () => {
@@ -211,6 +212,6 @@ describe("authorizeDiscordVoiceIngress", () => {
       },
     });
 
-    expect(access).toEqual({ ok: true });
+    expect(access).toMatchObject({ ok: true });
   });
 });

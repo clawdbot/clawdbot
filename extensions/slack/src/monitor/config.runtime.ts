@@ -2,7 +2,6 @@ export { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 export {
   readSessionUpdatedAt,
-  recordSessionMetaFromInbound,
   resolveSessionKey,
   resolveStorePath,
   updateLastRoute,

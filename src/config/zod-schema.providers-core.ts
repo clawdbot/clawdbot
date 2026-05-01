@@ -513,6 +513,8 @@ const DiscordVoiceSchema = z
     autoJoin: z.array(DiscordVoiceAutoJoinSchema).optional(),
     daveEncryption: z.boolean().optional(),
     decryptionFailureTolerance: z.number().int().min(0).optional(),
+    connectTimeoutMs: z.number().int().positive().max(120_000).optional(),
+    reconnectGraceMs: z.number().int().positive().max(120_000).optional(),
     tts: TtsConfigSchema.optional(),
   })
   .strict()

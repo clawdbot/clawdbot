@@ -11,15 +11,15 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
 
-export type BlueBubblesService = "imessage" | "sms" | "auto";
+type BlueBubblesService = "imessage" | "sms" | "auto";
 
-export type BlueBubblesTarget =
+type BlueBubblesTarget =
   | { kind: "chat_id"; chatId: number }
   | { kind: "chat_guid"; chatGuid: string }
   | { kind: "chat_identifier"; chatIdentifier: string }
   | { kind: "handle"; to: string; service: BlueBubblesService };
 
-export type BlueBubblesAllowTarget = ParsedChatTarget | { kind: "handle"; handle: string };
+type BlueBubblesAllowTarget = ParsedChatTarget | { kind: "handle"; handle: string };
 
 const CHAT_ID_PREFIXES = ["chat_id:", "chatid:", "chat:"];
 const CHAT_GUID_PREFIXES = ["chat_guid:", "chatguid:", "guid:"];

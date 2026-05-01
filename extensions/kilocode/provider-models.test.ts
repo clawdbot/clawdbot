@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { discoverKilocodeModels, KILOCODE_MODELS_URL } from "./provider-models.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -7,7 +6,12 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname: (baseUrl: string) => ({
+    allowedHostnames: [new URL(baseUrl).hostname],
+  }),
 }));
+
+import { discoverKilocodeModels, KILOCODE_MODELS_URL } from "./provider-models.js";
 
 type MockKilocodeFetchResponse = {
   ok: boolean;
@@ -79,9 +83,14 @@ async function withFetchPathTest(mockFetch: MockKilocodeFetch, runAssertions: ()
   delete process.env.NODE_ENV;
   delete process.env.VITEST;
 
+  fetchWithSsrFGuardMock.mockReset();
+  const callMockFetch = mockFetch as unknown as (
+    url: string,
+    init?: RequestInit,
+  ) => Promise<unknown>;
   fetchWithSsrFGuardMock.mockImplementation(
     async (params: { url: string; init?: RequestInit }) => ({
-      response: await mockFetch(params.url, params.init),
+      response: await callMockFetch(params.url, params.init),
       release,
     }),
   );
@@ -89,7 +98,6 @@ async function withFetchPathTest(mockFetch: MockKilocodeFetch, runAssertions: ()
   try {
     await runAssertions();
   } finally {
-    fetchWithSsrFGuardMock.mockReset();
     if (origNodeEnv === undefined) {
       delete process.env.NODE_ENV;
     } else {
@@ -100,6 +108,7 @@ async function withFetchPathTest(mockFetch: MockKilocodeFetch, runAssertions: ()
     } else {
       process.env.VITEST = origVitest;
     }
+    fetchWithSsrFGuardMock.mockReset();
   }
 }
 
@@ -141,6 +150,9 @@ describe("discoverKilocodeModels (fetch path)", () => {
           init: expect.objectContaining({
             headers: { Accept: "application/json" },
           }),
+          policy: { allowedHostnames: ["api.kilo.ai"] },
+          timeoutMs: 5000,
+          auditContext: "kilocode.model_discovery",
         }),
       );
       expect(mockFetch).toHaveBeenCalledWith(

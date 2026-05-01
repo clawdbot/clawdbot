@@ -131,14 +131,3 @@ export async function requestXaiXSearch(params: {
     },
   );
 }
-
-export const __testing = {
-  buildXSearchTool,
-  buildXaiXSearchPayload,
-  requestXaiXSearch,
-  resolveXaiXSearchConfig,
-  resolveXaiXSearchInlineCitations,
-  resolveXaiXSearchMaxTurns,
-  resolveXaiXSearchModel,
-  XAI_DEFAULT_X_SEARCH_MODEL,
-} as const;

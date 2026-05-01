@@ -19,6 +19,7 @@ const loadGatewayStartupPlugins = vi.hoisted(() =>
 );
 const prepareBundledPluginRuntimeLoadRoot = vi.hoisted(() => vi.fn((params: unknown) => params));
 const registerBundledRuntimeDependencyJitiAliases = vi.hoisted(() => vi.fn());
+const isSourceCheckoutRoot = vi.hoisted(() => vi.fn((_packageRoot: string) => false));
 const pruneUnknownBundledRuntimeDepsRoots = vi.hoisted(() =>
   vi.fn((_params: unknown) => ({ scanned: 0, removed: 0, skippedLocked: 0 })),
 );
@@ -138,6 +139,7 @@ vi.mock("../plugins/bundled-runtime-deps.js", () => ({
 }));
 
 vi.mock("../plugins/bundled-runtime-deps-roots.js", () => ({
+  isSourceCheckoutRoot: (packageRoot: string) => isSourceCheckoutRoot(packageRoot),
   pruneUnknownBundledRuntimeDepsRoots: (params: unknown) =>
     pruneUnknownBundledRuntimeDepsRoots(params),
 }));
@@ -197,6 +199,7 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     loadGatewayStartupPlugins.mockClear();
     prepareBundledPluginRuntimeLoadRoot.mockReset().mockImplementation((params: unknown) => params);
     registerBundledRuntimeDependencyJitiAliases.mockClear();
+    isSourceCheckoutRoot.mockClear().mockReturnValue(false);
     pruneUnknownBundledRuntimeDepsRoots.mockClear().mockReturnValue({
       scanned: 0,
       removed: 0,
@@ -318,6 +321,35 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
       expect.objectContaining({
         packageRoot: "/package",
         exactPluginIds: ["telegram"],
+      }),
+    );
+    expect(loadGatewayStartupPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({ installBundledRuntimeDeps: false }),
+    );
+  });
+
+  it("repairs source-checkout startup plugin deps before verify-only load", async () => {
+    repairBundledRuntimeDepsPackagePlanAsync.mockResolvedValueOnce({
+      repairedSpecs: [],
+    });
+    isSourceCheckoutRoot.mockReturnValueOnce(true);
+    const log = createLog();
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    await prepareGatewayPluginBootstrap({
+      cfgAtStart: {},
+      startupRuntimeConfig: {},
+      minimalTestGateway: false,
+      log,
+    });
+
+    expect(isSourceCheckoutRoot).toHaveBeenCalledWith("/package");
+    expect(prepareBundledPluginRuntimeLoadRoot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginId: "telegram",
+        installMissingDeps: true,
+        memoizePreparedRoot: true,
+        logInstalled: expect.any(Function),
       }),
     );
     expect(loadGatewayStartupPlugins).toHaveBeenCalledWith(

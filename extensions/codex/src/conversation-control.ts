@@ -253,9 +253,3 @@ function permissionsForMode(mode: PermissionsMode): {
     ? { approvalPolicy: "never", sandbox: "danger-full-access" }
     : { approvalPolicy: "on-request", sandbox: "workspace-write" };
 }
-
-export const __testing = {
-  resetActiveTurns() {
-    getActiveTurns().clear();
-  },
-};

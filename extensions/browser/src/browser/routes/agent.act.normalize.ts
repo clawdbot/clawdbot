@@ -22,7 +22,7 @@ function normalizeActKind(raw: unknown): ActKind {
   return kind;
 }
 
-export function countBatchActions(actions: BrowserActRequest[]): number {
+function countBatchActions(actions: BrowserActRequest[]): number {
   let count = 0;
   for (const action of actions) {
     count += 1;

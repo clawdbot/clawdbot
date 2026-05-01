@@ -1,14 +1,6 @@
 import type { MiscMessageGenerationOptions } from "@whiskeysockets/baileys";
 import { jidToE164 } from "./text-runtime.js";
 
-export type QuotedMessageKey = {
-  id: string;
-  remoteJid: string;
-  fromMe: boolean;
-  participant?: string;
-  messageText?: string;
-};
-
 // ── Inbound message metadata cache ──────────────────────────────────────
 // Maps messageId → { participant, participantE164, body, fromMe } so the
 // outbound adapter can

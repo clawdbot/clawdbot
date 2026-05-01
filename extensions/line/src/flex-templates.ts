@@ -19,7 +19,6 @@ export {
 export { toFlexMessage } from "./flex-templates/message.js";
 
 export type {
-  Action,
   CardAction,
   FlexBox,
   FlexBubble,

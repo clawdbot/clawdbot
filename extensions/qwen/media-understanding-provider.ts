@@ -14,32 +14,10 @@ import {
   postJsonRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
-import { QWEN_STANDARD_CN_BASE_URL, QWEN_STANDARD_GLOBAL_BASE_URL } from "./models.js";
+import { QWEN_STANDARD_GLOBAL_BASE_URL } from "./models.js";
 
 const DEFAULT_QWEN_VIDEO_MODEL = "qwen-vl-max-latest";
 const DEFAULT_QWEN_VIDEO_PROMPT = "Describe the video in detail.";
-
-function resolveQwenStandardBaseUrl(
-  cfg: { models?: { providers?: Record<string, { baseUrl?: string } | undefined> } } | undefined,
-  providerId: string,
-): string {
-  const direct = cfg?.models?.providers?.[providerId]?.baseUrl?.trim();
-  if (!direct) {
-    return QWEN_STANDARD_GLOBAL_BASE_URL;
-  }
-  try {
-    const url = new URL(direct);
-    if (url.hostname === "coding-intl.dashscope.aliyuncs.com") {
-      return QWEN_STANDARD_GLOBAL_BASE_URL;
-    }
-    if (url.hostname === "coding.dashscope.aliyuncs.com") {
-      return QWEN_STANDARD_CN_BASE_URL;
-    }
-    return `${url.origin}${url.pathname}`.replace(/\/+$/u, "");
-  } catch {
-    return QWEN_STANDARD_GLOBAL_BASE_URL;
-  }
-}
 
 export async function describeQwenVideo(
   params: VideoDescriptionRequest,
@@ -107,10 +85,4 @@ export function buildQwenMediaUnderstandingProvider(): MediaUnderstandingProvide
     describeImages: describeImagesWithModel,
     describeVideo: describeQwenVideo,
   };
-}
-
-export function resolveQwenMediaUnderstandingBaseUrl(
-  cfg: { models?: { providers?: Record<string, { baseUrl?: string } | undefined> } } | undefined,
-): string {
-  return resolveQwenStandardBaseUrl(cfg, "qwen");
 }

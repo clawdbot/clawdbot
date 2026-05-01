@@ -1,6 +1,7 @@
 import { deliverFinalizableDraftPreview } from "openclaw/plugin-sdk/channel-lifecycle";
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { isReasoningReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -36,6 +37,7 @@ import {
 import {
   authorizeMattermostCommandInvocation,
   isMattermostSenderAllowed,
+  normalizeMattermostAllowEntry,
   normalizeMattermostAllowList,
 } from "./monitor-auth.js";
 import {
@@ -1568,6 +1570,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           OriginatingTo: to,
           ...mediaPayload,
         });
+        const pinnedMainDmOwner =
+          kind === "direct"
+            ? resolvePinnedMainDmOwnerFromAllowlist({
+                dmScope: cfg.session?.dmScope,
+                allowFrom: account.config.allowFrom,
+                normalizeEntry: normalizeMattermostAllowEntry,
+              })
+            : null;
 
         const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
           agentId: route.agentId,
@@ -1748,6 +1758,23 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                           channel: "mattermost",
                           to,
                           accountId: route.accountId,
+                          mainDmOwnerPin: pinnedMainDmOwner
+                            ? {
+                                ownerRecipient: pinnedMainDmOwner,
+                                senderRecipient: normalizeMattermostAllowEntry(senderId),
+                                onSkip: ({
+                                  ownerRecipient,
+                                  senderRecipient,
+                                }: {
+                                  ownerRecipient: string;
+                                  senderRecipient: string;
+                                }) => {
+                                  logVerboseMessage(
+                                    `mattermost: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                                  );
+                                },
+                              }
+                            : undefined,
                         }
                       : undefined,
                   onRecordError: (err) => {

@@ -297,4 +297,31 @@ describe("deliverSlackSlashReplies chunking", () => {
       response_type: "ephemeral",
     });
   });
+
+  it("sends block-only slash replies instead of dropping them", async () => {
+    const respond = vi.fn(async () => undefined);
+    const blocks = [{ type: "divider" }];
+
+    await deliverSlackSlashReplies({
+      replies: [
+        {
+          channelData: {
+            slack: {
+              blocks,
+            },
+          },
+        },
+      ],
+      respond,
+      ephemeral: false,
+      textLimit: 8000,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(respond).toHaveBeenCalledWith({
+      text: "",
+      blocks,
+      response_type: "in_channel",
+    });
+  });
 });

@@ -5,13 +5,16 @@
   "description": "OpenClaw OpenAI provider plugins",
   "type": "module",
   "dependencies": {
-    "@mariozechner/pi-ai": "0.70.6",
+    "@mariozechner/pi-ai": "0.71.1",
     "ws": "^8.20.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
+    "bundle": {
+      "stageRuntimeDependencies": true
+    },
     "extensions": [
       "./index.ts"
     ]

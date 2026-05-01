@@ -441,10 +441,13 @@ jobs:
             exit 0
           fi
           releases_json=""
+          npm_versions_json=""
           if [[ "$REQUESTED_BASELINES" == *"release-history"* ]]; then
             releases_json=".artifacts/package-candidate-input/openclaw-releases.json"
+            npm_versions_json=".artifacts/package-candidate-input/openclaw-npm-versions.json"
             mkdir -p "$(dirname "$releases_json")"
             gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName,publishedAt,isPrerelease > "$releases_json"
+            npm view openclaw versions --json > "$npm_versions_json"
           fi
           args=(
             --requested "$REQUESTED_BASELINES"
@@ -454,6 +457,7 @@ jobs:
           if [[ -n "$releases_json" ]]; then
             args+=(
               --releases-json "$releases_json"
+              --npm-versions-json "$npm_versions_json"
               --history-count 6
               --include-version 2026.4.23
               --pre-date 2026-03-15T00:00:00Z

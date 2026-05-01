@@ -18,8 +18,279 @@
       }
     }
   },
-  "providerAuthEnvVars": {
-    "groq": ["GROQ_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "groq",
+        "authMethods": ["api-key"],
+        "envVars": ["GROQ_API_KEY"]
+      }
+    ]
+  },
+  "modelCatalog": {
+    "providers": {
+      "groq": {
+        "baseUrl": "https://api.groq.com/openai/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "deepseek-r1-distill-llama-70b",
+            "name": "DeepSeek R1 Distill Llama 70B",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0.75,
+              "output": 0.99,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "gemma2-9b-it",
+            "name": "Gemma 2 9B",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 8192,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0.2,
+              "output": 0.2,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "groq/compound",
+            "name": "Compound",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "groq/compound-mini",
+            "name": "Compound Mini",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "llama-3.1-8b-instant",
+            "name": "Llama 3.1 8B Instant",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 0.05,
+              "output": 0.08,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "llama-3.3-70b-versatile",
+            "name": "Llama 3.3 70B Versatile",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 32768,
+            "cost": {
+              "input": 0.59,
+              "output": 0.79,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "llama3-70b-8192",
+            "name": "Llama 3 70B",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 8192,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0.59,
+              "output": 0.79,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "llama3-8b-8192",
+            "name": "Llama 3 8B",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 8192,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0.05,
+              "output": 0.08,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "meta-llama/llama-4-maverick-17b-128e-instruct",
+            "name": "Llama 4 Maverick 17B",
+            "reasoning": false,
+            "input": ["text", "image"],
+            "contextWindow": 131072,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0.2,
+              "output": 0.6,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "meta-llama/llama-4-scout-17b-16e-instruct",
+            "name": "Llama 4 Scout 17B",
+            "reasoning": false,
+            "input": ["text", "image"],
+            "contextWindow": 131072,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0.11,
+              "output": 0.34,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "mistral-saba-24b",
+            "name": "Mistral Saba 24B",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 32768,
+            "maxTokens": 32768,
+            "cost": {
+              "input": 0.79,
+              "output": 0.79,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "moonshotai/kimi-k2-instruct",
+            "name": "Kimi K2 Instruct",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 16384,
+            "cost": {
+              "input": 1,
+              "output": 3,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "moonshotai/kimi-k2-instruct-0905",
+            "name": "Kimi K2 Instruct 0905",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 16384,
+            "cost": {
+              "input": 1,
+              "output": 3,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "openai/gpt-oss-120b",
+            "name": "GPT OSS 120B",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0.15,
+              "output": 0.6,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "openai/gpt-oss-20b",
+            "name": "GPT OSS 20B",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0.075,
+              "output": 0.3,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "openai/gpt-oss-safeguard-20b",
+            "name": "Safety GPT OSS 20B",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0.075,
+              "output": 0.3,
+              "cacheRead": 0.037,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "qwen-qwq-32b",
+            "name": "Qwen QwQ 32B",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 16384,
+            "cost": {
+              "input": 0.29,
+              "output": 0.39,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "qwen/qwen3-32b",
+            "name": "Qwen3 32B",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 40960,
+            "cost": {
+              "input": 0.29,
+              "output": 0.59,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "groq": "static"
+    }
   },
   "contracts": {
     "mediaUnderstandingProviders": ["groq"]

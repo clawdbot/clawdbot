@@ -45,6 +45,10 @@ export abstract class ReadyListener extends BaseListener {
   readonly type = GatewayDispatchEvents.Ready;
 }
 
+export abstract class ResumedListener extends BaseListener {
+  readonly type = GatewayDispatchEvents.Resumed;
+}
+
 export abstract class MessageCreateListener extends BaseListener {
   readonly type = GatewayDispatchEvents.MessageCreate;
   abstract override handle(data: DiscordMessageDispatchData, client: Client): Promise<void> | void;

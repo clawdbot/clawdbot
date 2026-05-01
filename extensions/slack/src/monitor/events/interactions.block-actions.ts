@@ -62,7 +62,7 @@ type InteractionSelectionFields = {
   routedChannelId?: string;
 };
 
-export type InteractionSummary = InteractionSelectionFields & {
+type InteractionSummary = InteractionSelectionFields & {
   interactionType?: "block_action" | "view_submission" | "view_closed";
   actionId: string;
   userId?: string;

@@ -68,7 +68,7 @@ export function createTimestampedNewMessagePayloadForTest(
   });
 }
 
-export function createMessageReactionPayloadForTest(dataOverrides: Record<string, unknown> = {}) {
+function createMessageReactionPayloadForTest(dataOverrides: Record<string, unknown> = {}) {
   return {
     type: "message-reaction",
     data: {
@@ -128,7 +128,7 @@ export function createMockRequest(
   return req;
 }
 
-export function createMockRequestForTest(params: WebhookRequestParams = {}): IncomingMessage {
+function createMockRequestForTest(params: WebhookRequestParams = {}): IncomingMessage {
   return createMockRequest(
     params.method ?? "POST",
     params.url ?? "/bluebubbles-webhook",
@@ -198,7 +198,7 @@ export function createHangingWebhookRequestForTest(
   return { req, destroyMock };
 }
 
-export function createMockResponse(): ServerResponse & { body: string; statusCode: number } {
+function createMockResponse(): ServerResponse & { body: string; statusCode: number } {
   const res = {
     statusCode: 200,
     body: "",
@@ -210,7 +210,7 @@ export function createMockResponse(): ServerResponse & { body: string; statusCod
   return res;
 }
 
-export async function flushAsync() {
+async function flushAsync() {
   for (let i = 0; i < 2; i += 1) {
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
@@ -269,7 +269,7 @@ export function trackWebhookRegistrationForTest<T extends { unregister: () => vo
   return registration;
 }
 
-export function registerWebhookTargetForTest(params: {
+function registerWebhookTargetForTest(params: {
   core: PluginRuntime;
   account?: ResolvedBlueBubblesAccount;
   config?: OpenClawConfig;
@@ -292,7 +292,7 @@ export function registerWebhookTargetForTest(params: {
   });
 }
 
-export function registerWebhookTargetsForTest(params: {
+function registerWebhookTargetsForTest(params: {
   core: PluginRuntime;
   accounts: Array<{
     account: ResolvedBlueBubblesAccount;

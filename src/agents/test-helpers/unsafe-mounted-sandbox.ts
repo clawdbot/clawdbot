@@ -6,7 +6,7 @@ import type { SandboxFsBridge, SandboxResolvedPath } from "../sandbox/fs-bridge.
 import { createSandboxFsBridgeFromResolver } from "./host-sandbox-fs-bridge.js";
 import { createPiToolsSandboxContext } from "./pi-tools-sandbox-context.js";
 
-export function createUnsafeMountedBridge(params: {
+function createUnsafeMountedBridge(params: {
   root: string;
   agentHostRoot: string;
   workspaceContainerRoot?: string;

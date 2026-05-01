@@ -23,8 +23,8 @@ run_plugins_marketplace_scenario() {
   run_logged install-marketplace-shortcut node "$OPENCLAW_ENTRY" plugins install marketplace-shortcut@claude-fixtures
   run_logged install-marketplace-direct node "$OPENCLAW_ENTRY" plugins install marketplace-direct --marketplace claude-fixtures
   node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins-marketplace.json
-  node "$OPENCLAW_ENTRY" plugins inspect marketplace-shortcut --json >/tmp/plugins-marketplace-shortcut-inspect.json
-  node "$OPENCLAW_ENTRY" plugins inspect marketplace-direct --json >/tmp/plugins-marketplace-direct-inspect.json
+  node "$OPENCLAW_ENTRY" plugins inspect marketplace-shortcut --runtime --json >/tmp/plugins-marketplace-shortcut-inspect.json
+  node "$OPENCLAW_ENTRY" plugins inspect marketplace-direct --runtime --json >/tmp/plugins-marketplace-direct-inspect.json
 
   node scripts/e2e/lib/plugins/assertions.mjs marketplace-installed
 
@@ -39,7 +39,7 @@ run_plugins_marketplace_scenario() {
   run_logged update-marketplace-shortcut-dry-run node "$OPENCLAW_ENTRY" plugins update marketplace-shortcut --dry-run
   run_logged update-marketplace-shortcut node "$OPENCLAW_ENTRY" plugins update marketplace-shortcut
   node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins-marketplace-updated.json
-  node "$OPENCLAW_ENTRY" plugins inspect marketplace-shortcut --json >/tmp/plugins-marketplace-updated-inspect.json
+  node "$OPENCLAW_ENTRY" plugins inspect marketplace-shortcut --runtime --json >/tmp/plugins-marketplace-updated-inspect.json
 
   node scripts/e2e/lib/plugins/assertions.mjs marketplace-updated
 }

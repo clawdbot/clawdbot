@@ -425,6 +425,34 @@ describe("infra runtime", () => {
         process.removeListener("SIGUSR1", handler);
       }
     });
+
+    it("bypasses restart cooldown when requested", async () => {
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "first" });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(consumeGatewaySigusr1RestartAuthorization()).toBe(true);
+        markGatewaySigusr1RestartHandled();
+
+        const forced = scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          reason: "update.run",
+          skipCooldown: true,
+        });
+
+        expect(forced.coalesced).toBe(false);
+        expect(forced.delayMs).toBe(0);
+        expect(forced.cooldownMsApplied).toBe(0);
+
+        await vi.advanceTimersByTimeAsync(0);
+        expect(emitSpy.mock.calls.filter((args) => args[0] === "SIGUSR1").length).toBe(2);
+        expect(peekGatewaySigusr1RestartReason()).toBe("update.run");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
   });
 
   describe("pre-restart deferral check", () => {

@@ -4,9 +4,6 @@
   "private": true,
   "description": "OpenClaw Brave plugin",
   "type": "module",
-  "dependencies": {
-    "typebox": "1.1.34"
-  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },

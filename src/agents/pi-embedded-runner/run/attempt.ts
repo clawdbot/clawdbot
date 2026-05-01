@@ -10,6 +10,7 @@ import {
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import type { AssembleResult } from "../../../context-engine/types.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
@@ -566,6 +567,13 @@ export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   );
 }
 
+export function resolveAttemptToolPolicyMessageProvider(params: {
+  messageProvider?: string;
+  messageChannel?: string;
+}): string | undefined {
+  return params.messageProvider ?? params.messageChannel;
+}
+
 function collectAttemptExplicitToolAllowlistSources(params: {
   config?: EmbeddedRunAttemptParams["config"];
   sessionKey?: string;
@@ -784,7 +792,7 @@ export async function runEmbeddedAttempt(
                 elevated: params.bashElevated,
               },
               sandbox,
-              messageProvider: params.messageChannel ?? params.messageProvider,
+              messageProvider: resolveAttemptToolPolicyMessageProvider(params),
               agentAccountId: params.agentAccountId,
               messageTo: params.messageTo,
               messageThreadId: params.messageThreadId,
@@ -1003,7 +1011,7 @@ export async function runEmbeddedAttempt(
       agentId: sessionAgentId,
       modelProvider: params.provider,
       modelId: params.modelId,
-      messageProvider: params.messageChannel ?? params.messageProvider,
+      messageProvider: resolveAttemptToolPolicyMessageProvider(params),
       agentAccountId: params.agentAccountId,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
@@ -1030,7 +1038,7 @@ export async function runEmbeddedAttempt(
       agentId: sessionAgentId,
       modelProvider: params.provider,
       modelId: params.modelId,
-      messageProvider: params.messageChannel ?? params.messageProvider,
+      messageProvider: resolveAttemptToolPolicyMessageProvider(params),
       agentAccountId: params.agentAccountId,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
@@ -1520,6 +1528,8 @@ export async function runEmbeddedAttempt(
       }
       let prePromptMessageCount = activeSession.messages.length;
       let unwindowedContextEngineMessagesForPrecheck: AgentMessage[] | undefined;
+      let contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]> =
+        "assembled";
       abortSessionForYield = () => {
         yieldAbortSettled = Promise.resolve(activeSession.abort());
       };
@@ -1684,11 +1694,19 @@ export async function runEmbeddedAttempt(
         agentDir,
         workspaceDir: effectiveWorkspace,
       });
-      const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransport({
-        provider: params.provider,
-        modelApi: params.model.api,
-        modelBaseUrl: params.model.baseUrl,
-      });
+      const hasExplicitSseTransport = [
+        (params.streamParams as { transport?: unknown } | undefined)?.transport,
+        (params.model as { params?: { transport?: unknown } }).params?.transport,
+      ]
+        .map((value) => (typeof value === "string" ? value.trim().toLowerCase() : ""))
+        .includes("sse");
+      const shouldUseWebSocketTransport =
+        !hasExplicitSseTransport &&
+        shouldUseOpenAIWebSocketTransport({
+          provider: params.provider,
+          modelApi: params.model.api,
+          modelBaseUrl: params.model.baseUrl,
+        });
       const wsApiKey = shouldUseWebSocketTransport
         ? await resolveEmbeddedAgentApiKey({
             provider: params.provider,
@@ -2056,7 +2074,11 @@ export async function runEmbeddedAttempt(
 
         if (activeContextEngine) {
           try {
-            unwindowedContextEngineMessagesForPrecheck = activeSession.messages.slice();
+            // Snapshot before assemble: the assemble contract does not require
+            // the input array to be treated immutably, so an engine that windows
+            // history in place would otherwise leave the precheck reading
+            // already-windowed messages instead of the true pre-assembly state.
+            const preassemblyContextEngineMessagesForPrecheck = activeSession.messages.slice();
             const assembled = await assembleAttemptContextEngine({
               contextEngine: activeContextEngine,
               sessionId: params.sessionId,
@@ -2073,6 +2095,11 @@ export async function runEmbeddedAttempt(
             }
             if (assembled.messages !== activeSession.messages) {
               activeSession.agent.state.messages = assembled.messages;
+            }
+            contextEnginePromptAuthority = assembled.promptAuthority ?? "assembled";
+            if (contextEnginePromptAuthority === "preassembly_may_overflow") {
+              unwindowedContextEngineMessagesForPrecheck =
+                preassemblyContextEngineMessagesForPrecheck;
             }
             if (assembled.systemPromptAddition) {
               systemPromptText = prependSystemPromptAddition({
@@ -2745,7 +2772,9 @@ export async function runEmbeddedAttempt(
 
           const preemptiveCompaction = shouldPreemptivelyCompactBeforePrompt({
             messages: activeSession.messages,
-            unwindowedMessages: unwindowedContextEngineMessagesForPrecheck,
+            ...(contextEnginePromptAuthority === "preassembly_may_overflow"
+              ? { unwindowedMessages: unwindowedContextEngineMessagesForPrecheck }
+              : {}),
             systemPrompt: systemPromptText,
             prompt: effectivePrompt,
             contextTokenBudget,

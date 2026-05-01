@@ -7,7 +7,7 @@ import { isOpenAIApiBaseUrl } from "./base-url.js";
 
 const OPENAI_WEB_SEARCH_TOOL = { type: "web_search" } as const;
 
-export type OpenAINativeWebSearchPatchResult =
+type OpenAINativeWebSearchPatchResult =
   | "payload_not_object"
   | "native_tool_already_present"
   | "injected";
@@ -38,7 +38,7 @@ function shouldUseOpenAINativeWebSearchProvider(config: OpenClawConfig | undefin
   return normalized === "" || normalized === "auto" || normalized === "openai";
 }
 
-export function shouldEnableOpenAINativeWebSearch(params: {
+function shouldEnableOpenAINativeWebSearch(params: {
   config?: OpenClawConfig;
   model: { api?: unknown; provider?: unknown; baseUrl?: unknown };
 }): boolean {
@@ -65,9 +65,7 @@ function raiseMinimalReasoningForOpenAINativeWebSearch(payload: Record<string, u
   reasoning.effort = "low";
 }
 
-export function patchOpenAINativeWebSearchPayload(
-  payload: unknown,
-): OpenAINativeWebSearchPatchResult {
+function patchOpenAINativeWebSearchPayload(payload: unknown): OpenAINativeWebSearchPatchResult {
   if (!isRecord(payload)) {
     return "payload_not_object";
   }

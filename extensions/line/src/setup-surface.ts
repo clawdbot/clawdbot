@@ -81,8 +81,6 @@ const lineDmPolicy: ChannelSetupDmPolicy = {
     }),
 };
 
-export { lineSetupAdapter } from "./setup-core.js";
-
 export const lineSetupWizard: ChannelSetupWizard = {
   channel,
   status: createStandardChannelSetupStatus({

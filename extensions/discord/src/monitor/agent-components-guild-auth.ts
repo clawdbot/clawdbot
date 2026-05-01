@@ -32,7 +32,7 @@ function resolveComponentRuntimeGroupPolicy(ctx: AgentComponentContext) {
   }).groupPolicy;
 }
 
-export async function ensureGuildComponentMemberAllowed(params: {
+async function ensureGuildComponentMemberAllowed(params: {
   interaction: AgentComponentInteraction;
   guildInfo: ReturnType<typeof resolveDiscordGuildEntry>;
   channelId: string;

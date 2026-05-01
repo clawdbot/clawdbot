@@ -71,6 +71,8 @@ export type AgentCommandOpts = {
   threadId?: string | number;
   /** Message channel context. */
   messageChannel?: string;
+  /** Tool-policy/output surface context. Defaults to messageChannel. */
+  messageProvider?: string;
   /** Delivery channel. */
   channel?: string;
   /** Account ID for multi-account channel routing. */

@@ -139,13 +139,6 @@ export interface UploadPrepareResponse {
   retry_timeout?: number;
 }
 
-/** Complete upload response. */
-export interface MediaUploadResponse {
-  file_uuid: string;
-  file_info: string;
-  ttl: number;
-}
-
 /** File hash information for upload_prepare. */
 export interface UploadPrepareHashes {
   /** Whole-file MD5 (hex). */

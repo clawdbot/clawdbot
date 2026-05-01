@@ -278,6 +278,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         blockStreaming: {
           type: "boolean",
         },
+        replyContextApiFallback: {
+          type: "boolean",
+        },
         groups: {
           type: "object",
           properties: {},
@@ -593,6 +596,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 additionalProperties: false,
               },
               blockStreaming: {
+                type: "boolean",
+              },
+              replyContextApiFallback: {
                 type: "boolean",
               },
               groups: {
@@ -1494,6 +1500,16 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               type: "integer",
               minimum: 0,
               maximum: 9007199254740991,
+            },
+            connectTimeoutMs: {
+              type: "integer",
+              exclusiveMinimum: 0,
+              maximum: 120000,
+            },
+            reconnectGraceMs: {
+              type: "integer",
+              exclusiveMinimum: 0,
+              maximum: 120000,
             },
             tts: {
               type: "object",
@@ -2861,6 +2877,16 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     minimum: 0,
                     maximum: 9007199254740991,
                   },
+                  connectTimeoutMs: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 120000,
+                  },
+                  reconnectGraceMs: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 120000,
+                  },
                   tts: {
                     type: "object",
                     properties: {
@@ -3566,6 +3592,14 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       "voice.decryptionFailureTolerance": {
         label: "Discord Voice Decrypt Failure Tolerance",
         help: "Consecutive decrypt failures before DAVE attempts session recovery (passed to @discordjs/voice; default: 24).",
+      },
+      "voice.connectTimeoutMs": {
+        label: "Discord Voice Connect Timeout (ms)",
+        help: "Initial @discordjs/voice Ready wait before a join is treated as failed. Default: 30000.",
+      },
+      "voice.reconnectGraceMs": {
+        label: "Discord Voice Reconnect Grace (ms)",
+        help: "Grace period for a disconnected Discord voice session to enter Signalling or Connecting before OpenClaw destroys it. Default: 15000.",
       },
       "voice.tts": {
         label: "Discord Voice Text-to-Speech",

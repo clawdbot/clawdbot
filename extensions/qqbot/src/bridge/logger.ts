@@ -5,7 +5,7 @@
  * engine's `debugLog` so that all logs flow through the OpenClaw log system.
  */
 
-export interface BridgeLogger {
+interface BridgeLogger {
   info: (msg: string) => void;
   error: (msg: string) => void;
   warn?: (msg: string) => void;

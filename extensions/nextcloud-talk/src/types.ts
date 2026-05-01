@@ -193,12 +193,3 @@ export type NextcloudTalkWebhookServerOptions = {
   onError?: (error: Error) => void;
   abortSignal?: AbortSignal;
 };
-
-/** Options for sending a message. */
-export type NextcloudTalkSendOptions = {
-  baseUrl: string;
-  secret: string;
-  roomToken: string;
-  message: string;
-  replyTo?: string;
-};

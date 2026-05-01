@@ -143,6 +143,7 @@ function applyModelProviderToolPolicy(
     modelId?: string;
     agentDir?: string;
     modelCompat?: ModelCompatConfig;
+    suppressManagedWebSearch?: boolean;
   },
 ): AnyAgentTool[] {
   if (params?.config?.agents?.defaults?.experimental?.localModelLean === true) {
@@ -151,6 +152,7 @@ function applyModelProviderToolPolicy(
   }
 
   if (
+    params?.suppressManagedWebSearch !== false &&
     shouldSuppressManagedWebSearchTool({
       config: params?.config,
       modelProvider: params?.modelProvider,
@@ -302,6 +304,8 @@ export function createOpenClawCodingTools(options?: {
   modelContextWindowTokens?: number;
   /** Resolved runtime model compatibility hints. */
   modelCompat?: ModelCompatConfig;
+  /** If false, keep OpenClaw web_search even when a provider-native search tool is active. */
+  suppressManagedWebSearch?: boolean;
   /**
    * Auth mode for the current provider. We only need this for Anthropic OAuth
    * tool-name blocking quirks.
@@ -685,6 +689,7 @@ export function createOpenClawCodingTools(options?: {
     modelId: options?.modelId,
     agentDir: options?.agentDir,
     modelCompat: options?.modelCompat,
+    suppressManagedWebSearch: options?.suppressManagedWebSearch,
   });
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
   const senderIsOwner = options?.senderIsOwner === true;

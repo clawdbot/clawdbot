@@ -131,16 +131,29 @@ export class OpenClawStdioClientTransport implements Transport {
   }
 
   send(message: JSONRPCMessage): Promise<void> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const stdin = this.process?.stdin;
       if (!stdin) {
         throw new Error("Not connected");
       }
       const json = serializeMessage(message);
-      if (stdin.write(json)) {
-        resolve();
-      } else {
-        stdin.once("drain", resolve);
+      // Settle from the write callback so async EPIPE rejects instead of
+      // escaping to uncaughtException. (#75438)
+      try {
+        const flushed = stdin.write(json, (err) => {
+          if (err) {
+            reject(err);
+          } else {
+            resolve();
+          }
+        });
+        if (!flushed) {
+          // Back-pressure: drain fires when the buffer empties, but the
+          // write callback above still owns promise settlement.
+          stdin.once("drain", () => {});
+        }
+      } catch (err) {
+        reject(err instanceof Error ? err : new Error(String(err)));
       }
     });
   }

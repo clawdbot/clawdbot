@@ -14,9 +14,6 @@ const BYTEPLUS_CODING_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
 
 export const BYTEPLUS_BASE_URL = BYTEPLUS_MANIFEST_PROVIDER.baseUrl;
 export const BYTEPLUS_CODING_BASE_URL = BYTEPLUS_CODING_MANIFEST_PROVIDER.baseUrl;
-export const BYTEPLUS_DEFAULT_MODEL_ID = "seed-1-8-251228";
-export const BYTEPLUS_CODING_DEFAULT_MODEL_ID = "ark-code-latest";
-export const BYTEPLUS_DEFAULT_MODEL_REF = `byteplus/${BYTEPLUS_DEFAULT_MODEL_ID}`;
 
 export const BYTEPLUS_DEFAULT_COST = {
   input: 0.0001,

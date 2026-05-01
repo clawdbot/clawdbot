@@ -6,6 +6,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { formatMention } from "../mentions.js";
 import { normalizeDiscordSlug } from "../monitor/allow-list.js";
+import { buildDiscordGroupSystemPrompt } from "../monitor/inbound-context.js";
 import { authorizeDiscordVoiceIngress } from "./access.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
@@ -18,6 +19,7 @@ import {
 import type { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
 import { synthesizeVoiceReplyAudio, transcribeVoiceAudio } from "./tts.js";
 
+const DISCORD_VOICE_MESSAGE_PROVIDER = "discord-voice";
 const logger = createSubsystemLogger("discord/voice");
 
 export async function processDiscordVoiceSegment(params: {
@@ -81,6 +83,7 @@ export async function processDiscordVoiceSegment(params: {
   );
 
   const prompt = formatVoiceIngressPrompt(transcript, speaker.label);
+  const extraSystemPrompt = buildDiscordGroupSystemPrompt(access.channelConfig);
   const modelOverride = normalizeOptionalString(params.discordConfig.voice?.model);
 
   const result = await agentCommandFromIngress(
@@ -89,6 +92,8 @@ export async function processDiscordVoiceSegment(params: {
       sessionKey: entry.route.sessionKey,
       agentId: entry.route.agentId,
       messageChannel: "discord",
+      messageProvider: DISCORD_VOICE_MESSAGE_PROVIDER,
+      extraSystemPrompt,
       senderIsOwner: speaker.senderIsOwner,
       allowModelOverride: Boolean(modelOverride),
       model: modelOverride,

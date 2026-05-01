@@ -20,7 +20,7 @@ export function createBundleMcpTempHarness() {
   };
 }
 
-export function resolveBundlePluginRoot(homeDir: string, pluginId: string) {
+function resolveBundlePluginRoot(homeDir: string, pluginId: string) {
   return path.join(homeDir, ".openclaw", "extensions", pluginId);
 }
 
@@ -37,19 +37,6 @@ export async function writeClaudeBundleManifest(params: {
     "utf-8",
   );
   return pluginRoot;
-}
-
-export async function writeBundleTextFiles(
-  rootDir: string,
-  files: Readonly<Record<string, string>>,
-) {
-  await Promise.all(
-    Object.entries(files).map(async ([relativePath, contents]) => {
-      const filePath = path.join(rootDir, relativePath);
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(filePath, contents, "utf-8");
-    }),
-  );
 }
 
 export function createEnabledPluginEntries(pluginIds: readonly string[]) {

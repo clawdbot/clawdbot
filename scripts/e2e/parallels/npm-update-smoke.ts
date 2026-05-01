@@ -13,6 +13,7 @@ import {
   resolveHostIp,
   resolveLatestVersion,
   resolveProviderAuth,
+  resolveWindowsProviderAuth,
   run,
   say,
   startHostServer,
@@ -145,6 +146,7 @@ function platformRecord<T>(value: T): Record<Platform, T> {
 
 class NpmUpdateSmoke {
   private auth: ProviderAuth;
+  private windowsAuth: ProviderAuth;
   private runDir = "";
   private tgzDir = "";
   private latestVersion = "";
@@ -164,6 +166,11 @@ class NpmUpdateSmoke {
 
   constructor(private options: NpmUpdateOptions) {
     this.auth = resolveProviderAuth({
+      apiKeyEnv: options.apiKeyEnv,
+      modelId: options.modelId,
+      provider: options.provider,
+    });
+    this.windowsAuth = resolveWindowsProviderAuth({
       apiKeyEnv: options.apiKeyEnv,
       modelId: options.modelId,
       provider: options.provider,
@@ -243,6 +250,7 @@ class NpmUpdateSmoke {
     env: NodeJS.ProcessEnv = {},
   ): Job {
     const logPath = path.join(this.runDir, `${platform}-fresh.log`);
+    const auth = this.authForPlatform(platform);
     const args = [
       "exec",
       "tsx",
@@ -252,9 +260,9 @@ class NpmUpdateSmoke {
       "--provider",
       this.options.provider,
       "--model",
-      this.auth.modelId,
+      auth.modelId,
       "--api-key-env",
-      this.auth.apiKeyEnv,
+      auth.apiKeyEnv,
       "--target-package-spec",
       this.packageSpec,
       "--json",
@@ -376,9 +384,8 @@ class NpmUpdateSmoke {
 
   private updateScript(platform: Platform): string {
     const input = {
-      auth: this.auth,
+      auth: this.authForPlatform(platform),
       expectedNeedle: this.updateExpectedNeedle,
-      provider: this.options.provider,
       updateTarget: this.updateTargetEffective,
     };
     switch (platform) {
@@ -390,6 +397,10 @@ class NpmUpdateSmoke {
         return linuxUpdateScript(input);
     }
     return die("unsupported platform");
+  }
+
+  private authForPlatform(platform: Platform): ProviderAuth {
+    return platform === "windows" ? this.windowsAuth : this.auth;
   }
 
   private spawnLogged(

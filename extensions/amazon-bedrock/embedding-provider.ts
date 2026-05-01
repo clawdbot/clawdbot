@@ -10,7 +10,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtim
 // Types & constants
 // ---------------------------------------------------------------------------
 
-export type BedrockEmbeddingClient = {
+type BedrockEmbeddingClient = {
   region: string;
   model: string;
   dimensions?: number;
@@ -162,7 +162,7 @@ async function loadCredentialProviderSdk(): Promise<AwsCredentialProviderSdk | n
 const MODEL_PREFIX_RE = /^(?:bedrock|amazon-bedrock|aws)\//;
 const REGION_RE = /bedrock-runtime\.([a-z0-9-]+)\./;
 
-export function normalizeBedrockEmbeddingModel(model: string): string {
+function normalizeBedrockEmbeddingModel(model: string): string {
   const trimmed = model.trim();
   return trimmed ? trimmed.replace(MODEL_PREFIX_RE, "") : DEFAULT_BEDROCK_EMBEDDING_MODEL;
 }
@@ -337,7 +337,7 @@ export async function createBedrockEmbeddingProvider(
 // Client resolution
 // ---------------------------------------------------------------------------
 
-export function resolveBedrockEmbeddingClient(
+function resolveBedrockEmbeddingClient(
   options: MemoryEmbeddingProviderCreateOptions,
 ): BedrockEmbeddingClient {
   const model = normalizeBedrockEmbeddingModel(options.model);

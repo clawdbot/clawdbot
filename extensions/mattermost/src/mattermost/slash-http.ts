@@ -40,17 +40,24 @@ import {
 } from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
 import {
+  MATTERMOST_SLASH_POST_METHOD,
+  getMattermostCommand,
+  listMattermostCommands,
+  normalizeSlashCommandTrigger,
   parseSlashCommandPayload,
   resolveCommandText,
+  type MattermostRegisteredCommand,
+  type MattermostCommandResponse,
   type MattermostSlashCommandResponse,
+  type MattermostSlashCommandPayload,
 } from "./slash-commands.js";
 
 type SlashHttpHandlerParams = {
   account: ResolvedMattermostAccount;
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
-  /** Expected token from registered commands (for validation). */
-  commandTokens: Set<string>;
+  /** Commands registered or reconciled during monitor startup. */
+  registeredCommands: readonly MattermostRegisteredCommand[];
   /** Map from trigger to original command name (for skill commands that start with oc_). */
   triggerMap?: ReadonlyMap<string, string>;
   log?: (msg: string) => void;
@@ -59,6 +66,34 @@ type SlashHttpHandlerParams = {
 
 const MAX_BODY_BYTES = 64 * 1024;
 const BODY_READ_TIMEOUT_MS = 5_000;
+const COMMAND_LOOKUP_TIMEOUT_MS = 1_000;
+const COMMAND_VALIDATION_FAILURE_CACHE_MS = 5_000;
+const COMMAND_VALIDATION_FAILURE_CACHE_MAX_KEYS = 2_000;
+const COMMAND_VALIDATION_LOOKUP_BURST = 20;
+const COMMAND_VALIDATION_LOOKUP_REFILL_MS = 500;
+const COMMAND_VALIDATION_LOOKUP_LIMIT_LOG_MS = 5_000;
+const COMMAND_VALIDATION_LOOKUP_RATE_LIMIT_MAX_KEYS = 2_000;
+type CommandLookupInflightEntry = {
+  accountId: string;
+  promise: Promise<MattermostCommandResponse | null>;
+};
+type CommandValidationRateLimitEntry = {
+  accountId: string;
+  tokens: number;
+  updatedAt: number;
+  lastLimitedLogAt: number;
+};
+const commandLookupInflight = new Map<string, CommandLookupInflightEntry>();
+const commandValidationFailureCache = new Map<string, { accountId: string; expiresAt: number }>();
+const commandValidationLookupRateLimit = new Map<string, CommandValidationRateLimitEntry>();
+const SECRET_LOG_KEYS = new Set([
+  "access_token",
+  "authorization",
+  "bottoken",
+  "client_secret",
+  "refresh_token",
+  "token",
+]);
 
 /**
  * Read the full request body as a string.
@@ -84,16 +119,300 @@ function sendJsonResponse(
   res.end(JSON.stringify(body));
 }
 
-function matchesRegisteredCommandToken(
-  commandTokens: ReadonlySet<string>,
-  candidate: string,
-): boolean {
-  for (const token of commandTokens) {
-    if (safeEqualSecret(candidate, token)) {
-      return true;
+function findRegisteredCommandForPayload(params: {
+  registeredCommands: readonly MattermostRegisteredCommand[];
+  payload: MattermostSlashCommandPayload;
+}): MattermostRegisteredCommand | undefined {
+  const trigger = normalizeSlashCommandTrigger(params.payload.command);
+  return params.registeredCommands.find(
+    (cmd) => cmd.teamId === params.payload.team_id && cmd.trigger === trigger,
+  );
+}
+
+function isDeletedMattermostCommand(command: { delete_at?: number }): boolean {
+  return typeof command.delete_at === "number" && command.delete_at > 0;
+}
+
+function sanitizeCommandLookupError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  return raw
+    .replace(/[\r\n\t]/gu, " ")
+    .replace(/https?:\/\/[^\s)\]}]+/giu, (urlText) => {
+      try {
+        const url = new URL(urlText);
+        if (url.username || url.password) {
+          url.username = "redacted";
+          url.password = "redacted";
+        }
+        for (const key of url.searchParams.keys()) {
+          if (SECRET_LOG_KEYS.has(key.toLowerCase())) {
+            url.searchParams.set(key, "redacted");
+          }
+        }
+        return url.toString();
+      } catch {
+        return urlText;
+      }
+    })
+    .replace(/(^|[^\w-])(Bearer|Token)\s+[A-Za-z0-9._~+/=-]+/giu, "$1$2 [redacted]")
+    .replace(
+      /\b(token|authorization|access_token|refresh_token|client_secret|botToken)\b(\s*["']?\s*(?:=|:)\s*["']?)[^"',\s;}]+/giu,
+      "$1$2[redacted]",
+    )
+    .slice(0, 300);
+}
+
+function sanitizeMattermostLogValue(value: string): string {
+  return value.replace(/[\r\n\t]/gu, " ").slice(0, 200);
+}
+
+async function withCommandLookupTimeout<T>(task: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), COMMAND_LOOKUP_TIMEOUT_MS);
+  try {
+    return await task(controller.signal);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function commandLookupKey(
+  client: ReturnType<typeof createMattermostClient>,
+  registered: MattermostRegisteredCommand,
+  accountId: string,
+): string {
+  return `${client.apiBaseUrl}:${accountId}:${registered.teamId}:${registered.id}`;
+}
+
+export function resetMattermostSlashCommandValidationCacheForTests(): void {
+  commandLookupInflight.clear();
+  commandValidationFailureCache.clear();
+  commandValidationLookupRateLimit.clear();
+}
+
+export function clearMattermostSlashCommandValidationCacheForAccount(accountId: string): void {
+  for (const [key, entry] of commandValidationFailureCache) {
+    if (entry.accountId === accountId) {
+      commandValidationFailureCache.delete(key);
     }
   }
+  for (const [key, entry] of commandLookupInflight) {
+    if (entry.accountId === accountId) {
+      commandLookupInflight.delete(key);
+    }
+  }
+  for (const [key, entry] of commandValidationLookupRateLimit) {
+    if (entry.accountId === accountId) {
+      commandValidationLookupRateLimit.delete(key);
+    }
+  }
+}
+
+function sweepCommandValidationFailureCache(now = Date.now()): void {
+  for (const [key, entry] of commandValidationFailureCache) {
+    if (entry.expiresAt <= now) {
+      commandValidationFailureCache.delete(key);
+    }
+  }
+  while (commandValidationFailureCache.size > COMMAND_VALIDATION_FAILURE_CACHE_MAX_KEYS) {
+    const oldestKey = commandValidationFailureCache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    commandValidationFailureCache.delete(oldestKey);
+  }
+}
+
+function hasCachedCommandValidationFailure(key: string, now = Date.now()): boolean {
+  sweepCommandValidationFailureCache(now);
+  const cached = commandValidationFailureCache.get(key);
+  if (!cached) {
+    return false;
+  }
+  if (cached.expiresAt > now) {
+    return true;
+  }
+  commandValidationFailureCache.delete(key);
   return false;
+}
+
+function cacheCommandValidationFailure(key: string, accountId: string): void {
+  sweepCommandValidationFailureCache();
+  commandValidationFailureCache.set(key, {
+    accountId,
+    expiresAt: Date.now() + COMMAND_VALIDATION_FAILURE_CACHE_MS,
+  });
+}
+
+function sweepCommandValidationLookupRateLimit(now = Date.now()): void {
+  const staleAfterMs = COMMAND_VALIDATION_LOOKUP_REFILL_MS * COMMAND_VALIDATION_LOOKUP_BURST * 2;
+  for (const [key, entry] of commandValidationLookupRateLimit) {
+    if (now - entry.updatedAt > staleAfterMs) {
+      commandValidationLookupRateLimit.delete(key);
+    }
+  }
+  while (commandValidationLookupRateLimit.size > COMMAND_VALIDATION_LOOKUP_RATE_LIMIT_MAX_KEYS) {
+    const oldestKey = commandValidationLookupRateLimit.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    commandValidationLookupRateLimit.delete(oldestKey);
+  }
+}
+
+function reserveCommandValidationLookup(params: {
+  key: string;
+  accountId: string;
+  now?: number;
+}): { allowed: true } | { allowed: false; shouldLog: boolean } {
+  const now = params.now ?? Date.now();
+  sweepCommandValidationLookupRateLimit(now);
+  const existing = commandValidationLookupRateLimit.get(params.key);
+  if (!existing) {
+    commandValidationLookupRateLimit.set(params.key, {
+      accountId: params.accountId,
+      tokens: COMMAND_VALIDATION_LOOKUP_BURST - 1,
+      updatedAt: now,
+      lastLimitedLogAt: 0,
+    });
+    return { allowed: true };
+  }
+
+  const refill = Math.floor((now - existing.updatedAt) / COMMAND_VALIDATION_LOOKUP_REFILL_MS);
+  if (refill > 0) {
+    existing.tokens = Math.min(COMMAND_VALIDATION_LOOKUP_BURST, existing.tokens + refill);
+    existing.updatedAt += refill * COMMAND_VALIDATION_LOOKUP_REFILL_MS;
+  }
+  if (existing.tokens <= 0) {
+    const shouldLog = now - existing.lastLimitedLogAt >= COMMAND_VALIDATION_LOOKUP_LIMIT_LOG_MS;
+    if (shouldLog) {
+      existing.lastLimitedLogAt = now;
+    }
+    return { allowed: false, shouldLog };
+  }
+  existing.tokens -= 1;
+  return { allowed: true };
+}
+
+async function fetchCurrentMattermostCommandUncached(params: {
+  client: ReturnType<typeof createMattermostClient>;
+  registered: MattermostRegisteredCommand;
+  log?: (msg: string) => void;
+}): Promise<MattermostCommandResponse | null> {
+  let commandLookupResult: MattermostCommandResponse | null = null;
+  let commandLookupError: unknown;
+  let commandLookupFallbackDetail: string | undefined;
+  try {
+    commandLookupResult = await withCommandLookupTimeout((signal) =>
+      getMattermostCommand(params.client, params.registered.id, { signal }),
+    );
+    if (!isDeletedMattermostCommand(commandLookupResult)) {
+      return commandLookupResult;
+    }
+    commandLookupFallbackDetail = `command lookup by id returned deleted command ${sanitizeMattermostLogValue(commandLookupResult.id)}`;
+  } catch (err) {
+    commandLookupError = err;
+    // Older Mattermost servers may not expose GET /commands/{id}; fall back to
+    // the team command list, which registration already requires.
+  }
+
+  try {
+    const currentCommands = await withCommandLookupTimeout((signal) =>
+      listMattermostCommands(params.client, params.registered.teamId, { signal }),
+    );
+    if (commandLookupError) {
+      params.log?.(
+        `mattermost: slash command lookup by id failed for /${sanitizeMattermostLogValue(params.registered.trigger)}; using team list fallback: ${sanitizeCommandLookupError(commandLookupError)}`,
+      );
+    } else if (commandLookupFallbackDetail) {
+      params.log?.(
+        `mattermost: slash ${commandLookupFallbackDetail} for /${sanitizeMattermostLogValue(params.registered.trigger)}; using team list fallback`,
+      );
+    }
+    return currentCommands.find((cmd) => cmd.id === params.registered.id) ?? commandLookupResult;
+  } catch (err) {
+    const primaryDetail = commandLookupError
+      ? `; command lookup: ${sanitizeCommandLookupError(commandLookupError)}`
+      : commandLookupFallbackDetail
+        ? `; command lookup: ${commandLookupFallbackDetail}`
+        : "";
+    params.log?.(
+      `mattermost: slash command registration check failed for /${sanitizeMattermostLogValue(params.registered.trigger)}: ${sanitizeCommandLookupError(err)}${primaryDetail}`,
+    );
+    return null;
+  }
+}
+
+async function fetchCurrentMattermostCommand(params: {
+  accountId: string;
+  client: ReturnType<typeof createMattermostClient>;
+  registered: MattermostRegisteredCommand;
+  log?: (msg: string) => void;
+}): Promise<MattermostCommandResponse | null> {
+  const key = commandLookupKey(params.client, params.registered, params.accountId);
+  const existing = commandLookupInflight.get(key);
+  if (existing) {
+    return await existing.promise;
+  }
+
+  const lookup = fetchCurrentMattermostCommandUncached(params).finally(() => {
+    commandLookupInflight.delete(key);
+  });
+  commandLookupInflight.set(key, { accountId: params.accountId, promise: lookup });
+  return await lookup;
+}
+
+export async function validateMattermostSlashCommandToken(params: {
+  accountId: string;
+  client: ReturnType<typeof createMattermostClient>;
+  registeredCommand: MattermostRegisteredCommand;
+  payload: MattermostSlashCommandPayload;
+  log?: (msg: string) => void;
+}): Promise<boolean> {
+  const lookupKey = commandLookupKey(params.client, params.registeredCommand, params.accountId);
+  if (hasCachedCommandValidationFailure(lookupKey)) {
+    return false;
+  }
+  if (!commandLookupInflight.has(lookupKey)) {
+    const reservation = reserveCommandValidationLookup({
+      key: lookupKey,
+      accountId: params.accountId,
+    });
+    if (!reservation.allowed) {
+      if (reservation.shouldLog) {
+        params.log?.(
+          `mattermost: slash command validation lookup rate-limited for /${sanitizeMattermostLogValue(params.registeredCommand.trigger)}`,
+        );
+      }
+      return false;
+    }
+  }
+  const current = await fetchCurrentMattermostCommand({
+    accountId: params.accountId,
+    client: params.client,
+    registered: params.registeredCommand,
+    log: params.log,
+  });
+  if (!current || isDeletedMattermostCommand(current)) {
+    cacheCommandValidationFailure(lookupKey, params.accountId);
+    return false;
+  }
+  if (
+    current.id !== params.registeredCommand.id ||
+    current.team_id !== params.registeredCommand.teamId ||
+    current.trigger !== params.registeredCommand.trigger ||
+    current.method !== MATTERMOST_SLASH_POST_METHOD ||
+    current.url !== params.registeredCommand.url
+  ) {
+    cacheCommandValidationFailure(lookupKey, params.accountId);
+    return false;
+  }
+  if (!current.token || !safeEqualSecret(params.payload.token, current.token)) {
+    cacheCommandValidationFailure(lookupKey, params.accountId);
+    return false;
+  }
+  commandValidationFailureCache.delete(lookupKey);
+  return true;
 }
 
 type SlashInvocationAuth = {
@@ -126,7 +445,9 @@ async function authorizeSlashInvocation(params: {
   try {
     channelInfo = await fetchMattermostChannel(client, channelId);
   } catch (err) {
-    log?.(`mattermost: slash channel lookup failed for ${channelId}: ${String(err)}`);
+    log?.(
+      `mattermost: slash channel lookup failed for ${sanitizeMattermostLogValue(channelId)}: ${sanitizeCommandLookupError(err)}`,
+    );
   }
 
   if (!channelInfo) {
@@ -224,7 +545,7 @@ async function authorizeSlashInvocation(params: {
  * from the Mattermost server when a user invokes a registered slash command.
  */
 export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
-  const { account, cfg, runtime, commandTokens, triggerMap, log, bodyTimeoutMs } = params;
+  const { account, cfg, runtime, registeredCommands, triggerMap, log, bodyTimeoutMs } = params;
 
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (req.method !== "POST") {
@@ -258,9 +579,20 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       return;
     }
 
-    // Validate token — fail closed: reject when no tokens are registered
-    // (e.g. registration failed or startup was partial)
-    if (commandTokens.size === 0 || !matchesRegisteredCommandToken(commandTokens, payload.token)) {
+    const registeredCommand = findRegisteredCommandForPayload({ registeredCommands, payload });
+
+    // Fail closed when no commands are registered, the payload doesn't map to
+    // a registered (team, trigger), or the payload token doesn't equal the
+    // resolved command's startup token. Comparing against the resolved
+    // command's token (rather than any token in the account) prevents a token
+    // valid for command A from advancing to upstream validation for command B,
+    // which would otherwise let an attacker poison the per-command failure
+    // cache and DoS legitimate invocations of command B.
+    if (
+      registeredCommands.length === 0 ||
+      !registeredCommand ||
+      !safeEqualSecret(payload.token, registeredCommand.token)
+    ) {
       sendJsonResponse(res, 401, {
         response_type: "ephemeral",
         text: "Unauthorized: invalid command token.",
@@ -269,17 +601,33 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     }
 
     // Extract command info
-    const trigger = payload.command.replace(/^\//, "").trim();
-    const commandText = resolveCommandText(trigger, payload.text, triggerMap);
-    const channelId = payload.channel_id;
-    const senderId = payload.user_id;
-    const senderName = payload.user_name ?? senderId;
-
     const client = createMattermostClient({
       baseUrl: account.baseUrl ?? "",
       botToken: account.botToken ?? "",
       allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
     });
+
+    const tokenIsCurrent = await validateMattermostSlashCommandToken({
+      accountId: account.accountId,
+      client,
+      registeredCommand,
+      payload,
+      log,
+    });
+    if (!tokenIsCurrent) {
+      sendJsonResponse(res, 401, {
+        response_type: "ephemeral",
+        text: "Unauthorized: invalid command token.",
+      });
+      return;
+    }
+
+    // Extract command info
+    const trigger = normalizeSlashCommandTrigger(payload.command);
+    const commandText = resolveCommandText(trigger, payload.text, triggerMap);
+    const channelId = payload.channel_id;
+    const senderId = payload.user_id;
+    const senderName = payload.user_name ?? senderId;
 
     const auth = await authorizeSlashInvocation({
       account,
@@ -301,7 +649,9 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       return;
     }
 
-    log?.(`mattermost: slash command /${trigger} from ${senderName} in ${channelId}`);
+    log?.(
+      `mattermost: slash command /${sanitizeMattermostLogValue(trigger)} from ${sanitizeMattermostLogValue(senderName)} in ${sanitizeMattermostLogValue(channelId)}`,
+    );
 
     // Acknowledge immediately — we'll send the actual reply asynchronously
     sendJsonResponse(res, 200, {
@@ -331,7 +681,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
         log,
       });
     } catch (err) {
-      log?.(`mattermost: slash command handler error: ${String(err)}`);
+      log?.(`mattermost: slash command handler error: ${sanitizeCommandLookupError(err)}`);
       try {
         const to = `channel:${channelId}`;
         await sendMessageMattermost(to, "Sorry, something went wrong processing that command.", {
@@ -525,7 +875,9 @@ async function handleSlashCommandAsync(params: {
         runtime.log?.(`delivered slash reply to ${to}`);
       },
       onError: (err, info) => {
-        runtime.error?.(`mattermost slash ${info.kind} reply failed: ${String(err)}`);
+        runtime.error?.(
+          `mattermost slash ${info.kind} reply failed: ${sanitizeCommandLookupError(err)}`,
+        );
       },
       onReplyStart: typingCallbacks?.onReplyStart,
     });

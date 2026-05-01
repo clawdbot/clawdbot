@@ -36,8 +36,6 @@ export type RequestGuildMembersData = {
   user_ids?: string | string[];
   nonce?: string;
 };
-export type GatewayWebSocketLike = ws.WebSocket;
-
 type GatewayPluginOptions = {
   reconnect?: { maxAttempts?: number };
   intents?: number;

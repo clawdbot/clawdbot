@@ -132,16 +132,12 @@ export {
   hookMocks,
   internalHookMocks,
   mocks,
-  pluginConversationBindingMocks,
   sessionBindingMocks,
   sessionStoreMocks,
-  replyMediaPathMocks,
   runtimePluginMocks,
-  threadInfoMocks,
-  ttsMocks,
 };
 
-export function parseGenericThreadSessionInfo(sessionKey: string | undefined) {
+function parseGenericThreadSessionInfo(sessionKey: string | undefined) {
   const trimmed = sessionKey?.trim();
   if (!trimmed) {
     return { baseSessionKey: undefined, threadId: undefined };

@@ -537,8 +537,8 @@ export class TwilioProvider implements VoiceCallProvider {
 
   /**
    * Initiate an outbound call via Twilio API.
-   * If inlineTwiml or preConnectTwiml is provided, the first webhook request
-   * receives that TwiML before normal dynamic TwiML resumes.
+   * If preConnectTwiml is provided, the first webhook request receives that
+   * TwiML before normal dynamic TwiML resumes.
    */
   async initiateCall(input: InitiateCallInput): Promise<InitiateCallResult> {
     const url = new URL(input.webhookUrl);
@@ -549,31 +549,29 @@ export class TwilioProvider implements VoiceCallProvider {
     statusUrl.searchParams.set("callId", input.callId);
     statusUrl.searchParams.set("type", "status"); // Differentiate from TwiML requests
 
-    // Store TwiML content if provided (for notify mode)
-    // We now serve it from the webhook endpoint instead of sending inline
-    if (input.inlineTwiml) {
-      this.twimlStorage.set(input.callId, input.inlineTwiml);
-      this.notifyCalls.add(input.callId);
-      console.log(
-        `[voice-call] Stored Twilio initial TwiML for call ${input.callId} (kind=notify)`,
-      );
-    } else if (input.preConnectTwiml) {
+    if (!input.inlineTwiml && input.preConnectTwiml) {
       this.twimlStorage.set(input.callId, input.preConnectTwiml);
       console.log(
         `[voice-call] Stored Twilio initial TwiML for call ${input.callId} (kind=pre-connect)`,
       );
     }
 
-    // Build request params - always use URL-based TwiML.
-    // Twilio silently ignores `StatusCallback` when using the inline `Twiml` parameter.
     const params: Record<string, string | string[]> = {
       To: input.to,
       From: input.from,
-      Url: url.toString(), // TwiML serving endpoint
-      StatusCallback: statusUrl.toString(), // Separate status callback endpoint
+      StatusCallback: statusUrl.toString(),
       StatusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
       Timeout: "30",
     };
+
+    if (input.inlineTwiml) {
+      params.Twiml = input.inlineTwiml;
+      console.log(
+        `[voice-call] Sending direct Twilio initial TwiML for call ${input.callId} (kind=notify)`,
+      );
+    } else {
+      params.Url = url.toString();
+    }
 
     const result = await this.apiRequest<TwilioCallResponse>("/Calls.json", params);
 

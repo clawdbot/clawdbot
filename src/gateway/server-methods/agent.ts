@@ -1128,6 +1128,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     let resolvedTo = deliveryPlan.resolvedTo;
     let effectivePlan = deliveryPlan;
     let deliveryDowngradeReason: string | null = null;
+    let deliveryTargetResolutionError: Error | undefined;
 
     if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
       const cfgResolved = cfgForAgent ?? cfg;
@@ -1165,7 +1166,30 @@ export const agentHandlers: GatewayRequestHandlers = {
       });
       if (fallback.resolvedTarget?.ok) {
         resolvedTo = fallback.resolvedTo;
+      } else if (fallback.resolvedTarget && !fallback.resolvedTarget.ok) {
+        deliveryTargetResolutionError = fallback.resolvedTarget.error;
       }
+    }
+
+    if (wantsDelivery && isDeliverableMessageChannel(resolvedChannel) && !resolvedTo) {
+      if (!bestEffortDeliver) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            deliveryTargetResolutionError
+              ? String(deliveryTargetResolutionError)
+              : `delivery target is required for ${resolvedChannel}: pass --to/--reply-to or configure a default target`,
+          ),
+        );
+        return;
+      }
+      context.logGateway.info(
+        deliveryTargetResolutionError
+          ? `agent delivery target missing (bestEffortDeliver): ${String(deliveryTargetResolutionError)}`
+          : "agent delivery target missing (bestEffortDeliver): no deliverable target",
+      );
     }
 
     if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {

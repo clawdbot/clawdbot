@@ -4,6 +4,7 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { FlexContainer } from "./flex-templates.js";
 import type { ProcessedLineMessage } from "./markdown-to-line.js";
+import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
 import type { SendLineReplyChunksParams } from "./reply-chunks.js";
 import type { LineChannelData, LineTemplateMessagePayload } from "./types.js";
 
@@ -165,16 +166,34 @@ export async function deliverLineAutoReply(params: {
     }
   } else {
     const combined = [...richMessages, ...mediaMessages];
-    if (hasQuickReplies && combined.length > 0) {
-      const quickReply = deps.createQuickReplyItems(lineData.quickReplies!);
-      const targetIndex =
-        replyToken && !replyTokenUsed ? Math.min(4, combined.length - 1) : combined.length - 1;
-      const target = combined[targetIndex] as messagingApi.Message & {
-        quickReply?: messagingApi.QuickReply;
-      };
-      combined[targetIndex] = { ...target, quickReply };
+    if (hasQuickReplies && combined.length === 0) {
+      const { replyTokenUsed: nextReplyTokenUsed } = await deps.sendLineReplyChunks({
+        to,
+        chunks: [buildLineQuickReplyFallbackText(lineData.quickReplies)],
+        quickReplies: lineData.quickReplies,
+        replyToken,
+        replyTokenUsed,
+        cfg: params.cfg,
+        accountId,
+        replyMessageLine: deps.replyMessageLine,
+        pushMessageLine: deps.pushMessageLine,
+        pushTextMessageWithQuickReplies: deps.pushTextMessageWithQuickReplies,
+        createTextMessageWithQuickReplies: deps.createTextMessageWithQuickReplies,
+        onReplyError: deps.onReplyError,
+      });
+      replyTokenUsed = nextReplyTokenUsed;
+    } else {
+      if (hasQuickReplies && combined.length > 0) {
+        const quickReply = deps.createQuickReplyItems(lineData.quickReplies!);
+        const targetIndex =
+          replyToken && !replyTokenUsed ? Math.min(4, combined.length - 1) : combined.length - 1;
+        const target = combined[targetIndex] as messagingApi.Message & {
+          quickReply?: messagingApi.QuickReply;
+        };
+        combined[targetIndex] = { ...target, quickReply };
+      }
+      await sendLineMessages(combined, true);
     }
-    await sendLineMessages(combined, true);
   }
 
   return { replyTokenUsed };

@@ -55,6 +55,7 @@ function buildDockParams(commandBody: string, ctxOverrides?: Partial<MsgContext>
       Provider: "telegram",
       Surface: "telegram",
       OriginatingChannel: "telegram",
+      ChatType: "direct",
       SenderId: "42",
       From: "42",
       ...ctxOverrides,
@@ -119,6 +120,25 @@ describe("handleDockCommand", () => {
       },
     });
     expect(params.sessionEntry?.lastChannel).toBe("telegram");
+  });
+
+  it("rejects group-session docking before it can reroute replies to a linked DM", async () => {
+    const params = buildDockParams("/dock-discord", {
+      ChatType: "group",
+      From: "telegram:group:-100123",
+      To: "telegram:-100123",
+      OriginatingTo: "telegram:-100123",
+      SenderId: "42",
+    });
+
+    const result = await handleDockCommand(params, true);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "Cannot dock to discord: docking is only available from direct chats." },
+    });
+    expect(params.sessionEntry?.lastChannel).toBe("telegram");
+    expect(params.sessionEntry?.lastTo).toBe("42");
   });
 
   it("fails closed when no session entry can be persisted", async () => {

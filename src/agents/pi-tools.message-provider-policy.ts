@@ -1,6 +1,7 @@
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 const TOOL_DENY_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>> = {
+  "discord-voice": ["tts"],
   voice: ["tts"],
 };
 

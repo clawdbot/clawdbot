@@ -276,8 +276,3 @@ export async function resolveComposeServiceUrl(
   }
   return (await isHealthy(`${baseUrl}healthz`, fetchImpl)) ? baseUrl : null;
 }
-
-export const __testing = {
-  fetchHealthUrl,
-  normalizeDockerServiceStatus,
-};

@@ -912,9 +912,6 @@ public actor GatewayChannelActor {
     }
 
     private func isTrustedDeviceRetryEndpoint() -> Bool {
-        // This client currently treats loopback as the only trusted retry target.
-        // Unlike the Node gateway client, it does not yet expose a pinned TLS-fingerprint
-        // trust path for remote retry, so remote fallback remains disabled by default.
         guard let host = self.url.host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
               !host.isEmpty
         else {
@@ -922,6 +919,11 @@ public actor GatewayChannelActor {
         }
         if host == "localhost" || host == "::1" || host == "127.0.0.1" || host.hasPrefix("127.") {
             return true
+        }
+        if self.url.scheme?.lowercased() == "wss",
+           let trust = self.session as? GatewayDeviceTokenRetryTrustProviding
+        {
+            return trust.allowsDeviceTokenRetryAuth
         }
         return false
     }

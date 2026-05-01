@@ -494,6 +494,11 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
         registerCliMetadata?.(api);
         return;
       }
+      if (api.registrationMode === "tool-discovery") {
+        const profile = createProfiler({ pluginId: id, source: importMetaUrl });
+        profile("bundled-register:registerFull", () => registerFull?.(api));
+        return;
+      }
       const profile = createProfiler({ pluginId: id, source: importMetaUrl });
       const channelPlugin = profile("bundled-register:loadChannelPlugin", loadChannelPlugin);
       profile("bundled-register:registerChannel", () =>

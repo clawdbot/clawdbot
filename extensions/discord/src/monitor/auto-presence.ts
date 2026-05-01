@@ -354,9 +354,3 @@ export function createDiscordAutoPresenceController(params: {
     },
   };
 }
-
-export const __testing = {
-  resolveAutoPresenceConfig,
-  resolveAuthAvailability,
-  stablePresenceSignature,
-};

@@ -11,7 +11,7 @@ export { isJavaScriptModulePath } from "../../plugins/native-module-require.js";
 function createModuleLoader() {
   const jitiLoaders: PluginJitiLoaderCache = new Map();
 
-  return (modulePath: string) => {
+  return (modulePath: string, tryNative?: boolean) => {
     return getCachedPluginJitiLoader({
       cache: jitiLoaders,
       modulePath,
@@ -19,6 +19,7 @@ function createModuleLoader() {
       argvEntry: process.argv[1],
       preferBuiltDist: true,
       jitiFilename: import.meta.url,
+      tryNative,
     });
   };
 }
@@ -83,7 +84,8 @@ export function loadChannelPluginModule(params: {
   }
   const safePath = opened.path;
   fs.closeSync(opened.fd);
-  if (params.shouldTryNativeRequire?.(safePath)) {
+  const shouldTryNative = params.shouldTryNativeRequire?.(safePath);
+  if (shouldTryNative) {
     const nativeModule = tryNativeRequireJavaScriptModule(safePath, {
       allowWindows: true,
     });
@@ -91,5 +93,5 @@ export function loadChannelPluginModule(params: {
       return nativeModule.moduleExport;
     }
   }
-  return loadModule(safePath)(safePath);
+  return loadModule(safePath, shouldTryNative)(safePath);
 }

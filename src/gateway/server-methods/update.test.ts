@@ -297,6 +297,7 @@ describe("update.run restart scheduling", () => {
       expect.objectContaining({
         delayMs: 0,
         reason: "update.run",
+        skipCooldown: true,
         skipDeferral: true,
       }),
     );

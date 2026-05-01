@@ -14,15 +14,12 @@ import type {
   ResolvedAcpxPluginConfig,
 } from "./config-schema.js";
 export {
-  ACPX_NON_INTERACTIVE_POLICIES,
-  ACPX_PERMISSION_MODES,
   type AcpxMcpServer,
   type AcpxNonInteractivePermissionPolicy,
   type AcpxPermissionMode,
   type AcpxPluginConfig,
   type McpServerConfig,
   type ResolvedAcpxPluginConfig,
-  createAcpxPluginConfigSchema,
 } from "./config-schema.js";
 
 export const ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME = "openclaw-plugin-tools";
@@ -103,8 +100,6 @@ export function resolveAcpxPluginRoot(moduleUrl: string = import.meta.url): stri
     resolvedRoot
   );
 }
-
-export const ACPX_PLUGIN_ROOT = resolveAcpxPluginRoot();
 
 const DEFAULT_PERMISSION_MODE: AcpxPermissionMode = "approve-reads";
 const DEFAULT_NON_INTERACTIVE_POLICY: AcpxNonInteractivePermissionPolicy = "fail";

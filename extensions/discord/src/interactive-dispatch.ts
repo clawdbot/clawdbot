@@ -51,7 +51,7 @@ export type DiscordInteractiveHandlerRegistration = PluginInteractiveRegistratio
   "discord"
 >;
 
-export type DiscordInteractiveDispatchContext = Omit<
+type DiscordInteractiveDispatchContext = Omit<
   DiscordInteractiveHandlerContext,
   | "interaction"
   | "respond"

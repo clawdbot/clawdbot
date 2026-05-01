@@ -39,11 +39,11 @@ const DEFAULT_TIMEOUT_MS = 5 * 60_000;
 
 export const DEFAULT_COMFY_MODEL = "workflow";
 
-export type ComfyMode = "local" | "cloud";
-export type ComfyCapability = "image" | "music" | "video";
-export type ComfyOutputKind = "audio" | "gifs" | "images" | "videos";
-export type ComfyWorkflow = Record<string, unknown>;
-export type ComfyProviderConfig = Record<string, unknown>;
+type ComfyMode = "local" | "cloud";
+type ComfyCapability = "image" | "music" | "video";
+type ComfyOutputKind = "audio" | "gifs" | "images" | "videos";
+type ComfyWorkflow = Record<string, unknown>;
+type ComfyProviderConfig = Record<string, unknown>;
 type ComfyFetchGuardParams = Parameters<typeof fetchWithSsrFGuard>[0];
 type ComfyDispatcherPolicy = ComfyFetchGuardParams["dispatcherPolicy"];
 type ComfyPromptResponse = {
@@ -84,20 +84,20 @@ type ComfyApiKeyResolution =
       status: "configured_unavailable";
     };
 
-export type ComfySourceImage = {
+type ComfySourceImage = {
   buffer: Buffer;
   mimeType: string;
   fileName?: string;
 };
 
-export type ComfyGeneratedAsset = {
+type ComfyGeneratedAsset = {
   buffer: Buffer;
   mimeType: string;
   fileName: string;
   nodeId: string;
 };
 
-export type ComfyWorkflowResult = {
+type ComfyWorkflowResult = {
   assets: ComfyGeneratedAsset[];
   model: string;
   promptId: string;
@@ -137,7 +137,7 @@ function stripNestedCapabilityConfig(config: ComfyProviderConfig): ComfyProvider
   return next;
 }
 
-export function getComfyCapabilityConfig(
+function getComfyCapabilityConfig(
   config: ComfyProviderConfig,
   capability: ComfyCapability,
 ): ComfyProviderConfig {
@@ -149,7 +149,7 @@ export function getComfyCapabilityConfig(
   return { ...shared, ...nested };
 }
 
-export function resolveComfyMode(config: ComfyProviderConfig): ComfyMode {
+function resolveComfyMode(config: ComfyProviderConfig): ComfyMode {
   return normalizeOptionalString(config.mode) === "cloud" ? "cloud" : "local";
 }
 

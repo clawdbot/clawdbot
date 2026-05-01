@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { describe, expect, it } from "vitest";
 import { getRegisteredMemoryEmbeddingProvider } from "../memory-embedding-providers.js";
+import { createPluginRecord } from "../status.test-helpers.js";
 
 describe("memory embedding provider registration", () => {
   it("rejects non-memory plugins that did not declare the capability contract", () => {
@@ -80,5 +81,42 @@ describe("memory embedding provider registration", () => {
       adapter: expect.objectContaining({ id: "demo-embedding" }),
       ownerPluginId: "memory-core",
     });
+  });
+
+  it("keeps companion embedding providers available during tool discovery", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    const record = createPluginRecord({
+      id: "tool-discovery-memory",
+      name: "Tool Discovery Memory",
+      kind: "memory",
+    });
+    registry.registry.plugins.push(record);
+    const api = registry.createApi(record, {
+      config,
+      registrationMode: "tool-discovery",
+    });
+
+    api.registerMemoryEmbeddingProvider({
+      id: "tool-discovery-embedding",
+      create: async () => ({ provider: null }),
+    });
+    api.registerTool({
+      name: "memory_recall",
+      label: "Memory Recall",
+      description: "Recall memory",
+      parameters: {},
+      execute: async () => ({ content: [], details: {} }),
+    });
+
+    expect(getRegisteredMemoryEmbeddingProvider("tool-discovery-embedding")).toEqual({
+      adapter: expect.objectContaining({ id: "tool-discovery-embedding" }),
+      ownerPluginId: "tool-discovery-memory",
+    });
+    expect(registry.registry.tools).toEqual([
+      expect.objectContaining({
+        pluginId: "tool-discovery-memory",
+        names: ["memory_recall"],
+      }),
+    ]);
   });
 });

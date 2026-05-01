@@ -227,7 +227,7 @@ function createQQBotApprovalCapability(): ChannelApprovalCapability {
   });
 }
 
-export const qqbotApprovalCapability = createQQBotApprovalCapability();
+const qqbotApprovalCapability = createQQBotApprovalCapability();
 
 let _cachedCapability: ChannelApprovalCapability | undefined;
 

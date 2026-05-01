@@ -1,7 +1,7 @@
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { blueBubblesFetchWithTimeout } from "./types.js";
 
-export function concatUint8Arrays(parts: Uint8Array[]): Uint8Array {
+function concatUint8Arrays(parts: Uint8Array[]): Uint8Array {
   const totalLength = parts.reduce((acc, part) => acc + part.length, 0);
   const body = new Uint8Array(totalLength);
   let offset = 0;

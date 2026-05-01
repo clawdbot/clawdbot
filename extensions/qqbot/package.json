@@ -9,7 +9,7 @@
     "mpg123-decoder": "^1.0.3",
     "silk-wasm": "^3.7.1",
     "ws": "^8.20.0",
-    "zod": "^4.3.6"
+    "zod": "^4.4.1"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

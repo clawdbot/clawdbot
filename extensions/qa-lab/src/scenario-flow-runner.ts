@@ -1,4 +1,3 @@
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaTransportState } from "./qa-transport.js";
 import type { QaScenarioFlow, QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
@@ -291,8 +290,4 @@ export async function runScenarioFlow(params: {
     },
   }));
   return await params.api.runScenario(params.scenarioTitle, steps);
-}
-
-export function describeScenarioFlowError(error: unknown) {
-  return formatErrorMessage(error);
 }

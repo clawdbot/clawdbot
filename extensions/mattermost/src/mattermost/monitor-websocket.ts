@@ -132,17 +132,6 @@ export function parsePostedPayload(
   return { payload, post };
 }
 
-export function parsePostedEvent(
-  data: WebSocket.RawData,
-): { payload: MattermostEventPayload; post: MattermostPost } | null {
-  const raw = rawDataToString(data);
-  const payload = parseMattermostEventPayload(raw);
-  if (!payload) {
-    return null;
-  }
-  return parsePostedPayload(payload);
-}
-
 export function createMattermostConnectOnce(
   opts: CreateMattermostConnectOnceOpts,
 ): () => Promise<void> {

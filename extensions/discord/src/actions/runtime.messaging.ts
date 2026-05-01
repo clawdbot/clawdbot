@@ -7,10 +7,7 @@ import {
   createDiscordMessagingActionContext,
   type DiscordMessagingActionOptions,
 } from "./runtime.messaging.shared.js";
-export {
-  discordMessagingActionRuntime,
-  resolveDiscordReactionTargetChannelId,
-} from "./runtime.messaging.runtime.js";
+export { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
 
 export async function handleDiscordMessagingAction(
   action: string,

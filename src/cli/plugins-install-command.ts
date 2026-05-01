@@ -8,6 +8,7 @@ import { parseClawHubPluginSpec } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
 import { installPluginFromClawHub } from "../plugins/clawhub.js";
+import { installPluginFromGitSpec, parseGitPluginSpec } from "../plugins/git-install.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
 import {
@@ -323,6 +324,42 @@ async function tryInstallPluginOrHookPackFromNpmSpec(params: {
   return { ok: true };
 }
 
+async function tryInstallPluginFromGitSpec(params: {
+  snapshot: ConfigSnapshotForInstallPersist;
+  installMode: "install" | "update";
+  spec: string;
+  safetyOverrides: InstallSafetyOverrides;
+  extensionsDir: string;
+}): Promise<{ ok: true } | { ok: false }> {
+  const result = await installPluginFromGitSpec({
+    ...params.safetyOverrides,
+    mode: params.installMode,
+    spec: params.spec,
+    extensionsDir: params.extensionsDir,
+    logger: createPluginInstallLogger(),
+  });
+  if (!result.ok) {
+    defaultRuntime.error(result.error);
+    return { ok: false };
+  }
+
+  await persistPluginInstall({
+    snapshot: params.snapshot,
+    pluginId: result.pluginId,
+    install: {
+      source: "git",
+      spec: params.spec,
+      installPath: result.targetDir,
+      version: result.version,
+      resolvedAt: result.git.resolvedAt,
+      gitUrl: result.git.url,
+      gitRef: result.git.ref,
+      gitCommit: result.git.commit,
+    },
+  });
+  return { ok: true };
+}
+
 function isTerminalPluginInstallSecurityFailure(code?: string): boolean {
   return (
     code === PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED ||
@@ -443,6 +480,20 @@ export async function runPluginInstallCommand(params: {
       defaultRuntime.error("`--pin` is not supported with `--marketplace`.");
       return defaultRuntime.exit(1);
     }
+  }
+  const gitPrefix = raw.trim().toLowerCase().startsWith("git:");
+  const gitSpec = parseGitPluginSpec(raw);
+  if (gitPrefix && !gitSpec) {
+    defaultRuntime.error(`unsupported git: plugin spec: ${raw}`);
+    return defaultRuntime.exit(1);
+  }
+  if (gitSpec && opts.link) {
+    defaultRuntime.error("`--link` is not supported with `git:` installs.");
+    return defaultRuntime.exit(1);
+  }
+  if (gitSpec && opts.pin) {
+    defaultRuntime.error("`--pin` is not supported with `git:` installs; use `git:<repo>@<ref>`.");
+    return defaultRuntime.exit(1);
   }
   if (opts.link && opts.force) {
     defaultRuntime.error("`--force` is not supported with `--link`.");
@@ -620,6 +671,20 @@ export async function runPluginInstallCommand(params: {
       extensionsDir,
     });
     if (!npmPrefixResult.ok) {
+      return defaultRuntime.exit(1);
+    }
+    return;
+  }
+
+  if (gitSpec) {
+    const gitResult = await tryInstallPluginFromGitSpec({
+      snapshot,
+      installMode,
+      spec: raw,
+      safetyOverrides,
+      extensionsDir,
+    });
+    if (!gitResult.ok) {
       return defaultRuntime.exit(1);
     }
     return;

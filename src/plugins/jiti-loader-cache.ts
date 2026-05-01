@@ -76,26 +76,41 @@ export function getCachedPluginJitiLoader(params: {
   if (cached) {
     return cached;
   }
-  const jitiLoader = (params.createLoader ?? createJiti)(jitiFilename, {
-    ...buildPluginLoaderJitiOptions(aliasMap),
-    tryNative,
-  });
-  const loadWithJiti = new Proxy(jitiLoader, {
-    apply(target, thisArg, argArray) {
-      const [first, ...rest] = argArray as [unknown, ...unknown[]];
-      if (typeof first === "string") {
-        return Reflect.apply(target, thisArg, [toSafeImportPath(first), ...rest] as never) as never;
-      }
-      return Reflect.apply(target, thisArg, argArray as never) as never;
-    },
-  });
+  let loadWithJiti: PluginJitiLoader | undefined;
+  const getLoadWithJiti = (): PluginJitiLoader => {
+    if (loadWithJiti) {
+      return loadWithJiti;
+    }
+    const jitiLoader = (params.createLoader ?? createJiti)(jitiFilename, {
+      ...buildPluginLoaderJitiOptions(aliasMap),
+      tryNative,
+    });
+    loadWithJiti = new Proxy(jitiLoader, {
+      apply(target, thisArg, argArray) {
+        const [first, ...rest] = argArray as [unknown, ...unknown[]];
+        if (typeof first === "string") {
+          return Reflect.apply(target, thisArg, [
+            toSafeImportPath(first),
+            ...rest,
+          ] as never) as never;
+        }
+        return Reflect.apply(target, thisArg, argArray as never) as never;
+      },
+    });
+    return loadWithJiti;
+  };
   // When the caller has explicitly opted out of native loading (for example
   // `bundled-capability-runtime` in Vitest+dist mode, which depends on
   // jiti's alias rewriting to surface a narrow SDK slice), route every
   // target through jiti so those alias rewrites still apply.
   if (!tryNative) {
-    params.cache.set(scopedCacheKey, loadWithJiti);
-    return loadWithJiti;
+    const loader = ((target: string, ...rest: unknown[]) =>
+      (getLoadWithJiti() as (t: string, ...a: unknown[]) => unknown)(
+        target,
+        ...rest,
+      )) as PluginJitiLoader;
+    params.cache.set(scopedCacheKey, loader);
+    return loader;
   }
   // Otherwise prefer native require() for already-compiled JS artifacts
   // (the bundled plugin public surfaces shipped in dist/). jiti's transform
@@ -109,7 +124,7 @@ export function getCachedPluginJitiLoader(params: {
     if (native.ok) {
       return native.moduleExport;
     }
-    return (loadWithJiti as (t: string, ...a: unknown[]) => unknown)(target, ...rest);
+    return (getLoadWithJiti() as (t: string, ...a: unknown[]) => unknown)(target, ...rest);
   }) as PluginJitiLoader;
   params.cache.set(scopedCacheKey, loader);
   return loader;

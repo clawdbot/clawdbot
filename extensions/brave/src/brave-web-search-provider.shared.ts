@@ -3,11 +3,11 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
 
-export type BraveConfig = {
+type BraveConfig = {
   mode?: string;
 };
 
-export type BraveLlmContextResult = { url: string; title: string; snippets: string[] };
+type BraveLlmContextResult = { url: string; title: string; snippets: string[] };
 export type BraveLlmContextResponse = {
   grounding: { generic?: BraveLlmContextResult[] };
   sources?: { url?: string; hostname?: string; date?: string }[];

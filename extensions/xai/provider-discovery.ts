@@ -16,7 +16,7 @@ function resolveXaiSyntheticAuth(config: unknown) {
     : undefined;
 }
 
-export const xaiProviderDiscovery: ProviderPlugin = {
+const xaiProviderDiscovery: ProviderPlugin = {
   id: PROVIDER_ID,
   label: "xAI",
   docsPath: "/providers/models",

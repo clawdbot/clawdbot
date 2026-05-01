@@ -482,6 +482,7 @@ export function isBundledPluginConfiguredForRuntimeDeps(params: {
   pluginDir: string;
   configuredModelOwnerPluginIds?: ReadonlySet<string>;
   includeConfiguredChannels?: boolean;
+  includeEnabledByDefaultPlugins?: boolean;
   manifestCache?: BundledPluginRuntimeDepsManifestCache;
 }): boolean {
   if (
@@ -560,7 +561,11 @@ export function isBundledPluginConfiguredForRuntimeDeps(params: {
   ) {
     return true;
   }
-  return manifest.enabledByDefault && manifest.providers.length === 0;
+  return (
+    (params.includeEnabledByDefaultPlugins ?? true) &&
+    manifest.enabledByDefault &&
+    manifest.providers.length === 0
+  );
 }
 
 function isBundledPluginExplicitlyDisabledForRuntimeDeps(params: {
@@ -600,6 +605,7 @@ function shouldIncludeBundledPluginRuntimeDeps(params: {
   pluginDir: string;
   configuredModelOwnerPluginIds?: ReadonlySet<string>;
   includeConfiguredChannels?: boolean;
+  includeEnabledByDefaultPlugins?: boolean;
   manifestCache?: BundledPluginRuntimeDepsManifestCache;
 }): boolean {
   if (params.exactPluginIds) {
@@ -650,6 +656,7 @@ function shouldIncludeBundledPluginRuntimeDeps(params: {
     pluginDir: params.pluginDir,
     configuredModelOwnerPluginIds: params.configuredModelOwnerPluginIds,
     includeConfiguredChannels: params.includeConfiguredChannels,
+    includeEnabledByDefaultPlugins: params.includeEnabledByDefaultPlugins,
     manifestCache: params.manifestCache,
   });
 }
@@ -660,6 +667,7 @@ export function collectBundledPluginRuntimeDeps(params: {
   pluginIds?: ReadonlySet<string>;
   exactPluginIds?: ReadonlySet<string>;
   includeConfiguredChannels?: boolean;
+  includeEnabledByDefaultPlugins?: boolean;
   manifestCache?: BundledPluginRuntimeDepsManifestCache;
   normalizePluginId?: NormalizePluginId;
 }): {
@@ -707,6 +715,7 @@ export function collectBundledPluginRuntimeDeps(params: {
         pluginDir,
         configuredModelOwnerPluginIds,
         includeConfiguredChannels: params.includeConfiguredChannels,
+        includeEnabledByDefaultPlugins: params.includeEnabledByDefaultPlugins,
         manifestCache,
       })
     ) {

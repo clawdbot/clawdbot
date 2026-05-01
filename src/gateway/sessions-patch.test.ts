@@ -429,6 +429,27 @@ describe("gateway sessions patch", () => {
     expect(entry.thinkingLevel).toBe("xhigh");
   });
 
+  test("accepts xhigh thinking patches from bundled startup-lazy provider policy without catalog", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "openai-codex/gpt-5.5" },
+            },
+          },
+        } as OpenClawConfig,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          thinkingLevel: "xhigh",
+        },
+        loadGatewayModelCatalog: async () => [],
+      }),
+    );
+
+    expect(entry.thinkingLevel).toBe("xhigh");
+  });
+
   test("sets spawnedBy for ACP sessions", async () => {
     const entry = expectPatchOk(
       await runPatch({

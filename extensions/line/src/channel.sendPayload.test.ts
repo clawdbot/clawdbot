@@ -202,6 +202,34 @@ describe("line outbound sendPayload", () => {
     expect(mocks.createQuickReplyItems).toHaveBeenCalledWith(["One", "Two"]);
   });
 
+  it("sends quick-reply-only payloads with fallback text", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    const result = await lineOutboundAdapter.sendPayload!({
+      to: "line:user:quick",
+      text: "",
+      payload: {
+        channelData: {
+          line: {
+            quickReplies: ["One", "Two"],
+          },
+        },
+      },
+      accountId: "default",
+      cfg,
+    });
+
+    expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledWith(
+      "line:user:quick",
+      "Options:\n- One\n- Two",
+      ["One", "Two"],
+      { verbose: false, accountId: "default", cfg },
+    );
+    expect(result).toEqual({ channel: "line", messageId: "m-quick", chatId: "c1" });
+  });
+
   it("sends media before quick-reply text so buttons stay visible", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);

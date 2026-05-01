@@ -1,11 +1,11 @@
 import { vi } from "vitest";
 import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
 
-export const resolveCleanupPlanFromDisk = vi.fn();
-export const removePath = vi.fn();
-export const listAgentSessionDirs = vi.fn();
-export const removeStateAndLinkedPaths = vi.fn();
-export const removeWorkspaceDirs = vi.fn();
+const resolveCleanupPlanFromDisk = vi.fn();
+const removePath = vi.fn();
+const listAgentSessionDirs = vi.fn();
+const removeStateAndLinkedPaths = vi.fn();
+const removeWorkspaceDirs = vi.fn();
 
 vi.mock("../config/config.js", () => ({
   isNixMode: false,

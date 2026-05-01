@@ -18,6 +18,15 @@
       }
     }
   },
+  "setup": {
+    "providers": [
+      {
+        "id": "deepinfra",
+        "authMethods": ["api-key"],
+        "envVars": ["DEEPINFRA_API_KEY"]
+      }
+    ]
+  },
   "modelCatalog": {
     "providers": {
       "deepinfra": {
@@ -145,10 +154,10 @@
           }
         ]
       }
+    },
+    "discovery": {
+      "deepinfra": "refreshable"
     }
-  },
-  "providerAuthEnvVars": {
-    "deepinfra": ["DEEPINFRA_API_KEY"]
   },
   "providerAuthChoices": [
     {

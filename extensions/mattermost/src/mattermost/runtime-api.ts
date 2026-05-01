@@ -33,15 +33,11 @@ export {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 export { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
-export {
-  getAgentScopedMediaLocalRoots,
-  resolveChannelMediaMaxBytes,
-} from "openclaw/plugin-sdk/media-runtime";
+export { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 export {
   DEFAULT_GROUP_HISTORY_LIMIT,
   buildPendingHistoryContextFromMap,
-  clearHistoryEntriesIfEnabled,
   recordPendingHistoryEntryIfEnabled,
 } from "openclaw/plugin-sdk/reply-history";
 export { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-targets";

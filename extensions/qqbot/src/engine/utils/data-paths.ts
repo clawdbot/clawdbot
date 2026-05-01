@@ -17,7 +17,7 @@ import { getQQBotDataPath } from "./platform.js";
  * Normalise an identifier so it is safe to embed in a filename.
  * Keeps alphanumerics, dot, underscore, dash; everything else becomes `_`.
  */
-export function safeName(id: string): string {
+function safeName(id: string): string {
   return id.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 

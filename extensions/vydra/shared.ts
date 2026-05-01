@@ -19,7 +19,7 @@ export const DEFAULT_VYDRA_IMAGE_MODEL = "grok-imagine";
 export const DEFAULT_VYDRA_VIDEO_MODEL = "veo3";
 export const DEFAULT_VYDRA_SPEECH_MODEL = "elevenlabs/tts";
 export const DEFAULT_VYDRA_VOICE_ID = "21m00Tcm4TlvDq8ikWAM";
-export const DEFAULT_HTTP_TIMEOUT_MS = 120_000;
+const DEFAULT_HTTP_TIMEOUT_MS = 120_000;
 const POLL_INTERVAL_MS = 2_500;
 const MAX_POLL_ATTEMPTS = 120;
 type VydraAuthStore = Parameters<typeof resolveApiKeyForProvider>[0]["store"];
@@ -80,7 +80,7 @@ export function normalizeVydraBaseUrl(value: string | undefined): string {
   }
 }
 
-export function resolveVydraBaseUrlFromConfig(cfg: unknown): string {
+function resolveVydraBaseUrlFromConfig(cfg: unknown): string {
   const models = asObject(asObject(cfg)?.models);
   const providers = asObject(models?.providers);
   const vydra = asObject(providers?.vydra);
@@ -140,7 +140,7 @@ export function resolveVydraResponseStatus(payload: unknown): string | undefined
   return normalizeOptionalLowercaseString(trimToUndefined(asObject(payload)?.status));
 }
 
-export function resolveVydraErrorMessage(payload: unknown): string | undefined {
+function resolveVydraErrorMessage(payload: unknown): string | undefined {
   const object = asObject(payload) as VydraJobPayload | undefined;
   const error = object?.error;
   if (typeof error === "string" && error.trim()) {
@@ -242,7 +242,7 @@ export async function downloadVydraAsset(params: {
   };
 }
 
-export async function waitForVydraJob(params: {
+async function waitForVydraJob(params: {
   baseUrl: string;
   jobId: string;
   headers: Headers;

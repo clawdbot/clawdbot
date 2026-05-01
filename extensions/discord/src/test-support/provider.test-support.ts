@@ -194,17 +194,6 @@ export function getProviderMonitorTestMocks(): typeof providerMonitorTestMocks {
   return providerMonitorTestMocks;
 }
 
-export function mockResolvedDiscordAccountConfig(overrides: Record<string, unknown>) {
-  resolveDiscordAccountMock.mockImplementation(() => ({
-    accountId: "default",
-    token: "cfg-token",
-    config: {
-      ...baseDiscordAccountConfig(),
-      ...overrides,
-    },
-  }));
-}
-
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe handler params shape.
 export function getFirstDiscordMessageHandlerParams<T extends object>() {
   expect(createDiscordMessageHandlerMock).toHaveBeenCalledTimes(1);

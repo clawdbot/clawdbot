@@ -1,4 +1,4 @@
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard } from "../../../api.js";
 
 type ParsedTwilioApiError = {
   code?: number;
@@ -61,8 +61,9 @@ export async function twilioApiRequest<T = unknown>(params: {
           return acc;
         }, new URLSearchParams());
 
+  const requestUrl = `${params.baseUrl}${params.endpoint}`;
   const { response, release } = await fetchWithSsrFGuard({
-    url: `${params.baseUrl}${params.endpoint}`,
+    url: requestUrl,
     init: {
       method: "POST",
       headers: {

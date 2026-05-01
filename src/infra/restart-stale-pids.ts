@@ -6,6 +6,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isGatewayArgv } from "./gateway-process-argv.js";
 import { resolveLsofCommandSync } from "./ports-lsof.js";
+import { getWindowsInstallRoots } from "./windows-install-roots.js";
 import {
   readWindowsListeningPidsOnPortSync,
   readWindowsListeningPidsResultSync,
@@ -424,8 +425,8 @@ function terminateStaleProcessesSync(pids: number[]): number[] {
  * Sends a graceful taskkill first (/T for tree), waits, then escalates to /F.
  */
 function terminateStaleProcessesWindows(pids: number[]): number[] {
-  const taskkillPath = path.join(
-    process.env.SystemRoot ?? "C:\\Windows",
+  const taskkillPath = path.win32.join(
+    getWindowsInstallRoots().systemRoot,
     "System32",
     "taskkill.exe",
   );

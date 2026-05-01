@@ -90,7 +90,7 @@ export function addTestHook(params: {
   } as PluginHookRegistration);
 }
 
-export function addTestHooks(
+function addTestHooks(
   registry: PluginRegistry,
   hooks: ReadonlyArray<{
     pluginId: string;

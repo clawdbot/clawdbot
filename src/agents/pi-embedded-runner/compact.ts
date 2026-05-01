@@ -11,7 +11,7 @@ import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  captureCompactionCheckpointSnapshot,
+  captureCompactionCheckpointSnapshotAsync,
   cleanupCompactionCheckpointSnapshot,
   persistSessionCompactionCheckpoint,
   resolveSessionCompactionCheckpointReason,
@@ -822,7 +822,7 @@ export async function compactEmbeddedPiSessionDirect(
             : undefined,
         allowedToolNames,
       });
-      checkpointSnapshot = captureCompactionCheckpointSnapshot({
+      checkpointSnapshot = await captureCompactionCheckpointSnapshotAsync({
         sessionManager,
         sessionFile: params.sessionFile,
       });

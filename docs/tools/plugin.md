@@ -30,6 +30,9 @@ temporary set of OpenClaw-owned plugin packages while that migration finishes.
     # From npm
     openclaw plugins install npm:@acme/openclaw-plugin
 
+    # From git
+    openclaw plugins install git:github.com/acme/openclaw-plugin@v1.0.0
+
     # From a local directory or archive
     openclaw plugins install ./my-plugin
     openclaw plugins install ./my-plugin.tgz
@@ -45,6 +48,20 @@ temporary set of OpenClaw-owned plugin packages while that migration finishes.
     Then configure under `plugins.entries.\<id\>.config` in your config file.
 
   </Step>
+
+  <Step title="Verify the plugin">
+    ```bash
+    openclaw plugins inspect <plugin-id> --runtime --json
+
+    # If the plugin registered a CLI root, run one command from that root.
+    openclaw <plugin-command> --help
+    ```
+
+    Use `--runtime` when you need to prove registered tools, services, gateway
+    methods, hooks, or plugin-owned CLI commands. Plain `inspect` is a cold
+    manifest/registry check and intentionally avoids importing plugin runtime.
+
+  </Step>
 </Steps>
 
 If you prefer chat-native control, enable `commands.plugins: true` and use:
@@ -56,8 +73,8 @@ If you prefer chat-native control, enable `commands.plugins: true` and use:
 ```
 
 The install path uses the same resolver as the CLI: local path/archive, explicit
-`clawhub:<pkg>`, explicit `npm:<pkg>`, or bare package spec (ClawHub first, then
-npm fallback).
+`clawhub:<pkg>`, explicit `npm:<pkg>`, explicit `git:<repo>`, or bare package
+spec (ClawHub first, then npm fallback).
 
 If config is invalid, install normally fails closed and points you at
 `openclaw doctor --fix`. The only recovery exception is a narrow bundled-plugin
@@ -384,7 +401,7 @@ openclaw plugins list --enabled            # only enabled plugins
 openclaw plugins list --verbose            # per-plugin detail lines
 openclaw plugins list --json               # machine-readable inventory
 openclaw plugins inspect <id>              # static detail
-openclaw plugins inspect <id> --runtime    # registered hooks/tools/diagnostics
+openclaw plugins inspect <id> --runtime    # registered hooks/tools/CLI/gateway methods
 openclaw plugins inspect <id> --json       # machine-readable
 openclaw plugins inspect --all             # fleet-wide table
 openclaw plugins info <id>                 # inspect alias
@@ -396,6 +413,8 @@ openclaw doctor --fix                      # repair plugin registry state
 openclaw plugins install <package>         # install (ClawHub first, then npm)
 openclaw plugins install clawhub:<pkg>     # install from ClawHub only
 openclaw plugins install npm:<pkg>         # install from npm only
+openclaw plugins install git:<repo>        # install from git
+openclaw plugins install git:<repo>@<ref>  # install from git ref
 openclaw plugins install <spec> --force    # overwrite existing install
 openclaw plugins install <path>            # install from local path
 openclaw plugins install -l <path>         # link (no copy) for dev
@@ -410,6 +429,12 @@ openclaw plugins uninstall <id>          # remove config and plugin index record
 openclaw plugins uninstall <id> --keep-files
 openclaw plugins marketplace list <source>
 openclaw plugins marketplace list <source> --json
+
+# Verify runtime registrations after install.
+openclaw plugins inspect <id> --runtime --json
+
+# Run plugin-owned CLI commands directly from the OpenClaw root CLI.
+openclaw <plugin-command> --help
 
 openclaw plugins enable <id>
 openclaw plugins disable <id>

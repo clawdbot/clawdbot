@@ -468,10 +468,3 @@ export function summarizeConceptTagScriptCoverage(
 
   return coverage;
 }
-
-export const __testing = {
-  normalizeConceptToken,
-  collectGlossaryMatches,
-  collectCompoundTokens,
-  collectSegmentTokens,
-};

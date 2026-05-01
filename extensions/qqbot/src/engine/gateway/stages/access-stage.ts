@@ -15,7 +15,7 @@ import { buildBlockedInboundContext } from "./stub-contexts.js";
 
 // ─────────────────────────── Types ───────────────────────────
 
-export interface AccessStageAllow {
+interface AccessStageAllow {
   kind: "allow";
   isGroupChat: boolean;
   peerId: string;
@@ -25,12 +25,12 @@ export interface AccessStageAllow {
   access: QQBotAccessResult;
 }
 
-export interface AccessStageBlock {
+interface AccessStageBlock {
   kind: "block";
   context: InboundContext;
 }
 
-export type AccessStageResult = AccessStageAllow | AccessStageBlock;
+type AccessStageResult = AccessStageAllow | AccessStageBlock;
 
 // ─────────────────────────── Stage ───────────────────────────
 

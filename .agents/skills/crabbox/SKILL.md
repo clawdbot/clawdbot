@@ -17,7 +17,10 @@ runner class, reusable warm state, or a Blacksmith alternative.
 - Use Crabbox for broad OpenClaw gates when owned AWS/Hetzner capacity is the
   right remote lane.
 - Check `.crabbox.yaml` for repo defaults before adding flags.
-- Install with `brew install openclaw/tap/crabbox`; auth is required before use: `crabbox login`.
+- Install with `brew install openclaw/tap/crabbox`; auth is required before use:
+  `printf '%s' "$CRABBOX_COORDINATOR_TOKEN" | crabbox login --url https://crabbox-coordinator.steipete.workers.dev --provider aws --token-stdin`.
+- On macOS the user config is `~/Library/Application Support/crabbox/config.yaml`;
+  it must include `broker.url`, `broker.token`, and usually `provider: aws`.
 
 ## OpenClaw Flow
 

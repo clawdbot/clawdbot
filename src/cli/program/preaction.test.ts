@@ -245,6 +245,7 @@ describe("registerPreActionHooks", () => {
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",
+      installBundledRuntimeDeps: true,
     });
   });
 
@@ -261,6 +262,7 @@ describe("registerPreActionHooks", () => {
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",
+      installBundledRuntimeDeps: true,
     });
   });
 

@@ -26,7 +26,7 @@ const OPENAI_MAX_INPUT_TOKENS: Record<string, number> = {
   "text-embedding-ada-002": 8191,
 };
 
-export function normalizeOpenAiModel(model: string): string {
+function normalizeOpenAiModel(model: string): string {
   const trimmed = model.trim();
   if (!trimmed) {
     return DEFAULT_OPENAI_EMBEDDING_MODEL;
@@ -82,7 +82,7 @@ export async function createOpenAiEmbeddingProvider(
   };
 }
 
-export async function resolveOpenAiEmbeddingClient(
+async function resolveOpenAiEmbeddingClient(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<OpenAiEmbeddingClient> {
   const client = await resolveRemoteEmbeddingClient({

@@ -324,6 +324,7 @@ export function runAgentAttempt(params: {
   body: string;
   isFallbackRetry: boolean;
   resolvedThinkLevel: ThinkLevel;
+  fastMode?: boolean;
   timeoutMs: number;
   runId: string;
   opts: AgentCommandOpts & { senderIsOwner: boolean };
@@ -481,7 +482,7 @@ export function runAgentAttempt(params: {
         skillsSnapshot: params.skillsSnapshot,
         messageChannel: params.messageChannel,
         streamParams: params.opts.streamParams,
-        messageProvider: params.messageChannel,
+        messageProvider: params.opts.messageProvider ?? params.messageChannel,
         agentAccountId: params.runContext.accountId,
         senderIsOwner: params.opts.senderIsOwner,
         cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
@@ -550,6 +551,7 @@ export function runAgentAttempt(params: {
     agentId: params.sessionAgentId,
     trigger: "user",
     messageChannel: params.messageChannel,
+    messageProvider: params.opts.messageProvider ?? params.messageChannel,
     agentAccountId: params.runContext.accountId,
     messageTo: params.opts.replyTo ?? params.opts.to,
     messageThreadId: params.opts.threadId,
@@ -576,6 +578,7 @@ export function runAgentAttempt(params: {
     authProfileId,
     authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,
     thinkLevel: params.resolvedThinkLevel,
+    fastMode: params.fastMode,
     verboseLevel: params.resolvedVerboseLevel,
     timeoutMs: params.timeoutMs,
     runId: params.runId,

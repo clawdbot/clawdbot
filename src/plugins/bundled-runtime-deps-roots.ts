@@ -269,6 +269,57 @@ export function listSiblingExternalBundledRuntimeDepsRoots(params: {
     .map((entry) => entry.root);
 }
 
+export function pruneSiblingExternalBundledRuntimeDepsRoots(params: {
+  installRoot: string;
+  nowMs?: number;
+  warn?: (message: string) => void;
+}): { scanned: number; removed: number; skippedLocked: number } {
+  const installRoot = path.resolve(params.installRoot);
+  const installRootHash = readPackageKeyPathHash(path.basename(installRoot));
+  if (!installRootHash) {
+    return { scanned: 0, removed: 0, skippedLocked: 0 };
+  }
+  const parentDir = path.dirname(installRoot);
+  const nowMs = params.nowMs ?? Date.now();
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(parentDir, { withFileTypes: true });
+  } catch {
+    return { scanned: 0, removed: 0, skippedLocked: 0 };
+  }
+
+  let scanned = 0;
+  let removed = 0;
+  let skippedLocked = 0;
+  for (const entry of entries) {
+    if (
+      !entry.isDirectory() ||
+      !entry.name.startsWith("openclaw-") ||
+      readPackageKeyPathHash(entry.name) !== installRootHash
+    ) {
+      continue;
+    }
+    const root = path.join(parentDir, entry.name);
+    if (path.resolve(root) === installRoot) {
+      continue;
+    }
+    scanned += 1;
+    const lockDir = path.join(root, BUNDLED_RUNTIME_DEPS_LOCK_DIR);
+    if (fs.existsSync(lockDir) && !removeRuntimeDepsLockIfStale(lockDir, nowMs)) {
+      skippedLocked += 1;
+      continue;
+    }
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+      removed += 1;
+    } catch (error) {
+      params.warn?.(`failed to remove sibling bundled runtime deps root ${root}: ${String(error)}`);
+    }
+  }
+
+  return { scanned, removed, skippedLocked };
+}
+
 function readPackageKeyPathHash(packageKey: string): string | null {
   return PACKAGE_KEY_PATH_HASH_RE.exec(packageKey)?.[1] ?? null;
 }

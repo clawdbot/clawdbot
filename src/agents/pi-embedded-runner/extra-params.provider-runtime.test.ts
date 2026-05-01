@@ -1,7 +1,11 @@
 import type { Model } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPiAiStreamSimpleMock } from "../../../test/helpers/agents/pi-ai-stream-simple-mock.js";
-import { __testing as extraParamsTesting } from "./extra-params.js";
+import {
+  __testing as extraParamsTesting,
+  resolveAgentTransportOverride,
+  resolveExplicitSettingsTransport,
+} from "./extra-params.js";
 import { runExtraParamsCase } from "./extra-params.test-support.js";
 
 vi.mock("@mariozechner/pi-ai", () => createPiAiStreamSimpleMock());
@@ -37,6 +41,29 @@ afterEach(() => {
 });
 
 describe("extra-params: provider runtime handoff", () => {
+  it("keeps unsupported upstream transport values out of OpenClaw runtime hooks", () => {
+    const settingsManager = {
+      getGlobalSettings: () => ({}),
+      getProjectSettings: () => ({}),
+    };
+
+    expect(
+      resolveAgentTransportOverride({
+        settingsManager,
+        effectiveExtraParams: { transport: "websocket-cached" },
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveExplicitSettingsTransport({
+        settingsManager: {
+          getGlobalSettings: () => ({ transport: "auto" }),
+          getProjectSettings: () => ({}),
+        },
+        sessionTransport: "websocket-cached",
+      }),
+    ).toBeUndefined();
+  });
+
   it("passes thinking-off intent through the provider runtime wrapper seam", () => {
     const payload = runExtraParamsCase({
       applyProvider: "local-provider",

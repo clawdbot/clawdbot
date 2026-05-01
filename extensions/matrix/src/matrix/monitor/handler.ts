@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import {
   loadSessionStore,
   resolveSessionStoreEntry,
@@ -38,7 +39,7 @@ import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
 import { resolveMatrixStoredSessionMeta } from "../session-store-metadata.js";
 import { resolveMatrixMonitorAccessState } from "./access-state.js";
 import { resolveMatrixAckReactionConfig } from "./ack-config.js";
-import { resolveMatrixAllowListMatch } from "./allowlist.js";
+import { normalizeMatrixUserId, resolveMatrixAllowListMatch } from "./allowlist.js";
 import {
   resolveMatrixMonitorLiveUserAllowlist,
   type MatrixResolvedAllowlistEntry,
@@ -740,6 +741,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           isRoom,
         });
         const {
+          effectiveAllowFrom,
           effectiveGroupAllowFrom,
           effectiveRoomUsers,
           groupAllowConfigured,
@@ -1148,6 +1150,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           triggerSnapshot,
           threadRootId: _threadRootId,
           thread,
+          effectiveAllowFrom,
           effectiveGroupAllowFrom,
           effectiveRoomUsers,
         };
@@ -1202,6 +1205,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         triggerSnapshot,
         threadRootId: _threadRootId,
         thread,
+        effectiveAllowFrom,
         effectiveGroupAllowFrom,
         effectiveRoomUsers,
       } = resolvedIngressResult;
@@ -1828,6 +1832,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           onReplyStart: typingCallbacks.onReplyStart,
           onIdle: typingCallbacks.onIdle,
         });
+      const pinnedMainDmOwner = isDirectMessage
+        ? resolvePinnedMainDmOwnerFromAllowlist({
+            dmScope: cfg.session?.dmScope,
+            allowFrom: effectiveAllowFrom,
+            normalizeEntry: normalizeMatrixUserId,
+          })
+        : null;
 
       const turnResult = await core.channel.turn.run({
         channel: "matrix",
@@ -1855,6 +1866,23 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                     channel: "matrix",
                     to: `room:${roomId}`,
                     accountId: _route.accountId,
+                    mainDmOwnerPin: pinnedMainDmOwner
+                      ? {
+                          ownerRecipient: pinnedMainDmOwner,
+                          senderRecipient: normalizeMatrixUserId(senderId),
+                          onSkip: ({
+                            ownerRecipient,
+                            senderRecipient,
+                          }: {
+                            ownerRecipient: string;
+                            senderRecipient: string;
+                          }) => {
+                            logVerboseMessage(
+                              `matrix: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                            );
+                          },
+                        }
+                      : undefined,
                   }
                 : undefined,
               onRecordError: (err) => {

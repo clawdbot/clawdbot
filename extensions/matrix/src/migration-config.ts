@@ -18,14 +18,14 @@ import {
 } from "./matrix/client/env-auth.js";
 import { resolveMatrixAccountStorageRoot, resolveMatrixCredentialsPath } from "./storage-paths.js";
 
-export type MatrixStoredCredentials = {
+type MatrixStoredCredentials = {
   homeserver: string;
   userId: string;
   accessToken: string;
   deviceId?: string;
 };
 
-export type MatrixMigrationAccountTarget = {
+type MatrixMigrationAccountTarget = {
   accountId: string;
   homeserver: string;
   userId: string;
@@ -34,7 +34,7 @@ export type MatrixMigrationAccountTarget = {
   storedDeviceId: string | null;
 };
 
-export type MatrixLegacyFlatStoreTarget = MatrixMigrationAccountTarget & {
+type MatrixLegacyFlatStoreTarget = MatrixMigrationAccountTarget & {
   selectionNote?: string;
 };
 
@@ -64,7 +64,7 @@ function resolveMatrixFlatStoreSelectionNote(
   );
 }
 
-export function resolveMatrixMigrationConfigFields(params: {
+function resolveMatrixMigrationConfigFields(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   accountId: string;
@@ -101,7 +101,7 @@ export function resolveMatrixMigrationConfigFields(params: {
   };
 }
 
-export function loadStoredMatrixCredentials(
+function loadStoredMatrixCredentials(
   env: NodeJS.ProcessEnv,
   accountId: string,
 ): MatrixStoredCredentials | null {
@@ -135,7 +135,7 @@ export function loadStoredMatrixCredentials(
   }
 }
 
-export function credentialsMatchResolvedIdentity(
+function credentialsMatchResolvedIdentity(
   stored: MatrixStoredCredentials | null,
   identity: {
     homeserver: string;

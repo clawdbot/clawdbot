@@ -1,7 +1,7 @@
 import { FormData as UndiciFormData } from "undici";
 import { RequestClient, type RequestClientOptions } from "./internal/discord.js";
 
-export type ProxyRequestClientOptions = RequestClientOptions;
+type ProxyRequestClientOptions = RequestClientOptions;
 
 export const DISCORD_REST_TIMEOUT_MS = 15_000;
 

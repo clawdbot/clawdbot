@@ -43,6 +43,7 @@ describe("getCachedPluginJitiLoader", () => {
     const second = getCachedPluginJitiLoader(params);
 
     expect(second).toBe(first);
+    first("/repo/extensions/demo/index.ts");
     expect(createJiti).toHaveBeenCalledTimes(1);
     expect(cache.size).toBe(1);
   });
@@ -70,6 +71,8 @@ describe("getCachedPluginJitiLoader", () => {
     });
 
     expect(second).not.toBe(first);
+    first("/repo/dist/extensions/demo/api.ts");
+    second("/repo/dist/extensions/demo/api.ts");
     expect(createJiti).toHaveBeenNthCalledWith(
       1,
       "file:///repo/src/plugins/public-surface-loader.ts",
@@ -119,6 +122,7 @@ describe("getCachedPluginJitiLoader", () => {
     });
 
     expect(second).toBe(first);
+    first("/repo/extensions/demo/index.ts");
     expect(createJiti).toHaveBeenCalledTimes(1);
     expect(createJiti).toHaveBeenCalledWith(
       "file:///repo/src/plugins/loader.ts",
@@ -161,6 +165,7 @@ describe("getCachedPluginJitiLoader", () => {
     });
 
     expect(second).toBe(first);
+    second("/repo/dist/extensions/demo-b/api.js");
     expect(createJiti).toHaveBeenCalledTimes(1);
     expect(cache.size).toBe(1);
   });
@@ -192,6 +197,29 @@ describe("getCachedPluginJitiLoader", () => {
       },
       tryNative: false,
     });
+
+    getCachedPluginJitiLoader({
+      cache,
+      modulePath: "/repo/extensions/demo-a/index.ts",
+      importerUrl: "file:///repo/src/plugins/loader.ts",
+      jitiFilename: "/repo/extensions/demo-a/index.ts",
+      aliasMap: {
+        alpha: "/repo/alpha",
+        beta: "alpha/sub",
+      },
+      tryNative: false,
+    })("/repo/extensions/demo-a/index.ts");
+    getCachedPluginJitiLoader({
+      cache,
+      modulePath: "/repo/extensions/demo-b/index.ts",
+      importerUrl: "file:///repo/src/plugins/loader.ts",
+      jitiFilename: "/repo/extensions/demo-b/index.ts",
+      aliasMap: {
+        beta: "alpha/sub",
+        alpha: "/repo/alpha",
+      },
+      tryNative: false,
+    })("/repo/extensions/demo-b/index.ts");
 
     const marker = Symbol.for("pathe:normalizedAlias");
     const firstAlias = (createJiti.mock.calls[0]?.[1] as { alias?: Record<string, string> }).alias;
@@ -231,8 +259,9 @@ describe("getCachedPluginJitiLoader", () => {
 
     const result = loader("/repo/dist/extensions/demo/api.js") as { loadedFrom: string };
     expect(result.loadedFrom).toBe("/repo/dist/extensions/demo/api.js");
-    // jiti is created eagerly, but its loader must NOT be invoked for .js
-    // targets that `tryNativeRequireJavaScriptModule` resolves.
+    // Jiti should not be constructed or invoked for .js targets that
+    // `tryNativeRequireJavaScriptModule` resolves.
+    expect(createJiti).not.toHaveBeenCalled();
     expect(jitiLoader).not.toHaveBeenCalled();
     // allowWindows must be passed so the native fast path works on Windows too.
     expect(nativeStub).toHaveBeenCalledWith("/repo/dist/extensions/demo/api.js", {

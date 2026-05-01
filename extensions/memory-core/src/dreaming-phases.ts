@@ -1808,14 +1808,6 @@ async function runPhaseIfTriggered(
   return { handled: true, reason: `memory-core: ${params.phase} dreaming processed` };
 }
 
-/**
- * @deprecated Unified dreaming registration lives in registerShortTermPromotionDreaming().
- */
-export function registerMemoryDreamingPhases(_api: OpenClawPluginApi): void {
-  // LEGACY(memory-v1): kept as a no-op compatibility shim while the unified
-  // dreaming controller owns startup reconciliation and heartbeat triggers.
-}
-
 export const __testing = {
   runPhaseIfTriggered,
   previewRemDreaming,

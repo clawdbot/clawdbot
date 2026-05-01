@@ -357,6 +357,9 @@ export async function runCommandWithTimeout(
     armNoOutputTimer();
 
     if (hasInput && child.stdin) {
+      // Swallow EPIPE from a prematurely-exited child; the exit handler
+      // reports the real status. (#75438)
+      child.stdin.on("error", () => {});
       child.stdin.write(input ?? "");
       child.stdin.end();
     }

@@ -8,7 +8,7 @@ import { CronService } from "./service.js";
 import { createCronServiceState, type CronServiceState } from "./service/state.js";
 import type { CronJob } from "./types.js";
 
-export type NoopLogger = {
+type NoopLogger = {
   debug: MockFn;
   info: MockFn;
   warn: MockFn;
@@ -204,7 +204,7 @@ export function createRunningCronServiceState(params: {
   return state;
 }
 
-export function disposeCronServiceState(state: { timer: NodeJS.Timeout | null }): void {
+function disposeCronServiceState(state: { timer: NodeJS.Timeout | null }): void {
   if (state.timer) {
     clearTimeout(state.timer);
     state.timer = null;

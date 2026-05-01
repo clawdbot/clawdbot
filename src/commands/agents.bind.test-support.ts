@@ -11,7 +11,7 @@ export const readConfigFileSnapshotMock: Mock<(...args: unknown[]) => Promise<un
 export const writeConfigFileMock: Mock<(...args: unknown[]) => Promise<unknown>> = vi
   .fn()
   .mockResolvedValue(undefined);
-export const replaceConfigFileMock: Mock<(...args: unknown[]) => Promise<unknown>> = vi.fn(
+const replaceConfigFileMock: Mock<(...args: unknown[]) => Promise<unknown>> = vi.fn(
   async (params: { nextConfig: OpenClawConfig }): Promise<ReplaceConfigFileResult> => {
     await writeConfigFileMock(params.nextConfig);
     return {

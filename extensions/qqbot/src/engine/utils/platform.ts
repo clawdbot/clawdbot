@@ -84,7 +84,7 @@ export function getQQBotMediaDir(...subPaths: string[]): string {
  * `saveMediaBuffer(..., "outbound", ...)`) or `inbound/`, while still keeping
  * the check anchored to a single, well-known directory.
  */
-export function getOpenClawMediaDir(): string {
+function getOpenClawMediaDir(): string {
   return path.join(getHomeDir(), ".openclaw", "media");
 }
 
@@ -209,7 +209,7 @@ export async function checkSilkWasmAvailable(): Promise<boolean> {
 // ---- Tilde expansion and path normalization ----
 
 /** Expand `~` to the current user's home directory. */
-export function expandTilde(p: string): string {
+function expandTilde(p: string): string {
   if (!p) {
     return p;
   }

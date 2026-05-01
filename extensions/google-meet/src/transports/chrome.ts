@@ -43,6 +43,7 @@ export const __testing = {
   setDepsForTest(deps: { callGatewayFromCli?: typeof callGatewayFromCli } | null) {
     chromeTransportDeps.callGatewayFromCli = deps?.callGatewayFromCli ?? callGatewayFromCli;
   },
+  meetStatusScriptForTest: meetStatusScript,
 };
 
 export function outputMentionsBlackHole2ch(output: string): boolean {
@@ -209,6 +210,15 @@ function parseMeetBrowserStatus(result: unknown): GoogleMeetChromeHealth | undef
   const parsed = JSON.parse(raw) as {
     inCall?: boolean;
     micMuted?: boolean;
+    lobbyWaiting?: boolean;
+    leaveReason?: string;
+    captioning?: boolean;
+    captionsEnabledAttempted?: boolean;
+    transcriptLines?: number;
+    lastCaptionAt?: string;
+    lastCaptionSpeaker?: string;
+    lastCaptionText?: string;
+    recentTranscript?: GoogleMeetChromeHealth["recentTranscript"];
     manualActionRequired?: boolean;
     manualActionReason?: GoogleMeetChromeHealth["manualActionReason"];
     manualActionMessage?: string;
@@ -219,6 +229,15 @@ function parseMeetBrowserStatus(result: unknown): GoogleMeetChromeHealth | undef
   return {
     inCall: parsed.inCall,
     micMuted: parsed.micMuted,
+    lobbyWaiting: parsed.lobbyWaiting,
+    leaveReason: parsed.leaveReason,
+    captioning: parsed.captioning,
+    captionsEnabledAttempted: parsed.captionsEnabledAttempted,
+    transcriptLines: parsed.transcriptLines,
+    lastCaptionAt: parsed.lastCaptionAt,
+    lastCaptionSpeaker: parsed.lastCaptionSpeaker,
+    lastCaptionText: parsed.lastCaptionText,
+    recentTranscript: parsed.recentTranscript,
     manualActionRequired: parsed.manualActionRequired,
     manualActionReason: parsed.manualActionReason,
     manualActionMessage: parsed.manualActionMessage,
@@ -306,11 +325,13 @@ async function grantMeetMediaPermissions(params: {
 function meetStatusScript(params: {
   allowMicrophone: boolean;
   autoJoin: boolean;
+  captureCaptions: boolean;
   guestName: string;
 }) {
   return `() => {
   const text = (node) => (node?.innerText || node?.textContent || "").trim();
   const allowMicrophone = ${JSON.stringify(params.allowMicrophone)};
+  const captureCaptions = ${JSON.stringify(params.captureCaptions)};
   const buttons = [...document.querySelectorAll('button')];
   const notes = [];
   const findButton = (pattern) =>
@@ -356,6 +377,95 @@ function meetStatusScript(params: {
     notes.push("Skipped Meet microphone prompt for observe-only mode.");
   }
   const inCall = buttons.some((button) => /leave call/i.test(button.getAttribute('aria-label') || text(button)));
+  let captioning = false;
+  let captionsEnabledAttempted = false;
+  let transcriptLines = 0;
+  let lastCaptionAt;
+  let lastCaptionSpeaker;
+  let lastCaptionText;
+  let recentTranscript = [];
+  const captionSelector = '[role="region"][aria-label*="aption" i], [aria-live="polite"][role="region"], div[aria-live="polite"]';
+  const captionState = (() => {
+    if (!captureCaptions) return undefined;
+    const w = window;
+    if (!inCall && !w.__openclawMeetCaptions) return undefined;
+    if (!w.__openclawMeetCaptions) {
+      w.__openclawMeetCaptions = {
+        enabledAttempted: false,
+        observerInstalled: false,
+        lines: [],
+        seen: {}
+      };
+    }
+    return w.__openclawMeetCaptions;
+  })();
+  const recordCaption = (speaker, captionText) => {
+    if (!captionState) return;
+    const clean = String(captionText || "").replace(/\\s+/g, " ").trim();
+    const cleanSpeaker = String(speaker || "").replace(/\\s+/g, " ").trim();
+    if (!clean || clean.length < 2) return;
+    if (/^(turn on captions|turn off captions|captions)$/i.test(clean)) return;
+    const key = (cleanSpeaker + "\\n" + clean).toLowerCase();
+    if (captionState.seen[key]) return;
+    captionState.seen[key] = true;
+    const entry = { at: new Date().toISOString(), speaker: cleanSpeaker || undefined, text: clean };
+    captionState.lines.push(entry);
+    if (captionState.lines.length > 50) captionState.lines.splice(0, captionState.lines.length - 50);
+  };
+  const scrapeCaptions = () => {
+    if (!captionState) return;
+    const regions = [...document.querySelectorAll(captionSelector)];
+    for (const region of regions) {
+      const raw = text(region);
+      if (!raw) continue;
+      const pieces = raw.split(/\\n+/).map((part) => part.trim()).filter(Boolean);
+      if (pieces.length >= 2) {
+        recordCaption(pieces[0], pieces.slice(1).join(" "));
+      } else {
+        recordCaption("", pieces[0] || raw);
+      }
+    }
+  };
+  if (captionState) {
+    if (inCall && !captionState.enabledAttempted) {
+      const captionButton = findButton(/turn on captions|show captions|captions/i);
+      const captionLabel = captionButton ? (captionButton.getAttribute("aria-label") || captionButton.getAttribute("data-tooltip") || text(captionButton)) : "";
+      if (captionButton) {
+        captionState.enabledAttempted = true;
+        captionsEnabledAttempted = true;
+        if (!/turn off captions|hide captions/i.test(captionLabel)) {
+          captionButton.click();
+          notes.push("Attempted to enable Meet captions for observe-only transcript health.");
+        }
+      }
+    } else if (captionState.enabledAttempted) {
+      captionsEnabledAttempted = true;
+    }
+    if (inCall && !captionState.observerInstalled) {
+      captionState.observerInstalled = true;
+      new MutationObserver(scrapeCaptions).observe(document.body, {
+        childList: true,
+        subtree: true,
+        characterData: true
+      });
+      notes.push("Installed Meet caption observer for observe-only transcript health.");
+    }
+    if (inCall) {
+      scrapeCaptions();
+    }
+    const lines = Array.isArray(captionState.lines) ? captionState.lines : [];
+    const last = lines[lines.length - 1];
+    captioning = document.querySelector(captionSelector) !== null || lines.length > 0;
+    transcriptLines = lines.length;
+    lastCaptionAt = last?.at;
+    lastCaptionSpeaker = last?.speaker;
+    lastCaptionText = last?.text;
+    recentTranscript = lines.slice(-5);
+  }
+  const lobbyWaiting = !inCall && /asking to be let in|you.?ll join when someone lets you in|waiting to be let in|ask to join/i.test(pageText);
+  const leaveReason = /you left the meeting|you.?ve left the meeting|removed from the meeting|you were removed|call ended|meeting ended/i.test(pageText)
+    ? pageText.match(/you left the meeting|you.?ve left the meeting|removed from the meeting|you were removed|call ended|meeting ended/i)?.[0]
+    : undefined;
   let manualActionReason;
   let manualActionMessage;
   if (!inCall && (host === "accounts.google.com" || /use your google account|to continue to google meet|choose an account|sign in to (join|continue)/i.test(pageText))) {
@@ -380,6 +490,15 @@ function meetStatusScript(params: {
     clickedMicrophoneChoice: Boolean(allowMicrophone && microphoneChoice),
     inCall,
     micMuted: mic ? /turn on microphone/i.test(mic.getAttribute('aria-label') || text(mic)) : undefined,
+    lobbyWaiting,
+    leaveReason,
+    captioning,
+    captionsEnabledAttempted,
+    transcriptLines,
+    lastCaptionAt,
+    lastCaptionSpeaker,
+    lastCaptionText,
+    recentTranscript,
     manualActionRequired: Boolean(manualActionReason),
     manualActionReason,
     manualActionMessage,
@@ -490,6 +609,7 @@ async function openMeetWithBrowserRequest(params: {
           targetId,
           fn: meetStatusScript({
             allowMicrophone: params.mode === "realtime",
+            captureCaptions: params.mode === "transcribe",
             guestName: params.config.chrome.guestName,
             autoJoin: params.config.chrome.autoJoin,
           }),
@@ -544,10 +664,12 @@ function isRecoverableMeetTab(tab: BrowserTab, url?: string): boolean {
 async function inspectRecoverableMeetTab(params: {
   callBrowser: BrowserRequestCaller;
   config: GoogleMeetConfig;
+  mode?: "realtime" | "transcribe";
   timeoutMs: number;
   tab: BrowserTab;
   targetId: string;
 }) {
+  const allowMicrophone = params.mode !== "transcribe";
   await params.callBrowser({
     method: "POST",
     path: "/tabs/focus",
@@ -555,7 +677,7 @@ async function inspectRecoverableMeetTab(params: {
     timeoutMs: Math.min(params.timeoutMs, 5_000),
   });
   const permissionNotes = await grantMeetMediaPermissions({
-    allowMicrophone: true,
+    allowMicrophone,
     callBrowser: params.callBrowser,
     timeoutMs: params.timeoutMs,
   });
@@ -566,7 +688,8 @@ async function inspectRecoverableMeetTab(params: {
       kind: "evaluate",
       targetId: params.targetId,
       fn: meetStatusScript({
-        allowMicrophone: true,
+        allowMicrophone,
+        captureCaptions: params.mode === "transcribe",
         guestName: params.config.chrome.guestName,
         autoJoin: false,
       }),
@@ -596,6 +719,7 @@ async function inspectRecoverableMeetTab(params: {
 
 export async function recoverCurrentMeetTab(params: {
   config: GoogleMeetConfig;
+  mode?: "realtime" | "transcribe";
   url?: string;
 }): Promise<{
   transport: "chrome";
@@ -631,6 +755,7 @@ export async function recoverCurrentMeetTab(params: {
     ...(await inspectRecoverableMeetTab({
       callBrowser: callLocalBrowserRequest,
       config: params.config,
+      mode: params.mode,
       timeoutMs,
       tab,
       targetId,
@@ -641,6 +766,7 @@ export async function recoverCurrentMeetTab(params: {
 export async function recoverCurrentMeetTabOnNode(params: {
   runtime: PluginRuntime;
   config: GoogleMeetConfig;
+  mode?: "realtime" | "transcribe";
   url?: string;
 }): Promise<{
   transport: "chrome-node";
@@ -692,16 +818,13 @@ export async function recoverCurrentMeetTabOnNode(params: {
           timeoutMs: request.timeoutMs,
         }),
       config: params.config,
+      mode: params.mode,
       timeoutMs,
       tab,
       targetId,
     })),
   };
 }
-
-export type GoogleMeetCurrentTabRecoveryResult = Awaited<
-  ReturnType<typeof recoverCurrentMeetTab | typeof recoverCurrentMeetTabOnNode>
->;
 
 export async function launchChromeMeetOnNode(params: {
   runtime: PluginRuntime;

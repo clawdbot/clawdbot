@@ -798,7 +798,10 @@ const writeBuildStamp = (deps) => {
   }
 };
 
-const shouldSkipCleanWatchRuntimeSync = (deps) => deps.env.OPENCLAW_WATCH_MODE === "1";
+const shouldSkipWatchRuntimeSync = (deps, requirement) =>
+  deps.env.OPENCLAW_WATCH_MODE === "1" &&
+  requirement.reason === "missing_runtime_postbuild_stamp" &&
+  hasDirtyRuntimePostBuildInputs(deps) !== true;
 
 const isGatewayClientCommand = (args) =>
   args[0] === "gateway" && (args[1] === "call" || args[1] === "status");
@@ -885,9 +888,12 @@ export async function runNodeMain(params = {}) {
       return await closeRunNodeOutputTee(deps, exitCode);
     }
     if (!buildRequirement.shouldBuild) {
-      if (!useExistingGatewayClientDist && !shouldSkipCleanWatchRuntimeSync(deps)) {
+      if (!useExistingGatewayClientDist) {
         const runtimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);
-        if (runtimePostBuildRequirement.shouldSync) {
+        if (
+          runtimePostBuildRequirement.shouldSync &&
+          !shouldSkipWatchRuntimeSync(deps, runtimePostBuildRequirement)
+        ) {
           const synced = await withRunNodeBuildLock(deps, async () => {
             const lockedRuntimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);
             if (!lockedRuntimePostBuildRequirement.shouldSync) {

@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import { type AddressInfo, createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
@@ -490,20 +489,6 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
 
 export async function getFreePort(): Promise<number> {
   return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 3, 4] });
-}
-
-export async function occupyPort(): Promise<{
-  server: ReturnType<typeof createServer>;
-  port: number;
-}> {
-  return await new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const port = (server.address() as AddressInfo).port;
-      resolve({ server, port });
-    });
-  });
 }
 
 type GatewayTestMessage = {

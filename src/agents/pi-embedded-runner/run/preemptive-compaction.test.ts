@@ -93,7 +93,7 @@ describe("preemptive-compaction", () => {
     expect(result.estimatedPromptTokens).toBeLessThan(result.promptBudgetBeforeReserve);
   });
 
-  it("uses the larger unwindowed message estimate when context engine assembly windows history", () => {
+  it("uses the larger unwindowed message estimate when explicitly provided", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
       messages: [makeAssistantHistory("small assembled window")],
       unwindowedMessages: [makeAssistantHistory(verboseHistory.repeat(4))],

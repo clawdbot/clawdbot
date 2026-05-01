@@ -489,14 +489,12 @@ export function isInternalHookEvent(value: unknown): value is InternalHookEvent 
 }
 
 export {
-  sessionCleanupMocks,
   bootstrapCacheMocks,
   sessionHookMocks,
   beforeResetHookMocks,
   sessionLifecycleHookMocks,
   subagentLifecycleHookMocks,
   beforeResetHookState,
-  sessionLifecycleHookState,
   subagentLifecycleHookState,
   threadBindingMocks,
   acpRuntimeMocks,

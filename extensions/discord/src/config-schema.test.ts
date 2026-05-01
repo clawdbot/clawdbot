@@ -147,6 +147,29 @@ describe("discord config schema", () => {
     expect(cfg.voice?.model).toBe("openai/gpt-5.4-mini");
   });
 
+  it("accepts Discord voice timing overrides", () => {
+    const cfg = expectValidDiscordConfig({
+      voice: {
+        connectTimeoutMs: 45_000,
+        reconnectGraceMs: 20_000,
+      },
+    });
+
+    expect(cfg.voice?.connectTimeoutMs).toBe(45_000);
+    expect(cfg.voice?.reconnectGraceMs).toBe(20_000);
+  });
+
+  it("rejects invalid Discord voice timing overrides", () => {
+    for (const voice of [
+      { connectTimeoutMs: 0 },
+      { connectTimeoutMs: 120_001 },
+      { reconnectGraceMs: -1 },
+      { reconnectGraceMs: 1.5 },
+    ]) {
+      expectInvalidDiscordConfig({ voice });
+    }
+  });
+
   it("coerces safe-integer numeric allowlist entries to strings", () => {
     const cfg = expectValidDiscordConfig({
       allowFrom: [123],

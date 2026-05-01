@@ -1,4 +1,3 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import { createDiscordRuntimeAccountContext } from "../client.js";
 import {
@@ -32,10 +31,6 @@ export type DiscordMessagingActionContext = {
   ) => DiscordReactOpts & T;
   normalizeMessage: (message: unknown) => unknown;
 };
-
-export type DiscordMessagingActionHandler = (
-  ctx: DiscordMessagingActionContext,
-) => Promise<AgentToolResult<unknown> | undefined>;
 
 export function createDiscordMessagingActionContext(params: {
   action: string;

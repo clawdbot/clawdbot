@@ -174,6 +174,13 @@ const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set([
   DEFAULT_MEMORY_FILENAME,
 ]);
 
+const OPTIONAL_BOOTSTRAP_FILENAMES: ReadonlySet<string> = new Set([
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_USER_FILENAME,
+  DEFAULT_HEARTBEAT_FILENAME,
+]);
+
 async function writeFileIfMissing(filePath: string, content: string): Promise<boolean> {
   try {
     await fs.writeFile(filePath, content, {
@@ -467,6 +474,12 @@ async function ensureGitRepo(dir: string, isBrandNewWorkspace: boolean) {
 export async function ensureAgentWorkspace(params?: {
   dir?: string;
   ensureBootstrapFiles?: boolean;
+  /**
+   * List of optional bootstrap filenames to skip writing.
+   * Applies only to SOUL.md, USER.md, HEARTBEAT.md, IDENTITY.md.
+   * Required workspace setup such as AGENTS.md and TOOLS.md still runs.
+   */
+  skipOptionalBootstrapFiles?: string[];
 }): Promise<{
   dir: string;
   agentsPath?: string;
@@ -519,12 +532,24 @@ export async function ensureAgentWorkspace(params?: {
   const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME);
   const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
   const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
+  const skipOptionalBootstrapFiles = new Set(params?.skipOptionalBootstrapFiles ?? []);
+  const shouldWriteBootstrapFile = (fileName: string): boolean =>
+    !OPTIONAL_BOOTSTRAP_FILENAMES.has(fileName) || !skipOptionalBootstrapFiles.has(fileName);
+
   await writeFileIfMissing(agentsPath, agentsTemplate);
-  await writeFileIfMissing(soulPath, soulTemplate);
+  if (shouldWriteBootstrapFile(DEFAULT_SOUL_FILENAME)) {
+    await writeFileIfMissing(soulPath, soulTemplate);
+  }
   await writeFileIfMissing(toolsPath, toolsTemplate);
-  const identityPathCreated = await writeFileIfMissing(identityPath, identityTemplate);
-  await writeFileIfMissing(userPath, userTemplate);
-  await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
+  const identityPathCreated = shouldWriteBootstrapFile(DEFAULT_IDENTITY_FILENAME)
+    ? await writeFileIfMissing(identityPath, identityTemplate)
+    : false;
+  if (shouldWriteBootstrapFile(DEFAULT_USER_FILENAME)) {
+    await writeFileIfMissing(userPath, userTemplate);
+  }
+  if (shouldWriteBootstrapFile(DEFAULT_HEARTBEAT_FILENAME)) {
+    await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
+  }
 
   let state = await readWorkspaceSetupState(statePath, {
     persistLegacyMigration: true,

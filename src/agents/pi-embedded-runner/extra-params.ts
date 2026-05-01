@@ -124,7 +124,7 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cachedContent?: string;
   openaiWsWarmup?: boolean;
 };
-export type SupportedTransport = Exclude<CacheRetentionStreamOptions["transport"], undefined>;
+export type SupportedTransport = "sse" | "websocket" | "auto";
 
 function resolveSupportedTransport(value: unknown): SupportedTransport | undefined {
   return value === "sse" || value === "websocket" || value === "auto" ? value : undefined;

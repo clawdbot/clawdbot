@@ -643,6 +643,8 @@ describe("plugin-sdk subpath exports", () => {
       "collectOpenGroupPolicyConfiguredRouteWarnings",
       "resolveControlCommandGate",
       "delegateCompactionToRuntime",
+      "createReplyPrefixContext",
+      "createChannelReplyPipeline",
     ]);
     expectSourceMentions("device-bootstrap", [
       "approveDevicePairing",

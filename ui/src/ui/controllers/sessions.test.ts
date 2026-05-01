@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applySessionsChangedEvent,
+  createSessionAndRefresh,
   deleteSessionsAndRefresh,
   loadSessions,
   subscribeSessions,
@@ -50,6 +51,72 @@ describe("subscribeSessions", () => {
 
     expect(request).toHaveBeenCalledWith("sessions.subscribe", {});
     expect(state.sessionsError).toBeNull();
+  });
+});
+
+describe("createSessionAndRefresh", () => {
+  it("creates a dashboard session and refreshes the session list", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.create") {
+        return { key: "agent:main:dashboard:abc" };
+      }
+      if (method === "sessions.list") {
+        return {
+          ts: 2,
+          path: "(multiple)",
+          count: 1,
+          defaults: {},
+          sessions: [{ key: "agent:main:dashboard:abc", kind: "direct", updatedAt: 2 }],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const state = createState(request);
+
+    const key = await createSessionAndRefresh(
+      state,
+      { agentId: "main", parentSessionKey: "agent:main:main" },
+      { activeMinutes: 0, limit: 0, includeGlobal: true, includeUnknown: true },
+    );
+
+    expect(key).toBe("agent:main:dashboard:abc");
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.create", {
+      agentId: "main",
+      parentSessionKey: "agent:main:main",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+    });
+    expect(state.sessionsResult?.sessions[0]?.key).toBe("agent:main:dashboard:abc");
+    expect(state.sessionsLoading).toBe(false);
+  });
+
+  it("keeps the current state when create does not return a key", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.create") {
+        return {};
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const state = createState(request);
+
+    const key = await createSessionAndRefresh(state);
+
+    expect(key).toBeNull();
+    expect(state.sessionsError).toBe("Error: sessions.create returned no key");
+    expect(state.sessionsLoading).toBe(false);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start a create mutation while sessions are loading", async () => {
+    const request = vi.fn(async () => ({ key: "agent:main:dashboard:abc" }));
+    const state = createState(request, { sessionsLoading: true });
+
+    const key = await createSessionAndRefresh(state);
+
+    expect(key).toBeNull();
+    expect(request).not.toHaveBeenCalled();
   });
 });
 

@@ -2,7 +2,7 @@ import type { AgentSideConnection } from "@agentclientprotocol/sdk";
 import { vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 
-export type TestAcpConnection = AgentSideConnection & {
+type TestAcpConnection = AgentSideConnection & {
   __sessionUpdateMock: ReturnType<typeof vi.fn>;
 };
 

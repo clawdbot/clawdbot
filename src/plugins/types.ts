@@ -2217,6 +2217,7 @@ export type OpenClawPluginModule = OpenClawPluginDefinition | ((api: OpenClawPlu
  *
  * - `full`: live runtime activation; long-lived side effects may start.
  * - `discovery`: read-only capability discovery; skip sockets/workers/clients.
+ * - `tool-discovery`: capability discovery for executable tools; skip channel runtime hydration.
  * - `setup-only`: lightweight channel setup entry only.
  * - `setup-runtime`: setup flow that also needs the runtime channel entry.
  * - `cli-metadata`: CLI command metadata collection.
@@ -2224,6 +2225,7 @@ export type OpenClawPluginModule = OpenClawPluginDefinition | ((api: OpenClawPlu
 export type PluginRegistrationMode =
   | "full"
   | "discovery"
+  | "tool-discovery"
   | "setup-only"
   | "setup-runtime"
   | "cli-metadata";

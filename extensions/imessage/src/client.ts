@@ -108,6 +108,12 @@ export class IMessageRpcClient {
       this.closedResolve?.();
     });
 
+    // Without this listener, async EPIPE from a dead child crashes the
+    // gateway via uncaughtException. (#75438)
+    child.stdin.on("error", (err) => {
+      this.failAll(err instanceof Error ? err : new Error(String(err)));
+    });
+
     child.on("close", (code, signal) => {
       if (code !== 0 && code !== null) {
         const reason = signal ? `signal ${signal}` : `code ${code}`;
@@ -180,7 +186,21 @@ export class IMessageRpcClient {
       });
     });
 
-    this.child.stdin.write(line);
+    // Reject the specific pending request on write error (e.g. EPIPE)
+    // instead of letting it hang until timeout. (#75438)
+    this.child.stdin.write(line, (err) => {
+      if (err) {
+        const key = String(id);
+        const pending = this.pending.get(key);
+        if (pending) {
+          if (pending.timer) {
+            clearTimeout(pending.timer);
+          }
+          this.pending.delete(key);
+          pending.reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      }
+    });
     return await response;
   }
 

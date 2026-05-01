@@ -1,6 +1,6 @@
 import { isBlockedHostnameOrIp } from "../api.js";
 
-export type VoiceCallWebhookExposureConfig = {
+type VoiceCallWebhookExposureConfig = {
   provider?: string;
   publicUrl?: string;
   tunnel?: {
@@ -11,7 +11,7 @@ export type VoiceCallWebhookExposureConfig = {
   };
 };
 
-export type VoiceCallWebhookExposureStatus = {
+type VoiceCallWebhookExposureStatus = {
   ok: boolean;
   configured: boolean;
   message: string;

@@ -55,7 +55,7 @@ export type TlonSettingsStore = {
   pendingApprovals?: PendingApproval[];
 };
 
-export type TlonSettingsState = {
+type TlonSettingsState = {
   current: TlonSettingsStore;
   loaded: boolean;
 };
@@ -285,7 +285,7 @@ function applySettingsUpdate(
   return next;
 }
 
-export type SettingsLogger = {
+type SettingsLogger = {
   log?: (msg: string) => void;
   error?: (msg: string) => void;
 };

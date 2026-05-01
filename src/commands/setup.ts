@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import JSON5 from "json5";
 import { z } from "zod";
+import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -16,6 +17,7 @@ type ConfigIO = {
 type EnsureAgentWorkspace = (params: {
   dir: string;
   ensureBootstrapFiles?: boolean;
+  skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
 }) => Promise<{ dir: string }>;
 
 type SetupCommandDeps = {
@@ -191,6 +193,7 @@ export async function setupCommand(
   const ws = await (deps.ensureAgentWorkspace ?? ensureDefaultAgentWorkspace)({
     dir: workspace,
     ensureBootstrapFiles: !next.agents?.defaults?.skipBootstrap,
+    skipOptionalBootstrapFiles: next.agents?.defaults?.skipOptionalBootstrapFiles,
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
 

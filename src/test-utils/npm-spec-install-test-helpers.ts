@@ -4,12 +4,12 @@ import { expect } from "vitest";
 import type { CommandOptions, SpawnResult } from "../process/exec.js";
 import { expectSingleNpmInstallIgnoreScriptsCall } from "./exec-assertions.js";
 
-export type InstallResultLike = {
+type InstallResultLike = {
   ok: boolean;
   error?: string;
 };
 
-export type NpmPackMetadata = {
+type NpmPackMetadata = {
   id: string;
   name: string;
   version: string;
@@ -18,7 +18,7 @@ export type NpmPackMetadata = {
   shasum: string;
 };
 
-export function createSuccessfulSpawnResult(stdout = ""): SpawnResult {
+function createSuccessfulSpawnResult(stdout = ""): SpawnResult {
   return {
     code: 0,
     stdout,

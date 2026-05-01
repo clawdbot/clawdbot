@@ -183,6 +183,7 @@ export type PluginLoadOptions = {
    * via package metadata because their setup entry covers the pre-listen startup surface.
    */
   preferSetupRuntimeForChannelPlugins?: boolean;
+  toolDiscovery?: boolean;
   activate?: boolean;
   loadModules?: boolean;
   installBundledRuntimeDeps?: boolean;
@@ -544,6 +545,72 @@ function setCachedPluginRegistry(cacheKey: string, state: CachedPluginState): vo
   pluginLoaderCacheState.set(cacheKey, state);
 }
 
+function resolveBundledPackageRootForCache(stockRoot?: string): string | undefined {
+  if (!stockRoot) {
+    return undefined;
+  }
+  const resolved = path.resolve(stockRoot);
+  const parent = path.dirname(resolved);
+  if (
+    path.basename(resolved) === "extensions" &&
+    (path.basename(parent) === "dist" || path.basename(parent) === "dist-runtime")
+  ) {
+    return path.dirname(parent);
+  }
+  const sourcePackageRoot = parent;
+  if (fs.existsSync(path.join(sourcePackageRoot, "package.json"))) {
+    return sourcePackageRoot;
+  }
+  return undefined;
+}
+
+function readPackageVersionForCache(packageJsonPath: string): string {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return "unknown";
+    }
+    const version = (parsed as { version?: unknown }).version;
+    return typeof version === "string" && version.trim() ? version.trim() : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+function resolveBundledPackageCacheIdentity(stockRoot?: string):
+  | {
+      packageJson: string;
+      packageRoot: string;
+      packageVersion: string;
+      size: number;
+      mtimeMs: number;
+    }
+  | undefined {
+  const packageRoot = resolveBundledPackageRootForCache(stockRoot);
+  if (!packageRoot) {
+    return undefined;
+  }
+  const packageJsonPath = path.join(packageRoot, "package.json");
+  try {
+    const stat = fs.statSync(packageJsonPath);
+    return {
+      packageJson: safeRealpathOrResolve(packageJsonPath),
+      packageRoot: safeRealpathOrResolve(packageRoot),
+      packageVersion: readPackageVersionForCache(packageJsonPath),
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+    };
+  } catch {
+    return {
+      packageJson: path.resolve(packageJsonPath),
+      packageRoot: safeRealpathOrResolve(packageRoot),
+      packageVersion: "missing",
+      size: -1,
+      mtimeMs: -1,
+    };
+  }
+}
+
 function buildCacheKey(params: {
   workspaceDir?: string;
   plugins: NormalizedPluginsConfig;
@@ -555,6 +622,7 @@ function buildCacheKey(params: {
   forceSetupOnlyChannelPlugins?: boolean;
   requireSetupEntryForSetupOnlyChannelPlugins?: boolean;
   preferSetupRuntimeForChannelPlugins?: boolean;
+  toolDiscovery?: boolean;
   loadModules?: boolean;
   installBundledRuntimeDeps?: boolean;
   runtimeSubagentMode?: "default" | "explicit" | "gateway-bindable";
@@ -567,6 +635,7 @@ function buildCacheKey(params: {
     loadPaths: params.plugins.loadPaths,
     env: params.env,
   });
+  const bundledPackage = resolveBundledPackageCacheIdentity(roots.stock);
   const installs = Object.fromEntries(
     Object.entries(params.installs ?? {}).map(([pluginId, install]) => [
       pluginId,
@@ -594,17 +663,19 @@ function buildCacheKey(params: {
   const startupChannelMode =
     params.preferSetupRuntimeForChannelPlugins === true ? "prefer-setup" : "full";
   const moduleLoadMode = params.loadModules === false ? "manifest-only" : "load-modules";
+  const discoveryMode = params.toolDiscovery === true ? "tool-discovery" : "default-discovery";
   const bundledRuntimeDepsMode =
     params.installBundledRuntimeDeps === false ? "skip-runtime-deps" : "install-runtime-deps";
   const runtimeSubagentMode = params.runtimeSubagentMode ?? "default";
   const gatewayMethodsKey = JSON.stringify(params.coreGatewayMethodNames ?? []);
   const activationMode = params.activate === false ? "snapshot" : "active";
   return `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify({
+    bundledPackage,
     ...params.plugins,
     installs,
     loadPaths,
     activationMetadataKey: params.activationMetadataKey ?? "",
-  })}::${scopeKey}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${startupChannelMode}::${moduleLoadMode}::${bundledRuntimeDepsMode}::${runtimeSubagentMode}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}::${activationMode}`;
+  })}::${scopeKey}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${startupChannelMode}::${moduleLoadMode}::${discoveryMode}::${bundledRuntimeDepsMode}::${runtimeSubagentMode}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}::${activationMode}`;
 }
 
 function matchesScopedPluginRequest(params: {
@@ -687,6 +758,24 @@ function hasExplicitCompatibilityInputs(options: PluginLoadOptions): boolean {
   );
 }
 
+function pluginLoadOptionsMatchCacheKey(
+  options: PluginLoadOptions,
+  expectedCacheKey: string,
+): boolean {
+  if (resolvePluginLoadCacheContext(options).cacheKey === expectedCacheKey) {
+    return true;
+  }
+  if (options.installBundledRuntimeDeps !== false) {
+    return false;
+  }
+  return (
+    resolvePluginLoadCacheContext({
+      ...options,
+      installBundledRuntimeDeps: undefined,
+    }).cacheKey === expectedCacheKey
+  );
+}
+
 type PluginRegistrationPlan = {
   /** Public compatibility label passed to plugin register(api). */
   mode: PluginRegistrationMode;
@@ -718,6 +807,7 @@ function resolvePluginRegistrationPlan(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   preferSetupRuntimeForChannelPlugins: boolean;
+  toolDiscovery: boolean;
 }): PluginRegistrationPlan | null {
   if (params.canLoadScopedSetupOnlyChannelPlugin) {
     return {
@@ -736,6 +826,15 @@ function resolvePluginRegistrationPlan(params: {
   }
   if (!params.enableStateEnabled) {
     return null;
+  }
+  if (params.toolDiscovery) {
+    return {
+      mode: "tool-discovery",
+      loadSetupEntry: false,
+      loadSetupRuntimeEntry: false,
+      runRuntimeCapabilityPolicy: true,
+      runFullActivationOnlyRegistrations: false,
+    };
   }
   const loadSetupRuntimeEntry =
     params.shouldLoadModules &&
@@ -815,6 +914,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     forceSetupOnlyChannelPlugins,
     requireSetupEntryForSetupOnlyChannelPlugins,
     preferSetupRuntimeForChannelPlugins,
+    toolDiscovery: options.toolDiscovery,
     loadModules: options.loadModules,
     installBundledRuntimeDeps: options.installBundledRuntimeDeps,
     runtimeSubagentMode,
@@ -896,15 +996,15 @@ function getCompatibleActivePluginRegistry(
     return undefined;
   }
   const loadContext = resolvePluginLoadCacheContext(options);
-  if (loadContext.cacheKey === activeCacheKey) {
+  if (pluginLoadOptionsMatchCacheKey(options, activeCacheKey)) {
     return activeRegistry;
   }
   if (!loadContext.shouldActivate) {
-    const activatingCacheKey = resolvePluginLoadCacheContext({
+    const activatingOptions = {
       ...options,
       activate: true,
-    }).cacheKey;
-    if (activatingCacheKey === activeCacheKey) {
+    };
+    if (pluginLoadOptionsMatchCacheKey(activatingOptions, activeCacheKey)) {
       return activeRegistry;
     }
   }
@@ -912,26 +1012,26 @@ function getCompatibleActivePluginRegistry(
     loadContext.runtimeSubagentMode === "default" &&
     getActivePluginRuntimeSubagentMode() === "gateway-bindable"
   ) {
-    const gatewayBindableCacheKey = resolvePluginLoadCacheContext({
+    const gatewayBindableOptions = {
       ...options,
       runtimeOptions: {
         ...options.runtimeOptions,
         allowGatewaySubagentBinding: true,
       },
-    }).cacheKey;
-    if (gatewayBindableCacheKey === activeCacheKey) {
+    };
+    if (pluginLoadOptionsMatchCacheKey(gatewayBindableOptions, activeCacheKey)) {
       return activeRegistry;
     }
     if (!loadContext.shouldActivate) {
-      const activatingGatewayBindableCacheKey = resolvePluginLoadCacheContext({
+      const activatingGatewayBindableOptions = {
         ...options,
         activate: true,
         runtimeOptions: {
           ...options.runtimeOptions,
           allowGatewaySubagentBinding: true,
         },
-      }).cacheKey;
-      if (activatingGatewayBindableCacheKey === activeCacheKey) {
+      };
+      if (pluginLoadOptionsMatchCacheKey(activatingGatewayBindableOptions, activeCacheKey)) {
         return activeRegistry;
       }
     }
@@ -1444,6 +1544,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         cfg,
         env,
         preferSetupRuntimeForChannelPlugins,
+        toolDiscovery: options.toolDiscovery === true,
       });
 
       if (!registrationPlan) {

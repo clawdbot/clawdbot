@@ -17,16 +17,16 @@ export type GetReplyFromConfigFn = (
   opts?: GetReplyOptions,
   configOverride?: OpenClawConfig,
 ) => Promise<ReplyPayload | ReplyPayload[] | undefined>;
-export type CronIsolatedRunFn = (...args: unknown[]) => Promise<RunCronAgentTurnResult>;
-export type AgentCommandFn = (...args: unknown[]) => Promise<void>;
-export type SendWhatsAppFn = (...args: unknown[]) => Promise<{ messageId: string; toJid: string }>;
+type CronIsolatedRunFn = (...args: unknown[]) => Promise<RunCronAgentTurnResult>;
+type AgentCommandFn = (...args: unknown[]) => Promise<void>;
+type SendWhatsAppFn = (...args: unknown[]) => Promise<{ messageId: string; toJid: string }>;
 export type RunBtwSideQuestionFn = (...args: unknown[]) => Promise<unknown>;
-export type DispatchInboundMessageFn = (...args: unknown[]) => Promise<unknown>;
-export type CompactEmbeddedPiSessionFn = (...args: unknown[]) => Promise<unknown>;
+type DispatchInboundMessageFn = (...args: unknown[]) => Promise<unknown>;
+type CompactEmbeddedPiSessionFn = (...args: unknown[]) => Promise<unknown>;
 
 const GATEWAY_TEST_CONFIG_ROOT_KEY = Symbol.for("openclaw.gatewayTestHelpers.configRoot");
 
-export type GatewayTestHoistedState = {
+type GatewayTestHoistedState = {
   testTailnetIPv4: { value: string | undefined };
   piSdkMock: {
     enabled: boolean;

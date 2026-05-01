@@ -160,7 +160,7 @@ function resolveDiscordAccountTokenOwner(params: {
   return owner?.accountId;
 }
 
-export function resolveDiscordDuplicateTokenOwner(params: {
+function resolveDiscordDuplicateTokenOwner(params: {
   cfg: OpenClawConfig;
   account: ResolvedDiscordAccount;
 }): string | undefined {

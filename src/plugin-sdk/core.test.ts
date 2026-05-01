@@ -28,10 +28,46 @@ function createApi(registrationMode: PluginRegistrationMode): OpenClawPluginApi 
     registrationMode,
     runtime: { registrationMode } as unknown as PluginRuntime,
     registerChannel: vi.fn(),
+    registerTool: vi.fn(),
   } as unknown as OpenClawPluginApi;
 }
 
 describe("defineChannelPluginEntry", () => {
+  it("runs tool registrations without channel runtime wiring during tool discovery", () => {
+    const setRuntime = vi.fn<(runtime: PluginRuntime) => void>();
+    const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
+    const registerFull = vi.fn<(api: OpenClawPluginApi) => void>((api) => {
+      api.registerTool(
+        {
+          name: "channel_tool",
+          label: "Channel Tool",
+          description: "channel tool",
+          parameters: {},
+          execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
+        },
+        { name: "channel_tool" },
+      );
+    });
+    const entry = defineChannelPluginEntry({
+      id: "runtime-tool-discovery",
+      name: "Runtime Tool Discovery",
+      description: "runtime tool discovery test",
+      plugin: createChannelPlugin("runtime-tool-discovery"),
+      setRuntime,
+      registerCliMetadata,
+      registerFull,
+    });
+
+    const api = createApi("tool-discovery");
+    entry.register(api);
+
+    expect(api.registerChannel).not.toHaveBeenCalled();
+    expect(setRuntime).not.toHaveBeenCalled();
+    expect(registerCliMetadata).not.toHaveBeenCalled();
+    expect(registerFull).toHaveBeenCalledWith(api);
+    expect(api.registerTool).toHaveBeenCalledTimes(1);
+  });
+
   it("wires runtime helpers during discovery registration", () => {
     const setRuntime = vi.fn<(runtime: PluginRuntime) => void>();
     const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();

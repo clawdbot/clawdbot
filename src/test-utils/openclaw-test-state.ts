@@ -4,9 +4,9 @@ import path from "node:path";
 import { captureEnv } from "./env.js";
 import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 
-export type OpenClawTestStateLayout = "home" | "state-only" | "split";
+type OpenClawTestStateLayout = "home" | "state-only" | "split";
 
-export type OpenClawTestStateScenario =
+type OpenClawTestStateScenario =
   | "empty"
   | "minimal"
   | "update-stable"

@@ -6,7 +6,6 @@ export {
   errorShape,
   isLoopbackHost,
   isNodeCommandAllowed,
-  rawDataToString,
   respondUnavailableOnNodeInvokeError,
   resolveGatewayAuth,
   resolveNodeCommandAllowlist,
@@ -17,7 +16,6 @@ export type {
   GatewayRpcOpts,
   NodeSession,
 } from "openclaw/plugin-sdk/gateway-runtime";
-export { runExec } from "openclaw/plugin-sdk/process-runtime";
 export { runCommandWithRuntime } from "openclaw/plugin-sdk/cli-runtime";
 export type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
 export {

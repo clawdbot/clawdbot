@@ -1,18 +1,10 @@
 name: Parity gate
 
 on:
-  pull_request:
-    types: [opened, reopened, synchronize, ready_for_review]
-    paths:
-      - "extensions/qa-lab/**"
-      - "extensions/qa-channel/**"
-      - "extensions/openai/**"
-      - "qa/scenarios/**"
-      - "src/agents/**"
-      - "src/context-engine/**"
-      - "src/gateway/**"
-      - "src/media/**"
-      - ".github/workflows/parity-gate.yml"
+  schedule:
+    - cron: "17 3 * * *"
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -25,7 +17,6 @@ concurrency:
 jobs:
   parity-gate:
     name: Run the OpenAI / Opus 4.6 parity gate against the qa-lab mock
-    if: ${{ github.event.pull_request.draft != true }}
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 30
     env:

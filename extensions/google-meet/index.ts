@@ -676,7 +676,7 @@ export default definePluginEntry({
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
           const rt = await ensureRuntime();
-          respond(true, rt.status(normalizeOptionalString(params?.sessionId)));
+          respond(true, await rt.status(normalizeOptionalString(params?.sessionId)));
         } catch (err) {
           sendError(respond, err);
         }

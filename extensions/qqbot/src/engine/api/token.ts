@@ -17,7 +17,7 @@ interface CachedToken {
   appId: string;
 }
 
-export interface BackgroundRefreshOptions {
+interface BackgroundRefreshOptions {
   refreshAheadMs?: number;
   randomOffsetMs?: number;
   minRefreshIntervalMs?: number;

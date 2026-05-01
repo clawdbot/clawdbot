@@ -668,6 +668,12 @@ space, because the carrier cannot call back into those addresses. Do not use
 `localhost`, `127.0.0.1`, `0.0.0.0`, `10.x`, `172.16.x`-`172.31.x`,
 `192.168.x`, `169.254.x`, `fc00::/7`, or `fd00::/8` as `publicUrl`.
 
+Twilio notify-mode outbound calls send their initial `<Say>` TwiML directly in
+the create-call request, so the first spoken message does not depend on Twilio
+fetching webhook TwiML. A public webhook is still required for status callbacks,
+conversation calls, pre-connect DTMF, realtime streams, and post-connect call
+control.
+
 Use one public exposure path:
 
 ```json5

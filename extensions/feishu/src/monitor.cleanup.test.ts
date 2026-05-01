@@ -136,6 +136,165 @@ describe("feishu websocket cleanup", () => {
     expect(errorMessage).toContain("appSecret=[redacted]");
   });
 
+  it("recreates the websocket client after sdk reconnect exhaustion", async () => {
+    vi.useFakeTimers();
+    const exhaustedClient = createWsClient();
+    const recoveredClient = createWsClient();
+    createFeishuWSClientMock
+      .mockResolvedValueOnce(exhaustedClient)
+      .mockResolvedValueOnce(recoveredClient);
+
+    const abortController = new AbortController();
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+    const accountId = "exhausted";
+    botOpenIds.set(accountId, "ou_exhausted");
+    botNames.set(accountId, "Exhausted");
+
+    const monitorPromise = monitorWebSocket({
+      account: createAccount(accountId),
+      accountId,
+      runtime,
+      abortSignal: abortController.signal,
+      eventDispatcher: {} as never,
+    });
+
+    await vi.waitFor(() => {
+      expect(exhaustedClient.start).toHaveBeenCalledTimes(1);
+      expect(wsClients.get(accountId)).toBe(exhaustedClient);
+    });
+
+    const callbacks = createFeishuWSClientMock.mock.calls[0]?.[1] as
+      | { onError?: (err: Error) => void }
+      | undefined;
+    callbacks?.onError?.(
+      new Error("WebSocket reconnect exhausted after 3 attempts\nBearer token_abc"),
+    );
+
+    await vi.waitFor(() => {
+      expect(exhaustedClient.close).toHaveBeenCalledTimes(1);
+      expect(wsClients.has(accountId)).toBe(false);
+    });
+    expect(botOpenIds.get(accountId)).toBe("ou_exhausted");
+    expect(botNames.get(accountId)).toBe("Exhausted");
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await vi.waitFor(() => {
+      expect(recoveredClient.start).toHaveBeenCalledTimes(1);
+      expect(wsClients.get(accountId)).toBe(recoveredClient);
+    });
+
+    abortController.abort();
+    await monitorPromise;
+
+    expect(createFeishuWSClientMock).toHaveBeenCalledTimes(2);
+    expect(recoveredClient.close).toHaveBeenCalledTimes(1);
+    expect(botOpenIds.has(accountId)).toBe(false);
+    expect(botNames.has(accountId)).toBe(false);
+    const errorMessage = String(runtime.error.mock.calls[0]?.[0] ?? "");
+    expect(errorMessage).toContain("WebSocket connection ended, recreating client in 1000ms");
+    expect(errorMessage).toContain("Bearer [redacted]");
+    expect(errorMessage).not.toContain("\n");
+    expect(errorMessage).not.toContain("token_abc");
+  });
+
+  it("keeps the websocket client alive after recoverable sdk callback errors", async () => {
+    vi.useFakeTimers();
+    const wsClient = createWsClient();
+    createFeishuWSClientMock.mockResolvedValueOnce(wsClient);
+
+    const abortController = new AbortController();
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+    const accountId = "recoverable-callback";
+
+    const monitorPromise = monitorWebSocket({
+      account: createAccount(accountId),
+      accountId,
+      runtime,
+      abortSignal: abortController.signal,
+      eventDispatcher: {} as never,
+    });
+
+    await vi.waitFor(() => {
+      expect(wsClient.start).toHaveBeenCalledTimes(1);
+      expect(wsClients.get(accountId)).toBe(wsClient);
+    });
+
+    const callbacks = createFeishuWSClientMock.mock.calls[0]?.[1] as
+      | { onError?: (err: Error) => void }
+      | undefined;
+    callbacks?.onError?.(new Error("temporary callback failure\nBearer token_abc"));
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(createFeishuWSClientMock).toHaveBeenCalledTimes(1);
+    expect(wsClient.close).not.toHaveBeenCalled();
+    expect(wsClients.get(accountId)).toBe(wsClient);
+    const errorMessage = String(runtime.error.mock.calls[0]?.[0] ?? "");
+    expect(errorMessage).toContain("WebSocket SDK reported recoverable error");
+    expect(errorMessage).toContain("Bearer [redacted]");
+    expect(errorMessage).not.toContain("\n");
+    expect(errorMessage).not.toContain("token_abc");
+
+    abortController.abort();
+    await monitorPromise;
+
+    expect(createFeishuWSClientMock).toHaveBeenCalledTimes(1);
+    expect(wsClient.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears identity without recreating a websocket when aborted during reconnect backoff", async () => {
+    vi.useFakeTimers();
+    const exhaustedClient = createWsClient();
+    createFeishuWSClientMock.mockResolvedValueOnce(exhaustedClient);
+
+    const abortController = new AbortController();
+    const accountId = "abort-backoff";
+    botOpenIds.set(accountId, "ou_abort");
+    botNames.set(accountId, "Abort");
+
+    const monitorPromise = monitorWebSocket({
+      account: createAccount(accountId),
+      accountId,
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+      abortSignal: abortController.signal,
+      eventDispatcher: {} as never,
+    });
+
+    await vi.waitFor(() => {
+      expect(exhaustedClient.start).toHaveBeenCalledTimes(1);
+    });
+
+    const callbacks = createFeishuWSClientMock.mock.calls[0]?.[1] as
+      | { onError?: (err: Error) => void }
+      | undefined;
+    callbacks?.onError?.(new Error("WebSocket reconnect exhausted after 3 attempts"));
+
+    await vi.waitFor(() => {
+      expect(exhaustedClient.close).toHaveBeenCalledTimes(1);
+    });
+
+    abortController.abort();
+    await monitorPromise;
+
+    expect(createFeishuWSClientMock).toHaveBeenCalledTimes(1);
+    expect(wsClients.has(accountId)).toBe(false);
+    expect(botOpenIds.has(accountId)).toBe(false);
+    expect(botNames.has(accountId)).toBe(false);
+  });
+
   it("redacts websocket close errors during abort cleanup", async () => {
     const wsClient = createWsClient();
     wsClient.close.mockImplementationOnce(() => {

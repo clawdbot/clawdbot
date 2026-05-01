@@ -86,10 +86,6 @@ export function getDockerArg(args: string[], position: number): string {
   return args[DOCKER_FIRST_SCRIPT_ARG_INDEX + position - 1] ?? "";
 }
 
-export function getDockerPathArg(args: string[]): string {
-  return getDockerArg(args, 1);
-}
-
 export function getScriptsFromCalls(): string[] {
   return mockedExecDockerRaw.mock.calls.map(([args]) => getDockerScript(args));
 }
@@ -171,7 +167,7 @@ export async function withTempDir<T>(
   }
 }
 
-export function installDockerReadMock(params?: { canonicalPath?: string }) {
+function installDockerReadMock(params?: { canonicalPath?: string }) {
   const canonicalPath = params?.canonicalPath;
   mockedExecDockerRaw.mockImplementation(async (args) => {
     const script = getDockerScript(args);

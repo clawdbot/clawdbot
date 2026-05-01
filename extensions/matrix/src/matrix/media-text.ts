@@ -2,7 +2,6 @@ import path from "node:path";
 import type {
   MatrixMessageAttachmentKind,
   MatrixMessageAttachmentSummary,
-  MatrixMessageSummary,
 } from "./actions/types.js";
 
 const MATRIX_MEDIA_KINDS: Record<string, MatrixMessageAttachmentKind> = {
@@ -132,12 +131,6 @@ export function formatMatrixMessageText(params: {
     return marker;
   }
   return `${body}\n\n${marker}`;
-}
-
-export function formatMatrixMessageSummaryText(
-  summary: Pick<MatrixMessageSummary, "body" | "attachment">,
-): string | undefined {
-  return formatMatrixMessageText(summary);
 }
 
 export function formatMatrixMediaUnavailableText(params: {

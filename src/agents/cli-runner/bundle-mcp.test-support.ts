@@ -42,7 +42,7 @@ export function setupCliBundleMcpTestHarness(): void {
   });
 }
 
-export function createEnabledBundleProbeConfig(): OpenClawConfig {
+function createEnabledBundleProbeConfig(): OpenClawConfig {
   return {
     plugins: {
       entries: {

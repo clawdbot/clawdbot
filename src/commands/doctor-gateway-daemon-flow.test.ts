@@ -185,6 +185,10 @@ describe("maybeRepairGatewayDaemon", () => {
 
   async function runNonInteractiveUpdateRepair() {
     process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+    await runNonInteractiveRepair();
+  }
+
+  async function runNonInteractiveRepair() {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     await maybeRepairGatewayDaemon({
       cfg: { gateway: {} },
@@ -254,6 +258,20 @@ describe("maybeRepairGatewayDaemon", () => {
 
     expect(service.install).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
+  });
+
+  it("skips gateway install during non-interactive doctor repairs", async () => {
+    setPlatform("linux");
+    service.isLoaded.mockResolvedValue(false);
+
+    await runNonInteractiveRepair();
+
+    expect(service.install).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("openclaw gateway install"),
+      "Gateway",
+    );
   });
 
   it("skips gateway restart during non-interactive update repairs", async () => {

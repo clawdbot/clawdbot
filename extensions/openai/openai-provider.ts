@@ -20,6 +20,7 @@ import {
   findCatalogTemplate,
   matchesExactOrPrefix,
 } from "./shared.js";
+import { resolveOpenAIThinkingProfile } from "./thinking-policy.js";
 
 const PROVIDER_ID = "openai";
 const OPENAI_GPT_55_MODEL_ID = "gpt-5.5";
@@ -59,15 +60,6 @@ const OPENAI_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.2"] as const;
 const OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS = ["gpt-5.2-pro", "gpt-5.2"] as const;
 const OPENAI_GPT_54_MINI_TEMPLATE_MODEL_IDS = ["gpt-5-mini"] as const;
 const OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS = ["gpt-5-nano", "gpt-5-mini"] as const;
-const OPENAI_XHIGH_MODEL_IDS = [
-  OPENAI_GPT_55_MODEL_ID,
-  OPENAI_GPT_55_PRO_MODEL_ID,
-  OPENAI_GPT_54_MODEL_ID,
-  OPENAI_GPT_54_PRO_MODEL_ID,
-  OPENAI_GPT_54_MINI_MODEL_ID,
-  OPENAI_GPT_54_NANO_MODEL_ID,
-  "gpt-5.2",
-] as const;
 const OPENAI_MODERN_MODEL_IDS = [
   OPENAI_GPT_55_MODEL_ID,
   OPENAI_GPT_55_PRO_MODEL_ID,
@@ -239,18 +231,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
     matchesContextOverflowError: ({ errorMessage }) =>
       /content_filter.*(?:prompt|input).*(?:too long|exceed)/i.test(errorMessage),
     resolveReasoningOutputMode: () => "native",
-    resolveThinkingProfile: ({ modelId }) => ({
-      levels: [
-        { id: "off" },
-        { id: "minimal" },
-        { id: "low" },
-        { id: "medium" },
-        { id: "high" },
-        ...(matchesExactOrPrefix(modelId, OPENAI_XHIGH_MODEL_IDS)
-          ? [{ id: "xhigh" as const }]
-          : []),
-      ],
-    }),
+    resolveThinkingProfile: ({ modelId }) => resolveOpenAIThinkingProfile(modelId),
     isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_MODERN_MODEL_IDS),
     buildMissingAuthMessage: (ctx) => {
       if (ctx.provider !== PROVIDER_ID || ctx.listProfileIds("openai-codex").length === 0) {

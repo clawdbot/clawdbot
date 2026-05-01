@@ -16,8 +16,6 @@ import { resolveMSTeamsAllowlistMatch, resolveMSTeamsRouteConfig } from "../poli
 import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 
-export type MSTeamsResolvedSenderAccess = Awaited<ReturnType<typeof resolveMSTeamsSenderAccess>>;
-
 export async function resolveMSTeamsSenderAccess(params: {
   cfg: OpenClawConfig;
   activity: MSTeamsTurnContext["activity"];

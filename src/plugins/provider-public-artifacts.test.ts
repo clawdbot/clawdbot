@@ -26,6 +26,28 @@ describe("provider public artifacts", () => {
     ).toBe(providerConfig);
   });
 
+  it("resolves multi-provider policy artifacts by manifest-owned provider id", () => {
+    const surface = resolveBundledProviderPolicySurface("openai-codex");
+
+    expect(surface?.resolveThinkingProfile).toBeTypeOf("function");
+    expect(
+      surface
+        ?.resolveThinkingProfile?.({
+          provider: "openai-codex",
+          modelId: "gpt-5.5",
+        })
+        ?.levels.map((level) => level.id),
+    ).toContain("xhigh");
+    expect(
+      surface
+        ?.resolveThinkingProfile?.({
+          provider: "openai-codex",
+          modelId: "gpt-4.1",
+        })
+        ?.levels.map((level) => level.id),
+    ).not.toContain("xhigh");
+  });
+
   it("loads provider policy surfaces without staging runtime deps", async () => {
     const loadBundledPluginPublicArtifactModuleSync = vi.fn(() => ({
       normalizeConfig: (ctx: { providerConfig: ModelProviderConfig }) => ctx.providerConfig,

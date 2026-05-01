@@ -1,5 +1,8 @@
 import { logError } from "openclaw/plugin-sdk/text-runtime";
-import { resolveDiscordComponentEntry, resolveDiscordModalEntry } from "../components-registry.js";
+import {
+  resolveDiscordComponentEntryWithPersistence,
+  resolveDiscordModalEntryWithPersistence,
+} from "../components-registry.js";
 import type { ButtonInteraction, ComponentData } from "../internal/discord.js";
 import {
   type AgentComponentContext,
@@ -46,7 +49,10 @@ async function handleDiscordComponentEvent(params: {
     return;
   }
 
-  const entry = resolveDiscordComponentEntry({ id: parsed.componentId, consume: false });
+  const entry = await resolveDiscordComponentEntryWithPersistence({
+    id: parsed.componentId,
+    consume: false,
+  });
   if (!entry) {
     try {
       await params.interaction.reply({
@@ -93,7 +99,7 @@ async function handleDiscordComponentEvent(params: {
   if (!componentAllowed) {
     return;
   }
-  const consumed = resolveDiscordComponentEntry({
+  const consumed = await resolveDiscordComponentEntryWithPersistence({
     id: parsed.componentId,
     consume: !entry.reusable,
   });
@@ -193,7 +199,10 @@ async function handleDiscordModalTrigger(params: {
     }
     return;
   }
-  const entry = resolveDiscordComponentEntry({ id: parsed.componentId, consume: false });
+  const entry = await resolveDiscordComponentEntryWithPersistence({
+    id: parsed.componentId,
+    consume: false,
+  });
   if (!entry || entry.kind !== "modal-trigger") {
     try {
       await params.interaction.reply({
@@ -246,7 +255,7 @@ async function handleDiscordModalTrigger(params: {
     return;
   }
 
-  const consumed = resolveDiscordComponentEntry({
+  const consumed = await resolveDiscordComponentEntryWithPersistence({
     id: parsed.componentId,
     consume: !entry.reusable,
   });
@@ -263,7 +272,10 @@ async function handleDiscordModalTrigger(params: {
   }
 
   const resolvedModalId = consumed.modalId ?? modalId;
-  const modalEntry = resolveDiscordModalEntry({ id: resolvedModalId, consume: false });
+  const modalEntry = await resolveDiscordModalEntryWithPersistence({
+    id: resolvedModalId,
+    consume: false,
+  });
   if (!modalEntry) {
     try {
       await params.interaction.reply({

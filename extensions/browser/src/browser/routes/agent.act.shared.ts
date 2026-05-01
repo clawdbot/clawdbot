@@ -1,4 +1,4 @@
-export const ACT_KINDS = [
+const ACT_KINDS = [
   "batch",
   "click",
   "clickCoords",

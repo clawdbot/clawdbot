@@ -9,7 +9,7 @@ const require = createRequire(import.meta.url);
 const SDK_CLIENT_INDEX_PATH = require.resolve("@modelcontextprotocol/sdk/client/index.js");
 const SDK_CLIENT_STDIO_PATH = require.resolve("@modelcontextprotocol/sdk/client/stdio.js");
 
-export { writeBundleProbeMcpServer, writeClaudeBundle, writeExecutable };
+export { writeBundleProbeMcpServer, writeClaudeBundle };
 
 export async function writeFakeClaudeLiveCli(params: {
   filePath: string;

@@ -92,7 +92,7 @@ describe("tsdown config", () => {
         "plugins/runtime/index",
         "plugin-sdk/compat",
         "plugin-sdk/index",
-        bundledEntry("openai"),
+        bundledEntry("active-memory"),
         "bundled/boot-md/handler",
       ]),
     );
@@ -128,6 +128,7 @@ describe("tsdown config", () => {
     );
     expect(stagedGraphs.some((config) => config.outDir === "dist/extensions/discord")).toBe(true);
     expect(stagedGraphs.some((config) => config.outDir === "dist/extensions/msteams")).toBe(true);
+    expect(stagedGraphs.some((config) => config.outDir === "dist/extensions/openai")).toBe(true);
     expect(
       stagedGraphs.some(
         (config) =>

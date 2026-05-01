@@ -22,6 +22,7 @@ import { normalizeSessionRuntimeModelFields, type SessionEntry } from "./types.j
 export type LoadSessionStoreOptions = {
   skipCache?: boolean;
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
+  runMaintenance?: boolean;
   clone?: boolean;
 };
 
@@ -131,28 +132,30 @@ export function loadSessionStore(
   if (migrated || normalized) {
     serializedFromDisk = undefined;
   }
-  const maintenance = opts.maintenanceConfig ?? resolveMaintenanceConfig();
-  const beforeCount = Object.keys(store).length;
-  if (maintenance.mode === "enforce" && beforeCount > maintenance.maxEntries) {
-    const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, { log: false });
-    const countAfterPrune = Object.keys(store).length;
-    const capped = shouldRunSessionEntryMaintenance({
-      entryCount: countAfterPrune,
-      maxEntries: maintenance.maxEntries,
-    })
-      ? capEntryCount(store, maintenance.maxEntries, { log: false })
-      : 0;
-    const afterCount = Object.keys(store).length;
-    if (pruned > 0 || capped > 0) {
-      serializedFromDisk = undefined;
-      log.info("applied load-time maintenance to oversized session store", {
-        storePath,
-        before: beforeCount,
-        after: afterCount,
-        pruned,
-        capped,
+  if (opts.runMaintenance) {
+    const maintenance = opts.maintenanceConfig ?? resolveMaintenanceConfig();
+    const beforeCount = Object.keys(store).length;
+    if (maintenance.mode === "enforce" && beforeCount > maintenance.maxEntries) {
+      const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, { log: false });
+      const countAfterPrune = Object.keys(store).length;
+      const capped = shouldRunSessionEntryMaintenance({
+        entryCount: countAfterPrune,
         maxEntries: maintenance.maxEntries,
-      });
+      })
+        ? capEntryCount(store, maintenance.maxEntries, { log: false })
+        : 0;
+      const afterCount = Object.keys(store).length;
+      if (pruned > 0 || capped > 0) {
+        serializedFromDisk = undefined;
+        log.info("applied load-time maintenance to oversized session store", {
+          storePath,
+          before: beforeCount,
+          after: afterCount,
+          pruned,
+          capped,
+          maxEntries: maintenance.maxEntries,
+        });
+      }
     }
   }
 

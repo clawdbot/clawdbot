@@ -37,7 +37,7 @@ const GEMINI_MAX_INPUT_TOKENS: Record<string, number> = {
   "gemini-embedding-2-preview": 8192,
 };
 
-export type GeminiTaskType = NonNullable<MemoryEmbeddingProviderCreateOptions["taskType"]>;
+type GeminiTaskType = NonNullable<MemoryEmbeddingProviderCreateOptions["taskType"]>;
 
 // --- gemini-embedding-2-preview support ---
 
@@ -49,12 +49,12 @@ export const GEMINI_EMBEDDING_2_MODELS = new Set([
 const GEMINI_EMBEDDING_2_DEFAULT_DIMENSIONS = 3072;
 const GEMINI_EMBEDDING_2_VALID_DIMENSIONS = [768, 1536, 3072] as const;
 
-export type GeminiTextPart = { text: string };
-export type GeminiInlinePart = {
+type GeminiTextPart = { text: string };
+type GeminiInlinePart = {
   inlineData: { mimeType: string; data: string };
 };
-export type GeminiPart = GeminiTextPart | GeminiInlinePart;
-export type GeminiEmbeddingRequest = {
+type GeminiPart = GeminiTextPart | GeminiInlinePart;
+type GeminiEmbeddingRequest = {
   content: { parts: GeminiPart[] };
   taskType: GeminiTaskType;
   outputDimensionality?: number;
@@ -305,7 +305,7 @@ export async function createGeminiEmbeddingProvider(
   };
 }
 
-export async function resolveGeminiEmbeddingClient(
+async function resolveGeminiEmbeddingClient(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<GeminiEmbeddingClient> {
   const remote = options.remote;

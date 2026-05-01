@@ -1,4 +1,4 @@
-export type DiscordPreviewStreamMode = "off" | "partial" | "block";
+type DiscordPreviewStreamMode = "off" | "partial" | "block";
 
 function parsePreviewStreamingMode(value: unknown): DiscordPreviewStreamMode | undefined {
   return value === "off" || value === "partial" || value === "block" ? value : undefined;

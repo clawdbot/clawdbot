@@ -84,7 +84,7 @@ export class UploadDailyLimitExceededError extends Error {
 }
 
 /** Chunked-upload progress callback payload. */
-export interface ChunkedUploadProgress {
+interface ChunkedUploadProgress {
   completedParts: number;
   totalParts: number;
   uploadedBytes: number;
@@ -92,7 +92,7 @@ export interface ChunkedUploadProgress {
 }
 
 /** Per-call options for {@link ChunkedMediaApi.uploadChunked}. */
-export interface UploadChunkedOptions {
+interface UploadChunkedOptions {
   scope: ChatScope;
   targetId: string;
   fileType: MediaFileType;
@@ -110,7 +110,7 @@ export interface UploadChunkedOptions {
 }
 
 /** Configuration for the {@link ChunkedMediaApi} constructor. */
-export interface ChunkedMediaApiConfig {
+interface ChunkedMediaApiConfig {
   logger?: EngineLogger;
   /** Upload cache adapter (optional; omit to disable caching). */
   uploadCache?: UploadCacheAdapter;

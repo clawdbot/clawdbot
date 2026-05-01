@@ -256,7 +256,7 @@ type HookRollbackEntry = { name: string; previousRegistrations: HookRegistration
 type PluginRegistrationCapabilities = {
   /** Broad registry writes that discovery and live activation both need. */
   capabilityHandlers: boolean;
-  /** Runtime channel registration is suppressed for setup-only metadata loads. */
+  /** Runtime channel registration is suppressed for setup-only and tool discovery loads. */
   runtimeChannel: boolean;
 };
 
@@ -268,9 +268,10 @@ type PluginRegistrationCapabilities = {
 function resolvePluginRegistrationCapabilities(
   mode: PluginRegistrationMode,
 ): PluginRegistrationCapabilities {
+  const capabilityHandlers = mode === "full" || mode === "discovery" || mode === "tool-discovery";
   return {
-    capabilityHandlers: mode === "full" || mode === "discovery",
-    runtimeChannel: mode !== "setup-only",
+    capabilityHandlers,
+    runtimeChannel: mode !== "setup-only" && mode !== "tool-discovery",
   };
 }
 

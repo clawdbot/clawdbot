@@ -6,7 +6,7 @@ import type {
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
-export type DiscordChannelPermissionsAuditEntry = {
+type DiscordChannelPermissionsAuditEntry = {
   channelId: string;
   ok: boolean;
   missing?: string[];
@@ -35,7 +35,7 @@ function shouldAuditChannelConfig(config: DiscordGuildChannelConfig | undefined)
   return true;
 }
 
-export function listConfiguredGuildChannelKeys(
+function listConfiguredGuildChannelKeys(
   guilds: Record<string, DiscordGuildEntry> | undefined,
 ): string[] {
   if (!guilds) {

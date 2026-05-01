@@ -242,6 +242,7 @@ export async function getReplyFromConfig(
     : await ensureAgentWorkspace({
         dir: workspaceDirRaw,
         ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+        skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
       });
   const workspaceDir = workspace.dir;
   const agentDir = resolveAgentDir(cfg, agentId);

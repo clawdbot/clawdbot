@@ -12,4 +12,3 @@ export const OLLAMA_DEFAULT_COST = {
 };
 
 export const OLLAMA_DEFAULT_MODEL = "gemma4";
-export const DEFAULT_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text";

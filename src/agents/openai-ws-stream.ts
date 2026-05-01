@@ -1346,6 +1346,7 @@ async function fallbackToHttp(
     }
     eventStream.push(event);
   }
+  eventStream.end();
 }
 
 export const __testing = {

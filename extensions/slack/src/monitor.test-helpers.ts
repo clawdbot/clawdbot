@@ -208,8 +208,10 @@ vi.mock("./monitor/reply.runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./monitor/reply.runtime.js")>(
     "./monitor/reply.runtime.js",
   );
-  const replyResolver: typeof actual.getReplyFromConfig = (...args) =>
-    slackTestState.replyMock(...args) as ReturnType<typeof actual.getReplyFromConfig>;
+  type DispatchParams = Parameters<typeof actual.dispatchInboundMessage>[0];
+  type ReplyResolver = NonNullable<DispatchParams["replyResolver"]>;
+  const replyResolver: ReplyResolver = (...args) =>
+    slackTestState.replyMock(...args) as ReturnType<ReplyResolver>;
   return {
     ...actual,
     dispatchInboundMessage: (params: Parameters<typeof actual.dispatchInboundMessage>[0]) =>
@@ -217,7 +219,6 @@ vi.mock("./monitor/reply.runtime.js", async () => {
         ...params,
         replyResolver,
       }),
-    getReplyFromConfig: replyResolver,
   };
 });
 

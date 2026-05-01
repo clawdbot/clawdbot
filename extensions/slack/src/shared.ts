@@ -21,12 +21,7 @@ import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./
 import { slackSecurityAdapter } from "./security.js";
 import { SLACK_CHANNEL } from "./setup-shared.js";
 
-export {
-  buildSlackSetupLines,
-  isSlackSetupAccountConfigured,
-  setSlackChannelAllowlist,
-  SLACK_CHANNEL,
-} from "./setup-shared.js";
+export { setSlackChannelAllowlist, SLACK_CHANNEL } from "./setup-shared.js";
 
 export function isSlackPluginAccountConfigured(account: ResolvedSlackAccount): boolean {
   const mode = account.config.mode ?? "socket";

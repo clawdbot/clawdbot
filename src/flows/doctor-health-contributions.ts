@@ -526,6 +526,9 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
     await replaceConfigFile({
       nextConfig: ctx.cfg,
       afterWrite: { mode: "auto" },
+      writeOptions: {
+        allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true,
+      },
     });
     logConfigUpdated(ctx.runtime);
     const backupPath = `${CONFIG_PATH}.bak`;

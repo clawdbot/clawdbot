@@ -2,7 +2,7 @@ import type { RuntimeEnv } from "../runtime.js";
 
 type RuntimeLike = Pick<RuntimeEnv, "log" | "error" | "exit">;
 
-export type NonInteractiveRuntime = {
+type NonInteractiveRuntime = {
   log: RuntimeLike["log"];
   error: RuntimeLike["error"];
   exit: RuntimeLike["exit"];

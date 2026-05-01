@@ -150,7 +150,7 @@ export type DiscordChannelCreate = {
   nsfw?: boolean;
 };
 
-export type DiscordForumTag = {
+type DiscordForumTag = {
   id?: string;
   name: string;
   moderated?: boolean;

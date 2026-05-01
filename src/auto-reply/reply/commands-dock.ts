@@ -38,6 +38,10 @@ function resolveTargetChannelAccountId(
   return normalizeOptionalString(plugin?.config.defaultAccountId?.(params.cfg)) || "default";
 }
 
+function isDirectDockSource(params: HandleCommandsParams): boolean {
+  return normalizeLowercaseStringOrEmpty(params.ctx.ChatType) === "direct";
+}
+
 function collectSourcePeerCandidates(params: HandleCommandsParams): string[] {
   return [
     params.ctx.NativeDirectUserId,
@@ -124,6 +128,14 @@ export const handleDockCommand: CommandHandler = async (params, allowTextCommand
     return {
       shouldContinue: false,
       reply: { text: `Already docked to ${targetChannel}.` },
+    };
+  }
+  if (!isDirectDockSource(params)) {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: `Cannot dock to ${targetChannel}: docking is only available from direct chats.`,
+      },
     };
   }
 

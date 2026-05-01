@@ -38,7 +38,7 @@ export function resolveQQBotExecApprovalConfig(params: {
   };
 }
 
-export function getQQBotExecApprovalApprovers(params: {
+function getQQBotExecApprovalApprovers(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): string[] {

@@ -61,6 +61,57 @@ describe("discordMessageActions", () => {
     expect(discovery?.actions).not.toContain("role-add");
   });
 
+  it("describes actions when the Discord token is an unresolved SecretRef", () => {
+    const discovery = discordMessageActions.describeMessageTool?.({
+      cfg: {
+        channels: {
+          discord: {
+            token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+            actions: {
+              polls: true,
+              reactions: true,
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(discovery?.capabilities).toEqual(["presentation"]);
+    expect(discovery?.actions).toEqual(
+      expect.arrayContaining(["send", "poll", "react", "reactions", "emoji-list"]),
+    );
+  });
+
+  it("describes scoped account actions when only the account token is an unresolved SecretRef", () => {
+    const discovery = discordMessageActions.describeMessageTool?.({
+      cfg: {
+        channels: {
+          discord: {
+            actions: {
+              polls: true,
+              reactions: false,
+            },
+            accounts: {
+              ops: {
+                token: { source: "file", provider: "filemain", id: "/DISCORD_BOT_TOKEN" },
+                actions: {
+                  polls: false,
+                  reactions: true,
+                },
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      accountId: "ops",
+    });
+
+    expect(discovery?.actions).toEqual(
+      expect.arrayContaining(["send", "react", "reactions", "emoji-list"]),
+    );
+    expect(discovery?.actions).not.toContain("poll");
+  });
+
   it("honors account-scoped action gates during discovery", () => {
     const cfg = {
       channels: {

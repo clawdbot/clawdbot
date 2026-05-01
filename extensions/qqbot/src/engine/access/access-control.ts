@@ -23,7 +23,7 @@ import {
   type QQBotGroupPolicy,
 } from "./types.js";
 
-export interface QQBotAccessInput extends EffectivePolicyInput {
+interface QQBotAccessInput extends EffectivePolicyInput {
   /** Whether the inbound originated in a group (or guild) chat. */
   isGroup: boolean;
   /** The raw inbound sender id as provided by the QQ event. */

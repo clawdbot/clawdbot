@@ -42,6 +42,7 @@ export async function runNonInteractiveRemoteSetup(params: {
   await replaceConfigFile({
     nextConfig,
     ...(baseHash !== undefined ? { baseHash } : {}),
+    writeOptions: { allowConfigSizeDrop: true },
   });
   logConfigUpdated(runtime);
 

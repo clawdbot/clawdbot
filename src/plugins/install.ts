@@ -89,7 +89,7 @@ export type PluginNpmIntegrityDriftParams = {
 };
 
 type PluginInstallPolicyRequest = {
-  kind: "plugin-dir" | "plugin-archive" | "plugin-file" | "plugin-npm";
+  kind: "plugin-dir" | "plugin-archive" | "plugin-file" | "plugin-npm" | "plugin-git";
   requestedSpecifier?: string;
 };
 

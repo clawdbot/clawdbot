@@ -26,6 +26,8 @@ type SubscribeEmbeddedPiSessionFn =
   typeof import("../../pi-embedded-subscribe.js").subscribeEmbeddedPiSession;
 type AcquireSessionWriteLockFn =
   typeof import("../../session-write-lock.js").acquireSessionWriteLock;
+type ShouldPreemptivelyCompactBeforePromptFn =
+  typeof import("./preemptive-compaction.js").shouldPreemptivelyCompactBeforePrompt;
 
 type SubscriptionMock = ReturnType<SubscribeEmbeddedPiSessionFn>;
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -78,6 +80,7 @@ type AttemptSpawnWorkspaceHoisted = {
     (sessionKey: string | undefined, config: unknown) => number | undefined
   >;
   limitHistoryTurnsMock: Mock<<T>(messages: T, limit: number | undefined) => T>;
+  preemptiveCompactionCalls: Parameters<ShouldPreemptivelyCompactBeforePromptFn>[0][];
   sessionManager: SessionManagerMocks;
 };
 
@@ -148,6 +151,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const limitHistoryTurnsMock = vi.fn<<T>(messages: T, limit: number | undefined) => T>(
     (messages) => messages,
   );
+  const preemptiveCompactionCalls: Parameters<ShouldPreemptivelyCompactBeforePromptFn>[0][] = [];
   const sessionManager = {
     getLeafEntry: vi.fn(() => null),
     branch: vi.fn(),
@@ -181,6 +185,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     runContextEngineMaintenanceMock,
     getDmHistoryLimitFromSessionKeyMock,
     limitHistoryTurnsMock,
+    preemptiveCompactionCalls,
     sessionManager,
   };
 });
@@ -583,6 +588,19 @@ vi.mock("../compaction-runtime-context.js", () => ({
   buildEmbeddedCompactionRuntimeContext: () => ({}),
 }));
 
+vi.mock("./preemptive-compaction.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./preemptive-compaction.js")>();
+  return {
+    ...actual,
+    shouldPreemptivelyCompactBeforePrompt: (
+      params: Parameters<typeof actual.shouldPreemptivelyCompactBeforePrompt>[0],
+    ) => {
+      hoisted.preemptiveCompactionCalls.push(params);
+      return actual.shouldPreemptivelyCompactBeforePrompt(params);
+    },
+  };
+});
+
 vi.mock("../compaction-safety-timeout.js", () => ({
   resolveCompactionTimeoutMs: () => undefined,
 }));
@@ -770,6 +788,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
   hoisted.getDmHistoryLimitFromSessionKeyMock.mockReset().mockReturnValue(undefined);
   hoisted.limitHistoryTurnsMock.mockReset().mockImplementation((messages) => messages);
+  hoisted.preemptiveCompactionCalls.length = 0;
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
   hoisted.sessionManager.branch.mockReset();
   hoisted.sessionManager.resetLeaf.mockReset();
@@ -872,14 +891,6 @@ export function expectCalledWithSessionKey(mock: ReturnType<typeof vi.fn>, sessi
 export const testModel = {
   api: "openai-completions",
   provider: "openai",
-  compat: {},
-  contextWindow: 8192,
-  input: ["text"],
-} as unknown as Model<Api>;
-
-export const cacheTtlEligibleModel = {
-  api: "anthropic",
-  provider: "anthropic",
   compat: {},
   contextWindow: 8192,
   input: ["text"],

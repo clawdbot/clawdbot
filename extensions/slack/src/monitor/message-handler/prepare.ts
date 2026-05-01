@@ -33,7 +33,7 @@ import {
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
 import { formatSlackFileReference } from "../../file-reference.js";
-import { hasSlackThreadParticipation } from "../../sent-thread-cache.js";
+import { hasSlackThreadParticipationWithPersistence } from "../../sent-thread-cache.js";
 import type { SlackMessageEvent } from "../../types.js";
 import {
   normalizeAllowListLower,
@@ -361,7 +361,11 @@ export async function prepareSlackMessage(params: {
           ...implicitMentionKindWhen("reply_to_bot", message.parent_user_id === ctx.botUserId),
           ...implicitMentionKindWhen(
             "bot_thread_participant",
-            hasSlackThreadParticipation(account.accountId, message.channel, message.thread_ts),
+            await hasSlackThreadParticipationWithPersistence({
+              accountId: account.accountId,
+              channelId: message.channel,
+              threadTs: message.thread_ts,
+            }),
           ),
         ];
 

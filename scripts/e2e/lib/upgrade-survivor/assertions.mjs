@@ -66,7 +66,11 @@ function acceptsIntent(coverage, id) {
   if (!coverage) {
     return true;
   }
-  return Array.isArray(coverage.acceptedIntents) && coverage.acceptedIntents.includes(id);
+  return (
+    Array.isArray(coverage.acceptedIntents) &&
+    coverage.acceptedIntents.includes(id) &&
+    !coverage.skippedIntents?.includes(id)
+  );
 }
 
 function hasCoverage(coverage) {
@@ -189,10 +193,12 @@ function assertConfigSurvived() {
         "main agent contextTokens changed",
       );
     }
-    assert(
-      agents.find((agent) => agent?.id === "ops")?.fastModeDefault === true,
-      "ops fastModeDefault changed",
-    );
+    if (!hasCoverage(coverage) || !coverage.skippedIntents?.includes("agent-modern-preferences")) {
+      assert(
+        agents.find((agent) => agent?.id === "ops")?.fastModeDefault === true,
+        "ops fastModeDefault changed",
+      );
+    }
   }
 
   if (acceptsIntent(coverage, "skills")) {

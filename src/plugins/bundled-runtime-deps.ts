@@ -25,6 +25,7 @@ import {
 import {
   isSourceCheckoutRoot,
   listSiblingExternalBundledRuntimeDepsRoots,
+  pruneSiblingExternalBundledRuntimeDepsRoots,
   pruneUnknownBundledRuntimeDepsRoots,
   resolveBundledRuntimeDependencyInstallRootPlan,
   resolveBundledRuntimeDependencyPackageInstallRootPlan,
@@ -91,6 +92,7 @@ export type BundledRuntimeDepsPackagePlanParams = {
   pluginIds?: readonly string[];
   exactPluginIds?: readonly string[];
   includeConfiguredChannels?: boolean;
+  includeEnabledByDefaultPlugins?: boolean;
   env?: NodeJS.ProcessEnv;
 };
 
@@ -366,6 +368,9 @@ export function createBundledRuntimeDepsPackagePlan(
     ...(!exactPluginIds && params.includeConfiguredChannels !== undefined
       ? { includeConfiguredChannels: params.includeConfiguredChannels }
       : {}),
+    ...(!exactPluginIds && params.includeEnabledByDefaultPlugins !== undefined
+      ? { includeEnabledByDefaultPlugins: params.includeEnabledByDefaultPlugins }
+      : {}),
     manifestCache,
     ...(normalizePluginId ? { normalizePluginId } : {}),
   });
@@ -393,6 +398,7 @@ export async function repairBundledRuntimeDepsPackagePlanAsync(params: {
   pluginIds?: readonly string[];
   exactPluginIds?: readonly string[];
   includeConfiguredChannels?: boolean;
+  includeEnabledByDefaultPlugins?: boolean;
   env: NodeJS.ProcessEnv;
   installDeps?: (params: BundledRuntimeDepsInstallParams) => Promise<void> | void;
   onProgress?: (message: string) => void;
@@ -404,6 +410,10 @@ export async function repairBundledRuntimeDepsPackagePlanAsync(params: {
   });
   const plan = createBundledRuntimeDepsPackagePlan(params);
   if (plan.missingSpecs.length === 0) {
+    pruneSiblingExternalBundledRuntimeDepsRoots({
+      installRoot: plan.installRootPlan.installRoot,
+      ...(params.warn ? { warn: params.warn } : {}),
+    });
     return { plan, repairedSpecs: [] };
   }
   const reuseResult = withBundledRuntimeDepsInstallRootLock(plan.installRootPlan.installRoot, () =>
@@ -416,6 +426,12 @@ export async function repairBundledRuntimeDepsPackagePlanAsync(params: {
   );
   if (reuseResult) {
     const refreshedPlan = createBundledRuntimeDepsPackagePlan(params);
+    if (reuseResult.status === "materialized") {
+      pruneSiblingExternalBundledRuntimeDepsRoots({
+        installRoot: refreshedPlan.installRootPlan.installRoot,
+        ...(params.warn ? { warn: params.warn } : {}),
+      });
+    }
     return {
       plan: refreshedPlan,
       repairedSpecs: [],
@@ -440,6 +456,10 @@ export async function repairBundledRuntimeDepsPackagePlanAsync(params: {
         }
       : {}),
     ...(params.onProgress ? { onProgress: params.onProgress } : {}),
+    ...(params.warn ? { warn: params.warn } : {}),
+  });
+  pruneSiblingExternalBundledRuntimeDepsRoots({
+    installRoot: plan.installRootPlan.installRoot,
     ...(params.warn ? { warn: params.warn } : {}),
   });
   return { plan, repairedSpecs: result.installSpecs };

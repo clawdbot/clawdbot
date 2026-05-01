@@ -2,7 +2,6 @@ export { resolveInteractionContextWithDmAuth } from "./agent-components-dm-auth.
 export {
   ensureAgentComponentInteractionAllowed,
   ensureComponentUserAllowed,
-  ensureGuildComponentMemberAllowed,
   resolveAuthorizedComponentInteraction,
   resolveComponentCommandAuthorized,
 } from "./agent-components-guild-auth.js";

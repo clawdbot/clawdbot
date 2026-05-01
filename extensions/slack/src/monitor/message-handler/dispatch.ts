@@ -1170,7 +1170,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   // or draft stream). Falls back to statusThreadTs for edge cases.
   const participationThreadTs = usedReplyThreadTs ?? statusThreadTs;
   if (anyReplyDelivered && participationThreadTs) {
-    recordSlackThreadParticipation(account.accountId, message.channel, participationThreadTs);
+    recordSlackThreadParticipation(account.accountId, message.channel, participationThreadTs, {
+      agentId: route.agentId,
+    });
   }
 
   if (!anyReplyDelivered) {

@@ -5,7 +5,7 @@ import {
 } from "openclaw/plugin-sdk/retry-runtime";
 import { RateLimitError } from "./internal/discord.js";
 
-export const DISCORD_RETRY_DEFAULTS = {
+const DISCORD_RETRY_DEFAULTS = {
   attempts: 3,
   minDelayMs: 500,
   maxDelayMs: 30_000,

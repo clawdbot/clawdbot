@@ -95,6 +95,7 @@ describe("preparePostConfigBundledRuntimeDeps", () => {
       packageRoot: "/pkg",
       config,
       includeConfiguredChannels: true,
+      includeEnabledByDefaultPlugins: false,
       env,
     });
     expect(mocks.repairBundledRuntimeDepsPackagePlanAsync).toHaveBeenCalledWith(
@@ -102,6 +103,7 @@ describe("preparePostConfigBundledRuntimeDeps", () => {
         packageRoot: "/pkg",
         config,
         includeConfiguredChannels: true,
+        includeEnabledByDefaultPlugins: false,
         env,
       }),
     );

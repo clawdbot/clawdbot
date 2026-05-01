@@ -26,7 +26,7 @@ import type { QueuedMessage } from "../message-queue.js";
 
 // ─────────────────────────── buildUserMessage ───────────────────────────
 
-export interface BuildUserMessageInput {
+interface BuildUserMessageInput {
   event: QueuedMessage;
   userContent: string;
   quotePart: string;
@@ -69,7 +69,7 @@ export function buildUserMessage(input: BuildUserMessageInput): string {
 
 // ─────────────────────────── buildAgentBody ───────────────────────────
 
-export interface BuildAgentBodyInput {
+interface BuildAgentBodyInput {
   event: QueuedMessage;
   userContent: string;
   userMessage: string;

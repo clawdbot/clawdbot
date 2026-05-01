@@ -6,7 +6,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { registerBundledRuntimeDependencyJitiAliases } from "../plugins/bundled-runtime-deps-jiti-aliases.js";
-import { pruneUnknownBundledRuntimeDepsRoots } from "../plugins/bundled-runtime-deps-roots.js";
+import {
+  isSourceCheckoutRoot,
+  pruneUnknownBundledRuntimeDepsRoots,
+} from "../plugins/bundled-runtime-deps-roots.js";
 import { repairBundledRuntimeDepsPackagePlanAsync } from "../plugins/bundled-runtime-deps.js";
 import { prepareBundledPluginRuntimeLoadRoot } from "../plugins/bundled-runtime-root.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -106,6 +109,7 @@ async function prestageGatewayBundledRuntimeDepsImpl(params: {
   }
   prestageGatewayBundledRuntimeMirrors({
     ...params,
+    ...(packageRoot ? { packageRoot } : {}),
     previousRepairError: repairError,
   });
   return repairError === undefined ? {} : { repairError };
@@ -116,9 +120,14 @@ function prestageGatewayBundledRuntimeMirrors(params: {
   manifestRegistry: PluginManifestRegistry;
   pluginIds: readonly string[];
   log: GatewayPluginBootstrapLog;
+  packageRoot?: string;
   previousRepairError?: unknown;
 }): void {
   const pluginIdSet = new Set(params.pluginIds);
+  const allowSourceCheckoutRepair =
+    params.previousRepairError === undefined &&
+    typeof params.packageRoot === "string" &&
+    isSourceCheckoutRoot(params.packageRoot);
   const startedAt = Date.now();
   const preparedPluginIds: string[] = [];
   for (const record of params.manifestRegistry.plugins) {
@@ -133,10 +142,15 @@ function prestageGatewayBundledRuntimeMirrors(params: {
         ...(record.setupSource ? { setupModulePath: record.setupSource } : {}),
         env: process.env,
         config: params.cfg,
-        installMissingDeps: false,
+        installMissingDeps: allowSourceCheckoutRepair,
         previousRepairError: params.previousRepairError,
         memoizePreparedRoot: true,
         registerRuntimeAliasRoot: registerBundledRuntimeDependencyJitiAliases,
+        logInstalled: (installedSpecs) => {
+          params.log.info(
+            `[plugins] ${record.id} installed bundled runtime deps in source checkout pre-stage: ${installedSpecs.join(", ")}`,
+          );
+        },
       });
       preparedPluginIds.push(record.id);
     } catch (error) {

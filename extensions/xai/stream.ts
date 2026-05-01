@@ -201,8 +201,7 @@ export function createXaiFastModeWrapper(
   };
 }
 
-export const createXaiToolCallArgumentDecodingWrapper =
-  createHtmlEntityToolCallArgumentDecodingWrapper;
+const createXaiToolCallArgumentDecodingWrapper = createHtmlEntityToolCallArgumentDecodingWrapper;
 
 export function wrapXaiProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
   const extraParams = ctx.extraParams;

@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 
-export type MistralEmbeddingClient = {
+type MistralEmbeddingClient = {
   baseUrl: string;
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
@@ -17,7 +17,7 @@ export type MistralEmbeddingClient = {
 export const DEFAULT_MISTRAL_EMBEDDING_MODEL = "mistral-embed";
 const DEFAULT_MISTRAL_BASE_URL = "https://api.mistral.ai/v1";
 
-export function normalizeMistralModel(model: string): string {
+function normalizeMistralModel(model: string): string {
   return normalizeEmbeddingModelWithPrefixes({
     model,
     defaultModel: DEFAULT_MISTRAL_EMBEDDING_MODEL,
@@ -40,7 +40,7 @@ export async function createMistralEmbeddingProvider(
   };
 }
 
-export async function resolveMistralEmbeddingClient(
+async function resolveMistralEmbeddingClient(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<MistralEmbeddingClient> {
   return await resolveRemoteEmbeddingClient({

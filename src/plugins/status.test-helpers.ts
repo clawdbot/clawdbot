@@ -1,6 +1,6 @@
 import type { PluginLoadResult } from "./loader.js";
 import type { PluginRecord } from "./registry.js";
-import type { PluginCompatibilityNotice, PluginStatusReport } from "./status.js";
+import type { PluginCompatibilityNotice } from "./status.js";
 import type { PluginHookName } from "./types.js";
 
 export const LEGACY_BEFORE_AGENT_START_MESSAGE =
@@ -172,15 +172,5 @@ export function createPluginLoadResult(
     gatewayDiscoveryServices: rest.gatewayDiscoveryServices ?? [],
     realtimeTranscriptionProviders: realtimeTranscriptionProviders ?? [],
     realtimeVoiceProviders: realtimeVoiceProviders ?? [],
-  };
-}
-
-export function createPluginStatusReport(
-  overrides: Partial<PluginStatusReport> & Pick<PluginStatusReport, "plugins">,
-): PluginStatusReport {
-  const { workspaceDir, ...loadResultOverrides } = overrides;
-  return {
-    workspaceDir,
-    ...createPluginLoadResult(loadResultOverrides),
   };
 }

@@ -24,6 +24,7 @@ import {
 import {
   assertPathIsNotSymlink,
   makePluginOwnedTempDir,
+  removeLegacyBundledRuntimeDepsSymlink,
   removeOwnedTempPathBestEffort,
   removePathIfExists,
   removeStaleRuntimeDepsTempDirs,
@@ -323,8 +324,10 @@ function installPluginRuntimeDeps(params) {
     }
     if (fs.existsSync(stagedNodeModulesDir)) {
       pruneStagedRuntimeDependencyCargo(stagedNodeModulesDir, pruneConfig);
+      removeLegacyBundledRuntimeDepsSymlink(nodeModulesDir, repoRoot);
       replaceDirAtomically(nodeModulesDir, stagedNodeModulesDir);
     } else {
+      removeLegacyBundledRuntimeDepsSymlink(nodeModulesDir, repoRoot);
       assertPathIsNotSymlink(nodeModulesDir, "remove runtime deps");
       removePathIfExists(nodeModulesDir);
     }

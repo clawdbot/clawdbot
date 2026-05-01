@@ -3,10 +3,6 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { join } from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 
-/** Container token (file-extension shape, no leading dot) the host knows how
- * to pre-transcode into. Update in lockstep with `pickAfconvertRecipe`. */
-export type HostTranscodableContainer = "caf";
-
 export type TranscodeOutcome =
   | { ok: true; buffer: Buffer }
   | {
@@ -93,9 +89,7 @@ function normalizeExt(ext: string): string | undefined {
 }
 
 function pickAfconvertRecipe(source: string, target: string): string[] | undefined {
-  // Currently only the MP3→CAF path used by BlueBubbles voice memos. Keep
-  // this in lockstep with `HostTranscodableContainer` above so a typo at the
-  // channel-capability declaration site is a compile-time error.
+  // Currently only the MP3→CAF path used by BlueBubbles voice memos.
   if (target === "caf") {
     // Opus-in-CAF, mono, 24 kHz. Validated against macOS 15.x Messages.app's
     // native voice-memo CAF descriptor (1 ch, 24000 Hz, opus); other CAF

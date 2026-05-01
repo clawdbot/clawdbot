@@ -1,6 +1,5 @@
 import {
   AllowFromListSchema,
-  buildChannelConfigSchema,
   DmPolicySchema,
   MarkdownConfigSchema,
 } from "openclaw/plugin-sdk/channel-config-primitives";
@@ -97,10 +96,3 @@ export const NostrConfigSchema = z.object({
   /** Profile metadata (NIP-01 kind:0 content) */
   profile: NostrProfileSchema.optional(),
 });
-
-export type NostrConfig = z.infer<typeof NostrConfigSchema>;
-
-/**
- * JSON Schema for Control UI (converted from Zod)
- */
-export const nostrChannelConfigSchema = buildChannelConfigSchema(NostrConfigSchema);

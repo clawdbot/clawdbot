@@ -1,6 +1,5 @@
 export { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 export type {
-  ChannelAccountSnapshot,
   ChannelDirectoryEntry,
   ChannelGroupContext,
   ChannelMessageActionAdapter,

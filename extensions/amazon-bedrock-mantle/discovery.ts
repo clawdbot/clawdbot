@@ -51,8 +51,8 @@ function isSupportedRegion(region: string): boolean {
 // Bearer token resolution
 // ---------------------------------------------------------------------------
 
-export type MantleBearerTokenProvider = () => Promise<string>;
-export type MantleBearerTokenProviderFactory = (opts?: {
+type MantleBearerTokenProvider = () => Promise<string>;
+type MantleBearerTokenProviderFactory = (opts?: {
   region?: string;
   expiresInSeconds?: number;
 }) => MantleBearerTokenProvider;

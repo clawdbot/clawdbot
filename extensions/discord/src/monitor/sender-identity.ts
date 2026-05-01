@@ -79,11 +79,3 @@ export function resolveDiscordSenderIdentity(params: {
     isPluralKit: false,
   };
 }
-
-export function resolveDiscordSenderLabel(params: {
-  author: User;
-  member?: DiscordMemberLike | null;
-  pluralkitInfo?: PluralKitMessageInfo | null;
-}): string {
-  return resolveDiscordSenderIdentity(params).label;
-}

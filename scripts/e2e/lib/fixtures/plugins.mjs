@@ -35,6 +35,30 @@ function writePlugin([dir, id, version, method, name]) {
   writePluginManifest(path.join(dir, "openclaw.plugin.json"), id);
 }
 
+function writePluginWithCli([dir, id, version, method, name, cliRoot, cliOutput]) {
+  for (const [value, label] of [
+    [dir, "dir"],
+    [id, "id"],
+    [version, "version"],
+    [method, "method"],
+    [name, "name"],
+    [cliRoot, "cliRoot"],
+    [cliOutput, "cliOutput"],
+  ]) {
+    requireArg(value, label);
+  }
+  writeJson(path.join(dir, "package.json"), {
+    name: `@openclaw/${id}`,
+    version,
+    openclaw: { extensions: ["./index.js"] },
+  });
+  write(
+    path.join(dir, "index.js"),
+    `module.exports = { id: ${JSON.stringify(id)}, name: ${JSON.stringify(name)}, register(api) { api.registerGatewayMethod(${JSON.stringify(method)}, async () => ({ ok: true })); api.registerCli(({ program }) => { const root = program.command(${JSON.stringify(cliRoot)}).description(${JSON.stringify(`${name} fixture command`)}); root.command("ping").description("Print fixture ping output").action(() => { console.log(${JSON.stringify(cliOutput)}); }); }, { descriptors: [{ name: ${JSON.stringify(cliRoot)}, description: ${JSON.stringify(`${name} fixture command`)}, hasSubcommands: true }] }); }, };\n`,
+  );
+  writePluginManifest(path.join(dir, "openclaw.plugin.json"), id);
+}
+
 function writeClaudeBundle([root]) {
   root = requireArg(root, "root");
   writeJson(path.join(root, ".claude-plugin", "plugin.json"), { name: "claude-bundle-e2e" });
@@ -75,6 +99,7 @@ function writePluginMarketplace([root]) {
 export const pluginCommands = {
   "plugin-demo": writePluginDemo,
   plugin: writePlugin,
+  "plugin-cli": writePluginWithCli,
   "plugin-manifest": ([file, id]) =>
     writePluginManifest(requireArg(file, "file"), requireArg(id, "id")),
   "claude-bundle": writeClaudeBundle,

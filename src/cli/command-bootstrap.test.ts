@@ -87,6 +87,20 @@ describe("ensureCliCommandBootstrap", () => {
     });
   });
 
+  it("loads agent command plugins with bundled runtime repair enabled", async () => {
+    await ensureCliCommandBootstrap({
+      runtime: {} as never,
+      commandPath: ["agent"],
+      loadPlugins: true,
+    });
+
+    expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "all",
+      routeLogsToStderr: undefined,
+      installBundledRuntimeDeps: true,
+    });
+  });
+
   it("does nothing extra when plugin loading is disabled", async () => {
     await ensureCliCommandBootstrap({
       runtime: {} as never,

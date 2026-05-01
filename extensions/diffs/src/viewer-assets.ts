@@ -11,7 +11,7 @@ const VIEWER_RUNTIME_CANDIDATE_RELATIVE_PATHS = [
   "../assets/viewer-runtime.js",
 ] as const;
 
-export type ServedViewerAsset = {
+type ServedViewerAsset = {
   body: string | Buffer;
   contentType: string;
 };

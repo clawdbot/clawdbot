@@ -15,4 +15,4 @@ export * from "./envelope-stage.js";
 export * from "./group-gate-stage.js";
 export * from "./quote-stage.js";
 export * from "./refidx-stage.js";
-export * from "./stub-contexts.js";
+export { buildSkippedInboundContext } from "./stub-contexts.js";

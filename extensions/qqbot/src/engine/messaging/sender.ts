@@ -803,6 +803,6 @@ export function accountToCreds(account: { appId: string; clientSecret: string })
 }
 
 /** Check whether a target type supports rich media (C2C and Group only). */
-export function supportsRichMedia(targetType: string): boolean {
+function supportsRichMedia(targetType: string): boolean {
   return targetType === "c2c" || targetType === "group";
 }

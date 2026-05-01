@@ -1,21 +1,6 @@
 import { formatErrorMessage as sharedFormatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeShip } from "../targets.js";
 
-// Cite types for message references
-export interface ChanCite {
-  chan: { nest: string; where: string };
-}
-export interface GroupCite {
-  group: string;
-}
-export interface DeskCite {
-  desk: { flag: string; where: string };
-}
-export interface BaitCite {
-  bait: { group: string; graph: string; where: string };
-}
-export type Cite = ChanCite | GroupCite | DeskCite | BaitCite;
-
 export interface ParsedCite {
   type: "chan" | "group" | "desk" | "bait";
   nest?: string;

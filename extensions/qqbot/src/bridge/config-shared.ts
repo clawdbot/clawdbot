@@ -31,14 +31,14 @@ export const qqbotMeta = {
   order: 50,
 } as const;
 
-export function validateQQBotSetupInput(params: {
+function validateQQBotSetupInput(params: {
   accountId: string;
   input: ChannelSetupInput;
 }): string | null {
   return engineValidateSetupInput(params.accountId, params.input);
 }
 
-export function applyQQBotSetupAccountConfig(params: {
+function applyQQBotSetupAccountConfig(params: {
   cfg: OpenClawConfig;
   accountId: string;
   input: ChannelSetupInput;
@@ -50,15 +50,15 @@ export function applyQQBotSetupAccountConfig(params: {
   ) as OpenClawConfig;
 }
 
-export function isQQBotConfigured(account: ResolvedQQBotAccount | undefined): boolean {
+function isQQBotConfigured(account: ResolvedQQBotAccount | undefined): boolean {
   return engineIsAccountConfigured(account as never);
 }
 
-export function describeQQBotAccount(account: ResolvedQQBotAccount | undefined) {
+function describeQQBotAccount(account: ResolvedQQBotAccount | undefined) {
   return engineDescribeAccount(account as never);
 }
 
-export function formatQQBotAllowFrom(params: {
+function formatQQBotAllowFrom(params: {
   allowFrom: Array<string | number> | undefined | null;
 }): string[] {
   return engineFormatAllowFrom(params.allowFrom);

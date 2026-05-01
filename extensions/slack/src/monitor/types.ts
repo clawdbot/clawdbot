@@ -60,6 +60,14 @@ export type SlackChannelIdChangedEvent = {
   event_ts?: string;
 };
 
+export type SlackAppHomeOpenedEvent = {
+  type: "app_home_opened";
+  user?: string;
+  channel?: string;
+  tab?: "home" | "messages";
+  event_ts?: string;
+};
+
 export type SlackPinEvent = {
   type: "pin_added" | "pin_removed";
   channel_id?: string;
@@ -83,15 +91,6 @@ export type SlackMessageDeletedEvent = {
   channel?: string;
   deleted_ts?: string;
   previous_message?: { ts?: string; user?: string; bot_id?: string };
-  event_ts?: string;
-};
-
-export type SlackThreadBroadcastEvent = {
-  type: "message";
-  subtype: "thread_broadcast";
-  channel?: string;
-  user?: string;
-  message?: { ts?: string; user?: string; bot_id?: string };
   event_ts?: string;
 };
 

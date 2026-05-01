@@ -6,7 +6,6 @@ const MISTRAL_MANIFEST_CATALOG = manifest.modelCatalog.providers.mistral;
 
 export const MISTRAL_BASE_URL = MISTRAL_MANIFEST_CATALOG.baseUrl;
 export const MISTRAL_DEFAULT_MODEL_ID = "mistral-large-latest";
-export const MISTRAL_DEFAULT_MODEL_REF = `mistral/${MISTRAL_DEFAULT_MODEL_ID}`;
 
 function requireMistralManifestModel(id: string): (typeof MISTRAL_MANIFEST_CATALOG.models)[number] {
   const model = MISTRAL_MANIFEST_CATALOG.models.find((entry) => entry.id === id);

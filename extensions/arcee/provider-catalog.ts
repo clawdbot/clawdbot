@@ -19,10 +19,6 @@ export function normalizeArceeOpenRouterBaseUrl(baseUrl: string | undefined): st
   return undefined;
 }
 
-export function isArceeOpenRouterBaseUrl(baseUrl: string | undefined): boolean {
-  return normalizeArceeOpenRouterBaseUrl(baseUrl) === OPENROUTER_BASE_URL;
-}
-
 export function toArceeOpenRouterModelId(modelId: string): string {
   const normalized = modelId.trim();
   if (!normalized || normalized.startsWith("arcee/")) {

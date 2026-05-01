@@ -59,7 +59,7 @@ function resolveChannelAllowFrom(
   return Array.isArray(allowFrom) ? allowFrom : undefined;
 }
 
-export const createCommandAuthRegistry = () =>
+const createCommandAuthRegistry = () =>
   createTestRegistry([
     {
       pluginId: "discord",

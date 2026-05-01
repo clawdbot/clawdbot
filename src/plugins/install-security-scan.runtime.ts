@@ -71,7 +71,8 @@ type PluginInstallRequestKind =
   | "plugin-dir"
   | "plugin-archive"
   | "plugin-file"
-  | "plugin-npm";
+  | "plugin-npm"
+  | "plugin-git";
 
 type SkillInstallSpec = {
   id?: string;

@@ -518,15 +518,3 @@ export function startQaCredentialLeaseHeartbeat(
     },
   };
 }
-
-export const __testing = {
-  DEFAULT_ACQUIRE_TIMEOUT_MS,
-  DEFAULT_ENDPOINT_PREFIX,
-  DEFAULT_HEARTBEAT_INTERVAL_MS,
-  DEFAULT_LEASE_TTL_MS,
-  computeAcquireBackoffMs,
-  normalizeQaCredentialRole,
-  normalizeQaCredentialSource,
-  parsePositiveIntegerEnv,
-  resolveConvexCredentialBrokerConfig,
-};

@@ -2,6 +2,14 @@ import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generati
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import type { MusicGenerationProvider } from "openclaw/plugin-sdk/music-generation";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  RealtimeVoiceBridge,
+  RealtimeVoiceBridgeCreateRequest,
+  RealtimeVoiceProviderConfig,
+  RealtimeVoiceProviderPlugin,
+} from "openclaw/plugin-sdk/realtime-voice";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { VideoGenerationProvider } from "openclaw/plugin-sdk/video-generation";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
@@ -11,13 +19,13 @@ import {
 } from "./generation-provider-metadata.js";
 import { geminiMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import { registerGoogleProvider } from "./provider-registration.js";
-import { buildGoogleRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 import { buildGoogleSpeechProvider } from "./speech-provider.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
 let googleImageGenerationProviderPromise: Promise<ImageGenerationProvider> | null = null;
 let googleMediaUnderstandingProviderPromise: Promise<MediaUnderstandingProvider> | null = null;
 let googleMusicGenerationProviderPromise: Promise<MusicGenerationProvider> | null = null;
+let googleRealtimeVoiceProviderPromise: Promise<RealtimeVoiceProviderPlugin> | null = null;
 let googleVideoGenerationProviderPromise: Promise<VideoGenerationProvider> | null = null;
 
 type GoogleMediaUnderstandingProvider = Required<
@@ -52,6 +60,15 @@ async function loadGoogleMusicGenerationProvider(): Promise<MusicGenerationProvi
     );
   }
   return await googleMusicGenerationProviderPromise;
+}
+
+async function loadGoogleRealtimeVoiceProvider(): Promise<RealtimeVoiceProviderPlugin> {
+  if (!googleRealtimeVoiceProviderPromise) {
+    googleRealtimeVoiceProviderPromise = import("./realtime-voice-provider.js").then((mod) =>
+      mod.buildGoogleRealtimeVoiceProvider(),
+    );
+  }
+  return await googleRealtimeVoiceProviderPromise;
 }
 
 async function loadGoogleVideoGenerationProvider(): Promise<VideoGenerationProvider> {
@@ -137,6 +154,113 @@ function createLazyGoogleMusicGenerationProvider(): MusicGenerationProvider {
   };
 }
 
+function resolveGoogleRealtimeProviderConfig(
+  rawConfig: RealtimeVoiceProviderConfig,
+  cfg?: { models?: { providers?: { google?: { apiKey?: unknown } } } },
+): RealtimeVoiceProviderConfig {
+  const providers =
+    typeof rawConfig.providers === "object" &&
+    rawConfig.providers !== null &&
+    !Array.isArray(rawConfig.providers)
+      ? (rawConfig.providers as Record<string, unknown>)
+      : undefined;
+  const nested = providers?.google;
+  const raw =
+    typeof nested === "object" && nested !== null && !Array.isArray(nested)
+      ? (nested as Record<string, unknown>)
+      : typeof rawConfig.google === "object" &&
+          rawConfig.google !== null &&
+          !Array.isArray(rawConfig.google)
+        ? (rawConfig.google as Record<string, unknown>)
+        : rawConfig;
+  return {
+    ...raw,
+    ...(raw.apiKey === undefined
+      ? cfg?.models?.providers?.google?.apiKey === undefined
+        ? {}
+        : {
+            apiKey: normalizeResolvedSecretInputString({
+              value: cfg.models.providers.google.apiKey,
+              path: "models.providers.google.apiKey",
+            }),
+          }
+      : {
+          apiKey: normalizeResolvedSecretInputString({
+            value: raw.apiKey,
+            path: "plugins.entries.voice-call.config.realtime.providers.google.apiKey",
+          }),
+        }),
+  };
+}
+
+function resolveGoogleRealtimeEnvApiKey(): string | undefined {
+  return (
+    normalizeOptionalString(process.env.GEMINI_API_KEY) ??
+    normalizeOptionalString(process.env.GOOGLE_API_KEY)
+  );
+}
+
+function createLazyGoogleRealtimeVoiceBridge(
+  req: RealtimeVoiceBridgeCreateRequest,
+): RealtimeVoiceBridge {
+  let bridge: RealtimeVoiceBridge | undefined;
+  let bridgePromise: Promise<RealtimeVoiceBridge> | undefined;
+  const loadBridge = async () => {
+    if (!bridgePromise) {
+      bridgePromise = loadGoogleRealtimeVoiceProvider().then((provider) =>
+        provider.createBridge(req),
+      );
+    }
+    bridge = await bridgePromise;
+    return bridge;
+  };
+  const requireBridge = () => {
+    if (!bridge) {
+      throw new Error("Google realtime voice bridge is not connected");
+    }
+    return bridge;
+  };
+  return {
+    supportsToolResultContinuation: true,
+    connect: async () => {
+      await (await loadBridge()).connect();
+    },
+    sendAudio: (audio) => requireBridge().sendAudio(audio),
+    setMediaTimestamp: (ts) => requireBridge().setMediaTimestamp(ts),
+    sendUserMessage: (text) => requireBridge().sendUserMessage?.(text),
+    triggerGreeting: (instructions) => requireBridge().triggerGreeting?.(instructions),
+    handleBargeIn: (options) => requireBridge().handleBargeIn?.(options),
+    submitToolResult: (callId, result, options) =>
+      requireBridge().submitToolResult(callId, result, options),
+    acknowledgeMark: () => requireBridge().acknowledgeMark(),
+    close: () => bridge?.close(),
+    isConnected: () => bridge?.isConnected() ?? false,
+  };
+}
+
+function createLazyGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
+  return {
+    id: "google",
+    label: "Google Live Voice",
+    autoSelectOrder: 20,
+    resolveConfig: ({ cfg, rawConfig }) => resolveGoogleRealtimeProviderConfig(rawConfig, cfg),
+    isConfigured: ({ cfg, providerConfig }) =>
+      Boolean(
+        normalizeOptionalString(providerConfig.apiKey) ??
+        normalizeOptionalString(cfg?.models?.providers?.google?.apiKey) ??
+        resolveGoogleRealtimeEnvApiKey(),
+      ),
+    createBridge: createLazyGoogleRealtimeVoiceBridge,
+    createBrowserSession: async (req) => {
+      const provider = await loadGoogleRealtimeVoiceProvider();
+      if (!provider.createBrowserSession) {
+        throw new Error("Google realtime voice browser sessions are unavailable");
+      }
+      return await provider.createBrowserSession(req);
+    },
+  };
+}
+
 function createLazyGoogleVideoGenerationProvider(): VideoGenerationProvider {
   return {
     ...createGoogleVideoGenerationProviderMetadata(),
@@ -157,7 +281,7 @@ export default definePluginEntry({
     api.registerImageGenerationProvider(createLazyGoogleImageGenerationProvider());
     api.registerMediaUnderstandingProvider(createLazyGoogleMediaUnderstandingProvider());
     api.registerMusicGenerationProvider(createLazyGoogleMusicGenerationProvider());
-    api.registerRealtimeVoiceProvider(buildGoogleRealtimeVoiceProvider());
+    api.registerRealtimeVoiceProvider(createLazyGoogleRealtimeVoiceProvider());
     api.registerSpeechProvider(buildGoogleSpeechProvider());
     api.registerVideoGenerationProvider(createLazyGoogleVideoGenerationProvider());
     api.registerWebSearchProvider(createGeminiWebSearchProvider());

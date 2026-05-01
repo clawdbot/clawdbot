@@ -199,9 +199,16 @@ export async function maybeRepairGatewayDaemon(params: {
         {
           message: "Install gateway service now?",
           initialValue: true,
+          requiresInteractiveConfirmation: true,
         },
         serviceRepairPolicy,
       );
+      if (!install) {
+        note(
+          `Run ${formatCliCommand("openclaw gateway install")} when you want to install the gateway service.`,
+          "Gateway",
+        );
+      }
       if (install) {
         const daemonRuntime = await params.prompter.select<GatewayDaemonRuntime>(
           {

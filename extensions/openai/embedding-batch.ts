@@ -27,7 +27,7 @@ type EmbeddingBatchExecutionParams = {
   debug?: (message: string, data?: Record<string, unknown>) => void;
 };
 
-export type OpenAiBatchRequest = {
+type OpenAiBatchRequest = {
   custom_id: string;
   method: "POST";
   url: "/v1/embeddings";
@@ -37,8 +37,8 @@ export type OpenAiBatchRequest = {
   };
 };
 
-export type OpenAiBatchStatus = EmbeddingBatchStatus;
-export type OpenAiBatchOutputLine = ProviderBatchOutputLine;
+type OpenAiBatchStatus = EmbeddingBatchStatus;
+type OpenAiBatchOutputLine = ProviderBatchOutputLine;
 
 export const OPENAI_BATCH_ENDPOINT = EMBEDDING_BATCH_ENDPOINT;
 const OPENAI_BATCH_COMPLETION_WINDOW = "24h";

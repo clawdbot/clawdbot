@@ -6,6 +6,7 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import { type ChannelPlugin, type ResolvedLineAccount } from "./channel-api.js";
 import { resolveLineOutboundMedia, type LineOutboundMediaResolved } from "./outbound-media.js";
+import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
 import { getLineRuntime } from "./runtime.js";
 import type { LineChannelData } from "./types.js";
 
@@ -292,6 +293,17 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           quickReply,
         };
         await sendMessageBatch(quickReplyMessages);
+      } else if (quickReply) {
+        lastResult = await sendQuickReplies(
+          to,
+          buildLineQuickReplyFallbackText(quickReplies),
+          quickReplies,
+          {
+            verbose: false,
+            cfg,
+            accountId: accountId ?? undefined,
+          },
+        );
       }
     }
 

@@ -80,10 +80,6 @@ export function setMemoryWorkspaceDir(next: string): void {
   workspaceDir = next;
 }
 
-export function setMemoryStatusCustom(next: Record<string, unknown> | undefined): void {
-  customStatus = next;
-}
-
 export function setMemorySearchImpl(next: SearchImpl): void {
   searchImpl = next;
 }

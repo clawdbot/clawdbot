@@ -37,6 +37,17 @@ export function createEmbeddedPiSettingsManager(params: {
   return SettingsManager.inMemory(settings);
 }
 
+function createRuntimeEmbeddedPiSettingsManager(settingsManager: SettingsManager): SettingsManager {
+  return SettingsManager.inMemory(
+    buildEmbeddedPiSettingsSnapshot({
+      globalSettings: settingsManager.getGlobalSettings(),
+      pluginSettings: {},
+      projectSettings: settingsManager.getProjectSettings(),
+      policy: "trusted",
+    }),
+  );
+}
+
 export function createPreparedEmbeddedPiSettingsManager(params: {
   cwd: string;
   agentDir: string;
@@ -44,7 +55,9 @@ export function createPreparedEmbeddedPiSettingsManager(params: {
   /** Resolved context window budget so reserve-token floor can be capped for small models. */
   contextTokenBudget?: number;
 }): SettingsManager {
-  const settingsManager = createEmbeddedPiSettingsManager(params);
+  const settingsManager = createRuntimeEmbeddedPiSettingsManager(
+    createEmbeddedPiSettingsManager(params),
+  );
   applyPiCompactionSettingsFromConfig({
     settingsManager,
     cfg: params.cfg,

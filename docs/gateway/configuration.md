@@ -333,7 +333,7 @@ cannot roll back unrelated user settings.
     }
     ```
 
-    Build the image first: `scripts/sandbox-setup.sh`
+    Build the image first — from a source checkout run `scripts/sandbox-setup.sh`, or from an npm install see the inline `docker build` command in [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup).
 
     See [Sandboxing](/gateway/sandboxing) for the full guide and [full reference](/gateway/config-agents#agentsdefaultssandbox) for all options.
 

@@ -190,6 +190,40 @@ function normalizeResolvedModel(params: {
   agentDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model<Api> {
+  const normalizeModelCost = (cost: unknown): Model<Api>["cost"] => {
+    if (!cost || typeof cost !== "object" || Array.isArray(cost)) {
+      return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    }
+    const record = cost as Partial<Model<Api>["cost"]>;
+    const input =
+      typeof record.input === "number" && Number.isFinite(record.input) ? record.input : 0;
+    const output =
+      typeof record.output === "number" && Number.isFinite(record.output) ? record.output : 0;
+    const cacheRead =
+      typeof record.cacheRead === "number" && Number.isFinite(record.cacheRead)
+        ? record.cacheRead
+        : 0;
+    const cacheWrite =
+      typeof record.cacheWrite === "number" && Number.isFinite(record.cacheWrite)
+        ? record.cacheWrite
+        : 0;
+    if (
+      input === record.input &&
+      output === record.output &&
+      cacheRead === record.cacheRead &&
+      cacheWrite === record.cacheWrite
+    ) {
+      return record as Model<Api>["cost"];
+    }
+    return {
+      ...cost,
+      input,
+      output,
+      cacheRead,
+      cacheWrite,
+    };
+  };
+
   const normalizedInputModel = {
     ...params.model,
     input: resolveProviderModelInput({
@@ -198,6 +232,7 @@ function normalizeResolvedModel(params: {
       modelName: params.model.name,
       input: params.model.input,
     }),
+    cost: normalizeModelCost((params.model as { cost?: unknown }).cost),
   } as Model<Api>;
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const pluginNormalized = runtimeHooks.normalizeProviderResolvedModelWithPlugin({

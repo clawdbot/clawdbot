@@ -63,7 +63,7 @@ export const ChannelApiSchema = {
  * Build the full API URL from base + path + query params.
  * 拼接 API 基地址 + 路径 + 查询参数。
  */
-export function buildUrl(path: string, query?: Record<string, string>): string {
+function buildUrl(path: string, query?: Record<string, string>): string {
   let url = `${API_BASE}${path}`;
   if (query && Object.keys(query).length > 0) {
     const params = new URLSearchParams();
@@ -84,7 +84,7 @@ export function buildUrl(path: string, query?: Record<string, string>): string {
  * Validate API path format; returns an error string or null if valid.
  * 校验 API 路径格式，返回错误描述或 null（合法）。
  */
-export function validatePath(path: string): string | null {
+function validatePath(path: string): string | null {
   if (!path.startsWith("/")) {
     return "path must start with /";
   }

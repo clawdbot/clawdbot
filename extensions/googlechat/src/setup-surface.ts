@@ -91,8 +91,6 @@ const googlechatDmPolicy: ChannelSetupDmPolicy = {
   promptAllowFrom,
 };
 
-export { googlechatSetupAdapter } from "./setup-core.js";
-
 function createServiceAccountTextInput(params: {
   inputKey: GoogleChatTextInputKey;
   message: string;

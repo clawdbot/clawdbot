@@ -647,10 +647,3 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     await activeClient.stop();
   }
 }
-
-export const __testing = {
-  resolveIMessageRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-};
-
-export const resolveIMessageRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;

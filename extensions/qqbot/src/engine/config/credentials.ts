@@ -12,7 +12,7 @@ import { DEFAULT_ACCOUNT_ID } from "./resolve.js";
 
 // ---- Logout: clear all credential fields for an account ----
 
-export interface ClearCredentialsResult {
+interface ClearCredentialsResult {
   nextCfg: Record<string, unknown>;
   cleared: boolean;
   changed: boolean;

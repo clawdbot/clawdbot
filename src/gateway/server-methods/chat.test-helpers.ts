@@ -23,20 +23,3 @@ export function createTranscriptFixtureSync(params: {
   );
   return { dir, transcriptPath };
 }
-
-export function createMockSessionEntry(params: {
-  transcriptPath: string;
-  sessionId: string;
-  canonicalKey?: string;
-  cfg?: Record<string, unknown>;
-}) {
-  return {
-    cfg: params.cfg ?? {},
-    storePath: path.join(path.dirname(params.transcriptPath), "sessions.json"),
-    entry: {
-      sessionId: params.sessionId,
-      sessionFile: params.transcriptPath,
-    },
-    canonicalKey: params.canonicalKey ?? "main",
-  };
-}

@@ -355,7 +355,7 @@ export function logVerbose(
   }
 }
 
-export type BlueBubblesInboundChatResolveTarget =
+type BlueBubblesInboundChatResolveTarget =
   | { readonly kind: "chat_id"; readonly chatId: number }
   | { readonly kind: "chat_identifier"; readonly chatIdentifier: string }
   | { readonly kind: "handle"; readonly address: string };

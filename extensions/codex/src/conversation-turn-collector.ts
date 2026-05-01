@@ -4,10 +4,6 @@ import {
   type JsonObject,
 } from "./app-server/protocol.js";
 
-export type CodexConversationTurnCollector = ReturnType<
-  typeof createCodexConversationTurnCollector
->;
-
 export function createCodexConversationTurnCollector(threadId: string) {
   let turnId: string | undefined;
   let completed = false;

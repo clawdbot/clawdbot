@@ -42,20 +42,6 @@ export interface PluginApprovalRequest {
   };
 }
 
-export interface ExecApprovalResolved {
-  id: string;
-  decision: string;
-  resolvedBy?: string;
-  [key: string]: unknown;
-}
-
-export interface PluginApprovalResolved {
-  id: string;
-  decision: string;
-  resolvedBy?: string;
-  [key: string]: unknown;
-}
-
 export type ApprovalDecision = "allow-once" | "allow-always" | "deny";
 
 export interface ApprovalTarget {

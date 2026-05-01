@@ -5,7 +5,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveDiscordAccountAllowFrom } from "../accounts.js";
-import { type Client, ReadyListener } from "../internal/discord.js";
+import { type Client, ReadyListener, ResumedListener } from "../internal/discord.js";
 import type { VoicePlugin } from "../internal/voice.js";
 import { formatMention } from "../mentions.js";
 import { decodeOpusStream, writeVoiceWavFile } from "./audio.js";
@@ -19,6 +19,7 @@ import {
   scheduleVoiceCaptureFinalize,
   stopVoiceCaptureState,
 } from "./capture-state.js";
+import { resolveDiscordVoiceEnabled } from "./config.js";
 import {
   analyzeVoiceReceiveError,
   createVoiceReceiveRecoveryState,
@@ -35,14 +36,53 @@ import {
   CAPTURE_FINALIZE_GRACE_MS,
   isVoiceChannel,
   logVoiceVerbose,
+  resolveVoiceTimeoutMs,
   MIN_SEGMENT_SECONDS,
   VOICE_CONNECT_READY_TIMEOUT_MS,
+  VOICE_RECONNECT_GRACE_MS,
   type VoiceOperationResult,
   type VoiceSessionEntry,
 } from "./session.js";
 import { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
 
 const logger = createSubsystemLogger("discord/voice");
+
+type DiscordVoiceSdk = ReturnType<typeof loadDiscordVoiceSdk>;
+type DiscordVoiceConnection = ReturnType<DiscordVoiceSdk["joinVoiceChannel"]>;
+
+function isVoiceConnectionDestroyed(
+  connection: DiscordVoiceConnection,
+  voiceSdk: DiscordVoiceSdk,
+): boolean {
+  return connection.state.status === voiceSdk.VoiceConnectionStatus.Destroyed;
+}
+
+function destroyVoiceConnectionSafely(params: {
+  connection: DiscordVoiceConnection;
+  voiceSdk: DiscordVoiceSdk;
+  reason: string;
+}): void {
+  if (isVoiceConnectionDestroyed(params.connection, params.voiceSdk)) {
+    logVoiceVerbose(`destroy skipped: ${params.reason}; connection already destroyed`);
+    return;
+  }
+  try {
+    params.connection.destroy();
+  } catch (err) {
+    const message = formatErrorMessage(err);
+    if (message.includes("already been destroyed")) {
+      logVoiceVerbose(`destroy skipped: ${params.reason}; ${message}`);
+      return;
+    }
+    logger.warn(`discord voice: destroy failed: ${params.reason}: ${message}`);
+  }
+}
+
+function startAutoJoin(manager: Pick<DiscordVoiceManager, "autoJoin">) {
+  void manager
+    .autoJoin()
+    .catch((err) => logger.warn(`discord voice: autoJoin failed: ${formatErrorMessage(err)}`));
+}
 
 export class DiscordVoiceManager {
   private sessions = new Map<string, VoiceSessionEntry>();
@@ -63,7 +103,7 @@ export class DiscordVoiceManager {
     },
   ) {
     this.botUserId = params.botUserId;
-    this.voiceEnabled = params.discordConfig.voice?.enabled !== false;
+    this.voiceEnabled = resolveDiscordVoiceEnabled(params.discordConfig.voice);
     this.ownerAllowFrom =
       resolveDiscordAccountAllowFrom({ cfg: params.cfg, accountId: params.accountId }) ??
       params.discordConfig.allowFrom ??
@@ -172,15 +212,37 @@ export class DiscordVoiceManager {
       return { ok: false, message: "Discord voice plugin is not available." };
     }
 
+    const voiceConfig = this.params.discordConfig.voice;
     const adapterCreator = voicePlugin.getGatewayAdapterCreator(guildId);
-    const daveEncryption = this.params.discordConfig.voice?.daveEncryption;
-    const decryptionFailureTolerance = this.params.discordConfig.voice?.decryptionFailureTolerance;
+    const daveEncryption = voiceConfig?.daveEncryption;
+    const decryptionFailureTolerance = voiceConfig?.decryptionFailureTolerance;
+    const connectReadyTimeoutMs = resolveVoiceTimeoutMs(
+      voiceConfig?.connectTimeoutMs,
+      VOICE_CONNECT_READY_TIMEOUT_MS,
+    );
+    const reconnectGraceMs = resolveVoiceTimeoutMs(
+      voiceConfig?.reconnectGraceMs,
+      VOICE_RECONNECT_GRACE_MS,
+    );
     logVoiceVerbose(
       `join: DAVE settings encryption=${daveEncryption === false ? "off" : "on"} tolerance=${
         decryptionFailureTolerance ?? "default"
-      }`,
+      } connectTimeout=${connectReadyTimeoutMs}ms reconnectGrace=${reconnectGraceMs}ms`,
     );
     const voiceSdk = loadDiscordVoiceSdk();
+    const existingEntry = this.sessions.get(guildId);
+    if (existingEntry) {
+      existingEntry.stop();
+      this.sessions.delete(guildId);
+    }
+    const staleConnection = voiceSdk.getVoiceConnection(guildId);
+    if (staleConnection) {
+      destroyVoiceConnectionSafely({
+        connection: staleConnection,
+        voiceSdk,
+        reason: `stale connection before join guild ${guildId}`,
+      });
+    }
     const connection = voiceSdk.joinVoiceChannel({
       channelId,
       guildId,
@@ -195,11 +257,18 @@ export class DiscordVoiceManager {
       await voiceSdk.entersState(
         connection,
         voiceSdk.VoiceConnectionStatus.Ready,
-        VOICE_CONNECT_READY_TIMEOUT_MS,
+        connectReadyTimeoutMs,
       );
       logVoiceVerbose(`join: connected to guild ${guildId} channel ${channelId}`);
     } catch (err) {
-      connection.destroy();
+      logger.warn(
+        `discord voice: join failed before ready: guild ${guildId} channel ${channelId} timeout=${connectReadyTimeoutMs}ms error=${formatErrorMessage(err)}`,
+      );
+      destroyVoiceConnectionSafely({
+        connection,
+        voiceSdk,
+        reason: `failed join cleanup guild ${guildId} channel ${channelId}`,
+      });
       return { ok: false, message: `Failed to join voice channel: ${formatErrorMessage(err)}` };
     }
 
@@ -274,7 +343,11 @@ export class DiscordVoiceManager {
           player.off("error", playerErrorHandler);
         }
         player.stop();
-        connection.destroy();
+        destroyVoiceConnectionSafely({
+          connection,
+          voiceSdk,
+          reason: `stop guild ${guildId} channel ${channelId}`,
+        });
       },
     };
 
@@ -289,13 +362,32 @@ export class DiscordVoiceManager {
 
     disconnectedHandler = async () => {
       try {
+        logVoiceVerbose(
+          `disconnected: attempting recovery guild ${guildId} channel ${channelId} grace=${reconnectGraceMs}ms`,
+        );
         await Promise.race([
-          voiceSdk.entersState(connection, voiceSdk.VoiceConnectionStatus.Signalling, 5_000),
-          voiceSdk.entersState(connection, voiceSdk.VoiceConnectionStatus.Connecting, 5_000),
+          voiceSdk.entersState(
+            connection,
+            voiceSdk.VoiceConnectionStatus.Signalling,
+            reconnectGraceMs,
+          ),
+          voiceSdk.entersState(
+            connection,
+            voiceSdk.VoiceConnectionStatus.Connecting,
+            reconnectGraceMs,
+          ),
         ]);
-      } catch {
+        logVoiceVerbose(`disconnected: recovery started guild ${guildId} channel ${channelId}`);
+      } catch (err) {
+        logger.warn(
+          `discord voice: disconnect recovery failed: guild ${guildId} channel ${channelId} timeout=${reconnectGraceMs}ms error=${formatErrorMessage(err)}; destroying connection`,
+        );
         clearSessionIfCurrent();
-        connection.destroy();
+        destroyVoiceConnectionSafely({
+          connection,
+          voiceSdk,
+          reason: `disconnect recovery failed guild ${guildId} channel ${channelId}`,
+        });
       }
     };
     destroyedHandler = () => {
@@ -584,8 +676,16 @@ export class DiscordVoiceReadyListener extends ReadyListener {
   }
 
   async handle(_data: unknown, _client: Client): Promise<void> {
-    void this.manager
-      .autoJoin()
-      .catch((err) => logger.warn(`discord voice: autoJoin failed: ${formatErrorMessage(err)}`));
+    startAutoJoin(this.manager);
+  }
+}
+
+export class DiscordVoiceResumedListener extends ResumedListener {
+  constructor(private manager: DiscordVoiceManager) {
+    super();
+  }
+
+  async handle(_data: unknown, _client: Client): Promise<void> {
+    startAutoJoin(this.manager);
   }
 }

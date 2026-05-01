@@ -21,8 +21,6 @@ function parseList(value: string): string[] {
     .filter(Boolean);
 }
 
-export { tlonSetupAdapter } from "./setup-core.js";
-
 export const tlonSetupWizard = createTlonSetupWizardBase({
   resolveConfigured: async ({ cfg, accountId }) => await resolveTlonSetupConfigured(cfg, accountId),
   resolveStatusLines: async ({ cfg, accountId }) =>

@@ -1,8 +1,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub.js";
-import { applyExclusiveSlotSelection, slotKeysForPluginKind } from "../plugins/slots.js";
-import { buildPluginDiagnosticsReport, buildPluginSnapshotReport } from "../plugins/status.js";
+import type { PluginKind } from "../plugins/plugin-kind.types.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
+import { applyExclusiveSlotSelection } from "../plugins/slots.js";
+import { buildPluginDiagnosticsReport } from "../plugins/status.js";
 import type { PluginLogger } from "../plugins/types.js";
 import { defaultRuntime } from "../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -16,6 +18,59 @@ export const quietPluginJsonLogger: PluginLogger = {
   warn: () => undefined,
   error: () => undefined,
 };
+
+type SlotSelectionPlugin = {
+  id: string;
+  kind?: PluginKind | PluginKind[];
+};
+
+type SlotSelectionRegistry = {
+  plugins: SlotSelectionPlugin[];
+};
+
+function mergeRuntimeKinds(
+  report: SlotSelectionRegistry,
+  runtimeReport: SlotSelectionRegistry,
+): SlotSelectionRegistry {
+  const runtimeKinds = new Map(
+    runtimeReport.plugins
+      .filter((plugin) => plugin.kind)
+      .map((plugin) => [plugin.id, plugin.kind] as const),
+  );
+  return {
+    plugins: report.plugins.map((plugin) => {
+      if (plugin.kind) {
+        return plugin;
+      }
+      const runtimeKind = runtimeKinds.get(plugin.id);
+      return runtimeKind ? { ...plugin, kind: runtimeKind } : plugin;
+    }),
+  };
+}
+
+function loadRuntimeKindReportForPlugins(config: OpenClawConfig, pluginIds: readonly string[]) {
+  return buildPluginDiagnosticsReport({
+    config,
+    onlyPluginIds: [...pluginIds],
+  });
+}
+
+function buildSlotSelectionRegistry(
+  config: OpenClawConfig,
+  pluginId: string,
+): SlotSelectionRegistry {
+  const registry = loadPluginManifestRegistryForPluginRegistry({
+    config,
+    includeDisabled: true,
+    pluginIds: [pluginId],
+  });
+  return {
+    plugins: registry.plugins.map((plugin) => ({
+      id: plugin.id,
+      kind: plugin.kind,
+    })),
+  };
+}
 
 export function resolveFileNpmSpecToLocalPath(
   raw: string,
@@ -47,34 +102,20 @@ export function applySlotSelectionForPlugin(
   config: OpenClawConfig,
   pluginId: string,
 ): { config: OpenClawConfig; warnings: string[] } {
-  const report = buildPluginSnapshotReport({ config });
+  const report = buildSlotSelectionRegistry(config, pluginId);
   const plugin = report.plugins.find((entry) => entry.id === pluginId);
   if (!plugin) {
     return { config, warnings: [] };
   }
-  if (
-    plugin.kind &&
-    slotKeysForPluginKind(plugin.kind).length > 0 &&
-    report.plugins.some((entry) => entry.id !== plugin.id && !entry.kind)
-  ) {
-    const runtimeReport = buildPluginDiagnosticsReport({ config });
-    const result = applyExclusiveSlotSelection({
-      config,
-      selectedId: plugin.id,
-      selectedKind: plugin.kind,
-      registry: runtimeReport,
-    });
-    return { config: result.config, warnings: result.warnings };
-  }
   if (!plugin.kind) {
-    const runtimeReport = buildPluginDiagnosticsReport({ config });
+    const runtimeReport = loadRuntimeKindReportForPlugins(config, [plugin.id]);
     const runtimePlugin = runtimeReport.plugins.find((entry) => entry.id === plugin.id);
     if (runtimePlugin?.kind) {
       const result = applyExclusiveSlotSelection({
         config,
         selectedId: runtimePlugin.id,
         selectedKind: runtimePlugin.kind,
-        registry: runtimeReport,
+        registry: mergeRuntimeKinds(report, runtimeReport),
       });
       return { config: result.config, warnings: result.warnings };
     }

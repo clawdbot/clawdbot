@@ -791,12 +791,3 @@ export function buildGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
     createBrowserSession: createGoogleRealtimeBrowserSession,
   };
 }
-
-export {
-  GOOGLE_REALTIME_DEFAULT_API_VERSION,
-  GOOGLE_REALTIME_DEFAULT_MODEL,
-  GOOGLE_REALTIME_DEFAULT_VOICE,
-  GOOGLE_REALTIME_BROWSER_API_VERSION,
-  GOOGLE_REALTIME_BROWSER_WEBSOCKET_URL,
-};
-export type { GoogleRealtimeVoiceProviderConfig };

@@ -165,7 +165,7 @@ function toCanonicalAnthropicModelRef(ref: string): string {
     : ref;
 }
 
-export function normalizeAnthropicProviderConfig<T extends { api?: string; models?: unknown[] }>(
+function normalizeAnthropicProviderConfig<T extends { api?: string; models?: unknown[] }>(
   providerConfig: T,
 ): T {
   if (

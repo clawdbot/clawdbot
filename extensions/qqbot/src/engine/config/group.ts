@@ -24,10 +24,10 @@ import { resolveAccountBase } from "./resolve.js";
  *                 back to its built-in restricted palette.
  * - `none`:       deny all tools.
  */
-export type GroupToolPolicy = "full" | "restricted" | "none";
+type GroupToolPolicy = "full" | "restricted" | "none";
 
 /** Per-group configuration — everything that may be overridden per group. */
-export interface GroupConfig {
+interface GroupConfig {
   /** Whether the bot requires @mention to respond. Defaults to true. */
   requireMention: boolean;
   /**
@@ -225,7 +225,7 @@ export function resolveGroupName(
  * (which depend on `agentId`, not on the group itself) and a
  * pre-computed display name for logging.
  */
-export interface GroupSettings {
+interface GroupSettings {
   /** Merged group config (specific > wildcard > defaults). */
   config: GroupConfig;
   /** Display name — `config.name` or the first 8 chars of the openid. */

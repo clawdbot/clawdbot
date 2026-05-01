@@ -2,6 +2,7 @@ import { normalizeFastMode } from "../auto-reply/thinking.shared.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentConfig } from "./agent-scope.js";
+import { modelKey } from "./model-ref-shared.js";
 
 export type FastModeState = {
   enabled: boolean;
@@ -13,8 +14,8 @@ function resolveConfiguredFastModeRaw(params: {
   provider: string;
   model: string;
 }): unknown {
-  const modelKey = `${params.provider}/${params.model}`;
-  const modelConfig = params.cfg?.agents?.defaults?.models?.[modelKey];
+  const modelConfig =
+    params.cfg?.agents?.defaults?.models?.[modelKey(params.provider, params.model)];
   return modelConfig?.params?.fastMode ?? modelConfig?.params?.fast_mode;
 }
 

@@ -10,7 +10,7 @@ import { mergeDiscordAccountConfig, resolveDiscordAccountConfig } from "./accoun
 import type { DiscordAccountConfig } from "./runtime-api.js";
 import { resolveDiscordToken } from "./token.js";
 
-export type InspectedDiscordSetupAccount = {
+type InspectedDiscordSetupAccount = {
   accountId: string;
   enabled: boolean;
   token: string;

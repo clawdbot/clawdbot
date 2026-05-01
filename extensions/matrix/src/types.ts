@@ -231,6 +231,7 @@ export type CoreConfig = {
   };
   session?: {
     store?: string;
+    dmScope?: NonNullable<OpenClawConfig["session"]>["dmScope"];
   };
   messages?: {
     ackReaction?: string;

@@ -198,6 +198,22 @@ describe("runCommandWithTimeout", () => {
       expect(result.code).not.toBe(0);
     },
   );
+
+  it.runIf(process.platform !== "win32")(
+    "swallows stdin EPIPE when child exits before input is consumed (#75438)",
+    { timeout: 5_000 },
+    async () => {
+      await loadExecModules();
+      const result = await runCommandWithTimeout(
+        [process.execPath, "-e", "process.exit(0)"],
+        {
+          timeoutMs: 3_000,
+          input: "this input will EPIPE because the child ignores stdin\n",
+        },
+      );
+      expect(result.code).toBe(0);
+    },
+  );
 });
 
 describe("attachChildProcessBridge", () => {

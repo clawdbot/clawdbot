@@ -12,7 +12,7 @@ import {
   applyReplyThreading,
   filterMessagingToolDuplicates,
   filterMessagingToolMediaDuplicates,
-  shouldSuppressMessagingToolReplies,
+  resolveMessagingToolPayloadDedupe,
 } from "./reply-payloads.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 
@@ -35,10 +35,11 @@ export function resolveFollowupDeliveryPayloads(params: {
   sentTargets?: MessagingToolSend[];
   sentTexts?: string[];
 }): ReplyPayload[] {
-  const replyToChannel = resolveOriginMessageProvider({
+  const replyMessageProvider = resolveOriginMessageProvider({
     originatingChannel: params.originatingChannel,
     provider: params.messageProvider,
-  }) as OriginatingChannelType | undefined;
+  });
+  const replyToChannel = replyMessageProvider as OriginatingChannelType | undefined;
   const replyToMode = resolveReplyToMode(
     params.cfg,
     replyToChannel,
@@ -62,16 +63,8 @@ export function resolveFollowupDeliveryPayloads(params: {
     replyToMode,
     replyToChannel,
   });
-  const dedupedPayloads = filterMessagingToolDuplicates({
-    payloads: replyTaggedPayloads,
-    sentTexts: params.sentTexts ?? [],
-  });
-  const mediaFilteredPayloads = filterMessagingToolMediaDuplicates({
-    payloads: dedupedPayloads,
-    sentMediaUrls: params.sentMediaUrls ?? [],
-  });
-  const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
-    messageProvider: replyToChannel,
+  const messagingToolPayloadDedupe = resolveMessagingToolPayloadDedupe({
+    messageProvider: replyMessageProvider,
     messagingToolSentTargets: params.sentTargets,
     originatingTo: resolveOriginMessageTo({
       originatingTo: params.originatingTo,
@@ -80,5 +73,17 @@ export function resolveFollowupDeliveryPayloads(params: {
       originatingAccountId: params.originatingAccountId,
     }),
   });
-  return suppressMessagingToolReplies ? [] : mediaFilteredPayloads;
+  const mediaFilteredPayloads = messagingToolPayloadDedupe.shouldDedupePayloads
+    ? filterMessagingToolMediaDuplicates({
+        payloads: replyTaggedPayloads,
+        sentMediaUrls: params.sentMediaUrls ?? [],
+      })
+    : replyTaggedPayloads;
+  const dedupedPayloads = messagingToolPayloadDedupe.shouldDedupePayloads
+    ? filterMessagingToolDuplicates({
+        payloads: mediaFilteredPayloads,
+        sentTexts: params.sentTexts ?? [],
+      })
+    : mediaFilteredPayloads;
+  return messagingToolPayloadDedupe.suppressReplies ? [] : dedupedPayloads;
 }

@@ -23,7 +23,7 @@ function resolveClaudeCliSyntheticAuth() {
       };
 }
 
-export const anthropicProviderDiscovery: ProviderPlugin = {
+const anthropicProviderDiscovery: ProviderPlugin = {
   id: CLAUDE_CLI_BACKEND_ID,
   label: "Claude CLI",
   docsPath: "/providers/models",

@@ -66,6 +66,7 @@ export async function preparePostConfigBundledRuntimeDeps(params: {
     packageRoot,
     config: params.config,
     includeConfiguredChannels: true,
+    includeEnabledByDefaultPlugins: false,
     env,
   });
   if (plan.conflicts.length > 0) {
@@ -102,6 +103,7 @@ export async function preparePostConfigBundledRuntimeDeps(params: {
       packageRoot,
       config: params.config,
       includeConfiguredChannels: true,
+      includeEnabledByDefaultPlugins: false,
       env,
       ...(params.installDeps
         ? {

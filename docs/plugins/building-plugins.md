@@ -253,6 +253,47 @@ Users enable optional tools in config:
 - Use `optional: true` for tools with side effects or extra binary requirements
 - Users can enable all tools from a plugin by adding the plugin id to `tools.allow`
 
+## Registering CLI commands
+
+Plugins can add root `openclaw` command groups with `api.registerCli`. Provide
+`descriptors` for every top-level command root so OpenClaw can show and route
+the command without eagerly loading every plugin runtime.
+
+```typescript
+register(api) {
+  api.registerCli(
+    ({ program }) => {
+      const demo = program
+        .command("demo-plugin")
+        .description("Run demo plugin commands");
+
+      demo
+        .command("ping")
+        .description("Check that the plugin CLI is executable")
+        .action(() => {
+          console.log("demo-plugin:pong");
+        });
+    },
+    {
+      descriptors: [
+        {
+          name: "demo-plugin",
+          description: "Run demo plugin commands",
+          hasSubcommands: true,
+        },
+      ],
+    },
+  );
+}
+```
+
+After install, verify the runtime registration and execute the command:
+
+```bash
+openclaw plugins inspect demo-plugin --runtime --json
+openclaw demo-plugin ping
+```
+
 ## Import conventions
 
 Always import from focused `openclaw/plugin-sdk/<subpath>` paths:

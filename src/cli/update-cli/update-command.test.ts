@@ -5,7 +5,9 @@ import {
   resolveGatewayInstallEntrypoint,
 } from "../../daemon/gateway-entrypoint.js";
 import {
+  resolvePostInstallDoctorEnv,
   shouldPrepareUpdatedInstallRestart,
+  resolveUpdatedGatewayRestartPort,
   shouldUseLegacyProcessRestartAfterUpdate,
 } from "./update-command.js";
 
@@ -80,6 +82,70 @@ describe("shouldPrepareUpdatedInstallRestart", () => {
         serviceLoaded: true,
       }),
     ).toBe(true);
+  });
+});
+
+describe("resolveUpdatedGatewayRestartPort", () => {
+  it("uses the managed service port ahead of the caller environment", () => {
+    expect(
+      resolveUpdatedGatewayRestartPort({
+        config: { gateway: { port: 19000 } } as never,
+        processEnv: { OPENCLAW_GATEWAY_PORT: "19001" },
+        serviceEnv: { OPENCLAW_GATEWAY_PORT: "19002" },
+      }),
+    ).toBe(19002);
+  });
+
+  it("falls back to the post-update config when no service port is available", () => {
+    expect(
+      resolveUpdatedGatewayRestartPort({
+        config: { gateway: { port: 19000 } } as never,
+        processEnv: {},
+        serviceEnv: {},
+      }),
+    ).toBe(19000);
+  });
+});
+
+describe("resolvePostInstallDoctorEnv", () => {
+  it("uses the managed service profile paths for post-install doctor", () => {
+    const env = resolvePostInstallDoctorEnv({
+      invocationCwd: "/srv/openclaw",
+      baseEnv: {
+        PATH: "/bin",
+        OPENCLAW_STATE_DIR: "/wrong/state",
+        OPENCLAW_CONFIG_PATH: "/wrong/openclaw.json",
+        OPENCLAW_PROFILE: "wrong",
+      },
+      serviceEnv: {
+        OPENCLAW_STATE_DIR: "daemon-state",
+        OPENCLAW_CONFIG_PATH: "daemon-state/openclaw.json",
+        OPENCLAW_PROFILE: "work",
+      },
+    });
+
+    expect(env.PATH).toBe("/bin");
+    expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
+    expect(env.OPENCLAW_STATE_DIR).toBe(path.join("/srv/openclaw", "daemon-state"));
+    expect(env.OPENCLAW_CONFIG_PATH).toBe(
+      path.join("/srv/openclaw", "daemon-state", "openclaw.json"),
+    );
+    expect(env.OPENCLAW_PROFILE).toBe("work");
+  });
+
+  it("keeps the caller env when no managed service env is available", () => {
+    const env = resolvePostInstallDoctorEnv({
+      baseEnv: {
+        PATH: "/bin",
+        OPENCLAW_STATE_DIR: "/caller/state",
+        OPENCLAW_PROFILE: "caller",
+      },
+    });
+
+    expect(env.PATH).toBe("/bin");
+    expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
+    expect(env.OPENCLAW_STATE_DIR).toBe("/caller/state");
+    expect(env.OPENCLAW_PROFILE).toBe("caller");
   });
 });
 

@@ -5,11 +5,11 @@ export const XAI_BASE_URL = "https://api.x.ai/v1";
 export const XAI_DEFAULT_IMAGE_MODEL = "grok-imagine-image";
 export const XAI_IMAGE_MODELS = ["grok-imagine-image", "grok-imagine-image-pro"] as const;
 export const XAI_DEFAULT_CONTEXT_WINDOW = 256_000;
-export const XAI_LARGE_CONTEXT_WINDOW = 2_000_000;
-export const XAI_CODE_CONTEXT_WINDOW = 256_000;
+const XAI_LARGE_CONTEXT_WINDOW = 2_000_000;
+const XAI_CODE_CONTEXT_WINDOW = 256_000;
 export const XAI_DEFAULT_MAX_TOKENS = 64_000;
-export const XAI_LEGACY_CONTEXT_WINDOW = 131_072;
-export const XAI_LEGACY_MAX_TOKENS = 8_192;
+const XAI_LEGACY_CONTEXT_WINDOW = 131_072;
+const XAI_LEGACY_MAX_TOKENS = 8_192;
 export const XAI_DEFAULT_MODEL_ID = "grok-4";
 export const XAI_DEFAULT_MODEL_REF = `xai/${XAI_DEFAULT_MODEL_ID}`;
 

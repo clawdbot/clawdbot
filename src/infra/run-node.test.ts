@@ -697,6 +697,44 @@ describe("run-node script", () => {
     });
   });
 
+  it("restages dirty runtime metadata in watch mode when dist is already current", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [EXTENSION_PACKAGE]: '{"openclaw":{"bundle":{"stageRuntimeDependencies":true}}}\n',
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          EXTENSION_PACKAGE,
+          ROOT_TSCONFIG,
+          ROOT_PACKAGE,
+          DIST_ENTRY,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+
+      const runRuntimePostBuild = vi.fn();
+      const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: ` M ${EXTENSION_PACKAGE}\n`,
+      });
+      const exitCode = await runStatusCommand({
+        tmp,
+        spawn,
+        spawnSync,
+        env: { OPENCLAW_WATCH_MODE: "1" },
+        runRuntimePostBuild,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([statusCommandSpawn()]);
+      expect(runRuntimePostBuild).toHaveBeenCalledOnce();
+    });
+  });
+
   it("runs QA parity report from source without rebuilding private QA dist", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {

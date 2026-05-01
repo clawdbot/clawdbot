@@ -4,6 +4,20 @@ import path from "node:path";
 const command = process.argv[2];
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 
+function getInstallRecords() {
+  const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
+  const index = fs.existsSync(indexPath) ? readJson(indexPath) : {};
+  const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
+  const config = fs.existsSync(configPath) ? readJson(configPath) : {};
+  const allowLegacyCompat = process.env.OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT === "1";
+  if (!allowLegacyCompat && !index.installRecords) {
+    throw new Error("expected modern installRecords in installed plugin index");
+  }
+  return allowLegacyCompat
+    ? (index.installRecords ?? index.records ?? config.plugins?.installs ?? {})
+    : (index.installRecords ?? {});
+}
+
 function recordFixturePluginTrust() {
   const pluginId = process.argv[3];
   const pluginRoot = process.argv[4];
@@ -173,17 +187,7 @@ function assertMarketplaceInstalled() {
 }
 
 function assertMarketplaceRecords() {
-  const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
-  const index = readJson(indexPath);
-  const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
-  const config = fs.existsSync(configPath) ? readJson(configPath) : {};
-  const allowLegacyCompat = process.env.OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT === "1";
-  if (!allowLegacyCompat && !index.installRecords) {
-    throw new Error("expected modern installRecords in installed plugin index");
-  }
-  const installRecords = allowLegacyCompat
-    ? (index.installRecords ?? index.records ?? config.plugins?.installs ?? {})
-    : (index.installRecords ?? {});
+  const installRecords = getInstallRecords();
   for (const id of ["marketplace-shortcut", "marketplace-direct"]) {
     const record = installRecords[id];
     if (!record) {
@@ -202,6 +206,56 @@ function assertMarketplaceRecords() {
     if (record.marketplacePlugin !== id) {
       throw new Error(`unexpected marketplace plugin for ${id}: ${record.marketplacePlugin}`);
     }
+  }
+}
+
+function assertGitPlugin() {
+  const repoUrl = process.argv[3];
+  const gitRef = process.argv[4];
+  assertSimplePlugin(
+    "/tmp/plugins-git.json",
+    "/tmp/plugins-git-inspect.json",
+    "demo-plugin-git",
+    "demo.git",
+  );
+
+  const inspect = readJson("/tmp/plugins-git-inspect.json");
+  if (!Array.isArray(inspect.cliCommands) || !inspect.cliCommands.includes("demo-git")) {
+    throw new Error(`expected demo-git cli command, got ${inspect.cliCommands?.join(", ")}`);
+  }
+
+  const cliOutput = fs.readFileSync("/tmp/plugins-git-cli.txt", "utf8");
+  if (!cliOutput.includes("demo-plugin-git:pong")) {
+    throw new Error(`unexpected git plugin cli output: ${cliOutput.trim()}`);
+  }
+
+  const record = getInstallRecords()["demo-plugin-git"];
+  if (!record) {
+    throw new Error("missing git install record for demo-plugin-git");
+  }
+  if (record.source !== "git") {
+    throw new Error(`unexpected git install source: ${record.source}`);
+  }
+  if (record.gitUrl !== repoUrl) {
+    throw new Error(`unexpected git url: ${record.gitUrl}, expected ${repoUrl}`);
+  }
+  if (record.gitRef !== gitRef) {
+    throw new Error(`unexpected git ref: ${record.gitRef}, expected ${gitRef}`);
+  }
+  if (record.gitCommit !== gitRef) {
+    throw new Error(`unexpected git commit: ${record.gitCommit}, expected ${gitRef}`);
+  }
+  if (record.spec !== `git:${repoUrl}@${gitRef}`) {
+    throw new Error(`unexpected git spec: ${record.spec}`);
+  }
+
+  const installPath = record.installPath?.replace(/^~(?=$|\/)/u, process.env.HOME);
+  if (!installPath || !fs.existsSync(installPath)) {
+    throw new Error(`git install path missing on disk: ${installPath}`);
+  }
+  const extensionsRoot = path.join(process.env.HOME, ".openclaw", "extensions");
+  if (!installPath.startsWith(`${extensionsRoot}${path.sep}`)) {
+    throw new Error(`git install path is outside managed extensions root: ${installPath}`);
   }
 }
 
@@ -414,6 +468,7 @@ const commands = {
   "bundle-disabled": assertClaudeBundleDisabled,
   "bundle-inspect": assertClaudeBundleInspect,
   "slash-install": assertSlashInstall,
+  "plugin-git": assertGitPlugin,
   "marketplace-list": assertMarketplaceList,
   "marketplace-installed": assertMarketplaceInstalled,
   "marketplace-records": assertMarketplaceRecords,

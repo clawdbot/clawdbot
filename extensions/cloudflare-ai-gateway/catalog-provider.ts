@@ -8,7 +8,7 @@ import {
   resolveCloudflareAiGatewayBaseUrl,
 } from "./models.js";
 
-export type CloudflareAiGatewayCredential =
+type CloudflareAiGatewayCredential =
   | {
       type?: string;
       keyRef?: unknown;
@@ -20,9 +20,7 @@ export type CloudflareAiGatewayCredential =
     }
   | undefined;
 
-export function resolveCloudflareAiGatewayApiKey(
-  cred: CloudflareAiGatewayCredential,
-): string | undefined {
+function resolveCloudflareAiGatewayApiKey(cred: CloudflareAiGatewayCredential): string | undefined {
   if (!cred || cred.type !== "api_key") {
     return undefined;
   }
@@ -35,7 +33,7 @@ export function resolveCloudflareAiGatewayApiKey(
   return normalizeOptionalString(cred.key);
 }
 
-export function resolveCloudflareAiGatewayMetadata(cred: CloudflareAiGatewayCredential): {
+function resolveCloudflareAiGatewayMetadata(cred: CloudflareAiGatewayCredential): {
   accountId?: string;
   gatewayId?: string;
 } {

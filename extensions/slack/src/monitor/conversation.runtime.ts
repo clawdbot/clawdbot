@@ -1,7 +1,6 @@
 export {
   buildPluginBindingResolvedText,
   parsePluginBindingApprovalCustomId,
-  readChannelAllowFromStore,
   recordInboundSession,
   resolveConversationLabel,
   resolvePluginConversationBindingApproval,

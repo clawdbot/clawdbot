@@ -1,1 +1,1 @@
-export { CONFIG_DIR, escapeRegExp, resolveUserPath, shortenHomePath } from "./sdk-config.js";
+export { CONFIG_DIR, escapeRegExp, resolveUserPath } from "./sdk-config.js";

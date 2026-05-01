@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
-export type ColdPluginFixture = {
+type ColdPluginFixture = {
   authChoiceId: string;
   channelId: string;
   pluginId: string;

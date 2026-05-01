@@ -43,6 +43,32 @@ describe("resolveFollowupDeliveryPayloads", () => {
     ).toEqual([{ mediaUrl: undefined, mediaUrls: undefined }]);
   });
 
+  it("does not dedupe text sent via messaging tool to another target", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [{ text: "hello world!" }],
+        messageProvider: "telegram",
+        originatingTo: "telegram:123",
+        sentTexts: ["hello world!"],
+        sentTargets: [{ tool: "discord", provider: "discord", to: "channel:C1" }],
+      }),
+    ).toEqual([{ text: "hello world!" }]);
+  });
+
+  it("does not dedupe media sent via messaging tool to another target", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [{ text: "photo", mediaUrl: "file:///tmp/photo.jpg" }],
+        messageProvider: "telegram",
+        originatingTo: "telegram:123",
+        sentMediaUrls: ["file:///tmp/photo.jpg"],
+        sentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
+      }),
+    ).toEqual([{ text: "photo", mediaUrl: "file:///tmp/photo.jpg" }]);
+  });
+
   it("suppresses replies when a messaging tool already sent to the same provider and target", () => {
     expect(
       resolveFollowupDeliveryPayloads({

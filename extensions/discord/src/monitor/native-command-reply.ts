@@ -89,10 +89,11 @@ export async function deliverDiscordInteractionReply(params: {
     files?: { name: string; data: Buffer }[],
     components?: TopLevelComponents[],
   ) => {
+    const contentPayload = content ? { content } : {};
     const payload =
       files && files.length > 0
         ? {
-            content,
+            ...contentPayload,
             ...(components ? { components } : {}),
             ...(params.responseEphemeral !== undefined
               ? { ephemeral: params.responseEphemeral }
@@ -106,7 +107,7 @@ export async function deliverDiscordInteractionReply(params: {
             }),
           }
         : {
-            content,
+            ...contentPayload,
             ...(components ? { components } : {}),
             ...(params.responseEphemeral !== undefined
               ? { ephemeral: params.responseEphemeral }
@@ -159,7 +160,7 @@ export async function deliverDiscordInteractionReply(params: {
   if (!reply.hasText && !firstMessageComponents) {
     return;
   }
-  const chunks =
+  let chunks =
     reply.text || firstMessageComponents
       ? resolveTextChunksWithFallback(
           reply.text,
@@ -170,6 +171,9 @@ export async function deliverDiscordInteractionReply(params: {
           }),
         )
       : [];
+  if (chunks.length === 0 && firstMessageComponents) {
+    chunks = [""];
+  }
   for (const chunk of chunks) {
     if (!chunk.trim() && !firstMessageComponents) {
       continue;

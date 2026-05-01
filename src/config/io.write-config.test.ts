@@ -602,6 +602,68 @@ describe("config io write", () => {
     });
   });
 
+  it("allows intentional size-drop writes without disabling gateway-mode protection", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const original = {
+        meta: { lastTouchedVersion: "2026.4.30" },
+        gateway: { mode: "local" },
+        channels: {
+          telegram: {
+            enabled: true,
+            allowFrom: Array.from({ length: 80 }, (_, index) => `telegram:${index}`),
+          },
+        },
+      } satisfies ConfigFileSnapshot["config"];
+      const originalRaw = `${JSON.stringify(original, null, 2)}\n`;
+      await fs.writeFile(configPath, originalRaw, "utf-8");
+      const io = createConfigIO({
+        env: { VITEST: "true" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const baseSnapshot = {
+        path: configPath,
+        exists: true,
+        raw: originalRaw,
+        parsed: original,
+        sourceConfig: original,
+        resolved: original,
+        valid: true,
+        runtimeConfig: original,
+        config: original,
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      } satisfies ConfigFileSnapshot;
+
+      await expect(
+        io.writeConfigFile(
+          { meta: original.meta, gateway: { mode: "local" } },
+          {
+            allowConfigSizeDrop: true,
+            baseSnapshot,
+          },
+        ),
+      ).resolves.toMatchObject({
+        persistedConfig: expect.objectContaining({ gateway: { mode: "local" } }),
+      });
+
+      await expect(
+        io.writeConfigFile(
+          { meta: original.meta },
+          {
+            allowConfigSizeDrop: true,
+            baseSnapshot,
+          },
+        ),
+      ).rejects.toMatchObject({
+        code: "CONFIG_WRITE_REJECTED",
+      });
+    });
+  });
+
   it("keeps authored agent provider params during narrowed internal agent writes", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");

@@ -20,7 +20,7 @@ const REPLY_TO_ID_MAX_LENGTH = 128;
 const PART_INDEX_REPLY_TO_ID_PATTERN = /^p:\d{1,10}\/([A-Za-z0-9._:-]+)$/;
 const PART_INDEX_REPLY_TO_ID_MAX_LENGTH = REPLY_TO_ID_MAX_LENGTH + "p:".length + 10 + "/".length;
 
-export type BlueBubblesReplyFetchResult = {
+type BlueBubblesReplyFetchResult = {
   body?: string;
   sender?: string;
 };
@@ -41,7 +41,7 @@ export function _resetBlueBubblesReplyFetchState(): void {
   inflight.clear();
 }
 
-export type FetchBlueBubblesReplyContextParams = {
+type FetchBlueBubblesReplyContextParams = {
   accountId: string;
   replyToId: string;
   baseUrl: string;

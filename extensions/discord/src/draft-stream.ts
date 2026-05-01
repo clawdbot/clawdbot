@@ -12,7 +12,7 @@ const DISCORD_STREAM_MAX_CHARS = 2000;
 const DEFAULT_THROTTLE_MS = 1200;
 const DISCORD_PREVIEW_ALLOWED_MENTIONS = { parse: [] };
 
-export type DiscordDraftStream = {
+type DiscordDraftStream = {
   update: (text: string) => void;
   flush: () => Promise<void>;
   messageId: () => string | undefined;

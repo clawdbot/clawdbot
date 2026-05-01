@@ -254,6 +254,38 @@ describe("resolveModel", () => {
     expect(result.model?.input).toEqual(["text"]);
   });
 
+  it("defaults missing model cost before handing models to PI", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            api: "openai-responses",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "GPT-5.5",
+                api: "openai-responses",
+                reasoning: true,
+                input: ["text"],
+                contextWindow: 400_000,
+                maxTokens: 128_000,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("openai", "gpt-5.5", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.5",
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
+  });
+
   it("includes provider baseUrl in fallback model", () => {
     const cfg = {
       models: {

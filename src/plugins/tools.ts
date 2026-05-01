@@ -135,6 +135,8 @@ export function resolvePluginTools(params: {
     : undefined;
   const loadOptions = buildPluginRuntimeLoadOptions(context, {
     installBundledRuntimeDeps: false,
+    activate: false,
+    toolDiscovery: true,
     runtimeOptions,
   });
   const registry = resolvePluginToolRegistry({

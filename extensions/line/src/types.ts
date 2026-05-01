@@ -1,4 +1,3 @@
-import type { messagingApi, webhook } from "@line/bot-sdk";
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 
 export type LineTokenSource = "config" | "env" | "file" | "none";
@@ -52,22 +51,6 @@ export interface ResolvedLineAccount {
   channelSecret: string;
   tokenSource: LineTokenSource;
   config: LineConfig & LineAccountConfig;
-}
-
-export type LineMessageType =
-  | messagingApi.TextMessage
-  | messagingApi.ImageMessage
-  | messagingApi.VideoMessage
-  | messagingApi.AudioMessage
-  | messagingApi.StickerMessage
-  | messagingApi.LocationMessage;
-
-export interface LineWebhookContext {
-  event: webhook.Event;
-  replyToken?: string;
-  userId?: string;
-  groupId?: string;
-  roomId?: string;
 }
 
 export interface LineSendResult {

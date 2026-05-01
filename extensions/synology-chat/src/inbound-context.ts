@@ -8,5 +8,3 @@ export type SynologyInboundMessage = {
   commandAuthorized: boolean;
   chatUserId?: string;
 };
-
-export type { ResolvedSynologyChatAccount } from "./types.js";

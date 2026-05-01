@@ -11,6 +11,7 @@ import { pruneStagedRuntimeDependencyCargo } from "./bundled-runtime-deps-prune.
 import {
   assertPathIsNotSymlink,
   makePluginOwnedTempDir,
+  removeLegacyBundledRuntimeDepsSymlink,
   removeOwnedTempPathBestEffort,
   removePathIfExists,
   replaceDirAtomically,
@@ -155,6 +156,7 @@ export function stageInstalledRootRuntimeDeps(params) {
   const rootsToCopy = selectRuntimeDependencyRootsToCopy(resolution);
   const nodeModulesDir = path.join(pluginDir, "node_modules");
   if (rootsToCopy.length === 0) {
+    removeLegacyBundledRuntimeDepsSymlink(nodeModulesDir, repoRoot);
     assertPathIsNotSymlink(nodeModulesDir, "remove runtime deps");
     removePathIfExists(nodeModulesDir);
     writeJsonAtomically(stampPath, {
@@ -196,6 +198,7 @@ export function stageInstalledRootRuntimeDeps(params) {
     }
     pruneStagedRuntimeDependencyCargo(stagedNodeModulesDir, pruneConfig);
 
+    removeLegacyBundledRuntimeDepsSymlink(nodeModulesDir, repoRoot);
     replaceDirAtomically(nodeModulesDir, stagedNodeModulesDir);
     writeJsonAtomically(stampPath, {
       cheapFingerprint,

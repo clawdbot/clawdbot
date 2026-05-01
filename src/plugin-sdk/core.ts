@@ -523,6 +523,10 @@ export function defineChannelPluginEntry<TPlugin>({
         registerCliMetadata?.(api);
         return;
       }
+      if (api.registrationMode === "tool-discovery") {
+        registerFull?.(api);
+        return;
+      }
       api.registerChannel({ plugin: plugin as ChannelPlugin });
       setRuntime?.(api.runtime);
       if (api.registrationMode === "discovery") {

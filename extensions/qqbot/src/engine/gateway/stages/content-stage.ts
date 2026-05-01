@@ -18,7 +18,7 @@ import type { QueuedMention, QueuedMessage } from "../message-queue.js";
 // ─────────────────────────── Types ───────────────────────────
 
 /** Input for {@link buildUserContent}. */
-export interface ContentStageInput {
+interface ContentStageInput {
   event: QueuedMessage;
   /** `attachmentInfo` from the attachment stage — appended verbatim. */
   attachmentInfo: string;
@@ -27,7 +27,7 @@ export interface ContentStageInput {
 }
 
 /** Output of {@link buildUserContent}. */
-export interface ContentStageOutput {
+interface ContentStageOutput {
   /** `parseFaceTags(event.content)`. */
   parsedContent: string;
   /** Full user-visible content (parsed + voice + attachments + mention cleanup). */

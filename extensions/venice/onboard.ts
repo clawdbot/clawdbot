@@ -22,10 +22,6 @@ const venicePresetAppliers = createModelCatalogPresetAppliers({
   }),
 });
 
-export function applyVeniceProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return venicePresetAppliers.applyProviderConfig(cfg);
-}
-
 export function applyVeniceConfig(cfg: OpenClawConfig): OpenClawConfig {
   return venicePresetAppliers.applyConfig(cfg);
 }

@@ -9,7 +9,7 @@ const PROXY_ROUTING_CHROME_ARGS = new Set([
 
 const PROXY_CONTROL_CHROME_ARGS = new Set(["--no-proxy-server", ...PROXY_ROUTING_CHROME_ARGS]);
 
-export const CHROME_PROXY_ENV_KEYS = [
+const CHROME_PROXY_ENV_KEYS = [
   "HTTP_PROXY",
   "HTTPS_PROXY",
   "ALL_PROXY",

@@ -32,7 +32,7 @@ type SyntheticOpenAIModelCatalogEntry = {
   cost?: SyntheticOpenAIModelCatalogCost;
 };
 
-export const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
+const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
 
 export function toOpenAIDataUrl(buffer: Buffer, mimeType: string): string {
   return `data:${mimeType};base64,${buffer.toString("base64")}`;
@@ -48,7 +48,7 @@ function hasSupportedOpenAIResponsesTransport(
   return transport === "auto" || transport === "sse" || transport === "websocket";
 }
 
-export function defaultOpenAIResponsesExtraParams(
+function defaultOpenAIResponsesExtraParams(
   extraParams: Record<string, unknown> | undefined,
   options?: { openaiWsWarmup?: boolean },
 ): Record<string, unknown> | undefined {

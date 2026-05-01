@@ -62,29 +62,6 @@ export function normalizeMatrixMessagingTarget(raw: string): string | undefined 
   return normalized || undefined;
 }
 
-export function normalizeMatrixDirectoryUserId(raw: string): string | undefined {
-  const normalized = stripKnownPrefixes(raw, [MATRIX_PREFIX, USER_PREFIX]);
-  if (!normalized || normalized === "*") {
-    return undefined;
-  }
-  return isMatrixQualifiedUserId(normalized) ? `user:${normalized}` : normalized;
-}
-
-export function normalizeMatrixDirectoryGroupId(raw: string): string | undefined {
-  const normalized = stripKnownPrefixes(raw, [MATRIX_PREFIX]);
-  if (!normalized || normalized === "*") {
-    return undefined;
-  }
-  const lowered = normalizeLowercaseStringOrEmpty(normalized);
-  if (lowered.startsWith(ROOM_PREFIX) || lowered.startsWith(CHANNEL_PREFIX)) {
-    return normalized;
-  }
-  if (normalized.startsWith("!")) {
-    return `room:${normalized}`;
-  }
-  return normalized;
-}
-
 export function resolveMatrixDirectUserId(params: {
   from?: string;
   to?: string;

@@ -237,7 +237,7 @@ function formatDuration(value: number | undefined): string {
     : `${minutes}m ${seconds.toString().padStart(2, "0")}s`;
 }
 
-function writeDoctorStatus(status: ReturnType<GoogleMeetRuntime["status"]>): void {
+function writeDoctorStatus(status: Awaited<ReturnType<GoogleMeetRuntime["status"]>>): void {
   if (!status.found) {
     writeStdoutLine("Google Meet session: not found");
     return;
@@ -256,6 +256,15 @@ function writeDoctorStatus(status: ReturnType<GoogleMeetRuntime["status"]>): voi
     writeStdoutLine("state: %s", session.state);
     writeStdoutLine("transport: %s", session.transport);
     writeStdoutLine("mode: %s", session.mode);
+    if (session.twilio) {
+      writeStdoutLine("twilio dial-in: %s", session.twilio.dialInNumber);
+      writeStdoutLine("voice call id: %s", formatOptional(session.twilio.voiceCallId));
+      writeStdoutLine("dtmf sent: %s", formatBoolean(session.twilio.dtmfSent));
+      writeStdoutLine("intro sent: %s", formatBoolean(session.twilio.introSent));
+    }
+    if (!session.chrome) {
+      continue;
+    }
     writeStdoutLine("node: %s", session.chrome?.nodeId ?? "local/none");
     writeStdoutLine("audio bridge: %s", session.chrome?.audioBridge?.type ?? "none");
     writeStdoutLine(
@@ -263,6 +272,10 @@ function writeDoctorStatus(status: ReturnType<GoogleMeetRuntime["status"]>): voi
       session.chrome?.audioBridge?.provider ?? session.realtime.provider ?? "n/a",
     );
     writeStdoutLine("in call: %s", formatBoolean(health?.inCall));
+    writeStdoutLine("lobby waiting: %s", formatBoolean(health?.lobbyWaiting));
+    writeStdoutLine("captioning: %s", formatBoolean(health?.captioning));
+    writeStdoutLine("transcript lines: %s", health?.transcriptLines ?? 0);
+    writeStdoutLine("last caption: %s", formatOptional(health?.lastCaptionAt));
     writeStdoutLine("manual action: %s", formatBoolean(health?.manualActionRequired));
     if (health?.manualActionRequired) {
       writeStdoutLine("manual reason: %s", formatOptional(health.manualActionReason));
@@ -289,6 +302,10 @@ function writeDoctorStatus(status: ReturnType<GoogleMeetRuntime["status"]>): voi
     );
     writeStdoutLine("bridge closed: %s", formatBoolean(health?.bridgeClosed));
     writeStdoutLine("browser url: %s", formatOptional(health?.browserUrl));
+    if (health?.lastCaptionText) {
+      const speaker = health.lastCaptionSpeaker ? `${health.lastCaptionSpeaker}: ` : "";
+      writeStdoutLine("last caption text: %s%s", speaker, health.lastCaptionText);
+    }
   }
 }
 
@@ -1938,7 +1955,7 @@ export function registerGoogleMeetCli(params: {
     .option("--json", "Print JSON output", false)
     .action(async (sessionId?: string) => {
       const rt = await params.ensureRuntime();
-      writeStdoutJson(rt.status(sessionId));
+      writeStdoutJson(await rt.status(sessionId));
     });
 
   root
@@ -1965,7 +1982,7 @@ export function registerGoogleMeetCli(params: {
         return;
       }
       const rt = await params.ensureRuntime();
-      const status = rt.status(sessionId);
+      const status = await rt.status(sessionId);
       if (options.json) {
         writeStdoutJson(status);
         return;

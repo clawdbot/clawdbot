@@ -135,7 +135,7 @@ export const discordChannelConfigUiHints = {
   },
   "intents.voiceStates": {
     label: "Discord Voice States Intent",
-    help: "Enable the Guild Voice States intent. Defaults to the effective Discord voice setting; set false for text-only gateway sessions even when voice config is present.",
+    help: "Enable the Guild Voice States intent. Defaults to the effective Discord voice setting; set true only for Discord voice channel conversations.",
   },
   gatewayInfoTimeoutMs: {
     label: "Discord Gateway Metadata Timeout (ms)",
@@ -143,7 +143,7 @@ export const discordChannelConfigUiHints = {
   },
   "voice.enabled": {
     label: "Discord Voice Enabled",
-    help: "Enable Discord voice channel conversations (default: true). Set false for text-only gateway sessions.",
+    help: "Enable Discord voice channel conversations. Text-only Discord configs leave voice off by default; set true to enable /vc commands and the Guild Voice States intent.",
   },
   "voice.model": {
     label: "Discord Voice Model",
@@ -160,6 +160,14 @@ export const discordChannelConfigUiHints = {
   "voice.decryptionFailureTolerance": {
     label: "Discord Voice Decrypt Failure Tolerance",
     help: "Consecutive decrypt failures before DAVE attempts session recovery (passed to @discordjs/voice; default: 24).",
+  },
+  "voice.connectTimeoutMs": {
+    label: "Discord Voice Connect Timeout (ms)",
+    help: "Initial @discordjs/voice Ready wait before a join is treated as failed. Default: 30000.",
+  },
+  "voice.reconnectGraceMs": {
+    label: "Discord Voice Reconnect Grace (ms)",
+    help: "Grace period for a disconnected Discord voice session to enter Signalling or Connecting before OpenClaw destroys it. Default: 15000.",
   },
   "voice.tts": {
     label: "Discord Voice Text-to-Speech",

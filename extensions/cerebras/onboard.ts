@@ -21,10 +21,6 @@ const cerebrasPresetAppliers = createModelCatalogPresetAppliers({
   }),
 });
 
-export function applyCerebrasProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return cerebrasPresetAppliers.applyProviderConfig(cfg);
-}
-
 export function applyCerebrasConfig(cfg: OpenClawConfig): OpenClawConfig {
   return cerebrasPresetAppliers.applyConfig(cfg);
 }

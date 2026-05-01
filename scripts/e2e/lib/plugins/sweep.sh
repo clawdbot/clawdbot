@@ -22,7 +22,7 @@ write_demo_fixture_plugin "$demo_plugin_root"
 record_fixture_plugin_trust "$demo_plugin_id" "$demo_plugin_root" 1
 
 node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins.json
-node "$OPENCLAW_ENTRY" plugins inspect demo-plugin --json >/tmp/plugins-inspect.json
+node "$OPENCLAW_ENTRY" plugins inspect demo-plugin --runtime --json >/tmp/plugins-inspect.json
 
 node scripts/e2e/lib/plugins/assertions.mjs demo-plugin
 
@@ -32,7 +32,7 @@ pack_fixture_plugin "$pack_dir" /tmp/demo-plugin-tgz.tgz demo-plugin-tgz 0.0.1 d
 
 run_logged install-tgz node "$OPENCLAW_ENTRY" plugins install /tmp/demo-plugin-tgz.tgz
 node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins2.json
-node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-tgz --json >/tmp/plugins2-inspect.json
+node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-tgz --runtime --json >/tmp/plugins2-inspect.json
 
 node scripts/e2e/lib/plugins/assertions.mjs plugin-tgz
 
@@ -42,7 +42,7 @@ write_fixture_plugin "$dir_plugin" demo-plugin-dir 0.0.1 demo.dir "Demo Plugin D
 
 run_logged install-dir node "$OPENCLAW_ENTRY" plugins install "$dir_plugin"
 node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins3.json
-node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-dir --json >/tmp/plugins3-inspect.json
+node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-dir --runtime --json >/tmp/plugins3-inspect.json
 
 node scripts/e2e/lib/plugins/assertions.mjs plugin-dir
 
@@ -52,9 +52,28 @@ write_fixture_plugin "$file_pack_dir/package" demo-plugin-file 0.0.1 demo.file "
 
 run_logged install-file node "$OPENCLAW_ENTRY" plugins install "file:$file_pack_dir/package"
 node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins4.json
-node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-file --json >/tmp/plugins4-inspect.json
+node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-file --runtime --json >/tmp/plugins4-inspect.json
 
 node scripts/e2e/lib/plugins/assertions.mjs plugin-file
+
+echo "Testing install from git repo and plugin CLI execution..."
+git_fixture_root="$(mktemp -d "/tmp/openclaw-plugin-git.XXXXXX")"
+git_repo="$git_fixture_root/repo"
+git_repo_url="file://$git_repo"
+write_fixture_plugin_with_cli "$git_repo" demo-plugin-git 0.0.1 demo.git "Demo Plugin Git" demo-git "demo-plugin-git:pong"
+git -C "$git_repo" init -q
+git -C "$git_repo" config user.email "docker-e2e@openclaw.local"
+git -C "$git_repo" config user.name "OpenClaw Docker E2E"
+git -C "$git_repo" add -A
+git -C "$git_repo" commit -qm "test fixture"
+git_ref="$(git -C "$git_repo" rev-parse HEAD)"
+
+run_logged install-git node "$OPENCLAW_ENTRY" plugins install "git:$git_repo_url@$git_ref"
+node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins-git.json
+node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-git --runtime --json >/tmp/plugins-git-inspect.json
+run_logged exec-git-plugin-cli bash -c 'node "$OPENCLAW_ENTRY" demo-git ping >/tmp/plugins-git-cli.txt'
+
+node scripts/e2e/lib/plugins/assertions.mjs plugin-git "$git_repo_url" "$git_ref"
 
 echo "Testing Claude bundle enable and inspect flow..."
 bundle_plugin_id="claude-bundle-e2e"
@@ -74,7 +93,7 @@ slash_install_dir="$(mktemp -d "/tmp/openclaw-plugin-slash-install.XXXXXX")"
 write_fixture_plugin "$slash_install_dir" slash-install-plugin 0.0.1 demo.slash.install "Slash Install Plugin"
 
 run_logged install-slash-plugin node "$OPENCLAW_ENTRY" plugins install "$slash_install_dir"
-node "$OPENCLAW_ENTRY" plugins inspect slash-install-plugin --json >/tmp/plugin-command-install-show.json
+node "$OPENCLAW_ENTRY" plugins inspect slash-install-plugin --runtime --json >/tmp/plugin-command-install-show.json
 node scripts/e2e/lib/plugins/assertions.mjs slash-install
 
 run_plugins_marketplace_scenario

@@ -7,6 +7,7 @@ import {
   expectedIntegrityForUpdate,
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
+import { compareComparableSemver, parseComparableSemver } from "../infra/semver-compare.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveBundledPluginSources } from "./bundled-sources.js";
@@ -18,6 +19,7 @@ import {
   getExternalizedBundledPluginTargetId,
   type ExternalizedBundledPluginBridge,
 } from "./externalized-bundled-plugins.js";
+import { installPluginFromGitSpec } from "./git-install.js";
 import {
   installPluginFromNpmSpec,
   PLUGIN_INSTALL_ERROR_CODE,
@@ -105,6 +107,15 @@ function formatClawHubInstallFailure(params: {
   return `Failed to ${params.phase} ${params.pluginId}: ${params.error} (ClawHub ${params.spec}).`;
 }
 
+function formatGitInstallFailure(params: {
+  pluginId: string;
+  spec: string;
+  phase: "check" | "update";
+  error: string;
+}): string {
+  return `Failed to ${params.phase} ${params.pluginId}: ${params.error} (git ${params.spec}).`;
+}
+
 type InstallIntegrityDrift = {
   spec: string;
   expectedIntegrity: string;
@@ -155,6 +166,13 @@ function shouldSkipUnchangedNpmInstall(params: {
     params.record.resolvedSpec === params.metadata.resolvedSpec &&
     params.record.resolvedVersion === params.metadata.version
   );
+}
+
+function isBundledVersionNewer(bundledVersion: string, installedVersion: string): boolean {
+  const bundled = parseComparableSemver(bundledVersion);
+  const installed = parseComparableSemver(installedVersion);
+  const cmp = compareComparableSemver(bundled, installed);
+  return cmp !== null && cmp > 0;
 }
 
 function pathsEqual(
@@ -482,6 +500,7 @@ export async function updateNpmInstalledPlugins(params: {
   const normalizedPluginConfig = params.skipDisabledPlugins
     ? normalizePluginsConfig(params.config.plugins)
     : undefined;
+  const bundled = resolveBundledPluginSources({});
   const outcomes: PluginUpdateOutcome[] = [];
   let next = params.config;
   let changed = false;
@@ -523,7 +542,12 @@ export async function updateNpmInstalledPlugins(params: {
       }
     }
 
-    if (record.source !== "npm" && record.source !== "marketplace" && record.source !== "clawhub") {
+    if (
+      record.source !== "npm" &&
+      record.source !== "marketplace" &&
+      record.source !== "clawhub" &&
+      record.source !== "git"
+    ) {
       outcomes.push({
         pluginId,
         status: "skipped",
@@ -548,6 +572,15 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
+    if (record.source === "git" && !effectiveSpec) {
+      outcomes.push({
+        pluginId,
+        status: "skipped",
+        message: `Skipping "${pluginId}" (missing git spec).`,
+      });
+      continue;
+    }
+
     if (record.source === "clawhub" && !record.clawhubPackage) {
       outcomes.push({
         pluginId,
@@ -555,6 +588,26 @@ export async function updateNpmInstalledPlugins(params: {
         message: `Skipping "${pluginId}" (missing ClawHub package metadata).`,
       });
       continue;
+    }
+
+    if (record.source === "clawhub" || record.source === "marketplace") {
+      const bundledSource = bundled.get(pluginId);
+      if (
+        bundledSource?.version &&
+        record.version &&
+        isBundledVersionNewer(bundledSource.version, record.version)
+      ) {
+        logger.warn?.(
+          `Skipping "${pluginId}" update: bundled version ${bundledSource.version} is newer than the installed ${record.source} version ${record.version}. ` +
+            `Uninstall the ${record.source} plugin to use the bundled version, or pin a newer version explicitly.`,
+        );
+        outcomes.push({
+          pluginId,
+          status: "skipped",
+          message: `Skipping "${pluginId}": bundled version ${bundledSource.version} is newer than ${record.source} version ${record.version}.`,
+        });
+        continue;
+      }
     }
 
     if (
@@ -621,6 +674,7 @@ export async function updateNpmInstalledPlugins(params: {
       let probe:
         | Awaited<ReturnType<typeof installPluginFromNpmSpec>>
         | Awaited<ReturnType<typeof installPluginFromClawHub>>
+        | Awaited<ReturnType<typeof installPluginFromGitSpec>>
         | Awaited<ReturnType<typeof installPluginFromMarketplace>>;
       try {
         probe =
@@ -654,17 +708,28 @@ export async function updateNpmInstalledPlugins(params: {
                   expectedPluginId: pluginId,
                   logger,
                 })
-              : await installPluginFromMarketplace({
-                  marketplace: record.marketplaceSource!,
-                  plugin: record.marketplacePlugin!,
-                  mode: "update",
-                  extensionsDir,
-                  timeoutMs: params.timeoutMs,
-                  dryRun: true,
-                  dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-                  expectedPluginId: pluginId,
-                  logger,
-                });
+              : record.source === "git"
+                ? await installPluginFromGitSpec({
+                    spec: effectiveSpec!,
+                    mode: "update",
+                    extensionsDir,
+                    timeoutMs: params.timeoutMs,
+                    dryRun: true,
+                    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+                    expectedPluginId: pluginId,
+                    logger,
+                  })
+                : await installPluginFromMarketplace({
+                    marketplace: record.marketplaceSource!,
+                    plugin: record.marketplacePlugin!,
+                    mode: "update",
+                    extensionsDir,
+                    timeoutMs: params.timeoutMs,
+                    dryRun: true,
+                    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+                    expectedPluginId: pluginId,
+                    logger,
+                  });
       } catch (err) {
         outcomes.push({
           pluginId,
@@ -692,20 +757,36 @@ export async function updateNpmInstalledPlugins(params: {
                     phase: "check",
                     error: probe.error,
                   })
-                : formatMarketplaceInstallFailure({
-                    pluginId,
-                    marketplaceSource: record.marketplaceSource!,
-                    marketplacePlugin: record.marketplacePlugin!,
-                    phase: "check",
-                    error: probe.error,
-                  }),
+                : record.source === "git"
+                  ? formatGitInstallFailure({
+                      pluginId,
+                      spec: effectiveSpec!,
+                      phase: "check",
+                      error: probe.error,
+                    })
+                  : formatMarketplaceInstallFailure({
+                      pluginId,
+                      marketplaceSource: record.marketplaceSource!,
+                      marketplacePlugin: record.marketplacePlugin!,
+                      phase: "check",
+                      error: probe.error,
+                    }),
         });
         continue;
       }
 
       const nextVersion = probe.version ?? "unknown";
       const currentLabel = currentVersion ?? "unknown";
-      if (currentVersion && probe.version && currentVersion === probe.version) {
+      const gitProbe =
+        record.source === "git"
+          ? (probe as Extract<Awaited<ReturnType<typeof installPluginFromGitSpec>>, { ok: true }>)
+              .git
+          : undefined;
+      const unchanged =
+        record.source === "git" && record.gitCommit && gitProbe?.commit
+          ? record.gitCommit === gitProbe.commit
+          : Boolean(currentVersion && probe.version && currentVersion === probe.version);
+      if (unchanged) {
         outcomes.push({
           pluginId,
           status: "unchanged",
@@ -728,6 +809,7 @@ export async function updateNpmInstalledPlugins(params: {
     let result:
       | Awaited<ReturnType<typeof installPluginFromNpmSpec>>
       | Awaited<ReturnType<typeof installPluginFromClawHub>>
+      | Awaited<ReturnType<typeof installPluginFromGitSpec>>
       | Awaited<ReturnType<typeof installPluginFromMarketplace>>;
     try {
       result =
@@ -759,16 +841,26 @@ export async function updateNpmInstalledPlugins(params: {
                 expectedPluginId: pluginId,
                 logger,
               })
-            : await installPluginFromMarketplace({
-                marketplace: record.marketplaceSource!,
-                plugin: record.marketplacePlugin!,
-                mode: "update",
-                extensionsDir,
-                timeoutMs: params.timeoutMs,
-                dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-                expectedPluginId: pluginId,
-                logger,
-              });
+            : record.source === "git"
+              ? await installPluginFromGitSpec({
+                  spec: effectiveSpec!,
+                  mode: "update",
+                  extensionsDir,
+                  timeoutMs: params.timeoutMs,
+                  dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+                  expectedPluginId: pluginId,
+                  logger,
+                })
+              : await installPluginFromMarketplace({
+                  marketplace: record.marketplaceSource!,
+                  plugin: record.marketplacePlugin!,
+                  mode: "update",
+                  extensionsDir,
+                  timeoutMs: params.timeoutMs,
+                  dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+                  expectedPluginId: pluginId,
+                  logger,
+                });
     } catch (err) {
       outcomes.push({
         pluginId,
@@ -796,13 +888,20 @@ export async function updateNpmInstalledPlugins(params: {
                   phase: "update",
                   error: result.error,
                 })
-              : formatMarketplaceInstallFailure({
-                  pluginId,
-                  marketplaceSource: record.marketplaceSource!,
-                  marketplacePlugin: record.marketplacePlugin!,
-                  phase: "update",
-                  error: result.error,
-                }),
+              : record.source === "git"
+                ? formatGitInstallFailure({
+                    pluginId,
+                    spec: effectiveSpec!,
+                    phase: "update",
+                    error: result.error,
+                  })
+                : formatMarketplaceInstallFailure({
+                    pluginId,
+                    marketplaceSource: record.marketplaceSource!,
+                    marketplacePlugin: record.marketplacePlugin!,
+                    phase: "update",
+                    error: result.error,
+                  }),
       });
       continue;
     }
@@ -839,6 +938,22 @@ export async function updateNpmInstalledPlugins(params: {
         clawhubPackage: clawhubResult.clawhub.clawhubPackage,
         clawhubFamily: clawhubResult.clawhub.clawhubFamily,
         clawhubChannel: clawhubResult.clawhub.clawhubChannel,
+      });
+    } else if (record.source === "git") {
+      const gitResult = result as Extract<
+        Awaited<ReturnType<typeof installPluginFromGitSpec>>,
+        { ok: true }
+      >;
+      next = recordPluginInstall(next, {
+        pluginId: resolvedPluginId,
+        source: "git",
+        spec: effectiveSpec ?? record.spec,
+        installPath: result.targetDir,
+        version: nextVersion,
+        resolvedAt: gitResult.git.resolvedAt,
+        gitUrl: gitResult.git.url,
+        gitRef: gitResult.git.ref,
+        gitCommit: gitResult.git.commit,
       });
     } else {
       const marketplaceResult = result as Extract<

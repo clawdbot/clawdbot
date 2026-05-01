@@ -589,7 +589,10 @@ export async function runConfigureWizard(
           },
         },
       };
-      await ensureWorkspaceAndSessions(workspaceDir, runtime);
+      await ensureWorkspaceAndSessions(workspaceDir, runtime, {
+        skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
+        skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
+      });
     };
 
     const configureChannelsSection = async () => {

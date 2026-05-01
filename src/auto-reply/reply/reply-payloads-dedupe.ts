@@ -204,3 +204,28 @@ export function shouldSuppressMessagingToolReplies(params: {
     });
   });
 }
+
+export type MessagingToolPayloadDedupeDecision = {
+  shouldDedupePayloads: boolean;
+  suppressReplies: boolean;
+};
+
+export function resolveMessagingToolPayloadDedupe(params: {
+  messageProvider?: string;
+  messagingToolSentTargets?: MessagingToolSend[];
+  originatingTo?: string;
+  accountId?: string;
+}): MessagingToolPayloadDedupeDecision {
+  const sentTargets = params.messagingToolSentTargets ?? [];
+  const suppressReplies = shouldSuppressMessagingToolReplies({
+    messageProvider: params.messageProvider,
+    messagingToolSentTargets: sentTargets,
+    originatingTo: params.originatingTo,
+    accountId: params.accountId,
+  });
+
+  return {
+    shouldDedupePayloads: suppressReplies || sentTargets.length === 0,
+    suppressReplies,
+  };
+}

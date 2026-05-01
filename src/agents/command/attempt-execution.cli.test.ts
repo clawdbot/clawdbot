@@ -424,7 +424,7 @@ describe("CLI attempt execution", () => {
     });
   });
 
-  it("forwards user trigger and channel context to CLI runs", async () => {
+  it("forwards separate user trigger, channel, and provider context to CLI runs", async () => {
     const sessionKey = "agent:main:direct:claude-channel-context";
     const sessionEntry: SessionEntry = {
       sessionId: "openclaw-session-channel",
@@ -450,10 +450,13 @@ describe("CLI attempt execution", () => {
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
       runId: "run-cli-channel-context",
-      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      opts: {
+        senderIsOwner: false,
+        messageProvider: "discord-voice",
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
-      messageChannel: "telegram",
+      messageChannel: "discord",
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
       agentDir: tmpDir,
@@ -468,8 +471,8 @@ describe("CLI attempt execution", () => {
     expect(runCliAgentMock).toHaveBeenCalledWith(
       expect.objectContaining({
         trigger: "user",
-        messageChannel: "telegram",
-        messageProvider: "telegram",
+        messageChannel: "discord",
+        messageProvider: "discord-voice",
       }),
     );
   });
@@ -567,6 +570,7 @@ describe("CLI attempt execution", () => {
         senderIsOwner: false,
         modelRun: true,
         promptMode: "none",
+        messageProvider: "discord-voice",
         inputProvenance: {
           kind: "inter_session",
           sourceSessionKey: "agent:main:discord:source",
@@ -575,7 +579,7 @@ describe("CLI attempt execution", () => {
       } as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
-      messageChannel: "telegram",
+      messageChannel: "discord",
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
       agentDir: tmpDir,
@@ -593,6 +597,8 @@ describe("CLI attempt execution", () => {
         model: "claude-opus-4-7",
         agentHarnessId: "pi",
         prompt: "raw prompt",
+        messageChannel: "discord",
+        messageProvider: "discord-voice",
         modelRun: true,
         promptMode: "none",
         disableTools: true,

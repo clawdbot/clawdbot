@@ -83,6 +83,25 @@ describe("agent defaults schema", () => {
     expect(() => AgentDefaultsSchema.parse({ contextInjection: "unknown" })).toThrow();
   });
 
+  it("accepts supported optional bootstrap filenames", () => {
+    const result = AgentDefaultsSchema.parse({
+      skipOptionalBootstrapFiles: ["SOUL.md", "USER.md", "HEARTBEAT.md", "IDENTITY.md"],
+    })!;
+    expect(result.skipOptionalBootstrapFiles).toEqual([
+      "SOUL.md",
+      "USER.md",
+      "HEARTBEAT.md",
+      "IDENTITY.md",
+    ]);
+  });
+
+  it("rejects unsupported optional bootstrap filenames", () => {
+    expect(() =>
+      AgentDefaultsSchema.parse({ skipOptionalBootstrapFiles: ["AGENTS.md"] }),
+    ).toThrow();
+    expect(() => AgentDefaultsSchema.parse({ skipOptionalBootstrapFiles: ["SOUL.MD"] })).toThrow();
+  });
+
   it("accepts embeddedPi.executionContract", () => {
     const result = AgentDefaultsSchema.parse({
       embeddedPi: {

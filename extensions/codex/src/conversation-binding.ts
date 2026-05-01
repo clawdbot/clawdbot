@@ -352,9 +352,3 @@ function enqueueBoundTurn<T>(key: string, run: () => Promise<T>): Promise<T> {
   });
   return next;
 }
-
-export const __testing = {
-  resetQueues() {
-    getGlobalState().queues.clear();
-  },
-};

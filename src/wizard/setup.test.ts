@@ -537,6 +537,7 @@ describe("runSetupWizard", () => {
             }),
           }),
         }),
+        writeOptions: expect.objectContaining({ allowConfigSizeDrop: true }),
       }),
     );
     expect(ensureWorkspaceAndSessions).toHaveBeenCalledWith(

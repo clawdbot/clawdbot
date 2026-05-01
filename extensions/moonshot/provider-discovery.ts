@@ -1,7 +1,7 @@
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildMoonshotProvider } from "./provider-catalog.js";
 
-export const moonshotProviderDiscovery: ProviderPlugin = {
+const moonshotProviderDiscovery: ProviderPlugin = {
   id: "moonshot",
   label: "Moonshot",
   docsPath: "/providers/moonshot",

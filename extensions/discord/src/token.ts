@@ -4,7 +4,7 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/rout
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 
-export type DiscordTokenSource = "env" | "config" | "none";
+type DiscordTokenSource = "env" | "config" | "none";
 
 export type DiscordTokenResolution = BaseTokenResolution & {
   source: DiscordTokenSource;

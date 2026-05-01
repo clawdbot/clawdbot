@@ -4,7 +4,7 @@ import { z } from "openclaw/plugin-sdk/zod";
 const ShipSchema = z.string().min(1);
 const ChannelNestSchema = z.string().min(1);
 
-export const TlonChannelRuleSchema = z.object({
+const TlonChannelRuleSchema = z.object({
   mode: z.enum(["restricted", "open"]).optional(),
   allowedShips: z.array(ShipSchema).optional(),
 });
@@ -39,7 +39,7 @@ const tlonCommonConfigFields = {
   ownerShip: ShipSchema.optional(), // Ship that receives approval requests and can approve/deny
 } satisfies z.ZodRawShape;
 
-export const TlonAccountSchema = z.object({
+const TlonAccountSchema = z.object({
   ...tlonCommonConfigFields,
 });
 

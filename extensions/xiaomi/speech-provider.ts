@@ -13,14 +13,14 @@ import {
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 
-export const DEFAULT_XIAOMI_TTS_BASE_URL = "https://api.xiaomimimo.com/v1";
-export const DEFAULT_XIAOMI_TTS_MODEL = "mimo-v2.5-tts";
-export const DEFAULT_XIAOMI_TTS_VOICE = "mimo_default";
-export const DEFAULT_XIAOMI_TTS_FORMAT = "mp3";
+const DEFAULT_XIAOMI_TTS_BASE_URL = "https://api.xiaomimimo.com/v1";
+const DEFAULT_XIAOMI_TTS_MODEL = "mimo-v2.5-tts";
+const DEFAULT_XIAOMI_TTS_VOICE = "mimo_default";
+const DEFAULT_XIAOMI_TTS_FORMAT = "mp3";
 
-export const XIAOMI_TTS_MODELS = ["mimo-v2.5-tts", "mimo-v2-tts"] as const;
+const XIAOMI_TTS_MODELS = ["mimo-v2.5-tts", "mimo-v2-tts"] as const;
 
-export const XIAOMI_TTS_VOICES = [
+const XIAOMI_TTS_VOICES = [
   "mimo_default",
   "default_zh",
   "default_en",
@@ -194,7 +194,7 @@ function decodeXiaomiAudioData(body: unknown): Buffer {
   return Buffer.from(audioData, "base64");
 }
 
-export async function xiaomiTTS(params: {
+async function xiaomiTTS(params: {
   text: string;
   apiKey: string;
   baseUrl: string;

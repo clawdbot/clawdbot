@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
@@ -1909,17 +1908,4 @@ export async function resolveZaloAllowFromEntries(params: {
       note: matches.length > 1 ? "multiple matches; chose first" : undefined,
     };
   });
-}
-
-export async function clearProfileRuntimeArtifacts(profileInput?: string | null): Promise<void> {
-  const profile = normalizeProfile(profileInput);
-  resetQrLogin(profile);
-  clearCachedGroupContext(profile);
-  const listener = activeListeners.get(profile);
-  if (listener) {
-    listener.stop();
-    activeListeners.delete(profile);
-  }
-  invalidateApi(profile);
-  await fsp.mkdir(resolveCredentialsDir(), { recursive: true }).catch(() => undefined);
 }

@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "../config/types.js";
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type ResolveConfigPathMock = Mock<() => string>;
 
-export type StatusScanSharedMocks = {
+type StatusScanSharedMocks = {
   resolveConfigPath: ResolveConfigPathMock;
   hasPotentialConfiguredChannels: UnknownMock;
   readBestEffortConfig: UnknownMock;
@@ -49,7 +49,7 @@ type StatusOsSummaryModuleMock = {
   resolveOsSummary: Mock<() => { label: string }>;
 };
 
-export function createStatusOsSummaryModuleMock(): StatusOsSummaryModuleMock {
+function createStatusOsSummaryModuleMock(): StatusOsSummaryModuleMock {
   return {
     resolveOsSummary: vi.fn(() => ({ label: "test-os" })),
   };
@@ -60,7 +60,7 @@ type StatusScanDepsRuntimeModuleMock = {
   getMemorySearchManager: StatusScanSharedMocks["getMemorySearchManager"];
 };
 
-export function createStatusScanDepsRuntimeModuleMock(
+function createStatusScanDepsRuntimeModuleMock(
   mocks: Pick<StatusScanSharedMocks, "getMemorySearchManager">,
 ): StatusScanDepsRuntimeModuleMock {
   return {
@@ -74,7 +74,7 @@ type StatusGatewayProbeModuleMock = {
   resolveGatewayProbeAuthResolution: StatusScanSharedMocks["resolveGatewayProbeAuthResolution"];
 };
 
-export function createStatusGatewayProbeModuleMock(
+function createStatusGatewayProbeModuleMock(
   mocks: Pick<StatusScanSharedMocks, "resolveGatewayProbeAuthResolution">,
 ): StatusGatewayProbeModuleMock {
   return {
@@ -88,7 +88,7 @@ type StatusGatewayCallModuleMock = {
   callGateway?: unknown;
 };
 
-export function createStatusGatewayCallModuleMock(
+function createStatusGatewayCallModuleMock(
   mocks: Pick<StatusScanSharedMocks, "buildGatewayConnectionDetails"> & {
     callGateway?: unknown;
   },
@@ -99,7 +99,7 @@ export function createStatusGatewayCallModuleMock(
   };
 }
 
-export function createStatusPluginRegistryModuleMock(
+function createStatusPluginRegistryModuleMock(
   mocks: Pick<StatusScanSharedMocks, "ensurePluginRegistryLoaded">,
 ): { ensurePluginRegistryLoaded: StatusScanSharedMocks["ensurePluginRegistryLoaded"] } {
   return {
@@ -107,7 +107,7 @@ export function createStatusPluginRegistryModuleMock(
   };
 }
 
-export function createStatusPluginStatusModuleMock(
+function createStatusPluginStatusModuleMock(
   mocks: Pick<StatusScanSharedMocks, "buildPluginCompatibilityNotices">,
 ): {
   buildPluginCompatibilityNotices: StatusScanSharedMocks["buildPluginCompatibilityNotices"];
@@ -119,15 +119,15 @@ export function createStatusPluginStatusModuleMock(
   };
 }
 
-export function createStatusUpdateModuleMock(
-  mocks: Pick<StatusScanSharedMocks, "getUpdateCheckResult">,
-): { getUpdateCheckResult: StatusScanSharedMocks["getUpdateCheckResult"] } {
+function createStatusUpdateModuleMock(mocks: Pick<StatusScanSharedMocks, "getUpdateCheckResult">): {
+  getUpdateCheckResult: StatusScanSharedMocks["getUpdateCheckResult"];
+} {
   return {
     getUpdateCheckResult: mocks.getUpdateCheckResult,
   };
 }
 
-export function createStatusAgentLocalModuleMock(
+function createStatusAgentLocalModuleMock(
   mocks: Pick<StatusScanSharedMocks, "getAgentLocalStatuses">,
 ): { getAgentLocalStatuses: StatusScanSharedMocks["getAgentLocalStatuses"] } {
   return {
@@ -135,15 +135,15 @@ export function createStatusAgentLocalModuleMock(
   };
 }
 
-export function createStatusSummaryModuleMock(
-  mocks: Pick<StatusScanSharedMocks, "getStatusSummary">,
-): { getStatusSummary: StatusScanSharedMocks["getStatusSummary"] } {
+function createStatusSummaryModuleMock(mocks: Pick<StatusScanSharedMocks, "getStatusSummary">): {
+  getStatusSummary: StatusScanSharedMocks["getStatusSummary"];
+} {
   return {
     getStatusSummary: mocks.getStatusSummary,
   };
 }
 
-export function createStatusExecModuleMock(): { runExec: UnknownMock } {
+function createStatusExecModuleMock(): { runExec: UnknownMock } {
   return {
     runExec: vi.fn(),
   };
@@ -333,7 +333,7 @@ export function createStatusSummary(
   };
 }
 
-export function createStatusUpdateResult() {
+function createStatusUpdateResult() {
   return {
     installKind: "git",
     git: null,
@@ -341,21 +341,21 @@ export function createStatusUpdateResult() {
   };
 }
 
-export function createStatusAgentLocalStatuses() {
+function createStatusAgentLocalStatuses() {
   return {
     defaultId: "main",
     agents: [],
   };
 }
 
-export function createStatusGatewayConnection() {
+function createStatusGatewayConnection() {
   return {
     url: "ws://127.0.0.1:18789",
     urlSource: "default",
   };
 }
 
-export function createStatusGatewayProbeFailure() {
+function createStatusGatewayProbeFailure() {
   return {
     ok: false,
     url: "ws://127.0.0.1:18789",

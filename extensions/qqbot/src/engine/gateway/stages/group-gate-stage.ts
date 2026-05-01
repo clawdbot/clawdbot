@@ -27,20 +27,20 @@ import { isMergedTurn, type QueuedMessage } from "../message-queue.js";
 
 // ─────────────────────────── Types ───────────────────────────
 
-export interface GroupGatePass {
+interface GroupGatePass {
   kind: "pass";
   groupInfo: InboundGroupInfo;
 }
 
-export interface GroupGateSkip {
+interface GroupGateSkip {
   kind: "skip";
   groupInfo: InboundGroupInfo;
   skipReason: NonNullable<import("../inbound-context.js").InboundContext["skipReason"]>;
 }
 
-export type GroupGateStageResult = GroupGatePass | GroupGateSkip;
+type GroupGateStageResult = GroupGatePass | GroupGateSkip;
 
-export interface GroupGateStageInput {
+interface GroupGateStageInput {
   event: QueuedMessage;
   deps: InboundPipelineDeps;
   accountId: string;

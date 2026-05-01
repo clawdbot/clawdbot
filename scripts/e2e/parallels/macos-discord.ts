@@ -40,6 +40,7 @@ ${this.input.guestNode} ${this.input.guestOpenClawEntry} config set channels.dis
 ${this.input.guestNode} ${this.input.guestOpenClawEntry} config set channels.discord.enabled true
 ${this.input.guestNode} ${this.input.guestOpenClawEntry} config set channels.discord.groupPolicy allowlist
 ${this.input.guestNode} ${this.input.guestOpenClawEntry} config set channels.discord.guilds ${shellQuote(guilds)} --strict-json
+${this.input.guestNode} ${this.input.guestOpenClawEntry} plugins deps --repair
 ${this.input.guestNode} ${this.input.guestOpenClawEntry} gateway restart
 ${this.input.guestNode} ${this.input.guestOpenClawEntry} channels status --probe --json`);
   }

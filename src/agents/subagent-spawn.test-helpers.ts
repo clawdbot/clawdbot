@@ -58,11 +58,11 @@ export function setupAcceptedSubagentGatewayMock(callGatewayMock: MockImplementa
   });
 }
 
-export function identityDeliveryContext(value: unknown) {
+function identityDeliveryContext(value: unknown) {
   return value;
 }
 
-export function createDefaultSessionHelperMocks() {
+function createDefaultSessionHelperMocks() {
   return {
     resolveMainSessionAlias: () => ({ mainKey: "main", alias: "main" }),
     resolveInternalSessionKey: ({ key }: { key?: string }) => key ?? "agent:main:main",

@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { handleSubagentsSendAction } from "./commands-subagents/action-send.js";
 import type { InlineDirectives } from "./directive-handling.js";
 
-export function buildSubagentRun(): SubagentRunRecord {
+function buildSubagentRun(): SubagentRunRecord {
   return {
     runId: "run-1",
     childSessionKey: "agent:main:subagent:abc",

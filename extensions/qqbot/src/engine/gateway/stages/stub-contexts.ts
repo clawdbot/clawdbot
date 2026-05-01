@@ -23,7 +23,7 @@ interface BaseStubFields {
 }
 
 /** Build an {@link InboundContext} with all non-routing fields cleared. */
-export function emptyInboundContext(fields: BaseStubFields): InboundContext {
+function emptyInboundContext(fields: BaseStubFields): InboundContext {
   return {
     event: fields.event,
     route: fields.route,

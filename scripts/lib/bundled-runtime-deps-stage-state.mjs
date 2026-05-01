@@ -95,6 +95,53 @@ export function assertPathIsNotSymlink(targetPath, label) {
   }
 }
 
+function isDirectChildPath(parentPath, childPath) {
+  const relativePath = path.relative(parentPath, childPath);
+  return (
+    relativePath.length > 0 &&
+    !relativePath.startsWith("..") &&
+    !path.isAbsolute(relativePath) &&
+    !relativePath.includes(path.sep)
+  );
+}
+
+function isLegacyBundledRuntimeDepsNodeModulesPath(targetPath, repoRoot, linkedPath) {
+  const legacyRuntimeDepsRoot = path.resolve(repoRoot, ".local", "bundled-plugin-runtime-deps");
+  const resolvedLinkedPath = path.resolve(path.dirname(targetPath), linkedPath);
+  return (
+    path.basename(resolvedLinkedPath) === "node_modules" &&
+    isDirectChildPath(legacyRuntimeDepsRoot, path.dirname(resolvedLinkedPath))
+  );
+}
+
+export function removeLegacyBundledRuntimeDepsSymlink(targetPath, repoRoot) {
+  let stats;
+  try {
+    stats = fs.lstatSync(targetPath);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+  if (!stats.isSymbolicLink()) {
+    return false;
+  }
+
+  let linkedPath;
+  try {
+    linkedPath = fs.readlinkSync(targetPath);
+  } catch {
+    return false;
+  }
+  if (!isLegacyBundledRuntimeDepsNodeModulesPath(targetPath, repoRoot, linkedPath)) {
+    return false;
+  }
+
+  removePathIfExists(targetPath);
+  return true;
+}
+
 export function replaceDirAtomically(targetPath, sourcePath) {
   assertPathIsNotSymlink(targetPath, "replace runtime deps");
   const targetParentDir = path.dirname(targetPath);

@@ -29,14 +29,6 @@ const moonshotPresetAppliers = createDefaultModelPresetAppliers<[string]>({
   },
 });
 
-export function applyMoonshotProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return moonshotPresetAppliers.applyProviderConfig(cfg, MOONSHOT_BASE_URL);
-}
-
-export function applyMoonshotProviderConfigCn(cfg: OpenClawConfig): OpenClawConfig {
-  return moonshotPresetAppliers.applyProviderConfig(cfg, MOONSHOT_CN_BASE_URL);
-}
-
 export function applyMoonshotConfig(cfg: OpenClawConfig): OpenClawConfig {
   return moonshotPresetAppliers.applyConfig(cfg, MOONSHOT_BASE_URL);
 }

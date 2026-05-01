@@ -7,7 +7,6 @@ import {
   clearBundledRuntimeDependencyNodePaths,
   ensureBundledPluginRuntimeDeps,
 } from "../plugins/bundled-runtime-deps.js";
-import { shouldExpectNativeJitiForJavaScriptTestRuntime } from "../test-utils/jiti-runtime.js";
 import {
   listImportedBundledPluginFacadeIds,
   loadBundledPluginPublicSurfaceModule,
@@ -377,7 +376,7 @@ describe("plugin-sdk facade loader", () => {
     expect(listImportedFacadeRuntimeIds()).toEqual([fixture.pluginId]);
   });
 
-  it("uses the runtime-supported Jiti boundary for Windows dist facade loads", () => {
+  it("uses the runtime-supported native boundary for Windows dist facade loads", () => {
     const fixture = createBundledPluginFixture({
       prefix: "openclaw-facade-loader-windows-",
       marker: "windows-dist-ok",
@@ -388,7 +387,7 @@ describe("plugin-sdk facade loader", () => {
     setFacadeLoaderJitiFactoryForTest(((...args) => {
       createJitiCalls.push(args);
       return vi.fn(() => ({
-        marker: "windows-dist-ok",
+        marker: "jiti-fallback",
       })) as unknown as ReturnType<FacadeLoaderJitiFactory>;
     }) as FacadeLoaderJitiFactory);
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
@@ -401,13 +400,7 @@ describe("plugin-sdk facade loader", () => {
           artifactBasename: "api.js",
         }).marker,
       ).toBe("windows-dist-ok");
-      expect(createJitiCalls).toHaveLength(1);
-      expect(createJitiCalls[0]?.[0]).toEqual(expect.any(String));
-      expect(createJitiCalls[0]?.[1]).toEqual(
-        expect.objectContaining({
-          tryNative: shouldExpectNativeJitiForJavaScriptTestRuntime(),
-        }),
-      );
+      expect(createJitiCalls).toHaveLength(0);
     } finally {
       restoreVersions();
       platformSpy.mockRestore();

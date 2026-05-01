@@ -11,6 +11,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import * as ws from "ws";
 import * as discordGateway from "../internal/gateway.js";
 import { validateDiscordProxyUrl } from "../proxy-fetch.js";
+import { resolveDiscordVoiceEnabled } from "../voice/config.js";
 import { DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT } from "./gateway-handle.js";
 import {
   fetchDiscordGatewayInfoWithTimeout,
@@ -70,7 +71,7 @@ type ResolveDiscordGatewayIntentsParams = {
 export function resolveDiscordGatewayIntents(params?: ResolveDiscordGatewayIntentsParams): number {
   const intentsConfig = params?.intentsConfig;
   const voiceEnabled = params?.voiceEnabled;
-  const voiceStatesEnabled = intentsConfig?.voiceStates ?? voiceEnabled ?? true;
+  const voiceStatesEnabled = intentsConfig?.voiceStates ?? voiceEnabled ?? false;
   let intents =
     discordGateway.GatewayIntents.Guilds |
     discordGateway.GatewayIntents.GuildMessages |
@@ -253,7 +254,7 @@ export function createDiscordGatewayPlugin(params: {
 }): discordGateway.GatewayPlugin {
   const intents = resolveDiscordGatewayIntents({
     intentsConfig: params.discordConfig?.intents,
-    voiceEnabled: params.discordConfig?.voice?.enabled !== false,
+    voiceEnabled: resolveDiscordVoiceEnabled(params.discordConfig?.voice),
   });
   const proxy = resolveEffectiveDebugProxyUrl(params.discordConfig?.proxy);
   const debugProxySettings = resolveDebugProxySettings();

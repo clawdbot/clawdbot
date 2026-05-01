@@ -21,7 +21,7 @@ type SilkWasm = typeof import("silk-wasm");
 let _silkWasmPromise: Promise<SilkWasm | null> | null = null;
 
 /** Lazy-load the silk-wasm module (singleton cache; returns null on failure). */
-export function loadSilkWasm(): Promise<SilkWasm | null> {
+function loadSilkWasm(): Promise<SilkWasm | null> {
   if (_silkWasmPromise) {
     return _silkWasmPromise;
   }
@@ -370,7 +370,7 @@ export async function waitForFile(
 }
 
 /** Encode PCM s16le data into SILK format. */
-export async function pcmToSilk(
+async function pcmToSilk(
   pcmBuffer: Buffer,
   sampleRate: number,
 ): Promise<{ silkBuffer: Buffer; duration: number }> {
@@ -387,7 +387,7 @@ export async function pcmToSilk(
 }
 
 /** Use ffmpeg to convert any audio to mono 24 kHz PCM s16le. */
-export function ffmpegToPCM(
+function ffmpegToPCM(
   ffmpegCmd: string,
   inputPath: string,
   sampleRate: number = 24000,
@@ -428,7 +428,7 @@ export function ffmpegToPCM(
 }
 
 /** Decode MP3 to PCM via mpg123-decoder WASM (fallback when ffmpeg is unavailable). */
-export async function wasmDecodeMp3ToPCM(buf: Buffer, targetRate: number): Promise<Buffer | null> {
+async function wasmDecodeMp3ToPCM(buf: Buffer, targetRate: number): Promise<Buffer | null> {
   try {
     const { MPEGDecoder } = await import("mpg123-decoder");
     debugLog(`[audio-convert] WASM MP3 decode: size=${buf.length} bytes`);

@@ -12,7 +12,7 @@ export const DEFAULT_AZURE_SPEECH_AUDIO_FORMAT = "audio-24khz-48kbitrate-mono-mp
 export const DEFAULT_AZURE_SPEECH_VOICE_NOTE_FORMAT = "ogg-24khz-16bit-mono-opus";
 export const DEFAULT_AZURE_SPEECH_TELEPHONY_FORMAT = "raw-8khz-8bit-mono-mulaw";
 
-export type AzureSpeechVoiceEntry = {
+type AzureSpeechVoiceEntry = {
   ShortName?: string;
   DisplayName?: string;
   LocalName?: string;
@@ -52,11 +52,11 @@ function azureSpeechUrl(params: {
   return `${baseUrl}${params.path}`;
 }
 
-export function escapeXmlText(text: string): string {
+function escapeXmlText(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-export function escapeXmlAttr(value: string): string {
+function escapeXmlAttr(value: string): string {
   return escapeXmlText(value).replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 }
 

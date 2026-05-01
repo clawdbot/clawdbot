@@ -155,6 +155,55 @@ describe("ensureAgentWorkspace", () => {
     await expectCompletedWithoutBootstrap(tempDir);
   });
 
+  it("skips configured optional bootstrap files without skipping required files", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+
+    await ensureAgentWorkspace({
+      dir: tempDir,
+      ensureBootstrapFiles: true,
+      skipOptionalBootstrapFiles: [
+        DEFAULT_SOUL_FILENAME,
+        DEFAULT_IDENTITY_FILENAME,
+        DEFAULT_USER_FILENAME,
+        DEFAULT_HEARTBEAT_FILENAME,
+      ],
+    });
+
+    await expect(fs.access(path.join(tempDir, DEFAULT_AGENTS_FILENAME))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(tempDir, DEFAULT_TOOLS_FILENAME))).resolves.toBeUndefined();
+    await expect(
+      fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME)),
+    ).resolves.toBeUndefined();
+    for (const fileName of [
+      DEFAULT_SOUL_FILENAME,
+      DEFAULT_IDENTITY_FILENAME,
+      DEFAULT_USER_FILENAME,
+      DEFAULT_HEARTBEAT_FILENAME,
+    ]) {
+      await expect(fs.access(path.join(tempDir, fileName))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    }
+  });
+
+  it("preserves legacy setup detection when skipped profile files already exist", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_IDENTITY_FILENAME, content: "custom" });
+    await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_USER_FILENAME, content: "custom" });
+
+    await ensureAgentWorkspace({
+      dir: tempDir,
+      ensureBootstrapFiles: true,
+      skipOptionalBootstrapFiles: [DEFAULT_IDENTITY_FILENAME, DEFAULT_USER_FILENAME],
+    });
+
+    await expect(fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    const state = await readWorkspaceState(tempDir);
+    expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+  });
+
   it("migrates legacy onboardingCompletedAt markers to setupCompletedAt", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await fs.mkdir(path.join(tempDir, ".openclaw"), { recursive: true });

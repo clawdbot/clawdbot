@@ -72,7 +72,7 @@ import {
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   archiveFileOnDisk,
-  listSessionsFromStore,
+  listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
   loadGatewaySessionRow,
   loadSessionEntry,
@@ -650,7 +650,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const cfg = context.getRuntimeConfig();
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
     const modelCatalog = await loadOptionalSessionsListModelCatalog(context);
-    const result = listSessionsFromStore({
+    const result = await listSessionsFromStoreAsync({
       cfg,
       storePath,
       store,

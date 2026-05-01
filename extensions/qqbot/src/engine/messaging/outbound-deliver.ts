@@ -73,7 +73,7 @@ export interface DeliverDeps {
 // ---- Exported types ----
 
 /** Maximum text length for a single QQ Bot message. */
-export const TEXT_CHUNK_LIMIT = 5000;
+const TEXT_CHUNK_LIMIT = 5000;
 
 export interface DeliverEventContext {
   type: "c2c" | "guild" | "dm" | "group";

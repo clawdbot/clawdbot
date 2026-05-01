@@ -15,7 +15,6 @@ import {
   type DiffLayout,
   type DiffMode,
   type DiffOutputFormat,
-  type DiffPresentationDefaults,
   type DiffTheme,
   type DiffToolDefaults,
 } from "./types.js";
@@ -92,7 +91,7 @@ export const DEFAULT_DIFFS_TOOL_DEFAULTS: DiffToolDefaults = {
   mode: "both",
 };
 
-export type DiffsPluginSecurityConfig = {
+type DiffsPluginSecurityConfig = {
   allowRemoteViewer: boolean;
 };
 
@@ -312,31 +311,6 @@ export function resolveDiffsPluginViewerBaseUrl(config: unknown): string | undef
 
   const normalized = viewerBaseUrl.trim();
   return normalized ? normalizeViewerBaseUrl(normalized) : undefined;
-}
-
-export function toPresentationDefaults(defaults: DiffToolDefaults): DiffPresentationDefaults {
-  const {
-    fontFamily,
-    fontSize,
-    lineSpacing,
-    layout,
-    showLineNumbers,
-    diffIndicators,
-    wordWrap,
-    background,
-    theme,
-  } = defaults;
-  return {
-    fontFamily,
-    fontSize,
-    lineSpacing,
-    layout,
-    showLineNumbers,
-    diffIndicators,
-    wordWrap,
-    background,
-    theme,
-  };
 }
 
 function normalizeFontFamily(fontFamily?: string): string {

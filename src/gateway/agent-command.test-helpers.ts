@@ -1,7 +1,7 @@
 import { vi } from "vitest";
 import { agentCommand } from "./test-helpers.runtime-state.js";
 
-export type AgentCommandCall = Record<string, unknown>;
+type AgentCommandCall = Record<string, unknown>;
 
 function agentCommandCalls(): Array<[AgentCommandCall]> {
   return vi.mocked(agentCommand).mock.calls as unknown as Array<[AgentCommandCall]>;

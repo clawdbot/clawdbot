@@ -54,8 +54,8 @@ type TwilioApiRequest = (
   options?: { allowNotFound?: boolean },
 ) => Promise<unknown>;
 
-function createApiRequestMock() {
-  return vi.fn<TwilioApiRequest>(async () => ({}));
+function createApiRequestMock(impl?: TwilioApiRequest) {
+  return vi.fn<TwilioApiRequest>(impl ?? (async () => ({})));
 }
 
 function createTwilioCallStateRaceError(): TwilioApiError {
@@ -88,6 +88,63 @@ function configureTelephonyTwiMlFallback(params: { providerCallId: string; strea
 }
 
 describe("TwilioProvider", () => {
+  it("sends direct initial TwiML for notify-mode outbound calls", async () => {
+    const provider = createProvider();
+    const apiRequest = createApiRequestMock(async () => ({ sid: "CA123", status: "queued" }));
+    (
+      provider as unknown as {
+        apiRequest: TwilioApiRequest;
+      }
+    ).apiRequest = apiRequest;
+
+    const result = await provider.initiateCall({
+      callId: "call-1",
+      from: "+14155550100",
+      to: "+14155550123",
+      webhookUrl: "https://example.ngrok.app/voice/webhook",
+      inlineTwiml: "<Response><Say>Hello</Say></Response>",
+    });
+
+    expect(result).toEqual({ providerCallId: "CA123", status: "queued" });
+    expect(apiRequest).toHaveBeenCalledWith(
+      "/Calls.json",
+      expect.objectContaining({
+        To: "+14155550123",
+        From: "+14155550100",
+        Twiml: "<Response><Say>Hello</Say></Response>",
+        StatusCallback: "https://example.ngrok.app/voice/webhook?callId=call-1&type=status",
+        StatusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
+      }),
+    );
+    expect(apiRequest.mock.calls[0]?.[1]).not.toHaveProperty("Url");
+  });
+
+  it("uses the webhook URL for conversation outbound calls", async () => {
+    const provider = createProvider();
+    const apiRequest = createApiRequestMock(async () => ({ sid: "CA123", status: "queued" }));
+    (
+      provider as unknown as {
+        apiRequest: TwilioApiRequest;
+      }
+    ).apiRequest = apiRequest;
+
+    await provider.initiateCall({
+      callId: "call-1",
+      from: "+14155550100",
+      to: "+14155550123",
+      webhookUrl: "https://example.ngrok.app/voice/webhook",
+    });
+
+    expect(apiRequest).toHaveBeenCalledWith(
+      "/Calls.json",
+      expect.objectContaining({
+        Url: "https://example.ngrok.app/voice/webhook?callId=call-1",
+        StatusCallback: "https://example.ngrok.app/voice/webhook?callId=call-1&type=status",
+      }),
+    );
+    expect(apiRequest.mock.calls[0]?.[1]).not.toHaveProperty("Twiml");
+  });
+
   it("returns streaming TwiML for outbound conversation calls before in-progress", () => {
     const provider = createProvider();
     const ctx = createContext("CallStatus=initiated&Direction=outbound-api&CallSid=CA123", {

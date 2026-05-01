@@ -164,6 +164,34 @@ describe("plugin index install records store", () => {
     });
   });
 
+  it("preserves git install resolution fields in persisted records", async () => {
+    const stateDir = makeStateDir();
+    const candidate = createPluginCandidate(stateDir, "git-demo");
+    await writePersistedInstalledPluginIndexInstallRecords(
+      {
+        "git-demo": {
+          source: "git",
+          spec: "git:file:///tmp/git-demo@abc123",
+          installPath: path.join(stateDir, "plugins", "git-demo"),
+          gitUrl: "file:///tmp/git-demo",
+          gitRef: "abc123",
+          gitCommit: "abc123",
+        },
+      },
+      { stateDir, candidates: [candidate] },
+    );
+
+    await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).resolves.toMatchObject({
+      "git-demo": {
+        source: "git",
+        spec: "git:file:///tmp/git-demo@abc123",
+        gitUrl: "file:///tmp/git-demo",
+        gitRef: "abc123",
+        gitCommit: "abc123",
+      },
+    });
+  });
+
   it("returns an empty record map when no plugin index exists", () => {
     const stateDir = makeStateDir();
 

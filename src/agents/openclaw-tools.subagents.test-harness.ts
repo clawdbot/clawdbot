@@ -5,7 +5,7 @@ import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { __testing as subagentAnnounceTesting } from "./subagent-announce.js";
 import { __testing as subagentControlTesting } from "./subagent-control.js";
 
-export type LoadedConfig = ReturnType<(typeof import("../config/config.js"))["getRuntimeConfig"]>;
+type LoadedConfig = ReturnType<(typeof import("../config/config.js"))["getRuntimeConfig"]>;
 
 export const callGatewayMock: MockFn = vi.fn();
 

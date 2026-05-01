@@ -3,7 +3,7 @@ import { createEditorSubmitHandler } from "./tui-submit.js";
 
 type MockFn = ReturnType<typeof vi.fn>;
 
-export type SubmitHarness = {
+type SubmitHarness = {
   editor: {
     setText: MockFn;
     addToHistory: MockFn;

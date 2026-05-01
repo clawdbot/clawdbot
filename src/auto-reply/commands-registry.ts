@@ -54,7 +54,6 @@ export type {
   CommandDetection,
   CommandNormalizeOptions,
   CommandScope,
-  CommandTier,
   NativeCommandSpec,
   ShouldHandleTextCommandsParams,
 } from "./commands-registry.types.js";

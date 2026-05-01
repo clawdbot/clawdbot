@@ -343,7 +343,7 @@ describe("model-pricing-cache", () => {
         ],
       },
       tools: {
-        subagents: { model: { primary: "zai/glm-5" } },
+        subagents: { model: { primary: "zai/glm-openrouter-test" } },
       },
     } as unknown as OpenClawConfig;
 
@@ -371,7 +371,7 @@ describe("model-pricing-cache", () => {
                 },
               },
               {
-                id: "z-ai/glm-5",
+                id: "z-ai/glm-openrouter-test",
                 pricing: {
                   prompt: "0.000001",
                   completion: "0.000004",
@@ -413,12 +413,14 @@ describe("model-pricing-cache", () => {
       cacheRead: 0.3,
       cacheWrite: 0,
     });
-    expect(getCachedGatewayModelPricing({ provider: "zai", model: "glm-5" })).toEqual({
-      input: 1,
-      output: 4,
-      cacheRead: 0,
-      cacheWrite: 0,
-    });
+    expect(getCachedGatewayModelPricing({ provider: "zai", model: "glm-openrouter-test" })).toEqual(
+      {
+        input: 1,
+        output: 4,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+    );
   });
 
   it("does not recurse forever for native openrouter auto refs", async () => {

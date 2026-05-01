@@ -31,6 +31,17 @@ function dedupeSpecs(specs) {
   return [...new Set(specs.map(normalizeUpgradeSurvivorBaselineSpec).filter(Boolean))];
 }
 
+function readPublishedVersions(file) {
+  if (!file) {
+    return undefined;
+  }
+  const parsed = JSON.parse(readFileSync(file, "utf8"));
+  if (!Array.isArray(parsed)) {
+    throw new Error(`npm versions list must be a JSON array: ${file}`);
+  }
+  return new Set(parsed.filter((version) => typeof version === "string"));
+}
+
 function stableVersionFromTag(tagName) {
   const version = String(tagName ?? "").replace(/^v/u, "");
   if (!/^[0-9]{4}\.[0-9]+\.[0-9]+(?:-[0-9]+)?$/u.test(version)) {
@@ -39,7 +50,18 @@ function stableVersionFromTag(tagName) {
   return version;
 }
 
-function readStableReleases(file) {
+function npmPublishedVersion(version, publishedVersions) {
+  if (!version || !publishedVersions) {
+    return version;
+  }
+  if (publishedVersions.has(version)) {
+    return version;
+  }
+  const baseVersion = version.replace(/-[0-9]+$/u, "");
+  return publishedVersions.has(baseVersion) ? baseVersion : undefined;
+}
+
+function readStableReleases(file, publishedVersions) {
   const ansiEscape = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g");
   const raw = readFileSync(file, "utf8").replace(ansiEscape, "");
   const parsed = JSON.parse(raw);
@@ -50,7 +72,7 @@ function readStableReleases(file) {
     .filter((release) => !release.isPrerelease)
     .map((release) => ({
       publishedAt: release.publishedAt,
-      version: stableVersionFromTag(release.tagName),
+      version: npmPublishedVersion(stableVersionFromTag(release.tagName), publishedVersions),
     }))
     .filter((release) => release.version && release.publishedAt)
     .toSorted((a, b) => String(b.publishedAt).localeCompare(String(a.publishedAt)));
@@ -67,7 +89,8 @@ export function resolveReleaseHistory(args) {
   }
   const includeVersion = args.get("include-version") ?? "2026.4.23";
   const preDate = args.get("pre-date") ?? "2026-03-15T00:00:00Z";
-  const releases = readStableReleases(releasesJson);
+  const publishedVersions = readPublishedVersions(args.get("npm-versions-json"));
+  const releases = readStableReleases(releasesJson, publishedVersions);
   const versions = releases.slice(0, historyCount).map((release) => release.version);
   const exact = releases.find((release) => release.version === includeVersion);
   if (exact) {

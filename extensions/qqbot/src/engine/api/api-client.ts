@@ -16,7 +16,7 @@ const DEFAULT_BASE_URL = "https://api.sgroup.qq.com";
 const DEFAULT_TIMEOUT_MS = 30_000;
 const FILE_UPLOAD_TIMEOUT_MS = 120_000;
 
-export interface RequestOptions {
+interface RequestOptions {
   /** Request timeout override in milliseconds. */
   timeoutMs?: number;
   /** Body keys to redact in debug logs (e.g. `['file_data']`). */

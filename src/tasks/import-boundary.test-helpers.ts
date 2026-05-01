@@ -3,7 +3,7 @@ import path from "node:path";
 
 const TASK_ROOT = path.resolve(import.meta.dirname);
 
-export const TASK_BOUNDARY_SRC_ROOT = path.resolve(TASK_ROOT, "..");
+const TASK_BOUNDARY_SRC_ROOT = path.resolve(TASK_ROOT, "..");
 
 export function toTaskBoundaryRelativePath(file: string, root = TASK_BOUNDARY_SRC_ROOT): string {
   return path.relative(root, file).replaceAll(path.sep, "/");

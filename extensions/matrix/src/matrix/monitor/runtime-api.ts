@@ -22,7 +22,6 @@ export {
 export { formatLocationText, toLocationContext } from "openclaw/plugin-sdk/channel-location";
 export { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/agent-media-payload";
 export { logInboundDrop, logTypingFailure } from "openclaw/plugin-sdk/channel-logging";
-export { resolveAckReaction } from "openclaw/plugin-sdk/channel-feedback";
 export {
   buildChannelKeyCandidates,
   resolveChannelEntryMatch,

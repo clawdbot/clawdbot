@@ -301,7 +301,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(Object.keys(loaded)).toHaveLength(2);
   });
 
-  it("loadSessionStore prunes stale entries from oversized stores by default", async () => {
+  it("loadSessionStore leaves oversized stores untouched during normal reads", async () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
       stale: makeEntry(now - 31 * DAY_MS),
@@ -319,12 +319,37 @@ describe("Integration: saveSessionStore with pruning", () => {
       },
     });
 
-    expect(loaded.stale).toBeUndefined();
+    expect(Object.keys(loaded)).toHaveLength(3);
+    expect(loaded.stale).toBeDefined();
     expect(loaded.recent).toBeDefined();
     expect(loaded.newest).toBeDefined();
   });
 
-  it("loadSessionStore caps oversized stores by default", async () => {
+  it("loadSessionStore applies maintenance only when explicitly requested", async () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      stale: makeEntry(now - 31 * DAY_MS),
+      recent: makeEntry(now - DAY_MS),
+      newest: makeEntry(now),
+    };
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+
+    const loaded = loadSessionStore(storePath, {
+      skipCache: true,
+      runMaintenance: true,
+      maintenanceConfig: {
+        ...ENFORCED_MAINTENANCE_OVERRIDE,
+        maxEntries: 1,
+        pruneAfterMs: 7 * DAY_MS,
+      },
+    });
+
+    expect(loaded.stale).toBeUndefined();
+    expect(loaded.recent).toBeUndefined();
+    expect(loaded.newest).toBeDefined();
+  });
+
+  it("loadSessionStore does not cap oversized stores during normal reads", async () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
       oldest: makeEntry(now - 3 * DAY_MS),
@@ -342,13 +367,13 @@ describe("Integration: saveSessionStore with pruning", () => {
       },
     });
 
-    expect(Object.keys(loaded)).toHaveLength(2);
-    expect(loaded.oldest).toBeUndefined();
+    expect(Object.keys(loaded)).toHaveLength(3);
+    expect(loaded.oldest).toBeDefined();
     expect(loaded.recent).toBeDefined();
     expect(loaded.newest).toBeDefined();
   });
 
-  it("loadSessionStore batches entry-count cleanup until the high-water mark", async () => {
+  it("explicit loadSessionStore maintenance batches entry-count cleanup until the high-water mark", async () => {
     const now = Date.now();
     const store = Object.fromEntries(
       Array.from({ length: 51 }, (_, index) => [`session-${index}`, makeEntry(now - index)]),
@@ -357,6 +382,7 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const loaded = loadSessionStore(storePath, {
       skipCache: true,
+      runMaintenance: true,
       maintenanceConfig: {
         ...ENFORCED_MAINTENANCE_OVERRIDE,
         maxEntries: 50,
@@ -367,7 +393,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(Object.keys(loaded)).toHaveLength(51);
   });
 
-  it("loadSessionStore caps production-sized stores once they reach the high-water mark", async () => {
+  it("explicit loadSessionStore maintenance caps production-sized stores once they reach the high-water mark", async () => {
     const now = Date.now();
     const store = Object.fromEntries(
       Array.from({ length: 75 }, (_, index) => [`session-${index}`, makeEntry(now - index)]),
@@ -376,6 +402,7 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const loaded = loadSessionStore(storePath, {
       skipCache: true,
+      runMaintenance: true,
       maintenanceConfig: {
         ...ENFORCED_MAINTENANCE_OVERRIDE,
         maxEntries: 50,

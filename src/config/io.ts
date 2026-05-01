@@ -216,6 +216,11 @@ export type ConfigWriteOptions = {
    */
   allowDestructiveWrite?: boolean;
   /**
+   * Allow an intentional large config size drop while keeping other destructive
+   * guards active. Used by repair flows that remove stale or legacy config.
+   */
+  allowConfigSizeDrop?: boolean;
+  /**
    * Suppress human-readable output logs (overwrite/anomaly messages).
    * Useful when the caller wants machine-readable output only (--json mode).
    */
@@ -399,9 +404,14 @@ function resolveConfigWriteSuspiciousReasons(params: {
   return reasons;
 }
 
-function resolveConfigWriteBlockingReasons(suspicious: string[]): string[] {
+function resolveConfigWriteBlockingReasons(
+  suspicious: string[],
+  options: Pick<ConfigWriteOptions, "allowConfigSizeDrop"> = {},
+): string[] {
   return suspicious.filter(
-    (reason) => reason.startsWith("size-drop:") || reason === "gateway-mode-removed",
+    (reason) =>
+      (reason.startsWith("size-drop:") && options.allowConfigSizeDrop !== true) ||
+      reason === "gateway-mode-removed",
   );
 }
 
@@ -2165,7 +2175,7 @@ export function createConfigIO(
         }),
       });
     };
-    const blockingReasons = resolveConfigWriteBlockingReasons(suspiciousReasons);
+    const blockingReasons = resolveConfigWriteBlockingReasons(suspiciousReasons, options);
     if (blockingReasons.length > 0 && options.allowDestructiveWrite !== true) {
       const rejectedPath = `${configPath}.rejected.${formatConfigArtifactTimestamp(new Date().toISOString())}`;
       await deps.fs.promises
@@ -2426,6 +2436,7 @@ export async function writeConfigFile(
     }),
     unsetPaths: resolveManagedUnsetPathsForWrite(options.unsetPaths),
     allowDestructiveWrite: options.allowDestructiveWrite,
+    allowConfigSizeDrop: options.allowConfigSizeDrop,
     skipRuntimeSnapshotRefresh: options.skipRuntimeSnapshotRefresh,
     skipOutputLogs: options.skipOutputLogs,
   });

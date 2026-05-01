@@ -138,6 +138,18 @@ describe("Codex app-server config", () => {
     );
   });
 
+  it("parses dynamic tool profile controls", () => {
+    expect(
+      readCodexPluginConfig({
+        codexDynamicToolsProfile: "openclaw-compat",
+        codexDynamicToolsExclude: ["custom_tool"],
+      }),
+    ).toMatchObject({
+      codexDynamicToolsProfile: "openclaw-compat",
+      codexDynamicToolsExclude: ["custom_tool"],
+    });
+  });
+
   it("treats configured and environment commands as explicit overrides", () => {
     expect(
       resolveCodexAppServerRuntimeOptions({
