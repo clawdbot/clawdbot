@@ -49,7 +49,7 @@ type SlashHandlerMatch =
 
 // ─── Per-account state ───────────────────────────────────────────────────────
 
-export type SlashCommandAccountState = {
+type SlashCommandAccountState = {
   /** Tokens from registered/current commands, used for fast-path routing. */
   commandTokens: Set<string>;
   /** Registered command IDs for cleanup on shutdown. */

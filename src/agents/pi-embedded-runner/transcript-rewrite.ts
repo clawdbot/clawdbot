@@ -10,6 +10,11 @@ import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js
 import { getRawSessionAppendMessage } from "../session-raw-append-message.js";
 import { acquireSessionWriteLock } from "../session-write-lock.js";
 import { log } from "./logger.js";
+import {
+  persistTranscriptStateMutation,
+  readTranscriptFileState,
+  type TranscriptFileState,
+} from "./transcript-file-state.js";
 
 type SessionManagerLike = ReturnType<typeof SessionManager.open>;
 type SessionBranchEntry = ReturnType<SessionManagerLike["getBranch"]>[number];
@@ -79,6 +84,58 @@ function appendBranchEntry(params: {
     );
   }
   return sessionManager.appendLabelChange(
+    remapEntryId(entry.targetId, rewrittenEntryIds) ?? entry.targetId,
+    entry.label,
+  );
+}
+
+function appendTranscriptStateBranchEntry(params: {
+  state: TranscriptFileState;
+  entry: SessionBranchEntry;
+  rewrittenEntryIds: ReadonlyMap<string, string>;
+}): SessionBranchEntry {
+  const { state, entry, rewrittenEntryIds } = params;
+  if (entry.type === "message") {
+    return state.appendMessage(entry.message);
+  }
+  if (entry.type === "compaction") {
+    return state.appendCompaction(
+      entry.summary,
+      remapEntryId(entry.firstKeptEntryId, rewrittenEntryIds) ?? entry.firstKeptEntryId,
+      entry.tokensBefore,
+      entry.details,
+      entry.fromHook,
+    );
+  }
+  if (entry.type === "thinking_level_change") {
+    return state.appendThinkingLevelChange(entry.thinkingLevel);
+  }
+  if (entry.type === "model_change") {
+    return state.appendModelChange(entry.provider, entry.modelId);
+  }
+  if (entry.type === "custom") {
+    return state.appendCustomEntry(entry.customType, entry.data);
+  }
+  if (entry.type === "custom_message") {
+    return state.appendCustomMessageEntry(
+      entry.customType,
+      entry.content,
+      entry.display,
+      entry.details,
+    );
+  }
+  if (entry.type === "session_info") {
+    return state.appendSessionInfo(entry.name ?? "");
+  }
+  if (entry.type === "branch_summary") {
+    return state.branchWithSummary(
+      remapEntryId(entry.parentId, rewrittenEntryIds),
+      entry.summary,
+      entry.details,
+      entry.fromHook,
+    );
+  }
+  return state.appendLabelChange(
     remapEntryId(entry.targetId, rewrittenEntryIds) ?? entry.targetId,
     entry.label,
   );
@@ -188,6 +245,108 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
   };
 }
 
+export function rewriteTranscriptEntriesInState(params: {
+  state: TranscriptFileState;
+  replacements: TranscriptRewriteReplacement[];
+}): TranscriptRewriteResult & { appendedEntries: SessionBranchEntry[] } {
+  const replacementsById = new Map(
+    params.replacements
+      .filter((replacement) => replacement.entryId.trim().length > 0)
+      .map((replacement) => [replacement.entryId, replacement.message]),
+  );
+  if (replacementsById.size === 0) {
+    return {
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+      reason: "no replacements requested",
+      appendedEntries: [],
+    };
+  }
+
+  const branch = params.state.getBranch();
+  if (branch.length === 0) {
+    return {
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+      reason: "empty session",
+      appendedEntries: [],
+    };
+  }
+
+  const matchedIndices: number[] = [];
+  let bytesFreed = 0;
+
+  for (let index = 0; index < branch.length; index++) {
+    const entry = branch[index];
+    if (entry.type !== "message") {
+      continue;
+    }
+    const replacement = replacementsById.get(entry.id);
+    if (!replacement) {
+      continue;
+    }
+    const originalBytes = estimateMessageBytes(entry.message);
+    const replacementBytes = estimateMessageBytes(replacement);
+    matchedIndices.push(index);
+    bytesFreed += Math.max(0, originalBytes - replacementBytes);
+  }
+
+  if (matchedIndices.length === 0) {
+    return {
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+      reason: "no matching message entries",
+      appendedEntries: [],
+    };
+  }
+
+  const firstMatchedEntry = branch[matchedIndices[0]] as
+    | Extract<SessionBranchEntry, { type: "message" }>
+    | undefined;
+  if (!firstMatchedEntry) {
+    return {
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+      reason: "invalid first rewrite target",
+      appendedEntries: [],
+    };
+  }
+
+  if (!firstMatchedEntry.parentId) {
+    params.state.resetLeaf();
+  } else {
+    params.state.branch(firstMatchedEntry.parentId);
+  }
+
+  const appendedEntries: SessionBranchEntry[] = [];
+  const rewrittenEntryIds = new Map<string, string>();
+  for (let index = matchedIndices[0]; index < branch.length; index++) {
+    const entry = branch[index];
+    const replacement = entry.type === "message" ? replacementsById.get(entry.id) : undefined;
+    const newEntry =
+      replacement === undefined
+        ? appendTranscriptStateBranchEntry({
+            state: params.state,
+            entry,
+            rewrittenEntryIds,
+          })
+        : params.state.appendMessage(replacement);
+    rewrittenEntryIds.set(entry.id, newEntry.id);
+    appendedEntries.push(newEntry);
+  }
+
+  return {
+    changed: true,
+    bytesFreed,
+    rewrittenEntries: matchedIndices.length,
+    appendedEntries,
+  };
+}
+
 /**
  * Open a transcript file, rewrite message entries on the active branch, and
  * emit a transcript update when the active branch changed.
@@ -203,12 +362,17 @@ export async function rewriteTranscriptEntriesInSessionFile(params: {
     sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
     });
-    const sessionManager = SessionManager.open(params.sessionFile);
-    const result = rewriteTranscriptEntriesInSessionManager({
-      sessionManager,
+    const state = await readTranscriptFileState(params.sessionFile);
+    const result = rewriteTranscriptEntriesInState({
+      state,
       replacements: params.request.replacements,
     });
     if (result.changed) {
+      await persistTranscriptStateMutation({
+        sessionFile: params.sessionFile,
+        state,
+        appendedEntries: result.appendedEntries,
+      });
       emitSessionTranscriptUpdate(params.sessionFile);
       log.info(
         `[transcript-rewrite] rewrote ${result.rewrittenEntries} entr` +

@@ -21,16 +21,7 @@ import {
   waitForAgentRunAndReadUpdatedAssistantReply,
 } from "./run-wait.js";
 import { resolveStoredSubagentCapabilities } from "./subagent-capabilities.js";
-import {
-  buildLatestSubagentRunIndex,
-  buildSubagentList,
-  createPendingDescendantCounter,
-  isActiveSubagentRun,
-  resolveSessionEntryForKey,
-  type BuiltSubagentList,
-  type SessionEntryResolution,
-  type SubagentListItem,
-} from "./subagent-list.js";
+import { buildLatestSubagentRunIndex, resolveSessionEntryForKey } from "./subagent-list.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   getLatestSubagentRunByChildSessionKey,
@@ -50,8 +41,8 @@ import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sess
 export const DEFAULT_RECENT_MINUTES = 30;
 export const MAX_RECENT_MINUTES = 24 * 60;
 export const MAX_STEER_MESSAGE_CHARS = 4_000;
-export const STEER_RATE_LIMIT_MS = 2_000;
-export const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
+const STEER_RATE_LIMIT_MS = 2_000;
+const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
 const SUBAGENT_REPLY_HISTORY_LIMIT = 50;
 
 const steerRateLimit = new Map<string, number>();
@@ -104,14 +95,6 @@ export type ResolvedSubagentController = {
   callerIsSubagent: boolean;
   controlScope: "children" | "none";
 };
-export type { BuiltSubagentList, SessionEntryResolution, SubagentListItem };
-export {
-  buildSubagentList,
-  createPendingDescendantCounter,
-  isActiveSubagentRun,
-  resolveSessionEntryForKey,
-};
-
 export function resolveSubagentController(params: {
   cfg: OpenClawConfig;
   agentSessionKey?: string;

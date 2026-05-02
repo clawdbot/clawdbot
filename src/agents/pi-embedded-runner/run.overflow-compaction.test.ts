@@ -18,6 +18,8 @@ import {
   mockedContextEngine,
   mockedDescribeFailoverError,
   mockedEvaluateContextWindowGuard,
+  mockedEnsureAuthProfileStore,
+  mockedEnsureAuthProfileStoreWithoutExternalProfiles,
   mockedGlobalHookRunner,
   mockedGetApiKeyForModel,
   mockedPickFallbackThinkingLevel,
@@ -190,6 +192,21 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         authProfileId: "test-profile",
         authProfileIdSource: "auto",
       }),
+    );
+  });
+
+  it("uses the lightweight auth profile store during reply startup", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      runId: "run-lightweight-auth-store",
+    });
+
+    expect(mockedEnsureAuthProfileStore).not.toHaveBeenCalled();
+    expect(mockedEnsureAuthProfileStoreWithoutExternalProfiles).toHaveBeenCalledWith(
+      "/tmp/agent-dir",
+      { allowKeychainPrompt: false },
     );
   });
 

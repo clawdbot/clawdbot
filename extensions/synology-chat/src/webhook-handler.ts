@@ -128,10 +128,6 @@ export function clearSynologyWebhookRateLimiterStateForTest(): void {
   webhookInFlightLimiter.clear();
 }
 
-export function getSynologyWebhookRateLimiterCountForTest(): number {
-  return rateLimiters.size + invalidTokenRateLimiters.size;
-}
-
 function getSynologyWebhookInvalidTokenRateLimitKey(req: IncomingMessage): string {
   return req.socket?.remoteAddress ?? "unknown";
 }

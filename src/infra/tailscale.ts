@@ -166,7 +166,7 @@ export function getTestTailscaleBinaryOverride(
   return null;
 }
 
-export async function getTailscaleBinary(): Promise<string> {
+async function getTailscaleBinary(): Promise<string> {
   const forcedBinary = getTestTailscaleBinaryOverride();
   if (forcedBinary) {
     cachedTailscaleBinary = forcedBinary;

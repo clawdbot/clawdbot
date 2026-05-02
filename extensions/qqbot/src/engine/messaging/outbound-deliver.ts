@@ -28,7 +28,7 @@ import {
 // ---- Injected dependency interfaces ----
 
 /** Media target context — describes where to send media. */
-export interface MediaTargetContext {
+interface MediaTargetContext {
   targetType: "c2c" | "group" | "channel" | "dm";
   targetId: string;
   account: GatewayAccount;
@@ -36,14 +36,14 @@ export interface MediaTargetContext {
 }
 
 /** Media send result. */
-export interface MediaSendResult {
+interface MediaSendResult {
   channel?: string;
   error?: string;
   messageId?: string;
 }
 
 /** Media sender interface — implemented by the upper-layer outbound.ts module. */
-export interface MediaSender {
+interface MediaSender {
   sendPhoto(target: MediaTargetContext, imageUrl: string): Promise<MediaSendResult>;
   sendVoice(
     target: MediaTargetContext,
@@ -75,7 +75,7 @@ export interface DeliverDeps {
 /** Maximum text length for a single QQ Bot message. */
 const TEXT_CHUNK_LIMIT = 5000;
 
-export interface DeliverEventContext {
+interface DeliverEventContext {
   type: "c2c" | "guild" | "dm" | "group";
   senderId: string;
   messageId: string;
@@ -85,7 +85,7 @@ export interface DeliverEventContext {
   msgIdx?: string;
 }
 
-export interface DeliverAccountContext {
+interface DeliverAccountContext {
   account: GatewayAccount;
   qualifiedTarget: string;
   log?: {
@@ -96,10 +96,10 @@ export interface DeliverAccountContext {
 }
 
 /** Wrapper that retries when the access token expires. */
-export type SendWithRetryFn = <T>(sendFn: (token: string) => Promise<T>) => Promise<T>;
+type SendWithRetryFn = <T>(sendFn: (token: string) => Promise<T>) => Promise<T>;
 
 /** Consume a quote ref exactly once. */
-export type ConsumeQuoteRefFn = () => string | undefined;
+type ConsumeQuoteRefFn = () => string | undefined;
 
 // ---- Internal helpers ----
 
@@ -458,7 +458,7 @@ export async function parseAndSendMediaTags(
 
 // ---- Plain reply ----
 
-export interface PlainReplyPayload {
+interface PlainReplyPayload {
   text?: string;
   mediaUrls?: string[];
   mediaUrl?: string;

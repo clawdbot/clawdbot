@@ -11,7 +11,7 @@ type SlackSocketModeConfig = Pick<
   "clientPingTimeout" | "serverPingTimeout" | "pingPongLoggingEnabled"
 >;
 
-export const OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS = 15_000;
+const OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS = 15_000;
 
 export type SlackBoltResolvedExports = {
   App: SlackAppConstructor;

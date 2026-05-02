@@ -27,6 +27,12 @@ temporary set of OpenClaw-owned plugin packages while that migration finishes.
 
   <Step title="Install a plugin">
     ```bash
+    # Search ClawHub plugins
+    openclaw plugins search "calendar"
+
+    # From ClawHub
+    openclaw plugins install clawhub:openclaw-codex-app-server
+
     # From npm
     openclaw plugins install npm:@acme/openclaw-plugin
 
@@ -96,22 +102,22 @@ Gateway startup skips plugin discovery/load work and `openclaw doctor` preserves
 the disabled plugin config instead of auto-removing it. Re-enable plugins before
 running doctor cleanup if you want stale plugin ids removed.
 
-Packaged OpenClaw installs do not eagerly install every bundled plugin's
-runtime dependency tree. When a bundled OpenClaw-owned plugin is active from
-plugin config, legacy channel config, or a default-enabled manifest, startup
-repairs only that plugin's declared runtime dependencies before importing it.
-Persisted channel auth state alone does not activate a bundled channel for
-Gateway startup runtime-dependency repair.
-Explicit disablement still wins: `plugins.entries.<id>.enabled: false`,
-`plugins.deny`, `plugins.enabled: false`, and `channels.<id>.enabled: false`
-prevent automatic bundled runtime-dependency repair for that plugin/channel.
-A non-empty `plugins.allow` also bounds default-enabled bundled runtime-dependency
-repair; explicit bundled channel enablement (`channels.<id>.enabled: true`) can
-still repair that channel's plugin dependencies.
-External plugins and custom load paths must still be installed through
-`openclaw plugins install`.
-See [Plugin dependency resolution](/plugins/dependency-resolution) for the full
-planning and staging lifecycle.
+Plugin dependency installation happens only during explicit install/update or
+doctor repair flows. Gateway startup, config reload, and runtime inspection do
+not run package managers or repair dependency trees. Local plugins must already
+have their dependencies installed, while npm, git, and ClawHub plugins are
+installed under OpenClaw's managed plugin roots. npm dependencies may be hoisted
+within OpenClaw's managed npm root; install/update scans that managed root before
+trust and uninstall removes npm-managed packages through npm. External plugins
+and custom load paths must still be installed through `openclaw plugins install`.
+See [Plugin dependency resolution](/plugins/dependency-resolution) for the
+install-time lifecycle.
+
+Source checkouts are pnpm workspaces. If you clone OpenClaw to hack on bundled
+plugins, run `pnpm install`; OpenClaw then loads bundled plugins from
+`extensions/<id>` so edits and package-local dependencies are used directly.
+Plain npm root installs are for packaged OpenClaw, not source checkout
+development.
 
 ## Plugin types
 
@@ -137,7 +143,9 @@ peer such as `src/index.ts` to `dist/index.js`.
 Use `openclaw.runtimeExtensions` when published runtime files do not live at the
 same paths as the source entries. When present, `runtimeExtensions` must contain
 exactly one entry for every `extensions` entry. Mismatched lists fail install and
-plugin discovery rather than silently falling back to source paths.
+plugin discovery rather than silently falling back to source paths. If you also
+publish `openclaw.setupEntry`, use `openclaw.runtimeSetupEntry` for its built
+JavaScript peer; that file is required when declared.
 
 ```json
 {
@@ -192,7 +200,7 @@ current OpenClaw or a local checkout until a newer npm package is published.
 
   <Accordion title="Memory plugins">
     - `memory-core` — bundled memory search (default via `plugins.slots.memory`)
-    - `memory-lancedb` — install-on-demand long-term memory with auto-recall/capture (set `plugins.slots.memory = "memory-lancedb"`)
+    - `memory-lancedb` — LanceDB-backed long-term memory with auto-recall/capture (set `plugins.slots.memory = "memory-lancedb"`)
 
     See [Memory LanceDB](/plugins/memory-lancedb) for OpenAI-compatible
     embedding setup, Ollama examples, recall limits, and troubleshooting.
@@ -339,6 +347,37 @@ do not run in live chat traffic, check these first:
   Gateway session/status surfaces and, when debugging provider payloads, start
   the Gateway with `--raw-stream --raw-stream-path <path>`.
 
+### Slow plugin tool setup
+
+If agent turns appear to stall while preparing tools, enable trace logging and
+check for plugin tool factory timing lines:
+
+```bash
+openclaw config set logging.level trace
+openclaw logs --follow
+```
+
+Look for:
+
+```text
+[trace:plugin-tools] factory timings ...
+```
+
+The summary lists total factory time and the slowest plugin tool factories,
+including plugin id, declared tool names, result shape, and whether the tool is
+optional. Slow lines are promoted to warnings when a single factory takes at
+least 1s or total plugin tool factory prep takes at least 5s.
+
+If one plugin dominates the timing, inspect its runtime registrations:
+
+```bash
+openclaw plugins inspect <plugin-id> --runtime --json
+```
+
+Then update, reinstall, or disable that plugin. Plugin authors should move
+expensive dependency loading behind the tool execution path instead of doing it
+inside the tool factory.
+
 ### Duplicate channel or tool ownership
 
 Symptoms:
@@ -400,6 +439,7 @@ openclaw plugins list                       # compact inventory
 openclaw plugins list --enabled            # only enabled plugins
 openclaw plugins list --verbose            # per-plugin detail lines
 openclaw plugins list --json               # machine-readable inventory
+openclaw plugins search <query>            # search ClawHub plugin catalog
 openclaw plugins inspect <id>              # static detail
 openclaw plugins inspect <id> --runtime    # registered hooks/tools/CLI/gateway methods
 openclaw plugins inspect <id> --json       # machine-readable

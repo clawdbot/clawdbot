@@ -2,10 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   rotateTranscriptAfterCompaction,
+  rotateTranscriptFileAfterCompaction,
   shouldRotateCompactionTranscript,
 } from "./compaction-successor-transcript.js";
 import { hardenManualCompactionBoundary } from "./manual-compaction-boundary.js";
@@ -54,6 +55,30 @@ function createCompactedSession(sessionDir: string): {
 }
 
 describe("rotateTranscriptAfterCompaction", () => {
+  it("can rotate a persisted transcript without opening a manager", async () => {
+    const dir = await createTmpDir();
+    const { sessionFile } = createCompactedSession(dir);
+
+    const openSpy = vi.spyOn(SessionManager, "open").mockImplementation(() => {
+      throw new Error("SessionManager.open should not be used for file rotation");
+    });
+    const result = await rotateTranscriptFileAfterCompaction({
+      sessionFile,
+      now: () => new Date("2026-04-27T12:00:00.000Z"),
+    });
+    openSpy.mockRestore();
+
+    expect(result.rotated).toBe(true);
+    expect(result.sessionFile).toBeTruthy();
+
+    const successor = SessionManager.open(result.sessionFile!);
+    expect(successor.getHeader()).toMatchObject({
+      parentSession: sessionFile,
+      cwd: dir,
+    });
+    expect(successor.buildSessionContext().messages.length).toBeGreaterThan(0);
+  });
+
   it("creates a compacted successor transcript and leaves the archive untouched", async () => {
     const dir = await createTmpDir();
     const { manager, sessionFile, firstKeptId, oldUserId } = createCompactedSession(dir);

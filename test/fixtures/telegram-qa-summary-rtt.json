@@ -24,8 +24,37 @@
       "id": "telegram-mentioned-message-reply",
       "title": "Telegram mentioned message gets a reply",
       "status": "pass",
-      "details": "reply matched in 5678ms",
-      "rttMs": 5678
+      "details": "3/3 warm samples passed",
+      "rttMs": 5000,
+      "samples": [
+        {
+          "index": 1,
+          "status": "pass",
+          "details": "observed SUT message 101",
+          "rttMs": 4000
+        },
+        {
+          "index": 2,
+          "status": "pass",
+          "details": "observed SUT message 102",
+          "rttMs": 5000
+        },
+        {
+          "index": 3,
+          "status": "pass",
+          "details": "observed SUT message 103",
+          "rttMs": 7000
+        }
+      ],
+      "stats": {
+        "total": 3,
+        "passed": 3,
+        "failed": 0,
+        "avgMs": 5333,
+        "p50Ms": 5000,
+        "p95Ms": 7000,
+        "maxMs": 7000
+      }
     }
   ]
 }

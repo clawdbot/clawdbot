@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -271,13 +274,39 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
 });
 
 describe("rewriteTranscriptEntriesInSessionFile", () => {
-  it("emits transcript updates when the active branch changes", async () => {
-    const sessionFile = "/tmp/session.jsonl";
-    const { sessionManager, toolResultEntryId } = createExecRewriteSession();
+  it("emits transcript updates when the active branch changes without opening a manager", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-"));
+    const sessionManager = SessionManager.create(dir, dir);
+    const entryIds = appendSessionMessages(sessionManager, [
+      asAppendMessage({
+        role: "user",
+        content: "run tool",
+        timestamp: 1,
+      }),
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "exec",
+        content: createTextContent("before rewrite"),
+        isError: false,
+        timestamp: 2,
+      }),
+      asAppendMessage({
+        role: "assistant",
+        content: createTextContent("summarized"),
+        timestamp: 3,
+      }),
+    ]);
+    const sessionFile = sessionManager.getSessionFile();
+    expect(sessionFile).toBeTruthy();
+    if (!sessionFile) {
+      throw new Error("expected persisted session file");
+    }
+    const toolResultEntryId = entryIds[1];
 
-    const openSpy = vi
-      .spyOn(SessionManager, "open")
-      .mockReturnValue(sessionManager as unknown as ReturnType<typeof SessionManager.open>);
+    const openSpy = vi.spyOn(SessionManager, "open").mockImplementation(() => {
+      throw new Error("SessionManager.open should not be used for file rewrites");
+    });
     const listener = vi.fn();
     const cleanup = onSessionTranscriptUpdate(listener);
 
@@ -302,7 +331,9 @@ describe("rewriteTranscriptEntriesInSessionFile", () => {
       expect(acquireSessionWriteLockReleaseMock).toHaveBeenCalledTimes(1);
       expect(listener).toHaveBeenCalledWith({ sessionFile });
 
-      const rewrittenToolResult = getBranchMessages(sessionManager)[1] as Extract<
+      openSpy.mockRestore();
+      const rewrittenSession = SessionManager.open(sessionFile);
+      const rewrittenToolResult = getBranchMessages(rewrittenSession)[1] as Extract<
         AgentMessage,
         { role: "toolResult" }
       >;

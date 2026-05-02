@@ -50,7 +50,7 @@ export function missingUiHtml() {
 </html>`;
 }
 
-export function resolveUiDistDir(overrideDir?: string | null, repoRoot = process.cwd()) {
+function resolveUiDistDir(overrideDir?: string | null, repoRoot = process.cwd()) {
   if (overrideDir?.trim()) {
     return overrideDir;
   }

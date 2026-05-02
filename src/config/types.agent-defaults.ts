@@ -149,6 +149,13 @@ export type CliBackendConfig = {
   serialize?: boolean;
   /** Runtime reliability tuning for this backend's process lifecycle. */
   reliability?: {
+    /** Live-session output caps for CLIs that stream JSONL through a long-lived process. */
+    outputLimits?: {
+      /** Max raw JSONL characters retained for one live CLI turn. */
+      maxTurnRawChars?: number;
+      /** Max raw JSONL lines retained for one live CLI turn. */
+      maxTurnLines?: number;
+    };
     /** No-output watchdog tuning (fresh vs resumed runs). */
     watchdog?: {
       /** Fresh/new sessions (non-resume). */

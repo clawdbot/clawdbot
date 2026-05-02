@@ -25,8 +25,7 @@ paths:
   - src/plugins/bundled-dir.ts
   - src/plugins/bundled-plugin-metadata.ts
   - src/plugins/bundled-plugin-scan.ts
-  - src/plugins/bundled-runtime-deps*.ts
-  - src/plugins/bundled-runtime-root.ts
+  - src/plugins/plugin-sdk-dist-alias.ts
   - src/plugins/cli-registry-loader.ts
   - src/plugins/config-activation-shared.ts
   - src/plugins/config-contracts.ts

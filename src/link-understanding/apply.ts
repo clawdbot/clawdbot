@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatLinkUnderstandingBody } from "./format.js";
 import { runLinkUnderstanding } from "./runner.js";
 
-export type ApplyLinkUnderstandingResult = {
+type ApplyLinkUnderstandingResult = {
   outputs: string[];
   urls: string[];
 };

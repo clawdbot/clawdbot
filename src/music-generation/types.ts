@@ -19,7 +19,7 @@ export type MusicGenerationSourceImage = {
   metadata?: Record<string, unknown>;
 };
 
-export type MusicGenerationProviderConfiguredContext = {
+type MusicGenerationProviderConfiguredContext = {
   cfg?: OpenClawConfig;
   agentDir?: string;
 };

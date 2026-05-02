@@ -16,7 +16,7 @@ export type NativeHookRelayCliOptions = {
   timeout?: string;
 };
 
-export type NativeHookRelayCliDeps = {
+type NativeHookRelayCliDeps = {
   stdin?: NodeJS.ReadableStream;
   stdout?: NodeJS.WritableStream;
   stderr?: NodeJS.WritableStream;

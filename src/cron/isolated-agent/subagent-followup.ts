@@ -1,8 +1,7 @@
 import { readLatestAssistantReply, waitForAgentRunsToDrain } from "../../agents/run-wait.js";
 import { listDescendantRunsForRequester } from "../../agents/subagent-registry-read.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
-export { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
+import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 function resolveCronSubagentTimings() {
   const fastTestMode = process.env.OPENCLAW_TEST_FAST === "1";

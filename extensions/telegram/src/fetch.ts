@@ -75,6 +75,7 @@ type TelegramDispatcherAttempt = {
 type TelegramTransportAttempt = {
   createDispatcher: () => TelegramDispatcher;
   exportAttempt: TelegramDispatcherAttempt;
+  logLevel?: "debug" | "warn";
   logMessage?: string;
 };
 
@@ -518,6 +519,7 @@ function createTelegramTransportAttempts(params: {
       return ipv4Dispatcher;
     },
     exportAttempt: { dispatcherPolicy: fallbackPolicy },
+    logLevel: "debug",
     logMessage: "fetch fallback: enabling sticky IPv4-only dispatcher",
   });
 
@@ -542,6 +544,7 @@ function createTelegramTransportAttempts(params: {
       return fallbackIpDispatcher;
     },
     exportAttempt: { dispatcherPolicy: fallbackIpPolicy },
+    logLevel: "warn",
     logMessage: "fetch fallback: DNS-resolved IP unreachable; trying alternative Telegram API IP",
   });
 
@@ -643,7 +646,12 @@ export function resolveTelegramTransport(
     const nextAttempt = transportAttempts[nextIndex];
     if (nextAttempt.logMessage) {
       const reasonText = reason ? `, reason=${reason}` : "";
-      log.warn(`${nextAttempt.logMessage} (codes=${formatErrorCodes(err)}${reasonText})`);
+      const logLine = `${nextAttempt.logMessage} (codes=${formatErrorCodes(err)}${reasonText})`;
+      if (nextAttempt.logLevel === "debug") {
+        log.debug(logLine);
+      } else {
+        log.warn(logLine);
+      }
     }
     stickyAttemptIndex = nextIndex;
     return true;

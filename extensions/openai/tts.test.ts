@@ -169,6 +169,47 @@ describe("openai tts", () => {
       expect(body.voice).toBe("custom-voice");
     });
 
+    it("merges sanitized extraBody fields into TTS requests", async () => {
+      const fetchMock = vi.fn(
+        async (_url: string | URL, _init?: RequestInit) =>
+          new Response(Buffer.from("audio-bytes"), { status: 200 }),
+      );
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      const extraBody = JSON.parse(
+        '{"lang":"e","speed":1.2,"__proto__":{"polluted":true},"constructor":"bad","prototype":"bad"}',
+      ) as Record<string, unknown>;
+
+      await openaiTTS({
+        text: "hello",
+        apiKey: "test-key",
+        baseUrl: "https://tts.example.com/v1",
+        model: "tts-1",
+        voice: "custom-voice",
+        speed: 1,
+        responseFormat: "mp3",
+        extraBody,
+        timeoutMs: 5_000,
+      });
+
+      const [, init] = fetchMock.mock.calls[0] ?? [];
+      if (typeof init?.body !== "string") {
+        throw new Error("expected JSON request body");
+      }
+      const body = JSON.parse(init.body) as Record<string, unknown>;
+      expect(body).toMatchObject({
+        model: "tts-1",
+        input: "hello",
+        voice: "custom-voice",
+        response_format: "mp3",
+        lang: "e",
+        speed: 1.2,
+      });
+      expect(Object.hasOwn(body, "__proto__")).toBe(false);
+      expect(Object.hasOwn(body, "constructor")).toBe(false);
+      expect(Object.hasOwn(body, "prototype")).toBe(false);
+      expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
+    });
+
     it("omits instructions for unsupported models on the official OpenAI endpoint", async () => {
       const fetchMock = vi.fn(
         async (_url: string | URL, _init?: RequestInit) =>

@@ -1,6 +1,6 @@
 import { isMcpConfigRecord, toMcpEnvRecord, toMcpStringArray } from "./mcp-config-shared.js";
 
-type StdioMcpServerLaunchConfig = {
+export type StdioMcpServerLaunchConfig = {
   command: string;
   args?: string[];
   env?: Record<string, string>;
@@ -50,5 +50,3 @@ export function describeStdioMcpServerLaunchConfig(config: StdioMcpServerLaunchC
   const cwd = config.cwd ? ` (cwd=${config.cwd})` : "";
   return `${config.command}${args}${cwd}`;
 }
-
-export type { StdioMcpServerLaunchConfig, StdioMcpServerLaunchResult };

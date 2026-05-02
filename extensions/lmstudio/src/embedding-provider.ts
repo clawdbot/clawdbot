@@ -19,7 +19,7 @@ import {
 
 const log = createSubsystemLogger("memory/embeddings");
 
-export type LmstudioEmbeddingClient = {
+type LmstudioEmbeddingClient = {
   baseUrl: string;
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;

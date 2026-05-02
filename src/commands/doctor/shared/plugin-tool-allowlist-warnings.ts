@@ -2,7 +2,7 @@ import { normalizeToolName } from "../../../agents/tool-policy-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
 import type { PluginManifestRegistry } from "../../../plugins/manifest-registry.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../../../plugins/plugin-registry.js";
+import { loadPluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
 
 type ToolAllowlistSource = {
   label: string;
@@ -147,11 +147,10 @@ export function collectPluginToolAllowlistWarnings(params: {
 
   const registry =
     params.manifestRegistry ??
-    loadPluginManifestRegistryForPluginRegistry({
+    loadPluginMetadataSnapshot({
       config: params.cfg,
-      env: params.env,
-      includeDisabled: true,
-    });
+      env: params.env ?? process.env,
+    }).manifestRegistry;
   const knownPluginIds = collectKnownPluginIds(registry);
   const toolOwners = collectToolOwners(registry);
   const missingPluginIssues = new Map<string, Set<string>>();

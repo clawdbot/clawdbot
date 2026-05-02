@@ -861,7 +861,6 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
     applyAutoEnable: false,
     bundledProviderAllowlistCompat: false,
     bundledProviderVitestCompat: false,
-    installBundledRuntimeDeps: false,
   })?.resolveSyntheticAuth?.(params.context);
   if (runtimeResolved) {
     return runtimeResolved;
@@ -876,7 +875,6 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
       applyAutoEnable: false,
       bundledProviderAllowlistCompat: false,
       bundledProviderVitestCompat: false,
-      installBundledRuntimeDeps: false,
     })?.resolveSyntheticAuth?.(params.context);
     if (runtimeProviderResolved) {
       return runtimeProviderResolved;

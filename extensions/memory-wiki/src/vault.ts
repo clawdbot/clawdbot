@@ -20,7 +20,7 @@ export const WIKI_VAULT_DIRECTORIES = [
   ".openclaw-wiki/cache",
 ] as const;
 
-export type InitializeMemoryWikiVaultResult = {
+type InitializeMemoryWikiVaultResult = {
   rootDir: string;
   created: boolean;
   createdDirectories: string[];

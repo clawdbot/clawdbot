@@ -1,4 +1,8 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
+import {
+  HEARTBEAT_RESPONSE_TOOL_NAME,
+  normalizeHeartbeatToolResponse,
+} from "../auto-reply/heartbeat-tool-response.js";
 import type {
   AgentApprovalEventData,
   AgentCommandOutputEventData,
@@ -903,6 +907,12 @@ export async function handleToolExecutionEnd(
   // Track committed reminders only when cron.add completed successfully.
   if (!isToolError && toolName === "cron" && isCronAddAction(startData?.args)) {
     ctx.state.successfulCronAdds += 1;
+  }
+  if (!isToolError && toolName === HEARTBEAT_RESPONSE_TOOL_NAME) {
+    const response = normalizeHeartbeatToolResponse(result?.details);
+    if (response) {
+      ctx.state.heartbeatToolResponse = response;
+    }
   }
 
   emitAgentEvent({

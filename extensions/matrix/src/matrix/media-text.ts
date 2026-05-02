@@ -35,7 +35,7 @@ function formatMatrixAttachmentMarker(params: {
   return params.unavailable ? `[matrix ${label} unavailable]` : `[matrix ${label}]`;
 }
 
-export function isLikelyBareFilename(text: string): boolean {
+function isLikelyBareFilename(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed || trimmed.includes("\n") || /\s/.test(trimmed)) {
     return false;
@@ -97,7 +97,7 @@ export function resolveMatrixMessageBody(params: {
   return attachment.caption;
 }
 
-export function formatMatrixAttachmentText(params: {
+function formatMatrixAttachmentText(params: {
   attachment?: MatrixMessageAttachmentSummary;
   tooLarge?: boolean;
   unavailable?: boolean;

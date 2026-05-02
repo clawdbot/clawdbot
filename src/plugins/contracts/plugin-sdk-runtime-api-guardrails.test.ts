@@ -17,7 +17,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
   ],
   [bundledPluginFile({ rootDir: ROOT_DIR, pluginId: "imessage", relativePath: "runtime-api.ts" })]:
     [
-      'export { DEFAULT_ACCOUNT_ID, getChatChannelMeta, type ChannelPlugin, type OpenClawConfig } from "openclaw/plugin-sdk/core";',
+      'export { DEFAULT_ACCOUNT_ID, getChatChannelMeta, type ChannelPlugin } from "openclaw/plugin-sdk/core";',
       'export { buildChannelConfigSchema, IMessageConfigSchema } from "./config-api.js";',
       'export { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";',
       'export { buildComputedAccountStatusSnapshot, collectStatusIssuesFromLastError } from "openclaw/plugin-sdk/status-helpers";',
@@ -224,7 +224,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
       'export { handleWhatsAppAction, whatsAppActionRuntime } from "./src/action-runtime.js";',
       'export { createWhatsAppLoginTool } from "./src/agent-tools-login.js";',
       'export { formatWhatsAppWebAuthStatusState, getWebAuthAgeMs, hasWebCredsSync, logWebSelfId, logoutWeb, pickWebChannel, readCredsJsonRaw, readWebAuthExistsBestEffort, readWebAuthExistsForDecision, readWebAuthSnapshot, readWebAuthSnapshotBestEffort, readWebAuthState, readWebSelfId, readWebSelfIdentity, readWebSelfIdentityForDecision, resolveDefaultWebAuthDir, resolveWebCredsBackupPath, resolveWebCredsPath, restoreCredsFromBackupIfNeeded, WA_WEB_AUTH_DIR, webAuthExists, WHATSAPP_AUTH_UNSTABLE_CODE, WhatsAppAuthUnstableError, type WhatsAppWebAuthState } from "./src/auth-store.js";',
-      'export { DEFAULT_WEB_MEDIA_BYTES, HEARTBEAT_PROMPT, HEARTBEAT_TOKEN, monitorWebChannel, resolveHeartbeatRecipients, runWebHeartbeatOnce, SILENT_REPLY_TOKEN, stripHeartbeatToken, type WebChannelStatus, type WebMonitorTuning } from "./src/auto-reply.js";',
+      'export { DEFAULT_WEB_MEDIA_BYTES, HEARTBEAT_PROMPT, HEARTBEAT_TOKEN, monitorWebChannel, SILENT_REPLY_TOKEN, stripHeartbeatToken, type WebChannelStatus, type WebMonitorTuning } from "./src/auto-reply.js";',
       'export { extractContactContext, extractLocationData, extractMediaPlaceholder, extractText, monitorWebInbox, resetWebInboundDedupe, type WebInboundMessage, type WebListenerCloseReason } from "./src/inbound.js";',
       'export { loginWeb } from "./src/login.js";',
       'export { getDefaultLocalRoots, loadWebMedia, loadWebMediaRaw, LocalMediaAccessError, optimizeImageToJpeg, optimizeImageToPng, type LocalMediaAccessErrorCode, type WebMediaResult } from "./src/media.js";',

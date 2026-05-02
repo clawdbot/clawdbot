@@ -67,7 +67,7 @@ export function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {
   return isStrictOpenAIJsonSchemaCompatibleRecursive(normalizeStrictOpenAIJsonSchema(schema));
 }
 
-export type OpenAIStrictToolSchemaDiagnostic = {
+type OpenAIStrictToolSchemaDiagnostic = {
   toolIndex: number;
   toolName?: string;
   violations: string[];

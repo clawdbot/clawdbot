@@ -3,7 +3,7 @@ import {
   normalizeLegacyDotBetaVersion,
 } from "../infra/semver-compare.js";
 
-export type OpenClawVersion = {
+type OpenClawVersion = {
   major: number;
   minor: number;
   patch: number;

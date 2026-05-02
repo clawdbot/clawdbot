@@ -54,7 +54,7 @@ export function isLiveUnendedSubagentRun(
   return !hasSubagentRunEnded(entry) && !isStaleUnendedSubagentRun(entry, now);
 }
 
-export function isRecentlyEndedSubagentRun(
+function isRecentlyEndedSubagentRun(
   entry: Pick<SubagentRunRecord, "endedAt">,
   now = Date.now(),
   recentMs = RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,

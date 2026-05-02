@@ -22,7 +22,7 @@ export function isActiveUnusableWindow(until: number | undefined, now: number): 
   return typeof until === "number" && Number.isFinite(until) && until > 0 && now < until;
 }
 
-export function shouldBypassModelScopedCooldown(
+function shouldBypassModelScopedCooldown(
   stats: Pick<ProfileUsageStats, "cooldownReason" | "cooldownModel" | "disabledUntil">,
   now: number,
   forModel?: string,

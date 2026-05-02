@@ -44,6 +44,7 @@ describe("codex plugin", () => {
     expect(registerAgentHarness.mock.calls[0]?.[0]).toMatchObject({
       id: "codex",
       label: "Codex agent harness",
+      deliveryDefaults: { sourceVisibleReplies: "message_tool" },
       dispose: expect.any(Function),
     });
     expect(registerMediaUnderstandingProvider.mock.calls[0]?.[0]).toMatchObject({
@@ -89,6 +90,7 @@ describe("codex plugin", () => {
   it("only claims the codex provider by default", () => {
     const harness = createCodexAppServerAgentHarness();
 
+    expect(harness.deliveryDefaults?.sourceVisibleReplies).toBe("message_tool");
     expect(
       harness.supports({ provider: "codex", modelId: "gpt-5.4", requestedRuntime: "auto" })
         .supported,

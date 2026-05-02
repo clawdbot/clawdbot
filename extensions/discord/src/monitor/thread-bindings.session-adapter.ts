@@ -61,7 +61,7 @@ function resolveEffectiveBindingExpiresAt(params: {
   return inactivityExpiresAt ?? maxAgeExpiresAt;
 }
 
-export function toSessionBindingRecord(
+function toSessionBindingRecord(
   record: ThreadBindingRecord,
   defaults: ThreadBindingDefaults,
 ): SessionBindingRecord {

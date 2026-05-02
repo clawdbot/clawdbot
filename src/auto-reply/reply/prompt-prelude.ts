@@ -3,7 +3,7 @@ import { buildInboundMediaNote } from "../media-note.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { appendUntrustedContext } from "./untrusted-context.js";
 
-export const REPLY_MEDIA_HINT =
+const REPLY_MEDIA_HINT =
   "To send an image back, prefer the message tool (media/path/filePath). If you must inline, use MEDIA:https://example.com/image.jpg (spaces ok, quote if needed) or a safe relative path like MEDIA:./image.jpg. Absolute and ~ paths only work when they stay inside your allowed file-read boundary; host file:// URLs are blocked. Keep caption in the text body.";
 
 export function buildReplyPromptBodies(params: {

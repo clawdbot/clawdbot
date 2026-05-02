@@ -30,13 +30,9 @@ export type ToolsInvokeInput = {
   dryRun?: unknown;
 };
 
-export type ToolsInvokeErrorType =
-  | "invalid_request"
-  | "not_found"
-  | "tool_call_blocked"
-  | "tool_error";
+type ToolsInvokeErrorType = "invalid_request" | "not_found" | "tool_call_blocked" | "tool_error";
 
-export type ToolsInvokeOutcome =
+type ToolsInvokeOutcome =
   | {
       ok: true;
       status: 200;

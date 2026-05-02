@@ -362,6 +362,10 @@ describe("buildAgentSystemPrompt", () => {
         "Use ACP for Codex only when the user explicitly asks for ACP/acpx or wants to test the ACP path.",
       ],
       acpEnabled: true,
+      runtimeInfo: {
+        channel: "discord",
+        capabilities: ["threadbound-acp-spawn"],
+      },
     });
 
     expect(prompt).toContain("Native Codex app-server plugin is available");
@@ -379,6 +383,24 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       'do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path',
     );
+  });
+
+  it("omits ACP thread-spawn guidance when the runtime capability is absent", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn", "exec"],
+      acpEnabled: true,
+      runtimeInfo: {
+        channel: "discord",
+        capabilities: [],
+      },
+    });
+
+    expect(prompt).toContain(
+      'For requests like "do this in claude code/cursor/gemini/opencode" or similar ACP harnesses, treat it as ACP harness intent',
+    );
+    expect(prompt).not.toContain("default ACP harness requests to thread-bound");
+    expect(prompt).not.toContain('use `sessions_spawn` (`runtime: "acp"`, `thread: true`)');
   });
 
   it("omits ACP harness guidance when ACP is disabled", () => {
@@ -803,6 +825,8 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("use `message(action=send)` for visible channel output");
     expect(prompt).toContain("The target defaults to the current source channel");
     expect(prompt).toContain("final answers are private in this mode");
+    expect(prompt).not.toContain("## Silent Replies");
+    expect(prompt).not.toContain(SILENT_REPLY_TOKEN);
     expect(prompt).not.toContain(
       `respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies)`,
     );

@@ -8,14 +8,14 @@ import {
   type QueuedSessionDelivery,
 } from "./session-delivery-queue-storage.js";
 
-export type SessionDeliveryRecoverySummary = {
+type SessionDeliveryRecoverySummary = {
   recovered: number;
   failed: number;
   skippedMaxRetries: number;
   deferredBackoff: number;
 };
 
-export type DeliverSessionDeliveryFn = (entry: QueuedSessionDelivery) => Promise<void>;
+type DeliverSessionDeliveryFn = (entry: QueuedSessionDelivery) => Promise<void>;
 
 export interface SessionDeliveryRecoveryLogger {
   info(msg: string): void;
@@ -23,7 +23,7 @@ export interface SessionDeliveryRecoveryLogger {
   error(msg: string): void;
 }
 
-export interface PendingSessionDeliveryDrainDecision {
+interface PendingSessionDeliveryDrainDecision {
   match: boolean;
   bypassBackoff?: boolean;
 }

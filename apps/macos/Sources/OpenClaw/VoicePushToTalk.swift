@@ -260,9 +260,9 @@ actor VoicePushToTalk {
             input.removeTap(onBus: 0)
             self.tapInstalled = false
         }
-        // Pipe raw mic buffers into the Speech request while the chord is held.
+        // Pipe Speech-compatible mic buffers into the request while the chord is held.
         input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak request] buffer, _ in
-            request?.append(buffer)
+            request?.append(SpeechAudioBufferNormalizer.speechCompatibleBuffer(from: buffer))
         }
         self.tapInstalled = true
 
@@ -348,7 +348,7 @@ actor VoicePushToTalk {
                     VoiceWakeChimePlayer.play(chime, reason: "ptt.fallback_send")
                 }
                 Task.detached {
-                    await VoiceWakeForwarder.forward(transcript: finalText)
+                    await VoiceWakeForwarder.forwardToSelectedSession(transcript: finalText)
                 }
             }
         }

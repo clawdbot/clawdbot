@@ -109,9 +109,9 @@ export type TranscriptRewriteResult = {
 
 export type ContextEngineMaintenanceResult = TranscriptRewriteResult;
 
-export type ContextEnginePromptCacheRetention = "none" | "short" | "long" | "in_memory" | "24h";
+type ContextEnginePromptCacheRetention = "none" | "short" | "long" | "in_memory" | "24h";
 
-export type ContextEnginePromptCacheUsage = {
+type ContextEnginePromptCacheUsage = {
   input?: number;
   output?: number;
   cacheRead?: number;
@@ -119,7 +119,7 @@ export type ContextEnginePromptCacheUsage = {
   total?: number;
 };
 
-export type ContextEnginePromptCacheObservationChangeCode =
+type ContextEnginePromptCacheObservationChangeCode =
   | "cacheRetention"
   | "model"
   | "streamStrategy"
@@ -127,12 +127,12 @@ export type ContextEnginePromptCacheObservationChangeCode =
   | "tools"
   | "transport";
 
-export type ContextEnginePromptCacheObservationChange = {
+type ContextEnginePromptCacheObservationChange = {
   code: ContextEnginePromptCacheObservationChangeCode;
   detail: string;
 };
 
-export type ContextEnginePromptCacheObservation = {
+type ContextEnginePromptCacheObservation = {
   broke: boolean;
   previousCacheRead?: number;
   cacheRead?: number;

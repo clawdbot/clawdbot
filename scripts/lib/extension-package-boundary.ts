@@ -1,9 +1,6 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, posix, resolve } from "node:path";
 
-export const EXTENSION_PACKAGE_BOUNDARY_BASE_CONFIG =
-  "extensions/tsconfig.package-boundary.base.json" as const;
-
 export const EXTENSION_PACKAGE_BOUNDARY_INCLUDE = ["./*.ts", "./src/**/*.ts"] as const;
 export const EXTENSION_PACKAGE_BOUNDARY_EXCLUDE = [
   "./**/*.test.ts",
@@ -104,7 +101,7 @@ export const EXTENSION_PACKAGE_BOUNDARY_XAI_PATHS = {
   "@openclaw/speech-core/runtime-api.js": ["./.boundary-stubs/speech-core-runtime-api.d.ts"],
 } as const;
 
-export type ExtensionPackageBoundaryTsConfigJson = {
+type ExtensionPackageBoundaryTsConfigJson = {
   extends?: unknown;
   compilerOptions?: {
     rootDir?: unknown;
@@ -114,7 +111,7 @@ export type ExtensionPackageBoundaryTsConfigJson = {
   exclude?: unknown;
 };
 
-export type ExtensionPackageBoundaryPackageJson = {
+type ExtensionPackageBoundaryPackageJson = {
   devDependencies?: Record<string, string>;
 };
 
@@ -123,21 +120,18 @@ function readJsonFile<T>(filePath: string): T {
   return JSON.parse(readFileSync(filePath, "utf8")) as T;
 }
 
-export function collectBundledExtensionIds(rootDir = resolve(".")): string[] {
+function collectBundledExtensionIds(rootDir = resolve(".")): string[] {
   return readdirSync(join(rootDir, "extensions"), { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .toSorted();
 }
 
-export function resolveExtensionTsconfigPath(extensionId: string, rootDir = resolve(".")): string {
+function resolveExtensionTsconfigPath(extensionId: string, rootDir = resolve(".")): string {
   return join(rootDir, "extensions", extensionId, "tsconfig.json");
 }
 
-export function resolveExtensionPackageJsonPath(
-  extensionId: string,
-  rootDir = resolve("."),
-): string {
+function resolveExtensionPackageJsonPath(extensionId: string, rootDir = resolve(".")): string {
   return join(rootDir, "extensions", extensionId, "package.json");
 }
 
@@ -177,30 +171,4 @@ export function collectOptInExtensionPackageBoundaries(rootDir = resolve(".")): 
       readExtensionPackageBoundaryTsconfig(extensionId, rootDir),
     ),
   );
-}
-
-export function renderExtensionPackageBoundaryTsconfig(params?: {
-  paths?: Record<string, readonly string[]>;
-}): {
-  extends: "../tsconfig.package-boundary.base.json";
-  compilerOptions: { rootDir: "."; paths?: Record<string, readonly string[]> };
-  include: typeof EXTENSION_PACKAGE_BOUNDARY_INCLUDE;
-  exclude: typeof EXTENSION_PACKAGE_BOUNDARY_EXCLUDE;
-} {
-  return {
-    extends: "../tsconfig.package-boundary.base.json",
-    compilerOptions: {
-      rootDir: ".",
-      ...(params?.paths
-        ? {
-            paths: {
-              ...EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS,
-              ...params.paths,
-            },
-          }
-        : {}),
-    },
-    include: EXTENSION_PACKAGE_BOUNDARY_INCLUDE,
-    exclude: EXTENSION_PACKAGE_BOUNDARY_EXCLUDE,
-  };
 }

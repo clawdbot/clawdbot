@@ -715,6 +715,48 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
+  it("does not persist agent media supplements when no playable media resolves", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-stale-tts-");
+    const staleAudioPath = path.join(transcriptDir, "stale.mp3");
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: {
+          text: "Text-only test: one clean reply, no TTS, no media, no tool narration.",
+          mediaUrl: staleAudioPath,
+          mediaUrls: [staleAudioPath],
+          trustedLocalMedia: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-stale-agent-media",
+      expectBroadcast: false,
+      waitFor: "dedupe",
+    });
+
+    const assistantUpdates = mockState.emittedTranscriptUpdates.filter(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    );
+    expect(assistantUpdates).toEqual([]);
+  });
+
   it("keeps visible text on non-agent TTS final media because no model transcript exists", async () => {
     const transcriptDir = createTranscriptFixture("openclaw-chat-send-command-tts-final-");
     const audioPath = path.join(transcriptDir, "tts.mp3");

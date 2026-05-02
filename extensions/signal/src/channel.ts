@@ -270,6 +270,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
         },
       },
       messaging: {
+        targetPrefixes: ["signal"],
         normalizeTarget: normalizeSignalMessagingTarget,
         parseExplicitTarget: ({ raw }) => parseSignalExplicitTarget(raw),
         inferTargetChatType: ({ to }) => inferSignalTargetChatType(to),

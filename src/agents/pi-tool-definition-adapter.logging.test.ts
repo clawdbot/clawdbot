@@ -111,6 +111,83 @@ describe("pi tool definition adapter logging", () => {
     );
   });
 
+  it("logs provider AbortError failures when the agent run was not aborted", async () => {
+    const baseTool = {
+      name: "web_search",
+      label: "Web Search",
+      description: "searches",
+      parameters: Type.Object({
+        query: Type.String(),
+      }),
+      execute: async () => {
+        const error = new Error("This operation was aborted");
+        error.name = "AbortError";
+        throw error;
+      },
+    } satisfies AgentTool;
+    const [def] = toToolDefinitions([baseTool]);
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+
+    const result = await def.execute(
+      "call-web-search-abort",
+      { query: "OpenClaw" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        details: expect.objectContaining({
+          status: "error",
+          tool: "web_search",
+          error: "This operation was aborted",
+        }),
+      }),
+    );
+    expect(logError).toHaveBeenCalledWith(
+      expect.stringContaining("[tools] web_search failed: This operation was aborted"),
+    );
+  });
+
+  it("rethrows AbortError failures when the agent run signal was aborted", async () => {
+    const baseTool = {
+      name: "web_search",
+      label: "Web Search",
+      description: "searches",
+      parameters: Type.Object({
+        query: Type.String(),
+      }),
+      execute: async () => {
+        const error = new Error("This operation was aborted");
+        error.name = "AbortError";
+        throw error;
+      },
+    } satisfies AgentTool;
+    const [def] = toToolDefinitions([baseTool]);
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      def.execute(
+        "call-web-search-agent-abort",
+        { query: "OpenClaw" },
+        controller.signal,
+        undefined,
+        extensionContext,
+      ),
+    ).rejects.toMatchObject({
+      name: "AbortError",
+      message: "This operation was aborted",
+    });
+    expect(logError).not.toHaveBeenCalled();
+  });
+
   it("accepts nested edits arrays for the current edit schema", async () => {
     const execute = vi.fn(async (_toolCallId: string, params: unknown) => ({
       content: [{ type: "text" as const, text: JSON.stringify(params) }],

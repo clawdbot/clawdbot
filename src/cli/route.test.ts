@@ -92,7 +92,6 @@ describe("tryRouteCli", () => {
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "channels",
-      installBundledRuntimeDeps: false,
     });
   });
 
@@ -164,7 +163,6 @@ describe("tryRouteCli", () => {
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "channels",
-      installBundledRuntimeDeps: false,
     });
   });
 

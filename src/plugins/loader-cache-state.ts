@@ -1,4 +1,4 @@
-import { PluginLruCache } from "./plugin-lru-cache.js";
+import { PluginLruCache } from "./plugin-cache-primitives.js";
 
 export class PluginLoadReentryError extends Error {
   readonly cacheKey: string;

@@ -12,7 +12,7 @@ export const CODEX_CONTROL_METHODS = {
   review: "review/start",
 } as const;
 
-export type CodexControlName = keyof typeof CODEX_CONTROL_METHODS;
+type CodexControlName = keyof typeof CODEX_CONTROL_METHODS;
 export type CodexControlMethod = (typeof CODEX_CONTROL_METHODS)[CodexControlName];
 
 export function describeControlFailure(error: unknown): string {

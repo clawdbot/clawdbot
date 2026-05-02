@@ -2,9 +2,9 @@ import { NODE_SYSTEM_RUN_COMMANDS } from "./node-commands.js";
 
 export type NodeApprovalScope = "operator.pairing" | "operator.write" | "operator.admin";
 
-export const OPERATOR_PAIRING_SCOPE: NodeApprovalScope = "operator.pairing";
-export const OPERATOR_WRITE_SCOPE: NodeApprovalScope = "operator.write";
-export const OPERATOR_ADMIN_SCOPE: NodeApprovalScope = "operator.admin";
+const OPERATOR_PAIRING_SCOPE: NodeApprovalScope = "operator.pairing";
+const OPERATOR_WRITE_SCOPE: NodeApprovalScope = "operator.write";
+const OPERATOR_ADMIN_SCOPE: NodeApprovalScope = "operator.admin";
 
 export function resolveNodePairApprovalScopes(commands: unknown): NodeApprovalScope[] {
   const normalized = Array.isArray(commands)

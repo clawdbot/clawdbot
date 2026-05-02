@@ -427,19 +427,48 @@ describe("handleSlackAction", () => {
     );
   });
 
-  it("rejects blocks combined with mediaUrl", async () => {
-    await expect(
-      handleSlackAction(
-        {
-          action: "sendMessage",
-          to: "channel:C123",
-          content: "hello",
-          mediaUrl: "https://example.com/file.png",
-          blocks: JSON.stringify([{ type: "divider" }]),
-        },
-        slackConfig(),
-      ),
-    ).rejects.toThrow(/does not support blocks with mediaUrl/i);
+  it("sends media before a separate blocks message", async () => {
+    sendSlackMessage.mockResolvedValueOnce({ channelId: "C123" });
+    sendSlackMessage.mockResolvedValueOnce({ channelId: "C123" });
+
+    const result = await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "channel:C123",
+        content: "hello",
+        mediaUrl: "https://example.com/file.png",
+        blocks: JSON.stringify([{ type: "divider" }]),
+      },
+      slackConfig(),
+    );
+
+    expect(sendSlackMessage).toHaveBeenCalledTimes(2);
+    expect(sendSlackMessage).toHaveBeenNthCalledWith(
+      1,
+      "channel:C123",
+      "",
+      expect.objectContaining({
+        cfg: expect.any(Object),
+        mediaUrl: "https://example.com/file.png",
+        threadTs: undefined,
+      }),
+    );
+    expect(sendSlackMessage.mock.calls[0]?.[2]).not.toHaveProperty("blocks");
+    expect(sendSlackMessage).toHaveBeenNthCalledWith(
+      2,
+      "channel:C123",
+      "hello",
+      expect.objectContaining({
+        cfg: expect.any(Object),
+        blocks: [{ type: "divider" }],
+        threadTs: undefined,
+      }),
+    );
+    expect(sendSlackMessage.mock.calls[1]?.[2]).not.toHaveProperty("mediaUrl");
+    expect(result.details).toEqual({
+      ok: true,
+      result: { channelId: "C123" },
+    });
   });
 
   it.each([
@@ -685,6 +714,29 @@ describe("handleSlackAction", () => {
         limit: undefined,
         before: undefined,
         after: undefined,
+      }),
+    );
+  });
+
+  it("passes messageId through to readSlackMessages", async () => {
+    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+
+    await handleSlackAction(
+      {
+        action: "readMessages",
+        channelId: "C1",
+        threadId: "1712345678.123456",
+        messageId: "1712345678.654321",
+      },
+      slackConfig(),
+    );
+
+    expect(readSlackMessages).toHaveBeenCalledWith(
+      "C1",
+      expect.objectContaining({
+        cfg: expect.any(Object),
+        threadId: "1712345678.123456",
+        messageId: "1712345678.654321",
       }),
     );
   });

@@ -35,7 +35,7 @@ export function isSameMeetUrlForReuse(a: string | undefined, b: string | undefin
   return Boolean(normalizedA && normalizedB && normalizedA === normalizedB);
 }
 
-export type GoogleMeetNodeInfo = {
+type GoogleMeetNodeInfo = {
   caps?: string[];
   commands?: string[];
   connected?: boolean;

@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
 
-export type RegisteredRoute = {
+type RegisteredRoute = {
   path: string;
   accountId: string;
   handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;

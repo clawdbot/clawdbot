@@ -32,13 +32,11 @@ export type TelegramActionConfig = {
 
 export type TelegramThreadBindingsConfig = SessionThreadBindingsConfig & {
   /**
-   * Allow `sessions_spawn({ thread: true })` to auto-create + bind Telegram
-   * topics for subagent sessions. Default: false (opt-in).
+   * @deprecated Use spawnSessions instead.
    */
   spawnSubagentSessions?: boolean;
   /**
-   * Allow `/acp spawn` to auto-create + bind Telegram topics for ACP
-   * sessions. Default: false (opt-in).
+   * @deprecated Use spawnSessions instead.
    */
   spawnAcpSessions?: boolean;
 };

@@ -122,10 +122,7 @@ export function loadBundledRuntimeChannelPlugin(params: {
   }
 }
 
-export function resolveSetupChannelRegistration(
-  moduleExport: unknown,
-  params: { installRuntimeDeps?: boolean } = {},
-): {
+export function resolveSetupChannelRegistration(moduleExport: unknown): {
   plugin?: ChannelPlugin;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
   usesBundledSetupContract?: boolean;
@@ -146,14 +143,10 @@ export function resolveSetupChannelRegistration(
     typeof setupEntryRecord.loadSetupPlugin === "function"
   ) {
     try {
-      const setupLoadOptions =
-        params.installRuntimeDeps === false ? { installRuntimeDeps: false } : undefined;
-      const loadedPlugin = setupEntryRecord.loadSetupPlugin(setupLoadOptions);
+      const loadedPlugin = setupEntryRecord.loadSetupPlugin();
       const loadedSecrets =
         typeof setupEntryRecord.loadSetupSecrets === "function"
-          ? (setupEntryRecord.loadSetupSecrets(setupLoadOptions) as
-              | ChannelPlugin["secrets"]
-              | undefined)
+          ? (setupEntryRecord.loadSetupSecrets() as ChannelPlugin["secrets"] | undefined)
           : undefined;
       if (loadedPlugin && typeof loadedPlugin === "object") {
         const mergedSecrets = mergeChannelPluginSection(

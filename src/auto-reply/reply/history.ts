@@ -4,7 +4,7 @@ export const HISTORY_CONTEXT_MARKER = "[Chat messages since your last reply - fo
 export const DEFAULT_GROUP_HISTORY_LIMIT = 50;
 
 /** Maximum number of group history keys to retain (LRU eviction when exceeded). */
-export const MAX_HISTORY_KEYS = 1000;
+const MAX_HISTORY_KEYS = 1000;
 
 /**
  * Evict oldest keys from a history map when it exceeds MAX_HISTORY_KEYS.

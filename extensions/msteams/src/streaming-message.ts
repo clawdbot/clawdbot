@@ -30,7 +30,7 @@ const MAX_STREAM_AGE_MS = 45_000;
 
 type StreamSendFn = (activity: Record<string, unknown>) => Promise<unknown>;
 
-export type TeamsStreamOptions = {
+type TeamsStreamOptions = {
   /** Function to send an activity (POST to Bot Framework). */
   sendActivity: StreamSendFn;
   /** Whether to enable feedback loop on the final message. */

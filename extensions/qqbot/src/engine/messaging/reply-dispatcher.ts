@@ -32,7 +32,7 @@ import {
 // ---- Injected dependencies ----
 
 /** TTS provider interface — injected from the outer layer. */
-export interface TTSProvider {
+interface TTSProvider {
   /** Framework TTS: text → audio file path. */
   textToSpeech(params: {
     text: string;
@@ -57,7 +57,7 @@ export interface ReplyDispatcherDeps {
 
 // ---- Exported types ----
 
-export interface MessageTarget {
+interface MessageTarget {
   type: "c2c" | "guild" | "dm" | "group";
   senderId: string;
   messageId: string;
@@ -66,7 +66,7 @@ export interface MessageTarget {
   groupOpenid?: string;
 }
 
-export interface ReplyContext {
+interface ReplyContext {
   target: MessageTarget;
   account: GatewayAccount;
   cfg: unknown;
@@ -93,11 +93,7 @@ export async function sendWithTokenRetry<T>(
 // ---- Text routing ----
 
 /** Route a text message to the correct QQ target type. */
-export async function sendTextToTarget(
-  ctx: ReplyContext,
-  text: string,
-  refIdx?: string,
-): Promise<void> {
+async function sendTextToTarget(ctx: ReplyContext, text: string, refIdx?: string): Promise<void> {
   const { target, account } = ctx;
   const deliveryTarget = buildDeliveryTarget(target);
   const creds = accountToCreds(account);

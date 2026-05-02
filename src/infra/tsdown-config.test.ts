@@ -49,11 +49,6 @@ function entrySources(config: TsdownConfigEntry): Record<string, string> {
   return config.entry;
 }
 
-function hasBundledPluginRuntimeEntry(config: TsdownConfigEntry): boolean {
-  const keys = entryKeys(config);
-  return keys.includes("index") || keys.includes("runtime-api");
-}
-
 function bundledEntry(pluginId: string): string {
   return `${bundledPluginRoot(pluginId)}/index`;
 }
@@ -116,26 +111,12 @@ describe("tsdown config", () => {
     expect(new Set(importSpecifiers)).toEqual(new Set(["./lifecycle.runtime.js"]));
   });
 
-  it("emits staged bundled plugins as separate extension graphs", () => {
-    const stagedGraphs = asConfigArray(tsdownConfig).filter(
+  it("keeps bundled plugins out of separate dependency-staging graphs", () => {
+    const extensionGraphs = asConfigArray(tsdownConfig).filter(
       (config) => typeof config.outDir === "string" && config.outDir.startsWith("dist/extensions/"),
     );
 
-    expect(stagedGraphs.length).toBeGreaterThan(0);
-    expect(stagedGraphs.every(hasBundledPluginRuntimeEntry)).toBe(true);
-    expect(stagedGraphs.every((config) => !entryKeys(config).includes("plugin-sdk/index"))).toBe(
-      true,
-    );
-    expect(stagedGraphs.some((config) => config.outDir === "dist/extensions/discord")).toBe(true);
-    expect(stagedGraphs.some((config) => config.outDir === "dist/extensions/msteams")).toBe(true);
-    expect(stagedGraphs.some((config) => config.outDir === "dist/extensions/openai")).toBe(true);
-    expect(
-      stagedGraphs.some(
-        (config) =>
-          config.outDir === "dist/extensions/media-understanding-core" &&
-          entryKeys(config).includes("image-ops"),
-      ),
-    ).toBe(true);
+    expect(extensionGraphs).toEqual([]);
   });
 
   it("does not emit plugin-sdk or hooks from a separate dist graph", () => {
@@ -151,17 +132,17 @@ describe("tsdown config", () => {
     ).toBe(false);
   });
 
-  it("externalizes staged bundled plugin runtime dependencies", () => {
+  it("externalizes known heavy native dependencies", () => {
     const unifiedGraph = unifiedDistGraph();
     const neverBundle = unifiedGraph?.deps?.neverBundle;
 
     if (typeof neverBundle === "function") {
-      expect(neverBundle("silk-wasm")).toBe(true);
-      expect(neverBundle("ws")).toBe(true);
-      expect(neverBundle("ws/lib/websocket.js")).toBe(true);
+      expect(neverBundle("@lancedb/lancedb")).toBe(true);
+      expect(neverBundle("@matrix-org/matrix-sdk-crypto-nodejs")).toBe(true);
+      expect(neverBundle("matrix-js-sdk/lib/client.js")).toBe(true);
       expect(neverBundle("not-a-runtime-dependency")).toBe(false);
     } else {
-      expect(neverBundle).toEqual(expect.arrayContaining(["silk-wasm", "ws"]));
+      expect(neverBundle).toEqual(expect.arrayContaining(["@lancedb/lancedb", "matrix-js-sdk"]));
     }
   });
 

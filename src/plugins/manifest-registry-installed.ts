@@ -104,36 +104,36 @@ function resolveFallbackPluginSource(record: InstalledPluginIndexRecord): string
 function resolveInstalledPackageManifest(
   record: InstalledPluginIndexRecord,
 ): OpenClawPackageManifest | undefined {
-  if (!record.packageChannel) {
-    return undefined;
-  }
-  if (record.packageChannel.commands) {
-    return { channel: record.packageChannel };
-  }
   const rootDir = resolveInstalledPluginRootDir(record);
   const packageJsonPath = record.packageJson?.path
     ? path.resolve(rootDir, record.packageJson.path)
     : undefined;
   if (!packageJsonPath) {
-    return { channel: record.packageChannel };
+    return record.packageChannel ? { channel: record.packageChannel } : undefined;
   }
   const relative = path.relative(rootDir, packageJsonPath);
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    return { channel: record.packageChannel };
+    return record.packageChannel ? { channel: record.packageChannel } : undefined;
   }
   try {
     const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as PackageManifest;
     const packageManifest = getPackageManifestMetadata(packageJson);
+    if (!packageManifest) {
+      return record.packageChannel ? { channel: record.packageChannel } : undefined;
+    }
+    const channel =
+      record.packageChannel || packageManifest.channel
+        ? {
+            ...record.packageChannel,
+            ...packageManifest.channel,
+          }
+        : undefined;
     return {
-      channel: {
-        ...record.packageChannel,
-        ...(packageManifest?.channel?.commands
-          ? { commands: packageManifest.channel.commands }
-          : {}),
-      },
+      ...packageManifest,
+      ...(channel ? { channel } : {}),
     };
   } catch {
-    return { channel: record.packageChannel };
+    return record.packageChannel ? { channel: record.packageChannel } : undefined;
   }
 }
 

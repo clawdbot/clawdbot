@@ -426,6 +426,33 @@ describe("processEvent (functional)", () => {
     expect(call.direction).toBe("inbound");
   });
 
+  it("assigns per-call session keys to inbound calls when configured", () => {
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "plivo",
+        fromNumber: "+15550000000",
+        inboundPolicy: "open",
+        sessionScope: "per-call",
+      }),
+    });
+    const event: NormalizedEvent = {
+      id: "evt-inbound-session-scope",
+      type: "call.initiated",
+      callId: "CA-inbound-session-scope",
+      providerCallId: "CA-inbound-session-scope",
+      timestamp: Date.now(),
+      direction: "inbound",
+      from: "+15554444444",
+      to: "+15550000000",
+    };
+
+    processEvent(ctx, event);
+
+    const call = requireFirstActiveCall(ctx);
+    expect(call.sessionKey).toBe(`voice:call:${call.callId}`);
+  });
+
   it("deduplicates by dedupeKey even when event IDs differ", () => {
     const now = Date.now();
     const ctx = createContext();

@@ -454,6 +454,35 @@ describe("registerPluginCommand", () => {
     });
   });
 
+  it("exposes native description localizations on plugin command specs", () => {
+    const result = registerVoiceCommandForTest({
+      description: "Demo command",
+      descriptionLocalizations: { ko: "데모 명령" },
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(listProviderPluginCommandSpecs("discord")).toEqual([
+      {
+        name: "voice",
+        description: "Demo command",
+        descriptionLocalizations: { ko: "데모 명령" },
+        acceptsArgs: false,
+      },
+    ]);
+  });
+
+  it("rejects empty native description localizations", () => {
+    const result = registerVoiceCommandForTest({
+      description: "Demo command",
+      descriptionLocalizations: { ko: "   " },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: 'Description localization "ko" cannot be empty',
+    });
+  });
+
   it("rejects empty native progress metadata", () => {
     const result = registerVoiceCommandForTest({
       nativeProgressMessages: { telegram: "   " },

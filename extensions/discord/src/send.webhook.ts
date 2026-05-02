@@ -86,6 +86,7 @@ export async function sendWebhookMessageDiscord(
   });
   const rewrittenText = rewriteDiscordKnownMentions(text, {
     accountId: account.accountId,
+    mentionAliases: account.config.mentionAliases,
   });
 
   const response = await (proxyFetch ?? fetch)(

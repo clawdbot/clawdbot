@@ -2,7 +2,7 @@ import type { MessageEntity } from "@grammyjs/types";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
 
-export type TelegramReplyParameters = {
+type TelegramReplyParameters = {
   message_id: number;
   allow_sending_without_reply: true;
   quote?: string;
@@ -10,7 +10,7 @@ export type TelegramReplyParameters = {
   quote_entities?: MessageEntity[];
 };
 
-export type TelegramThreadReplyParams = {
+type TelegramThreadReplyParams = {
   message_thread_id?: number;
   reply_parameters?: TelegramReplyParameters;
   reply_to_message_id?: number;

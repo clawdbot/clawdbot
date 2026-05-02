@@ -47,6 +47,25 @@ describe("WizardSession", () => {
     expect(done.status).toBe("done");
   });
 
+  test("plain output is a client note with plain format", async () => {
+    const session = new WizardSession(async (prompter) => {
+      await prompter.plain?.('{"ok":true}');
+    });
+
+    const first = await session.next();
+    expect(first.step).toMatchObject({
+      type: "note",
+      message: '{"ok":true}',
+      format: "plain",
+    });
+    if (!first.step) {
+      throw new Error("expected plain note");
+    }
+    await session.answer(first.step.id, null);
+    const done = await session.next();
+    expect(done.done).toBe(true);
+  });
+
   test("invalid answers throw", async () => {
     const session = noteRunner();
     const first = await session.next();

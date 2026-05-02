@@ -1,6 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
-export type ExecApprovalResult =
+type ExecApprovalResult =
   | {
       kind: "denied";
       raw: string;

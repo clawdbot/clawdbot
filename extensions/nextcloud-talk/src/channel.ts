@@ -119,6 +119,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
         resolveToolPolicy: resolveNextcloudTalkGroupToolPolicy,
       },
       messaging: {
+        targetPrefixes: ["nextcloud-talk", "nc-talk", "nc"],
         normalizeTarget: normalizeNextcloudTalkMessagingTarget,
         resolveOutboundSessionRoute: (params) => resolveNextcloudTalkOutboundSessionRoute(params),
         targetResolver: {

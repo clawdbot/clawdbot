@@ -5,7 +5,7 @@
  */
 
 // Inline content types
-export type StoryInline =
+type StoryInline =
   | string
   | { bold: StoryInline[] }
   | { italics: StoryInline[] }
@@ -19,14 +19,14 @@ export type StoryInline =
   | { tag: string };
 
 // Block content types
-export type StoryBlock =
+type StoryBlock =
   | { header: { tag: "h1" | "h2" | "h3" | "h4" | "h5" | "h6"; content: StoryInline[] } }
   | { code: { code: string; lang: string } }
   | { image: { src: string; height: number; width: number; alt: string } }
   | { rule: null }
   | { listing: StoryListing };
 
-export type StoryListing =
+type StoryListing =
   | {
       list: {
         type: "ordered" | "unordered" | "tasklist";
@@ -37,7 +37,7 @@ export type StoryListing =
   | { item: StoryInline[] };
 
 // A verse is either a block or inline content
-export type StoryVerse = { block: StoryBlock } | { inline: StoryInline[] };
+type StoryVerse = { block: StoryBlock } | { inline: StoryInline[] };
 
 // A story is a list of verses
 export type Story = StoryVerse[];

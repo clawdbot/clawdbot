@@ -479,7 +479,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("passes native quote candidates for current message replies", async () => {
+  it("keeps answer draft preview for current message replies with native quote candidates", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Hello", replyToId: "1001" }, { kind: "final" });
       return { queuedFinal: true };
@@ -499,7 +501,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
       }),
     });
 
-    expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    expect(createTelegramDraftStream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: 1001,
+      }),
+    );
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ replyToId: "1001" })],

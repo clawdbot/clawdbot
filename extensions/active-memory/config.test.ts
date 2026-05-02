@@ -36,6 +36,20 @@ describe("active-memory manifest config schema", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts setupGraceTimeoutMs values at the runtime ceiling", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "active-memory.manifest.setup-grace-timeout-ceiling",
+      value: {
+        enabled: true,
+        agents: ["main"],
+        setupGraceTimeoutMs: 30_000,
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("accepts explicit in allowedChatTypes", () => {
     const result = validateJsonSchemaValue({
       schema: manifest.configSchema,
@@ -58,6 +72,20 @@ describe("active-memory manifest config schema", () => {
         enabled: true,
         agents: ["main"],
         timeoutMs: 120_001,
+      },
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects setupGraceTimeoutMs values above the runtime ceiling", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "active-memory.manifest.setup-grace-timeout-above-ceiling",
+      value: {
+        enabled: true,
+        agents: ["main"],
+        setupGraceTimeoutMs: 30_001,
       },
     });
 

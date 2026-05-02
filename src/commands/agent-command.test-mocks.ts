@@ -49,6 +49,7 @@ vi.mock("../agents/pi-embedded.js", () => ({
 }));
 
 vi.mock("../agents/model-catalog.js", () => ({
+  loadManifestModelCatalog: vi.fn(() => []),
   loadModelCatalog: vi.fn(),
 }));
 

@@ -1,8 +1,11 @@
 {
   "name": "@openclaw/diffs",
-  "version": "2026.4.25",
-  "private": true,
+  "version": "2026.5.1-beta.1",
   "description": "OpenClaw diff viewer plugin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "scripts": {
     "build:viewer": "bun build src/viewer-client.ts --target browser --format esm --minify --outfile assets/viewer-runtime.js"
@@ -11,17 +14,33 @@
     "@pierre/diffs": "1.1.20",
     "@pierre/theme": "0.0.29",
     "playwright-core": "1.59.1",
-    "typebox": "1.1.36"
+    "typebox": "1.1.37"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
-    "bundle": {
-      "stageRuntimeDependencies": true
-    },
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "install": {
+      "npmSpec": "@openclaw/diffs",
+      "localPath": "extensions/diffs",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.30"
+    },
+    "compat": {
+      "pluginApi": ">=2026.4.30"
+    },
+    "build": {
+      "openclawVersion": "2026.5.1-beta.1"
+    },
+    "bundle": {
+      "includeInCore": false
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
   }
 }

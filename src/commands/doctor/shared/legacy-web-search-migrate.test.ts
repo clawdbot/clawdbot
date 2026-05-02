@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 
-vi.mock("../../../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: () => ({
+vi.mock("../../../plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: () => ({
     plugins: [
       {
         id: "brave",
@@ -21,8 +21,6 @@ vi.mock("../../../plugins/plugin-registry.js", () => ({
       },
     ],
   }),
-  resolveManifestContractOwnerPluginId: ({ value }: { value: string }) =>
-    ({ brave: "brave", grok: "xai", kimi: "moonshot" })[value as "brave" | "grok" | "kimi"],
 }));
 
 import {

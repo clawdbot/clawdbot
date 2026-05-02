@@ -17,11 +17,11 @@ function hashIncludePatterns(includePatterns) {
   return createHash("sha1").update(JSON.stringify(includePatterns)).digest("hex").slice(0, 12);
 }
 
-export function shouldUseShardTimings(env = process.env) {
+function shouldUseShardTimings(env = process.env) {
   return env[TIMINGS_DISABLE_ENV_KEY] !== "0";
 }
 
-export function resolveShardTimingsPath(cwd = process.cwd(), env = process.env) {
+function resolveShardTimingsPath(cwd = process.cwd(), env = process.env) {
   return env[TIMINGS_FILE_ENV_KEY] || path.join(cwd, ".artifacts", "vitest-shard-timings.json");
 }
 

@@ -5,7 +5,7 @@ import { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js"
 
 // --- Types ---
 
-export type WebPushSubscription = {
+type WebPushSubscription = {
   subscriptionId: string;
   endpoint: string;
   keys: { p256dh: string; auth: string };
@@ -13,17 +13,17 @@ export type WebPushSubscription = {
   updatedAtMs: number;
 };
 
-export type WebPushRegistrationState = {
+type WebPushRegistrationState = {
   subscriptionsByEndpointHash: Record<string, WebPushSubscription>;
 };
 
-export type VapidKeyPair = {
+type VapidKeyPair = {
   publicKey: string;
   privateKey: string;
   subject: string;
 };
 
-export type WebPushSendResult = {
+type WebPushSendResult = {
   ok: boolean;
   subscriptionId: string;
   statusCode?: number;
@@ -142,17 +142,17 @@ function resolveVapidSubjectFromEnv(): string {
   return process.env.OPENCLAW_VAPID_SUBJECT || DEFAULT_VAPID_SUBJECT;
 }
 
-export function resolveVapidPublicKeyFromEnv(): string | undefined {
+function resolveVapidPublicKeyFromEnv(): string | undefined {
   return process.env.OPENCLAW_VAPID_PUBLIC_KEY || undefined;
 }
 
-export function resolveVapidPrivateKeyFromEnv(): string | undefined {
+function resolveVapidPrivateKeyFromEnv(): string | undefined {
   return process.env.OPENCLAW_VAPID_PRIVATE_KEY || undefined;
 }
 
 // --- Subscription CRUD ---
 
-export type RegisterWebPushParams = {
+type RegisterWebPushParams = {
   endpoint: string;
   keys: { p256dh: string; auth: string };
   baseDir?: string;
@@ -243,7 +243,7 @@ export async function clearWebPushSubscriptionByEndpoint(
 
 // --- Sending ---
 
-export type WebPushPayload = {
+type WebPushPayload = {
   title: string;
   body?: string;
   tag?: string;

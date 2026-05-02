@@ -4,7 +4,7 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { liveProvidersShareOwningPlugin } from "./live-provider-owner.js";
 import { normalizeProviderId } from "./provider-id.js";
 
-export type ModelRef = {
+type ModelRef = {
   provider?: string | null;
   id?: string | null;
 };
@@ -24,7 +24,7 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "openrouter/minimax/minimax-m2.7",
   "opencode-go/glm-5",
   "openrouter/ai21/jamba-large-1.7",
-  "xai/grok-4-1-fast-non-reasoning",
+  "xai/grok-4.3",
   "zai/glm-5.1",
   "fireworks/accounts/fireworks/models/kimi-k2p6",
   "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",

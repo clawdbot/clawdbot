@@ -22,7 +22,7 @@ type DiscordMessageRunQueueParams = {
   __testing?: DiscordMessageRunQueueTestingHooks;
 };
 
-export type DiscordMessageRunQueue = {
+type DiscordMessageRunQueue = {
   enqueue: (job: DiscordInboundJob) => void;
   deactivate: () => void;
 };

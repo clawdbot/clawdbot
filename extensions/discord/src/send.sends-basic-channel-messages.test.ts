@@ -6,6 +6,7 @@ vi.mock("openclaw/plugin-sdk/web-media", () => discordWebMediaMockFactory());
 
 let deleteMessageDiscord: typeof import("./send.js").deleteMessageDiscord;
 let editMessageDiscord: typeof import("./send.js").editMessageDiscord;
+let canViewDiscordGuildChannel: typeof import("./send.js").canViewDiscordGuildChannel;
 let fetchChannelPermissionsDiscord: typeof import("./send.js").fetchChannelPermissionsDiscord;
 let fetchReactionsDiscord: typeof import("./send.js").fetchReactionsDiscord;
 let pinMessageDiscord: typeof import("./send.js").pinMessageDiscord;
@@ -29,6 +30,7 @@ beforeAll(async () => {
   ({
     deleteMessageDiscord,
     editMessageDiscord,
+    canViewDiscordGuildChannel,
     fetchChannelPermissionsDiscord,
     fetchReactionsDiscord,
     pinMessageDiscord,
@@ -160,6 +162,34 @@ describe("sendMessageDiscord", () => {
       rest,
       token: "t",
       cfg: DISCORD_TEST_CFG,
+      accountId: "default",
+    });
+    expect(postMock).toHaveBeenCalledWith(
+      Routes.channelMessages("789"),
+      expect.objectContaining({ body: { content: "ping <@123456789012345678>" } }),
+    );
+  });
+
+  it("rewrites configured @username aliases to id-based mentions", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    postMock.mockResolvedValue({
+      id: "msg1",
+      channel_id: "789",
+    });
+    await sendMessageDiscord("channel:789", "ping @OpsLead", {
+      rest,
+      token: "t",
+      cfg: {
+        channels: {
+          discord: {
+            token: "t",
+            mentionAliases: {
+              opslead: "123456789012345678",
+            },
+          },
+        },
+      } as never,
       accountId: "default",
     });
     expect(postMock).toHaveBeenCalledWith(
@@ -411,6 +441,28 @@ describe("sendMessageDiscord", () => {
     expect(loadWebMedia).toHaveBeenCalledWith(
       "file:///tmp/photo.jpg",
       expect.objectContaining({ maxBytes: 100 * 1024 * 1024 }),
+    );
+  });
+
+  it("passes mediaAccess workspaceDir when loading relative media attachments", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock.mockResolvedValue({ id: "msg", channel_id: "789" });
+
+    await sendMessageDiscord("channel:789", "", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      mediaUrl: "chart.png",
+      mediaAccess: {
+        workspaceDir: "/tmp/agent-workspace",
+      },
+    });
+
+    expect(loadWebMedia).toHaveBeenCalledWith(
+      "chart.png",
+      expect.objectContaining({
+        workspaceDir: "/tmp/agent-workspace",
+      }),
     );
   });
 
@@ -694,6 +746,98 @@ describe("fetchChannelPermissionsDiscord", () => {
     });
     expect(res.permissions).toContain("Administrator");
     expect(res.permissions).toContain("ViewChannel");
+  });
+
+  it("checks whether an arbitrary member can view a guild channel", async () => {
+    const { rest, getMock } = makeDiscordRest();
+    getMock
+      .mockResolvedValueOnce({
+        id: "chan1",
+        guild_id: "guild1",
+        permission_overwrites: [
+          {
+            id: "guild1",
+            deny: PermissionFlagsBits.ViewChannel.toString(),
+            allow: "0",
+          },
+          {
+            id: "role2",
+            deny: "0",
+            allow: PermissionFlagsBits.ViewChannel.toString(),
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        id: "guild1",
+        roles: [
+          { id: "guild1", permissions: "0" },
+          { id: "role2", permissions: "0" },
+        ],
+      })
+      .mockResolvedValueOnce({ roles: ["role2"] });
+
+    await expect(
+      canViewDiscordGuildChannel("guild1", "chan1", "user1", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("aggregates conflicting role overwrites before applying allows", async () => {
+    const { rest, getMock } = makeDiscordRest();
+    getMock
+      .mockResolvedValueOnce({
+        id: "chan1",
+        guild_id: "guild1",
+        permission_overwrites: [
+          {
+            id: "role-allow",
+            deny: "0",
+            allow: PermissionFlagsBits.ViewChannel.toString(),
+          },
+          {
+            id: "role-deny",
+            deny: PermissionFlagsBits.ViewChannel.toString(),
+            allow: "0",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        id: "guild1",
+        roles: [
+          { id: "guild1", permissions: "0" },
+          { id: "role-allow", permissions: "0" },
+          { id: "role-deny", permissions: "0" },
+        ],
+      })
+      .mockResolvedValueOnce({ roles: ["role-allow", "role-deny"] });
+
+    await expect(
+      canViewDiscordGuildChannel("guild1", "chan1", "user1", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("fails closed when the channel belongs to a different guild", async () => {
+    const { rest, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({
+      id: "chan1",
+      guild_id: "guild2",
+      permission_overwrites: [],
+    });
+
+    await expect(
+      canViewDiscordGuildChannel("guild1", "chan1", "user1", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+      }),
+    ).resolves.toBe(false);
   });
 });
 

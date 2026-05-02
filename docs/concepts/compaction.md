@@ -89,7 +89,7 @@ This works with local models too, for example a second Ollama model dedicated to
 }
 ```
 
-When unset, compaction uses the agent's primary model.
+When unset, compaction starts with the active session model. If summarization fails with a model-fallback-eligible provider error, OpenClaw retries that compaction attempt through the session's existing model fallback chain. The fallback choice is temporary and is not written back to session state. An explicit `agents.defaults.compaction.model` override remains exact and does not inherit the session fallback chain.
 
 ### Identifier preservation
 

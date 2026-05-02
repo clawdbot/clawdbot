@@ -17,15 +17,6 @@ import {
   STEPFUN_STANDARD_INTL_BASE_URL,
 } from "./provider-catalog.js";
 
-export {
-  STEPFUN_DEFAULT_MODEL_REF,
-  STEPFUN_PLAN_CN_BASE_URL,
-  STEPFUN_PLAN_DEFAULT_MODEL_REF,
-  STEPFUN_PLAN_INTL_BASE_URL,
-  STEPFUN_STANDARD_CN_BASE_URL,
-  STEPFUN_STANDARD_INTL_BASE_URL,
-};
-
 function createStepFunPresetAppliers(params: {
   providerId: string;
   primaryModelRef: string;

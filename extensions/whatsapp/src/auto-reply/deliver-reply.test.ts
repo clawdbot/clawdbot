@@ -271,6 +271,28 @@ describe("deliverWebReply", () => {
     expect(vi.mocked(msg.reply).mock.calls[0]?.[0]).toBe("Before\n\nAfter\n");
   });
 
+  it("strips legacy uppercase TOOL_CALL text before WhatsApp text delivery", async () => {
+    const msg = makeMsg();
+
+    await deliverWebReply({
+      replyResult: {
+        text: [
+          "Before",
+          '[TOOL_CALL]{tool => "web_search", args => {"query":"NET stock price"}}[/TOOL_CALL]',
+          "After",
+        ].join("\n"),
+      },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 4000,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(msg.reply).mock.calls[0]?.[0]).toBe("Before\n\nAfter");
+  });
+
   it("keeps quote threading on every text chunk for a threaded reply", async () => {
     const msg = makeMsg();
     cacheInboundMessageMeta("work", "15551234567@s.whatsapp.net", "reply-1", {

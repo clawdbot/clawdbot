@@ -41,7 +41,7 @@
  *                                 skip AI dispatch.
  * - `pass`                      — forward the message to the AI pipeline.
  */
-export type GroupMessageGateAction =
+type GroupMessageGateAction =
   | "drop_other_mention"
   | "block_unauthorized_command"
   | "skip_no_mention"

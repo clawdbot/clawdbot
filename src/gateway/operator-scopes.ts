@@ -22,9 +22,7 @@ const KNOWN_OPERATOR_SCOPE_VALUES: readonly OperatorScope[] = [
   TALK_SECRETS_SCOPE,
 ];
 
-export const KNOWN_OPERATOR_SCOPES: ReadonlySet<OperatorScope> = new Set(
-  KNOWN_OPERATOR_SCOPE_VALUES,
-);
+const KNOWN_OPERATOR_SCOPES: ReadonlySet<OperatorScope> = new Set(KNOWN_OPERATOR_SCOPE_VALUES);
 
 export function isOperatorScope(value: unknown): value is OperatorScope {
   return typeof value === "string" && KNOWN_OPERATOR_SCOPES.has(value as OperatorScope);

@@ -29,19 +29,6 @@
 
 import type { FetchMediaOptions, FetchMediaResult, SecretInputRef } from "./types.js";
 
-// ============ Re-exports (port interfaces) ============
-
-export type { HistoryPort, HistoryEntryLike } from "./history.port.js";
-export type {
-  MentionGatePort,
-  MentionFacts,
-  MentionPolicy,
-  MentionGateDecision,
-  ImplicitMentionKind,
-} from "./mention-gate.port.js";
-export type { AudioConvertPort, OutboundAudioPort } from "./audio.port.js";
-export type { CommandsPort, ApproveRuntimeGetter } from "./commands.port.js";
-
 // ============ EngineAdapters (aggregated port injection) ============
 
 /**

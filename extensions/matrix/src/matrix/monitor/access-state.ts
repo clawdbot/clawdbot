@@ -12,7 +12,7 @@ type MatrixMonitorAllowListMatch = {
   matchSource?: "wildcard" | "id" | "prefixed-id" | "prefixed-user";
 };
 
-export type MatrixMonitorAccessState = {
+type MatrixMonitorAccessState = {
   effectiveAllowFrom: string[];
   effectiveGroupAllowFrom: string[];
   effectiveRoomUsers: string[];

@@ -2,7 +2,7 @@ import { readSecretFromFile } from "../acp/secret-file.js";
 import { defaultRuntime } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
-export function resolveGatewaySecretOption(params: {
+function resolveGatewaySecretOption(params: {
   direct?: unknown;
   file?: unknown;
   directFlag: string;
@@ -20,7 +20,7 @@ export function resolveGatewaySecretOption(params: {
   return direct || undefined;
 }
 
-export function warnGatewaySecretCliFlag(flag: "--token" | "--password"): void {
+function warnGatewaySecretCliFlag(flag: "--token" | "--password"): void {
   defaultRuntime.error(
     `Warning: ${flag} can be exposed via process listings. Prefer ${flag}-file or environment variables.`,
   );

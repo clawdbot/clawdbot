@@ -36,7 +36,7 @@ export function parseAgentSessionKey(
   return { agentId, rest };
 }
 
-export function normalizeMainKey(value: string | undefined | null): string {
+function normalizeMainKey(value: string | undefined | null): string {
   return normalizeOptionalLowercaseString(value) ?? DEFAULT_MAIN_KEY;
 }
 

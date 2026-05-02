@@ -4,7 +4,6 @@ export {
   DEFAULT_ACCOUNT_ID,
   getChatChannelMeta,
   type ChannelPlugin,
-  type OpenClawConfig,
 } from "openclaw/plugin-sdk/core";
 export { buildChannelConfigSchema, IMessageConfigSchema } from "./config-api.js";
 export { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";

@@ -1,8 +1,12 @@
-import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { SessionEntry as PiSessionEntry, SessionHeader } from "@mariozechner/pi-coding-agent";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import {
+  migrateSessionEntries,
+  parseSessionEntries,
+  type SessionEntry as PiSessionEntry,
+  type SessionHeader,
+} from "@mariozechner/pi-coding-agent";
 import type { ReplyPayload } from "../types.js";
 import {
   isReplyPayload,
@@ -23,8 +27,8 @@ interface SessionData {
   tools?: Array<{ name: string; description?: string; parameters?: unknown }>;
 }
 
-function loadTemplate(fileName: string): string {
-  return fs.readFileSync(path.join(EXPORT_HTML_DIR, fileName), "utf-8");
+async function loadTemplate(fileName: string): Promise<string> {
+  return await fsp.readFile(path.join(EXPORT_HTML_DIR, fileName), "utf-8");
 }
 
 function replaceHtmlPlaceholder(template: string, name: string, value: string): string {
@@ -46,12 +50,14 @@ function replaceHtmlPlaceholder(template: string, name: string, value: string): 
   return next;
 }
 
-function generateHtml(sessionData: SessionData): string {
-  const template = loadTemplate("template.html");
-  const templateCss = loadTemplate("template.css");
-  const templateJs = loadTemplate("template.js");
-  const markedJs = loadTemplate(path.join("vendor", "marked.min.js"));
-  const hljsJs = loadTemplate(path.join("vendor", "highlight.min.js"));
+async function generateHtml(sessionData: SessionData): Promise<string> {
+  const [template, templateCss, templateJs, markedJs, hljsJs] = await Promise.all([
+    loadTemplate("template.html"),
+    loadTemplate("template.css"),
+    loadTemplate("template.js"),
+    loadTemplate(path.join("vendor", "marked.min.js")),
+    loadTemplate(path.join("vendor", "highlight.min.js")),
+  ]);
 
   // Use pi-mono dark theme colors (matching their theme/dark.json)
   const themeVars = `
@@ -116,6 +122,31 @@ function generateHtml(sessionData: SessionData): string {
   ].reduce((html, [name, value]) => replaceHtmlPlaceholder(html, name, value), template);
 }
 
+async function fileExists(pathName: string): Promise<boolean> {
+  try {
+    await fsp.access(pathName);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function readSessionDataFromTranscript(sessionFile: string): Promise<{
+  header: SessionHeader | null;
+  entries: PiSessionEntry[];
+  leafId: string | null;
+}> {
+  const raw = await fsp.readFile(sessionFile, "utf-8");
+  const fileEntries = parseSessionEntries(raw);
+  migrateSessionEntries(fileEntries);
+  const header =
+    fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
+  const entries = fileEntries.filter((entry): entry is PiSessionEntry => entry.type !== "session");
+  const lastEntry = entries.at(-1);
+  const leafId = typeof lastEntry?.id === "string" ? lastEntry.id : null;
+  return { header, entries, leafId };
+}
+
 export async function buildExportSessionReply(params: HandleCommandsParams): Promise<ReplyPayload> {
   const args = parseExportCommandOutputPath(params.command.commandBodyNormalized, [
     "export-session",
@@ -130,15 +161,12 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   }
   const { entry, sessionFile } = sessionTarget;
 
-  if (!fs.existsSync(sessionFile)) {
+  if (!(await fileExists(sessionFile))) {
     return { text: `❌ Session file not found: ${sessionFile}` };
   }
 
   // 2. Load session entries
-  const sessionManager = SessionManager.open(sessionFile);
-  const entries = sessionManager.getEntries();
-  const header = sessionManager.getHeader();
-  const leafId = sessionManager.getLeafId();
+  const { entries, header, leafId } = await readSessionDataFromTranscript(sessionFile);
 
   // 3. Build full system prompt
   const { systemPrompt, tools } = await resolveCommandsSystemPromptBundle({
@@ -160,7 +188,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   };
 
   // 5. Generate HTML
-  const html = generateHtml(sessionData);
+  const html = await generateHtml(sessionData);
 
   // 6. Determine output path
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
@@ -175,12 +203,10 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
 
   // Ensure directory exists
   const outputDir = path.dirname(outputPath);
-  if (!fs.existsSync(outputDir)) {
-    fs.mkdirSync(outputDir, { recursive: true });
-  }
+  await fsp.mkdir(outputDir, { recursive: true });
 
   // 7. Write file
-  fs.writeFileSync(outputPath, html, "utf-8");
+  await fsp.writeFile(outputPath, html, "utf-8");
 
   const relativePath = path.relative(params.workspaceDir, outputPath);
   const displayPath = relativePath.startsWith("..") ? outputPath : relativePath;

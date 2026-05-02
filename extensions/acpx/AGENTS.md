@@ -4,7 +4,7 @@ This file applies to work under `extensions/acpx/`.
 
 ## Purpose
 
-The bundled ACPX extension is a thin OpenClaw wrapper around the published `acpx` package. Keep reusable ACP runtime logic in `openclaw/acpx`, not in this extension.
+The ACPX extension is a thin OpenClaw wrapper around the published `acpx` package. Keep reusable ACP runtime logic in `openclaw/acpx`, not in this extension.
 
 ## Default Version Policy
 
@@ -30,7 +30,7 @@ Use this flow when OpenClaw needs unreleased ACPX changes before the ACPX versio
 ## Lockfile Notes
 
 - `pnpm-lock.yaml` is the tracked workspace lockfile and must match the ACPX version referenced by `extensions/acpx/package.json`.
-- `extensions/acpx/package-lock.json` is useful local install metadata for the bundled plugin package.
+- `extensions/acpx/package-lock.json` is useful local install metadata for the plugin package.
 - If `extensions/acpx/package-lock.json` is gitignored in this repo state, regenerating it is still useful for local verification, but it will not appear in `git status`.
 
 ## Local Runtime Validation

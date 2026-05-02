@@ -34,13 +34,13 @@ import { performGatewaySessionReset } from "../gateway/session-reset-service.js"
 import { capArrayByJsonBytes } from "../gateway/session-utils.fs.js";
 import {
   listAgentsForGateway,
-  listSessionsFromStore,
+  listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
-  readSessionMessages,
+  readSessionMessagesAsync,
 } from "../gateway/session-utils.js";
 import { applySessionsPatchToStore } from "../gateway/sessions-patch.js";
 import { type AgentEventPayload, onAgentEvent } from "../infra/agent-events.js";
@@ -196,14 +196,21 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const sessionId = entry?.sessionId;
     const sessionAgentId = resolveSessionAgentId({ sessionKey: opts.sessionKey, config: cfg });
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
+    const max = Math.min(1000, typeof opts.limit === "number" ? opts.limit : 200);
+    const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const localMessages =
-      sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
+      sessionId && storePath
+        ? await readSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, {
+            mode: "recent",
+            maxMessages: max,
+            maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+          })
+        : [];
     const rawMessages = augmentChatHistoryWithCliSessionImports({
       entry,
       provider: resolvedSessionModel.provider,
       localMessages,
     });
-    const max = Math.min(1000, typeof opts.limit === "number" ? opts.limit : 200);
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg);
     const normalized = augmentChatHistoryWithCanvasBlocks(
       projectRecentChatDisplayMessages(rawMessages, {
@@ -211,7 +218,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
         maxMessages: max,
       }),
     );
-    const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
     const replaced = replaceOversizedChatHistoryMessages({
       messages: normalized,
@@ -245,12 +251,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async listSessions(opts?: Parameters<TuiBackend["listSessions"]>[0]): Promise<TuiSessionList> {
     const cfg = getRuntimeConfig();
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
-    return listSessionsFromStore({
+    return (await listSessionsFromStoreAsync({
       cfg,
       storePath,
       store,
       opts: opts ?? {},
-    }) as TuiSessionList;
+    })) as TuiSessionList;
   }
 
   async listAgents(): Promise<TuiAgentsList> {

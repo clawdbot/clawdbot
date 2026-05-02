@@ -13,7 +13,7 @@ const SUFFIX_SKIP_RE = /\.(?:test|spec|fixture)\./u;
 const INFRA_DIR_RE = /(^|\/)(?:coverage|dist|node_modules)(?:\/|$)/u;
 const INFRA_NAME_RE = /(test-harness|test-support|test-helpers|test-fixtures)/u;
 
-export function normalizeExtensionSourcePath(filePath) {
+function normalizeExtensionSourcePath(filePath) {
   return filePath.replaceAll("\\", "/");
 }
 

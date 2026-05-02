@@ -1,14 +1,8 @@
 import type { messagingApi } from "@line/bot-sdk";
-import {
-  datetimePickerAction,
-  messageAction,
-  postbackAction,
-  uriAction,
-  type Action,
-} from "./actions.js";
+import { messageAction, postbackAction, uriAction, type Action } from "./actions.js";
 import type { LineTemplateMessagePayload } from "./types.js";
 
-export { datetimePickerAction, messageAction, postbackAction, uriAction };
+export { messageAction };
 
 type TemplateMessage = messagingApi.TemplateMessage;
 type ConfirmTemplate = messagingApi.ConfirmTemplate;
@@ -336,5 +330,4 @@ export type {
   CarouselColumn,
   ImageCarouselTemplate,
   ImageCarouselColumn,
-  Action,
 };

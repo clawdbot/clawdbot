@@ -199,6 +199,49 @@ describe("lmstudio stream wrapper", () => {
     expect(baseStream).toHaveBeenCalledTimes(1);
   });
 
+  it("skips native model preload when provider params disable it", async () => {
+    const baseStream = buildDoneStreamFn();
+    const wrapped = wrapLmstudioInferencePreload({
+      provider: "lmstudio",
+      modelId: "qwen3-8b-instruct",
+      config: {
+        models: {
+          providers: {
+            lmstudio: {
+              baseUrl: "http://localhost:1234",
+              params: { preload: false },
+              models: [],
+            },
+          },
+        },
+      },
+      streamFn: baseStream,
+    } as never);
+
+    const events = await collectEvents(
+      wrapped(
+        {
+          provider: "lmstudio",
+          api: "openai-completions",
+          id: "qwen3-8b-instruct",
+        } as never,
+        { messages: [] } as never,
+        undefined as never,
+      ),
+    );
+
+    expect(events).toEqual([expect.objectContaining({ type: "done" })]);
+    expect(ensureLmstudioModelLoadedMock).not.toHaveBeenCalled();
+    expect(baseStream).toHaveBeenCalledTimes(1);
+    expect(baseStream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        compat: expect.objectContaining({ supportsUsageInStreaming: true }),
+      }),
+      expect.anything(),
+      undefined,
+    );
+  });
+
   it("dedupes concurrent preload requests for the same model and context", async () => {
     let resolvePreload: (() => void) | undefined;
     ensureLmstudioModelLoadedMock.mockImplementationOnce(

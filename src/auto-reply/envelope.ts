@@ -13,7 +13,7 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 
-export type AgentEnvelopeParams = {
+type AgentEnvelopeParams = {
   channel: string;
   from?: string;
   timestamp?: number | Date;

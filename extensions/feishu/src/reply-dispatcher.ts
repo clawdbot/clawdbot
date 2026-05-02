@@ -101,7 +101,7 @@ function resolveCardNote(
   return parts.join(" | ");
 }
 
-export type CreateFeishuReplyDispatcherParams = {
+type CreateFeishuReplyDispatcherParams = {
   cfg: ClawdbotConfig;
   agentId: string;
   runtime: RuntimeEnv;

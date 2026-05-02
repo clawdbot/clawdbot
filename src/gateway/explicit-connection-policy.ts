@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { trimToUndefined, type ExplicitGatewayAuth } from "./credentials.js";
 
-export function hasExplicitGatewayConnectionAuth(auth?: ExplicitGatewayAuth): boolean {
+function hasExplicitGatewayConnectionAuth(auth?: ExplicitGatewayAuth): boolean {
   return Boolean(trimToUndefined(auth?.token) || trimToUndefined(auth?.password));
 }
 

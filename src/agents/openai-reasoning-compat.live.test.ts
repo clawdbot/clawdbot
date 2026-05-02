@@ -261,9 +261,21 @@ describeLive("openai reasoning compat live", () => {
         "toolResult",
         "user",
       ]);
+      const assistantToolIds = (
+        ((sanitized[1] as { content?: unknown }).content ?? []) as unknown[]
+      )
+        .filter(
+          (block): block is { type: "toolCall"; id: string } =>
+            typeof block === "object" &&
+            block !== null &&
+            (block as { type?: unknown }).type === "toolCall" &&
+            typeof (block as { id?: unknown }).id === "string",
+        )
+        .map((block) => block.id);
+      expect(assistantToolIds).toHaveLength(3);
       expect(
         sanitized.slice(2, 5).map((message) => (message as { toolCallId?: string }).toolCallId),
-      ).toEqual(["call_keep", "call_missing_a", "call_missing_b"]);
+      ).toEqual(assistantToolIds);
       expect(
         sanitized
           .slice(3, 5)

@@ -1,6 +1,6 @@
-import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { migrateSessionEntries, parseSessionEntries } from "@mariozechner/pi-coding-agent";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -100,9 +100,9 @@ export function buildCliSessionHistoryPrompt(params: {
   ].join("\n");
 }
 
-function safeRealpathSync(filePath: string): string | undefined {
+async function safeRealpath(filePath: string): Promise<string | undefined> {
   try {
-    return fs.realpathSync(filePath);
+    return await fsp.realpath(filePath);
   } catch {
     return undefined;
   }
@@ -140,56 +140,58 @@ function resolveSafeCliSessionFile(params: {
   };
 }
 
-function loadCliSessionEntries(params: {
+async function loadCliSessionEntries(params: {
   sessionId: string;
   sessionFile: string;
   sessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
-}): unknown[] {
+}): Promise<unknown[]> {
   try {
     const { sessionFile, sessionsDir } = resolveSafeCliSessionFile(params);
-    const entryStat = fs.lstatSync(sessionFile);
+    const entryStat = await fsp.lstat(sessionFile);
     if (!entryStat.isFile() || entryStat.isSymbolicLink()) {
       return [];
     }
-    const realSessionsDir = safeRealpathSync(sessionsDir) ?? path.resolve(sessionsDir);
-    const realSessionFile = safeRealpathSync(sessionFile);
+    const realSessionsDir = (await safeRealpath(sessionsDir)) ?? path.resolve(sessionsDir);
+    const realSessionFile = await safeRealpath(sessionFile);
     if (!realSessionFile || !isPathWithinBase(realSessionsDir, realSessionFile)) {
       return [];
     }
-    const stat = fs.statSync(realSessionFile);
+    const stat = await fsp.stat(realSessionFile);
     if (!stat.isFile() || stat.size > MAX_CLI_SESSION_HISTORY_FILE_BYTES) {
       return [];
     }
-    return SessionManager.open(realSessionFile).getEntries();
+    const entries = parseSessionEntries(await fsp.readFile(realSessionFile, "utf-8"));
+    migrateSessionEntries(entries);
+    return entries.filter((entry) => entry.type !== "session");
   } catch {
     return [];
   }
 }
 
-export function loadCliSessionHistoryMessages(params: {
+export async function loadCliSessionHistoryMessages(params: {
   sessionId: string;
   sessionFile: string;
   sessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
-}): unknown[] {
-  const history = loadCliSessionEntries(params).flatMap((entry) => {
+}): Promise<unknown[]> {
+  const history = (await loadCliSessionEntries(params)).flatMap((entry) => {
     const candidate = entry as HistoryEntry;
     return candidate.type === "message" ? [candidate.message] : [];
   });
   return limitAgentHookHistoryMessages(history, MAX_CLI_SESSION_HISTORY_MESSAGES);
 }
 
-export function loadCliSessionReseedMessages(params: {
+export async function loadCliSessionReseedMessages(params: {
   sessionId: string;
   sessionFile: string;
   sessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
-}): unknown[] {
-  const entries = loadCliSessionEntries(params);
+}): Promise<unknown[]> {
+  const entries = await loadCliSessionEntries(params);
   const latestCompactionIndex = entries.findLastIndex((entry) => {
     const candidate = entry as HistoryEntry;
     return candidate.type === "compaction" && typeof candidate.summary === "string";

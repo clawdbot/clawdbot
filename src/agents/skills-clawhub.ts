@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileExists } from "../infra/archive.js";
@@ -141,9 +140,7 @@ async function ensureSkillRoot(rootDir: string): Promise<void> {
   throw new Error("downloaded archive is missing SKILL.md");
 }
 
-export async function readClawHubSkillsLockfile(
-  workspaceDir: string,
-): Promise<ClawHubSkillsLockfile> {
+async function readClawHubSkillsLockfile(workspaceDir: string): Promise<ClawHubSkillsLockfile> {
   const candidates = [
     path.join(workspaceDir, DOT_DIR, "lock.json"),
     path.join(workspaceDir, LEGACY_DOT_DIR, "lock.json"),
@@ -166,7 +163,7 @@ export async function readClawHubSkillsLockfile(
   return { version: 1, skills: {} };
 }
 
-export async function writeClawHubSkillsLockfile(
+async function writeClawHubSkillsLockfile(
   workspaceDir: string,
   lockfile: ClawHubSkillsLockfile,
 ): Promise<void> {
@@ -175,7 +172,7 @@ export async function writeClawHubSkillsLockfile(
   await fs.writeFile(targetPath, `${JSON.stringify(lockfile, null, 2)}\n`, "utf8");
 }
 
-export async function readClawHubSkillOrigin(skillDir: string): Promise<ClawHubSkillOrigin | null> {
+async function readClawHubSkillOrigin(skillDir: string): Promise<ClawHubSkillOrigin | null> {
   const candidates = [
     path.join(skillDir, DOT_DIR, "origin.json"),
     path.join(skillDir, LEGACY_DOT_DIR, "origin.json"),
@@ -199,7 +196,7 @@ export async function readClawHubSkillOrigin(skillDir: string): Promise<ClawHubS
   return null;
 }
 
-export async function writeClawHubSkillOrigin(
+async function writeClawHubSkillOrigin(
   skillDir: string,
   origin: ClawHubSkillOrigin,
 ): Promise<void> {
@@ -465,36 +462,4 @@ export async function updateSkillsFromClawHub(params: {
 export async function readTrackedClawHubSkillSlugs(workspaceDir: string): Promise<string[]> {
   const lock = await readClawHubSkillsLockfile(workspaceDir);
   return Object.keys(lock.skills).toSorted();
-}
-
-export async function computeSkillFingerprint(skillDir: string): Promise<string> {
-  const digest = createHash("sha256");
-  const queue = [skillDir];
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (!current) {
-      continue;
-    }
-    const entries = await fs.readdir(current, { withFileTypes: true });
-    entries.sort((left, right) => left.name.localeCompare(right.name));
-    for (const entry of entries) {
-      if (entry.name.startsWith(".")) {
-        continue;
-      }
-      const fullPath = path.join(current, entry.name);
-      if (entry.isDirectory()) {
-        queue.push(fullPath);
-        continue;
-      }
-      if (!entry.isFile()) {
-        continue;
-      }
-      const relPath = path.relative(skillDir, fullPath).split(path.sep).join("/");
-      digest.update(relPath);
-      digest.update("\n");
-      digest.update(await fs.readFile(fullPath));
-      digest.update("\n");
-    }
-  }
-  return digest.digest("hex");
 }

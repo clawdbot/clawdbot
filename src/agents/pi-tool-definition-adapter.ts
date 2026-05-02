@@ -256,13 +256,6 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
           if (signal?.aborted) {
             throw err;
           }
-          const name =
-            err && typeof err === "object" && "name" in err
-              ? String((err as { name?: unknown }).name)
-              : "";
-          if (name === "AbortError") {
-            throw err;
-          }
           if (isBeforeToolCallBlockedError(err)) {
             logDebug(`tools: ${normalizedName} blocked by before_tool_call: ${err.reason}`);
             return buildBlockedToolResult({

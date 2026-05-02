@@ -19,7 +19,7 @@ export function normalizeSkillName(value: string): string {
     .slice(0, 80);
 }
 
-export function assertValidSkillName(name: string): string {
+function assertValidSkillName(name: string): string {
   const normalized = normalizeSkillName(name);
   if (!VALID_SKILL_NAME.test(normalized)) {
     throw new Error(`invalid skill name: ${name}`);

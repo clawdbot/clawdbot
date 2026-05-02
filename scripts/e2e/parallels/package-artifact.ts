@@ -86,7 +86,6 @@ export async function packOpenClaw(input: {
   destination: string;
   packageSpec?: string;
   requireControlUi?: boolean;
-  stageRuntimeDeps?: boolean;
 }): Promise<PackageArtifact> {
   await mkdir(input.destination, { recursive: true });
   if (input.packageSpec) {
@@ -126,9 +125,6 @@ export async function packOpenClaw(input: {
       "--eval",
       "import { writePackageDistInventory } from './src/infra/package-dist-inventory.ts'; await writePackageDistInventory(process.cwd());",
     ]);
-    if (input.stageRuntimeDeps) {
-      run("node", ["scripts/stage-bundled-plugin-runtime-deps.mjs"]);
-    }
     const shortHead = run("git", ["rev-parse", "--short", "HEAD"], { quiet: true }).stdout.trim();
     const output = run(
       "npm",

@@ -396,6 +396,33 @@ describe("modelsStatusCommand auth overview", () => {
     );
   });
 
+  it("does not double-prefix provider-qualified resolved default models", async () => {
+    const localRuntime = createRuntime();
+    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: { primary: "openrouter/auto", fallbacks: [] },
+          models: { "openrouter/auto": {} },
+        },
+      },
+      models: { providers: {} },
+      env: { shellEnv: { enabled: true } },
+    });
+
+    try {
+      await modelsStatusCommand({ json: true }, localRuntime as never);
+      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+
+      expect(payload.defaultModel).toBe("openrouter/auto");
+      expect(payload.resolvedDefault).toBe("openrouter/auto");
+    } finally {
+      if (originalLoadConfig) {
+        mocks.loadConfig.mockImplementation(originalLoadConfig);
+      }
+    }
+  });
+
   it("handles cli backend and aliased provider auth summaries", async () => {
     const localRuntime = createRuntime();
     const originalLoadConfig = mocks.loadConfig.getMockImplementation();

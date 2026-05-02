@@ -78,7 +78,7 @@ export function withFullRuntimeReplyConfig<T extends OpenClawConfig>(config: T):
   return markCompleteReplyConfig(config, { runtimeMode: "full" });
 }
 
-export function isCompleteReplyConfig(config: unknown): config is OpenClawConfig {
+function isCompleteReplyConfig(config: unknown): config is OpenClawConfig {
   return Boolean(
     config &&
     typeof config === "object" &&
@@ -86,7 +86,7 @@ export function isCompleteReplyConfig(config: unknown): config is OpenClawConfig
   );
 }
 
-export function usesFullReplyRuntime(config: unknown): boolean {
+function usesFullReplyRuntime(config: unknown): boolean {
   return Boolean(
     config &&
     typeof config === "object" &&

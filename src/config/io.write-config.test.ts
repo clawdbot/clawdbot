@@ -1,3 +1,4 @@
+import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -33,6 +34,14 @@ const mockMaintainConfigBackups = vi.hoisted(() =>
 vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry: mockLoadPluginManifestRegistry,
 }));
+
+vi.mock("../plugins/plugin-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/plugin-registry.js")>();
+  return {
+    ...actual,
+    loadPluginManifestRegistryForPluginRegistry: mockLoadPluginManifestRegistry,
+  };
+});
 
 vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
@@ -102,6 +111,65 @@ describe("config io write", () => {
       homedir: () => home,
       logger: silentLogger,
     });
+
+  function withHealthStateWriteFailure(healthPath: string): typeof fsNode {
+    const writeFile = fsNode.promises.writeFile.bind(fsNode.promises);
+    const writeFileSync = fsNode.writeFileSync.bind(fsNode);
+    return {
+      ...fsNode,
+      promises: {
+        ...fsNode.promises,
+        writeFile: async (target, data, options) => {
+          if (target === healthPath) {
+            throw new Error("health write failed");
+          }
+          return await writeFile(target, data, options);
+        },
+      },
+      writeFileSync: (target, data, options) => {
+        if (target === healthPath) {
+          throw new Error("health write failed");
+        }
+        return writeFileSync(target, data, options);
+      },
+    };
+  }
+
+  it("logs health-state write failures through public config reads", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const healthPath = path.join(home, ".openclaw", "logs", "config-health.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ gateway: { mode: "local" } }, null, 2)}\n`,
+        "utf-8",
+      );
+      const warn = vi.fn();
+      const io = createConfigIO({
+        configPath,
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        fs: withHealthStateWriteFailure(healthPath),
+        homedir: () => home,
+        logger: { warn, error: vi.fn() },
+      });
+
+      await expect(io.readConfigFileSnapshot()).resolves.toMatchObject({ exists: true });
+      expect(() => io.loadConfig()).not.toThrow();
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `Config health-state write failed: ${healthPath}: health write failed`,
+        ),
+      );
+      expect(
+        warn.mock.calls.filter(
+          ([message]) =>
+            typeof message === "string" && message.includes("Config health-state write failed:"),
+        ),
+      ).toHaveLength(2);
+    });
+  });
 
   it("migrates shipped plugin install config records into the plugin index", async () => {
     await withSuiteHome(async (home) => {
@@ -744,7 +812,7 @@ describe("config io write", () => {
     });
   });
 
-  it("preserves parsed source config when snapshot validation throws", async () => {
+  it("preserves parsed source config when snapshot validation fails", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -754,10 +822,6 @@ describe("config io write", () => {
       };
       const originalRaw = `${JSON.stringify(original, null, 2)}\n`;
       await fs.writeFile(configPath, originalRaw, "utf-8");
-      mockLoadPluginManifestRegistry.mockImplementationOnce(() => {
-        throw new Error("manifest registry unavailable");
-      });
-
       const io = createFastConfigIO(home);
 
       const snapshot = await io.readConfigFileSnapshot();
@@ -767,7 +831,7 @@ describe("config io write", () => {
       expect(snapshot.parsed).toEqual(original);
       expect(snapshot.sourceConfig).toEqual(original);
       expect(snapshot.config).toEqual(original);
-      expect(snapshot.issues[0]?.message).toContain("manifest registry unavailable");
+      expect(snapshot.issues[0]?.message).toContain("unknown channel id: test-plugin-channel");
     });
   });
 

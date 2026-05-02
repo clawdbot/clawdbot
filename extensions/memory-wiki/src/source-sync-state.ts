@@ -3,7 +3,7 @@ import path from "node:path";
 
 export type MemoryWikiImportedSourceGroup = "bridge" | "unsafe-local";
 
-export type MemoryWikiImportedSourceStateEntry = {
+type MemoryWikiImportedSourceStateEntry = {
   group: MemoryWikiImportedSourceGroup;
   pagePath: string;
   sourcePath: string;
@@ -22,7 +22,7 @@ const EMPTY_STATE: MemoryWikiImportedSourceState = {
   entries: {},
 };
 
-export function resolveMemoryWikiSourceSyncStatePath(vaultRoot: string): string {
+function resolveMemoryWikiSourceSyncStatePath(vaultRoot: string): string {
   return path.join(vaultRoot, ".openclaw-wiki", "source-sync.json");
 }
 

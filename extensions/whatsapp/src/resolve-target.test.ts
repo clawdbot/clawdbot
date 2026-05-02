@@ -42,6 +42,13 @@ describe("normalizeWhatsAppTarget", () => {
     expect(normalizeWhatsAppTarget("abc@s.whatsapp.net")).toBeNull();
   });
 
+  it("rejects non-WhatsApp provider-prefixed phone-like targets", () => {
+    expect(normalizeWhatsAppTarget("telegram:1234567890")).toBeNull();
+    expect(normalizeWhatsAppTarget("tg:1234567890")).toBeNull();
+    expect(normalizeWhatsAppTarget("sms:+15551234567")).toBeNull();
+    expect(looksLikeWhatsAppTargetId("telegram:1234567890")).toBe(false);
+  });
+
   it("handles repeated prefixes", () => {
     expect(normalizeWhatsAppTarget("whatsapp:whatsapp:+1555")).toBe("+1555");
     expect(normalizeWhatsAppTarget("group:group:120@g.us")).toBeNull();

@@ -11,9 +11,9 @@ const FTS_QUERY_TOKEN_RE = /[\p{L}\p{N}_]+/gu;
 const SHORT_CJK_TRIGRAM_RE = /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\u3131-\u3163]/u;
 const VECTOR_KNN_OVERSAMPLE_FACTOR = 8;
 
-export type SearchSource = string;
+type SearchSource = string;
 
-export type SearchRowResult = {
+type SearchRowResult = {
   id: string;
   path: string;
   startLine: number;
@@ -215,7 +215,7 @@ export async function searchVector(params: {
   });
 }
 
-export function searchChunksByEmbedding(params: {
+function searchChunksByEmbedding(params: {
   db: DatabaseSync;
   providerModel: string;
   sourceFilter: { sql: string; params: SearchSource[] };

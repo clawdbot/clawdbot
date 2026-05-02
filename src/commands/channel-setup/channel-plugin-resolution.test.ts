@@ -156,4 +156,93 @@ describe("resolveInstallableChannelPlugin", () => {
       }),
     );
   });
+
+  it("returns an existing plugin that lacks the requested capability without reinstalling", async () => {
+    const catalogEntry = createCatalogEntry({
+      id: "openclaw-weixin",
+      pluginId: "@tencent-weixin/openclaw-weixin",
+      origin: "bundled",
+    });
+    const installedPlugin = createPlugin("openclaw-weixin");
+
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([catalogEntry]);
+    mocks.getChannelPlugin.mockReturnValue(installedPlugin);
+
+    const result = await resolveInstallableChannelPlugin({
+      cfg: { plugins: { enabled: true } },
+      runtime: {} as never,
+      rawChannel: "openclaw-weixin",
+      allowInstall: true,
+      supports: (plugin) => Boolean(plugin.directory),
+    });
+
+    expect(result.plugin).toBe(installedPlugin);
+    expect(result.pluginInstalled).toBe(false);
+    expect(result.supportsRequestedCapability).toBe(false);
+    expect(mocks.ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
+  });
+
+  it("returns a scoped installed plugin that lacks the requested capability without reinstalling", async () => {
+    const catalogEntry = createCatalogEntry({
+      id: "openclaw-weixin",
+      pluginId: "@tencent-weixin/openclaw-weixin",
+      origin: "bundled",
+    });
+    const scopedPlugin = createPlugin("openclaw-weixin");
+
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([catalogEntry]);
+    mocks.loadChannelSetupPluginRegistrySnapshotForChannel.mockReturnValue({
+      channels: [{ plugin: scopedPlugin }],
+      channelSetups: [],
+    });
+
+    const result = await resolveInstallableChannelPlugin({
+      cfg: { plugins: { enabled: true } },
+      runtime: {} as never,
+      rawChannel: "openclaw-weixin",
+      allowInstall: true,
+      supports: (plugin) => Boolean(plugin.directory),
+    });
+
+    expect(result.plugin).toBe(scopedPlugin);
+    expect(result.pluginInstalled).toBe(false);
+    expect(result.supportsRequestedCapability).toBe(false);
+    expect(mocks.ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
+  });
+
+  it("still offers install when only a setup fallback lacks the requested capability", async () => {
+    const catalogEntry = createCatalogEntry({
+      id: "demo-directory",
+      pluginId: "@demo/directory",
+      origin: "bundled",
+    });
+    const setupOnlyPlugin = createPlugin("demo-directory");
+
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([catalogEntry]);
+    mocks.loadChannelSetupPluginRegistrySnapshotForChannel.mockReturnValue({
+      channels: [],
+      channelSetups: [{ plugin: setupOnlyPlugin }],
+    });
+    mocks.ensureChannelSetupPluginInstalled.mockResolvedValueOnce({
+      cfg: { plugins: { entries: { "@demo/directory": { enabled: true } } } },
+      installed: true,
+      pluginId: "@demo/directory",
+      status: "installed",
+    });
+
+    const result = await resolveInstallableChannelPlugin({
+      cfg: { plugins: { enabled: true } },
+      runtime: {} as never,
+      rawChannel: "demo-directory",
+      allowInstall: true,
+      supports: (plugin) => Boolean(plugin.directory),
+    });
+
+    expect(mocks.ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: catalogEntry,
+      }),
+    );
+    expect(result.pluginInstalled).toBe(true);
+  });
 });

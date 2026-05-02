@@ -38,7 +38,7 @@ export type ZaloConfig = {
   defaultAccount?: string;
 } & ZaloAccountConfig;
 
-export type ZaloTokenSource = "env" | "config" | "configFile" | "none";
+type ZaloTokenSource = "env" | "config" | "configFile" | "none";
 
 export type ResolvedZaloAccount = {
   accountId: string;

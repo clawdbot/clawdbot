@@ -1,7 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
-export const TOOL_CALL_NAME_MAX_CHARS = 64;
-export const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_:.-]+$/;
+const TOOL_CALL_NAME_MAX_CHARS = 64;
+const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_:.-]+$/;
 
 export const REDACTED_SESSIONS_SPAWN_ATTACHMENT_CONTENT = "__OPENCLAW_REDACTED__";
 export const SESSIONS_SPAWN_ATTACHMENT_METADATA_KEYS = ["name", "encoding", "mimeType"] as const;
@@ -66,7 +66,7 @@ export function isRedactedSessionsSpawnAttachment(item: unknown): boolean {
   return true;
 }
 
-export type SessionsSpawnAttachmentToolCallBlock = {
+type SessionsSpawnAttachmentToolCallBlock = {
   name?: unknown;
   input?: unknown;
   arguments?: unknown;

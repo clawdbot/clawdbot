@@ -415,6 +415,36 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(loaded["session-74"]).toBeUndefined();
   });
 
+  it("explicit loadSessionStore maintenance preserves channel, thread, and topic session pointers", async () => {
+    const now = Date.now();
+    const channelKey = "agent:main:slack:channel:C123";
+    const threadKey = "agent:main:discord:channel:123456:thread:987654";
+    const topicKey = "agent:main:telegram:group:-100123:topic:77";
+    const store = Object.fromEntries(
+      Array.from({ length: 75 }, (_, index) => [`session-${index}`, makeEntry(now - index)]),
+    );
+    store[channelKey] = makeEntry(now - 99 * DAY_MS);
+    store[threadKey] = makeEntry(now - 100 * DAY_MS);
+    store[topicKey] = makeEntry(now - 101 * DAY_MS);
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+
+    const loaded = loadSessionStore(storePath, {
+      skipCache: true,
+      runMaintenance: true,
+      maintenanceConfig: {
+        ...ENFORCED_MAINTENANCE_OVERRIDE,
+        maxEntries: 50,
+        pruneAfterMs: 365 * DAY_MS,
+      },
+    });
+
+    expect(Object.keys(loaded)).toHaveLength(50);
+    expect(loaded[channelKey]).toBeDefined();
+    expect(loaded[threadKey]).toBeDefined();
+    expect(loaded[topicKey]).toBeDefined();
+    expect(loaded["session-74"]).toBeUndefined();
+  });
+
   it("updateSessionStore batches cap-hit maintenance instead of pruning every new session", async () => {
     const now = Date.now();
     const store = Object.fromEntries(

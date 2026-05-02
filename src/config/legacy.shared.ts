@@ -7,7 +7,7 @@ export type LegacyConfigRule = {
   requireSourceLiteral?: boolean;
 };
 
-export type LegacyConfigMigration = {
+type LegacyConfigMigration = {
   id: string;
   describe: string;
   apply: (raw: Record<string, unknown>, changes: string[]) => void;
@@ -20,7 +20,6 @@ export type LegacyConfigMigrationSpec = LegacyConfigMigration & {
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { isRecord } from "../utils.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
-export { isRecord };
 
 export const getRecord = (value: unknown): Record<string, unknown> | null =>
   isRecord(value) ? value : null;

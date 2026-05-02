@@ -214,6 +214,12 @@ describe("isBillingErrorMessage", () => {
     expect(isBillingErrorMessage(msg)).toBe(true);
     expect(classifyFailoverReason(msg)).toBe("billing");
   });
+  it("matches provider spending-limit exhaustion messages", () => {
+    const msg =
+      "Your team has either used all available credits or reached its monthly spending limit.";
+    expect(isBillingErrorMessage(msg)).toBe(true);
+    expect(classifyFailoverReason(msg)).toBe("billing");
+  });
   it("classifies flat JSON billing payloads with string error code (#74079)", () => {
     const raw =
       '{"error":"insufficient_balance","message":"Insufficient MBT balance. Top up or upgrade your subscription to continue.","upgradeUrl":"/settings/billing"}';

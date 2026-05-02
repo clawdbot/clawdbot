@@ -385,6 +385,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       resolveToolPolicy: resolveSlackGroupToolPolicy,
     },
     messaging: {
+      targetPrefixes: ["slack"],
       normalizeTarget: normalizeSlackMessagingTarget,
       resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
         const parent = parentConversationId?.trim();
@@ -433,6 +434,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         (await loadSlackDirectoryConfigModule()).listSlackDirectoryGroupsFromConfig(params),
       ...createRuntimeDirectoryLiveAdapter({
         getRuntime: loadSlackDirectoryLiveModule,
+        self: (runtime) => runtime.getSlackDirectorySelfLive,
         listPeersLive: (runtime) => runtime.listSlackDirectoryPeersLive,
         listGroupsLive: (runtime) => runtime.listSlackDirectoryGroupsLive,
       }),

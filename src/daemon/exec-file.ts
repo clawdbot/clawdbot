@@ -1,6 +1,6 @@
 import { execFile, type ExecFileOptionsWithStringEncoding } from "node:child_process";
 
-export type ExecResult = { stdout: string; stderr: string; code: number };
+type ExecResult = { stdout: string; stderr: string; code: number };
 
 export async function execFileUtf8(
   command: string,

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   createProviderHttpError,
@@ -20,7 +21,10 @@ import type {
   RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ } from "openclaw/plugin-sdk/realtime-voice";
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import {
+  normalizeResolvedSecretInputString,
+  normalizeSecretInputString,
+} from "openclaw/plugin-sdk/secret-input";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import WebSocket from "ws";
 import {
@@ -31,7 +35,7 @@ import {
   trimToUndefined,
 } from "./realtime-provider-shared.js";
 
-export type OpenAIRealtimeVoice =
+type OpenAIRealtimeVoice =
   | "alloy"
   | "ash"
   | "ballad"
@@ -126,6 +130,77 @@ function normalizeProviderConfig(
     azureDeployment: trimToUndefined(raw?.azureDeployment),
     azureApiVersion: trimToUndefined(raw?.azureApiVersion),
   };
+}
+
+type OpenAIRealtimeApiKeyResolution =
+  | { status: "available"; value: string }
+  | { status: "missing" };
+
+const KEYCHAIN_SECRET_REF_RE = /^keychain:([^:]+):([^:]+)$/;
+const KEYCHAIN_LOOKUP_TIMEOUT_MS = 5000;
+const resolvedKeychainSecretRefCache = new Map<string, string>();
+
+function resolveKeychainSecretRef(value: string): string | undefined {
+  const trimmed = value.trim();
+  const match = KEYCHAIN_SECRET_REF_RE.exec(trimmed);
+  if (!match) {
+    return trimmed || undefined;
+  }
+  const cached = resolvedKeychainSecretRefCache.get(trimmed);
+  if (cached) {
+    return cached;
+  }
+  const [, service, account] = match;
+  try {
+    const resolved =
+      execFileSync(
+        "/usr/bin/security",
+        ["find-generic-password", "-s", service, "-a", account, "-w"],
+        {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+          timeout: KEYCHAIN_LOOKUP_TIMEOUT_MS,
+        },
+      ).trim() || undefined;
+    if (resolved) {
+      resolvedKeychainSecretRefCache.set(trimmed, resolved);
+    }
+    return resolved;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveOpenAIRealtimeApiKey(
+  configuredApiKey: string | undefined,
+): OpenAIRealtimeApiKeyResolution {
+  const configured = normalizeSecretInputString(configuredApiKey);
+  if (configured) {
+    const value = resolveKeychainSecretRef(configured);
+    return value ? { status: "available", value } : { status: "missing" };
+  }
+
+  const envValue = normalizeSecretInputString(process.env.OPENAI_API_KEY);
+  if (!envValue) {
+    return { status: "missing" };
+  }
+  const value = resolveKeychainSecretRef(envValue);
+  return value ? { status: "available", value } : { status: "missing" };
+}
+
+function requireOpenAIRealtimeApiKey(configuredApiKey: string | undefined): string {
+  const resolved = resolveOpenAIRealtimeApiKey(configuredApiKey);
+  if (resolved.status === "available") {
+    return resolved.value;
+  }
+  throw new Error("OpenAI API key missing");
+}
+
+function hasOpenAIRealtimeApiKeyInput(configuredApiKey: string | undefined): boolean {
+  return Boolean(
+    normalizeSecretInputString(configuredApiKey) ??
+    normalizeSecretInputString(process.env.OPENAI_API_KEY),
+  );
 }
 
 function base64ToBuffer(b64: string): Buffer {
@@ -666,10 +741,7 @@ async function createOpenAIRealtimeBrowserSession(
   req: RealtimeVoiceBrowserSessionCreateRequest,
 ): Promise<RealtimeVoiceBrowserSession> {
   const config = normalizeProviderConfig(req.providerConfig);
-  const apiKey = config.apiKey || process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error("OpenAI API key missing");
-  }
+  const apiKey = requireOpenAIRealtimeApiKey(config.apiKey);
   if (config.azureEndpoint || config.azureDeployment) {
     throw new Error("OpenAI Realtime browser sessions do not support Azure endpoints yet");
   }
@@ -681,6 +753,14 @@ async function createOpenAIRealtimeBrowserSession(
     model,
     instructions: req.instructions,
     audio: {
+      input: {
+        turn_detection: {
+          type: "server_vad",
+          create_response: true,
+          interrupt_response: true,
+        },
+        transcription: { model: "whisper-1" },
+      },
       output: { voice },
     },
   };
@@ -752,13 +832,10 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
     autoSelectOrder: 10,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig }) =>
-      Boolean(normalizeProviderConfig(providerConfig).apiKey || process.env.OPENAI_API_KEY),
+      hasOpenAIRealtimeApiKeyInput(normalizeProviderConfig(providerConfig).apiKey),
     createBridge: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
-      const apiKey = config.apiKey || process.env.OPENAI_API_KEY;
-      if (!apiKey) {
-        throw new Error("OpenAI API key missing");
-      }
+      const apiKey = requireOpenAIRealtimeApiKey(config.apiKey);
       return new OpenAIRealtimeVoiceBridge({
         ...req,
         apiKey,
@@ -776,5 +853,3 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
     createBrowserSession: createOpenAIRealtimeBrowserSession,
   };
 }
-
-export type { OpenAIRealtimeVoiceProviderConfig };

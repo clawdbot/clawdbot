@@ -12,7 +12,7 @@ function prefixMatchPath(pathname: string, prefix: string): boolean {
   );
 }
 
-export function doPluginHttpRoutesOverlap(
+function doPluginHttpRoutesOverlap(
   a: Pick<PluginHttpRouteLike, "path" | "match">,
   b: Pick<PluginHttpRouteLike, "path" | "match">,
 ): boolean {

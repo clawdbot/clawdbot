@@ -23,7 +23,7 @@ export function resolveConfiguredSourcesForMeta(sources: Iterable<MemorySource>)
   return normalized.length > 0 ? normalized : ["memory"];
 }
 
-export function normalizeMetaSources(meta: MemoryIndexMeta): MemorySource[] {
+function normalizeMetaSources(meta: MemoryIndexMeta): MemorySource[] {
   if (!Array.isArray(meta.sources)) {
     // Backward compatibility for older indexes that did not persist sources.
     return ["memory"];
@@ -38,7 +38,7 @@ export function normalizeMetaSources(meta: MemoryIndexMeta): MemorySource[] {
   return normalized.length > 0 ? normalized : ["memory"];
 }
 
-export function configuredMetaSourcesDiffer(params: {
+function configuredMetaSourcesDiffer(params: {
   meta: MemoryIndexMeta;
   configuredSources: MemorySource[];
 }): boolean {

@@ -88,7 +88,7 @@ export function resolveGroupActivation(params: {
  *   2. `$OPENCLAW_STATE_DIR` / `$CLAWDBOT_STATE_DIR`
  *   3. `~/.openclaw/agents/{agentId}/sessions/sessions.json`
  */
-export function resolveSessionStorePath(
+function resolveSessionStorePath(
   cfg: Record<string, unknown>,
   agentId: string | undefined,
 ): string {

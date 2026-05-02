@@ -19,7 +19,8 @@ const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = path.resolve(TEST_DIR, "../fixtures/telegram-qa-summary-rtt.json");
 
 describe("RTT harness", () => {
-  it("validates published OpenClaw package specs", () => {
+  it("validates OpenClaw package specs", () => {
+    expect(validateOpenClawPackageSpec("openclaw@main")).toBe("openclaw@main");
     expect(validateOpenClawPackageSpec("openclaw@beta")).toBe("openclaw@beta");
     expect(validateOpenClawPackageSpec("openclaw@latest")).toBe("openclaw@latest");
     expect(validateOpenClawPackageSpec("openclaw@2026.4.30")).toBe("openclaw@2026.4.30");
@@ -52,6 +53,8 @@ describe("RTT harness", () => {
       },
       providerMode: "mock-openai",
       rawOutputDir: ".artifacts/rtt/run/raw",
+      samples: 20,
+      sampleTimeoutMs: 30_000,
       scenarios: ["telegram-mentioned-message-reply"],
       spec: "openclaw@beta",
       timeoutMs: 180_000,
@@ -65,6 +68,8 @@ describe("RTT harness", () => {
     expect(env.OPENCLAW_NPM_TELEGRAM_SCENARIOS).toBe("telegram-mentioned-message-reply");
     expect(env.OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR).toBe(".artifacts/rtt/run/raw");
     expect(env.OPENCLAW_NPM_TELEGRAM_FAST).toBe("0");
+    expect(env.OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES).toBe("20");
+    expect(env.OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS).toBe("30000");
     expect(env.OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS).toBe("180000");
     expect(env.OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS).toBe("180000");
   });
@@ -73,7 +78,13 @@ describe("RTT harness", () => {
     const summary = await readTelegramSummary(FIXTURE_PATH);
     expect(extractRtt(summary)).toEqual({
       canaryMs: 1234,
-      mentionReplyMs: 5678,
+      mentionReplyMs: 5000,
+      warmSamples: [4000, 5000, 7000],
+      avgMs: 5333,
+      p50Ms: 5000,
+      p95Ms: 7000,
+      maxMs: 7000,
+      failedSamples: 0,
     });
   });
 
@@ -103,8 +114,17 @@ describe("RTT harness", () => {
         providerMode: "mock-openai",
         scenarios: ["telegram-mentioned-message-reply"],
       },
-      rtt: { canaryMs: 1234, mentionReplyMs: 5678 },
+      rtt: {
+        canaryMs: 1234,
+        mentionReplyMs: 5000,
+        avgMs: 5333,
+        p50Ms: 5000,
+        p95Ms: 7000,
+        maxMs: 7000,
+        failedSamples: 0,
+      },
     });
+    expect(result.rtt.warmSamples).toEqual([4000, 5000, 7000]);
   });
 
   it("marks failed scenario summaries as failed results", () => {
@@ -146,10 +166,16 @@ describe("RTT harness", () => {
   it("parses CLI options", () => {
     const parsed = cliTesting.parseArgs([
       "openclaw@latest",
+      "--package-tgz",
+      "/tmp/openclaw.tgz",
       "--provider",
       "live-frontier",
       "--runs",
       "3",
+      "--samples",
+      "5",
+      "--sample-timeout-ms",
+      "30000",
       "--timeout-ms",
       "240000",
       "--harness-root",
@@ -160,8 +186,11 @@ describe("RTT harness", () => {
 
     expect(parsed.spec).toBe("openclaw@latest");
     expect(parsed.options).toMatchObject({
+      packageTgz: "/tmp/openclaw.tgz",
       providerMode: "live-frontier",
       runs: 3,
+      samples: 5,
+      sampleTimeoutMs: 30_000,
       harnessRoot: "/tmp/openclaw",
       output: "/tmp/runs",
       scenarios: ["telegram-mentioned-message-reply"],

@@ -12,6 +12,7 @@ import {
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { type ImageModelConfig } from "./image-tool.helpers.js";
 import {
   applyImageModelConfigDefaults,
@@ -244,6 +245,7 @@ async function runPdfPrompt(params: {
 export function createPdfTool(options?: {
   config?: OpenClawConfig;
   agentDir?: string;
+  authProfileStore?: AuthProfileStore;
   workspaceDir?: string;
   sandbox?: PdfSandboxConfig;
   fsPolicy?: ToolFsPolicy;
@@ -257,7 +259,12 @@ export function createPdfTool(options?: {
     return null;
   }
 
-  const pdfModelConfig = resolvePdfModelConfigForTool({ cfg: options?.config, agentDir });
+  const pdfModelConfig = resolvePdfModelConfigForTool({
+    cfg: options?.config,
+    agentDir,
+    workspaceDir: options?.workspaceDir,
+    authStore: options?.authProfileStore,
+  });
   if (!pdfModelConfig) {
     return null;
   }

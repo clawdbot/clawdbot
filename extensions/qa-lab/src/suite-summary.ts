@@ -1,6 +1,6 @@
 import type { QaProviderMode } from "./model-selection.js";
 
-export type QaSuiteSummaryScenario = {
+type QaSuiteSummaryScenario = {
   name: string;
   status: "pass" | "fail";
   steps: unknown[];

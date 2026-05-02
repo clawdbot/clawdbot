@@ -7,13 +7,7 @@ import {
 } from "./pi-project-settings-snapshot.js";
 import { applyPiCompactionSettingsFromConfig } from "./pi-settings.js";
 
-export {
-  buildEmbeddedPiSettingsSnapshot,
-  loadEnabledBundlePiSettingsSnapshot,
-  resolveEmbeddedPiProjectSettingsPolicy,
-} from "./pi-project-settings-snapshot.js";
-
-export function createEmbeddedPiSettingsManager(params: {
+function createEmbeddedPiSettingsManager(params: {
   cwd: string;
   agentDir: string;
   cfg?: OpenClawConfig;

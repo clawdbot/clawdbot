@@ -277,6 +277,7 @@ describe("spawnSubagentDirect workspace inheritance", () => {
         task: "fail after register with thread binding",
         thread: true,
         mode: "session",
+        context: "isolated",
       },
       {
         agentSessionKey: "agent:main:main",

@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import type { VoiceCallConfig } from "../config.js";
 
-export type TailscaleSelfInfo = {
+type TailscaleSelfInfo = {
   dnsName: string | null;
   nodeId: string | null;
 };

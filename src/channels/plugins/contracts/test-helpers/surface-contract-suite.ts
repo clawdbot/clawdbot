@@ -1,33 +1,5 @@
-import { expect, it } from "vitest";
+import { expect } from "vitest";
 import type { ChannelPlugin } from "../../types.js";
-
-export function installChannelSurfaceContractSuite(params: {
-  plugin: Pick<
-    ChannelPlugin,
-    | "id"
-    | "actions"
-    | "setup"
-    | "status"
-    | "outbound"
-    | "messaging"
-    | "threading"
-    | "directory"
-    | "gateway"
-  >;
-  surface:
-    | "actions"
-    | "setup"
-    | "status"
-    | "outbound"
-    | "messaging"
-    | "threading"
-    | "directory"
-    | "gateway";
-}) {
-  it(`exposes the ${params.surface} surface contract`, () => {
-    expectChannelSurfaceContract(params);
-  });
-}
 
 export function expectChannelSurfaceContract(params: {
   plugin: Pick<

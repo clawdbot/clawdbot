@@ -27,10 +27,19 @@ export type AgentHarnessResultClassification =
   | "ok"
   | NonNullable<AgentHarnessAttemptResult["agentHarnessResultClassification"]>;
 
+export type AgentHarnessDeliveryDefaults = {
+  /**
+   * Preferred default for visible source replies when user config has not
+   * explicitly selected automatic or message-tool delivery.
+   */
+  sourceVisibleReplies?: "automatic" | "message_tool";
+};
+
 export type AgentHarness = {
   id: string;
   label: string;
   pluginId?: string;
+  deliveryDefaults?: AgentHarnessDeliveryDefaults;
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
   runAttempt(params: AgentHarnessAttemptParams): Promise<AgentHarnessAttemptResult>;
   classify?(

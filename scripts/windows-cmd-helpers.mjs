@@ -4,7 +4,7 @@ export function resolvePathEnvKey(env) {
   return Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "PATH";
 }
 
-export function escapeForCmdExe(arg) {
+function escapeForCmdExe(arg) {
   if (WINDOWS_UNSAFE_CMD_CHARS_RE.test(arg)) {
     throw new Error(`unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}`);
   }

@@ -12,7 +12,7 @@ export function stripSlackMentionsForCommandDetection(text: string): string {
     .trim();
 }
 
-export function normalizeSlackSlashCommandName(raw: string) {
+function normalizeSlackSlashCommandName(raw: string) {
   return raw.replace(/^\/+/, "");
 }
 

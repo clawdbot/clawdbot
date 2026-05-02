@@ -130,7 +130,7 @@ function validateWebhookPath(value: string): string | undefined {
 }
 
 function parseSynologyUserId(value: string): string | null {
-  const cleaned = value.replace(/^synology-chat:/i, "").trim();
+  const cleaned = value.replace(/^synology(?:[-_]?chat)?:/i, "").trim();
   return /^\d+$/.test(cleaned) ? cleaned : null;
 }
 

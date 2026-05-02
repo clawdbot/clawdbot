@@ -1,12 +1,6 @@
 import { applyOwnerOnlyToolPolicy } from "../agents/tool-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  clearActiveMcpLoopbackRuntimeByOwnerToken,
-  createMcpLoopbackServerConfig,
-  getActiveMcpLoopbackRuntime,
-  setActiveMcpLoopbackRuntime,
-} from "./mcp-http.loopback-runtime.js";
-import {
   buildMcpToolSchema,
   type McpLoopbackTool,
   type McpToolSchemaEntry,
@@ -72,10 +66,3 @@ export class McpLoopbackToolCache {
     return nextEntry;
   }
 }
-
-export {
-  clearActiveMcpLoopbackRuntimeByOwnerToken,
-  createMcpLoopbackServerConfig,
-  getActiveMcpLoopbackRuntime,
-  setActiveMcpLoopbackRuntime,
-};

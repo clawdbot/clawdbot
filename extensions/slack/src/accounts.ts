@@ -44,7 +44,7 @@ const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("sl
 export const listSlackAccountIds = listAccountIds;
 export const resolveDefaultSlackAccountId = resolveDefaultAccountId;
 
-export function resolveSlackAccountConfig(
+function resolveSlackAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): SlackAccountConfig | undefined {

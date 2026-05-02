@@ -858,6 +858,34 @@ describe("model-selection", () => {
       });
     });
 
+    it("keeps legacy CLI runtime refs accepted when canonical runtime refs are also configured", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            agentRuntime: { id: "claude-cli" },
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            models: {
+              "anthropic/claude-sonnet-4-6": {},
+              "claude-cli/claude-sonnet-4-6": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: BUNDLED_ALLOWLIST_CATALOG,
+        raw: "claude-cli/claude-sonnet-4-6",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({
+        key: "claude-cli/claude-sonnet-4-6",
+        ref: { provider: "claude-cli", model: "claude-sonnet-4-6" },
+      });
+    });
+
     it("strips trailing auth profile suffix before allowlist matching", () => {
       const cfg: OpenClawConfig = {
         agents: {

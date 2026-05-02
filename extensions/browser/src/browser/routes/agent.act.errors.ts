@@ -9,7 +9,7 @@ export const ACT_ERROR_CODES = {
   targetIdMismatch: "ACT_TARGET_ID_MISMATCH",
 } as const;
 
-export type ActErrorCode = (typeof ACT_ERROR_CODES)[keyof typeof ACT_ERROR_CODES];
+type ActErrorCode = (typeof ACT_ERROR_CODES)[keyof typeof ACT_ERROR_CODES];
 
 export function jsonActError(
   res: BrowserResponse,

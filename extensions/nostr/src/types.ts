@@ -14,7 +14,7 @@ import type { NostrProfile } from "./config-schema.js";
 import { DEFAULT_RELAYS } from "./default-relays.js";
 import { getPublicKeyFromPrivate } from "./nostr-key-utils.js";
 
-export interface NostrAccountConfig {
+interface NostrAccountConfig {
   enabled?: boolean;
   name?: string;
   defaultAccount?: string;

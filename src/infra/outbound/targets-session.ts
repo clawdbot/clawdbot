@@ -14,6 +14,7 @@ import type {
   DeliverableMessageChannel,
   GatewayMessageChannel,
 } from "../../utils/message-channel-normalize.js";
+import { resolveTargetPrefixedChannel } from "./channel-target-prefix.js";
 
 export type SessionDeliveryTarget = {
   channel?: DeliverableMessageChannel;
@@ -117,7 +118,14 @@ export function resolveSessionDeliveryTarget(params: {
       ? params.explicitTo.trim()
       : undefined;
 
-  let channel = requestedChannel === "last" ? lastChannel : requestedChannel;
+  const explicitPrefixedChannel =
+    requestedChannel === "last" ? resolveTargetPrefixedChannel(rawExplicitTo) : undefined;
+  let channel =
+    explicitPrefixedChannel && isDeliverableMessageChannel(explicitPrefixedChannel)
+      ? explicitPrefixedChannel
+      : requestedChannel === "last"
+        ? lastChannel
+        : requestedChannel;
   if (!channel && params.fallbackChannel && isDeliverableMessageChannel(params.fallbackChannel)) {
     channel = params.fallbackChannel;
   }

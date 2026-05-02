@@ -36,11 +36,8 @@ import { buildCodexConversationTurnInput } from "./conversation-turn-input.js";
 const DEFAULT_BOUND_TURN_TIMEOUT_MS = 20 * 60_000;
 
 export {
-  createCodexConversationBindingData,
   readCodexConversationBindingData,
-  readCodexConversationBindingDataRecord,
   resolveCodexDefaultWorkspaceDir,
-  type CodexConversationBindingData,
 } from "./conversation-binding-data.js";
 
 type CodexConversationRunOptions = {

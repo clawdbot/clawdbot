@@ -41,6 +41,74 @@ describe("legacy session maintenance migrate", () => {
   });
 });
 
+describe("legacy session parent fork migrate", () => {
+  it("removes legacy session.parentForkMaxTokens", () => {
+    const res = migrateLegacyConfigForTest({
+      session: {
+        store: "sessions.json",
+        parentForkMaxTokens: 200_000,
+      },
+    });
+
+    expect(res.config?.session).toEqual({
+      store: "sessions.json",
+    });
+    expect(res.changes).toContain(
+      "Removed session.parentForkMaxTokens; parent fork sizing is automatic.",
+    );
+  });
+});
+
+describe("legacy thread binding spawn migrate", () => {
+  it("moves matching split spawn flags to unified spawnSessions", () => {
+    const res = migrateLegacyConfigForTest({
+      channels: {
+        discord: {
+          threadBindings: {
+            enabled: true,
+            spawnSubagentSessions: true,
+            spawnAcpSessions: true,
+          },
+        },
+      },
+    });
+
+    expect(res.config?.channels?.discord?.threadBindings).toEqual({
+      enabled: true,
+      spawnSessions: true,
+    });
+    expect(res.changes).toContain(
+      "Moved channels.discord.threadBindings.spawnSubagentSessions/spawnAcpSessions → channels.discord.threadBindings.spawnSessions (true).",
+    );
+  });
+
+  it("collapses conflicting split spawn flags conservatively", () => {
+    const res = migrateLegacyConfigForTest({
+      channels: {
+        discord: {
+          accounts: {
+            work: {
+              threadBindings: {
+                spawnSubagentSessions: true,
+                spawnAcpSessions: false,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      res.config?.channels?.discord?.accounts?.work?.threadBindings as Record<string, unknown>,
+    ).toEqual({
+      spawnSessions: false,
+    });
+    expect(res.changes).toContain(
+      "Collapsed conflicting channels.discord.accounts.work.threadBindings.spawnSubagentSessions/spawnAcpSessions → channels.discord.accounts.work.threadBindings.spawnSessions (false).",
+    );
+  });
+});
+
 describe("legacy migrate audio transcription", () => {
   it("does not rewrite removed routing.transcribeAudio migrations", () => {
     const res = migrateLegacyConfigForTest({

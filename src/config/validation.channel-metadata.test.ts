@@ -120,10 +120,21 @@ vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: () => mockLoadPluginManifestRegistry(),
 }));
 
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: () => ({
+    manifestRegistry: mockLoadPluginManifestRegistry(),
+  }),
+}));
+
 vi.mock("../plugins/doctor-contract-registry.js", () => ({
   collectRelevantDoctorPluginIds: () => [],
   listPluginDoctorLegacyConfigRules: () => [],
   applyPluginDoctorCompatibilityMigrations: () => ({ next: null, changes: [] }),
+}));
+
+vi.mock("../secrets/target-registry-data.js", () => ({
+  getCoreSecretTargetRegistry: () => [],
+  getSecretTargetRegistry: () => [],
 }));
 
 vi.mock("../channels/plugins/legacy-config.js", () => ({

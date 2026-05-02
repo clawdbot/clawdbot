@@ -1,4 +1,9 @@
-import { MessageReferenceType, StickerFormatType } from "discord-api-types/v10";
+import {
+  ComponentType,
+  MessageFlags,
+  MessageReferenceType,
+  StickerFormatType,
+} from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, type Client, type Message } from "../internal/discord.js";
 
@@ -137,6 +142,7 @@ function asForwardedSnapshotMessage(params: {
 
 function asReferencedForwardMessage(params: {
   content?: string;
+  components?: Array<Record<string, unknown>>;
   embeds?: Array<{ title?: string; description?: string }>;
   attachments?: Array<Record<string, unknown>>;
   messageReferenceType?: MessageReferenceType;
@@ -152,8 +158,10 @@ function asReferencedForwardMessage(params: {
       id: "m0",
       channelId: "c1",
       content: params.content ?? "",
+      components: params.components ?? [],
       attachments: params.attachments ?? [],
       embeds: params.embeds ?? [],
+      flags: params.components ? MessageFlags.IsComponentsV2 : 0,
       stickers: [],
       author: {
         id: "u2",
@@ -980,6 +988,46 @@ describe("resolveDiscordMessageText", () => {
     expect(text).toBe("Breaking");
   });
 
+  it("uses Components v2 text display content when normal message text is empty", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "",
+        flags: MessageFlags.IsComponentsV2,
+        components: [
+          {
+            type: ComponentType.Container,
+            components: [
+              { type: ComponentType.TextDisplay, content: "Component headline" },
+              {
+                type: ComponentType.Section,
+                components: [{ type: ComponentType.TextDisplay, content: "Component body" }],
+                accessory: { type: ComponentType.Thumbnail, media: { url: "attachment://x.png" } },
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    expect(text).toBe("Component headline\nComponent body");
+  });
+
+  it("uses Components v2 text display content from referenced reply messages", () => {
+    const text = resolveDiscordMessageText(
+      asReferencedForwardMessage({
+        components: [
+          {
+            type: ComponentType.Container,
+            components: [{ type: ComponentType.TextDisplay, content: "Referenced component text" }],
+          },
+        ],
+        messageReferenceType: MessageReferenceType.Default,
+      }).referencedMessage!,
+    );
+
+    expect(text).toBe("Referenced component text");
+  });
+
   it("uses embed description when content is empty", () => {
     const text = resolveDiscordMessageText(
       asMessage({
@@ -1024,6 +1072,42 @@ describe("resolveDiscordMessageText", () => {
 
     expect(text).toContain("[Forwarded message from @Bob]");
     expect(text).toContain("Forwarded title\nForwarded details");
+  });
+
+  it("includes Components v2 text display content from forwarded snapshots", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "",
+        rawData: {
+          message_snapshots: [
+            {
+              message: {
+                content: "",
+                embeds: [],
+                attachments: [],
+                components: [
+                  {
+                    type: ComponentType.Container,
+                    components: [
+                      { type: ComponentType.TextDisplay, content: "Forwarded component text" },
+                    ],
+                  },
+                ],
+                author: {
+                  id: "u2",
+                  username: "Bob",
+                  discriminator: "0",
+                },
+              },
+            },
+          ],
+        },
+      }),
+      { includeForwarded: true },
+    );
+
+    expect(text).toContain("[Forwarded message from @Bob]");
+    expect(text).toContain("Forwarded component text");
   });
 });
 

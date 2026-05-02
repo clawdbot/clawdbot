@@ -13,7 +13,7 @@ import type { QaSeedScenario } from "./scenario-catalog.js";
 export type { QaProviderMode } from "./model-selection.js";
 export type { QaProviderModeInput } from "./providers/index.js";
 
-export type QaLabRunSelection = {
+type QaLabRunSelection = {
   providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
@@ -21,14 +21,14 @@ export type QaLabRunSelection = {
   scenarioIds: string[];
 };
 
-export type QaLabRunArtifacts = {
+type QaLabRunArtifacts = {
   outputDir: string;
   reportPath: string;
   summaryPath: string;
   watchUrl: string;
 };
 
-export type QaLabRunnerSnapshot = {
+type QaLabRunnerSnapshot = {
   status: "idle" | "running" | "completed" | "failed";
   selection: QaLabRunSelection;
   startedAt?: string;

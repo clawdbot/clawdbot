@@ -125,6 +125,97 @@ describe("handleDiscordMessageAction", () => {
     );
   });
 
+  it("maps upload-file to Discord sendMessage with media read context", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("image"));
+    const mediaAccess = {
+      localRoots: ["/tmp/agent-root"],
+      readFile: mediaReadFile,
+    };
+
+    await handleDiscordMessageAction({
+      action: "upload-file",
+      params: {
+        target: "channel:123",
+        filePath: "/tmp/agent-root/image.png",
+        message: "caption",
+        filename: "image.png",
+        replyTo: "message-1",
+        silent: true,
+        __sessionKey: "session-1",
+        __agentId: "agent-1",
+      },
+      cfg: {
+        channels: { discord: { token: "tok" } },
+      } as OpenClawConfig,
+      mediaAccess,
+      mediaLocalRoots: ["/tmp/agent-root"],
+      mediaReadFile,
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        to: "channel:123",
+        content: "caption",
+        mediaUrl: "/tmp/agent-root/image.png",
+        filename: "image.png",
+        replyTo: "message-1",
+        silent: true,
+        __sessionKey: "session-1",
+        __agentId: "agent-1",
+      }),
+      expect.any(Object),
+      {
+        mediaAccess,
+        mediaLocalRoots: ["/tmp/agent-root"],
+        mediaReadFile,
+      },
+    );
+  });
+
+  it("falls back to Discord toolContext.currentChannelId for upload-file", async () => {
+    await handleDiscordMessageAction({
+      action: "upload-file",
+      params: {
+        path: "/tmp/agent-root/image.png",
+      },
+      cfg: {
+        channels: { discord: { token: "tok" } },
+      } as OpenClawConfig,
+      toolContext: {
+        currentChannelProvider: "discord",
+        currentChannelId: "channel:123",
+      },
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        to: "channel:123",
+        content: "",
+        mediaUrl: "/tmp/agent-root/image.png",
+      }),
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
+  it("requires a file path for upload-file", async () => {
+    await expect(
+      handleDiscordMessageAction({
+        action: "upload-file",
+        params: {
+          to: "channel:123",
+        },
+        cfg: {
+          channels: { discord: { token: "tok" } },
+        } as OpenClawConfig,
+      }),
+    ).rejects.toThrow(/upload-file requires filePath, path, or media/i);
+
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
+  });
+
   it("does not use another provider's current target for Discord sends", async () => {
     await expect(
       handleDiscordMessageAction({

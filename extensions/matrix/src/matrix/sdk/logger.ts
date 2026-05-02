@@ -3,7 +3,7 @@ import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 
-export type Logger = {
+type Logger = {
   trace: (module: string, ...messageOrObject: unknown[]) => void;
   debug: (module: string, ...messageOrObject: unknown[]) => void;
   info: (module: string, ...messageOrObject: unknown[]) => void;

@@ -24,7 +24,7 @@ function normalizeOrigin(value: string): string | null {
   }
 }
 
-export type NextcloudTalkMonitorOptions = {
+type NextcloudTalkMonitorOptions = {
   accountId?: string;
   config?: CoreConfig;
   runtime?: RuntimeEnv;

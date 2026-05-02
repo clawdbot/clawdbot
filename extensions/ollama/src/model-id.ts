@@ -1,6 +1,6 @@
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 
-export const OLLAMA_PROVIDER_ID = "ollama";
+const OLLAMA_PROVIDER_ID = "ollama";
 
 function uniqueModelPrefixCandidates(providerId?: string): string[] {
   const candidates = [providerId, normalizeProviderId(providerId ?? ""), OLLAMA_PROVIDER_ID]

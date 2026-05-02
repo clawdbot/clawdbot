@@ -210,7 +210,7 @@ class FlushController {
 // ============ StreamingController ============
 
 /** StreamingController 的依赖注入 */
-export interface StreamingControllerDeps {
+interface StreamingControllerDeps {
   /** QQ Bot 账户配置 */
   account: GatewayAccount;
   /** 目标用户 openid（流式 API 仅支持 C2C） */
@@ -1105,7 +1105,7 @@ export class StreamingController {
 // ============ 流式媒体发送 ============
 
 /** 流式媒体发送上下文（由 gateway 注入到 StreamingController） */
-export interface StreamingMediaContext {
+interface StreamingMediaContext {
   /** 账户信息 */
   account: GatewayAccount;
   /** 事件信息 */

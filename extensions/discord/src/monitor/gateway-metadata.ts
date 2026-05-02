@@ -16,7 +16,7 @@ const MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS = 120_000;
 const DISCORD_GATEWAY_INFO_TIMEOUT_ENV = "OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS";
 const DISCORD_GATEWAY_METADATA_FALLBACK_LOG_INTERVAL_MS = 60_000;
 
-export type DiscordGatewayMetadataResponse = Pick<Response, "ok" | "status" | "text">;
+type DiscordGatewayMetadataResponse = Pick<Response, "ok" | "status" | "text">;
 export type DiscordGatewayFetchInit = Record<string, unknown> & {
   headers?: Record<string, string>;
 };

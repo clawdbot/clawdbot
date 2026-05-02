@@ -75,6 +75,46 @@ describe("scripts/resolve-upgrade-survivor-baselines", () => {
     });
   });
 
+  it("resolves all-since baselines to every stable published release at or after the requested version", () => {
+    const releases = (
+      [
+        ["v2026.5.2", "2026-05-03T00:00:00Z"],
+        ["v2026.4.30", "2026-05-01T00:00:00Z"],
+        ["v2026.4.29", "2026-04-30T00:00:00Z"],
+        ["v2026.4.23", "2026-04-23T00:00:00Z"],
+        ["v2026.4.22", "2026-04-22T00:00:00Z"],
+        ["v2026.4.31-beta.1", "2026-05-02T00:00:00Z", true],
+      ] as const
+    ).map(([tagName, publishedAt, isPrerelease = false]) => ({
+      isPrerelease,
+      publishedAt,
+      tagName,
+    }));
+
+    withReleaseFixture(releases, (releasesFile) => {
+      withJsonFixture(
+        "versions.json",
+        ["2026.5.2", "2026.4.30", "2026.4.29", "2026.4.23", "2026.4.22"],
+        (versionsFile) => {
+          expect(
+            resolveBaselines(
+              new Map([
+                ["requested", "all-since-2026.4.23"],
+                ["releases-json", releasesFile],
+                ["npm-versions-json", versionsFile],
+              ]),
+            ),
+          ).toEqual([
+            "openclaw@2026.5.2",
+            "openclaw@2026.4.30",
+            "openclaw@2026.4.29",
+            "openclaw@2026.4.23",
+          ]);
+        },
+      );
+    });
+  });
+
   it("maps release-history anchors to npm-published package versions when GitHub tags have republish suffixes", () => {
     const releases = (
       [

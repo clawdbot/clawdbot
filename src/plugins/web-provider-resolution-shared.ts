@@ -1,7 +1,7 @@
 import { resolveBundledPluginCompatibleLoadValues } from "./activation-context.js";
 import type { PluginLoadOptions } from "./loader.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
+import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 
 export type WebProviderContract = "webSearchProviders" | "webFetchProviders";
@@ -66,13 +66,13 @@ function loadInstalledWebProviderManifestRecords(params: {
   env?: PluginLoadOptions["env"];
   pluginIds?: readonly string[];
 }): readonly PluginManifestRecord[] {
-  return loadPluginManifestRegistryForPluginRegistry({
-    config: params.config,
+  const records = loadPluginMetadataSnapshot({
+    config: params.config ?? {},
     workspaceDir: params.workspaceDir,
-    env: params.env,
-    pluginIds: params.pluginIds,
-    includeDisabled: true,
+    env: params.env ?? process.env,
   }).plugins;
+  const pluginIdSet = createPluginIdScopeSet(params.pluginIds);
+  return pluginIdSet ? records.filter((plugin) => pluginIdSet.has(plugin.id)) : records;
 }
 
 export function resolveManifestDeclaredWebProviderCandidatePluginIds(params: {
@@ -160,9 +160,9 @@ export function resolveBundledWebProviderResolutionConfig(params: {
     workspaceDir: params.workspaceDir,
     applyAutoEnable: true,
     compatMode: {
-      allowlist: params.bundledAllowlistCompat,
+      allowlist: params.config === undefined ? false : params.bundledAllowlistCompat,
       enablement: "always",
-      vitest: true,
+      vitest: params.config !== undefined,
     },
     resolveCompatPluginIds: (compatParams) =>
       resolveBundledWebProviderCompatPluginIds({

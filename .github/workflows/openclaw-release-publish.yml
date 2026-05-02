@@ -1,0 +1,257 @@
+name: OpenClaw Release Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish, for example v2026.5.1-beta.1
+        required: true
+        type: string
+      preflight_run_id:
+        description: Successful OpenClaw NPM Release preflight run id, required when publish_openclaw_npm=true
+        required: false
+        type: string
+      npm_dist_tag:
+        description: npm dist-tag for the OpenClaw package
+        required: true
+        default: beta
+        type: choice
+        options:
+          - beta
+          - latest
+      plugin_publish_scope:
+        description: Plugin publish scope to run before OpenClaw publish
+        required: true
+        default: all-publishable
+        type: choice
+        options:
+          - selected
+          - all-publishable
+      plugins:
+        description: Comma-separated plugin package names when plugin_publish_scope=selected
+        required: false
+        type: string
+      publish_openclaw_npm:
+        description: Publish the OpenClaw npm package after plugin npm and ClawHub publish complete
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: openclaw-release-publish-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.x"
+  PNPM_VERSION: "10.32.1"
+
+jobs:
+  resolve_release_target:
+    name: Resolve release target
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      sha: ${{ steps.ref.outputs.sha }}
+    steps:
+      - name: Validate inputs
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
+          PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
+          PLUGINS: ${{ inputs.plugins }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
+            echo "Invalid release tag: ${RELEASE_TAG}" >&2
+            exit 1
+          fi
+          if [[ "${RELEASE_TAG}" == *"-beta."* && "${RELEASE_NPM_DIST_TAG}" != "beta" ]]; then
+            echo "Beta prerelease tags must publish OpenClaw to npm dist-tag beta." >&2
+            exit 1
+          fi
+          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && -z "${PREFLIGHT_RUN_ID}" ]]; then
+            echo "publish_openclaw_npm=true requires preflight_run_id." >&2
+            exit 1
+          fi
+          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${WORKFLOW_REF}" != "refs/heads/main" && ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]]; then
+            echo "publish_openclaw_npm=true requires dispatching this workflow from main or release/YYYY.M.D." >&2
+            exit 1
+          fi
+          if [[ "${PLUGIN_PUBLISH_SCOPE}" == "selected" && -z "${PLUGINS}" ]]; then
+            echo "plugin_publish_scope=selected requires plugins." >&2
+            exit 1
+          fi
+          if [[ "${PLUGIN_PUBLISH_SCOPE}" == "all-publishable" && -n "${PLUGINS}" ]]; then
+            echo "plugin_publish_scope=all-publishable must not include plugins." >&2
+            exit 1
+          fi
+
+      - name: Checkout release tag
+        uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "false"
+
+      - name: Resolve checked-out release ref
+        id: ref
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Validate release tag is reachable from main or release branch
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main \
+            '+refs/heads/release/*:refs/remotes/origin/release/*'
+          if git merge-base --is-ancestor HEAD origin/main; then
+            exit 0
+          fi
+          while IFS= read -r release_ref; do
+            if git merge-base --is-ancestor HEAD "${release_ref}"; then
+              exit 0
+            fi
+          done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/release)
+          echo "Release tag must point to a commit reachable from main or release/*." >&2
+          exit 1
+
+      - name: Verify plugin versions were synced for this release
+        run: pnpm plugins:sync:check
+
+      - name: Summarize release target
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          TARGET_SHA: ${{ steps.ref.outputs.sha }}
+        run: |
+          {
+            echo "### Release target"
+            echo
+            echo "- Tag: \`${RELEASE_TAG}\`"
+            echo "- SHA: \`${TARGET_SHA}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Publish plugins, then OpenClaw
+    needs: [resolve_release_target]
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Dispatch publish workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+          CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
+          PLUGINS: ${{ inputs.plugins }}
+          PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+
+          dispatch_and_wait() {
+            local workflow="$1"
+            shift
+
+            local before_json dispatch_output run_id status conclusion url
+            before_json="$(gh run list --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
+
+            dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
+            printf '%s\n' "$dispatch_output"
+            run_id="$(
+              printf '%s\n' "$dispatch_output" |
+                sed -nE 's#.*actions/runs/([0-9]+).*#\1#p' |
+                tail -n 1
+            )"
+
+            if [[ -z "$run_id" ]]; then
+              for _ in $(seq 1 60); do
+                run_id="$(
+                  BEFORE_IDS="$before_json" gh run list --workflow "$workflow" --event workflow_dispatch --limit 50 --json databaseId,createdAt \
+                    --jq 'map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
+                )"
+                if [[ -n "$run_id" ]]; then
+                  break
+                fi
+                sleep 5
+              done
+            fi
+
+            if [[ -z "${run_id:-}" ]]; then
+              echo "Could not find dispatched run for ${workflow}." >&2
+              exit 1
+            fi
+
+            echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+
+            cancel_child() {
+              if [[ -n "${run_id:-}" ]]; then
+                echo "Cancelling child workflow ${workflow}: ${run_id}" >&2
+                gh run cancel "$run_id" >/dev/null 2>&1 || true
+              fi
+            }
+            trap cancel_child EXIT INT TERM
+
+            while true; do
+              status="$(gh run view "$run_id" --json status --jq '.status')"
+              if [[ "$status" == "completed" ]]; then
+                break
+              fi
+              sleep 30
+            done
+            trap - EXIT INT TERM
+
+            conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
+            url="$(gh run view "$run_id" --json url --jq '.url')"
+            echo "${workflow} finished with ${conclusion}: ${url}"
+            {
+              echo "- ${workflow}: ${conclusion} (${url})"
+            } >> "$GITHUB_STEP_SUMMARY"
+            if [[ "$conclusion" != "success" ]]; then
+              gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
+              exit 1
+            fi
+          }
+
+          {
+            echo "### Publish sequence"
+            echo
+            echo "- Workflow ref: \`${CHILD_WORKFLOW_REF}\`"
+            echo "- Release tag: \`${RELEASE_TAG}\`"
+            echo "- Release SHA: \`${TARGET_SHA}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          npm_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}")
+          clawhub_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}")
+          if [[ -n "${PLUGINS}" ]]; then
+            npm_args+=(-f plugins="${PLUGINS}")
+            clawhub_args+=(-f plugins="${PLUGINS}")
+          fi
+
+          dispatch_and_wait plugin-npm-release.yml "${npm_args[@]}"
+          dispatch_and_wait plugin-clawhub-release.yml "${clawhub_args[@]}"
+
+          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
+            dispatch_and_wait openclaw-npm-release.yml \
+              -f tag="${RELEASE_TAG}" \
+              -f preflight_only=false \
+              -f preflight_run_id="${PREFLIGHT_RUN_ID}" \
+              -f npm_dist_tag="${RELEASE_NPM_DIST_TAG}"
+          else
+            echo "- OpenClaw npm publish: skipped by input" >> "$GITHUB_STEP_SUMMARY"
+          fi

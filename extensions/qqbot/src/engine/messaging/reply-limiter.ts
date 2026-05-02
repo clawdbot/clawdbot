@@ -11,7 +11,7 @@
  */
 
 /** Configuration for the reply limiter. */
-export interface ReplyLimiterConfig {
+interface ReplyLimiterConfig {
   /** Maximum passive replies per message. Defaults to 4. */
   limit?: number;
   /** TTL in milliseconds for the passive reply window. Defaults to 1 hour. */

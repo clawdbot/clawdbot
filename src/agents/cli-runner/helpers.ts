@@ -227,7 +227,7 @@ function resolveCliImageRoot(params: { backend: CliBackendConfig; workspaceDir: 
   return path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images");
 }
 
-export function appendImagePathsToPrompt(prompt: string, paths: string[], prefix = ""): string {
+function appendImagePathsToPrompt(prompt: string, paths: string[], prefix = ""): string {
   if (!paths.length) {
     return prompt;
   }

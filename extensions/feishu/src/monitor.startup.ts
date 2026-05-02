@@ -20,7 +20,7 @@ function resolveStartupProbeTimeoutMs(): number {
   return FEISHU_STARTUP_BOT_INFO_TIMEOUT_DEFAULT_MS;
 }
 
-export const FEISHU_STARTUP_BOT_INFO_TIMEOUT_MS = resolveStartupProbeTimeoutMs();
+const FEISHU_STARTUP_BOT_INFO_TIMEOUT_MS = resolveStartupProbeTimeoutMs();
 
 type FetchBotOpenIdOptions = {
   runtime?: RuntimeEnv;

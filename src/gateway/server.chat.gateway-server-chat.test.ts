@@ -609,6 +609,29 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.send accepts the backing session id returned by chat.history", async () => {
+    await withMainSessionStore(async () => {
+      const historyRes = await rpcReq<{ sessionId?: string }>(ws, "chat.history", {
+        sessionKey: "main",
+      });
+      expect(historyRes.ok).toBe(true);
+      const sessionId = historyRes.payload?.sessionId;
+      expect(sessionId).toBe("sess-main");
+
+      const runId = "idem-chat-send-history-session-id";
+      const sendRes = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        sessionId,
+        message: "/context list",
+        idempotencyKey: runId,
+      });
+      expect(sendRes.ok).toBe(true);
+      expect(sendRes.payload?.status).toBe("started");
+
+      await waitForAgentRunOk(runId);
+    });
+  });
+
   test("chat.history hides assistant NO_REPLY-only entries", async () => {
     const historyMessages = await loadChatHistoryWithMessages(buildNoReplyHistoryFixture());
     const textValues = collectHistoryTextValues(historyMessages);

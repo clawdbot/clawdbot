@@ -81,8 +81,8 @@ run_success_scenario() {
   configure_kitchen_sink_runtime
   run_logged_print "kitchen-sink-enable-${KITCHEN_SINK_LABEL}" node "$OPENCLAW_ENTRY" plugins enable "$KITCHEN_SINK_ID"
   node "$OPENCLAW_ENTRY" plugins list --json >"/tmp/kitchen-sink-${KITCHEN_SINK_LABEL}-plugins.json"
-  node "$OPENCLAW_ENTRY" plugins inspect "$KITCHEN_SINK_ID" --json >"/tmp/kitchen-sink-${KITCHEN_SINK_LABEL}-inspect.json"
-  node "$OPENCLAW_ENTRY" plugins inspect --all --json >"/tmp/kitchen-sink-${KITCHEN_SINK_LABEL}-inspect-all.json"
+  node "$OPENCLAW_ENTRY" plugins inspect "$KITCHEN_SINK_ID" --runtime --json >"/tmp/kitchen-sink-${KITCHEN_SINK_LABEL}-inspect.json"
+  node "$OPENCLAW_ENTRY" plugins inspect --all --runtime --json >"/tmp/kitchen-sink-${KITCHEN_SINK_LABEL}-inspect-all.json"
   assert_kitchen_sink_installed
   if [ "$KITCHEN_SINK_SOURCE" = "clawhub" ]; then
     run_logged_print "kitchen-sink-uninstall-${KITCHEN_SINK_LABEL}" node "$OPENCLAW_ENTRY" plugins uninstall "$KITCHEN_SINK_SPEC" --force
@@ -121,6 +121,7 @@ while IFS='|' read -r label spec plugin_id source expectation surface_mode perso
   export KITCHEN_SINK_SOURCE="$source"
   export KITCHEN_SINK_SURFACE_MODE="$surface_mode"
   export KITCHEN_SINK_PERSONALITY="${personality:-}"
+  export OPENCLAW_KITCHEN_SINK_PERSONALITY="${personality:-}"
   case "$expectation" in
   success)
     run_success_scenario

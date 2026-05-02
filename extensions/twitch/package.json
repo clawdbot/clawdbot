@@ -1,7 +1,11 @@
 {
   "name": "@openclaw/twitch",
-  "version": "2026.4.25",
+  "version": "2026.5.1-beta.1",
   "description": "OpenClaw Twitch channel plugin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "dependencies": {
     "@twurple/api": "^8.1.3",
@@ -17,7 +21,15 @@
     ],
     "setupEntry": "./setup-entry.ts",
     "install": {
+      "npmSpec": "@openclaw/twitch",
+      "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.10"
+    },
+    "compat": {
+      "pluginApi": ">=2026.4.10"
+    },
+    "build": {
+      "openclawVersion": "2026.5.1-beta.1"
     },
     "channel": {
       "id": "twitch",
@@ -28,6 +40,10 @@
       "aliases": [
         "twitch-chat"
       ]
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
     }
   }
 }

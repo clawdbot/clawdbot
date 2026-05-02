@@ -18,7 +18,7 @@ type VoiceCallSpeakResult = {
   error?: string;
 };
 
-export type VoiceCallMeetJoinResult = {
+type VoiceCallMeetJoinResult = {
   callId: string;
   dtmfSent: boolean;
   introSent: boolean;

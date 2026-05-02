@@ -22,7 +22,7 @@ export type ExecHostRunResult = {
   error?: string | null;
 };
 
-export type ExecHostError = {
+type ExecHostError = {
   code: string;
   message: string;
   reason?: string;

@@ -345,9 +345,22 @@ async function writeSavedMediaBuffer(params: {
   buffer: Buffer;
 }): Promise<string> {
   const dest = path.join(params.dir, params.id);
-  await retryAfterRecreatingDir(params.dir, () =>
-    fs.writeFile(dest, params.buffer, { mode: MEDIA_FILE_MODE }),
-  );
+  await retryAfterRecreatingDir(params.dir, async () => {
+    const tempDest = path.join(params.dir, `.${params.id}.${crypto.randomUUID()}.tmp`);
+    try {
+      await fs.writeFile(tempDest, params.buffer, { mode: MEDIA_FILE_MODE });
+      const handle = await fs.open(tempDest, "r");
+      try {
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      await fs.rename(tempDest, dest);
+    } catch (err) {
+      await fs.rm(tempDest, { force: true }).catch(() => {});
+      throw err;
+    }
+  });
   return dest;
 }
 

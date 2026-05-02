@@ -2,8 +2,8 @@ import { afterAll, beforeAll, beforeEach } from "vitest";
 import { connectOk, startServerWithClient, testState } from "./test-helpers.js";
 
 type StartServerWithClient = typeof startServerWithClient;
-export type GatewayWs = Awaited<ReturnType<StartServerWithClient>>["ws"];
-export type GatewayServer = Awaited<ReturnType<StartServerWithClient>>["server"];
+type GatewayWs = Awaited<ReturnType<StartServerWithClient>>["ws"];
+type GatewayServer = Awaited<ReturnType<StartServerWithClient>>["server"];
 
 export async function withServer<T>(run: (ws: GatewayWs) => Promise<T>): Promise<T> {
   const { server, ws, envSnapshot } = await startServerWithClient("secret");

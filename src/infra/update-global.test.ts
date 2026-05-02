@@ -457,7 +457,7 @@ describe("update global helpers", () => {
     });
   });
 
-  it("ignores bundled plugin install stages during installed dist verification", async () => {
+  it("reports bundled plugin install stages during installed dist verification", async () => {
     await withTempDir({ prefix: "openclaw-update-global-plugin-stage-" }, async (packageRoot) => {
       await writeGlobalPackageJson(packageRoot);
       await fs.mkdir(path.join(packageRoot, "dist", "extensions", "brave"), { recursive: true });
@@ -480,7 +480,10 @@ describe("update global helpers", () => {
         await fs.writeFile(stagedFile, "export {};\n", "utf8");
       }
 
-      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);
+      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([
+        "unexpected packaged dist file dist/extensions/brave/.openclaw-install-stage-retry/node_modules/typebox/build/compile/code.mjs",
+        "unexpected packaged dist file dist/extensions/brave/.openclaw-install-stage/node_modules/typebox/build/compile/code.mjs",
+      ]);
     });
   });
 

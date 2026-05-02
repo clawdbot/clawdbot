@@ -9,7 +9,7 @@ export function normalizeCommentFileType(value: unknown): CommentFileType | unde
     : undefined;
 }
 
-export type FeishuCommentTarget = {
+type FeishuCommentTarget = {
   fileType: CommentFileType;
   fileToken: string;
   commentId: string;

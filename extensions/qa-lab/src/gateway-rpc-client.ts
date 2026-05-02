@@ -7,7 +7,7 @@ type QaGatewayRpcRequestOptions = {
   timeoutMs?: number;
 };
 
-export type QaGatewayRpcClient = {
+type QaGatewayRpcClient = {
   request(method: string, rpcParams?: unknown, opts?: QaGatewayRpcRequestOptions): Promise<unknown>;
   stop(): Promise<void>;
 };

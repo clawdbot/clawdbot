@@ -1,8 +1,11 @@
 {
   "name": "@openclaw/brave-plugin",
-  "version": "2026.4.25",
-  "private": true,
+  "version": "2026.5.1-beta.1",
   "description": "OpenClaw Brave plugin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -10,6 +13,21 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "install": {
+      "npmSpec": "@openclaw/brave-plugin",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.10"
+    },
+    "compat": {
+      "pluginApi": ">=2026.4.10"
+    },
+    "build": {
+      "openclawVersion": "2026.5.1-beta.1"
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
   }
 }

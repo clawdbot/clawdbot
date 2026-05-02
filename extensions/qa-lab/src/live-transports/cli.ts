@@ -35,7 +35,7 @@ function createQaRunnerCliRegistration(
   });
 }
 
-export const LIVE_TRANSPORT_QA_CLI_REGISTRATIONS: readonly LiveTransportQaCliRegistration[] = [
+const LIVE_TRANSPORT_QA_CLI_REGISTRATIONS: readonly LiveTransportQaCliRegistration[] = [
   telegramQaCliRegistration,
   discordQaCliRegistration,
 ];

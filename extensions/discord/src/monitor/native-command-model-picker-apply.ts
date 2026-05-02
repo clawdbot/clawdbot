@@ -15,13 +15,13 @@ import type { ThreadBindingManager } from "./thread-bindings.js";
 
 type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
 
-export type DiscordModelPickerSelectionCommand = {
+type DiscordModelPickerSelectionCommand = {
   prompt: string;
   command: ChatCommandDefinition;
   args?: CommandArgs;
 };
 
-export type DiscordModelPickerApplyResult =
+type DiscordModelPickerApplyResult =
   | { status: "success"; effectiveModelRef: string; noticeMessage: string }
   | { status: "mismatch"; effectiveModelRef: string; noticeMessage: string }
   | { status: "rejected"; noticeMessage: string }

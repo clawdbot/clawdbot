@@ -146,4 +146,23 @@ describe("hasGenerationToolAvailability", () => {
     ).toBe(true);
     expect(loadProviders).not.toHaveBeenCalled();
   });
+
+  it("checks configured runtime providers against the supplied auth store", () => {
+    expect(
+      hasGenerationToolAvailability({
+        providerKey: "imageGenerationProviders",
+        authStore: {
+          version: 1,
+          profiles: {
+            "local-image:default": {
+              provider: "local-image",
+              type: "api_key",
+              key: "test",
+            },
+          },
+        },
+        providers: [{ id: "local-image", defaultModel: "workflow" }],
+      }),
+    ).toBe(true);
+  });
 });

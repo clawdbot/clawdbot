@@ -6,13 +6,6 @@ import {
   HUGGINGFACE_MODEL_CATALOG,
 } from "./models.js";
 
-export {
-  buildHuggingfaceModelDefinition,
-  discoverHuggingfaceModels,
-  HUGGINGFACE_BASE_URL,
-  HUGGINGFACE_MODEL_CATALOG,
-} from "./models.js";
-
 export async function buildHuggingfaceProvider(
   discoveryApiKey?: string,
 ): Promise<ModelProviderConfig> {

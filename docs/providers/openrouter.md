@@ -159,6 +159,13 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
     better prompt-cache reuse on system/developer prompt blocks.
   </Accordion>
 
+  <Accordion title="Anthropic reasoning prefill">
+    On verified OpenRouter routes, Anthropic model refs with reasoning enabled
+    drop trailing assistant prefill turns before the request reaches OpenRouter,
+    matching Anthropic's requirement that reasoning conversations end with a user
+    turn.
+  </Accordion>
+
   <Accordion title="Thinking / reasoning injection">
     On supported non-`auto` routes, OpenClaw maps the selected thinking level to
     OpenRouter proxy reasoning payloads. Unsupported model hints and

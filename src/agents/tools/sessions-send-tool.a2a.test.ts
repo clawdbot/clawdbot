@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { runAgentStep } from "./agent-step.js";
 import { runSessionsSendA2AFlow, __testing } from "./sessions-send-tool.a2a.js";
 
 vi.mock("../run-wait.js", () => ({
@@ -19,6 +20,8 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
   beforeEach(() => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
     gatewayCalls = [];
+    vi.clearAllMocks();
+    vi.mocked(runAgentStep).mockResolvedValue("Test announce reply");
     __testing.setDepsForTest({
       callGateway: async <T = Record<string, unknown>>(opts: CallGatewayOptions) => {
         gatewayCalls.push(opts);
@@ -66,4 +69,47 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(sendParams.channel).toBe("discord");
     expect(sendParams.threadId).toBeUndefined();
   });
+
+  it.each(["NO_REPLY", "HEARTBEAT_OK", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
+    "does not re-inject exact control reply %s into agent-to-agent flow",
+    async (roundOneReply) => {
+      await runSessionsSendA2AFlow({
+        targetSessionKey: "agent:main:discord:group:dev",
+        displayKey: "agent:main:discord:group:dev",
+        message: "Test message",
+        announceTimeoutMs: 10_000,
+        maxPingPongTurns: 2,
+        requesterSessionKey: "agent:main:discord:group:req",
+        requesterChannel: "discord",
+        roundOneReply,
+      });
+
+      expect(runAgentStep).not.toHaveBeenCalled();
+      expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
+    },
+  );
+
+  it.each(["NO_REPLY", "HEARTBEAT_OK"])(
+    "suppresses exact announce control reply %s before channel delivery",
+    async (announceReply) => {
+      vi.mocked(runAgentStep).mockResolvedValueOnce(announceReply);
+
+      await runSessionsSendA2AFlow({
+        targetSessionKey: "agent:main:discord:group:dev",
+        displayKey: "agent:main:discord:group:dev",
+        message: "Test message",
+        announceTimeoutMs: 10_000,
+        maxPingPongTurns: 0,
+        roundOneReply: "Worker completed successfully",
+      });
+
+      expect(runAgentStep).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "Agent-to-agent announce step.",
+          transcriptMessage: "",
+        }),
+      );
+      expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
+    },
+  );
 });

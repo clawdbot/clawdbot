@@ -17,8 +17,8 @@ import type {
 import { normalizeMattermostBaseUrl } from "./client.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 
-export type MattermostTokenSource = "env" | "config" | "none";
-export type MattermostBaseUrlSource = "env" | "config" | "none";
+type MattermostTokenSource = "env" | "config" | "none";
+type MattermostBaseUrlSource = "env" | "config" | "none";
 
 export type ResolvedMattermostAccount = {
   accountId: string;

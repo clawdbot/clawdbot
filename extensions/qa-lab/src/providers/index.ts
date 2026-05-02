@@ -3,21 +3,16 @@ import { liveFrontierProviderDefinition } from "./live-frontier/index.js";
 import { mockOpenAiProviderDefinition } from "./mock-openai/index.js";
 import type { QaProviderDefinition, QaProviderMode, QaProviderModeInput } from "./shared/types.js";
 
-export type {
-  QaMockProviderServer,
-  QaProviderDefinition,
-  QaProviderMode,
-  QaProviderModeInput,
-} from "./shared/types.js";
+export type { QaMockProviderServer, QaProviderMode, QaProviderModeInput } from "./shared/types.js";
 
-const PROVIDERS = [
+const PROVIDERS: readonly QaProviderDefinition[] = [
   mockOpenAiProviderDefinition,
   aimockProviderDefinition,
   liveFrontierProviderDefinition,
-] as const satisfies readonly QaProviderDefinition[];
+] as const;
 
-export const DEFAULT_QA_PROVIDER_MODE = "mock-openai" satisfies QaProviderMode;
-export const DEFAULT_QA_LIVE_PROVIDER_MODE = "live-frontier" satisfies QaProviderMode;
+export const DEFAULT_QA_PROVIDER_MODE: QaProviderMode = "mock-openai";
+export const DEFAULT_QA_LIVE_PROVIDER_MODE: QaProviderMode = "live-frontier";
 
 const PROVIDERS_BY_INPUT = new Map<QaProviderModeInput, QaProviderDefinition>();
 for (const provider of PROVIDERS) {
@@ -40,7 +35,7 @@ export function getQaProvider(input: QaProviderModeInput): QaProviderDefinition 
   return provider;
 }
 
-export function listQaProviderModes() {
+function listQaProviderModes() {
   return PROVIDERS.map((provider) => provider.mode);
 }
 

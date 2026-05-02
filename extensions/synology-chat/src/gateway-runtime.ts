@@ -68,7 +68,7 @@ function createUnknownArgsLogAdapter(
   };
 }
 
-export function collectSynologyGatewayStartupIssues(params: {
+function collectSynologyGatewayStartupIssues(params: {
   cfg: OpenClawConfig;
   account: ResolvedSynologyChatAccount;
   accountId: string;

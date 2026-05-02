@@ -220,7 +220,8 @@ function Invoke-NativeCommandCapture {
     param(
         [Parameter(Mandatory = $true)]
         [string]$FilePath,
-        [string[]]$Arguments = @()
+        [string[]]$Arguments = @(),
+        [string]$WorkingDirectory = ""
     )
 
     $stdoutPath = [System.IO.Path]::GetTempFileName()
@@ -253,12 +254,19 @@ function Invoke-NativeCommandCapture {
             )
         }
 
-        $process = Start-Process -FilePath $startFilePath `
-            -ArgumentList $startArguments `
-            -Wait `
-            -PassThru `
-            -RedirectStandardOutput $stdoutPath `
-            -RedirectStandardError $stderrPath
+        $startProcessArgs = @{
+            FilePath = $startFilePath
+            ArgumentList = $startArguments
+            Wait = $true
+            PassThru = $true
+            RedirectStandardOutput = $stdoutPath
+            RedirectStandardError = $stderrPath
+        }
+        if (![string]::IsNullOrWhiteSpace($WorkingDirectory)) {
+            $startProcessArgs.WorkingDirectory = $WorkingDirectory
+        }
+
+        $process = Start-Process @startProcessArgs
 
         return @{
             ExitCode = $process.ExitCode
@@ -268,6 +276,12 @@ function Invoke-NativeCommandCapture {
     } finally {
         Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
     }
+}
+
+function Get-NpmWorkingDirectory {
+    $workingDirectory = Join-Path ([System.IO.Path]::GetTempPath()) "openclaw-installer"
+    New-Item -ItemType Directory -Path $workingDirectory -Force | Out-Null
+    return $workingDirectory
 }
 
 function Install-OpenClawNpm {
@@ -286,7 +300,7 @@ function Install-OpenClawNpm {
             $installSpec,
             "--no-fund",
             "--no-audit"
-        )
+        ) -WorkingDirectory (Get-NpmWorkingDirectory)
         if ($installResult.Stdout) {
             Microsoft.PowerShell.Utility\Write-Host $installResult.Stdout
         }
@@ -468,7 +482,7 @@ function Main {
             "config",
             "get",
             "prefix"
-        )
+        ) -WorkingDirectory (Get-NpmWorkingDirectory)
         $npmPrefix = $prefixResult.Stdout
         if ($prefixResult.ExitCode -eq 0 -and $npmPrefix) {
             Add-ToPath -Path "$npmPrefix"

@@ -117,7 +117,7 @@ type TelegramQaScenarioResult = {
 
 type TelegramQaCanaryPhase = "sut_reply_timeout" | "sut_reply_not_threaded" | "sut_reply_empty";
 
-export type TelegramQaRunResult = {
+type TelegramQaRunResult = {
   outputDir: string;
   reportPath: string;
   summaryPath: string;
@@ -298,7 +298,7 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
   },
 ];
 
-export const TELEGRAM_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
+const TELEGRAM_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
   alwaysOnStandardScenarioIds: ["canary"],
   scenarios: TELEGRAM_QA_SCENARIOS,
 });
@@ -416,9 +416,7 @@ function formatTelegramQaProgressDetails(details: string): string {
   return `${sanitized.slice(0, TELEGRAM_QA_PROGRESS_DETAIL_LIMIT - 3).trimEnd()}...`;
 }
 
-export function resolveTelegramQaRuntimeEnv(
-  env: NodeJS.ProcessEnv = process.env,
-): TelegramQaRuntimeEnv {
+function resolveTelegramQaRuntimeEnv(env: NodeJS.ProcessEnv = process.env): TelegramQaRuntimeEnv {
   const groupId = resolveEnvValue(env, "OPENCLAW_QA_TELEGRAM_GROUP_ID");
   if (!/^-?\d+$/u.test(groupId)) {
     throw new Error("OPENCLAW_QA_TELEGRAM_GROUP_ID must be a numeric Telegram chat id.");
@@ -472,9 +470,7 @@ function detectMediaKinds(message: TelegramMessage) {
   return kinds;
 }
 
-export function normalizeTelegramObservedMessage(
-  update: TelegramUpdate,
-): TelegramObservedMessage | null {
+function normalizeTelegramObservedMessage(update: TelegramUpdate): TelegramObservedMessage | null {
   const message = update.message;
   if (!message?.from?.id) {
     return null;

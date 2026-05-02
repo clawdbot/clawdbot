@@ -2316,11 +2316,27 @@ describe("short-term dreaming trigger", () => {
   it("fans out one dreaming run across configured agent workspaces", async () => {
     const logger = createLogger();
     const workspaceRoot = await createTempWorkspace("memory-dreaming-multi-");
+    const mainWorkspace = path.join(workspaceRoot, "main");
     const alphaWorkspace = path.join(workspaceRoot, "alpha");
     const betaWorkspace = path.join(workspaceRoot, "beta");
 
+    await writeDailyMemoryNote(mainWorkspace, "2026-04-02", ["Main workspace note."]);
     await writeDailyMemoryNote(alphaWorkspace, "2026-04-02", ["Alpha backup note."]);
     await writeDailyMemoryNote(betaWorkspace, "2026-04-02", ["Beta router note."]);
+    await recordShortTermRecalls({
+      workspaceDir: mainWorkspace,
+      query: "main workspace",
+      results: [
+        {
+          path: "memory/2026-04-02.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Main workspace note.",
+          source: "memory",
+        },
+      ],
+    });
     await recordShortTermRecalls({
       workspaceDir: alphaWorkspace,
       query: "alpha backup",
@@ -2353,7 +2369,7 @@ describe("short-term dreaming trigger", () => {
     const result = await runShortTermDreamingPromotionIfTriggered({
       cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
       trigger: "heartbeat",
-      workspaceDir: alphaWorkspace,
+      workspaceDir: mainWorkspace,
       cfg: {
         agents: {
           defaults: {
@@ -2387,6 +2403,9 @@ describe("short-term dreaming trigger", () => {
     });
 
     expect(result?.handled).toBe(true);
+    expect(await fs.readFile(path.join(mainWorkspace, "MEMORY.md"), "utf-8")).toContain(
+      "Main workspace note.",
+    );
     expect(await fs.readFile(path.join(alphaWorkspace, "MEMORY.md"), "utf-8")).toContain(
       "Alpha backup note.",
     );
@@ -2394,7 +2413,7 @@ describe("short-term dreaming trigger", () => {
       "Beta router note.",
     );
     expect(logger.info).toHaveBeenCalledWith(
-      "memory-core: dreaming promotion complete (workspaces=2, candidates=2, applied=2, failed=0).",
+      "memory-core: dreaming promotion complete (workspaces=3, candidates=3, applied=3, failed=0).",
     );
   });
 });

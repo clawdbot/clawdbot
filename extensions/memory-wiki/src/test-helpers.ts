@@ -13,12 +13,12 @@ import { initializeMemoryWikiVault } from "./vault.js";
 
 const MEMORY_WIKI_TEST_HOME = "/Users/tester";
 
-export type MemoryWikiTestVault = {
+type MemoryWikiTestVault = {
   rootDir: string;
   config: ResolvedMemoryWikiConfig;
 };
 
-export type MemoryWikiPluginApiHarness = {
+type MemoryWikiPluginApiHarness = {
   api: OpenClawPluginApi;
   registerCli: ReturnType<typeof vi.fn>;
   registerGatewayMethod: ReturnType<typeof vi.fn>;

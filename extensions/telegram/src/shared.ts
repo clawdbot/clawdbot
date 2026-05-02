@@ -31,7 +31,7 @@ import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./
 import { telegramSecurityAdapter } from "./security.js";
 import { namedAccountPromotionKeys, singleAccountKeysToMove } from "./setup-contract.js";
 
-export const TELEGRAM_CHANNEL = "telegram" as const;
+const TELEGRAM_CHANNEL = "telegram" as const;
 
 type TelegramConfigAccessorAccount = {
   config: TelegramAccountConfig;

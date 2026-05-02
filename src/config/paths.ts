@@ -96,6 +96,46 @@ function resolveUserPath(
   return resolveHomeRelativePath(input, { env, homedir });
 }
 
+/**
+ * Optional allowlist of directories that `$include` directives may resolve
+ * outside the config directory. Set via `OPENCLAW_INCLUDE_ROOTS` as a
+ * platform-delimited path list (`:` on POSIX, `;` on Windows).
+ *
+ * Each entry is tilde-expanded and resolved to an absolute path. Entries that
+ * cannot be resolved or that are not absolute after expansion are dropped.
+ *
+ * Returns an empty array when the var is unset or contains no usable entries,
+ * preserving the historical behavior where `$include` is confined to the
+ * directory containing `openclaw.json`.
+ */
+export function resolveIncludeRoots(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = envHomedir(env),
+): string[] {
+  const raw = env.OPENCLAW_INCLUDE_ROOTS?.trim();
+  if (!raw) {
+    return [];
+  }
+  const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
+  const seen = new Set<string>();
+  const roots: string[] = [];
+  for (const entry of raw.split(path.delimiter)) {
+    const trimmed = entry.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const resolved = path.resolve(
+      resolveHomeRelativePath(trimmed, { env, homedir: effectiveHomedir }),
+    );
+    if (!path.isAbsolute(resolved) || seen.has(resolved)) {
+      continue;
+    }
+    seen.add(resolved);
+    roots.push(resolved);
+  }
+  return roots;
+}
+
 export const STATE_DIR = resolveStateDir();
 
 /**

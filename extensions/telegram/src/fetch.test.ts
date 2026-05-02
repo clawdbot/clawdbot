@@ -2,9 +2,11 @@ import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
+const getDefaultResultOrder = vi.hoisted(() => vi.fn(() => "ipv4first"));
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
 const loggerInfo = vi.hoisted(() => vi.fn());
 const loggerDebug = vi.hoisted(() => vi.fn());
+const loggerWarn = vi.hoisted(() => vi.fn());
 
 const undiciFetch = vi.hoisted(() => vi.fn());
 const setGlobalDispatcher = vi.hoisted(() => vi.fn());
@@ -46,6 +48,7 @@ vi.mock("node:dns", async () => {
   const actual = await vi.importActual<typeof import("node:dns")>("node:dns");
   return {
     ...actual,
+    getDefaultResultOrder,
     setDefaultResultOrder,
   };
 });
@@ -70,12 +73,12 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   createSubsystemLogger: () => ({
     info: loggerInfo,
     debug: loggerDebug,
-    warn: vi.fn(),
+    warn: loggerWarn,
     error: vi.fn(),
     child: () => ({
       info: loggerInfo,
       debug: loggerDebug,
-      warn: vi.fn(),
+      warn: loggerWarn,
       error: vi.fn(),
     }),
   }),
@@ -129,6 +132,9 @@ beforeEach(() => {
   }
   loggerInfo.mockReset();
   loggerDebug.mockReset();
+  loggerWarn.mockReset();
+  getDefaultResultOrder.mockReset();
+  getDefaultResultOrder.mockReturnValue("ipv4first");
 });
 
 afterEach(() => {
@@ -368,9 +374,9 @@ describe("resolveTelegramFetch", () => {
     resolveTelegramFetchOrThrow();
 
     expect(loggerInfo).not.toHaveBeenCalledWith("autoSelectFamily=true (default-node22)");
-    expect(loggerInfo).not.toHaveBeenCalledWith("dnsResultOrder=ipv4first (default-node22)");
+    expect(loggerInfo).not.toHaveBeenCalledWith("dnsResultOrder=ipv4first (process-default)");
     expect(loggerDebug).toHaveBeenCalledWith("autoSelectFamily=true (default-node22)");
-    expect(loggerDebug).toHaveBeenCalledWith("dnsResultOrder=ipv4first (default-node22)");
+    expect(loggerDebug).toHaveBeenCalledWith("dnsResultOrder=ipv4first (process-default)");
   });
 
   it("uses EnvHttpProxyAgent dispatcher when proxy env is configured", async () => {
@@ -813,6 +819,12 @@ describe("resolveTelegramFetch", () => {
         autoSelectFamily: false,
       }),
     );
+    expect(loggerDebug).toHaveBeenCalledWith(
+      expect.stringContaining("fetch fallback: enabling sticky IPv4-only dispatcher"),
+    );
+    expect(loggerWarn).not.toHaveBeenCalledWith(
+      expect.stringContaining("fetch fallback: enabling sticky IPv4-only dispatcher"),
+    );
   });
 
   it("escalates from IPv4 fallback to pinned Telegram IP and keeps it sticky", async () => {
@@ -841,6 +853,9 @@ describe("resolveTelegramFetch", () => {
     expect(secondDispatcher).not.toBe(thirdDispatcher);
     expect(thirdDispatcher).toBe(fourthDispatcher);
     expectPinnedFallbackIpDispatcher(3);
+    expect(loggerWarn).toHaveBeenCalledWith(
+      expect.stringContaining("fetch fallback: DNS-resolved IP unreachable"),
+    );
   });
 
   it("keeps the armed fallback sticky when all attempts fail", async () => {

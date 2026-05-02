@@ -26,7 +26,7 @@ function looksLikeHandleOrPhoneTarget(params: {
   return (params.phonePattern ?? /^\+?\d{3,}$/).test(trimmed);
 }
 
-export function normalizeIMessageHandle(raw: string): string {
+function normalizeIMessageHandle(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
     return "";

@@ -39,7 +39,7 @@ export function resolveTestboxId({ argv = [], env = process.env } = {}) {
   ).trim();
 }
 
-export function resolveBlacksmithTestboxStateDir({ env = process.env, homeDir } = {}) {
+function resolveBlacksmithTestboxStateDir({ env = process.env, homeDir } = {}) {
   if (env.OPENCLAW_BLACKSMITH_TESTBOX_STATE_DIR) {
     return env.OPENCLAW_BLACKSMITH_TESTBOX_STATE_DIR;
   }
@@ -90,7 +90,7 @@ export function evaluateLocalTestboxKey({
   };
 }
 
-export function resolveOpenClawTestboxClaimPath({ testboxId, env = process.env, homeDir } = {}) {
+function resolveOpenClawTestboxClaimPath({ testboxId, env = process.env, homeDir } = {}) {
   const stateDir = resolveBlacksmithTestboxStateDir({ env, homeDir });
   return path.join(stateDir, testboxId, OPENCLAW_TESTBOX_CLAIM_FILE);
 }

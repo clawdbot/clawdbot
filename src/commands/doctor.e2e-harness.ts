@@ -378,10 +378,6 @@ vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
   getBootstrapChannelPlugin: vi.fn(() => undefined),
 }));
 
-vi.mock("./doctor-bundled-plugin-runtime-deps.js", () => ({
-  maybeRepairBundledPluginRuntimeDeps: vi.fn(async () => {}),
-}));
-
 vi.mock("../agents/auth-profiles.js", async () => {
   const actual = await vi.importActual<typeof import("../agents/auth-profiles.js")>(
     "../agents/auth-profiles.js",

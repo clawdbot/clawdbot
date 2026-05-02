@@ -7,7 +7,7 @@ export type MatrixQaRoomEvent = {
   type?: string;
 };
 
-export type MatrixQaObservedEventKind =
+type MatrixQaObservedEventKind =
   | "membership"
   | "message"
   | "notice"
@@ -15,13 +15,13 @@ export type MatrixQaObservedEventKind =
   | "reaction"
   | "room-event";
 
-export type MatrixQaObservedEventAttachment = {
+type MatrixQaObservedEventAttachment = {
   caption?: string;
   filename?: string;
   kind: "audio" | "file" | "image" | "sticker" | "video";
 };
 
-export type MatrixQaObservedApproval = {
+type MatrixQaObservedApproval = {
   agentId?: string;
   allowedDecisions?: string[];
   commandTextPreview?: string;

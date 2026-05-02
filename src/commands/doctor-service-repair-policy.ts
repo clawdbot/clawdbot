@@ -1,6 +1,6 @@
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
-export type ServiceRepairPolicy = "auto" | "external";
+type ServiceRepairPolicy = "auto" | "external";
 
 export const SERVICE_REPAIR_POLICY_ENV = "OPENCLAW_SERVICE_REPAIR_POLICY";
 

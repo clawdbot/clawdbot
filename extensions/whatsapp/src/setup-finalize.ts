@@ -152,10 +152,7 @@ function setWhatsAppSelfChatMode(
   return mergeWhatsAppConfig(cfg, accountId, { selfChatMode });
 }
 
-export async function detectWhatsAppLinked(
-  cfg: OpenClawConfig,
-  accountId: string,
-): Promise<boolean> {
+async function detectWhatsAppLinked(cfg: OpenClawConfig, accountId: string): Promise<boolean> {
   const { authDir } = resolveWhatsAppAuthDir({ cfg, accountId });
   const credsPath = path.join(authDir, "creds.json");
   return await pathExists(credsPath);

@@ -75,15 +75,13 @@ describe("plugin-registry-loader", () => {
     });
   });
 
-  it("forwards explicit runtime dependency install policy", async () => {
+  it("forwards configured-channel load scope without startup dependency repair", async () => {
     await ensureCliPluginRegistryLoaded({
       scope: "configured-channels",
-      installBundledRuntimeDeps: false,
     });
 
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "configured-channels",
-      installBundledRuntimeDeps: false,
     });
   });
 });

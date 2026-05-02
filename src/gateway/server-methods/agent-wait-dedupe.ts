@@ -76,9 +76,7 @@ function notifyWaiters(runId: string): void {
   }
 }
 
-export function readTerminalSnapshotFromDedupeEntry(
-  entry: DedupeEntry,
-): AgentWaitTerminalSnapshot | null {
+function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTerminalSnapshot | null {
   const payload = entry.payload as
     | {
         status?: unknown;

@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { exists, isDirectory, readJsonObject, resolveHomePath } from "./helpers.js";
 
-export type ClaudeArchivePath = {
+type ClaudeArchivePath = {
   id: string;
   path: string;
   relativePath: string;

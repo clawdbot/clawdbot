@@ -12,6 +12,7 @@ export type DiscordSnapshotAuthor = {
 
 export type DiscordSnapshotMessage = {
   content?: string | null;
+  components?: unknown;
   embeds?: Array<{ description?: string | null; title?: string | null }> | null;
   attachments?: APIAttachment[] | null;
   stickers?: APIStickerItem[] | null;

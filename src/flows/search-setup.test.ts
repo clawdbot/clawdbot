@@ -16,6 +16,7 @@ const mockGrokProvider = vi.hoisted(() => ({
   envVars: ["XAI_API_KEY"],
   onboardingScopes: ["text-inference"],
   credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
+  credentialNote: "Configure Grok web search prerequisites before entering the credential.",
   getCredentialValue: (search?: Record<string, unknown>) => search?.apiKey,
   setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => {
     searchConfigTarget.apiKey = value;
@@ -126,6 +127,79 @@ describe("runSearchSetupFlow", () => {
       enabled: true,
       model: "grok-4-1-fast",
     });
+  });
+
+  it("shows provider credential notes before plaintext credential prompts", async () => {
+    const select = vi.fn().mockResolvedValueOnce("grok").mockResolvedValueOnce("no");
+    const text = vi.fn().mockResolvedValue("xai-test-key");
+    const note = vi.fn(async () => {});
+    const prompter = createWizardPrompter({
+      note: note as never,
+      select: select as never,
+      text: text as never,
+    });
+
+    await runSearchSetupFlow({ plugins: { allow: ["xai"] } }, createNonExitingRuntime(), prompter);
+
+    expect(note).toHaveBeenCalledWith(mockGrokProvider.credentialNote, mockGrokProvider.label);
+    expect(text).toHaveBeenCalledTimes(1);
+    expect(note.mock.invocationCallOrder[1]).toBeLessThan(text.mock.invocationCallOrder[0]);
+  });
+
+  it("shows provider credential notes before SecretRef setup notes", async () => {
+    const select = vi.fn().mockResolvedValueOnce("grok").mockResolvedValueOnce("no");
+    const note = vi.fn(async () => {});
+    const prompter = createWizardPrompter({
+      note: note as never,
+      select: select as never,
+    });
+
+    await runSearchSetupFlow({ plugins: { allow: ["xai"] } }, createNonExitingRuntime(), prompter, {
+      secretInputMode: "ref",
+    });
+
+    expect(note).toHaveBeenNthCalledWith(
+      2,
+      mockGrokProvider.credentialNote,
+      mockGrokProvider.label,
+    );
+    expect(note).toHaveBeenNthCalledWith(
+      3,
+      expect.stringContaining("Secret references enabled"),
+      "Web search",
+    );
+  });
+
+  it("skips provider credential notes in quickstart fast path", async () => {
+    const select = vi.fn().mockResolvedValueOnce("grok").mockResolvedValueOnce("no");
+    const note = vi.fn(async () => {});
+    const prompter = createWizardPrompter({
+      note: note as never,
+      select: select as never,
+    });
+
+    await runSearchSetupFlow(
+      {
+        plugins: {
+          allow: ["xai"],
+          entries: {
+            xai: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: "xai-test-key",
+                },
+              },
+            },
+          },
+        },
+      },
+      createNonExitingRuntime(),
+      prompter,
+      { quickstartDefaults: true },
+    );
+
+    expect(note).not.toHaveBeenCalledWith(mockGrokProvider.credentialNote, mockGrokProvider.label);
   });
 
   it("preserves disabled web_search state while still allowing provider-owned x_search setup", async () => {

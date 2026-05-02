@@ -1,3 +1,4 @@
+import { ComponentType } from "discord-api-types/v10";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { Message } from "../internal/discord.js";
 import {
@@ -30,6 +31,7 @@ export function resolveDiscordMessageText(
     (message.embeds?.[0] as { title?: string | null; description?: string | null } | undefined) ??
       null,
   );
+  const componentText = extractDiscordComponentsV2Text(resolveDiscordMessageComponents(message));
   const rawText =
     normalizeOptionalString(message.content) ||
     buildDiscordMediaPlaceholder({
@@ -37,6 +39,7 @@ export function resolveDiscordMessageText(
       stickers: resolveDiscordMessageStickers(message),
     }) ||
     embedText ||
+    componentText ||
     normalizeOptionalString(options?.fallbackText) ||
     "";
   const baseText = resolveDiscordMentions(rawText, message);
@@ -87,6 +90,50 @@ function resolveDiscordForwardedMessagesText(message: Message): string {
   return `${heading}\n${referencedText}`;
 }
 
+function resolveDiscordMessageComponents(message: Message): unknown {
+  const components = (message as { components?: unknown }).components;
+  if (components !== undefined) {
+    return components;
+  }
+  try {
+    return (message as { rawData?: { components?: unknown } }).rawData?.components;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractDiscordComponentsV2Text(components: unknown): string {
+  const parts: string[] = [];
+  collectDiscordTextDisplayContent(components, parts);
+  return parts.join("\n");
+}
+
+function collectDiscordTextDisplayContent(value: unknown, parts: string[]): void {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectDiscordTextDisplayContent(entry, parts);
+    }
+    return;
+  }
+  if (!value || typeof value !== "object") {
+    return;
+  }
+  const component = value as {
+    type?: unknown;
+    content?: unknown;
+    components?: unknown;
+    component?: unknown;
+  };
+  if (component.type === ComponentType.TextDisplay) {
+    const content = normalizeOptionalString(component.content);
+    if (content) {
+      parts.push(content);
+    }
+  }
+  collectDiscordTextDisplayContent(component.components, parts);
+  collectDiscordTextDisplayContent(component.component, parts);
+}
+
 export function resolveDiscordForwardedMessagesTextFromSnapshots(snapshots: unknown): string {
   const forwardedBlocks = normalizeDiscordMessageSnapshots(snapshots)
     .map((snapshot) => buildDiscordForwardedMessageBlock(snapshot.message))
@@ -119,5 +166,6 @@ function resolveDiscordSnapshotMessageText(snapshot: DiscordSnapshotMessage): st
     stickers: resolveDiscordSnapshotStickers(snapshot),
   });
   const embedText = resolveDiscordEmbedText(snapshot.embeds?.[0]);
-  return content || attachmentText || embedText || "";
+  const componentText = extractDiscordComponentsV2Text(snapshot.components);
+  return content || attachmentText || embedText || componentText || "";
 }

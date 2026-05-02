@@ -1,9 +1,9 @@
 import { readSnakeCaseParamRaw } from "./param-key.js";
 import { normalizeLowercaseStringOrEmpty } from "./shared/string-coerce.js";
 
-export type PollCreationParamKind = "string" | "stringArray" | "number" | "boolean";
+type PollCreationParamKind = "string" | "stringArray" | "number" | "boolean";
 
-export type PollCreationParamDef = {
+type PollCreationParamDef = {
   kind: PollCreationParamKind;
 };
 

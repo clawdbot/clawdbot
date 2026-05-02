@@ -10,15 +10,14 @@ import {
   normalizePluginsConfigWithResolver,
   resolveEffectivePluginActivationState,
 } from "../plugins/config-policy.js";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { isRecord } from "../utils.js";
 import { loadEmbeddedPiMcpConfig } from "./embedded-pi-mcp.js";
 
 const log = createSubsystemLogger("embedded-pi-settings");
 
 export const DEFAULT_EMBEDDED_PI_PROJECT_SETTINGS_POLICY = "sanitize";
-export const SANITIZED_PROJECT_PI_KEYS = ["shellPath", "shellCommandPrefix"] as const;
+const SANITIZED_PROJECT_PI_KEYS = ["shellPath", "shellCommandPrefix"] as const;
 
 export type EmbeddedPiProjectSettingsPolicy = "trusted" | "sanitize" | "ignore";
 
@@ -69,33 +68,6 @@ function loadBundleSettingsFile(params: {
   }
 }
 
-function buildRegistryPluginIdAliases(
-  registry: PluginManifestRegistry,
-): Readonly<Record<string, string>> {
-  return Object.fromEntries(
-    registry.plugins
-      .flatMap((record) => [
-        ...(record.providers ?? [])
-          .filter((providerId) => providerId !== record.id)
-          .map((providerId) => [providerId, record.id] as const),
-        ...(record.legacyPluginIds ?? []).map(
-          (legacyPluginId) => [legacyPluginId, record.id] as const,
-        ),
-      ])
-      .toSorted(([left], [right]) => left.localeCompare(right)),
-  );
-}
-
-function createRegistryPluginIdNormalizer(
-  registry: PluginManifestRegistry,
-): (id: string) => string {
-  const aliases = buildRegistryPluginIdAliases(registry);
-  return (id: string) => {
-    const trimmed = id.trim();
-    return aliases[trimmed] ?? trimmed;
-  };
-}
-
 export function loadEnabledBundlePiSettingsSnapshot(params: {
   cwd: string;
   cfg?: OpenClawConfig;
@@ -104,18 +76,19 @@ export function loadEnabledBundlePiSettingsSnapshot(params: {
   if (!workspaceDir) {
     return {};
   }
-  const registry = loadPluginManifestRegistryForPluginRegistry({
+  const metadataSnapshot = loadPluginMetadataSnapshot({
     workspaceDir,
-    config: params.cfg,
-    includeDisabled: true,
+    config: params.cfg ?? {},
+    env: process.env,
   });
+  const registry = metadataSnapshot.manifestRegistry;
   if (registry.plugins.length === 0) {
     return {};
   }
 
   const normalizedPlugins = normalizePluginsConfigWithResolver(
     params.cfg?.plugins,
-    createRegistryPluginIdNormalizer(registry),
+    metadataSnapshot.normalizePluginId,
   );
   let snapshot: PiSettingsSnapshot = {};
 

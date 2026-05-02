@@ -22,6 +22,7 @@ import {
   errorShape,
   formatValidationErrors,
   validateChannelsStartParams,
+  validateChannelsStopParams,
   validateChannelsLogoutParams,
   validateChannelsStatusParams,
 } from "../protocol/index.js";
@@ -40,6 +41,12 @@ type ChannelStartPayload = {
   channel: ChannelId;
   accountId: string;
   started: boolean;
+};
+
+type ChannelStopPayload = {
+  channel: ChannelId;
+  accountId: string;
+  stopped: boolean;
 };
 
 const CHANNEL_STATUS_MAX_TIMEOUT_MS = 30_000;
@@ -135,6 +142,29 @@ export async function startChannelAccount(params: {
     channel: params.channelId,
     accountId: resolvedAccountId,
     started,
+  };
+}
+
+export async function stopChannelAccount(params: {
+  channelId: ChannelId;
+  accountId?: string | null;
+  cfg: OpenClawConfig;
+  context: GatewayRequestContext;
+  plugin: ChannelPlugin;
+}): Promise<ChannelStopPayload> {
+  const resolvedAccountId = resolveChannelGatewayAccountId(params);
+  await params.context.stopChannel(params.channelId, resolvedAccountId);
+  const runtime = params.context.getRuntimeSnapshot();
+  const stopped =
+    resolveRuntimeAccountSnapshot({
+      runtime,
+      channelId: params.channelId,
+      accountId: resolvedAccountId,
+    })?.running !== true;
+  return {
+    channel: params.channelId,
+    accountId: resolvedAccountId,
+    stopped,
   };
 }
 
@@ -383,6 +413,52 @@ export const channelsHandlers: GatewayRequestHandlers = {
         channelId,
         accountId: (params as { accountId?: string | null }).accountId,
         cfg,
+        context,
+        plugin,
+      });
+      respond(true, payload, undefined);
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(error)));
+    }
+  },
+  "channels.stop": async ({ params, respond, context }) => {
+    if (!validateChannelsStopParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid channels.stop params: ${formatValidationErrors(validateChannelsStopParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const rawChannel = (params as { channel?: unknown }).channel;
+    const channelId = typeof rawChannel === "string" ? normalizeChannelId(rawChannel) : null;
+    if (!channelId) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid channels.stop channel"),
+      );
+      return;
+    }
+    const plugin = getChannelPlugin(channelId);
+    if (!plugin) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `unknown channel ${channelId}`),
+      );
+      return;
+    }
+    const accountIdRaw = (params as { accountId?: unknown }).accountId;
+    const accountId = normalizeOptionalString(accountIdRaw);
+    try {
+      const payload = await stopChannelAccount({
+        channelId,
+        accountId,
+        cfg: context.getRuntimeConfig(),
         context,
         plugin,
       });

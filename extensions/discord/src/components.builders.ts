@@ -229,6 +229,7 @@ export function buildDiscordComponentMessage(params: {
   accountId?: string;
 }): DiscordComponentBuildResult {
   const entries: DiscordComponentEntry[] = [];
+  const consumptionGroupId = createShortId("grp_");
   const modals: DiscordModalEntry[] = [];
   const components: TopLevelComponents[] = [];
   const containerChildren: Array<
@@ -255,6 +256,7 @@ export function buildDiscordComponentMessage(params: {
       agentId: params.agentId,
       accountId: params.accountId,
       reusable: entry.reusable ?? params.spec.reusable,
+      consumptionGroupId,
     });
   };
 
@@ -392,6 +394,10 @@ export function buildDiscordComponentMessage(params: {
 
   const container = new Container(containerChildren, params.spec.container);
   components.push(container);
+  const consumptionGroupEntryIds = entries.map((entry) => entry.id);
+  for (const entry of entries) {
+    entry.consumptionGroupEntryIds = consumptionGroupEntryIds;
+  }
   return { components, entries, modals };
 }
 

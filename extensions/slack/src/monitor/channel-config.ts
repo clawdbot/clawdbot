@@ -5,7 +5,6 @@ import {
   type ChannelMatchSource,
 } from "openclaw/plugin-sdk/channel-targets";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import type { SlackMessageEvent } from "../types.js";
 import { normalizeSlackSlug } from "./allow-list.js";
 
 export type SlackChannelConfigResolved = {
@@ -19,7 +18,7 @@ export type SlackChannelConfigResolved = {
   matchSource?: ChannelMatchSource;
 };
 
-export type SlackChannelConfigEntry = {
+type SlackChannelConfigEntry = {
   enabled?: boolean;
   requireMention?: boolean;
   allowBots?: boolean;
@@ -75,10 +74,16 @@ export function resolveSlackChannelConfig(params: {
   // entry-scan. buildChannelKeyCandidates deduplicates identical keys.
   const channelIdLower = normalizeLowercaseStringOrEmpty(channelId);
   const channelIdUpper = channelId.toUpperCase();
+  const channelTarget = `channel:${channelId}`;
+  const channelTargetLower = `channel:${channelIdLower}`;
+  const channelTargetUpper = `channel:${channelIdUpper}`;
   const candidates = buildChannelKeyCandidates(
     channelId,
     channelIdLower !== channelId ? channelIdLower : undefined,
     channelIdUpper !== channelId ? channelIdUpper : undefined,
+    channelTarget,
+    channelTargetLower !== channelTarget ? channelTargetLower : undefined,
+    channelTargetUpper !== channelTarget ? channelTargetUpper : undefined,
     allowNameMatching ? (channelName ? `#${directName}` : undefined) : undefined,
     allowNameMatching ? directName : undefined,
     allowNameMatching ? normalizedName : undefined,
@@ -117,5 +122,3 @@ export function resolveSlackChannelConfig(params: {
   };
   return applyChannelMatchMeta(result, match);
 }
-
-export type { SlackMessageEvent };

@@ -12,6 +12,7 @@ import {
   runRealtimeSttLiveTest,
 } from "openclaw/plugin-sdk/provider-test-contracts";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { isBillingErrorMessage } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 import { XAI_DEFAULT_STT_MODEL } from "./stt.js";
@@ -71,211 +72,252 @@ const registerXaiPlugin = () =>
     name: "xAI Provider",
   });
 
+async function runXaiLiveCase(label: string, run: () => Promise<void>): Promise<void> {
+  try {
+    await run();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (isBillingErrorMessage(message)) {
+      console.warn(`[xai:live] skip ${label}: billing drift: ${message}`);
+      return;
+    }
+    throw error;
+  }
+}
+
+function isRealtimeOpenBillingDrift(error: Error): boolean {
+  return isBillingErrorMessage(error.message) || error.message.includes("server response: 429");
+}
+
 describeLive("xai plugin live", () => {
   it("synthesizes TTS through the registered speech provider", async () => {
-    const { speechProviders } = await registerXaiPlugin();
-    const speechProvider = requireRegisteredProvider(speechProviders, "xai");
-    const cfg = createLiveConfig();
+    await runXaiLiveCase("tts", async () => {
+      const { speechProviders } = await registerXaiPlugin();
+      const speechProvider = requireRegisteredProvider(speechProviders, "xai");
+      const cfg = createLiveConfig();
 
-    const voices = await speechProvider.listVoices?.({});
-    expect(voices).toEqual(expect.arrayContaining([expect.objectContaining({ id: "eve" })]));
+      const voices = await speechProvider.listVoices?.({});
+      expect(voices).toEqual(expect.arrayContaining([expect.objectContaining({ id: "eve" })]));
 
-    const audioFile = await speechProvider.synthesize({
-      text: "OpenClaw xAI text to speech integration test OK.",
-      cfg,
-      providerConfig: {
-        apiKey: XAI_API_KEY,
-        baseUrl: "https://api.x.ai/v1",
-        voiceId: "eve",
-      },
-      target: "audio-file",
-      timeoutMs: 90_000,
+      const audioFile = await speechProvider.synthesize({
+        text: "OpenClaw xAI text to speech integration test OK.",
+        cfg,
+        providerConfig: {
+          apiKey: XAI_API_KEY,
+          baseUrl: "https://api.x.ai/v1",
+          voiceId: "eve",
+        },
+        target: "audio-file",
+        timeoutMs: 90_000,
+      });
+
+      expect(audioFile.outputFormat).toBe("mp3");
+      expect(audioFile.fileExtension).toBe(".mp3");
+      expect(audioFile.voiceCompatible).toBe(false);
+      expect(audioFile.audioBuffer.byteLength).toBeGreaterThan(512);
+
+      const telephony = await speechProvider.synthesizeTelephony?.({
+        text: "OpenClaw xAI telephony check OK.",
+        cfg,
+        providerConfig: {
+          apiKey: XAI_API_KEY,
+          baseUrl: "https://api.x.ai/v1",
+          voiceId: "eve",
+        },
+        timeoutMs: 90_000,
+      });
+      if (!telephony) {
+        throw new Error("xAI telephony synthesis did not return audio");
+      }
+      expect(telephony.outputFormat).toBe("pcm");
+      expect(telephony.sampleRate).toBe(24_000);
+      expect(telephony?.audioBuffer.byteLength).toBeGreaterThan(512);
     });
-
-    expect(audioFile.outputFormat).toBe("mp3");
-    expect(audioFile.fileExtension).toBe(".mp3");
-    expect(audioFile.voiceCompatible).toBe(false);
-    expect(audioFile.audioBuffer.byteLength).toBeGreaterThan(512);
-
-    const telephony = await speechProvider.synthesizeTelephony?.({
-      text: "OpenClaw xAI telephony check OK.",
-      cfg,
-      providerConfig: {
-        apiKey: XAI_API_KEY,
-        baseUrl: "https://api.x.ai/v1",
-        voiceId: "eve",
-      },
-      timeoutMs: 90_000,
-    });
-    if (!telephony) {
-      throw new Error("xAI telephony synthesis did not return audio");
-    }
-    expect(telephony.outputFormat).toBe("pcm");
-    expect(telephony.sampleRate).toBe(24_000);
-    expect(telephony?.audioBuffer.byteLength).toBeGreaterThan(512);
   }, 120_000);
 
   it("transcribes audio through the registered media provider", async () => {
-    const { mediaProviders, speechProviders } = await registerXaiPlugin();
-    const mediaProvider = requireRegisteredProvider(mediaProviders, "xai");
-    const speechProvider = requireRegisteredProvider(speechProviders, "xai");
-    const cfg = createLiveConfig();
-    const phrase = "OpenClaw xAI speech to text integration test OK.";
+    await runXaiLiveCase("stt", async () => {
+      const { mediaProviders, speechProviders } = await registerXaiPlugin();
+      const mediaProvider = requireRegisteredProvider(mediaProviders, "xai");
+      const speechProvider = requireRegisteredProvider(speechProviders, "xai");
+      const cfg = createLiveConfig();
+      const phrase = "OpenClaw xAI speech to text integration test OK.";
 
-    const audioFile = await speechProvider.synthesize({
-      text: phrase,
-      cfg,
-      providerConfig: {
+      const audioFile = await speechProvider.synthesize({
+        text: phrase,
+        cfg,
+        providerConfig: {
+          apiKey: XAI_API_KEY,
+          baseUrl: "https://api.x.ai/v1",
+          voiceId: "eve",
+        },
+        target: "audio-file",
+        timeoutMs: 90_000,
+      });
+
+      const transcript = await mediaProvider.transcribeAudio?.({
+        buffer: audioFile.audioBuffer,
+        fileName: "xai-stt-live.mp3",
+        mime: "audio/mpeg",
         apiKey: XAI_API_KEY,
         baseUrl: "https://api.x.ai/v1",
-        voiceId: "eve",
-      },
-      target: "audio-file",
-      timeoutMs: 90_000,
-    });
+        model: XAI_DEFAULT_STT_MODEL,
+        timeoutMs: 90_000,
+      });
 
-    const transcript = await mediaProvider.transcribeAudio?.({
-      buffer: audioFile.audioBuffer,
-      fileName: "xai-stt-live.mp3",
-      mime: "audio/mpeg",
-      apiKey: XAI_API_KEY,
-      baseUrl: "https://api.x.ai/v1",
-      model: XAI_DEFAULT_STT_MODEL,
-      timeoutMs: 90_000,
+      const normalized = transcript?.text.toLowerCase() ?? "";
+      expect(transcript?.model).toBe(XAI_DEFAULT_STT_MODEL);
+      expectOpenClawLiveTranscriptMarker(normalized);
+      expect(normalized).toContain("speech");
+      expect(normalized).toContain("text");
+      expect(normalized).toContain("integration");
     });
-
-    const normalized = transcript?.text.toLowerCase() ?? "";
-    expect(transcript?.model).toBe(XAI_DEFAULT_STT_MODEL);
-    expectOpenClawLiveTranscriptMarker(normalized);
-    expect(normalized).toContain("speech");
-    expect(normalized).toContain("text");
-    expect(normalized).toContain("integration");
   }, 180_000);
 
   it("opens xAI realtime STT before sending audio", async () => {
-    const { realtimeTranscriptionProviders } = await registerXaiPlugin();
-    const realtimeProvider = requireRegisteredProvider(realtimeTranscriptionProviders, "xai");
-    const errors: Error[] = [];
-    const session = realtimeProvider.createSession({
-      providerConfig: {
-        apiKey: XAI_API_KEY,
-        baseUrl: "https://api.x.ai/v1",
-        sampleRate: 16_000,
-        encoding: "pcm",
-        interimResults: true,
-        endpointingMs: 800,
-        language: "en",
-      },
-      onError: (error) => errors.push(error),
-    });
+    await runXaiLiveCase("realtime-open", async () => {
+      const { realtimeTranscriptionProviders } = await registerXaiPlugin();
+      const realtimeProvider = requireRegisteredProvider(realtimeTranscriptionProviders, "xai");
+      const errors: Error[] = [];
+      const session = realtimeProvider.createSession({
+        providerConfig: {
+          apiKey: XAI_API_KEY,
+          baseUrl: "https://api.x.ai/v1",
+          sampleRate: 16_000,
+          encoding: "pcm",
+          interimResults: true,
+          endpointingMs: 800,
+          language: "en",
+        },
+        onError: (error) => errors.push(error),
+      });
 
-    try {
-      await session.connect();
-      expect(errors).toEqual([]);
-      expect(session.isConnected()).toBe(true);
-    } finally {
-      session.close();
-    }
+      try {
+        try {
+          await session.connect();
+        } catch (error) {
+          const thrown = error instanceof Error ? error : new Error(String(error));
+          if (isRealtimeOpenBillingDrift(thrown)) {
+            console.warn(`[xai:live] skip realtime-open: billing drift: ${thrown.message}`);
+            return;
+          }
+          throw error;
+        }
+        const billingError = errors.find(isRealtimeOpenBillingDrift);
+        if (billingError) {
+          console.warn(`[xai:live] skip realtime-open: billing drift: ${billingError.message}`);
+          return;
+        }
+        expect(errors).toEqual([]);
+        expect(session.isConnected()).toBe(true);
+      } finally {
+        session.close();
+      }
+    });
   }, 30_000);
 
   it("streams realtime STT through the registered transcription provider", async () => {
-    const { realtimeTranscriptionProviders, speechProviders } = await registerXaiPlugin();
-    const realtimeProvider = requireRegisteredProvider(realtimeTranscriptionProviders, "xai");
-    const speechProvider = requireRegisteredProvider(speechProviders, "xai");
-    const cfg = createLiveConfig();
-    const phrase = "OpenClaw xAI realtime transcription integration test OK.";
+    await runXaiLiveCase("realtime-stream", async () => {
+      const { realtimeTranscriptionProviders, speechProviders } = await registerXaiPlugin();
+      const realtimeProvider = requireRegisteredProvider(realtimeTranscriptionProviders, "xai");
+      const speechProvider = requireRegisteredProvider(speechProviders, "xai");
+      const cfg = createLiveConfig();
+      const phrase = "OpenClaw xAI realtime transcription integration test OK.";
 
-    const telephony = await speechProvider.synthesizeTelephony?.({
-      text: phrase,
-      cfg,
-      providerConfig: {
-        apiKey: XAI_API_KEY,
-        baseUrl: "https://api.x.ai/v1",
-        voiceId: "eve",
-      },
-      timeoutMs: 90_000,
+      const telephony = await speechProvider.synthesizeTelephony?.({
+        text: phrase,
+        cfg,
+        providerConfig: {
+          apiKey: XAI_API_KEY,
+          baseUrl: "https://api.x.ai/v1",
+          voiceId: "eve",
+        },
+        timeoutMs: 90_000,
+      });
+      if (!telephony) {
+        throw new Error("xAI telephony synthesis did not return audio");
+      }
+      expect(telephony.outputFormat).toBe("pcm");
+      expect(telephony.sampleRate).toBe(24_000);
+
+      const chunkSize = Math.max(1, Math.floor(telephony.sampleRate * 2 * 0.1));
+      const { transcripts, partials } = await runRealtimeSttLiveTest({
+        provider: realtimeProvider,
+        providerConfig: {
+          apiKey: XAI_API_KEY,
+          baseUrl: "https://api.x.ai/v1",
+          sampleRate: telephony.sampleRate,
+          encoding: "pcm",
+          interimResults: true,
+          endpointingMs: 500,
+          language: "en",
+        },
+        audio: telephony.audioBuffer,
+        chunkSize,
+        delayMs: 20,
+        closeBeforeWait: true,
+      });
+
+      const normalized = transcripts.join(" ").toLowerCase();
+      expectOpenClawLiveTranscriptMarker(normalized);
+      expect(normalized).toContain("transcription");
+      expect(partials.length + transcripts.length).toBeGreaterThan(0);
     });
-    if (!telephony) {
-      throw new Error("xAI telephony synthesis did not return audio");
-    }
-    expect(telephony.outputFormat).toBe("pcm");
-    expect(telephony.sampleRate).toBe(24_000);
-
-    const chunkSize = Math.max(1, Math.floor(telephony.sampleRate * 2 * 0.1));
-    const { transcripts, partials } = await runRealtimeSttLiveTest({
-      provider: realtimeProvider,
-      providerConfig: {
-        apiKey: XAI_API_KEY,
-        baseUrl: "https://api.x.ai/v1",
-        sampleRate: telephony.sampleRate,
-        encoding: "pcm",
-        interimResults: true,
-        endpointingMs: 500,
-        language: "en",
-      },
-      audio: telephony.audioBuffer,
-      chunkSize,
-      delayMs: 20,
-      closeBeforeWait: true,
-    });
-
-    const normalized = transcripts.join(" ").toLowerCase();
-    expectOpenClawLiveTranscriptMarker(normalized);
-    expect(normalized).toContain("transcription");
-    expect(partials.length + transcripts.length).toBeGreaterThan(0);
   }, 180_000);
 
   it("generates and edits images through the registered image provider", async () => {
-    const { imageProviders } = await registerXaiPlugin();
-    const imageProvider = requireRegisteredProvider(imageProviders, "xai");
-    const cfg = createLiveConfig();
-    const agentDir = await createTempAgentDir();
+    await runXaiLiveCase("image", async () => {
+      const { imageProviders } = await registerXaiPlugin();
+      const imageProvider = requireRegisteredProvider(imageProviders, "xai");
+      const cfg = createLiveConfig();
+      const agentDir = await createTempAgentDir();
 
-    try {
-      const generated = await imageProvider.generateImage({
-        provider: "xai",
-        model: LIVE_IMAGE_MODEL,
-        prompt: "Create a minimal flat orange square centered on a white background.",
-        cfg,
-        agentDir,
-        authStore: EMPTY_AUTH_STORE,
-        timeoutMs: 180_000,
-        count: 1,
-        aspectRatio: "1:1",
-        resolution: "1K",
-      });
+      try {
+        const generated = await imageProvider.generateImage({
+          provider: "xai",
+          model: LIVE_IMAGE_MODEL,
+          prompt: "Create a minimal flat orange square centered on a white background.",
+          cfg,
+          agentDir,
+          authStore: EMPTY_AUTH_STORE,
+          timeoutMs: 180_000,
+          count: 1,
+          aspectRatio: "1:1",
+          resolution: "1K",
+        });
 
-      expect(generated.model).toBe(LIVE_IMAGE_MODEL);
-      expect(generated.images.length).toBeGreaterThan(0);
-      expect(generated.images[0]?.mimeType.startsWith("image/")).toBe(true);
-      expect(generated.images[0]?.buffer.byteLength).toBeGreaterThan(1_000);
+        expect(generated.model).toBe(LIVE_IMAGE_MODEL);
+        expect(generated.images.length).toBeGreaterThan(0);
+        expect(generated.images[0]?.mimeType.startsWith("image/")).toBe(true);
+        expect(generated.images[0]?.buffer.byteLength).toBeGreaterThan(1_000);
 
-      const edited = await imageProvider.generateImage({
-        provider: "xai",
-        model: LIVE_IMAGE_MODEL,
-        prompt:
-          "Render this image as a pencil sketch with detailed shading. Keep the same framing.",
-        cfg,
-        agentDir,
-        authStore: EMPTY_AUTH_STORE,
-        timeoutMs: 180_000,
-        count: 1,
-        resolution: "1K",
-        inputImages: [
-          {
-            buffer: createReferencePng(),
-            mimeType: "image/png",
-            fileName: "reference.png",
-          },
-        ],
-      });
+        const edited = await imageProvider.generateImage({
+          provider: "xai",
+          model: LIVE_IMAGE_MODEL,
+          prompt:
+            "Render this image as a pencil sketch with detailed shading. Keep the same framing.",
+          cfg,
+          agentDir,
+          authStore: EMPTY_AUTH_STORE,
+          timeoutMs: 180_000,
+          count: 1,
+          resolution: "1K",
+          inputImages: [
+            {
+              buffer: createReferencePng(),
+              mimeType: "image/png",
+              fileName: "reference.png",
+            },
+          ],
+        });
 
-      expect(edited.model).toBe(LIVE_IMAGE_MODEL);
-      expect(edited.images.length).toBeGreaterThan(0);
-      expect(edited.images[0]?.mimeType.startsWith("image/")).toBe(true);
-      expect(edited.images[0]?.buffer.byteLength).toBeGreaterThan(1_000);
-    } finally {
-      await fs.rm(agentDir, { recursive: true, force: true });
-    }
+        expect(edited.model).toBe(LIVE_IMAGE_MODEL);
+        expect(edited.images.length).toBeGreaterThan(0);
+        expect(edited.images[0]?.mimeType.startsWith("image/")).toBe(true);
+        expect(edited.images[0]?.buffer.byteLength).toBeGreaterThan(1_000);
+      } finally {
+        await fs.rm(agentDir, { recursive: true, force: true });
+      }
+    });
   }, 300_000);
 });

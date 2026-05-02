@@ -491,6 +491,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     >();
     let { botUserId, botUserName } = await fetchDiscordBotIdentity({
       client,
+      token,
       runtime,
       logStartupPhase: (phase, details) =>
         logDiscordStartupPhase({
@@ -626,6 +627,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       voiceManagerRef,
       threadBindings,
       gatewaySupervisor,
+      gatewayReadyTimeoutMs: account.config.gatewayReadyTimeoutMs,
+      gatewayRuntimeReadyTimeoutMs: account.config.gatewayRuntimeReadyTimeoutMs,
     });
   } finally {
     cleanupDiscordProviderStartup({

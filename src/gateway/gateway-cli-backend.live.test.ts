@@ -56,7 +56,7 @@ const DEFAULT_MODEL =
 // The cron/MCP live probe now tolerates more cancelled tool-call retries in CI,
 // so the outer test budget needs enough headroom to finish those retries.
 const CLI_BACKEND_LIVE_TIMEOUT_MS = 20 * 60_000;
-const CLI_BACKEND_REQUEST_TIMEOUT_MS = 240_000;
+const CLI_BACKEND_REQUEST_TIMEOUT_MS = 600_000;
 const CLI_BACKEND_AGENT_TIMEOUT_SECONDS = Math.max(
   1,
   Math.ceil(CLI_BACKEND_REQUEST_TIMEOUT_MS / 1000) - 10,
@@ -72,6 +72,29 @@ function logCliBackendLiveStep(step: string, details?: Record<string, unknown>):
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function openAiProviderConfigForCodexCli(
+  modelKey: string,
+): NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>["openai"] {
+  const parsed = parseModelRef(modelKey, DEFAULT_PROVIDER);
+  const modelId = parsed?.model?.trim() || "gpt-5.5";
+  return {
+    api: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+    models: [
+      {
+        contextWindow: 1_047_576,
+        cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
+        id: modelId,
+        input: ["text"],
+        maxTokens: 32_768,
+        name: modelId,
+        reasoning: true,
+      },
+    ],
+    timeoutSeconds: Math.ceil(CLI_BACKEND_REQUEST_TIMEOUT_MS / 1000),
+  };
 }
 
 function isProviderCapacityError(error: unknown): boolean {
@@ -282,6 +305,19 @@ describeLive("gateway live (cli backend)", () => {
           port,
           auth: { mode: "token", token },
         },
+        models:
+          providerId === "codex-cli"
+            ? {
+                ...cfg.models,
+                providers: {
+                  ...cfg.models?.providers,
+                  openai: {
+                    ...openAiProviderConfigForCodexCli(modelKey),
+                    ...cfg.models?.providers?.openai,
+                  },
+                },
+              }
+            : cfg.models,
         agents: {
           ...cfg.agents,
           defaults: {

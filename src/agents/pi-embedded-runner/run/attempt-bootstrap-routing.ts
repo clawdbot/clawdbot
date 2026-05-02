@@ -39,7 +39,7 @@ export function shouldStripBootstrapFromEmbeddedContext(_params: {
   return true;
 }
 
-export function resolveAttemptBootstrapRouting(
+function resolveAttemptBootstrapRouting(
   params: AttemptBootstrapRoutingInput,
 ): AttemptBootstrapRouting {
   const bootstrapMode = resolveBootstrapMode({

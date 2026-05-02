@@ -4,15 +4,20 @@ import type { PluginManifestRegistry } from "./manifest-registry.js";
 const mocks = vi.hoisted(() => {
   const loadManifestRegistry = vi.fn();
   return {
-    findBundledPluginMetadataById: vi.fn(),
+    discoverOpenClawPlugins: vi.fn(() => ({ candidates: [], diagnostics: [] })),
+    loadBundledManifestRegistry: vi.fn(),
     loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
     loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
     loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
   };
 });
 
-vi.mock("./bundled-plugin-metadata.js", () => ({
-  findBundledPluginMetadataById: mocks.findBundledPluginMetadataById,
+vi.mock("./discovery.js", () => ({
+  discoverOpenClawPlugins: mocks.discoverOpenClawPlugins,
+}));
+
+vi.mock("./manifest-registry.js", () => ({
+  loadPluginManifestRegistry: mocks.loadBundledManifestRegistry,
 }));
 
 vi.mock("./manifest-registry-installed.js", () => ({
@@ -77,14 +82,17 @@ function createPluginRecord(
 
 describe("resolvePluginConfigContractsById", () => {
   beforeEach(() => {
-    mocks.findBundledPluginMetadataById.mockReset();
+    mocks.discoverOpenClawPlugins.mockReset();
+    mocks.discoverOpenClawPlugins.mockReturnValue({ candidates: [], diagnostics: [] });
+    mocks.loadBundledManifestRegistry.mockReset();
+    mocks.loadBundledManifestRegistry.mockReturnValue(createRegistry([]));
     mocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
     mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(createRegistry([]));
     mocks.loadPluginRegistrySnapshot.mockReset();
     mocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
   });
 
-  it("does not fall back to bundled metadata when registry already resolved a plugin without config contracts", () => {
+  it("does not fall back to bundled registry when registry already resolved a plugin without config contracts", () => {
     mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
       createRegistry([
         createPluginRecord({
@@ -99,10 +107,10 @@ describe("resolvePluginConfigContractsById", () => {
         pluginIds: ["brave"],
       }),
     ).toEqual(new Map());
-    expect(mocks.findBundledPluginMetadataById).not.toHaveBeenCalled();
+    expect(mocks.loadBundledManifestRegistry).not.toHaveBeenCalled();
   });
 
-  it("can hydrate missing contracts from bundled metadata for resolved bundled plugins", () => {
+  it("can hydrate missing contracts from bundled registry for resolved bundled plugins", () => {
     mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
       createRegistry([
         createPluginRecord({
@@ -114,15 +122,19 @@ describe("resolvePluginConfigContractsById", () => {
         }),
       ]),
     );
-    mocks.findBundledPluginMetadataById.mockReturnValue({
-      manifest: {
-        configContracts: {
-          secretInputs: {
-            paths: [{ path: "twilio.authToken", expected: "string" }],
+    mocks.loadBundledManifestRegistry.mockReturnValue(
+      createRegistry([
+        createPluginRecord({
+          id: "voice-call",
+          origin: "bundled",
+          configContracts: {
+            secretInputs: {
+              paths: [{ path: "twilio.authToken", expected: "string" }],
+            },
           },
-        },
-      },
-    });
+        }),
+      ]),
+    );
 
     expect(
       resolvePluginConfigContractsById({
@@ -147,7 +159,7 @@ describe("resolvePluginConfigContractsById", () => {
     );
   });
 
-  it("refreshes stale bundled SecretInput contracts from bundled metadata", () => {
+  it("refreshes stale bundled SecretInput contracts from bundled registry", () => {
     mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
       createRegistry([
         createPluginRecord({
@@ -162,18 +174,22 @@ describe("resolvePluginConfigContractsById", () => {
         }),
       ]),
     );
-    mocks.findBundledPluginMetadataById.mockReturnValue({
-      manifest: {
-        configContracts: {
-          secretInputs: {
-            paths: [
-              { path: "twilio.authToken", expected: "string" },
-              { path: "realtime.providers.*.apiKey", expected: "string" },
-            ],
+    mocks.loadBundledManifestRegistry.mockReturnValue(
+      createRegistry([
+        createPluginRecord({
+          id: "voice-call",
+          origin: "bundled",
+          configContracts: {
+            secretInputs: {
+              paths: [
+                { path: "twilio.authToken", expected: "string" },
+                { path: "realtime.providers.*.apiKey", expected: "string" },
+              ],
+            },
           },
-        },
-      },
-    });
+        }),
+      ]),
+    );
 
     expect(
       resolvePluginConfigContractsById({
@@ -210,15 +226,19 @@ describe("resolvePluginConfigContractsById", () => {
         }),
       ]),
     );
-    mocks.findBundledPluginMetadataById.mockReturnValue({
-      manifest: {
-        configContracts: {
-          secretInputs: {
-            paths: [{ path: "tts.providers.*.apiKey", expected: "string" }],
+    mocks.loadBundledManifestRegistry.mockReturnValue(
+      createRegistry([
+        createPluginRecord({
+          id: "voice-call",
+          origin: "bundled",
+          configContracts: {
+            secretInputs: {
+              paths: [{ path: "tts.providers.*.apiKey", expected: "string" }],
+            },
           },
-        },
-      },
-    });
+        }),
+      ]),
+    );
 
     expect(
       resolvePluginConfigContractsById({
@@ -249,6 +269,6 @@ describe("resolvePluginConfigContractsById", () => {
         fallbackToBundledMetadata: false,
       }),
     ).toEqual(new Map());
-    expect(mocks.findBundledPluginMetadataById).not.toHaveBeenCalled();
+    expect(mocks.loadBundledManifestRegistry).not.toHaveBeenCalled();
   });
 });

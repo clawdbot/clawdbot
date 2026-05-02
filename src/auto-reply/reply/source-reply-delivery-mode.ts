@@ -13,6 +13,7 @@ export function resolveSourceReplyDeliveryMode(params: {
   ctx: SourceReplyDeliveryModeContext;
   requested?: SourceReplyDeliveryMode;
   messageToolAvailable?: boolean;
+  defaultVisibleReplies?: "automatic" | "message_tool";
 }): SourceReplyDeliveryMode {
   if (params.requested) {
     return params.messageToolAvailable === false && params.requested === "message_tool_only"
@@ -29,8 +30,8 @@ export function resolveSourceReplyDeliveryMode(params: {
       params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies;
     mode = configuredMode === "automatic" ? "automatic" : "message_tool_only";
   } else {
-    mode =
-      params.cfg.messages?.visibleReplies === "message_tool" ? "message_tool_only" : "automatic";
+    const configuredMode = params.cfg.messages?.visibleReplies ?? params.defaultVisibleReplies;
+    mode = configuredMode === "message_tool" ? "message_tool_only" : "automatic";
   }
   if (mode === "message_tool_only" && params.messageToolAvailable === false) {
     return "automatic";
@@ -58,12 +59,14 @@ export function resolveSourceReplyVisibilityPolicy(params: {
   explicitSuppressTyping?: boolean;
   shouldSuppressTyping?: boolean;
   messageToolAvailable?: boolean;
+  defaultVisibleReplies?: "automatic" | "message_tool";
 }): SourceReplyVisibilityPolicy {
   const sourceReplyDeliveryMode = resolveSourceReplyDeliveryMode({
     cfg: params.cfg,
     ctx: params.ctx,
     requested: params.requested,
     messageToolAvailable: params.messageToolAvailable,
+    defaultVisibleReplies: params.defaultVisibleReplies,
   });
   const sendPolicyDenied = params.sendPolicy === "deny";
   const suppressAutomaticSourceDelivery = sourceReplyDeliveryMode === "message_tool_only";

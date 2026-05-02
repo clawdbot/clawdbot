@@ -103,7 +103,7 @@ function warnRejectedCredentialEntries(source: string, rejected: RejectedCredent
   });
 }
 
-export function coerceLegacyAuthStore(raw: unknown): LegacyAuthStore | null {
+function coerceLegacyAuthStore(raw: unknown): LegacyAuthStore | null {
   if (!raw || typeof raw !== "object") {
     return null;
   }

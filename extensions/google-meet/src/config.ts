@@ -10,7 +10,7 @@ import {
 
 export type GoogleMeetTransport = "chrome" | "chrome-node" | "twilio";
 export type GoogleMeetMode = "realtime" | "transcribe";
-export type GoogleMeetChromeAudioFormat = "pcm16-24khz" | "g711-ulaw-8khz";
+type GoogleMeetChromeAudioFormat = "pcm16-24khz" | "g711-ulaw-8khz";
 export type GoogleMeetToolPolicy = RealtimeVoiceAgentConsultToolPolicy;
 
 export type GoogleMeetConfig = {
@@ -123,7 +123,7 @@ export const DEFAULT_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND = [
   "BlackHole 2ch",
 ] as const;
 
-export const LEGACY_GOOGLE_MEET_AUDIO_INPUT_COMMAND = [
+const LEGACY_GOOGLE_MEET_AUDIO_INPUT_COMMAND = [
   "rec",
   "-q",
   "-t",
@@ -139,7 +139,7 @@ export const LEGACY_GOOGLE_MEET_AUDIO_INPUT_COMMAND = [
   "-",
 ] as const;
 
-export const LEGACY_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND = [
+const LEGACY_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND = [
   "play",
   "-q",
   "-t",
@@ -155,15 +155,15 @@ export const LEGACY_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND = [
   "-",
 ] as const;
 
-export const DEFAULT_GOOGLE_MEET_CHROME_AUDIO_FORMAT: GoogleMeetChromeAudioFormat = "pcm16-24khz";
-export const DEFAULT_GOOGLE_MEET_BARGE_IN_RMS_THRESHOLD = 650;
-export const DEFAULT_GOOGLE_MEET_BARGE_IN_PEAK_THRESHOLD = 2500;
-export const DEFAULT_GOOGLE_MEET_BARGE_IN_COOLDOWN_MS = 900;
+const DEFAULT_GOOGLE_MEET_CHROME_AUDIO_FORMAT: GoogleMeetChromeAudioFormat = "pcm16-24khz";
+const DEFAULT_GOOGLE_MEET_BARGE_IN_RMS_THRESHOLD = 650;
+const DEFAULT_GOOGLE_MEET_BARGE_IN_PEAK_THRESHOLD = 2500;
+const DEFAULT_GOOGLE_MEET_BARGE_IN_COOLDOWN_MS = 900;
 
-export const DEFAULT_GOOGLE_MEET_REALTIME_INSTRUCTIONS = `You are joining a private Google Meet as an OpenClaw agent. Keep spoken replies brief and natural. When a question needs deeper reasoning, current information, or tools, call ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} before answering.`;
-export const DEFAULT_GOOGLE_MEET_REALTIME_INTRO_MESSAGE = "Say exactly: I'm here and listening.";
+const DEFAULT_GOOGLE_MEET_REALTIME_INSTRUCTIONS = `You are joining a private Google Meet as an OpenClaw agent. Keep spoken replies brief and natural. When a question needs deeper reasoning, current information, or tools, call ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} before answering.`;
+const DEFAULT_GOOGLE_MEET_REALTIME_INTRO_MESSAGE = "Say exactly: I'm here and listening.";
 
-export const DEFAULT_GOOGLE_MEET_CONFIG: GoogleMeetConfig = {
+const DEFAULT_GOOGLE_MEET_CONFIG: GoogleMeetConfig = {
   enabled: true,
   defaults: {},
   preview: {

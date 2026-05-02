@@ -10,7 +10,7 @@ import {
 } from "./tool-display-common.js";
 import { TOOL_DISPLAY_CONFIG } from "./tool-display-config.js";
 
-export type ToolDisplay = {
+type ToolDisplay = {
   name: string;
   emoji: string;
   title: string;

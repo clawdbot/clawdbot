@@ -9,8 +9,6 @@ import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } f
 import { resolveMSTeamsSenderAccess } from "./monitor-handler/access.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
 import { createMSTeamsReactionHandler } from "./monitor-handler/reaction-handler.js";
-export type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
-import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import {

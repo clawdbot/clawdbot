@@ -10,7 +10,7 @@ function resolveLifecycleAllowFrom(params: {
   return params.allowFrom ?? (params.dmPolicy === "open" ? ["*"] : undefined);
 }
 
-export function createLifecycleConfig(params: {
+function createLifecycleConfig(params: {
   accountId: string;
   dmPolicy: "open" | "pairing";
   allowFrom?: string[];
@@ -38,7 +38,7 @@ export function createLifecycleConfig(params: {
   } as OpenClawConfig;
 }
 
-export function createLifecycleAccount(params: {
+function createLifecycleAccount(params: {
   accountId: string;
   dmPolicy: "open" | "pairing";
   allowFrom?: string[];
@@ -359,7 +359,7 @@ export async function settleAsyncWork(): Promise<void> {
   }
 }
 
-export async function postWebhookUpdate(params: {
+async function postWebhookUpdate(params: {
   baseUrl: string;
   path: string;
   secret: string;

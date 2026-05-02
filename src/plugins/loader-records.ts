@@ -22,6 +22,8 @@ export function createPluginRecord(params: {
   compat?: readonly PluginCompatCode[];
   activationState?: PluginActivationState;
   syntheticAuthRefs?: string[];
+  channelIds?: readonly string[];
+  providerIds?: readonly string[];
   configSchema: boolean;
   contracts?: PluginManifestContracts;
 }): PluginRecord {
@@ -47,21 +49,21 @@ export function createPluginRecord(params: {
     status: params.enabled ? "loaded" : "disabled",
     toolNames: [],
     hookNames: [],
-    channelIds: [],
+    channelIds: [...(params.channelIds ?? [])],
     cliBackendIds: [],
-    providerIds: [],
-    speechProviderIds: [],
-    realtimeTranscriptionProviderIds: [],
-    realtimeVoiceProviderIds: [],
-    mediaUnderstandingProviderIds: [],
-    imageGenerationProviderIds: [],
-    videoGenerationProviderIds: [],
-    musicGenerationProviderIds: [],
-    webFetchProviderIds: [],
-    webSearchProviderIds: [],
-    migrationProviderIds: [],
+    providerIds: [...(params.providerIds ?? [])],
+    speechProviderIds: [...(params.contracts?.speechProviders ?? [])],
+    realtimeTranscriptionProviderIds: [...(params.contracts?.realtimeTranscriptionProviders ?? [])],
+    realtimeVoiceProviderIds: [...(params.contracts?.realtimeVoiceProviders ?? [])],
+    mediaUnderstandingProviderIds: [...(params.contracts?.mediaUnderstandingProviders ?? [])],
+    imageGenerationProviderIds: [...(params.contracts?.imageGenerationProviders ?? [])],
+    videoGenerationProviderIds: [...(params.contracts?.videoGenerationProviders ?? [])],
+    musicGenerationProviderIds: [...(params.contracts?.musicGenerationProviders ?? [])],
+    webFetchProviderIds: [...(params.contracts?.webFetchProviders ?? [])],
+    webSearchProviderIds: [...(params.contracts?.webSearchProviders ?? [])],
+    migrationProviderIds: [...(params.contracts?.migrationProviders ?? [])],
     contextEngineIds: [],
-    memoryEmbeddingProviderIds: [],
+    memoryEmbeddingProviderIds: [...(params.contracts?.memoryEmbeddingProviders ?? [])],
     agentHarnessIds: [],
     gatewayMethods: [],
     cliCommands: [],

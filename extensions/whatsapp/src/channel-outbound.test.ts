@@ -101,6 +101,17 @@ describe("whatsappChannelOutbound", () => {
     });
   });
 
+  it("rejects non-WhatsApp provider-prefixed outbound targets", () => {
+    const result = whatsappChannelOutbound.resolveTarget?.({
+      to: "telegram:1234567890",
+      allowFrom: [],
+      mode: undefined,
+    });
+
+    expect(result?.ok).toBe(false);
+    expect(hoisted.sendMessageWhatsApp).not.toHaveBeenCalled();
+  });
+
   it("preserves indentation for payload delivery", async () => {
     await whatsappChannelOutbound.sendPayload!({
       cfg: {},

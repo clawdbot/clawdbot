@@ -93,7 +93,7 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
         workspaceDir: "/tmp/workspace",
         messageProvider: "telegram",
         trigger: "user",
-        channelId: "telegram",
+        channelId: "-100123",
       }),
     );
     expect(mocks.handleInlineActions.mock.invocationCallOrder[0]).toBeLessThan(

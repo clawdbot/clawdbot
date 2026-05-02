@@ -1,15 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  loadPluginManifestRegistryForPluginRegistry: vi.fn(),
+  loadPluginMetadataSnapshot: vi.fn(),
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts: vi.fn(() => null),
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts: vi.fn(() => null),
   loadBundledWebSearchProviderEntriesFromDir: vi.fn(),
   loadBundledWebFetchProviderEntriesFromDir: vi.fn(),
 }));
 
-vi.mock("./plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: mocks.loadPluginManifestRegistryForPluginRegistry,
+vi.mock("./plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
 }));
 
 vi.mock("./web-search-providers.shared.js", () => ({
@@ -41,7 +41,7 @@ const {
 describe("web provider public artifact manifest fallback", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
       diagnostics: [],
       plugins: [
         {
@@ -70,7 +70,7 @@ describe("web provider public artifact manifest fallback", () => {
     const providers = resolveBundledWebSearchProvidersFromPublicArtifacts({ config: {} });
 
     expect(providers).toEqual([{ id: "fallback-search", pluginId: "fallback-search" }]);
-    expect(mocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledOnce();
+    expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
     expect(mocks.loadBundledWebSearchProviderEntriesFromDir).toHaveBeenCalledWith({
       dirName: "fallback-search",
       pluginId: "fallback-search",
@@ -81,7 +81,7 @@ describe("web provider public artifact manifest fallback", () => {
     const providers = resolveBundledWebFetchProvidersFromPublicArtifacts({ config: {} });
 
     expect(providers).toEqual([{ id: "fallback-fetch", pluginId: "fallback-fetch" }]);
-    expect(mocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledOnce();
+    expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
     expect(mocks.loadBundledWebFetchProviderEntriesFromDir).toHaveBeenCalledWith({
       dirName: "fallback-fetch",
       pluginId: "fallback-fetch",

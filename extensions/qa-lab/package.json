@@ -27,11 +27,6 @@
     "extensions": [
       "./index.ts"
     ],
-    "install": {
-      "npmSpec": "@openclaw/qa-lab",
-      "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.10"
-    },
     "compat": {
       "pluginApi": ">=2026.4.25"
     }

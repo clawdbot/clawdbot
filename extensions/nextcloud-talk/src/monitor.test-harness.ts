@@ -3,7 +3,7 @@ import { afterEach } from "vitest";
 import { createNextcloudTalkWebhookServer } from "./monitor.js";
 import type { NextcloudTalkWebhookServerOptions } from "./types.js";
 
-export type WebhookHarness = {
+type WebhookHarness = {
   webhookUrl: string;
   stop: () => Promise<void>;
 };
@@ -19,7 +19,7 @@ afterEach(async () => {
   }
 });
 
-export type StartWebhookServerParams = Omit<
+type StartWebhookServerParams = Omit<
   NextcloudTalkWebhookServerOptions,
   "port" | "host" | "path" | "secret"
 > & {

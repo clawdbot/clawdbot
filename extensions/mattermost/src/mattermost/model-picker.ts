@@ -19,18 +19,18 @@ const ACTION_IDS = {
   back: "mdlback",
 } as const;
 
-export type MattermostModelPickerEntry =
+type MattermostModelPickerEntry =
   | { kind: "summary" }
   | { kind: "providers" }
   | { kind: "models"; provider: string };
 
-export type MattermostModelPickerState =
+type MattermostModelPickerState =
   | { action: "providers"; ownerUserId: string }
   | { action: "back"; ownerUserId: string }
   | { action: "list"; ownerUserId: string; provider: string; page: number }
   | { action: "select"; ownerUserId: string; provider: string; page: number; model: string };
 
-export type MattermostModelPickerRenderedView = {
+type MattermostModelPickerRenderedView = {
   text: string;
   buttons: MattermostInteractiveButtonInput[][];
 };

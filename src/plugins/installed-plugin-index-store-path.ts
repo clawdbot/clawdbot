@@ -1,7 +1,7 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 
-export const INSTALLED_PLUGIN_INDEX_STORE_PATH = path.join("plugins", "installs.json");
+const INSTALLED_PLUGIN_INDEX_STORE_PATH = path.join("plugins", "installs.json");
 
 export type InstalledPluginIndexStoreOptions = {
   env?: NodeJS.ProcessEnv;

@@ -10,12 +10,12 @@ type GraphUserProfile = {
   officeLocation?: string;
 };
 
-export type GetMemberInfoMSTeamsParams = {
+type GetMemberInfoMSTeamsParams = {
   cfg: OpenClawConfig;
   userId: string;
 };
 
-export type GetMemberInfoMSTeamsResult = {
+type GetMemberInfoMSTeamsResult = {
   user: {
     id: string | undefined;
     displayName: string | undefined;

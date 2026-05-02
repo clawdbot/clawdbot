@@ -18,7 +18,7 @@ type WindowsInstallRootsTestOverrides = {
   isReadableFile?: IsReadableFile;
 };
 
-export type WindowsInstallRoots = {
+type WindowsInstallRoots = {
   systemRoot: string;
   programFiles: string;
   programFilesX86: string;

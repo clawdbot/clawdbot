@@ -147,9 +147,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             type: "integer",
             exclusiveMinimum: 0,
             maximum: 9007199254740991,
-            title: "Stuck Session Warning Threshold (ms)",
+            title: "Session Liveness Threshold (ms)",
             description:
-              "Age threshold in milliseconds for emitting stuck-session warnings while a session remains in processing state. Increase for long multi-tool turns to reduce false positives; decrease for faster hang detection.",
+              "No-progress age threshold in milliseconds for classifying long processing sessions as long-running, stalled, or stuck. Reply, tool, status, block, and ACP progress reset the timer; repeated stuck diagnostics back off while unchanged.",
           },
           otel: {
             type: "object",
@@ -1279,6 +1279,65 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
         description:
           "Authentication profile root used for multi-profile provider credentials and cooldown-based failover ordering. Keep profiles minimal and explicit so automatic failover behavior stays auditable.",
       },
+      accessGroups: {
+        type: "object",
+        propertyNames: {
+          type: "string",
+          minLength: 1,
+        },
+        additionalProperties: {
+          oneOf: [
+            {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string",
+                  const: "discord.channelAudience",
+                },
+                guildId: {
+                  type: "string",
+                  minLength: 1,
+                },
+                channelId: {
+                  type: "string",
+                  minLength: 1,
+                },
+                membership: {
+                  type: "string",
+                  const: "canViewChannel",
+                },
+              },
+              required: ["type", "guildId", "channelId"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string",
+                  const: "message.senders",
+                },
+                members: {
+                  type: "object",
+                  propertyNames: {
+                    type: "string",
+                    minLength: 1,
+                  },
+                  additionalProperties: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                  },
+                },
+              },
+              required: ["type", "members"],
+              additionalProperties: false,
+            },
+          ],
+        },
+      },
       acp: {
         type: "object",
         properties: {
@@ -1628,6 +1687,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   title: "Model Provider Inject num_ctx (OpenAI Compat)",
                   description:
                     "Controls whether OpenClaw injects `options.num_ctx` for Ollama providers configured with the OpenAI-compatible adapter (`openai-completions`). Default is true. Set false only if your proxy/upstream rejects unknown `options` payload fields.",
+                },
+                params: {
+                  type: "object",
+                  propertyNames: {
+                    type: "string",
+                  },
+                  additionalProperties: {},
+                  title: "Model Provider Runtime Parameters",
+                  description:
+                    "Provider-specific runtime parameters interpreted by provider plugins. Keep keys documented by the provider, and prefer explicit provider docs over ad hoc shared assumptions.",
                 },
                 headers: {
                   type: "object",
@@ -20623,14 +20692,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               'Controls typing behavior timing: "never", "instant", "thinking", or "message" based emission points. Keep conservative modes in high-volume channels to avoid unnecessary typing noise.',
           },
-          parentForkMaxTokens: {
-            type: "integer",
-            minimum: 0,
-            maximum: 9007199254740991,
-            title: "Session Parent Fork Max Tokens",
-            description:
-              "Maximum parent-session token count allowed for thread/session inheritance forking. If the parent exceeds this, OpenClaw starts a fresh thread session instead of forking; set 0 to disable this protection.",
-          },
           mainKey: {
             type: "string",
             title: "Session Main Key",
@@ -20778,6 +20839,19 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 title: "Thread Binding Max Age (hours)",
                 description:
                   "Optional hard max age in hours for thread-bound sessions across providers/channels (0 disables hard cap). Default: 0.",
+              },
+              spawnSessions: {
+                type: "boolean",
+                title: "Thread-Bound Session Spawns",
+                description:
+                  "Global default gate for creating thread-bound work sessions from sessions_spawn and ACP thread spawns. Default: true when thread bindings are enabled.",
+              },
+              defaultSpawnContext: {
+                type: "string",
+                enum: ["isolated", "fork"],
+                title: "Thread Spawn Context",
+                description:
+                  'Default native subagent context for thread-bound spawns. Use "fork" to start from the requester transcript or "isolated" for a clean child. Default: "fork".',
               },
             },
             additionalProperties: false,
@@ -21720,6 +21794,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           const: "private",
                         },
                       ],
+                    },
+                    clawpackSha256: {
+                      type: "string",
+                    },
+                    clawpackSpecVersion: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    clawpackManifestSha256: {
+                      type: "string",
+                    },
+                    clawpackSize: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
                     },
                     gitUrl: {
                       type: "string",
@@ -24425,8 +24515,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["observability"],
     },
     "diagnostics.stuckSessionWarnMs": {
-      label: "Stuck Session Warning Threshold (ms)",
-      help: "Age threshold in milliseconds for emitting stuck-session warnings while a session remains in processing state. Increase for long multi-tool turns to reduce false positives; decrease for faster hang detection.",
+      label: "Session Liveness Threshold (ms)",
+      help: "No-progress age threshold in milliseconds for classifying long processing sessions as long-running, stalled, or stuck. Reply, tool, status, block, and ACP progress reset the timer; repeated stuck diagnostics back off while unchanged.",
       tags: ["observability", "storage"],
     },
     "diagnostics.otel.enabled": {
@@ -26919,6 +27009,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Controls whether OpenClaw injects `options.num_ctx` for Ollama providers configured with the OpenAI-compatible adapter (`openai-completions`). Default is true. Set false only if your proxy/upstream rejects unknown `options` payload fields.",
       tags: ["models"],
     },
+    "models.providers.*.params": {
+      label: "Model Provider Runtime Parameters",
+      help: "Provider-specific runtime parameters interpreted by provider plugins. Keep keys documented by the provider, and prefer explicit provider docs over ad hoc shared assumptions.",
+      tags: ["models"],
+    },
     "models.providers.*.headers": {
       label: "Model Provider Headers",
       help: "Static HTTP headers merged into provider requests for tenant routing, proxy auth, or custom gateway requirements. Use this sparingly and keep sensitive header values in secrets.",
@@ -27738,11 +27833,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: 'Controls typing behavior timing: "never", "instant", "thinking", or "message" based emission points. Keep conservative modes in high-volume channels to avoid unnecessary typing noise.',
       tags: ["storage"],
     },
-    "session.parentForkMaxTokens": {
-      label: "Session Parent Fork Max Tokens",
-      help: "Maximum parent-session token count allowed for thread/session inheritance forking. If the parent exceeds this, OpenClaw starts a fresh thread session instead of forking; set 0 to disable this protection.",
-      tags: ["security", "auth", "performance", "storage"],
-    },
     "session.mainKey": {
       label: "Session Main Key",
       help: 'Overrides the canonical main session key used for continuity when dmScope or routing logic points to "main". Use a stable value only if you intentionally need custom session anchoring.',
@@ -27822,6 +27912,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Thread Binding Max Age (hours)",
       help: "Optional hard max age in hours for thread-bound sessions across providers/channels (0 disables hard cap). Default: 0.",
       tags: ["performance", "storage"],
+    },
+    "session.threadBindings.spawnSessions": {
+      label: "Thread-Bound Session Spawns",
+      help: "Global default gate for creating thread-bound work sessions from sessions_spawn and ACP thread spawns. Default: true when thread bindings are enabled.",
+      tags: ["storage"],
+    },
+    "session.threadBindings.defaultSpawnContext": {
+      label: "Thread Spawn Context",
+      help: 'Default native subagent context for thread-bound spawns. Use "fork" to start from the requester transcript or "isolated" for a clean child. Default: "fork".',
+      tags: ["storage"],
     },
     "session.maintenance": {
       label: "Session Maintenance",

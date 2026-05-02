@@ -5,20 +5,20 @@ import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveUserPath } from "../utils.js";
 
-export type CanvasDocumentKind = "html_bundle" | "url_embed" | "document" | "image" | "video_asset";
+type CanvasDocumentKind = "html_bundle" | "url_embed" | "document" | "image" | "video_asset";
 
-export type CanvasDocumentAsset = {
+type CanvasDocumentAsset = {
   logicalPath: string;
   sourcePath: string;
   contentType?: string;
 };
 
-export type CanvasDocumentEntrypoint =
+type CanvasDocumentEntrypoint =
   | { type: "html"; value: string }
   | { type: "path"; value: string }
   | { type: "url"; value: string };
 
-export type CanvasDocumentCreateInput = {
+type CanvasDocumentCreateInput = {
   id?: string;
   kind: CanvasDocumentKind;
   title?: string;
@@ -28,7 +28,7 @@ export type CanvasDocumentCreateInput = {
   surface?: "assistant_message" | "tool_card" | "sidebar";
 };
 
-export type CanvasDocumentManifest = {
+type CanvasDocumentManifest = {
   id: string;
   kind: CanvasDocumentKind;
   title?: string;
@@ -44,7 +44,7 @@ export type CanvasDocumentManifest = {
   }>;
 };
 
-export type CanvasDocumentResolvedAsset = {
+type CanvasDocumentResolvedAsset = {
   logicalPath: string;
   contentType?: string;
   url: string;
@@ -97,12 +97,12 @@ function normalizeCanvasDocumentId(value: string): string {
   return normalized;
 }
 
-export function resolveCanvasRootDir(rootDir?: string, stateDir = resolveStateDir()): string {
+function resolveCanvasRootDir(rootDir?: string, stateDir = resolveStateDir()): string {
   const resolved = rootDir?.trim() ? resolveUserPath(rootDir) : path.join(stateDir, "canvas");
   return path.resolve(resolved);
 }
 
-export function resolveCanvasDocumentsDir(rootDir?: string, stateDir = resolveStateDir()): string {
+function resolveCanvasDocumentsDir(rootDir?: string, stateDir = resolveStateDir()): string {
   return path.join(resolveCanvasRootDir(rootDir, stateDir), CANVAS_DOCUMENTS_DIR_NAME);
 }
 
@@ -122,7 +122,7 @@ export function buildCanvasDocumentEntryUrl(documentId: string, entrypoint: stri
   return `${CANVAS_HOST_PATH}/${CANVAS_DOCUMENTS_DIR_NAME}/${encodeURIComponent(documentId)}/${encodedEntrypoint}`;
 }
 
-export function buildCanvasDocumentAssetUrl(documentId: string, logicalPath: string): string {
+function buildCanvasDocumentAssetUrl(documentId: string, logicalPath: string): string {
   return buildCanvasDocumentEntryUrl(documentId, logicalPath);
 }
 

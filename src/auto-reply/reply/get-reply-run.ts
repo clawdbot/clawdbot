@@ -450,6 +450,7 @@ export async function runPreparedReply(
   const directChatContext = isDirectChat
     ? buildDirectChatContext({
         sessionCtx: promptSessionCtx,
+        sourceReplyDeliveryMode: opts?.sourceReplyDeliveryMode,
         silentReplyPolicy: silentReplySettings.policy,
         silentReplyRewrite: silentReplySettings.rewrite,
         silentToken: SILENT_REPLY_TOKEN,

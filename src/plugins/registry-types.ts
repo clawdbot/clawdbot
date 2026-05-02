@@ -68,6 +68,7 @@ export type PluginToolRegistration = {
   pluginName?: string;
   factory: OpenClawPluginToolFactory;
   names: string[];
+  declaredNames?: string[];
   optional: boolean;
   source: string;
   rootDir?: string;
@@ -403,6 +404,7 @@ export type PluginRegistry = {
   memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
   agentHarnesses: PluginAgentHarnessRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
+  coreGatewayMethodNames?: string[];
   gatewayMethodScopes?: Partial<Record<string, OperatorScope>>;
   httpRoutes: PluginHttpRouteRegistration[];
   cliRegistrars: PluginCliRegistration[];

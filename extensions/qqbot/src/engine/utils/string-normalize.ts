@@ -12,7 +12,7 @@
 // ---- String coercion ----
 
 /** Return the trimmed string or `null` when the value is not a non-empty string. */
-export function normalizeNullableString(value: unknown): string | null {
+function normalizeNullableString(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
   }

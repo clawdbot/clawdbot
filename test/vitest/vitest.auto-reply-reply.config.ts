@@ -5,8 +5,6 @@ export function createAutoReplyReplyVitestConfig(env?: Record<string, string | u
   return createScopedVitestConfig([...autoReplyReplySubtreeTestInclude], {
     dir: "src/auto-reply",
     env,
-    fileParallelism: false,
-    maxWorkers: 1,
     name: "auto-reply-reply",
     sequence: {
       groupOrder: 1,

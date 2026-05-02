@@ -4,7 +4,7 @@ import type {
 } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import { resolveThreadBindingLifecycle } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 
-export type MatrixThreadBindingTargetKind = "subagent" | "acp";
+type MatrixThreadBindingTargetKind = "subagent" | "acp";
 
 export type MatrixThreadBindingRecord = {
   accountId: string;
@@ -44,7 +44,7 @@ export type MatrixThreadBindingManager = {
   stop: () => void;
 };
 
-export type MatrixThreadBindingManagerCacheEntry = {
+type MatrixThreadBindingManagerCacheEntry = {
   filePath: string;
   manager: MatrixThreadBindingManager;
 };

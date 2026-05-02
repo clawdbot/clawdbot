@@ -146,6 +146,11 @@ export type MemoryDreamingWorkspace = {
   agentIds: string[];
 };
 
+export type MemoryDreamingWorkspaceOptions = {
+  primaryWorkspaceDir?: string | null;
+  primaryAgentId?: string | null;
+};
+
 const DEFAULT_MEMORY_LIGHT_DREAMING_SOURCES: MemoryLightDreamingSource[] = [
   "daily",
   "sessions",
@@ -603,7 +608,10 @@ export function isSameMemoryDreamingDay(
   );
 }
 
-export function resolveMemoryDreamingWorkspaces(cfg: OpenClawConfig): MemoryDreamingWorkspace[] {
+export function resolveMemoryDreamingWorkspaces(
+  cfg: OpenClawConfig,
+  options: MemoryDreamingWorkspaceOptions = {},
+): MemoryDreamingWorkspace[] {
   const configured = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
   const agentIds: string[] = [];
   const seenAgents = new Set<string>();
@@ -623,18 +631,29 @@ export function resolveMemoryDreamingWorkspaces(cfg: OpenClawConfig): MemoryDrea
   }
 
   const byWorkspace = new Map<string, MemoryDreamingWorkspace>();
-  for (const agentId of agentIds) {
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId)?.trim();
+  const addWorkspace = (workspaceDirRaw: string | undefined, agentIdRaw: string): void => {
+    const workspaceDir = workspaceDirRaw?.trim();
     if (!workspaceDir) {
-      continue;
+      return;
     }
+    const agentId = normalizeOptionalLowercaseString(agentIdRaw) || resolveDefaultAgentId(cfg);
     const key = normalizePathForComparison(workspaceDir);
     const existing = byWorkspace.get(key);
     if (existing) {
-      existing.agentIds.push(agentId);
-      continue;
+      if (!existing.agentIds.includes(agentId)) {
+        existing.agentIds.push(agentId);
+      }
+      return;
     }
     byWorkspace.set(key, { workspaceDir, agentIds: [agentId] });
+  };
+
+  for (const agentId of agentIds) {
+    addWorkspace(resolveAgentWorkspaceDir(cfg, agentId), agentId);
   }
+  addWorkspace(
+    options.primaryWorkspaceDir ?? undefined,
+    options.primaryAgentId ?? resolveDefaultAgentId(cfg),
+  );
   return [...byWorkspace.values()];
 }

@@ -27,12 +27,16 @@ function installTelegramRuntime() {
   } as unknown as TelegramRuntime);
 }
 
-function createTelegramConfig(accountId = "default"): OpenClawConfig {
+function createTelegramConfig(
+  accountId = "default",
+  telegramOverrides: Record<string, unknown> = {},
+): OpenClawConfig {
   if (accountId === "default") {
     return {
       channels: {
         telegram: {
           botToken: "123456:bad-token",
+          ...telegramOverrides,
         },
       },
     } as OpenClawConfig;
@@ -44,6 +48,7 @@ function createTelegramConfig(accountId = "default"): OpenClawConfig {
         accounts: {
           [accountId]: {
             botToken: "123456:bad-token",
+            ...telegramOverrides,
           },
         },
       },
@@ -51,8 +56,11 @@ function createTelegramConfig(accountId = "default"): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-function startTelegramAccount(accountId = "default") {
-  const cfg = createTelegramConfig(accountId);
+function startTelegramAccount(
+  accountId = "default",
+  telegramOverrides: Record<string, unknown> = {},
+) {
+  const cfg = createTelegramConfig(accountId, telegramOverrides);
   const account = telegramPlugin.config.resolveAccount(cfg, accountId);
   const startAccount = telegramPlugin.gateway?.startAccount;
   expect(startAccount).toBeDefined();
@@ -112,6 +120,52 @@ describe("telegramPlugin gateway startup", () => {
         token: "123456:bad-token",
         accountId: "default",
         useWebhook: false,
+      }),
+    );
+  });
+
+  it("uses the getMe request guard for startup probe timeout", async () => {
+    installTelegramRuntime();
+    probeTelegram.mockResolvedValue({
+      ok: true,
+      status: null,
+      error: null,
+      elapsedMs: 12,
+    });
+    monitorTelegramProvider.mockResolvedValue(undefined);
+
+    const { task } = startTelegramAccount();
+
+    await expect(task).resolves.toBeUndefined();
+    expect(probeTelegram).toHaveBeenCalledWith(
+      "123456:bad-token",
+      15_000,
+      expect.objectContaining({
+        accountId: "default",
+        includeWebhookInfo: false,
+      }),
+    );
+  });
+
+  it("honors higher per-account timeoutSeconds for startup probe", async () => {
+    installTelegramRuntime();
+    probeTelegram.mockResolvedValue({
+      ok: true,
+      status: null,
+      error: null,
+      elapsedMs: 12,
+    });
+    monitorTelegramProvider.mockResolvedValue(undefined);
+
+    const { task } = startTelegramAccount("ops", { timeoutSeconds: 60 });
+
+    await expect(task).resolves.toBeUndefined();
+    expect(probeTelegram).toHaveBeenCalledWith(
+      "123456:bad-token",
+      60_000,
+      expect.objectContaining({
+        accountId: "ops",
+        includeWebhookInfo: false,
       }),
     );
   });

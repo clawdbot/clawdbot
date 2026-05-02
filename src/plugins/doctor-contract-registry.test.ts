@@ -23,7 +23,7 @@ afterEach(() => {
   cleanupTrackedTempDirs(tempDirs);
 });
 
-describe("doctor-contract-registry getJiti", () => {
+describe("doctor-contract-registry module loader", () => {
   beforeEach(async () => {
     resetRegistryJitiMocks();
     vi.resetModules();
@@ -67,7 +67,7 @@ describe("doctor-contract-registry getJiti", () => {
     expect(mocks.createJiti).not.toHaveBeenCalled();
   });
 
-  it("falls back to the Jiti boundary on Windows for TypeScript contract-api modules", () => {
+  it("falls back to the source-transform boundary on Windows for TypeScript contract-api modules", () => {
     const pluginRoot = makeTempDir();
     const contractApiPath = path.join(pluginRoot, "contract-api.ts");
     fs.writeFileSync(

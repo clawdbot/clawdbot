@@ -13,6 +13,7 @@ describe("sessions_spawn context modes", () => {
   const callGatewayMock = vi.fn();
   const updateSessionStoreMock = vi.fn();
   const forkSessionFromParentMock = vi.fn();
+  const ensureContextEnginesInitializedMock = vi.fn();
   const resolveContextEngineMock = vi.fn();
   let spawnSubagentDirect: Awaited<
     ReturnType<typeof loadSubagentSpawnModuleForTest>
@@ -23,6 +24,7 @@ describe("sessions_spawn context modes", () => {
       callGatewayMock,
       updateSessionStoreMock,
       forkSessionFromParentMock,
+      ensureContextEnginesInitializedMock,
       resolveContextEngineMock,
       sessionStorePath: storePath,
     }));
@@ -32,6 +34,7 @@ describe("sessions_spawn context modes", () => {
     callGatewayMock.mockReset();
     updateSessionStoreMock.mockReset();
     forkSessionFromParentMock.mockReset();
+    ensureContextEnginesInitializedMock.mockReset();
     resolveContextEngineMock.mockReset();
     setupAcceptedSubagentGatewayMock(callGatewayMock);
     resolveContextEngineMock.mockResolvedValue({});
@@ -109,6 +112,106 @@ describe("sessions_spawn context modes", () => {
         childSessionKey: result.childSessionKey,
         contextMode: "isolated",
       }),
+    );
+  });
+
+  it("falls back to isolated context when requested fork is too large", async () => {
+    const store: SessionStore = {
+      main: {
+        sessionId: "parent-session-id",
+        sessionFile: "/tmp/parent-session.jsonl",
+        updatedAt: 1,
+        totalTokens: 170_000,
+      },
+    };
+    usePersistentStoreMock(store);
+    const prepareSubagentSpawn = vi.fn(async () => undefined);
+    resolveContextEngineMock.mockResolvedValue({ prepareSubagentSpawn });
+
+    const result = await spawnSubagentDirect(
+      { task: "inspect the current thread", context: "fork" },
+      { agentSessionKey: "main" },
+    );
+
+    expect(result).toMatchObject({ status: "accepted", runId: "run-1" });
+    expect(result.note).toContain("Parent context is too large to fork");
+    expect(forkSessionFromParentMock).not.toHaveBeenCalled();
+    expect(prepareSubagentSpawn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parentSessionKey: "main",
+        childSessionKey: result.childSessionKey,
+        contextMode: "isolated",
+        parentSessionId: "parent-session-id",
+      }),
+    );
+  });
+
+  it("forks by default for thread-bound subagent sessions", async () => {
+    const store: SessionStore = {
+      main: {
+        sessionId: "parent-session-id",
+        sessionFile: "/tmp/parent-session.jsonl",
+        updatedAt: 1,
+        totalTokens: 1200,
+      },
+    };
+    usePersistentStoreMock(store);
+    forkSessionFromParentMock.mockImplementation(async () => ({
+      sessionId: "forked-session-id",
+      sessionFile: "/tmp/forked-session.jsonl",
+    }));
+    const prepareSubagentSpawn = vi.fn(async () => undefined);
+    resolveContextEngineMock.mockResolvedValue({ prepareSubagentSpawn });
+
+    const result = await spawnSubagentDirect(
+      { task: "spin this into a thread", thread: true },
+      {
+        agentSessionKey: "main",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:123",
+      },
+    );
+
+    expect(result.status).toBe("error");
+    expect(forkSessionFromParentMock).toHaveBeenCalledWith({
+      parentEntry: store.main,
+      agentId: "main",
+      sessionsDir: path.dirname(storePath),
+    });
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.delete",
+        params: expect.objectContaining({
+          key: result.childSessionKey,
+          deleteTranscript: true,
+          emitLifecycleHooks: false,
+        }),
+      }),
+    );
+    expect(prepareSubagentSpawn).not.toHaveBeenCalled();
+  });
+
+  it("initializes built-in context engines before resolving spawn preparation", async () => {
+    let initialized = false;
+    ensureContextEnginesInitializedMock.mockImplementation(() => {
+      initialized = true;
+    });
+    const prepareSubagentSpawn = vi.fn(async () => undefined);
+    resolveContextEngineMock.mockImplementation(async () => {
+      if (!initialized) {
+        throw new Error('Context engine "legacy" is not registered. Available engines: (none)');
+      }
+      return { prepareSubagentSpawn };
+    });
+
+    const result = await spawnSubagentDirect({ task: "clean worker" }, { agentSessionKey: "main" });
+
+    expect(result.status).toBe("accepted");
+    expect(ensureContextEnginesInitializedMock).toHaveBeenCalledTimes(1);
+    expect(resolveContextEngineMock).toHaveBeenCalledTimes(1);
+    expect(ensureContextEnginesInitializedMock.mock.invocationCallOrder[0]).toBeLessThan(
+      resolveContextEngineMock.mock.invocationCallOrder[0],
     );
   });
 

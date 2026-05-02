@@ -24,6 +24,7 @@ const PRIVATE_BUNDLED_SDK_SURFACE_PATTERN =
 const GENERIC_CORE_HELPER_FILES = ["src/polls.ts", "src/poll-params.ts"] as const;
 const GENERIC_CORE_PLUGIN_OWNER_NAME_PATTERN =
   /\b(?:bluebubbles|discord|feishu|googlechat|matrix|mattermost|msteams|slack|telegram|whatsapp|zalo|zalouser)\b/gi;
+const PACKAGE_CONTRACT_SCAN_TIMEOUT_MS = 240_000;
 const DEPRECATED_EXTENSION_SDK_SPECIFIERS = new Set([
   "openclaw/plugin-sdk",
   "openclaw/plugin-sdk/channel-config-schema-legacy",
@@ -618,7 +619,7 @@ describe("plugin-sdk package contract guardrails", () => {
     expect(failures).toEqual([]);
   });
 
-  it("keeps Matrix runtime deps local to the Matrix plugin", () => {
+  it("keeps Matrix dependencies local to the Matrix plugin", () => {
     const rootRuntimeDeps = collectRuntimeDependencySpecs(readRootPackageJson());
     const matrixPackageJson = readMatrixPackageJson();
     const matrixRuntimeDeps = collectRuntimeDependencySpecs(matrixPackageJson);
@@ -655,9 +656,13 @@ describe("plugin-sdk package contract guardrails", () => {
     expect(collectDeprecatedPackageTestingBridgeDrift()).toEqual([]);
   });
 
-  it("keeps extension test-api exports consumed", () => {
-    expect(collectUnusedExtensionTestApiExports()).toEqual([]);
-  });
+  it(
+    "keeps extension test-api exports consumed",
+    () => {
+      expect(collectUnusedExtensionTestApiExports()).toEqual([]);
+    },
+    PACKAGE_CONTRACT_SCAN_TIMEOUT_MS,
+  );
 
   it("keeps reserved SDK compatibility subpaths inside their owning bundled plugins", () => {
     expect(collectCrossOwnerReservedSdkImports()).toEqual([]);

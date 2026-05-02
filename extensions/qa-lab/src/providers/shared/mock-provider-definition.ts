@@ -1,7 +1,7 @@
 import { createMockProviderMap } from "./mock-model-config.js";
 import type { QaProviderDefinition, QaProviderMode } from "./types.js";
 
-export type MockQaProviderDefinitionParams = {
+type MockQaProviderDefinitionParams = {
   mode: Extract<QaProviderMode, "aimock" | "mock-openai">;
   commandName: string;
   commandDescription: string;

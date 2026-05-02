@@ -86,6 +86,7 @@ function describeDiscordMessageTool({
     actions.add("emoji-list");
   }
   if (discovery.isEnabled("messages")) {
+    actions.add("upload-file");
     actions.add("read");
     actions.add("edit");
     actions.add("delete");
@@ -181,7 +182,9 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     accountId,
     requesterSenderId,
     toolContext,
+    mediaAccess,
     mediaLocalRoots,
+    mediaReadFile,
   }) => {
     return await (
       await loadDiscordChannelActionsRuntime()
@@ -192,7 +195,9 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       accountId,
       requesterSenderId,
       toolContext,
+      mediaAccess,
       mediaLocalRoots,
+      mediaReadFile,
     });
   },
 };

@@ -76,13 +76,13 @@ function writeSse(res, events) {
   res.end();
 }
 
-function writeChatCompletion(res, stream) {
+function writeChatCompletion(res, stream, text = successMarker) {
   if (stream) {
     writeSse(res, [
       {
         id: "chatcmpl_e2e",
         object: "chat.completion.chunk",
-        choices: [{ index: 0, delta: { role: "assistant", content: successMarker } }],
+        choices: [{ index: 0, delta: { role: "assistant", content: text } }],
       },
       {
         id: "chatcmpl_e2e",
@@ -95,11 +95,14 @@ function writeChatCompletion(res, stream) {
   writeJson(res, 200, {
     id: "chatcmpl_e2e",
     object: "chat.completion",
-    choices: [
-      { index: 0, message: { role: "assistant", content: successMarker }, finish_reason: "stop" },
-    ],
+    choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
     usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 },
   });
+}
+
+function resolveResponseText(bodyText) {
+  const matches = Array.from(bodyText.matchAll(/\bOPENCLAW_E2E_OK(?:_\d+)?\b/gu));
+  return matches.at(-1)?.[0] ?? successMarker;
 }
 
 const server = http.createServer(async (req, res) => {
@@ -131,6 +134,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "POST" && url.pathname === "/v1/responses") {
+    const responseText = resolveResponseText(bodyText);
     if (body.stream === false) {
       writeJson(res, 200, {
         id: "resp_e2e",
@@ -142,19 +146,20 @@ const server = http.createServer(async (req, res) => {
             id: "msg_e2e_1",
             role: "assistant",
             status: "completed",
-            content: [{ type: "output_text", text: successMarker, annotations: [] }],
+            content: [{ type: "output_text", text: responseText, annotations: [] }],
           },
         ],
         usage: { input_tokens: 11, output_tokens: 7, total_tokens: 18 },
       });
       return;
     }
-    writeSse(res, responseEvents(successMarker));
+    writeSse(res, responseEvents(responseText));
     return;
   }
 
   if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
-    writeChatCompletion(res, body.stream !== false);
+    const responseText = resolveResponseText(bodyText);
+    writeChatCompletion(res, body.stream !== false, responseText);
     return;
   }
 

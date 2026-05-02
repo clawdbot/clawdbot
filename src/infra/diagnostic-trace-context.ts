@@ -21,7 +21,7 @@ export type DiagnosticTraceContext = {
   readonly traceFlags?: string;
 };
 
-export type DiagnosticTraceContextInput = Partial<DiagnosticTraceContext> & {
+type DiagnosticTraceContextInput = Partial<DiagnosticTraceContext> & {
   traceparent?: string;
 };
 

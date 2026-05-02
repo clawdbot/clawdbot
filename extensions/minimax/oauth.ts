@@ -28,7 +28,7 @@ function getOAuthEndpoints(region: MiniMaxRegion) {
   };
 }
 
-export type MiniMaxOAuthAuthorization = {
+type MiniMaxOAuthAuthorization = {
   user_code: string;
   verification_uri: string;
   expired_in: number;
@@ -36,7 +36,7 @@ export type MiniMaxOAuthAuthorization = {
   state: string;
 };
 
-export type MiniMaxOAuthToken = {
+type MiniMaxOAuthToken = {
   access: string;
   refresh: string;
   expires: number;

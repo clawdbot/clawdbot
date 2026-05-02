@@ -25,7 +25,7 @@ type BrowserCreateStepResult = {
   retryAfterMs?: number;
 };
 
-export type GoogleMeetBrowserCreateResult = {
+type GoogleMeetBrowserCreateResult = {
   meetingUri: string;
   nodeId: string;
   targetId?: string;
@@ -35,7 +35,7 @@ export type GoogleMeetBrowserCreateResult = {
   source: "browser";
 };
 
-export type GoogleMeetBrowserManualAction = {
+type GoogleMeetBrowserManualAction = {
   source: "browser";
   error: string;
   manualActionRequired: true;
@@ -50,7 +50,7 @@ export type GoogleMeetBrowserManualAction = {
   };
 };
 
-export class GoogleMeetBrowserManualActionError extends Error {
+class GoogleMeetBrowserManualActionError extends Error {
   readonly payload: GoogleMeetBrowserManualAction;
 
   constructor(payload: Omit<GoogleMeetBrowserManualAction, "source" | "error">) {

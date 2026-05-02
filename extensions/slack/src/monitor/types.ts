@@ -1,7 +1,7 @@
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig, SlackSlashCommandConfig } from "openclaw/plugin-sdk/config-types";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { SlackFile, SlackMessageEvent } from "../types.js";
+import type { SlackMessageEvent } from "../types.js";
 
 export type MonitorSlackOpts = {
   botToken?: string;
@@ -93,5 +93,3 @@ export type SlackMessageDeletedEvent = {
   previous_message?: { ts?: string; user?: string; bot_id?: string };
   event_ts?: string;
 };
-
-export type { SlackFile, SlackMessageEvent };

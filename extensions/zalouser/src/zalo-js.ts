@@ -1025,7 +1025,7 @@ function toInboundMessage(message: Message, ownUserId?: string): ZaloInboundMess
   };
 }
 
-export function zalouserSessionExists(profileInput?: string | null): boolean {
+function zalouserSessionExists(profileInput?: string | null): boolean {
   const profile = normalizeProfile(profileInput);
   return readCredentials(profile) !== null;
 }

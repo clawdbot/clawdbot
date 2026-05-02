@@ -697,12 +697,12 @@ describe("run-node script", () => {
     });
   });
 
-  it("restages dirty runtime metadata in watch mode when dist is already current", async () => {
+  it("reruns runtime postbuild for dirty extension package metadata in watch mode", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {
         files: {
           [ROOT_SRC]: "export const value = 1;\n",
-          [EXTENSION_PACKAGE]: '{"openclaw":{"bundle":{"stageRuntimeDependencies":true}}}\n',
+          [EXTENSION_PACKAGE]: '{"openclaw":{"extensions":["./index.ts"]}}\n',
           [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
         },
         buildPaths: [

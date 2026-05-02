@@ -37,6 +37,7 @@ type OpenAITtsProviderConfig = {
   speed?: number;
   instructions?: string;
   responseFormat?: OpenAiSpeechResponseFormat;
+  extraBody?: Record<string, unknown>;
 };
 
 type OpenAITtsProviderOverrides = {
@@ -96,10 +97,19 @@ function responseFormatToFileExtension(
   }
 }
 
+function readExtraBody(value: unknown): Record<string, unknown> | undefined {
+  const body = asObjectRecord(value);
+  if (!body || Object.keys(body).length === 0) {
+    return undefined;
+  }
+  return body;
+}
+
 function normalizeOpenAIProviderConfig(
   rawConfig: Record<string, unknown>,
 ): OpenAITtsProviderConfig {
   const raw = resolveOpenAIProviderConfigRecord(rawConfig);
+  const extraBody = readExtraBody(raw?.extraBody) ?? readExtraBody(raw?.extra_body);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
@@ -115,6 +125,7 @@ function normalizeOpenAIProviderConfig(
     speed: asFiniteNumber(raw?.speed),
     instructions: trimToUndefined(raw?.instructions),
     responseFormat: normalizeOpenAISpeechResponseFormat(raw?.responseFormat),
+    extraBody,
   };
 }
 
@@ -129,6 +140,7 @@ function readOpenAIProviderConfig(config: SpeechProviderConfig): OpenAITtsProvid
     instructions: trimToUndefined(config.instructions) ?? normalized.instructions,
     responseFormat:
       normalizeOpenAISpeechResponseFormat(config.responseFormat) ?? normalized.responseFormat,
+    extraBody: readExtraBody(config.extraBody) ?? readExtraBody(config.extra_body),
   };
 }
 
@@ -298,6 +310,7 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
         speed: overrides.speed ?? config.speed,
         instructions: config.instructions,
         responseFormat,
+        extraBody: config.extraBody,
         timeoutMs: req.timeoutMs,
       });
       return {
@@ -309,6 +322,7 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
     },
     synthesizeTelephony: async (req) => {
       const config = readOpenAIProviderConfig(req.providerConfig);
+      const overrides = readOpenAIOverrides(req.providerOverrides);
       const apiKey = config.apiKey || process.env.OPENAI_API_KEY;
       if (!apiKey) {
         throw new Error("OpenAI API key missing");
@@ -319,11 +333,12 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
         text: req.text,
         apiKey,
         baseUrl: config.baseUrl,
-        model: config.model,
-        voice: config.voice,
-        speed: config.speed,
+        model: overrides.model ?? config.model,
+        voice: overrides.voice ?? config.voice,
+        speed: overrides.speed ?? config.speed,
         instructions: config.instructions,
         responseFormat: outputFormat,
+        extraBody: config.extraBody,
         timeoutMs: req.timeoutMs,
       });
       return { audioBuffer, outputFormat, sampleRate };

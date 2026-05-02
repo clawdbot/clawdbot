@@ -23,7 +23,7 @@ import { normalizeUsage } from "./usage.js";
 
 type AnyMessage = Message & { role: string; content: unknown };
 type AssistantMessageWithPhase = AssistantMessage & { phase?: OpenAIResponsesAssistantPhase };
-export type ReplayModelInfo = { input?: ReadonlyArray<string>; api?: string };
+type ReplayModelInfo = { input?: ReadonlyArray<string>; api?: string };
 type ReplayableReasoningItem = Extract<InputItem, { type: "reasoning" }>;
 type ReplayableReasoningSignature = {
   type: "reasoning" | `reasoning.${string}`;
@@ -33,7 +33,7 @@ type ReplayableReasoningSignature = {
   summary?: unknown;
 };
 type ToolCallReplayId = { callId: string; itemId?: string };
-export type PlannedTurnInput = {
+type PlannedTurnInput = {
   inputItems: InputItem[];
   previousResponseId?: string;
   mode: "incremental_tool_results" | "full_context_initial" | "full_context_restart";

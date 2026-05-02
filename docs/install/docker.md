@@ -126,10 +126,9 @@ The setup script accepts these optional environment variables:
 | ------------------------------------------ | --------------------------------------------------------------- |
 | `OPENCLAW_IMAGE`                           | Use a remote image instead of building locally                  |
 | `OPENCLAW_DOCKER_APT_PACKAGES`             | Install extra apt packages during build (space-separated)       |
-| `OPENCLAW_EXTENSIONS`                      | Pre-install plugin deps at build time (space-separated names)   |
+| `OPENCLAW_EXTENSIONS`                      | Include selected bundled plugin helpers at build time           |
 | `OPENCLAW_EXTRA_MOUNTS`                    | Extra host bind mounts (comma-separated `source:target[:opts]`) |
 | `OPENCLAW_HOME_VOLUME`                     | Persist `/home/node` in a named Docker volume                   |
-| `OPENCLAW_PLUGIN_STAGE_DIR`                | Container path for generated bundled plugin deps and mirrors    |
 | `OPENCLAW_SANDBOX`                         | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)          |
 | `OPENCLAW_SKIP_ONBOARDING`                 | Skip the interactive onboarding step (`1`, `true`, `yes`, `on`) |
 | `OPENCLAW_DOCKER_SOCKET`                   | Override Docker socket path                                     |
@@ -162,16 +161,13 @@ export OTEL_SERVICE_NAME="openclaw-gateway"
 ./scripts/docker/setup.sh
 ```
 
-The official OpenClaw Docker release image includes the bundled
-`diagnostics-otel` plugin source. Depending on the image and cache state, the
-Gateway may still stage plugin-local OpenTelemetry runtime dependencies the
-first time the plugin is enabled, so allow that first boot to reach the package
-registry or prewarm the image in your release lane. To enable export, allow and
-enable the `diagnostics-otel` plugin in config, then set
-`diagnostics.otel.enabled=true` or use the config example in
-[OpenTelemetry export](/gateway/opentelemetry). Collector auth headers are
-configured through `diagnostics.otel.headers`, not through Docker environment
-variables.
+Install the official `@openclaw/diagnostics-otel` plugin in packaged Docker
+installs before enabling export. Custom source-built images can still include
+the local plugin source with `OPENCLAW_EXTENSIONS=diagnostics-otel`. To enable
+export, allow and enable the `diagnostics-otel` plugin in config, then set
+`diagnostics.otel.enabled=true` or use the config example in [OpenTelemetry
+export](/gateway/opentelemetry). Collector auth headers are configured through
+`diagnostics.otel.headers`, not through Docker environment variables.
 
 Prometheus metrics use the already-published Gateway port. Enable the
 `diagnostics-prometheus` plugin, then scrape:
@@ -273,24 +269,16 @@ That mounted config directory is where OpenClaw keeps:
 - `agents/<agentId>/agent/auth-profiles.json` for stored provider OAuth/API-key auth
 - `.env` for env-backed runtime secrets such as `OPENCLAW_GATEWAY_TOKEN`
 
-Bundled plugin runtime dependencies and mirrored runtime files are generated
-state, not user config. Compose stores them in the named Docker volume
-`openclaw-plugin-runtime-deps` mounted at
-`/var/lib/openclaw/plugin-runtime-deps`. Keeping that high-churn tree out of the
-host config bind mount avoids slow Docker Desktop/WSL file operations and stale
-Windows handles during cold Gateway startup.
-
-The default Compose file sets `OPENCLAW_PLUGIN_STAGE_DIR` to that path for both
-`openclaw-gateway` and `openclaw-cli`, so `openclaw doctor --fix`, channel
-login/setup commands, and Gateway startup all use the same generated runtime
-volume.
+Installed downloadable plugins store their package state under the mounted
+OpenClaw home, so plugin install records and package roots survive container
+replacement. Gateway startup does not generate bundled-plugin dependency trees.
 
 For full persistence details on VM deployments, see
 [Docker VM Runtime - What persists where](/install/docker-vm-runtime#what-persists-where).
 
-**Disk growth hotspots:** watch `media/`, session JSONL files, `cron/runs/*.jsonl`,
-the `openclaw-plugin-runtime-deps` Docker volume, and rolling file logs under
-`/tmp/openclaw/`.
+**Disk growth hotspots:** watch `media/`, session JSONL files,
+`cron/runs/*.jsonl`, installed plugin package roots, and rolling file logs
+under `/tmp/openclaw/`.
 
 ### Shell helpers (optional)
 

@@ -54,7 +54,7 @@ export const baseStatusOverviewScanFields = {
   ...baseStatusGatewaySnapshot,
 };
 
-export const baseStatusGatewayService = {
+const baseStatusGatewayService = {
   label: "LaunchAgent",
   installed: true,
   managedByOpenClaw: true,
@@ -62,7 +62,7 @@ export const baseStatusGatewayService = {
   runtimeShort: "running",
 };
 
-export const baseStatusNodeService = {
+const baseStatusNodeService = {
   label: "node",
   installed: true,
   loadedText: "loaded",
@@ -80,7 +80,7 @@ export const baseStatusOverviewSurface = {
   ...baseStatusServices,
 } as unknown as StatusOverviewSurface;
 
-export const baseStatusSummary = {
+const baseStatusSummary = {
   tasks: { total: 3, active: 1, failures: 0, byStatus: { queued: 1, running: 1 } },
   taskAudit: { errors: 1, warnings: 0 },
   heartbeat: {
@@ -112,14 +112,14 @@ export const baseStatusSummary = {
   },
 } as unknown as StatusSummary;
 
-export const baseStatusAgentStatus = {
+const baseStatusAgentStatus = {
   defaultId: "main",
   bootstrapPendingCount: 1,
   totalSessions: 2,
   agents: [{ id: "main", lastActiveAgeMs: 60_000 }] as AgentLocalStatus[],
 };
 
-export const baseStatusMemory = {
+const baseStatusMemory = {
   agentId: "main",
   files: 1,
   chunks: 2,
@@ -128,16 +128,16 @@ export const baseStatusMemory = {
   cache: {},
 } as unknown as MemoryStatusSnapshot;
 
-export const baseStatusMemoryPlugin = {
+const baseStatusMemoryPlugin = {
   enabled: true,
   slot: "memory",
 } as const satisfies MemoryPluginStatus;
 
-export const baseStatusPluginCompatibility = [
+const baseStatusPluginCompatibility = [
   { pluginId: "a", severity: "warn", message: "legacy" },
 ] as PluginCompatibilityNotice[];
 
-export function createStatusLastHeartbeat(): HeartbeatEventPayload {
+function createStatusLastHeartbeat(): HeartbeatEventPayload {
   return {
     ts: Date.now() - 30_000,
     status: "ok-token",
@@ -146,7 +146,7 @@ export function createStatusLastHeartbeat(): HeartbeatEventPayload {
   };
 }
 
-export function createStatusHealth() {
+function createStatusHealth() {
   return {
     ok: true as const,
     ts: Date.now(),
@@ -165,14 +165,14 @@ export function createStatusHealth() {
   };
 }
 
-export const statusTestDecorators = {
+const statusTestDecorators = {
   ok: (value: string) => `ok(${value})`,
   warn: (value: string) => `warn(${value})`,
   muted: (value: string) => `muted(${value})`,
   accentDim: (value: string) => `accent(${value})`,
 };
 
-export const statusTestFormatting = {
+const statusTestFormatting = {
   shortenText: (value: string) => value,
   formatCliCommand: (value: string) => `cmd:${value}`,
   formatTimeAgo: (value: number) => `${value}ms`,
@@ -184,13 +184,13 @@ export const statusTestFormatting = {
   formatUpdateAvailableHint: () => "update available",
 };
 
-export const statusTestMemoryResolvers = {
+const statusTestMemoryResolvers = {
   resolveMemoryVectorState: () => ({ state: "ready", tone: "ok" as Tone }),
   resolveMemoryFtsState: () => ({ state: "ready", tone: "warn" as Tone }),
   resolveMemoryCacheSummary: () => ({ text: "cache warm", tone: "muted" as Tone }),
 };
 
-export const statusTestTheme = {
+const statusTestTheme = {
   heading: (value: string) => `# ${value}`,
   muted: (value: string) => `muted(${value})`,
   warn: (value: string) => `warn(${value})`,

@@ -1,4 +1,5 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
+import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
@@ -15,7 +16,7 @@ import type {
 import type { ToolErrorSummary } from "./tool-error-summary.js";
 import type { NormalizedUsage } from "./usage.js";
 
-export type EmbeddedSubscribeLogger = {
+type EmbeddedSubscribeLogger = {
   debug: (message: string, meta?: Record<string, unknown>) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 };
@@ -89,6 +90,7 @@ export type EmbeddedPiSubscribeState = {
   messagingToolSentTexts: string[];
   messagingToolSentTextsNormalized: string[];
   messagingToolSentTargets: MessagingToolSend[];
+  heartbeatToolResponse?: HeartbeatToolResponse;
   messagingToolSentMediaUrls: string[];
   pendingMessagingTexts: Map<string, string>;
   pendingMessagingTargets: Map<string, MessagingToolSend>;
@@ -174,7 +176,7 @@ export type EmbeddedPiSubscribeContext = {
  * tests provide only the fields they exercise
  * without needing the full `EmbeddedPiSubscribeContext`.
  */
-export type ToolHandlerParams = Pick<
+type ToolHandlerParams = Pick<
   SubscribeEmbeddedPiSessionParams,
   | "runId"
   | "onBlockReplyFlush"
@@ -186,7 +188,7 @@ export type ToolHandlerParams = Pick<
   | "toolResultFormat"
 >;
 
-export type ToolHandlerState = Pick<
+type ToolHandlerState = Pick<
   EmbeddedPiSubscribeState,
   | "toolMetaById"
   | "toolMetas"
@@ -207,6 +209,7 @@ export type ToolHandlerState = Pick<
   | "messagingToolSentTextsNormalized"
   | "messagingToolSentMediaUrls"
   | "messagingToolSentTargets"
+  | "heartbeatToolResponse"
   | "successfulCronAdds"
   | "deterministicApprovalPromptSent"
 >;

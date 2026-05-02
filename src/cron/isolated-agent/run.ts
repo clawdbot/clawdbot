@@ -958,6 +958,7 @@ async function finalizeCronRun(params: {
     deliveryPayloadHasStructuredContent,
     deliveryPayloads,
     synthesizedText,
+    ttsAuto: prepared.cronSession.sessionEntry.ttsAuto,
     summary,
     outputText,
     telemetry,

@@ -2,8 +2,6 @@ import { applyAuthChoiceLoadedPluginProvider } from "../plugins/provider-auth-ch
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.types.js";
 import type { AuthChoice } from "./onboard-types.js";
 
-export type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.types.js";
-
 async function normalizeLegacyChoice(
   authChoice: AuthChoice | undefined,
   params: Pick<ApplyAuthChoiceParams, "config" | "env">,

@@ -10,18 +10,18 @@ const MIN_QR_PNG_MARGIN_MODULES = 0;
 const MAX_QR_PNG_MARGIN_MODULES = 16;
 const QR_PNG_DATA_URL_PREFIX = "data:image/png;base64,";
 
-export type QrPngRenderOptions = {
+type QrPngRenderOptions = {
   scale?: number;
   marginModules?: number;
 };
 
-export type QrPngTempFileOptions = QrPngRenderOptions & {
+type QrPngTempFileOptions = QrPngRenderOptions & {
   tmpRoot: string;
   dirPrefix: string;
   fileName?: string;
 };
 
-export type QrPngTempFile = {
+type QrPngTempFile = {
   filePath: string;
   dirPath: string;
   mediaLocalRoots: string[];

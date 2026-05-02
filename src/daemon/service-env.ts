@@ -25,7 +25,7 @@ import { resolveGatewayStateDir } from "./paths.js";
 
 export { isNodeVersionManagerRuntime, resolveLinuxSystemCaBundle };
 
-export type MinimalServicePathOptions = {
+type MinimalServicePathOptions = {
   platform?: NodeJS.Platform;
   extraDirs?: string[];
   home?: string;
@@ -225,7 +225,7 @@ function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
  * - fnm: macOS uses ~/Library/Application Support/fnm (not ~/.local/share/fnm)
  * - pnpm: macOS uses ~/Library/pnpm (not ~/.local/share/pnpm)
  */
-export function resolveDarwinUserBinDirs(
+function resolveDarwinUserBinDirs(
   home: string | undefined,
   env?: Record<string, string | undefined>,
   existsSync: (candidate: string) => boolean = fs.existsSync,
@@ -271,7 +271,7 @@ export function resolveDarwinUserBinDirs(
  * Resolve common user bin directories for Linux.
  * These are paths where npm global installs and node version managers typically place binaries.
  */
-export function resolveLinuxUserBinDirs(
+function resolveLinuxUserBinDirs(
   home: string | undefined,
   env?: Record<string, string | undefined>,
   existsSync: (candidate: string) => boolean = fs.existsSync,

@@ -22,7 +22,7 @@ const REFLECTION_PATTERNS: Array<{ re: RegExp; label: string }> = [
   { re: FINAL_TAG_RE, label: "final-tag" },
 ];
 
-export type ReflectionDetection = {
+type ReflectionDetection = {
   isReflection: boolean;
   matchedLabels: string[];
 };

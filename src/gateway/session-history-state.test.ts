@@ -5,7 +5,7 @@ import * as sessionUtils from "./session-utils.js";
 
 describe("SessionHistorySseState", () => {
   test("uses the initial raw snapshot for both first history and seq seeding", () => {
-    const readSpy = vi.spyOn(sessionUtils, "readSessionMessages").mockReturnValue([
+    const readSpy = vi.spyOn(sessionUtils, "readSessionMessagesAsync").mockResolvedValue([
       {
         role: "assistant",
         content: [{ type: "text", text: "stale disk message" }],
@@ -75,6 +75,68 @@ describe("SessionHistorySseState", () => {
     expect(snapshot.history.items).toBe(snapshot.history.messages);
     expect(snapshot.history.messages[0]?.__openclaw?.seq).toBe(2);
     expect(snapshot.rawTranscriptSeq).toBe(2);
+  });
+
+  test("marks bounded tail snapshots as having older history", () => {
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "tail" }],
+          __openclaw: { seq: 99 },
+        },
+      ],
+      limit: 1,
+      rawTranscriptSeq: 99,
+      totalRawMessages: 99,
+    });
+
+    expect(snapshot.history.hasMore).toBe(true);
+    expect(snapshot.history.nextCursor).toBe("99");
+    expect(snapshot.rawTranscriptSeq).toBe(99);
+  });
+
+  test("refreshes limited SSE history from bounded async tail reads", async () => {
+    const fullReadSpy = vi.spyOn(sessionUtils, "readSessionMessagesAsync").mockResolvedValue([]);
+    const tailReadSpy = vi
+      .spyOn(sessionUtils, "readRecentSessionMessagesWithStatsAsync")
+      .mockResolvedValueOnce({
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "tail two" }],
+            __openclaw: { seq: 8 },
+          },
+        ],
+        totalMessages: 8,
+      });
+    try {
+      const state = SessionHistorySseState.fromRawSnapshot({
+        target: { sessionId: "sess-main" },
+        rawMessages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "tail one" }],
+            __openclaw: { seq: 7 },
+          },
+        ],
+        rawTranscriptSeq: 7,
+        totalRawMessages: 7,
+        limit: 1,
+      });
+
+      expect(state.snapshot().messages[0]?.__openclaw?.seq).toBe(7);
+      const refreshed = await state.refreshAsync();
+
+      expect(refreshed.hasMore).toBe(true);
+      expect(refreshed.nextCursor).toBe("8");
+      expect(refreshed.messages[0]?.__openclaw?.seq).toBe(8);
+      expect(tailReadSpy).toHaveBeenCalledTimes(1);
+      expect(fullReadSpy).not.toHaveBeenCalled();
+    } finally {
+      fullReadSpy.mockRestore();
+      tailReadSpy.mockRestore();
+    }
   });
 
   test("strips legacy internal envelopes before exposing history", () => {

@@ -27,11 +27,7 @@ import type {
   GatewayServiceManageArgs,
   GatewayServiceRestartResult,
 } from "./service-types.js";
-import {
-  enableSystemdUserLinger,
-  readSystemdUserLingerStatus,
-  type SystemdUserLingerStatus,
-} from "./systemd-linger.js";
+import { enableSystemdUserLinger, readSystemdUserLingerStatus } from "./systemd-linger.js";
 import {
   classifySystemdUnavailableDetail,
   isSystemctlMissingDetail,
@@ -67,7 +63,6 @@ export function resolveSystemdUserUnitPath(env: GatewayServiceEnv): string {
 }
 
 export { enableSystemdUserLinger, readSystemdUserLingerStatus };
-export type { SystemdUserLingerStatus };
 
 // Unit file parsing/rendering: see systemd-unit.ts
 
@@ -235,7 +230,7 @@ async function resolveSystemdEnvironmentFiles(params: {
   return { environment: resolved };
 }
 
-export type SystemdServiceInfo = {
+type SystemdServiceInfo = {
   activeState?: string;
   subState?: string;
   mainPid?: number;
@@ -804,7 +799,7 @@ export async function readSystemdServiceRuntime(
     lastExitReason: parsed.execMainCode,
   };
 }
-export type LegacySystemdUnit = {
+type LegacySystemdUnit = {
   name: string;
   unitPath: string;
   enabled: boolean;
@@ -819,7 +814,7 @@ async function isSystemctlAvailable(env: GatewayServiceEnv): Promise<boolean> {
   return !isSystemctlMissing(readSystemctlDetail(res));
 }
 
-export async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySystemdUnit[]> {
+async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySystemdUnit[]> {
   const results: LegacySystemdUnit[] = [];
   const systemctlAvailable = await isSystemctlAvailable(env);
   for (const name of LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES) {

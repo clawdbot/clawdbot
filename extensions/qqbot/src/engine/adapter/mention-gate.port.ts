@@ -8,11 +8,7 @@
  */
 
 /** Implicit mention kind aligned with SDK's `InboundImplicitMentionKind`. */
-export type ImplicitMentionKind =
-  | "reply_to_bot"
-  | "quoted_bot"
-  | "bot_thread_participant"
-  | "native";
+type ImplicitMentionKind = "reply_to_bot" | "quoted_bot" | "bot_thread_participant" | "native";
 
 /** Facts about the current message's mention state. */
 export interface MentionFacts {

@@ -1,12 +1,12 @@
-export type NodeSendEventFn = (opts: {
+type NodeSendEventFn = (opts: {
   nodeId: string;
   event: string;
   payloadJSON?: string | null;
 }) => void;
 
-export type NodeListConnectedFn = () => Array<{ nodeId: string }>;
+type NodeListConnectedFn = () => Array<{ nodeId: string }>;
 
-export type NodeSubscriptionManager = {
+type NodeSubscriptionManager = {
   subscribe: (nodeId: string, sessionKey: string) => void;
   unsubscribe: (nodeId: string, sessionKey: string) => void;
   unsubscribeAll: (nodeId: string) => void;

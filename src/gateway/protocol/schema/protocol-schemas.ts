@@ -63,6 +63,7 @@ import {
 } from "./artifacts.js";
 import {
   ChannelsStartParamsSchema,
+  ChannelsStopParamsSchema,
   ChannelsLogoutParamsSchema,
   TalkConfigParamsSchema,
   TalkConfigResultSchema,
@@ -328,6 +329,7 @@ export const ProtocolSchemas = {
   ChannelsStatusParams: ChannelsStatusParamsSchema,
   ChannelsStatusResult: ChannelsStatusResultSchema,
   ChannelsStartParams: ChannelsStartParamsSchema,
+  ChannelsStopParams: ChannelsStopParamsSchema,
   ChannelsLogoutParams: ChannelsLogoutParamsSchema,
   WebLoginStartParams: WebLoginStartParamsSchema,
   WebLoginWaitParams: WebLoginWaitParamsSchema,

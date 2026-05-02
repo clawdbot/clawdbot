@@ -7,14 +7,14 @@ import { EXTENSION_MIME } from "../shared/mime.js";
 export const FILE_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
 export const FILE_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 
-export type FileFetchParams = {
+type FileFetchParams = {
   path?: unknown;
   maxBytes?: unknown;
   followSymlinks?: unknown;
   preflightOnly?: unknown;
 };
 
-export type FileFetchOk = {
+type FileFetchOk = {
   ok: true;
   path: string;
   size: number;
@@ -24,7 +24,7 @@ export type FileFetchOk = {
   preflightOnly?: boolean;
 };
 
-export type FileFetchErrCode =
+type FileFetchErrCode =
   | "INVALID_PATH"
   | "NOT_FOUND"
   | "PERMISSION_DENIED"
@@ -34,14 +34,14 @@ export type FileFetchErrCode =
   | "SYMLINK_REDIRECT"
   | "READ_ERROR";
 
-export type FileFetchErr = {
+type FileFetchErr = {
   ok: false;
   code: FileFetchErrCode;
   message: string;
   canonicalPath?: string;
 };
 
-export type FileFetchResult = FileFetchOk | FileFetchErr;
+type FileFetchResult = FileFetchOk | FileFetchErr;
 
 function detectMimeType(filePath: string): string {
   if (process.platform !== "win32") {

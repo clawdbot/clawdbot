@@ -20,7 +20,7 @@ export function readFlagValue(args, name) {
   return undefined;
 }
 
-export function consumeStringFlag(argv, index, flag, currentValue) {
+function consumeStringFlag(argv, index, flag, currentValue) {
   if (argv[index] !== flag) {
     return null;
   }
@@ -30,18 +30,7 @@ export function consumeStringFlag(argv, index, flag, currentValue) {
   };
 }
 
-export function consumeStringListFlag(argv, index, flag) {
-  if (argv[index] !== flag) {
-    return null;
-  }
-  const value = argv[index + 1];
-  return {
-    nextIndex: index + 1,
-    value: typeof value === "string" && value.length > 0 ? value : null,
-  };
-}
-
-export function consumeIntFlag(argv, index, flag, currentValue, options = {}) {
+function consumeIntFlag(argv, index, flag, currentValue, options = {}) {
   if (argv[index] !== flag) {
     return null;
   }
@@ -53,7 +42,7 @@ export function consumeIntFlag(argv, index, flag, currentValue, options = {}) {
   };
 }
 
-export function consumeFloatFlag(argv, index, flag, currentValue, options = {}) {
+function consumeFloatFlag(argv, index, flag, currentValue, options = {}) {
   if (argv[index] !== flag) {
     return null;
   }
@@ -78,25 +67,6 @@ export function stringFlag(flag, key) {
         nextIndex: option.nextIndex,
         apply(target) {
           target[key] = option.value;
-        },
-      };
-    },
-  };
-}
-
-export function stringListFlag(flag, key) {
-  return {
-    consume(argv, index) {
-      const option = consumeStringListFlag(argv, index, flag);
-      if (!option) {
-        return null;
-      }
-      return {
-        nextIndex: option.nextIndex,
-        apply(target) {
-          if (option.value) {
-            target[key].push(option.value);
-          }
         },
       };
     },

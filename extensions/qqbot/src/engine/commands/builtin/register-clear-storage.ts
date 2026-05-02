@@ -81,7 +81,7 @@ const CLEAR_STORAGE_MAX_DISPLAY = 10;
  * under `~/.openclaw/media/qqbot/downloads/` without appId subdivision.
  * The clear-storage command therefore cleans the entire downloads root.
  */
-export function resolveQqbotDownloadsDir(): string {
+function resolveQqbotDownloadsDir(): string {
   return getQQBotMediaPath("downloads");
 }
 

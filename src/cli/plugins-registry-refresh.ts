@@ -15,6 +15,7 @@ export async function refreshPluginRegistryAfterConfigMutation(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   installRecords?: Awaited<ReturnType<typeof loadInstalledPluginIndexInstallRecords>>;
+  policyPluginIds?: readonly string[];
   traceCommand?: string;
   logger?: PluginRegistryRefreshLogger;
 }): Promise<void> {
@@ -33,6 +34,7 @@ export async function refreshPluginRegistryAfterConfigMutation(params: {
           config: params.config,
           reason: params.reason,
           installRecords,
+          ...(params.policyPluginIds ? { policyPluginIds: params.policyPluginIds } : {}),
           ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
           ...(params.env ? { env: params.env } : {}),
         }),

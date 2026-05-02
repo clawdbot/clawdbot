@@ -7,6 +7,7 @@ import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.j
 
 export type ChatSendOptions = {
   sessionKey: string;
+  sessionId?: string | null;
   message: string;
   thinking?: string;
   deliver?: boolean;

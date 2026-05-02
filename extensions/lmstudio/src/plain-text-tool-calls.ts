@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { parseStandalonePlainTextToolCallBlocks } from "openclaw/plugin-sdk/tool-payload";
 
-export type LmstudioPlainTextToolCallBlock = {
+type LmstudioPlainTextToolCallBlock = {
   arguments: Record<string, unknown>;
   name: string;
 };

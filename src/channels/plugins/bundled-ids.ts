@@ -10,6 +10,6 @@ export function listBundledChannelPluginIdsForRoot(
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-export function listBundledChannelPluginIds(): string[] {
-  return listBundledChannelPluginIdsForRoot(resolveBundledChannelRootScope().cacheKey);
+export function listBundledChannelPluginIds(env: NodeJS.ProcessEnv = process.env): string[] {
+  return listBundledChannelPluginIdsForRoot(resolveBundledChannelRootScope(env).cacheKey, env);
 }

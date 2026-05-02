@@ -472,10 +472,7 @@ describe("doctor.memory.status", () => {
             enabled: true,
           },
         },
-        list: [
-          { id: "main", workspace: mainWorkspaceDir },
-          { id: "alpha", workspace: alphaWorkspaceDir },
-        ],
+        list: [{ id: "alpha", workspace: alphaWorkspaceDir }],
       },
       plugins: {
         entries: {
@@ -649,7 +646,7 @@ describe("doctor.memory.status", () => {
         expect.objectContaining({
           dreaming: expect.objectContaining({
             shortTermCount: 0,
-            promotedTotal: 0,
+            promotedTotal: 1,
             phases: expect.objectContaining({
               deep: expect.objectContaining({
                 managedCronPresent: false,

@@ -16,7 +16,7 @@ export function signalExitCode(signal) {
  * @param {import("node:child_process").ChildProcess} child
  * @param {NodeJS.Signals} [signal]
  */
-export function terminateManagedChild(child, signal = "SIGTERM") {
+function terminateManagedChild(child, signal = "SIGTERM") {
   if (!child.pid) {
     return;
   }

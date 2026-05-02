@@ -22,7 +22,7 @@ import {
 } from "./monitor.state.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
-export type MonitorTransportParams = {
+type MonitorTransportParams = {
   account: ResolvedFeishuAccount;
   accountId: string;
   runtime?: RuntimeEnv;

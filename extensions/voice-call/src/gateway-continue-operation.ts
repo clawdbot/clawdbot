@@ -35,13 +35,13 @@ type VoiceCallContinueOperation =
       error: string;
     };
 
-export type VoiceCallContinueOperationStartPayload = {
+type VoiceCallContinueOperationStartPayload = {
   operationId: string;
   status: "pending";
   pollTimeoutMs: number;
 };
 
-export type VoiceCallContinueOperationResultPayload =
+type VoiceCallContinueOperationResultPayload =
   | {
       operationId: string;
       status: "pending";
@@ -58,7 +58,7 @@ export type VoiceCallContinueOperationResultPayload =
       error: string;
     };
 
-export type VoiceCallContinueOperationRequest = {
+type VoiceCallContinueOperationRequest = {
   rt: VoiceCallRuntime;
   callId: string;
   message: string;

@@ -42,7 +42,7 @@ const IrcNickServSchema = z
     }
   });
 
-export const IrcAccountSchemaBase = z
+const IrcAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
@@ -68,7 +68,7 @@ export const IrcAccountSchemaBase = z
   })
   .strict();
 
-export const IrcAccountSchema = IrcAccountSchemaBase.superRefine((value, ctx) => {
+const IrcAccountSchema = IrcAccountSchemaBase.superRefine((value, ctx) => {
   requireOpenAllowFrom({
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,

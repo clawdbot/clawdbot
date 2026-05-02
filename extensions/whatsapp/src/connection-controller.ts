@@ -19,7 +19,7 @@ import type { WhatsAppSocketTimingOptions } from "./socket-timing.js";
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 const WHATSAPP_LOGIN_RESTART_MESSAGE =
   "WhatsApp asked for a restart after pairing (code 515); waiting for creds to save…";
-export const WHATSAPP_LOGGED_OUT_RELINK_MESSAGE =
+const WHATSAPP_LOGGED_OUT_RELINK_MESSAGE =
   "WhatsApp reported the session is logged out. Cleared cached web session; please rerun openclaw channels login and scan the QR again.";
 export const WHATSAPP_LOGGED_OUT_QR_MESSAGE =
   "WhatsApp reported the session is logged out. Cleared cached web session; please scan a new QR.";
@@ -33,7 +33,7 @@ export type ManagedWhatsAppListener = ActiveWebListener & {
   signalClose?: (reason?: WebListenerCloseReason) => void;
 };
 
-export type WhatsAppLiveConnection = {
+type WhatsAppLiveConnection = {
   connectionId: string;
   startedAt: number;
   sock: WASocket;
@@ -51,7 +51,7 @@ export type WhatsAppLiveConnection = {
   resolveClose: (reason: WebListenerCloseReason) => void;
 };
 
-export type WhatsAppConnectionSnapshot = {
+type WhatsAppConnectionSnapshot = {
   connectionId: string;
   startedAt: number;
   lastInboundAt: number | null;
@@ -61,7 +61,7 @@ export type WhatsAppConnectionSnapshot = {
   uptimeMs: number;
 };
 
-export type NormalizedConnectionCloseReason = {
+type NormalizedConnectionCloseReason = {
   statusCode?: number;
   statusLabel: number | "unknown";
   isLoggedOut: boolean;
@@ -69,7 +69,7 @@ export type NormalizedConnectionCloseReason = {
   errorText: string;
 };
 
-export type WhatsAppConnectionCloseDecision = {
+type WhatsAppConnectionCloseDecision = {
   action: "stop" | "retry";
   delayMs?: number;
   reconnectAttempts: number;
@@ -77,7 +77,7 @@ export type WhatsAppConnectionCloseDecision = {
   normalized: NormalizedConnectionCloseReason;
 };
 
-export type WhatsAppReconnectAttemptDecision = {
+type WhatsAppReconnectAttemptDecision = {
   action: "stop" | "retry";
   delayMs?: number;
   reconnectAttempts: number;
@@ -131,8 +131,20 @@ function createLiveConnection(params: {
   };
 }
 
-export function closeWaSocket(sock: { ws?: { close?: () => void } } | null | undefined): void {
+export function closeWaSocket(
+  sock:
+    | {
+        end?: (error: Error | undefined) => void;
+        ws?: { close?: () => void };
+      }
+    | null
+    | undefined,
+): void {
   try {
+    if (typeof sock?.end === "function") {
+      sock.end(new Error("OpenClaw WhatsApp socket close"));
+      return;
+    }
     sock?.ws?.close?.();
   } catch {
     // ignore best-effort shutdown failures
@@ -140,7 +152,13 @@ export function closeWaSocket(sock: { ws?: { close?: () => void } } | null | und
 }
 
 export function closeWaSocketSoon(
-  sock: { ws?: { close?: () => void } } | null | undefined,
+  sock:
+    | {
+        end?: (error: Error | undefined) => void;
+        ws?: { close?: () => void };
+      }
+    | null
+    | undefined,
   delayMs = 500,
 ): void {
   setTimeout(() => {
@@ -148,7 +166,7 @@ export function closeWaSocketSoon(
   }, delayMs);
 }
 
-export type WhatsAppLoginWaitResult =
+type WhatsAppLoginWaitResult =
   | {
       outcome: "connected";
       restarted: boolean;

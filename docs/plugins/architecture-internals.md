@@ -23,7 +23,7 @@ At startup, OpenClaw does roughly this:
    `slots`, `load.paths`)
 5. decide enablement for each candidate
 6. load enabled native modules: built bundled modules use a native loader;
-   unbuilt native plugins use jiti
+   third-party local source TypeScript uses the emergency Jiti fallback
 7. call native `register(api)` hooks and collect registrations into the plugin registry
 8. expose the registry to commands/runtime surfaces
 
@@ -61,10 +61,8 @@ to narrow plugin loading before broader registry materialization:
 - explicit provider setup/runtime resolution narrows to plugins that own the
   requested provider id
 - Gateway startup planning uses `activation.onStartup` for explicit startup
-  imports and startup opt-outs; every plugin should declare it as OpenClaw
-  moves away from implicit startup imports, while plugins without static
-  capability metadata and without `activation.onStartup` still use the
-  deprecated implicit startup sidecar fallback for compatibility
+  imports and startup opt-outs; plugins without startup metadata load only
+  through narrower activation triggers
 
 The activation planner exposes both an ids-only API for existing callers and a
 plan API for new diagnostics. Plan entries report why a plugin was selected,
@@ -118,8 +116,7 @@ loader state when code or installed artifacts are actually loaded, such as:
 - `PluginLoaderCacheState` and compatible active runtime registries
 - jiti/module caches and public-surface loader caches used to avoid importing
   the same runtime surface repeatedly
-- runtime dependency mirrors and filesystem caches for installed plugin
-  artifacts
+- filesystem caches for installed plugin artifacts
 - short-lived per-call maps for path normalization or duplicate resolution
 
 Those caches are data-plane implementation details. They must not answer

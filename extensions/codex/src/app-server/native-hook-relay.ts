@@ -4,12 +4,12 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { JsonObject, JsonValue } from "./protocol.js";
 
-export const CODEX_NATIVE_HOOK_RELAY_EVENTS = [
+export const CODEX_NATIVE_HOOK_RELAY_EVENTS: readonly NativeHookRelayEvent[] = [
   "pre_tool_use",
   "post_tool_use",
   "permission_request",
   "before_agent_finalize",
-] as const satisfies readonly NativeHookRelayEvent[];
+] as const;
 
 type CodexHookEventName = "PreToolUse" | "PostToolUse" | "PermissionRequest" | "Stop";
 

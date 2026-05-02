@@ -103,6 +103,8 @@ const normalizeTelegramTargetForDeliveryTest = vi.fn((raw: string): string | und
 beforeEach(() => {
   resetPluginRuntimeStateForTest();
   normalizeTelegramTargetForDeliveryTest.mockClear();
+  vi.mocked(readChannelAllowFromStoreEntriesSync).mockReset();
+  vi.mocked(readChannelAllowFromStoreEntriesSync).mockReturnValue([]);
   vi.mocked(resolveOutboundTarget).mockReset();
   setActivePluginRegistry(
     createTestRegistry([
@@ -141,14 +143,6 @@ beforeEach(() => {
               (cfg.channels?.alpha as { allowFrom?: string[] } | undefined)?.allowFrom,
           },
         },
-        source: "test",
-      },
-      {
-        pluginId: "telegram",
-        plugin: createOutboundTestPlugin({
-          id: "telegram",
-          outbound: createStubOutbound("Telegram"),
-        }),
         source: "test",
       },
     ]),
@@ -242,9 +236,8 @@ describe("resolveDeliveryTarget", () => {
       lastChannel: "alpha",
       lastTo: "room-denied",
     });
-    setStoredAlphaAllowFrom(["room-allowed"]);
 
-    const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: [] } } });
+    const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: ["room-allowed"] } } });
     const result = await resolveLastTarget(cfg);
 
     expect(result.channel).toBe("alpha");
@@ -257,9 +250,8 @@ describe("resolveDeliveryTarget", () => {
       lastChannel: "alpha",
       lastTo: "room-denied",
     });
-    setStoredAlphaAllowFrom(["room-allowed"]);
 
-    const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: [] } } });
+    const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: ["room-allowed"] } } });
     const result = await resolveDeliveryTarget(
       cfg,
       AGENT_ID,
@@ -289,6 +281,19 @@ describe("resolveDeliveryTarget", () => {
     });
 
     expect(result.to).toBe("room-denied");
+  });
+
+  it("does not use pairing-store entries as implicit automation recipients", async () => {
+    setMainSessionEntry(undefined);
+    setStoredAlphaAllowFrom(["room-paired"]);
+
+    const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: [] } } });
+    const result = await resolveLastTarget(cfg);
+
+    expect(result.ok).toBe(false);
+    expect(result.channel).toBe("alpha");
+    expect(result.to).toBeUndefined();
+    expect(readChannelAllowFromStoreEntriesSync).not.toHaveBeenCalled();
   });
 
   it("falls back to bound accountId when session has no lastAccountId", async () => {
@@ -480,6 +485,47 @@ describe("resolveDeliveryTarget", () => {
     expect(result.error.message).toContain("Invalid delivery target: target normalizer exploded");
   });
 
+  it("returns an unresolved target when the shared prefix guard rejects the explicit target", async () => {
+    setMainSessionEntry(undefined);
+    const resolveTarget = vi.fn(() => ({ ok: true as const, to: "telegram:1234567890" }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "alpha",
+          plugin: createOutboundTestPlugin({
+            id: "alpha",
+            outbound: {
+              deliveryMode: "gateway",
+              resolveTarget,
+            },
+          }),
+          source: "test",
+        },
+        {
+          pluginId: "telegram",
+          plugin: createOutboundTestPlugin({
+            id: "telegram",
+            outbound: createStubOutbound("Telegram"),
+            messaging: telegramMessagingForTest,
+          }),
+          source: "test",
+        },
+      ]),
+    );
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "alpha",
+      to: "telegram:1234567890",
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected invalid delivery target");
+    }
+    expect(result.error.message).toContain("belongs to telegram, not alpha");
+    expect(resolveTarget).not.toHaveBeenCalled();
+  });
+
   it("selects correct binding when multiple agents have bindings", async () => {
     setMainSessionEntry(undefined);
 
@@ -614,6 +660,18 @@ describe("resolveDeliveryTarget", () => {
     // resolveOutboundTarget provides the standard missing-target error when
     // no explicit target, no session lastTo, and no plugin resolveDefaultTo.
     expect(result.error.message).toContain("requires target");
+  });
+
+  it("uses provider-prefixed explicit target instead of fallback channel for delivery.channel=last", async () => {
+    setMainSessionEntry(undefined);
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "last",
+      to: "telegram:1234567890",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.channel).toBe("telegram");
+    expect(result.to).toBe("1234567890");
   });
 
   it("returns an error when channel selection is ambiguous", async () => {

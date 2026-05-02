@@ -4,7 +4,10 @@ import type {
   PluginWebFetchProviderEntry,
   WebFetchProviderToolDefinition,
 } from "../plugins/types.js";
-import { resolvePluginWebFetchProviders } from "../plugins/web-fetch-providers.runtime.js";
+import {
+  resolvePluginWebFetchProviders,
+  resolveRuntimeWebFetchProviders,
+} from "../plugins/web-fetch-providers.runtime.js";
 import { sortWebFetchProvidersForAutoDetect } from "../plugins/web-fetch-providers.shared.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebFetchMetadata } from "../secrets/runtime-web-tools.types.js";
@@ -81,7 +84,6 @@ export function listWebFetchProviders(params?: {
   return resolvePluginWebFetchProviders({
     config: params?.config,
     bundledAllowlistCompat: true,
-    origin: "bundled",
   });
 }
 
@@ -104,7 +106,6 @@ export function resolveWebFetchProviderId(params: {
       resolvePluginWebFetchProviders({
         config: params.config,
         bundledAllowlistCompat: true,
-        origin: "bundled",
       }),
   );
   const raw =
@@ -138,6 +139,20 @@ export function resolveWebFetchProviderId(params: {
   return "";
 }
 
+function resolveConfiguredWebFetchProviderId(params: {
+  fetch?: WebFetchConfig;
+  providers: PluginWebFetchProviderEntry[];
+}): string | undefined {
+  const raw =
+    params.fetch && "provider" in params.fetch
+      ? normalizeLowercaseStringOrEmpty(params.fetch.provider)
+      : "";
+  if (!raw) {
+    return undefined;
+  }
+  return params.providers.find((provider) => provider.id === raw)?.id;
+}
+
 export function resolveWebFetchDefinition(
   options?: ResolveWebFetchDefinitionParams,
 ): { provider: PluginWebFetchProviderEntry; definition: WebFetchProviderToolDefinition } | null {
@@ -146,18 +161,33 @@ export function resolveWebFetchDefinition(
     | undefined;
   const runtimeWebFetch = options?.runtimeWebFetch ?? getActiveRuntimeWebToolsMetadata()?.fetch;
   const providers = sortWebFetchProvidersForAutoDetect(
-    resolvePluginWebFetchProviders({
-      config: options?.config,
-      bundledAllowlistCompat: true,
-      origin: "bundled",
-    }),
+    options?.sandboxed
+      ? resolvePluginWebFetchProviders({
+          config: options?.config,
+          bundledAllowlistCompat: true,
+          origin: "bundled",
+        })
+      : options?.preferRuntimeProviders
+        ? resolveRuntimeWebFetchProviders({
+            config: options?.config,
+            bundledAllowlistCompat: true,
+          })
+        : resolvePluginWebFetchProviders({
+            config: options?.config,
+            bundledAllowlistCompat: true,
+          }),
   );
   return resolveWebProviderDefinition({
     config: options?.config,
     toolConfig: fetch as Record<string, unknown> | undefined,
     runtimeMetadata: runtimeWebFetch,
     sandboxed: options?.sandboxed,
-    providerId: options?.providerId,
+    providerId:
+      options?.providerId ??
+      resolveConfiguredWebFetchProviderId({
+        fetch,
+        providers,
+      }),
     providers,
     resolveEnabled: ({ toolConfig, sandboxed }) =>
       resolveWebFetchEnabled({

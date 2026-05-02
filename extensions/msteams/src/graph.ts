@@ -14,12 +14,12 @@ export type GraphUser = {
   mail?: string;
 };
 
-export type GraphGroup = {
+type GraphGroup = {
   id?: string;
   displayName?: string;
 };
 
-export type GraphChannel = {
+type GraphChannel = {
   id?: string;
   displayName?: string;
 };
@@ -125,13 +125,13 @@ export async function fetchGraphAbsoluteUrl<T>(params: {
 }
 
 /** Graph collection response with optional pagination link. */
-export type GraphPagedResponse<T> = {
+type GraphPagedResponse<T> = {
   value?: T[];
   "@odata.nextLink"?: string;
 };
 
 /** Result of a paginated Graph API fetch. */
-export type PaginatedResult<T> = {
+type PaginatedResult<T> = {
   items: T[];
   truncated: boolean;
   found?: T;

@@ -1,11 +1,13 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   createTestWizardPrompter,
+  runSetupWizardPrepare,
   runSetupWizardFinalize,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createSlackSetupWizardBase } from "./setup-core.js";
+import { buildSlackSetupLines } from "./setup-shared.js";
 
 const slackSetupWizard = createSlackSetupWizardBase({
   promptAllowFrom: async ({ cfg }) => cfg,
@@ -18,16 +20,16 @@ const slackSetupWizard = createSlackSetupWizardBase({
   resolveGroupAllowlist: async ({ entries }) => entries,
 });
 
-describe("slackSetupWizard.finalize", () => {
-  const baseCfg = {
-    channels: {
-      slack: {
-        botToken: "xoxb-test",
-        appToken: "xapp-test",
-      },
+const baseCfg = {
+  channels: {
+    slack: {
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
     },
-  } as OpenClawConfig;
+  },
+} as OpenClawConfig;
 
+describe("slackSetupWizard.finalize", () => {
   it("prompts to enable interactive replies for newly configured Slack accounts", async () => {
     const confirm = vi.fn(async () => true);
 
@@ -72,6 +74,53 @@ describe("slackSetupWizard.finalize", () => {
       (result.cfg.channels?.slack as { capabilities?: { interactiveReplies?: boolean } })
         ?.capabilities?.interactiveReplies,
     ).toBe(true);
+  });
+});
+
+describe("slackSetupWizard.prepare", () => {
+  it("keeps the manifest out of framed intro note lines", () => {
+    const lines = buildSlackSetupLines();
+
+    expect(lines.join("\n")).not.toContain("Manifest (JSON):");
+    expect(lines.join("\n")).not.toContain('"display_information"');
+    expect(lines).toContain("Manifest JSON follows as plain text for copy/paste.");
+  });
+
+  it("prints the manifest as plain JSON when Slack is not configured", async () => {
+    const plain = vi.fn<NonNullable<WizardPrompter["plain"]>>(async () => {});
+    const note = vi.fn(async () => {});
+
+    await runSetupWizardPrepare({
+      prepare: slackSetupWizard.prepare,
+      cfg: { channels: { slack: {} } } as OpenClawConfig,
+      prompter: createTestWizardPrompter({
+        plain,
+        note: note as WizardPrompter["note"],
+      }),
+    });
+
+    expect(plain).toHaveBeenCalledTimes(1);
+    expect(note).not.toHaveBeenCalled();
+    const manifest = plain.mock.calls[0]?.[0];
+    expect(typeof manifest).toBe("string");
+    expect(JSON.parse(manifest)).toMatchObject({
+      display_information: { name: "OpenClaw" },
+      settings: { socket_mode_enabled: true },
+    });
+  });
+
+  it("does not print the manifest after Slack credentials are configured", async () => {
+    const plain = vi.fn<NonNullable<WizardPrompter["plain"]>>(async () => {});
+
+    await runSetupWizardPrepare({
+      prepare: slackSetupWizard.prepare,
+      cfg: baseCfg,
+      prompter: createTestWizardPrompter({
+        plain,
+      }),
+    });
+
+    expect(plain).not.toHaveBeenCalled();
   });
 });
 

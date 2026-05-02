@@ -36,7 +36,7 @@ export {
 export const OPENCLAW_MODEL_ID = "openclaw";
 export const OPENCLAW_DEFAULT_MODEL_ID = "openclaw/default";
 
-export function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
+function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
   const raw =
     normalizeOptionalString(getHeader(req, "x-openclaw-agent-id")) ||
     normalizeOptionalString(getHeader(req, "x-openclaw-agent")) ||
@@ -126,7 +126,7 @@ export function resolveAgentIdForRequest(params: {
   return fromModel ?? resolveDefaultAgentId(cfg);
 }
 
-export function resolveSessionKey(params: {
+function resolveSessionKey(params: {
   req: IncomingMessage;
   agentId: string;
   user?: string | undefined;

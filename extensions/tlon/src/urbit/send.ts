@@ -151,18 +151,6 @@ export async function sendGroupMessageWithStory({
   return { channel: "tlon", messageId: `${fromShip}/${sentAt}` };
 }
 
-export function buildMediaText(text: string | undefined, mediaUrl: string | undefined): string {
-  const cleanText = text?.trim() ?? "";
-  const cleanUrl = mediaUrl?.trim() ?? "";
-  if (cleanText && cleanUrl) {
-    return `${cleanText}\n${cleanUrl}`;
-  }
-  if (cleanUrl) {
-    return cleanUrl;
-  }
-  return cleanText;
-}
-
 /**
  * Build a story with text and optional media (image)
  */

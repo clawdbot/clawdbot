@@ -14,13 +14,13 @@ import { buildFileConsentCard } from "./file-consent.js";
 import { storePendingUploadFs } from "./pending-uploads-fs.js";
 import { storePendingUpload } from "./pending-uploads.js";
 
-export type FileConsentMedia = {
+type FileConsentMedia = {
   buffer: Buffer;
   filename: string;
   contentType?: string;
 };
 
-export type FileConsentActivityResult = {
+type FileConsentActivityResult = {
   activity: Record<string, unknown>;
   uploadId: string;
 };

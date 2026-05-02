@@ -1,5 +1,4 @@
 import type { AssistantMessage, Usage } from "@mariozechner/pi-ai";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   classifyAgentHarnessTerminalOutcome,
   embeddedAgentLog,
@@ -15,6 +14,7 @@ import {
   type AgentMessage,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
+  type HeartbeatToolResponse,
   type MessagingToolSend,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readCodexTurn } from "./protocol-validators.js";
@@ -26,12 +26,14 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 
 export type CodexAppServerToolTelemetry = {
   didSendViaMessagingTool: boolean;
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: MessagingToolSend[];
+  heartbeatToolResponse?: HeartbeatToolResponse;
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
   successfulCronAdds?: number;
@@ -232,6 +234,7 @@ export class CodexAppServerEventProjector {
       messagingToolSentTexts: toolTelemetry.messagingToolSentTexts,
       messagingToolSentMediaUrls: toolTelemetry.messagingToolSentMediaUrls,
       messagingToolSentTargets: toolTelemetry.messagingToolSentTargets,
+      heartbeatToolResponse: toolTelemetry.heartbeatToolResponse,
       toolMediaUrls: toolTelemetry.toolMediaUrls,
       toolAudioAsVoice: toolTelemetry.toolAudioAsVoice,
       successfulCronAdds: toolTelemetry.successfulCronAdds,
@@ -334,7 +337,7 @@ export class CodexAppServerEventProjector {
       this.activeCompactionItemIds.add(itemId);
       await runAgentHarnessBeforeCompactionHook({
         sessionFile: this.params.sessionFile,
-        messages: this.readMirroredSessionMessages(),
+        messages: await this.readMirroredSessionMessages(),
         ctx: {
           runId: this.params.runId,
           agentId: this.params.agentId,
@@ -385,7 +388,7 @@ export class CodexAppServerEventProjector {
       this.completedCompactionCount += 1;
       await runAgentHarnessAfterCompactionHook({
         sessionFile: this.params.sessionFile,
-        messages: this.readMirroredSessionMessages(),
+        messages: await this.readMirroredSessionMessages(),
         compactedCount: -1,
         ctx: {
           runId: this.params.runId,
@@ -760,12 +763,8 @@ export class CodexAppServerEventProjector {
     this.assistantItemOrder.push(itemId);
   }
 
-  private readMirroredSessionMessages(): AgentMessage[] {
-    try {
-      return SessionManager.open(this.params.sessionFile).buildSessionContext().messages;
-    } catch {
-      return [];
-    }
+  private async readMirroredSessionMessages(): Promise<AgentMessage[]> {
+    return (await readCodexMirroredSessionHistoryMessages(this.params.sessionFile)) ?? [];
   }
 
   private createAssistantMessage(text: string): AssistantMessage {

@@ -5,9 +5,12 @@ import {
 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordDirectoryUserId } from "./directory-cache.js";
 
+type DiscordMentionAliasesConfig = Record<string, string>;
+
 const MARKDOWN_CODE_SEGMENT_PATTERN = /```[\s\S]*?```|`[^`\n]*`/g;
 const MENTION_CANDIDATE_PATTERN = /(^|[\s([{"'.,;:!?])@([a-z0-9_.-]{2,32}(?:#[0-9]{4})?)/gi;
 const DISCORD_RESERVED_MENTIONS = new Set(["everyone", "here"]);
+const DISCORD_DISCRIMINATOR_SUFFIX = /#\d{4}$/;
 
 function normalizeSnowflake(value: string | number | bigint): string | null {
   const text = normalizeOptionalStringifiedId(value) ?? "";
@@ -43,7 +46,58 @@ export function formatMention(params: {
   return `<#${target.id}>`;
 }
 
-function rewritePlainTextMentions(text: string, accountId?: string | null): string {
+function normalizeHandleKey(raw: string): string | null {
+  let handle = normalizeOptionalString(raw) ?? "";
+  if (!handle) {
+    return null;
+  }
+  if (handle.startsWith("@")) {
+    handle = normalizeOptionalString(handle.slice(1)) ?? "";
+  }
+  if (!handle || /\s/.test(handle)) {
+    return null;
+  }
+  return normalizeLowercaseStringOrEmpty(handle);
+}
+
+function resolveConfiguredMentionAlias(
+  handle: string,
+  mentionAliases?: DiscordMentionAliasesConfig | null,
+): string | undefined {
+  const key = normalizeHandleKey(handle);
+  if (!key || !mentionAliases) {
+    return undefined;
+  }
+  const withoutDiscriminator = key.replace(DISCORD_DISCRIMINATOR_SUFFIX, "");
+  for (const [rawAlias, rawUserId] of Object.entries(mentionAliases)) {
+    const alias = normalizeHandleKey(rawAlias);
+    if (!alias) {
+      continue;
+    }
+    const aliasWithoutDiscriminator = alias.replace(DISCORD_DISCRIMINATOR_SUFFIX, "");
+    if (
+      alias === key ||
+      (withoutDiscriminator && withoutDiscriminator !== key && alias === withoutDiscriminator) ||
+      (aliasWithoutDiscriminator &&
+        aliasWithoutDiscriminator !== alias &&
+        aliasWithoutDiscriminator === key)
+    ) {
+      const userId = normalizeSnowflake(rawUserId);
+      if (userId) {
+        return userId;
+      }
+    }
+  }
+  return undefined;
+}
+
+function rewritePlainTextMentions(
+  text: string,
+  params: {
+    accountId?: string | null;
+    mentionAliases?: DiscordMentionAliasesConfig | null;
+  },
+): string {
   if (!text.includes("@")) {
     return text;
   }
@@ -56,10 +110,12 @@ function rewritePlainTextMentions(text: string, accountId?: string | null): stri
     if (DISCORD_RESERVED_MENTIONS.has(lookup)) {
       return match;
     }
-    const userId = resolveDiscordDirectoryUserId({
-      accountId,
-      handle,
-    });
+    const userId =
+      resolveConfiguredMentionAlias(handle, params.mentionAliases) ??
+      resolveDiscordDirectoryUserId({
+        accountId: params.accountId,
+        handle,
+      });
     if (!userId) {
       return match;
     }
@@ -69,7 +125,10 @@ function rewritePlainTextMentions(text: string, accountId?: string | null): stri
 
 export function rewriteDiscordKnownMentions(
   text: string,
-  params: { accountId?: string | null },
+  params: {
+    accountId?: string | null;
+    mentionAliases?: DiscordMentionAliasesConfig | null;
+  },
 ): string {
   if (!text.includes("@")) {
     return text;
@@ -79,10 +138,10 @@ export function rewriteDiscordKnownMentions(
   MARKDOWN_CODE_SEGMENT_PATTERN.lastIndex = 0;
   for (const match of text.matchAll(MARKDOWN_CODE_SEGMENT_PATTERN)) {
     const matchIndex = match.index ?? 0;
-    rewritten += rewritePlainTextMentions(text.slice(offset, matchIndex), params.accountId);
+    rewritten += rewritePlainTextMentions(text.slice(offset, matchIndex), params);
     rewritten += match[0];
     offset = matchIndex + match[0].length;
   }
-  rewritten += rewritePlainTextMentions(text.slice(offset), params.accountId);
+  rewritten += rewritePlainTextMentions(text.slice(offset), params);
   return rewritten;
 }

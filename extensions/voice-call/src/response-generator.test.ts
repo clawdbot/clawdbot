@@ -191,6 +191,37 @@ describe("generateVoiceResponse", () => {
     );
   });
 
+  it("uses the persisted per-call session key for classic responses", async () => {
+    const { runtime, runEmbeddedPiAgent, sessionStore } = createAgentRuntime([
+      { text: '{"spoken":"Fresh call context."}' },
+    ]);
+    const voiceConfig = VoiceCallConfigSchema.parse({
+      sessionScope: "per-call",
+      responseTimeoutMs: 5000,
+    });
+
+    const result = await generateVoiceResponse({
+      voiceConfig,
+      coreConfig: {} as CoreConfig,
+      agentRuntime: runtime,
+      callId: "call-123",
+      sessionKey: "voice:call:call-123",
+      from: "+15550001111",
+      transcript: [{ speaker: "user", text: "hello there" }],
+      userMessage: "hello there",
+    });
+
+    expect(result.text).toBe("Fresh call context.");
+    expect(sessionStore["voice:call:call-123"]).toBeDefined();
+    expect(sessionStore["voice:15550001111"]).toBeUndefined();
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "voice:call:call-123",
+        sandboxSessionKey: "agent:main:voice:call:call-123",
+      }),
+    );
+  });
+
   it("uses the main agent workspace when voice config omits agentId", async () => {
     const {
       runtime,

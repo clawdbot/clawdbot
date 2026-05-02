@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { SessionManager, type SessionEntry } from "@mariozechner/pi-coding-agent";
+import { StringDecoder } from "node:string_decoder";
 import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "../agents/usage.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
@@ -14,6 +14,10 @@ import {
   archiveSessionTranscripts,
   cleanupArchivedSessionTranscripts,
 } from "./session-transcript-files.fs.js";
+import {
+  readSessionTranscriptIndex,
+  type IndexedTranscriptEntry,
+} from "./session-transcript-index.fs.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
 
 type SessionTitleFields = {
@@ -28,6 +32,16 @@ type SessionTitleFieldsCacheEntry = SessionTitleFields & {
 
 const sessionTitleFieldsCache = new Map<string, SessionTitleFieldsCacheEntry>();
 const MAX_SESSION_TITLE_FIELDS_CACHE_ENTRIES = 5000;
+const transcriptMessageCountCache = new Map<
+  string,
+  {
+    mtimeMs: number;
+    size: number;
+    count: number;
+  }
+>();
+const MAX_TRANSCRIPT_MESSAGE_COUNT_CACHE_ENTRIES = 5000;
+const TRANSCRIPT_ASYNC_READ_CHUNK_BYTES = 64 * 1024;
 
 function readSessionTitleFieldsCacheKey(
   filePath: string,
@@ -70,6 +84,39 @@ function setCachedSessionTitleFields(cacheKey: string, stat: fs.Stats, value: Se
   }
 }
 
+function getCachedTranscriptMessageCount(filePath: string, stat: fs.Stats): number | null {
+  const cached = transcriptMessageCountCache.get(filePath);
+  if (!cached) {
+    return null;
+  }
+  if (cached.mtimeMs !== stat.mtimeMs || cached.size !== stat.size) {
+    transcriptMessageCountCache.delete(filePath);
+    return null;
+  }
+  transcriptMessageCountCache.delete(filePath);
+  transcriptMessageCountCache.set(filePath, cached);
+  return cached.count;
+}
+
+function setCachedTranscriptMessageCount(filePath: string, stat: fs.Stats, count: number): void {
+  transcriptMessageCountCache.set(filePath, {
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    count,
+  });
+  while (transcriptMessageCountCache.size > MAX_TRANSCRIPT_MESSAGE_COUNT_CACHE_ENTRIES) {
+    const oldestKey = transcriptMessageCountCache.keys().next().value;
+    if (typeof oldestKey !== "string" || !oldestKey) {
+      break;
+    }
+    transcriptMessageCountCache.delete(oldestKey);
+  }
+}
+
+async function yieldTranscriptScan(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
 export function attachOpenClawTranscriptMeta(
   message: unknown,
   meta: Record<string, unknown>,
@@ -103,69 +150,7 @@ export function readSessionMessages(
     return [];
   }
 
-  const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
-  const hasTreeEntries = lines.some(hasSessionTreeEntry);
-  let branchEntries: SessionEntry[] | null = null;
-  if (hasTreeEntries) {
-    try {
-      branchEntries = SessionManager.open(filePath).getBranch();
-    } catch {
-      branchEntries = null;
-    }
-  }
-
-  if (branchEntries) {
-    const messages: unknown[] = [];
-    let messageSeq = 0;
-    for (const entry of branchEntries) {
-      if (entry.type === "message" && entry.message) {
-        messageSeq += 1;
-        messages.push(
-          attachOpenClawTranscriptMeta(entry.message, {
-            ...(typeof entry.id === "string" ? { id: entry.id } : {}),
-            seq: messageSeq,
-          }),
-        );
-        continue;
-      }
-
-      if (entry.type === "compaction") {
-        const ts = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
-        const timestamp = Number.isFinite(ts) ? ts : Date.now();
-        messageSeq += 1;
-        messages.push({
-          role: "system",
-          content: [{ type: "text", text: "Compaction" }],
-          timestamp,
-          __openclaw: {
-            kind: "compaction",
-            id: typeof entry.id === "string" ? entry.id : undefined,
-            seq: messageSeq,
-          },
-        });
-      }
-    }
-    return messages;
-  }
-
-  const messages: unknown[] = [];
-  let messageSeq = 0;
-  for (const line of lines) {
-    if (!line.trim()) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(line);
-      const message = parsedSessionEntryToMessage(parsed, messageSeq + 1);
-      if (message) {
-        messageSeq += 1;
-        messages.push(message);
-      }
-    } catch {
-      // ignore bad lines
-    }
-  }
-  return messages;
+  return transcriptRecordsToMessages(readSelectedTranscriptRecords(filePath));
 }
 
 export type ReadRecentSessionMessagesOptions = {
@@ -174,7 +159,27 @@ export type ReadRecentSessionMessagesOptions = {
   maxLines?: number;
 };
 
+export type ReadSessionMessagesAsyncOptions =
+  | {
+      mode: "full";
+      reason: string;
+    }
+  | ({
+      mode: "recent";
+    } & ReadRecentSessionMessagesOptions);
+
+type ReadRecentSessionMessagesResult = {
+  messages: unknown[];
+  totalMessages: number;
+};
+
 const RECENT_SESSION_MESSAGES_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
+
+type TailTranscriptRecord = {
+  id?: string;
+  parentId?: string | null;
+  record: Record<string, unknown>;
+};
 
 export function readRecentSessionMessages(
   sessionId: string,
@@ -224,39 +229,420 @@ export function readRecentSessionMessages(
         .filter((line) => line.trim().length > 0)
         .slice(-maxLines);
 
-      if (lines.some(hasSessionTreeEntry)) {
-        return readSessionMessages(sessionId, storePath, sessionFile).slice(-maxMessages);
-      }
-
-      const messages: unknown[] = [];
-      let messageSeq = 0;
-      for (const line of lines) {
-        try {
-          const parsed = JSON.parse(line);
-          const message = parsedSessionEntryToMessage(parsed, messageSeq + 1);
-          if (message) {
-            messageSeq += 1;
-            messages.push(message);
-          }
-        } catch {
-          // ignore bad tail lines
-        }
-      }
-      return messages.slice(-maxMessages);
+      return parseRecentTranscriptTailMessages(lines, maxMessages);
     }) ?? []
   );
 }
 
-function hasSessionTreeEntry(line: string): boolean {
-  if (!line.trim()) {
-    return false;
-  }
+async function readRecentTranscriptTailLinesAsync(
+  filePath: string,
+  stat: fs.Stats,
+  opts: ReadRecentSessionMessagesOptions,
+): Promise<string[]> {
+  const maxMessages = Math.max(0, Math.floor(opts.maxMessages));
+  const maxBytes = Math.max(
+    1024,
+    Math.floor(opts.maxBytes ?? RECENT_SESSION_MESSAGES_DEFAULT_MAX_BYTES),
+  );
+  const readLen = Math.min(stat.size, maxBytes);
+  const readStart = Math.max(0, stat.size - readLen);
+  const maxLines = Math.max(maxMessages, Math.floor(opts.maxLines ?? maxMessages * 20 + 20));
+  const handle = await fs.promises.open(filePath, "r");
   try {
-    const parsed = JSON.parse(line) as { type?: unknown; id?: unknown; parentId?: unknown };
-    return parsed.type !== "session" && typeof parsed.id === "string" && "parentId" in parsed;
-  } catch {
-    return false;
+    const buffer = Buffer.alloc(readLen);
+    const { bytesRead } = await handle.read(buffer, 0, readLen, readStart);
+    if (bytesRead <= 0) {
+      return [];
+    }
+    return buffer
+      .toString("utf-8", 0, bytesRead)
+      .split(/\r?\n/)
+      .slice(readStart > 0 ? 1 : 0)
+      .filter((line) => line.trim().length > 0)
+      .slice(-maxLines);
+  } finally {
+    await handle.close();
   }
+}
+
+function normalizeTailEntryString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function parseTailTranscriptRecord(line: string): TailTranscriptRecord | null {
+  try {
+    const parsed = JSON.parse(line) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    const record = parsed as Record<string, unknown>;
+    return {
+      ...(normalizeTailEntryString(record.id) ? { id: normalizeTailEntryString(record.id) } : {}),
+      ...(record.parentId === null
+        ? { parentId: null }
+        : normalizeTailEntryString(record.parentId)
+          ? { parentId: normalizeTailEntryString(record.parentId) }
+          : {}),
+      record,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function tailRecordHasTreeLink(entry: TailTranscriptRecord): boolean {
+  return (
+    entry.record.type !== "session" &&
+    typeof entry.id === "string" &&
+    Object.hasOwn(entry.record, "parentId")
+  );
+}
+
+function selectBoundedActiveTailRecords(entries: TailTranscriptRecord[]): TailTranscriptRecord[] {
+  const byId = new Map<string, TailTranscriptRecord>();
+  let leafId: string | undefined;
+  for (const entry of entries) {
+    if (tailRecordHasTreeLink(entry) && entry.id) {
+      byId.set(entry.id, entry);
+      leafId = entry.id;
+    }
+  }
+  if (!leafId) {
+    return entries;
+  }
+
+  const selected: TailTranscriptRecord[] = [];
+  const seen = new Set<string>();
+  let currentId: string | undefined = leafId;
+  while (currentId) {
+    if (seen.has(currentId)) {
+      return [];
+    }
+    seen.add(currentId);
+    const entry = byId.get(currentId);
+    if (!entry) {
+      break;
+    }
+    selected.push(entry);
+    currentId = entry.parentId ?? undefined;
+  }
+  return selected.toReversed();
+}
+
+function readTranscriptRecords(filePath: string): TailTranscriptRecord[] {
+  const records: TailTranscriptRecord[] = [];
+  visitTranscriptLines(filePath, (line) => {
+    if (!line.trim()) {
+      return;
+    }
+    const record = parseTailTranscriptRecord(line);
+    if (record && record.record.type !== "session") {
+      records.push(record);
+    }
+  });
+  return records;
+}
+
+function selectActiveTranscriptRecords(records: TailTranscriptRecord[]): TailTranscriptRecord[] {
+  return records.some(tailRecordHasTreeLink) ? selectBoundedActiveTailRecords(records) : records;
+}
+
+function readSelectedTranscriptRecords(filePath: string): TailTranscriptRecord[] {
+  try {
+    return selectActiveTranscriptRecords(readTranscriptRecords(filePath));
+  } catch {
+    return [];
+  }
+}
+
+function transcriptRecordsToMessages(records: TailTranscriptRecord[]): unknown[] {
+  const messages: unknown[] = [];
+  let messageSeq = 0;
+  for (const entry of records) {
+    const message = parsedSessionEntryToMessage(entry.record, messageSeq + 1);
+    if (message) {
+      messageSeq += 1;
+      messages.push(message);
+    }
+  }
+  return messages;
+}
+
+function parseRecentTranscriptTailMessages(lines: string[], maxMessages: number): unknown[] {
+  const entries = lines.flatMap((line) => {
+    const entry = parseTailTranscriptRecord(line);
+    return entry ? [entry] : [];
+  });
+  return transcriptRecordsToMessages(selectActiveTranscriptRecords(entries)).slice(-maxMessages);
+}
+
+function visitTranscriptLines(filePath: string, visit: (line: string) => void): void {
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const decoder = new StringDecoder("utf8");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let carry = "";
+    while (true) {
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead <= 0) {
+        break;
+      }
+      const text = carry + decoder.write(buffer.subarray(0, bytesRead));
+      const lines = text.split(/\r?\n/);
+      carry = lines.pop() ?? "";
+      for (const line of lines) {
+        visit(line);
+      }
+    }
+    const tail = carry + decoder.end();
+    if (tail) {
+      visit(tail);
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+async function visitTranscriptLinesAsync(
+  filePath: string,
+  visit: (line: string) => void,
+): Promise<void> {
+  const handle = await fs.promises.open(filePath, "r");
+  try {
+    const decoder = new StringDecoder("utf8");
+    const buffer = Buffer.allocUnsafe(TRANSCRIPT_ASYNC_READ_CHUNK_BYTES);
+    let carry = "";
+    while (true) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+      if (bytesRead <= 0) {
+        break;
+      }
+      const text = carry + decoder.write(buffer.subarray(0, bytesRead));
+      const lines = text.split(/\r?\n/);
+      carry = lines.pop() ?? "";
+      for (const line of lines) {
+        visit(line);
+      }
+      await yieldTranscriptScan();
+    }
+    const tail = carry + decoder.end();
+    if (tail) {
+      visit(tail);
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
+export function visitSessionMessages(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  visit: (message: unknown, seq: number) => void,
+): number {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
+  if (!filePath) {
+    return 0;
+  }
+
+  const messages = transcriptRecordsToMessages(readSelectedTranscriptRecords(filePath));
+  for (const [index, message] of messages.entries()) {
+    visit(message, index + 1);
+  }
+  return messages.length;
+}
+
+export function readSessionMessageCount(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+): number {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
+  if (!filePath) {
+    return 0;
+  }
+  let stat: fs.Stats | null = null;
+  try {
+    stat = fs.statSync(filePath);
+    const cached = getCachedTranscriptMessageCount(filePath, stat);
+    if (typeof cached === "number") {
+      return cached;
+    }
+  } catch {
+    // Count from the transcript reader below when stat metadata is unavailable.
+  }
+  const count = visitSessionMessages(sessionId, storePath, sessionFile, () => undefined);
+  if (stat) {
+    setCachedTranscriptMessageCount(filePath, stat, count);
+  }
+  return count;
+}
+
+export async function readSessionMessagesAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  opts: ReadSessionMessagesAsyncOptions,
+): Promise<unknown[]> {
+  if (opts.mode === "recent") {
+    const { mode: _mode, ...recentOpts } = opts;
+    return await readRecentSessionMessagesAsync(sessionId, storePath, sessionFile, recentOpts);
+  }
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
+  if (!filePath) {
+    return [];
+  }
+  const index = await readSessionTranscriptIndex(filePath);
+  return index?.entries.flatMap((entry) => indexedTranscriptEntryToMessages(entry)) ?? [];
+}
+
+export async function visitSessionMessagesAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  visit: (message: unknown, seq: number) => void,
+  _opts: { mode: "full"; reason: string },
+): Promise<number> {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
+  if (!filePath) {
+    return 0;
+  }
+  const index = await readSessionTranscriptIndex(filePath);
+  if (!index) {
+    return 0;
+  }
+  for (const entry of index.entries) {
+    const message = indexedTranscriptEntryToMessage(entry);
+    if (message) {
+      visit(message, entry.seq);
+    }
+  }
+  return index.entries.length;
+}
+
+export async function readSessionMessageCountAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+): Promise<number> {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
+  if (!filePath) {
+    return 0;
+  }
+  let stat: fs.Stats | null = null;
+  try {
+    stat = await fs.promises.stat(filePath);
+    const cached = getCachedTranscriptMessageCount(filePath, stat);
+    if (typeof cached === "number") {
+      return cached;
+    }
+  } catch {
+    // Count from the transcript reader below when stat metadata is unavailable.
+  }
+  const index = await readSessionTranscriptIndex(filePath);
+  const count = index?.entries.length ?? 0;
+  if (stat) {
+    setCachedTranscriptMessageCount(filePath, stat, count);
+  }
+  return count;
+}
+
+export function readRecentSessionMessagesWithStats(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  opts: ReadRecentSessionMessagesOptions,
+): ReadRecentSessionMessagesResult {
+  const totalMessages = readSessionMessageCount(sessionId, storePath, sessionFile);
+  const messages = readRecentSessionMessages(sessionId, storePath, sessionFile, opts);
+  const firstSeq = Math.max(1, totalMessages - messages.length + 1);
+  const messagesWithSeq = messages.map((message, index) =>
+    attachOpenClawTranscriptMeta(message, { seq: firstSeq + index }),
+  );
+  return { messages: messagesWithSeq, totalMessages };
+}
+
+export async function readRecentSessionMessagesAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  opts?: ReadRecentSessionMessagesOptions,
+): Promise<unknown[]> {
+  const maxMessages = Math.max(0, Math.floor(opts?.maxMessages ?? 0));
+  if (maxMessages === 0) {
+    return [];
+  }
+
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
+  if (!filePath) {
+    return [];
+  }
+
+  let stat: fs.Stats;
+  try {
+    stat = await fs.promises.stat(filePath);
+  } catch {
+    return [];
+  }
+  if (stat.size === 0) {
+    return [];
+  }
+  const lines = await readRecentTranscriptTailLinesAsync(filePath, stat, {
+    ...opts,
+    maxMessages,
+  });
+  return parseRecentTranscriptTailMessages(lines, maxMessages);
+}
+
+export async function readRecentSessionMessagesWithStatsAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  opts: ReadRecentSessionMessagesOptions,
+): Promise<ReadRecentSessionMessagesResult> {
+  const totalMessages = await readSessionMessageCountAsync(sessionId, storePath, sessionFile);
+  const messages = await readRecentSessionMessagesAsync(sessionId, storePath, sessionFile, opts);
+  const firstSeq = Math.max(1, totalMessages - messages.length + 1);
+  const messagesWithSeq = messages.map((message, index) =>
+    attachOpenClawTranscriptMeta(message, { seq: firstSeq + index }),
+  );
+  return { messages: messagesWithSeq, totalMessages };
+}
+
+export function readRecentSessionTranscriptLines(params: {
+  sessionId: string;
+  storePath: string | undefined;
+  sessionFile?: string;
+  agentId?: string;
+  maxLines: number;
+}): { lines: string[]; totalLines: number } | null {
+  const filePath = findExistingTranscriptPath(
+    params.sessionId,
+    params.storePath,
+    params.sessionFile,
+    params.agentId,
+  );
+  if (!filePath) {
+    return null;
+  }
+  const maxLines = Math.max(1, Math.floor(params.maxLines));
+  const lines: string[] = [];
+  let totalLines = 0;
+  try {
+    visitTranscriptLines(filePath, (line) => {
+      if (!line.trim()) {
+        return;
+      }
+      totalLines += 1;
+      lines.push(line);
+      if (lines.length > maxLines) {
+        lines.shift();
+      }
+    });
+  } catch {
+    return null;
+  }
+  return { lines, totalLines };
 }
 
 function parsedSessionEntryToMessage(parsed: unknown, seq: number): unknown {
@@ -288,6 +674,15 @@ function parsedSessionEntryToMessage(parsed: unknown, seq: number): unknown {
     };
   }
   return null;
+}
+
+function indexedTranscriptEntryToMessage(entry: IndexedTranscriptEntry): unknown {
+  return parsedSessionEntryToMessage(entry.record, entry.seq);
+}
+
+function indexedTranscriptEntryToMessages(entry: IndexedTranscriptEntry): unknown[] {
+  const message = indexedTranscriptEntryToMessage(entry);
+  return message ? [message] : [];
 }
 
 export {
@@ -393,6 +788,68 @@ export function readSessionTitleFieldsFromTranscript(
       }
     }
   }
+}
+
+export async function readSessionTitleFieldsFromTranscriptAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+  opts?: { includeInterSession?: boolean },
+): Promise<SessionTitleFields> {
+  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
+  const filePath = candidates.find((p) => fs.existsSync(p));
+  if (!filePath) {
+    return { firstUserMessage: null, lastMessagePreview: null };
+  }
+  let stat: fs.Stats;
+  try {
+    stat = await fs.promises.stat(filePath);
+  } catch {
+    return { firstUserMessage: null, lastMessagePreview: null };
+  }
+  const cacheKey = readSessionTitleFieldsCacheKey(filePath, opts);
+  const cached = getCachedSessionTitleFields(cacheKey, stat);
+  if (cached) {
+    return cached;
+  }
+  const index = await readSessionTranscriptIndex(filePath);
+  if (!index) {
+    return { firstUserMessage: null, lastMessagePreview: null };
+  }
+
+  let firstUserMessage: string | null = null;
+  for (const entry of index.entries) {
+    const msg = entry.record.message as TranscriptMessage | undefined;
+    if (msg?.role !== "user") {
+      continue;
+    }
+    if (opts?.includeInterSession !== true && hasInterSessionUserProvenance(msg)) {
+      continue;
+    }
+    const text = extractTextFromContent(msg.content);
+    if (text) {
+      firstUserMessage = text;
+      break;
+    }
+  }
+
+  let lastMessagePreview: string | null = null;
+  for (const entry of index.entries.toReversed()) {
+    const msg = entry.record.message as TranscriptMessage | undefined;
+    if (!msg || (msg.role !== "user" && msg.role !== "assistant")) {
+      continue;
+    }
+    const text = extractTextFromContent(msg.content);
+    if (text) {
+      lastMessagePreview = text;
+      break;
+    }
+  }
+
+  const result = { firstUserMessage, lastMessagePreview };
+  setCachedSessionTitleFields(cacheKey, stat, result);
+  return result;
 }
 
 function extractTextFromContent(content: TranscriptMessage["content"]): string | null {
@@ -557,7 +1014,7 @@ export function readLastMessagePreviewFromTranscript(
   });
 }
 
-export type SessionTranscriptUsageSnapshot = {
+type SessionTranscriptUsageSnapshot = {
   modelProvider?: string;
   model?: string;
   inputTokens?: number;
@@ -585,10 +1042,93 @@ function resolvePositiveUsageNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
-function extractLatestUsageFromTranscriptChunk(
-  chunk: string,
+function extractUsageSnapshotFromTranscriptLine(
+  line: string,
 ): SessionTranscriptUsageSnapshot | null {
-  const lines = chunk.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  try {
+    const parsed = JSON.parse(line) as Record<string, unknown>;
+    const message =
+      parsed.message && typeof parsed.message === "object" && !Array.isArray(parsed.message)
+        ? (parsed.message as Record<string, unknown>)
+        : undefined;
+    if (!message) {
+      return null;
+    }
+    const role = typeof message.role === "string" ? message.role : undefined;
+    if (role && role !== "assistant") {
+      return null;
+    }
+    const usageRaw =
+      message.usage && typeof message.usage === "object" && !Array.isArray(message.usage)
+        ? message.usage
+        : parsed.usage && typeof parsed.usage === "object" && !Array.isArray(parsed.usage)
+          ? parsed.usage
+          : undefined;
+    const usage = normalizeUsage(usageRaw);
+    const totalTokens = resolvePositiveUsageNumber(deriveSessionTotalTokens({ usage }));
+    const costUsd = extractTranscriptUsageCost(usageRaw);
+    const modelProvider =
+      typeof message.provider === "string"
+        ? message.provider.trim()
+        : typeof parsed.provider === "string"
+          ? parsed.provider.trim()
+          : undefined;
+    const model =
+      typeof message.model === "string"
+        ? message.model.trim()
+        : typeof parsed.model === "string"
+          ? parsed.model.trim()
+          : undefined;
+    const isDeliveryMirror = modelProvider === "openclaw" && model === "delivery-mirror";
+    const hasMeaningfulUsage =
+      hasNonzeroUsage(usage) ||
+      typeof totalTokens === "number" ||
+      (typeof costUsd === "number" && Number.isFinite(costUsd));
+    const hasModelIdentity = Boolean(modelProvider || model);
+    if (!hasMeaningfulUsage && !hasModelIdentity) {
+      return null;
+    }
+    if (isDeliveryMirror && !hasMeaningfulUsage) {
+      return null;
+    }
+
+    const snapshot: SessionTranscriptUsageSnapshot = {};
+    if (!isDeliveryMirror) {
+      if (modelProvider) {
+        snapshot.modelProvider = modelProvider;
+      }
+      if (model) {
+        snapshot.model = model;
+      }
+    }
+    if (typeof usage?.input === "number" && Number.isFinite(usage.input)) {
+      snapshot.inputTokens = usage.input;
+    }
+    if (typeof usage?.output === "number" && Number.isFinite(usage.output)) {
+      snapshot.outputTokens = usage.output;
+    }
+    if (typeof usage?.cacheRead === "number" && Number.isFinite(usage.cacheRead)) {
+      snapshot.cacheRead = usage.cacheRead;
+    }
+    if (typeof usage?.cacheWrite === "number" && Number.isFinite(usage.cacheWrite)) {
+      snapshot.cacheWrite = usage.cacheWrite;
+    }
+    if (typeof totalTokens === "number") {
+      snapshot.totalTokens = totalTokens;
+      snapshot.totalTokensFresh = true;
+    }
+    if (typeof costUsd === "number" && Number.isFinite(costUsd)) {
+      snapshot.costUsd = costUsd;
+    }
+    return snapshot;
+  } catch {
+    return null;
+  }
+}
+
+function extractAggregateUsageFromTranscriptLines(
+  lines: Iterable<string>,
+): SessionTranscriptUsageSnapshot | null {
   const snapshot: SessionTranscriptUsageSnapshot = {};
   let sawSnapshot = false;
   let inputTokens = 0;
@@ -603,88 +1143,40 @@ function extractLatestUsageFromTranscriptChunk(
   let sawCost = false;
 
   for (const line of lines) {
-    try {
-      const parsed = JSON.parse(line) as Record<string, unknown>;
-      const message =
-        parsed.message && typeof parsed.message === "object" && !Array.isArray(parsed.message)
-          ? (parsed.message as Record<string, unknown>)
-          : undefined;
-      if (!message) {
-        continue;
-      }
-      const role = typeof message.role === "string" ? message.role : undefined;
-      if (role && role !== "assistant") {
-        continue;
-      }
-      const usageRaw =
-        message.usage && typeof message.usage === "object" && !Array.isArray(message.usage)
-          ? message.usage
-          : parsed.usage && typeof parsed.usage === "object" && !Array.isArray(parsed.usage)
-            ? parsed.usage
-            : undefined;
-      const usage = normalizeUsage(usageRaw);
-      const totalTokens = resolvePositiveUsageNumber(deriveSessionTotalTokens({ usage }));
-      const costUsd = extractTranscriptUsageCost(usageRaw);
-      const modelProvider =
-        typeof message.provider === "string"
-          ? message.provider.trim()
-          : typeof parsed.provider === "string"
-            ? parsed.provider.trim()
-            : undefined;
-      const model =
-        typeof message.model === "string"
-          ? message.model.trim()
-          : typeof parsed.model === "string"
-            ? parsed.model.trim()
-            : undefined;
-      const isDeliveryMirror = modelProvider === "openclaw" && model === "delivery-mirror";
-      const hasMeaningfulUsage =
-        hasNonzeroUsage(usage) ||
-        typeof totalTokens === "number" ||
-        (typeof costUsd === "number" && Number.isFinite(costUsd));
-      const hasModelIdentity = Boolean(modelProvider || model);
-      if (!hasMeaningfulUsage && !hasModelIdentity) {
-        continue;
-      }
-      if (isDeliveryMirror && !hasMeaningfulUsage) {
-        continue;
-      }
-
-      sawSnapshot = true;
-      if (!isDeliveryMirror) {
-        if (modelProvider) {
-          snapshot.modelProvider = modelProvider;
-        }
-        if (model) {
-          snapshot.model = model;
-        }
-      }
-      if (typeof usage?.input === "number" && Number.isFinite(usage.input)) {
-        inputTokens += usage.input;
-        sawInputTokens = true;
-      }
-      if (typeof usage?.output === "number" && Number.isFinite(usage.output)) {
-        outputTokens += usage.output;
-        sawOutputTokens = true;
-      }
-      if (typeof usage?.cacheRead === "number" && Number.isFinite(usage.cacheRead)) {
-        cacheRead += usage.cacheRead;
-        sawCacheRead = true;
-      }
-      if (typeof usage?.cacheWrite === "number" && Number.isFinite(usage.cacheWrite)) {
-        cacheWrite += usage.cacheWrite;
-        sawCacheWrite = true;
-      }
-      if (typeof totalTokens === "number") {
-        snapshot.totalTokens = totalTokens;
-        snapshot.totalTokensFresh = true;
-      }
-      if (typeof costUsd === "number" && Number.isFinite(costUsd)) {
-        costUsdTotal += costUsd;
-        sawCost = true;
-      }
-    } catch {
-      // skip malformed lines
+    const current = extractUsageSnapshotFromTranscriptLine(line);
+    if (!current) {
+      continue;
+    }
+    sawSnapshot = true;
+    if (current.modelProvider) {
+      snapshot.modelProvider = current.modelProvider;
+    }
+    if (current.model) {
+      snapshot.model = current.model;
+    }
+    if (typeof current.inputTokens === "number") {
+      inputTokens += current.inputTokens;
+      sawInputTokens = true;
+    }
+    if (typeof current.outputTokens === "number") {
+      outputTokens += current.outputTokens;
+      sawOutputTokens = true;
+    }
+    if (typeof current.cacheRead === "number") {
+      cacheRead += current.cacheRead;
+      sawCacheRead = true;
+    }
+    if (typeof current.cacheWrite === "number") {
+      cacheWrite += current.cacheWrite;
+      sawCacheWrite = true;
+    }
+    if (typeof current.totalTokens === "number") {
+      snapshot.totalTokens = current.totalTokens;
+      snapshot.totalTokensFresh = true;
+    }
+    if (typeof current.costUsd === "number" && Number.isFinite(current.costUsd)) {
+      costUsdTotal += current.costUsd;
+      sawCost = true;
     }
   }
 
@@ -709,6 +1201,24 @@ function extractLatestUsageFromTranscriptChunk(
   return snapshot;
 }
 
+function extractLatestUsageFromTranscriptLines(
+  lines: Iterable<string>,
+): SessionTranscriptUsageSnapshot | null {
+  let latest: SessionTranscriptUsageSnapshot | null = null;
+  for (const line of lines) {
+    latest = extractUsageSnapshotFromTranscriptLine(line) ?? latest;
+  }
+  return latest;
+}
+
+function extractAggregateUsageFromTranscriptChunk(
+  chunk: string,
+): SessionTranscriptUsageSnapshot | null {
+  return extractAggregateUsageFromTranscriptLines(
+    chunk.split(/\r?\n/).filter((line) => line.trim().length > 0),
+  );
+}
+
 export function readLatestSessionUsageFromTranscript(
   sessionId: string,
   storePath: string | undefined,
@@ -726,8 +1236,92 @@ export function readLatestSessionUsageFromTranscript(
       return null;
     }
     const chunk = fs.readFileSync(fd, "utf-8");
-    return extractLatestUsageFromTranscriptChunk(chunk);
+    return extractAggregateUsageFromTranscriptChunk(chunk);
   });
+}
+
+export async function readLatestSessionUsageFromTranscriptAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+): Promise<SessionTranscriptUsageSnapshot | null> {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
+  if (!filePath) {
+    return null;
+  }
+
+  try {
+    const stat = await fs.promises.stat(filePath);
+    if (stat.size === 0) {
+      return null;
+    }
+    const lines: string[] = [];
+    await visitTranscriptLinesAsync(filePath, (line) => {
+      if (line.trim()) {
+        lines.push(line);
+      }
+    });
+    return extractAggregateUsageFromTranscriptLines(lines);
+  } catch {
+    return null;
+  }
+}
+
+export async function readRecentSessionUsageFromTranscriptAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  agentId: string | undefined,
+  maxBytes: number,
+): Promise<SessionTranscriptUsageSnapshot | null> {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
+  if (!filePath) {
+    return null;
+  }
+
+  try {
+    const stat = await fs.promises.stat(filePath);
+    if (stat.size === 0) {
+      return null;
+    }
+    const lines = await readRecentTranscriptTailLinesAsync(filePath, stat, {
+      maxMessages: 1,
+      maxLines: 1000,
+      maxBytes,
+    });
+    return extractAggregateUsageFromTranscriptLines(lines);
+  } catch {
+    return null;
+  }
+}
+
+export async function readLatestRecentSessionUsageFromTranscriptAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  agentId: string | undefined,
+  maxBytes: number,
+): Promise<SessionTranscriptUsageSnapshot | null> {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
+  if (!filePath) {
+    return null;
+  }
+
+  try {
+    const stat = await fs.promises.stat(filePath);
+    if (stat.size === 0) {
+      return null;
+    }
+    const lines = await readRecentTranscriptTailLinesAsync(filePath, stat, {
+      maxMessages: 1,
+      maxLines: 1000,
+      maxBytes,
+    });
+    return extractLatestUsageFromTranscriptLines(lines);
+  } catch {
+    return null;
+  }
 }
 
 export function readRecentSessionUsageFromTranscript(
@@ -759,7 +1353,7 @@ export function readRecentSessionUsageFromTranscript(
       .split(/\r?\n/)
       .slice(readStart > 0 ? 1 : 0)
       .join("\n");
-    return extractLatestUsageFromTranscriptChunk(chunk);
+    return extractAggregateUsageFromTranscriptChunk(chunk);
   });
 }
 

@@ -24,7 +24,7 @@ export type PackageUpdateStepResult = {
   stderrTail?: string | null;
 };
 
-export type PackageUpdateStepRunner = (params: {
+type PackageUpdateStepRunner = (params: {
   name: string;
   argv: string[];
   cwd?: string;

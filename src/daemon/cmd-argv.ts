@@ -13,7 +13,7 @@ export function quoteCmdScriptArg(value: string): string {
   return `"${escaped}"`;
 }
 
-export function unescapeCmdScriptArg(value: string): string {
+function unescapeCmdScriptArg(value: string): string {
   return value.replace(/\^!/g, "!").replace(/%%/g, "%");
 }
 

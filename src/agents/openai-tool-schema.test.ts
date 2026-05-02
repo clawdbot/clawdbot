@@ -29,4 +29,24 @@ describe("OpenAI strict tool schema normalization", () => {
       resolveOpenAIStrictToolFlagForInventory([{ name: "write", parameters: schema }], true),
     ).toBe(false);
   });
+
+  it("normalizes parameter-free MCP tool schema with properties:undefined (#75362)", () => {
+    const schema = { type: "object", properties: undefined } as unknown;
+    const normalized = normalizeStrictOpenAIJsonSchema(schema) as Record<string, unknown>;
+    expect(normalized.type).toBe("object");
+    expect(normalized.properties).toEqual({});
+    expect(normalized.required).toEqual([]);
+    expect(normalized.additionalProperties).toBe(false);
+    expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(true);
+  });
+
+  it("normalizes truly empty MCP tool schema {} for strict mode", () => {
+    const schema = {};
+    const normalized = normalizeStrictOpenAIJsonSchema(schema) as Record<string, unknown>;
+    expect(normalized.type).toBe("object");
+    expect(normalized.properties).toEqual({});
+    expect(normalized.required).toEqual([]);
+    expect(normalized.additionalProperties).toBe(false);
+    expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(true);
+  });
 });

@@ -41,7 +41,7 @@ export const AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN = "device-token";
 export const AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH = "hook-auth";
 const BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX = "browser-origin:";
 
-export interface RateLimitEntry {
+interface RateLimitEntry {
   /** Timestamps (epoch ms) of recent failed attempts inside the window. */
   attempts: number[];
   /** If set, requests from this IP are blocked until this epoch-ms instant. */

@@ -1,12 +1,12 @@
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { GroupPolicy } from "./types.base.js";
 
-export type RuntimeGroupPolicyResolution = {
+type RuntimeGroupPolicyResolution = {
   groupPolicy: GroupPolicy;
   providerMissingFallbackApplied: boolean;
 };
 
-export type RuntimeGroupPolicyParams = {
+type RuntimeGroupPolicyParams = {
   providerConfigPresent: boolean;
   groupPolicy?: GroupPolicy;
   defaultGroupPolicy?: GroupPolicy;
@@ -27,13 +27,13 @@ export function resolveRuntimeGroupPolicy(
   return { groupPolicy, providerMissingFallbackApplied };
 }
 
-export type ResolveProviderRuntimeGroupPolicyParams = {
+type ResolveProviderRuntimeGroupPolicyParams = {
   providerConfigPresent: boolean;
   groupPolicy?: GroupPolicy;
   defaultGroupPolicy?: GroupPolicy;
 };
 
-export type GroupPolicyDefaultsConfig = {
+type GroupPolicyDefaultsConfig = {
   channels?: {
     defaults?: {
       groupPolicy?: GroupPolicy;

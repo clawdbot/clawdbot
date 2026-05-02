@@ -34,7 +34,7 @@ import {
   toSessionDisplayRows,
 } from "./sessions-table.js";
 
-export type SessionsCleanupOptions = {
+type SessionsCleanupOptions = {
   store?: string;
   agent?: string;
   allAgents?: boolean;

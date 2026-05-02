@@ -34,6 +34,11 @@ const mocks = vi.hoisted(() => ({
     () => createEmptyMockManifestRegistry(),
   ),
   loadPluginRegistrySnapshot: vi.fn<() => MockPluginIndex>(() => createMockPluginIndex([])),
+  loadPluginRegistrySnapshotWithMetadata: vi.fn((params?: { index?: MockPluginIndex }) => ({
+    source: params?.index ? "provided" : "derived",
+    snapshot: params?.index ?? createMockPluginIndex([]),
+    diagnostics: [],
+  })),
   withBundledPluginAllowlistCompat: vi.fn(
     ({ config }: { config?: OpenClawConfig; pluginIds: string[] }) => config,
   ),
@@ -51,10 +56,12 @@ vi.mock("./loader.js", () => ({
 
 vi.mock("./plugin-registry.js", () => ({
   loadPluginRegistrySnapshot: mocks.loadPluginRegistrySnapshot,
+  loadPluginRegistrySnapshotWithMetadata: mocks.loadPluginRegistrySnapshotWithMetadata,
 }));
 
 vi.mock("./manifest-registry-installed.js", () => ({
   loadPluginManifestRegistryForInstalledIndex: mocks.loadPluginManifestRegistry,
+  resolveInstalledManifestRegistryIndexFingerprint: () => "test-index",
 }));
 
 vi.mock("./bundled-compat.js", () => ({
@@ -81,6 +88,13 @@ describe("migration provider runtime", () => {
     mocks.resolveRuntimePluginRegistry.mockReturnValue(createEmptyPluginRegistry());
     mocks.loadPluginManifestRegistry.mockReturnValue(createEmptyMockManifestRegistry());
     mocks.loadPluginRegistrySnapshot.mockReturnValue(createMockPluginIndex([]));
+    mocks.loadPluginRegistrySnapshotWithMetadata.mockImplementation(
+      (params?: { index?: MockPluginIndex }) => ({
+        source: params?.index ? "provided" : "derived",
+        snapshot: params?.index ?? mocks.loadPluginRegistrySnapshot(),
+        diagnostics: [],
+      }),
+    );
     const runtime = await import("./migration-provider-runtime.js");
     resolvePluginMigrationProvider = runtime.resolvePluginMigrationProvider;
     resolvePluginMigrationProviders = runtime.resolvePluginMigrationProviders;
@@ -143,7 +157,7 @@ describe("migration provider runtime", () => {
     const resolved = resolvePluginMigrationProvider({ providerId: "external-import", cfg });
 
     expect(resolved).toBe(provider);
-    expect(mocks.loadPluginRegistrySnapshot).toHaveBeenCalledWith({
+    expect(mocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
       config: cfg,
       env: process.env,
       preferPersisted: false,
@@ -202,18 +216,20 @@ describe("migration provider runtime", () => {
     const resolved = resolvePluginMigrationProvider({ providerId: "hermes" });
 
     expect(resolved).toBe(provider);
-    expect(mocks.loadPluginRegistrySnapshot).toHaveBeenCalledWith({
-      config: undefined,
+    expect(mocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
+      config: {},
       env: process.env,
       preferPersisted: false,
+      workspaceDir: undefined,
     });
     expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledWith({
       index: expect.objectContaining({
         plugins: [expect.objectContaining({ pluginId: "migrate-hermes" })],
       }),
-      config: undefined,
+      config: {},
       env: process.env,
       includeDisabled: true,
+      workspaceDir: undefined,
     });
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
       onlyPluginIds: ["migrate-hermes"],

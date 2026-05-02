@@ -152,6 +152,31 @@ function mergeVoiceSettingsOverride(
   };
 }
 
+function resolveVoiceSettingsOverride(
+  base: ElevenLabsProviderConfig["voiceSettings"],
+  overrides: unknown,
+): ElevenLabsProviderConfig["voiceSettings"] {
+  const voiceSettings = asObject(overrides);
+  return {
+    ...base,
+    ...(asFiniteNumber(voiceSettings?.stability) == null
+      ? {}
+      : { stability: asFiniteNumber(voiceSettings?.stability) }),
+    ...(asFiniteNumber(voiceSettings?.similarityBoost) == null
+      ? {}
+      : { similarityBoost: asFiniteNumber(voiceSettings?.similarityBoost) }),
+    ...(asFiniteNumber(voiceSettings?.style) == null
+      ? {}
+      : { style: asFiniteNumber(voiceSettings?.style) }),
+    ...(asBoolean(voiceSettings?.useSpeakerBoost) == null
+      ? {}
+      : { useSpeakerBoost: asBoolean(voiceSettings?.useSpeakerBoost) }),
+    ...(asFiniteNumber(voiceSettings?.speed) == null
+      ? {}
+      : { speed: asFiniteNumber(voiceSettings?.speed) }),
+  };
+}
+
 function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
   try {
     switch (ctx.key) {
@@ -469,7 +494,6 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
       const outputFormat =
         trimToUndefined(overrides.outputFormat) ??
         (req.target === "voice-note" ? "opus_48000_64" : "mp3_44100_128");
-      const overrideVoiceSettings = asObject(overrides.voiceSettings);
       const latencyTier = asFiniteNumber(overrides.latencyTier);
       const audioBuffer = await elevenLabsTTS({
         text: req.text,
@@ -487,24 +511,7 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
             | undefined) ?? config.applyTextNormalization,
         languageCode: trimToUndefined(overrides.languageCode) ?? config.languageCode,
         latencyTier,
-        voiceSettings: {
-          ...config.voiceSettings,
-          ...(asFiniteNumber(overrideVoiceSettings?.stability) == null
-            ? {}
-            : { stability: asFiniteNumber(overrideVoiceSettings?.stability) }),
-          ...(asFiniteNumber(overrideVoiceSettings?.similarityBoost) == null
-            ? {}
-            : { similarityBoost: asFiniteNumber(overrideVoiceSettings?.similarityBoost) }),
-          ...(asFiniteNumber(overrideVoiceSettings?.style) == null
-            ? {}
-            : { style: asFiniteNumber(overrideVoiceSettings?.style) }),
-          ...(asBoolean(overrideVoiceSettings?.useSpeakerBoost) == null
-            ? {}
-            : { useSpeakerBoost: asBoolean(overrideVoiceSettings?.useSpeakerBoost) }),
-          ...(asFiniteNumber(overrideVoiceSettings?.speed) == null
-            ? {}
-            : { speed: asFiniteNumber(overrideVoiceSettings?.speed) }),
-        },
+        voiceSettings: resolveVoiceSettingsOverride(config.voiceSettings, overrides.voiceSettings),
         timeoutMs: req.timeoutMs,
       });
       return {
@@ -516,6 +523,7 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
     },
     synthesizeTelephony: async (req) => {
       const config = readElevenLabsProviderConfig(req.providerConfig);
+      const overrides = req.providerOverrides ?? {};
       const apiKey =
         config.apiKey || resolveElevenLabsApiKeyWithProfileFallback() || process.env.XI_API_KEY;
       if (!apiKey) {
@@ -527,13 +535,18 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
         text: req.text,
         apiKey,
         baseUrl: config.baseUrl,
-        voiceId: config.voiceId,
-        modelId: config.modelId,
+        voiceId: trimToUndefined(overrides.voiceId) ?? config.voiceId,
+        modelId: trimToUndefined(overrides.modelId) ?? config.modelId,
         outputFormat,
-        seed: config.seed,
-        applyTextNormalization: config.applyTextNormalization,
-        languageCode: config.languageCode,
-        voiceSettings: config.voiceSettings,
+        seed: asFiniteNumber(overrides.seed) ?? config.seed,
+        applyTextNormalization:
+          (trimToUndefined(overrides.applyTextNormalization) as
+            | "auto"
+            | "on"
+            | "off"
+            | undefined) ?? config.applyTextNormalization,
+        languageCode: trimToUndefined(overrides.languageCode) ?? config.languageCode,
+        voiceSettings: resolveVoiceSettingsOverride(config.voiceSettings, overrides.voiceSettings),
         timeoutMs: req.timeoutMs,
       });
       return { audioBuffer, outputFormat, sampleRate };

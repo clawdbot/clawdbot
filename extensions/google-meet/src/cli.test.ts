@@ -324,6 +324,64 @@ describe("google-meet CLI", () => {
     }
   });
 
+  it("ends an active conference for a Meet space", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = requestUrl(input);
+      if (url.pathname === "/v2/spaces/abc-defg-hij") {
+        return jsonResponse({
+          name: "spaces/space-resource-123",
+          meetingCode: "abc-defg-hij",
+          meetingUri: "https://meet.google.com/abc-defg-hij",
+        });
+      }
+      if (url.pathname === "/v2/spaces/space-resource-123:endActiveConference") {
+        return jsonResponse({});
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const stdout = captureStdout();
+    try {
+      await setupCli({}).parseAsync(
+        [
+          "googlemeet",
+          "end-active-conference",
+          "https://meet.google.com/abc-defg-hij",
+          "--access-token",
+          "token",
+          "--expires-at",
+          String(Date.now() + 120_000),
+          "--json",
+        ],
+        { from: "user" },
+      );
+      expect(JSON.parse(stdout.output())).toMatchObject({
+        space: "spaces/space-resource-123",
+        ended: true,
+        tokenSource: "cached-access-token",
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://meet.googleapis.com/v2/spaces/space-resource-123:endActiveConference",
+        expect.objectContaining({ method: "POST", body: "{}" }),
+      );
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it("rejects access policy flags when create would use browser fallback", async () => {
+    await expect(
+      setupCli({
+        runtime: {
+          createViaBrowser: vi.fn(async () => {
+            throw new Error("browser fallback should not run");
+          }),
+        },
+      }).parseAsync(["googlemeet", "create", "--access-type", "OPEN"], { from: "user" }),
+    ).rejects.toThrow("access policy options require OAuth/API room creation");
+  });
+
   it("prints the latest conference record", async () => {
     stubMeetArtifactsApi();
     const stdout = captureStdout();
@@ -625,6 +683,55 @@ describe("google-meet CLI", () => {
       expect(JSON.parse(stdout.output())).toMatchObject({
         found: true,
         sessions: [{ id: "meet_1", transport: "twilio" }],
+      });
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it("runs a listen-first health probe", async () => {
+    const testListen = vi.fn(async () => ({
+      createdSession: true,
+      listenVerified: true,
+      listenTimedOut: false,
+      transcriptLines: 1,
+      session: {
+        id: "meet_1",
+        url: "https://meet.google.com/abc-defg-hij",
+        state: "active" as const,
+        transport: "chrome-node" as const,
+        mode: "transcribe" as const,
+        participantIdentity: "signed-in Google Chrome profile on a paired node",
+        createdAt: "2026-04-25T00:00:00.000Z",
+        updatedAt: "2026-04-25T00:00:01.000Z",
+        realtime: { enabled: false, provider: "openai", toolPolicy: "safe-read-only" },
+        notes: [],
+      },
+    }));
+    const stdout = captureStdout();
+    try {
+      await setupCli({
+        runtime: { testListen },
+      }).parseAsync(
+        [
+          "googlemeet",
+          "test-listen",
+          "https://meet.google.com/abc-defg-hij",
+          "--transport",
+          "chrome-node",
+          "--timeout-ms",
+          "30000",
+        ],
+        { from: "user" },
+      );
+      expect(testListen).toHaveBeenCalledWith({
+        url: "https://meet.google.com/abc-defg-hij",
+        transport: "chrome-node",
+        timeoutMs: 30000,
+      });
+      expect(JSON.parse(stdout.output())).toMatchObject({
+        listenVerified: true,
+        transcriptLines: 1,
       });
     } finally {
       stdout.restore();

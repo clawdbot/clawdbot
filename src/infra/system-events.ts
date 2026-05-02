@@ -149,6 +149,18 @@ function areSystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
   );
 }
 
+function resetQueueState(key: string, entry: SessionQueue) {
+  if (entry.queue.length === 0) {
+    entry.lastText = null;
+    entry.lastContextKey = null;
+    queues.delete(key);
+    return;
+  }
+  const newest = entry.queue[entry.queue.length - 1];
+  entry.lastText = newest.text;
+  entry.lastContextKey = newest.contextKey ?? null;
+}
+
 export function consumeSystemEventEntries(
   sessionKey: string,
   consumedEntries: readonly SystemEvent[],
@@ -165,15 +177,31 @@ export function consumeSystemEventEntries(
     return [];
   }
   const removed = entry.queue.splice(0, consumedEntries.length).map(cloneSystemEvent);
-  if (entry.queue.length === 0) {
-    entry.lastText = null;
-    entry.lastContextKey = null;
-    queues.delete(key);
-  } else {
-    const newest = entry.queue[entry.queue.length - 1];
-    entry.lastText = newest.text;
-    entry.lastContextKey = newest.contextKey ?? null;
+  resetQueueState(key, entry);
+  return removed;
+}
+
+export function consumeSelectedSystemEventEntries(
+  sessionKey: string,
+  consumedEntries: readonly SystemEvent[],
+): SystemEvent[] {
+  const key = requireSessionKey(sessionKey);
+  const entry = getSessionQueue(key);
+  if (!entry || entry.queue.length === 0 || consumedEntries.length === 0) {
+    return [];
   }
+  const removed: SystemEvent[] = [];
+  for (const consumed of consumedEntries) {
+    const index = entry.queue.findIndex((event) => areSystemEventsEqual(event, consumed));
+    if (index === -1) {
+      continue;
+    }
+    const [event] = entry.queue.splice(index, 1);
+    if (event) {
+      removed.push(cloneSystemEvent(event));
+    }
+  }
+  resetQueueState(key, entry);
   return removed;
 }
 

@@ -60,7 +60,7 @@ type ExecApprovalsSnapshot = {
   file: ExecApprovalsFile;
 };
 
-export type NodeInvokeRequestPayload = {
+type NodeInvokeRequestPayload = {
   id: string;
   nodeId: string;
   command: string;

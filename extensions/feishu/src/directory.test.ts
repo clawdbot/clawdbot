@@ -8,15 +8,12 @@ vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
 
-const {
-  listFeishuDirectoryGroups,
-  listFeishuDirectoryGroupsLive,
-  listFeishuDirectoryPeers,
-  listFeishuDirectoryPeersLive,
-} = await importFreshModule<typeof import("./directory.js")>(
-  import.meta.url,
-  "./directory.js?directory-test",
-);
+const { listFeishuDirectoryGroupsLive, listFeishuDirectoryPeersLive } = await importFreshModule<
+  typeof import("./directory.js")
+>(import.meta.url, "./directory.js?directory-test");
+const { listFeishuDirectoryGroups, listFeishuDirectoryPeers } = await importFreshModule<
+  typeof import("./directory.static.js")
+>(import.meta.url, "./directory.static.js?directory-test");
 
 function makeStaticCfg(): ClawdbotConfig {
   return {

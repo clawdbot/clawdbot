@@ -1,4 +1,4 @@
-export type SentMessageLookup = {
+type SentMessageLookup = {
   text?: string;
   messageId?: string;
 };

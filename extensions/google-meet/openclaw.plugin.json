@@ -9,6 +9,9 @@
     "onCommands": ["googlemeet"],
     "onCapabilities": ["tool"]
   },
+  "contracts": {
+    "tools": ["google_meet"]
+  },
   "uiHints": {
     "defaults.meeting": {
       "label": "Default Meeting",

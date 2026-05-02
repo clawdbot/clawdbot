@@ -73,6 +73,44 @@ describe("install.ps1 failure handling", () => {
     expect(completeInstallBody).toMatch(/\bthrow "OpenClaw installation failed with exit code/);
   });
 
+  it("runs npm capture commands from a writable installer temp directory", () => {
+    const nativeCaptureBody = extractFunctionBody(source, "Invoke-NativeCommandCapture");
+    const npmInstallBody = extractFunctionBody(source, "Install-OpenClawNpm");
+    const mainBody = extractFunctionBody(source, "Main");
+    expect(source).toContain("function Get-NpmWorkingDirectory {");
+    expect(nativeCaptureBody).toContain('[string]$WorkingDirectory = ""');
+    expect(nativeCaptureBody).toContain("$startProcessArgs.WorkingDirectory = $WorkingDirectory");
+    expect(npmInstallBody).toContain("-WorkingDirectory (Get-NpmWorkingDirectory)");
+    expect(mainBody).toContain("-WorkingDirectory (Get-NpmWorkingDirectory)");
+  });
+
+  runIfPowerShell("creates a temp npm working directory", () => {
+    const tempDir = harness.createTempDir("openclaw-install-ps1-");
+    const scriptPath = join(tempDir, "install.ps1");
+    const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
+    writeFileSync(
+      scriptPath,
+      [
+        scriptWithoutEntryPoint,
+        "",
+        "$result = Get-NpmWorkingDirectory",
+        'if (!(Test-Path -LiteralPath $result)) { throw "missing $result" }',
+        'if ($result -notmatch "openclaw-installer") { throw "unexpected $result" }',
+        "",
+      ].join("\n"),
+    );
+    chmodSync(scriptPath, 0o755);
+
+    const result = spawnSync(
+      powershell!,
+      ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
   runIfPowerShell("exits non-zero when run as a script file", () => {
     const tempDir = harness.createTempDir("openclaw-install-ps1-");
     const scriptPath = join(tempDir, "install.ps1");
@@ -125,7 +163,7 @@ describe("install.ps1 failure handling", () => {
         "function Ensure-Node { return $true }",
         "function Add-ToPath { param([string]$Path) }",
         "function Invoke-NativeCommandCapture {",
-        "  param([string]$FilePath, [string[]]$Arguments)",
+        "  param([string]$FilePath, [string[]]$Arguments, [string]$WorkingDirectory = '')",
         "  return @{ ExitCode = 0; Stdout = 'npm stdout'; Stderr = 'npm stderr' }",
         "}",
         "$NoOnboard = $true",
@@ -167,7 +205,7 @@ describe("install.ps1 failure handling", () => {
         "  return $true",
         "}",
         "function Invoke-NativeCommandCapture {",
-        "  param([string]$FilePath, [string[]]$Arguments)",
+        "  param([string]$FilePath, [string[]]$Arguments, [string]$WorkingDirectory = '')",
         "  return @{ ExitCode = 0; Stdout = 'npm prefix'; Stderr = '' }",
         "}",
         "$NoOnboard = $true",

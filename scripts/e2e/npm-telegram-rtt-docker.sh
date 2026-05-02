@@ -13,10 +13,10 @@ OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-r
 
 validate_openclaw_package_spec() {
   local spec="$1"
-  if [[ "$spec" =~ ^openclaw@(beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-beta\.[1-9][0-9]*)?)$ ]]; then
+  if [[ "$spec" =~ ^openclaw@(main|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-beta\.[1-9][0-9]*)?)$ ]]; then
     return 0
   fi
-  echo "OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC must be openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: $spec" >&2
+  echo "OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC must be openclaw@main, openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: $spec" >&2
   exit 1
 }
 
@@ -89,6 +89,9 @@ docker_env=(
   -e OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS="${OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS:-180000}"
   -e OPENCLAW_NPM_TELEGRAM_SCENARIOS="${OPENCLAW_NPM_TELEGRAM_SCENARIOS:-telegram-mentioned-message-reply}"
   -e OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE="${OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE:-mock-openai}"
+  -e OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES="${OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES:-20}"
+  -e OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS="${OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS:-30000}"
+  -e OPENCLAW_NPM_TELEGRAM_MAX_FAILURES="${OPENCLAW_NPM_TELEGRAM_MAX_FAILURES:-${OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES:-20}}"
 )
 
 run_logged() {

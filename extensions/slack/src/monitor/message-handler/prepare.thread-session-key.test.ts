@@ -4,10 +4,14 @@ import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackRoutingContext, type SlackRoutingContextDeps } from "./prepare-routing.js";
 
-function buildCtx(overrides?: { replyToMode?: "all" | "first" | "off" | "batched" }) {
+function buildCtx(overrides?: {
+  replyToMode?: "all" | "first" | "off" | "batched";
+  dmScope?: "main" | "per-sender" | "per-channel-peer";
+}) {
   const replyToMode = overrides?.replyToMode ?? "all";
   return {
     cfg: {
+      session: { dmScope: overrides?.dmScope },
       channels: {
         slack: { enabled: true, replyToMode },
       },
@@ -320,5 +324,29 @@ describe("thread-level session keys", () => {
 
     const sessionKey = routing.sessionKey;
     expect(sessionKey).not.toContain(":thread:");
+  });
+
+  it("keeps top-level DMs on the direct session when replyToMode=all", () => {
+    const ctx = buildCtx({ replyToMode: "all", dmScope: "per-channel-peer" });
+    const account = buildAccount("all");
+
+    const routing = resolveSlackRoutingContext({
+      ctx,
+      account,
+      message: {
+        channel: "D456",
+        channel_type: "im",
+        user: "U3",
+        text: "dm message",
+        ts: "1770408530.000000",
+      } as SlackMessageEvent,
+      isDirectMessage: true,
+      isGroupDm: false,
+      isRoom: false,
+      isRoomish: false,
+    });
+
+    expect(routing.sessionKey).toBe("agent:main:slack:direct:u3");
+    expect(routing.threadContext.messageThreadId).toBe("1770408530.000000");
   });
 });

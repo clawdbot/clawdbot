@@ -111,6 +111,8 @@ Light and REM phase hits add a small recency-decayed boost from `memory/.dreams/
 
 When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep. Each sweep runs phases in order: light → REM → deep.
 
+The sweep includes the primary runtime workspace and any configured agent workspaces, deduped by path, so subagent workspace fan-out does not exclude the main agent's `DREAMS.md` and memory state.
+
 Default cadence behavior:
 
 | Setting              | Default       |

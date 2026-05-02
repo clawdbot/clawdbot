@@ -13,7 +13,7 @@ type OpenAIStrictToolModel = {
 
 const optionalString = readStringValue;
 
-export function resolvesToNativeOpenAIStrictTools(
+function resolvesToNativeOpenAIStrictTools(
   model: OpenAIStrictToolModel,
   transport: OpenAITransportKind,
 ): boolean {

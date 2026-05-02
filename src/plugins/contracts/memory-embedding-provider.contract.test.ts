@@ -89,6 +89,7 @@ describe("memory embedding provider registration", () => {
       id: "tool-discovery-memory",
       name: "Tool Discovery Memory",
       kind: "memory",
+      contracts: { tools: ["memory_recall"] },
     });
     registry.registry.plugins.push(record);
     const api = registry.createApi(record, {

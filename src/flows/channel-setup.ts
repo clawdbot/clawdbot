@@ -156,7 +156,6 @@ export async function setupChannels(
     channel: ChannelChoice,
     pluginId?: string,
     setup?: {
-      installRuntimeDeps?: boolean;
       forceReload?: boolean;
       forceSetupOnlyChannelPlugins?: boolean;
     },
@@ -171,8 +170,7 @@ export async function setupChannels(
       channel,
       ...(pluginId ? { pluginId } : {}),
       workspaceDir: resolveWorkspaceDir(),
-      installRuntimeDeps: setup?.installRuntimeDeps ?? false,
-      forceSetupOnlyChannelPlugins: setup?.forceSetupOnlyChannelPlugins,
+      forceSetupOnlyChannelPlugins: setup?.forceSetupOnlyChannelPlugins ?? true,
     });
     const plugin =
       snapshot.channelSetups.find((entry) => entry.plugin.id === channel)?.plugin ??
@@ -442,7 +440,6 @@ export async function setupChannels(
       await loadScopedChannelPlugin(channel, undefined, {
         forceReload: true,
         forceSetupOnlyChannelPlugins: true,
-        installRuntimeDeps: true,
       });
     }
     const adapter = getVisibleSetupFlowAdapter(channel);

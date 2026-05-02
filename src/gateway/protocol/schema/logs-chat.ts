@@ -35,6 +35,7 @@ export const ChatHistoryParamsSchema = Type.Object(
 export const ChatSendParamsSchema = Type.Object(
   {
     sessionKey: ChatSendSessionKeyString,
+    sessionId: Type.Optional(NonEmptyString),
     message: Type.String(),
     thinking: Type.Optional(Type.String()),
     deliver: Type.Optional(Type.Boolean()),

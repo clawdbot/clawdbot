@@ -1,9 +1,9 @@
 import { z } from "openclaw/plugin-sdk/zod";
 
-export const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as const;
+const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as const;
 export type AcpxPermissionMode = (typeof ACPX_PERMISSION_MODES)[number];
 
-export const ACPX_NON_INTERACTIVE_POLICIES = ["deny", "fail"] as const;
+const ACPX_NON_INTERACTIVE_POLICIES = ["deny", "fail"] as const;
 export type AcpxNonInteractivePermissionPolicy = (typeof ACPX_NON_INTERACTIVE_POLICIES)[number];
 
 export const DEFAULT_ACPX_TIMEOUT_SECONDS = 120;

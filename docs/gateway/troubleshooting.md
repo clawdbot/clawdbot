@@ -517,7 +517,7 @@ Look for:
     - `browser.executablePath not found` → configured path is invalid.
     - `browser.cdpUrl must be http(s) or ws(s)` → the configured CDP URL uses an unsupported scheme such as `file:` or `ftp:`.
     - `browser.cdpUrl has invalid port` → the configured CDP URL has a bad or out-of-range port.
-    - `Playwright is not available in this gateway build; '<feature>' is unsupported.` → the current gateway install lacks the bundled browser plugin's `playwright-core` runtime dependency; run `openclaw doctor --fix`, then restart the gateway. ARIA snapshots and basic page screenshots can still work, but navigation, AI snapshots, CSS-selector element screenshots, and PDF export stay unavailable.
+    - `Playwright is not available in this gateway build; '<feature>' is unsupported.` → the current gateway install lacks the core browser runtime dependency; reinstall or update OpenClaw, then restart the gateway. ARIA snapshots and basic page screenshots can still work, but navigation, AI snapshots, CSS-selector element screenshots, and PDF export stay unavailable.
 
   </Accordion>
   <Accordion title="Chrome MCP / existing-session signatures">

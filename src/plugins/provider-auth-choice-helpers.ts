@@ -68,7 +68,7 @@ function sanitizeConfigPatchValue(value: unknown): unknown {
   return next;
 }
 
-export function mergeConfigPatch<T>(base: T, patch: unknown): T {
+function mergeConfigPatch<T>(base: T, patch: unknown): T {
   if (!isPlainRecord(base) || !isPlainRecord(patch)) {
     return sanitizeConfigPatchValue(patch) as T;
   }

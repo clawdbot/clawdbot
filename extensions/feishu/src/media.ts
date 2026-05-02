@@ -12,6 +12,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtim
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { requestFeishuApi } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
@@ -418,12 +419,17 @@ export async function uploadImageFeishu(params: {
   // See: https://github.com/larksuite/node-sdk/issues/121
   const imageData = typeof image === "string" ? fs.createReadStream(image) : image;
 
-  const response = await client.im.image.create({
-    data: {
-      image_type: imageType,
-      image: imageData,
-    },
-  });
+  const response = await requestFeishuApi(
+    () =>
+      client.im.image.create({
+        data: {
+          image_type: imageType,
+          image: imageData,
+        },
+      }),
+    "Feishu image upload failed",
+    { includeNestedErrorLogId: true },
+  );
 
   return {
     imageKey: extractFeishuUploadKey(response, {
@@ -469,14 +475,19 @@ export async function uploadFileFeishu(params: {
 
   const safeFileName = sanitizeFileNameForUpload(fileName);
 
-  const response = await client.im.file.create({
-    data: {
-      file_type: fileType,
-      file_name: safeFileName,
-      file: fileData,
-      ...(duration !== undefined && { duration }),
-    },
-  });
+  const response = await requestFeishuApi(
+    () =>
+      client.im.file.create({
+        data: {
+          file_type: fileType,
+          file_name: safeFileName,
+          file: fileData,
+          ...(duration !== undefined && { duration }),
+        },
+      }),
+    "Feishu file upload failed",
+    { includeNestedErrorLogId: true },
+  );
 
   return {
     fileKey: extractFeishuUploadKey(response, {
@@ -506,26 +517,36 @@ export async function sendImageFeishu(params: {
   const content = JSON.stringify({ image_key: imageKey });
 
   if (replyToMessageId) {
-    const response = await client.im.message.reply({
-      path: { message_id: replyToMessageId },
-      data: {
-        content,
-        msg_type: "image",
-        ...(replyInThread ? { reply_in_thread: true } : {}),
-      },
-    });
+    const response = await requestFeishuApi(
+      () =>
+        client.im.message.reply({
+          path: { message_id: replyToMessageId },
+          data: {
+            content,
+            msg_type: "image",
+            ...(replyInThread ? { reply_in_thread: true } : {}),
+          },
+        }),
+      "Feishu image reply failed",
+      { includeNestedErrorLogId: true },
+    );
     assertFeishuMessageApiSuccess(response, "Feishu image reply failed");
     return toFeishuSendResult(response, receiveId);
   }
 
-  const response = await client.im.message.create({
-    params: { receive_id_type: receiveIdType },
-    data: {
-      receive_id: receiveId,
-      content,
-      msg_type: "image",
-    },
-  });
+  const response = await requestFeishuApi(
+    () =>
+      client.im.message.create({
+        params: { receive_id_type: receiveIdType },
+        data: {
+          receive_id: receiveId,
+          content,
+          msg_type: "image",
+        },
+      }),
+    "Feishu image send failed",
+    { includeNestedErrorLogId: true },
+  );
   assertFeishuMessageApiSuccess(response, "Feishu image send failed");
   return toFeishuSendResult(response, receiveId);
 }
@@ -553,26 +574,36 @@ export async function sendFileFeishu(params: {
   const content = JSON.stringify({ file_key: fileKey });
 
   if (replyToMessageId) {
-    const response = await client.im.message.reply({
-      path: { message_id: replyToMessageId },
-      data: {
-        content,
-        msg_type: msgType,
-        ...(replyInThread ? { reply_in_thread: true } : {}),
-      },
-    });
+    const response = await requestFeishuApi(
+      () =>
+        client.im.message.reply({
+          path: { message_id: replyToMessageId },
+          data: {
+            content,
+            msg_type: msgType,
+            ...(replyInThread ? { reply_in_thread: true } : {}),
+          },
+        }),
+      "Feishu file reply failed",
+      { includeNestedErrorLogId: true },
+    );
     assertFeishuMessageApiSuccess(response, "Feishu file reply failed");
     return toFeishuSendResult(response, receiveId);
   }
 
-  const response = await client.im.message.create({
-    params: { receive_id_type: receiveIdType },
-    data: {
-      receive_id: receiveId,
-      content,
-      msg_type: msgType,
-    },
-  });
+  const response = await requestFeishuApi(
+    () =>
+      client.im.message.create({
+        params: { receive_id_type: receiveIdType },
+        data: {
+          receive_id: receiveId,
+          content,
+          msg_type: msgType,
+        },
+      }),
+    "Feishu file send failed",
+    { includeNestedErrorLogId: true },
+  );
   assertFeishuMessageApiSuccess(response, "Feishu file send failed");
   return toFeishuSendResult(response, receiveId);
 }

@@ -2,7 +2,7 @@ import { RateLimitError, readRetryAfter } from "./rest-errors.js";
 import { createBucketKey, createRouteKey, readHeaderNumber, readResetAt } from "./rest-routes.js";
 
 export type RequestQuery = Record<string, string | number | boolean>;
-export type ScheduledRequest<TData> = {
+type ScheduledRequest<TData> = {
   method: string;
   path: string;
   data?: TData;
@@ -26,7 +26,7 @@ type BucketState<TData> = {
   routeKeys: Set<string>;
 };
 
-export type RestSchedulerOptions = {
+type RestSchedulerOptions = {
   maxConcurrency: number;
   maxRateLimitRetries: number;
   maxQueueSize: number;

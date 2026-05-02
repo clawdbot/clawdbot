@@ -48,9 +48,9 @@ export const upsertPairingRequestMock: AsyncUnknownMock = runtimeMocks.upsertPai
 export const recordInboundSessionMock: AsyncUnknownMock = runtimeMocks.recordInboundSessionMock;
 export const readSessionUpdatedAtMock: UnknownMock = runtimeMocks.readSessionUpdatedAtMock;
 export const resolveStorePathMock: UnknownMock = runtimeMocks.resolveStorePathMock;
-export const resolvePluginConversationBindingApprovalMock: AsyncUnknownMock =
+const resolvePluginConversationBindingApprovalMock: AsyncUnknownMock =
   runtimeMocks.resolvePluginConversationBindingApprovalMock;
-export const buildPluginBindingResolvedTextMock: UnknownMock =
+const buildPluginBindingResolvedTextMock: UnknownMock =
   runtimeMocks.buildPluginBindingResolvedTextMock;
 
 async function readStoreAllowFromForDmPolicy(params: {

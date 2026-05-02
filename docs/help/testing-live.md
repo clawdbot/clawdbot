@@ -77,7 +77,7 @@ Live tests are split into two layers so we can isolate failures:
   - `pnpm test:live` (or `OPENCLAW_LIVE_TEST=1` if invoking Vitest directly)
 - Set `OPENCLAW_LIVE_MODELS=modern` (or `all`, alias for modern) to actually run this suite; otherwise it skips to keep `pnpm test:live` focused on gateway smoke
 - How to select models:
-  - `OPENCLAW_LIVE_MODELS=modern` to run the modern allowlist (Opus/Sonnet 4.6+, GPT-5.2 + Codex, Gemini 3, DeepSeek V4, GLM 4.7, MiniMax M2.7, Grok 4)
+  - `OPENCLAW_LIVE_MODELS=modern` to run the modern allowlist (Opus/Sonnet 4.6+, GPT-5.2 + Codex, Gemini 3, DeepSeek V4, GLM 4.7, MiniMax M2.7, Grok 4.3)
   - `OPENCLAW_LIVE_MODELS=all` is an alias for the modern allowlist
   - or `OPENCLAW_LIVE_MODELS="openai/gpt-5.5,openai-codex/gpt-5.5,anthropic/claude-opus-4-6,..."` (comma allowlist)
   - Modern/all sweeps default to a curated high-signal cap; set `OPENCLAW_LIVE_MAX_MODELS=0` for an exhaustive modern sweep or a positive number for a smaller cap.
@@ -111,7 +111,7 @@ Live tests are split into two layers so we can isolate failures:
 - How to enable:
   - `pnpm test:live` (or `OPENCLAW_LIVE_TEST=1` if invoking Vitest directly)
 - How to select models:
-  - Default: modern allowlist (Opus/Sonnet 4.6+, GPT-5.2 + Codex, Gemini 3, DeepSeek V4, GLM 4.7, MiniMax M2.7, Grok 4)
+  - Default: modern allowlist (Opus/Sonnet 4.6+, GPT-5.2 + Codex, Gemini 3, DeepSeek V4, GLM 4.7, MiniMax M2.7, Grok 4.3)
   - `OPENCLAW_LIVE_GATEWAY_MODELS=all` is an alias for the modern allowlist
   - Or set `OPENCLAW_LIVE_GATEWAY_MODELS="provider/model"` (or comma list) to narrow
   - Modern/all gateway sweeps default to a curated high-signal cap; set `OPENCLAW_LIVE_GATEWAY_MAX_MODELS=0` for an exhaustive modern sweep or a positive number for a smaller cap.
@@ -266,7 +266,7 @@ Docker notes:
 - The Docker runner lives at `scripts/test-live-acp-bind-docker.sh`.
 - By default, it runs the ACP bind smoke against the aggregate live CLI agents in sequence: `claude`, `codex`, then `gemini`.
 - Use `OPENCLAW_LIVE_ACP_BIND_AGENTS=claude`, `OPENCLAW_LIVE_ACP_BIND_AGENTS=codex`, `OPENCLAW_LIVE_ACP_BIND_AGENTS=droid`, `OPENCLAW_LIVE_ACP_BIND_AGENTS=gemini`, or `OPENCLAW_LIVE_ACP_BIND_AGENTS=opencode` to narrow the matrix.
-- It sources `~/.profile`, stages the matching CLI auth material into the container, then installs the requested live CLI (`@anthropic-ai/claude-code`, `@openai/codex`, Factory Droid via `https://app.factory.ai/cli`, `@google/gemini-cli`, or `opencode-ai`) if missing. The ACP backend itself is the bundled embedded `acpx/runtime` package from the `acpx` plugin.
+- It sources `~/.profile`, stages the matching CLI auth material into the container, then installs the requested live CLI (`@anthropic-ai/claude-code`, `@openai/codex`, Factory Droid via `https://app.factory.ai/cli`, `@google/gemini-cli`, or `opencode-ai`) if missing. The ACP backend itself is the embedded `acpx/runtime` package from the official `acpx` plugin.
 - The Droid Docker variant stages `~/.factory` for settings, forwards `FACTORY_API_KEY`, and requires that API key because local Factory OAuth/keyring auth is not portable into the container. It uses ACPX's built-in `droid exec --output-format acp` registry entry.
 - The OpenCode Docker variant is a strict single-agent regression lane. It writes a temporary `OPENCODE_CONFIG_CONTENT` default model from `OPENCLAW_LIVE_ACP_BIND_OPENCODE_MODEL` (default `opencode/kimi-k2.6`) after sourcing `~/.profile`, and `pnpm test:docker:live-acp-bind:opencode` requires a bound assistant transcript instead of accepting the generic post-bind skip.
 - Direct `acpx` CLI calls are only a manual/workaround path for comparing behavior outside the Gateway. The Docker ACP bind smoke exercises OpenClaw's embedded `acpx` runtime backend.
@@ -395,7 +395,7 @@ Pick at least one per provider family:
 
 Optional additional coverage (nice to have):
 
-- xAI: `xai/grok-4` (or latest available)
+- xAI: `xai/grok-4.3` (or latest available)
 - Mistral: `mistral/`… (pick one “tools” capable model you have enabled)
 - Cerebras: `cerebras/`… (if you have access)
 - LM Studio: `lmstudio/`… (local; tool calling depends on API mode)
@@ -498,8 +498,8 @@ openclaw infer image generate \
 ```
 
 This covers CLI argument parsing, config/default-agent resolution, bundled
-plugin activation, on-demand bundled runtime-dependency repair, the shared
-image-generation runtime, and the live provider request.
+plugin activation, the shared image-generation runtime, and the live provider
+request. Plugin dependencies are expected to be present before runtime load.
 
 ## Music generation live
 

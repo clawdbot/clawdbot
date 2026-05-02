@@ -59,7 +59,7 @@ export function buildAllowlistResolutionSummary<T extends AllowlistUserResolutio
   return { resolvedMap, mapping, unresolved, additions };
 }
 
-export function resolveAllowlistIdAdditions<T extends AllowlistUserResolutionLike>(params: {
+function resolveAllowlistIdAdditions<T extends AllowlistUserResolutionLike>(params: {
   existing: Array<string | number>;
   resolvedMap: Map<string, T>;
 }): string[] {

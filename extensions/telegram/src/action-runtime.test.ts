@@ -801,6 +801,38 @@ describe("handleTelegramAction", () => {
     );
   });
 
+  it("surfaces non-fatal delete warnings", async () => {
+    deleteMessageTelegram.mockResolvedValueOnce({
+      ok: false,
+      warning: "Message 456 was not deleted: 400: Bad Request: message can't be deleted",
+    } as unknown as Awaited<ReturnType<typeof deleteMessageTelegram>>);
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as OpenClawConfig;
+
+    const result = await handleTelegramAction(
+      {
+        action: "deleteMessage",
+        chatId: "123",
+        messageId: 456,
+      },
+      cfg,
+    );
+
+    const textPayload = result.content.find((item) => item.type === "text");
+    expect(textPayload?.type).toBe("text");
+    const parsed = JSON.parse((textPayload as { type: "text"; text: string }).text) as {
+      ok: boolean;
+      deleted?: boolean;
+      warning?: string;
+    };
+    expect(parsed).toMatchObject({
+      ok: false,
+      deleted: false,
+      warning: "Message 456 was not deleted: 400: Bad Request: message can't be deleted",
+    });
+  });
+
   it("respects deleteMessage gating", async () => {
     const cfg = {
       channels: {

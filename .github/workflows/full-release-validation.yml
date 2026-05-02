@@ -59,7 +59,7 @@ on:
         default: ""
         type: string
       npm_telegram_package_spec:
-        description: Optional published package spec for the post-publish Telegram E2E lane
+        description: Optional published package spec for the package Telegram E2E lane
         required: false
         default: ""
         type: string
@@ -69,7 +69,7 @@ on:
         default: ""
         type: string
       npm_telegram_provider_mode:
-        description: Provider mode for the optional post-publish Telegram E2E lane
+        description: Provider mode for the package Telegram E2E lane
         required: false
         default: mock-openai
         type: choice
@@ -77,7 +77,7 @@ on:
           - mock-openai
           - live-frontier
       npm_telegram_scenario:
-        description: Optional comma-separated Telegram scenario ids for the post-publish lane
+        description: Optional comma-separated Telegram scenario ids for the package Telegram lane
         required: false
         default: ""
         type: string
@@ -127,6 +127,7 @@ jobs:
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
           EVIDENCE_PACKAGE_SPEC: ${{ inputs.evidence_package_spec }}
+          RELEASE_PROFILE: ${{ inputs.release_profile }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
         run: |
@@ -156,9 +157,11 @@ jobs:
               echo "- Release/live/Docker/package/QA: skipped by rerun group"
             fi
             if [[ -n "${NPM_TELEGRAM_PACKAGE_SPEC// }" ]]; then
-              echo "- Post-publish Telegram E2E: \`${NPM_TELEGRAM_PACKAGE_SPEC}\`"
+              echo "- Published-package Telegram E2E: \`${NPM_TELEGRAM_PACKAGE_SPEC}\`"
+            elif [[ "$RERUN_GROUP" == "all" && "$RELEASE_PROFILE" == "full" ]]; then
+              echo "- Package Telegram E2E: release package artifact from \`OpenClaw Release Checks\`"
             else
-              echo "- Post-publish Telegram E2E: skipped because no published package spec was provided"
+              echo "- Package Telegram E2E: skipped unless \`release_profile=full\` or \`npm_telegram_package_spec\` is provided"
             fi
             if [[ -n "${EVIDENCE_PACKAGE_SPEC// }" ]]; then
               echo "- Private evidence package proof: \`${EVIDENCE_PACKAGE_SPEC}\`"
@@ -474,9 +477,9 @@ jobs:
           dispatch_and_wait openclaw-release-checks.yml "${args[@]}"
 
   npm_telegram:
-    name: Run post-publish Telegram E2E
-    needs: [resolve_target]
-    if: inputs.npm_telegram_package_spec != '' && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group)
+    name: Run package Telegram E2E
+    needs: [resolve_target, release_checks]
+    if: ${{ always() && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group) && (inputs.npm_telegram_package_spec != '' || (inputs.rerun_group == 'all' && inputs.release_profile == 'full')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     outputs:
@@ -491,6 +494,7 @@ jobs:
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
+          RELEASE_CHECKS_RUN_ID: ${{ needs.release_checks.outputs.run_id }}
           PROVIDER_MODE: ${{ inputs.npm_telegram_provider_mode }}
           SCENARIO: ${{ inputs.npm_telegram_scenario }}
         run: |
@@ -498,7 +502,18 @@ jobs:
 
           before_json="$(gh run list --workflow npm-telegram-beta-e2e.yml --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
 
-          args=(-f package_spec="$PACKAGE_SPEC" -f harness_ref="$TARGET_SHA" -f provider_mode="$PROVIDER_MODE")
+          args=(-f package_spec="${PACKAGE_SPEC:-openclaw@beta}" -f harness_ref="$TARGET_SHA" -f provider_mode="$PROVIDER_MODE")
+          if [[ -z "${PACKAGE_SPEC// }" ]]; then
+            if [[ -z "${RELEASE_CHECKS_RUN_ID// }" ]]; then
+              echo "Full release Telegram requires either npm_telegram_package_spec or a release_checks child run with the release-package-under-test artifact." >&2
+              exit 1
+            fi
+            args+=(
+              -f package_artifact_name=release-package-under-test
+              -f package_artifact_run_id="$RELEASE_CHECKS_RUN_ID"
+              -f package_label="full-release-${TARGET_SHA:0:12}"
+            )
+          fi
           if [[ -n "${SCENARIO// }" ]]; then
             args+=(-f scenario="$SCENARIO")
           fi
@@ -553,7 +568,7 @@ jobs:
 
   summary:
     name: Verify full validation
-    needs: [normal_ci, plugin_prerelease, release_checks, npm_telegram]
+    needs: [resolve_target, normal_ci, plugin_prerelease, release_checks, npm_telegram]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -625,6 +640,7 @@ jobs:
           PLUGIN_PRERELEASE_RESULT: ${{ needs.plugin_prerelease.result }}
           RELEASE_CHECKS_RESULT: ${{ needs.release_checks.result }}
           NPM_TELEGRAM_RESULT: ${{ needs.npm_telegram.result }}
+          TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
         run: |
           set -euo pipefail
 
@@ -642,13 +658,19 @@ jobs:
               return 1
             fi
 
-            local run_json status conclusion url attempt
-            run_json="$(gh run view "$run_id" --json status,conclusion,url,attempt,jobs)"
+            local run_json status conclusion url attempt head_sha
+            run_json="$(gh run view "$run_id" --json status,conclusion,url,attempt,headSha,jobs)"
             status="$(jq -r '.status' <<< "$run_json")"
             conclusion="$(jq -r '.conclusion' <<< "$run_json")"
             url="$(jq -r '.url' <<< "$run_json")"
             attempt="$(jq -r '.attempt' <<< "$run_json")"
-            echo "${label}: ${status}/${conclusion} attempt ${attempt}: ${url}"
+            head_sha="$(jq -r '.headSha // ""' <<< "$run_json")"
+            echo "${label}: ${status}/${conclusion} attempt ${attempt} head ${head_sha}: ${url}"
+
+            if [[ -n "${TARGET_SHA// }" && "$head_sha" != "$TARGET_SHA" ]]; then
+              echo "::error::${label} child run used ${head_sha}, expected ${TARGET_SHA}. Dispatch Full Release Validation from a ref pinned to the target SHA, not a moving branch."
+              return 1
+            fi
 
             if [[ "$status" != "completed" || "$conclusion" != "success" ]]; then
               echo "::error::${label} child run ended with ${status}/${conclusion}: ${url}"
@@ -662,8 +684,8 @@ jobs:
               echo
               echo "### Child workflow overview"
               echo
-              echo "| Child | Result | Minutes | Run |"
-              echo "| --- | --- | ---: | --- |"
+              echo "| Child | Result | Minutes | Head SHA | Run |"
+              echo "| --- | --- | ---: | --- | --- |"
             } >> "$GITHUB_STEP_SUMMARY"
 
             append_child_row() {
@@ -677,7 +699,7 @@ jobs:
               fi
 
               local run_json row
-              run_json="$(gh run view "$run_id" --json status,conclusion,url,createdAt,updatedAt)"
+              run_json="$(gh run view "$run_id" --json status,conclusion,url,createdAt,updatedAt,headSha)"
               row="$(
                 jq -r --arg label "$label" '
                   def ts: fromdateiso8601;
@@ -688,7 +710,8 @@ jobs:
                     then (((($updated | ts) - ($created | ts)) / 60) * 10 | round / 10 | tostring)
                     else ""
                   end) as $minutes |
-                  "| `" + $label + "` | `" + ($run.status // "") + "/" + ($run.conclusion // "") + "` | " + $minutes + " | [run](" + ($run.url // "") + ") |"
+                  ($run.headSha // "") as $head |
+                  "| `" + $label + "` | `" + ($run.status // "") + "/" + ($run.conclusion // "") + "` | " + $minutes + " | `" + $head + "` | [run](" + ($run.url // "") + ") |"
                 ' <<< "$run_json"
               )"
               echo "$row" >> "$GITHUB_STEP_SUMMARY"

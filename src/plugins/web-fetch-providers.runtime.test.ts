@@ -165,7 +165,7 @@ describe("resolvePluginWebFetchProviders", () => {
     expect(inFlightSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         activate: false,
-        cache: false,
+        cache: true,
         onlyPluginIds: ["firecrawl"],
         workspaceDir: DEFAULT_WORKSPACE,
       }),

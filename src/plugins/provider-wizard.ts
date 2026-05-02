@@ -15,7 +15,7 @@ import type {
   ProviderPluginWizardSetup,
 } from "./types.js";
 
-export const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
+const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
 
 export type ProviderWizardOption = {
   value: string;

@@ -54,6 +54,12 @@ OpenClaw persists sessions in two layers:
      transcript exceeds the checkpoint size cap, avoiding a second giant
      `.checkpoint.*.jsonl` copy.
 
+Gateway history readers should avoid materializing the whole transcript unless
+the surface explicitly needs arbitrary historical access. First-page history,
+embedded chat history, restart recovery, and token/usage checks use bounded tail
+reads. Full transcript scans go through the async transcript index, which is
+cached by file path plus `mtimeMs`/`size` and shared across concurrent readers.
+
 ---
 
 ## On-disk locations
@@ -80,6 +86,11 @@ Session persistence has automatic maintenance controls (`session.maintenance`) f
 - `highWaterBytes`: optional target after cleanup (default `80%` of `maxDiskBytes`)
 
 Normal Gateway writes batch `maxEntries` cleanup for production-sized caps, so a store may briefly exceed the configured cap before the next high-water cleanup rewrites it back down. Session store reads do not prune or cap entries during Gateway startup; use writes or `openclaw sessions cleanup --enforce` for cleanup. `openclaw sessions cleanup --enforce` still applies the configured cap immediately.
+
+Maintenance keeps durable external conversation pointers such as group sessions
+and thread-scoped chat sessions, but synthetic runtime entries for cron, hooks,
+heartbeat, ACP, and sub-agents can still be removed when they exceed the
+configured age, count, or disk budget.
 
 OpenClaw no longer creates automatic `sessions.json.bak.*` rotation backups during Gateway writes. The legacy `session.maintenance.rotateBytes` key is ignored and `openclaw doctor --fix` removes it from older configs.
 
@@ -143,7 +154,7 @@ Rules of thumb:
 - **Daily reset** (default 4:00 AM local time on the gateway host) creates a new `sessionId` on the next message after the reset boundary.
 - **Idle expiry** (`session.reset.idleMinutes` or legacy `session.idleMinutes`) creates a new `sessionId` when a message arrives after the idle window. When daily + idle are both configured, whichever expires first wins.
 - **System events** (heartbeat, cron wakeups, exec notifications, gateway bookkeeping) may mutate the session row but do not extend daily/idle reset freshness. Reset rollover discards queued system-event notices for the previous session before the fresh prompt is built.
-- **Thread parent fork guard** (`session.parentForkMaxTokens`, default `100000`) skips parent transcript forking when the parent session is already too large; the new thread starts fresh. Set `0` to disable.
+- **Parent fork policy** uses PI's active branch when creating a thread or subagent fork. If that branch is too large, OpenClaw starts the child with isolated context instead of failing or inheriting unusable history. The sizing policy is automatic; legacy `session.parentForkMaxTokens` config is removed by `openclaw doctor --fix`.
 
 Implementation detail: the decision happens in `initSessionState()` in `src/auto-reply/reply/session.ts`.
 

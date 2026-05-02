@@ -127,6 +127,42 @@ describe("GatewayPlugin", () => {
     await vi.waitFor(() => expect(errorSpy).toHaveBeenCalledWith(error));
   });
 
+  it("reconnects when the socket closes while waiting for identify concurrency", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    await sharedGatewayIdentifyLimiter.wait({ shardId: 0, maxConcurrency: 1 });
+    const gateway = new TestGatewayPlugin({
+      autoInteractions: false,
+      url: "wss://gateway.example.test",
+    });
+    const errorSpy = vi.fn();
+    gateway.emitter.on("error", errorSpy);
+
+    gateway.connect(false);
+    const socket = gateway.sockets[0];
+    socket?.emit("open");
+    socket?.emit(
+      "message",
+      JSON.stringify({
+        op: GatewayOpcodes.Hello,
+        d: { heartbeat_interval: 45_000 },
+        s: null,
+      }),
+    );
+    if (socket) {
+      socket.readyState = 3;
+    }
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(errorSpy).toHaveBeenCalledWith(
+      new Error("Discord gateway socket closed before IDENTIFY could be sent"),
+    );
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(gateway.connectCalls).toEqual([false, false]);
+    expect(gateway.sockets).toHaveLength(2);
+  });
+
   it("preserves MESSAGE_CREATE author payloads for inbound dispatch", async () => {
     const gateway = new GatewayPlugin({ autoInteractions: false });
     const dispatchGatewayEvent = vi.fn(async (_event: string, _data: unknown) => {});

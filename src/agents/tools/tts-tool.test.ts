@@ -17,6 +17,14 @@ describe("createTtsTool", () => {
     expect(tool.description).toContain(SILENT_REPLY_TOKEN);
   });
 
+  it("requires explicit user or config audio intent in guidance text", () => {
+    const tool = createTtsTool();
+
+    expect(tool.description).toContain("Use only for explicit audio intent");
+    expect(tool.description).toContain("active TTS config");
+    expect(tool.description).toContain("Never use for ordinary text replies");
+  });
+
   it("stores audio delivery in details.media and preserves the spoken text in content", async () => {
     textToSpeechSpy.mockResolvedValue({
       success: true,

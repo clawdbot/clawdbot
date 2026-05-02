@@ -350,6 +350,7 @@ export type ChatState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   sessionKey: string;
+  currentSessionId?: string | null;
   chatLoading: boolean;
   chatMessages: unknown[];
   chatThinkingLevel: string | null;
@@ -396,16 +397,17 @@ export async function loadChatHistory(state: ChatState) {
   state.chatLoading = true;
   state.lastError = null;
   try {
-    let res: { messages?: Array<unknown>; thinkingLevel?: string };
+    let res: { messages?: Array<unknown>; sessionId?: string; thinkingLevel?: string };
     for (;;) {
       try {
-        res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
-          "chat.history",
-          {
-            sessionKey,
-            limit: 200,
-          },
-        );
+        res = await state.client.request<{
+          messages?: Array<unknown>;
+          sessionId?: string;
+          thinkingLevel?: string;
+        }>("chat.history", {
+          sessionKey,
+          limit: 200,
+        });
         break;
       } catch (err) {
         if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
@@ -429,6 +431,8 @@ export async function loadChatHistory(state: ChatState) {
     const messages = Array.isArray(res.messages) ? res.messages : [];
     const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
     state.chatMessages = preserveOptimisticTailMessages(visibleMessages, previousMessages);
+    state.currentSessionId =
+      typeof res.sessionId === "string" && res.sessionId.trim() ? res.sessionId : null;
     state.chatThinkingLevel = res.thinkingLevel ?? null;
     // Clear all streaming state — history includes tool results and text
     // inline, so keeping streaming artifacts would cause duplicates.
@@ -486,8 +490,13 @@ async function requestChatSend(
   state: ChatState,
   params: { message: string; attachments?: ChatAttachment[]; runId: string },
 ) {
+  const sessionId =
+    typeof state.currentSessionId === "string" && state.currentSessionId.trim()
+      ? state.currentSessionId.trim()
+      : undefined;
   await state.client!.request("chat.send", {
     sessionKey: state.sessionKey,
+    ...(sessionId ? { sessionId } : {}),
     message: params.message,
     deliver: false,
     idempotencyKey: params.runId,
@@ -714,7 +723,12 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (!payload) {
     return null;
   }
-  if (payload.sessionKey !== state.sessionKey) {
+  const sessionMatches = payload.sessionKey === state.sessionKey;
+  const activeRunMatches =
+    state.chatRunId !== null &&
+    typeof payload.runId === "string" &&
+    payload.runId === state.chatRunId;
+  if (!sessionMatches && !activeRunMatches) {
     return null;
   }
 

@@ -20,7 +20,7 @@ import { setPendingUploadActivityId } from "./pending-uploads.js";
 import { buildMSTeamsPollCard } from "./polls.js";
 import { resolveMSTeamsSendContext, type MSTeamsProactiveContext } from "./send-context.js";
 
-export type SendMSTeamsMessageParams = {
+type SendMSTeamsMessageParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
   /** Conversation ID or user ID to send to */
@@ -35,7 +35,7 @@ export type SendMSTeamsMessageParams = {
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
 
-export type SendMSTeamsMessageResult = {
+type SendMSTeamsMessageResult = {
   messageId: string;
   conversationId: string;
   /** If a FileConsentCard was sent instead of the file, this contains the upload ID */
@@ -51,7 +51,7 @@ const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024; // 4MB
  */
 const MSTEAMS_MAX_MEDIA_BYTES = 100 * 1024 * 1024;
 
-export type SendMSTeamsPollParams = {
+type SendMSTeamsPollParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
   /** Conversation ID or user ID to send to */
@@ -64,13 +64,13 @@ export type SendMSTeamsPollParams = {
   maxSelections?: number;
 };
 
-export type SendMSTeamsPollResult = {
+type SendMSTeamsPollResult = {
   pollId: string;
   messageId: string;
   conversationId: string;
 };
 
-export type SendMSTeamsCardParams = {
+type SendMSTeamsCardParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
   /** Conversation ID or user ID to send to */
@@ -79,7 +79,7 @@ export type SendMSTeamsCardParams = {
   card: Record<string, unknown>;
 };
 
-export type SendMSTeamsCardResult = {
+type SendMSTeamsCardResult = {
   messageId: string;
   conversationId: string;
 };
@@ -526,7 +526,7 @@ export async function sendAdaptiveCardMSTeams(
   };
 }
 
-export type EditMSTeamsMessageParams = {
+type EditMSTeamsMessageParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
   /** Conversation ID or user ID */
@@ -537,11 +537,11 @@ export type EditMSTeamsMessageParams = {
   text: string;
 };
 
-export type EditMSTeamsMessageResult = {
+type EditMSTeamsMessageResult = {
   conversationId: string;
 };
 
-export type DeleteMSTeamsMessageParams = {
+type DeleteMSTeamsMessageParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
   /** Conversation ID or user ID */
@@ -550,7 +550,7 @@ export type DeleteMSTeamsMessageParams = {
   activityId: string;
 };
 
-export type DeleteMSTeamsMessageResult = {
+type DeleteMSTeamsMessageResult = {
   conversationId: string;
 };
 

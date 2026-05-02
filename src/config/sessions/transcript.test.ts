@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
+import { appendSessionTranscriptMessage } from "./transcript-append.js";
 import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
@@ -356,5 +357,125 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(emitSpy).toHaveBeenCalledWith(result.sessionFile);
     }
     emitSpy.mockRestore();
+  });
+
+  it("serializes concurrent parent-linked transcript appends", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "concurrent-tree-session",
+      fixture.sessionsDir(),
+    );
+    fs.writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 1,
+          id: "concurrent-tree-session",
+          timestamp: new Date().toISOString(),
+          cwd: process.cwd(),
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "root-message",
+          parentId: null,
+          timestamp: new Date().toISOString(),
+          message: { role: "user", content: "root" },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    await Promise.all(
+      Array.from({ length: 8 }, (_, index) =>
+        appendSessionTranscriptMessage({
+          transcriptPath: sessionFile,
+          message: { role: "assistant", content: `reply ${index}` },
+        }),
+      ),
+    );
+
+    const records = fs
+      .readFileSync(sessionFile, "utf-8")
+      .trim()
+      .split("\n")
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            type?: string;
+            id?: string;
+            parentId?: string | null;
+            message?: { content?: string };
+          },
+      )
+      .filter((record) => record.type === "message");
+
+    expect(records).toHaveLength(9);
+    for (let index = 1; index < records.length; index += 1) {
+      expect(records[index]?.parentId).toBe(records[index - 1]?.id);
+    }
+  });
+
+  it("migrates small linear transcripts before appending", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "small-linear-session",
+      fixture.sessionsDir(),
+    );
+    fs.writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "small-linear-session",
+          timestamp: new Date().toISOString(),
+          cwd: process.cwd(),
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "legacy-first",
+          timestamp: new Date().toISOString(),
+          message: { role: "user", content: "legacy first" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "legacy-second",
+          timestamp: new Date().toISOString(),
+          message: { role: "assistant", content: "legacy second" },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    const appended = await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: { role: "assistant", content: "new reply" },
+    });
+
+    const records = fs
+      .readFileSync(sessionFile, "utf-8")
+      .trim()
+      .split("\n")
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            type?: string;
+            id?: string;
+            parentId?: string | null;
+            message?: { content?: string };
+          },
+      );
+    const messages = records.filter((record) => record.type === "message");
+
+    expect(messages.map((record) => record.message?.content)).toEqual([
+      "legacy first",
+      "legacy second",
+      "new reply",
+    ]);
+    expect(messages[0]).toMatchObject({ id: "legacy-first", parentId: null });
+    expect(messages[1]).toMatchObject({ id: "legacy-second", parentId: "legacy-first" });
+    expect(messages[2]).toMatchObject({
+      id: appended.messageId,
+      parentId: "legacy-second",
+    });
   });
 });

@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { BundleLspServerConfig } from "../plugins/bundle-lsp.js";
 import { loadEnabledBundleLspConfig } from "../plugins/bundle-lsp.js";
 
-export type EmbeddedPiLspConfig = {
+type EmbeddedPiLspConfig = {
   lspServers: Record<string, BundleLspServerConfig>;
   diagnostics: Array<{ pluginId: string; message: string }>;
 };

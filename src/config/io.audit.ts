@@ -135,7 +135,7 @@ const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
 
 export type ConfigWriteAuditResult = "rename" | "copy-fallback" | "failed" | "rejected";
 
-export type ConfigWriteAuditRecord = {
+type ConfigWriteAuditRecord = {
   ts: string;
   source: "config-io";
   event: "config.write";
@@ -227,11 +227,13 @@ export type ConfigObserveAuditRecord = {
   clobberedPath: string | null;
   restoredFromBackup: boolean;
   restoredBackupPath: string | null;
+  restoreErrorCode: string | null;
+  restoreErrorMessage: string | null;
 };
 
-export type ConfigAuditRecord = ConfigWriteAuditRecord | ConfigObserveAuditRecord;
+type ConfigAuditRecord = ConfigWriteAuditRecord | ConfigObserveAuditRecord;
 
-export type ConfigAuditStatMetadata = {
+type ConfigAuditStatMetadata = {
   dev: string | null;
   ino: string | null;
   mode: number | null;
@@ -240,7 +242,7 @@ export type ConfigAuditStatMetadata = {
   gid: number | null;
 };
 
-export type ConfigAuditProcessInfo = {
+type ConfigAuditProcessInfo = {
   pid: number;
   ppid: number;
   cwd: string;
@@ -248,7 +250,7 @@ export type ConfigAuditProcessInfo = {
   execArgv: string[];
 };
 
-export type ConfigWriteAuditRecordBase = Omit<
+type ConfigWriteAuditRecordBase = Omit<
   ConfigWriteAuditRecord,
   | "result"
   | "nextDev"

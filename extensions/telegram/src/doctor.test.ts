@@ -5,6 +5,7 @@ import {
   collectTelegramApiRootWarnings,
   collectTelegramEmptyAllowlistExtraWarnings,
   collectTelegramGroupPolicyWarnings,
+  collectTelegramMissingEnvTokenWarnings,
   maybeRepairTelegramApiRoots,
   maybeRepairTelegramAllowFromUsernames,
   scanTelegramBotEndpointApiRoots,
@@ -62,7 +63,7 @@ describe("telegram doctor", () => {
       enabled: true,
       token: "tok",
       tokenSource: "config",
-      tokenStatus: "configured",
+      tokenStatus: "available",
     });
     lookupTelegramChatIdMock.mockReset();
   });
@@ -354,5 +355,71 @@ describe("telegram doctor", () => {
     expect(repaired?.changes).toEqual([
       "- channels.telegram.apiRoot: removed trailing /bot<TOKEN> from Telegram apiRoot.",
     ]);
+  });
+
+  it("warns when default env fallback token is missing after migration", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          allowFrom: ["123"],
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    inspectTelegramAccountMock.mockReturnValueOnce({
+      enabled: true,
+      token: "",
+      tokenSource: "none",
+      tokenStatus: "missing",
+      configured: false,
+      config: {},
+    });
+    expect(collectTelegramMissingEnvTokenWarnings({ cfg, env: {} })).toEqual([
+      expect.stringContaining("TELEGRAM_BOT_TOKEN is absent"),
+    ]);
+
+    inspectTelegramAccountMock.mockReturnValueOnce({
+      enabled: true,
+      token: "123:tok",
+      tokenSource: "env",
+      tokenStatus: "available",
+      configured: true,
+      config: {},
+    });
+    expect(
+      collectTelegramMissingEnvTokenWarnings({ cfg, env: { TELEGRAM_BOT_TOKEN: "123:tok" } }),
+    ).toEqual([]);
+
+    inspectTelegramAccountMock.mockReturnValueOnce({
+      enabled: true,
+      token: "",
+      tokenSource: "none",
+      tokenStatus: "missing",
+      configured: false,
+      config: {},
+    });
+    expect(
+      await telegramDoctor.collectPreviewWarnings?.({
+        cfg,
+        doctorFixCommand: "openclaw doctor --fix",
+        env: {},
+      }),
+    ).toContainEqual(expect.stringContaining("TELEGRAM_BOT_TOKEN is absent"));
+  });
+
+  it("does not warn about TELEGRAM_BOT_TOKEN when a non-default account is selected", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            work: {
+              botToken: "123:work",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(collectTelegramMissingEnvTokenWarnings({ cfg, env: {} })).toEqual([]);
   });
 });

@@ -1,7 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeExecutableToken } from "./exec-wrapper-resolution.js";
 
-export type InterpreterInlineEvalHit = {
+type InterpreterInlineEvalHit = {
   executable: string;
   normalizedExecutable: string;
   flag: string;

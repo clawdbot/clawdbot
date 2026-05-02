@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import type { PluginDiagnostic } from "./manifest-types.js";
 
-export function hashString(value: string): string {
+function hashString(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
 

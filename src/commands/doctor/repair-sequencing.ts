@@ -13,7 +13,9 @@ import { scanEmptyAllowlistPolicyWarnings } from "./shared/empty-allowlist-scan.
 import { maybeRepairExecSafeBinProfiles } from "./shared/exec-safe-bins.js";
 import { maybeRepairInvalidPluginConfig } from "./shared/invalid-plugin-config.js";
 import { maybeRepairLegacyToolsBySenderKeys } from "./shared/legacy-tools-by-sender.js";
+import { repairMissingConfiguredPluginInstalls } from "./shared/missing-configured-plugin-install.js";
 import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.js";
+import { cleanupLegacyPluginDependencyState } from "./shared/plugin-dependency-cleanup.js";
 import { maybeRepairStalePluginConfig } from "./shared/stale-plugin-config.js";
 
 export async function runDoctorRepairSequence(params: {
@@ -58,6 +60,16 @@ export async function runDoctorRepairSequence(params: {
   }
   applyMutation(maybeRepairOpenPolicyAllowFrom(state.candidate));
   applyMutation(maybeRepairBundledPluginLoadPaths(state.candidate, env));
+  const missingConfiguredPluginInstallRepair = await repairMissingConfiguredPluginInstalls({
+    cfg: state.candidate,
+    env,
+  });
+  if (missingConfiguredPluginInstallRepair.changes.length > 0) {
+    changeNotes.push(sanitizeLines(missingConfiguredPluginInstallRepair.changes));
+  }
+  if (missingConfiguredPluginInstallRepair.warnings.length > 0) {
+    warningNotes.push(sanitizeLines(missingConfiguredPluginInstallRepair.warnings));
+  }
   applyMutation(maybeRepairStalePluginConfig(state.candidate, env));
   applyMutation(maybeRepairInvalidPluginConfig(state.candidate));
   applyMutation(await maybeRepairAllowlistPolicyAllowFrom(state.candidate));
@@ -72,6 +84,13 @@ export async function runDoctorRepairSequence(params: {
 
   applyMutation(maybeRepairLegacyToolsBySenderKeys(state.candidate));
   applyMutation(maybeRepairExecSafeBinProfiles(state.candidate));
+  const pluginDependencyCleanup = await cleanupLegacyPluginDependencyState({ env });
+  if (pluginDependencyCleanup.changes.length > 0) {
+    changeNotes.push(sanitizeLines(pluginDependencyCleanup.changes));
+  }
+  if (pluginDependencyCleanup.warnings.length > 0) {
+    warningNotes.push(sanitizeLines(pluginDependencyCleanup.warnings));
+  }
 
   return { state, changeNotes, warningNotes };
 }

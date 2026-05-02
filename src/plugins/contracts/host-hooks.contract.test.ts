@@ -66,6 +66,7 @@ describe("host-hook fixture plugin contract", () => {
         id: "host-hook-fixture",
         name: "Host Hook Fixture",
         origin: "workspace",
+        contracts: { tools: ["approval_fixture_tool"] },
       }),
       register: registerHostHookFixture,
     });

@@ -3421,6 +3421,12 @@ describe("createOpenAIWebSocketStreamFn", () => {
     });
   });
 
+  it("keeps the default websocket HTTP fallback on the OpenClaw transport", () => {
+    expect(
+      openAIWsStreamTesting.getDefaultHttpFallbackStreamFnForTest(modelStub as never),
+    ).toBeTypeOf("function");
+  });
+
   it("forwards temperature and maxTokens to response.create", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-temp");
     const opts = { temperature: 0.3, maxTokens: 256 };

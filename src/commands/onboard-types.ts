@@ -7,7 +7,7 @@ export type OnboardMode = "local" | "remote";
  * Auth choices are plugin-owned contract ids plus a few legacy aliases that
  * are normalized elsewhere (for example `oauth` -> `setup-token`).
  */
-export type BuiltInAuthChoice =
+type BuiltInAuthChoice =
   /** @deprecated Use `setup-token`. */
   "oauth" | "setup-token" | "token" | "apiKey" | "custom-api-key" | "skip";
 export type AuthChoice = BuiltInAuthChoice | (string & {});

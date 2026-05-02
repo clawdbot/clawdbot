@@ -471,7 +471,7 @@ export function redactConfigSnapshot(
   };
 }
 
-export type RedactionResult = {
+type RedactionResult = {
   ok: boolean;
   result?: unknown;
   error?: unknown;

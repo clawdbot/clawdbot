@@ -178,6 +178,8 @@ const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity
 const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
 const MESSAGE_NOT_MODIFIED_RE =
   /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
+const MESSAGE_DELETE_NOOP_RE =
+  /message to delete not found|message can't be deleted|MESSAGE_ID_INVALID|MESSAGE_DELETE_FORBIDDEN/i;
 const CHAT_NOT_FOUND_RE = /400: Bad Request: chat not found/i;
 const sendLogger = createSubsystemLogger("telegram/send");
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
@@ -371,6 +373,10 @@ function isTelegramThreadNotFoundError(err: unknown): boolean {
 
 function isTelegramMessageNotModifiedError(err: unknown): boolean {
   return MESSAGE_NOT_MODIFIED_RE.test(formatErrorMessage(err));
+}
+
+function isTelegramMessageDeleteNoopError(err: unknown): boolean {
+  return MESSAGE_DELETE_NOOP_RE.test(formatErrorMessage(err));
 }
 
 function hasMessageThreadIdParam(params?: TelegramThreadScopedParams): boolean {
@@ -714,10 +720,11 @@ export async function sendMessageTelegram(
   };
 
   const buildChunkedTextPlan = (rawText: string, context: string): TelegramTextChunk[] => {
+    const htmlText = renderHtmlText(rawText);
     const fallbackText = opts.plainText ?? rawText;
     let htmlChunks: string[];
     try {
-      htmlChunks = splitTelegramHtmlChunks(rawText, 4000);
+      htmlChunks = splitTelegramHtmlChunks(htmlText, 4000);
     } catch (error) {
       logVerbose(
         `telegram ${context} failed HTML chunk planning, retrying as plain text: ${formatErrorMessage(
@@ -945,14 +952,7 @@ export async function sendMessageTelegram(
     // If text was too long for a caption, send it as a separate follow-up message.
     // Use HTML conversion so markdown renders like captions.
     if (needsSeparateText && followUpText) {
-      if (textMode === "html") {
-        const textResult = await sendChunkedText(followUpText, "text follow-up send");
-        return { messageId: textResult.messageId, chatId: resolvedChatId };
-      }
-      const textResult = await sendTelegramTextChunks(
-        [{ plainText: followUpText, htmlText: renderHtmlText(followUpText) }],
-        "text follow-up send",
-      );
+      const textResult = await sendChunkedText(followUpText, "text follow-up send");
       return { messageId: textResult.messageId, chatId: resolvedChatId };
     }
 
@@ -962,15 +962,7 @@ export async function sendMessageTelegram(
   if (!text || !text.trim()) {
     throw new Error("Message must be non-empty for Telegram sends");
   }
-  let textResult: { messageId: string; chatId: string };
-  if (textMode === "html") {
-    textResult = await sendChunkedText(text, "text send");
-  } else {
-    textResult = await sendTelegramTextChunks(
-      [{ plainText: opts.plainText ?? text, htmlText: renderHtmlText(text) }],
-      "text send",
-    );
-  }
+  const textResult = await sendChunkedText(text, "text send");
   recordChannelActivity({
     channel: "telegram",
     accountId: account.accountId,
@@ -1072,7 +1064,7 @@ export async function deleteMessageTelegram(
   chatIdInput: string | number,
   messageIdInput: string | number,
   opts: TelegramDeleteOpts,
-): Promise<{ ok: true }> {
+): Promise<{ ok: true } | { ok: false; warning: string }> {
   const { cfg, account, api } = resolveTelegramApiContext(opts);
   const rawTarget = String(chatIdInput);
   const chatId = await resolveAndPersistChatId({
@@ -1090,7 +1082,21 @@ export async function deleteMessageTelegram(
     verbose: opts.verbose,
     shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
   });
-  await requestWithDiag(() => api.deleteMessage(chatId, messageId), "deleteMessage");
+  try {
+    await requestWithDiag(() => api.deleteMessage(chatId, messageId), "deleteMessage", {
+      shouldLog: (err) => !isTelegramMessageDeleteNoopError(err),
+    });
+  } catch (err: unknown) {
+    if (!isTelegramMessageDeleteNoopError(err)) {
+      throw err;
+    }
+    const detail = formatErrorMessage(err);
+    logVerbose(`[telegram] Delete skipped for message ${messageId} in chat ${chatId}: ${detail}`);
+    return {
+      ok: false,
+      warning: `Message ${messageId} was not deleted: ${detail}`,
+    };
+  }
   logVerbose(`[telegram] Deleted message ${messageId} from chat ${chatId}`);
   return { ok: true };
 }

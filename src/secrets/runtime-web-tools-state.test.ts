@@ -41,6 +41,7 @@ describe("runtime web tools state", () => {
         WEB_SEARCH_GEMINI_API_KEY: "web-search-gemini-ref",
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
+      loadablePluginOrigins: new Map([["google", "bundled"]]),
       loadAuthStore: () => ({ version: 1, profiles: {} }),
     });
 

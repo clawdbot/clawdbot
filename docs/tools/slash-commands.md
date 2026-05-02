@@ -67,6 +67,7 @@ There are two related systems:
 <ParamField path="commands.native" type='boolean | "auto"' default='"auto"'>
   Registers native commands. Auto: on for Discord/Telegram; off for Slack (until you add slash commands); ignored for providers without native support. Set `channels.discord.commands.native`, `channels.telegram.commands.native`, or `channels.slack.commands.native` to override per provider (bool or `"auto"`). `false` clears previously registered commands on Discord/Telegram at startup. Slack commands are managed in the Slack app and are not removed automatically.
 </ParamField>
+On Discord, native command specs may include `descriptionLocalizations`, which OpenClaw publishes as Discord `description_localizations` and includes in reconcile comparisons.
 <ParamField path="commands.nativeSkills" type='boolean | "auto"' default='"auto"'>
   Registers **skill** commands natively when supported. Auto: on for Discord/Telegram; off for Slack (Slack requires creating a slash command per skill). Set `channels.discord.commands.nativeSkills`, `channels.telegram.commands.nativeSkills`, or `channels.slack.commands.nativeSkills` to override per provider (bool or `"auto"`).
 </ParamField>
@@ -237,6 +238,7 @@ User-invocable skills are also exposed as slash commands:
 - `/skill <name> [input]` always works as the generic entrypoint.
 - skills may also appear as direct commands like `/prose` when the skill/plugin registers them.
 - native skill-command registration is controlled by `commands.nativeSkills` and `channels.<provider>.commands.nativeSkills`.
+- command specs can provide `descriptionLocalizations` for native surfaces that support localized descriptions, including Discord.
 
 <AccordionGroup>
   <Accordion title="Argument and parser notes">

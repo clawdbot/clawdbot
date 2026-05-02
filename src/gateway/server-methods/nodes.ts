@@ -70,7 +70,6 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 export {
   clearNodeWakeState,
-  NODE_WAKE_RECONNECT_POLL_MS,
   NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
   NODE_WAKE_RECONNECT_WAIT_MS,
 } from "./nodes-wake-state.js";

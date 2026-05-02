@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import type { SessionsListParams, SessionsResolveParams } from "../../gateway/protocol/index.js";
+import type { ReadSessionMessagesAsyncOptions } from "../../gateway/session-utils.fs.js";
 import type { SessionsListResult } from "../../gateway/session-utils.types.js";
 import type { SessionsResolveResult } from "../../gateway/sessions-resolve.js";
 
@@ -30,12 +31,12 @@ interface EmbeddedGatewayRuntime {
     opts?: { maxChars?: number; maxMessages?: number },
   ) => unknown[];
   capArrayByJsonBytes: (items: unknown[], maxBytes: number) => { items: unknown[] };
-  listSessionsFromStore: (opts: {
+  listSessionsFromStoreAsync: (opts: {
     cfg: OpenClawConfig;
     storePath: string;
     store: unknown;
     opts: SessionsListParams;
-  }) => SessionsListResult;
+  }) => Promise<SessionsListResult>;
   loadCombinedSessionStoreForGateway: (cfg: OpenClawConfig) => {
     storePath: string;
     store: unknown;
@@ -49,7 +50,12 @@ interface EmbeddedGatewayRuntime {
     storePath: string | undefined;
     entry: Record<string, unknown> | undefined;
   };
-  readSessionMessages: (sessionId: string, storePath: string, sessionFile?: string) => unknown[];
+  readSessionMessagesAsync: (
+    sessionId: string,
+    storePath: string,
+    sessionFile: string | undefined,
+    opts: ReadSessionMessagesAsyncOptions,
+  ) => Promise<unknown[]>;
   resolveSessionModelRef: (
     cfg: OpenClawConfig,
     entry: unknown,
@@ -70,7 +76,7 @@ async function handleSessionsList(params: Record<string, unknown>) {
   const rt = await getRuntime();
   const cfg = rt.getRuntimeConfig();
   const { storePath, store } = rt.loadCombinedSessionStoreForGateway(cfg);
-  return rt.listSessionsFromStore({
+  return rt.listSessionsFromStoreAsync({
     cfg,
     storePath,
     store,
@@ -108,10 +114,24 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const sessionId = entry?.sessionId as string | undefined;
   const sessionAgentId = rt.resolveSessionAgentId({ sessionKey, config: cfg });
   const resolvedSessionModel = rt.resolveSessionModelRef(cfg, entry, sessionAgentId);
+  const hardMax = 1000;
+  const defaultLimit = 200;
+  const requested = typeof limit === "number" ? limit : defaultLimit;
+  const max = Math.min(hardMax, requested);
+  const maxHistoryBytes = rt.getMaxChatHistoryMessagesBytes();
 
   const localMessages =
     sessionId && storePath
-      ? rt.readSessionMessages(sessionId, storePath, entry?.sessionFile as string | undefined)
+      ? await rt.readSessionMessagesAsync(
+          sessionId,
+          storePath,
+          entry?.sessionFile as string | undefined,
+          {
+            mode: "recent",
+            maxMessages: max,
+            maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+          },
+        )
       : [];
 
   const rawMessages = rt.augmentChatHistoryWithCliSessionImports({
@@ -120,10 +140,6 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
     localMessages,
   });
 
-  const hardMax = 1000;
-  const defaultLimit = 200;
-  const requested = typeof limit === "number" ? limit : defaultLimit;
-  const max = Math.min(hardMax, requested);
   const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars(cfg);
 
   const normalized = rt.augmentChatHistoryWithCanvasBlocks(
@@ -133,7 +149,6 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
     }),
   );
 
-  const maxHistoryBytes = rt.getMaxChatHistoryMessagesBytes();
   const perMessageHardCap = Math.min(rt.CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
   const replaced = rt.replaceOversizedChatHistoryMessages({
     messages: normalized,

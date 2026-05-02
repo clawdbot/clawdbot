@@ -59,7 +59,7 @@ const listCredentialsResponseSchema = z.object({
   count: z.number().int().nonnegative().optional(),
 });
 
-export type QaCredentialAdminListStatus = z.infer<typeof listStatusSchema>;
+type QaCredentialAdminListStatus = z.infer<typeof listStatusSchema>;
 export type QaCredentialRecord = z.infer<typeof credentialRecordSchema>;
 
 export class QaCredentialAdminError extends Error {
@@ -111,13 +111,13 @@ type ListQaCredentialSetsOptions = AdminBaseOptions & {
   status?: string;
 };
 
-export type QaCredentialDoctorCheck = {
+type QaCredentialDoctorCheck = {
   details?: string;
   name: string;
   status: "fail" | "pass" | "warn";
 };
 
-export type QaCredentialDoctorResult = {
+type QaCredentialDoctorResult = {
   checks: QaCredentialDoctorCheck[];
   status: "fail" | "pass" | "warn";
 };

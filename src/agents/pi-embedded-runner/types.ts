@@ -1,5 +1,7 @@
+import type { HeartbeatToolResponse } from "../../auto-reply/heartbeat-tool-response.js";
 import type { CliSessionBinding, SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { MessagingToolSend } from "../pi-embedded-messaging.types.js";
 
 export type EmbeddedPiAgentMeta = {
@@ -9,6 +11,7 @@ export type EmbeddedPiAgentMeta = {
   model: string;
   contextTokens?: number;
   agentHarnessId?: string;
+  fallbackAttempts?: FallbackAttempt[];
   cliSessionBinding?: CliSessionBinding;
   compactionCount?: number;
   /**
@@ -166,6 +169,7 @@ export type EmbeddedPiRunResult = {
     isError?: boolean;
     isReasoning?: boolean;
     audioAsVoice?: boolean;
+    channelData?: Record<string, unknown>;
   }>;
   meta: EmbeddedPiRunMeta;
   diagnosticTrace?: DiagnosticTraceContext;
@@ -178,6 +182,8 @@ export type EmbeddedPiRunResult = {
   messagingToolSentMediaUrls?: string[];
   // Messaging tool targets that successfully sent a message during the run.
   messagingToolSentTargets?: MessagingToolSend[];
+  // Structured heartbeat outcome recorded by the heartbeat response tool.
+  heartbeatToolResponse?: HeartbeatToolResponse;
   // Count of successful cron.add tool calls in this run.
   successfulCronAdds?: number;
 };
@@ -186,6 +192,13 @@ export type EmbeddedPiCompactResult = {
   ok: boolean;
   compacted: boolean;
   reason?: string;
+  /** Structured failure metadata used by model fallback classification. */
+  failure?: {
+    reason?: string;
+    status?: number;
+    code?: string;
+    rawError?: string;
+  };
   result?: {
     summary: string;
     firstKeptEntryId: string;

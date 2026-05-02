@@ -43,11 +43,21 @@ vi.mock("../channels/config-presence.js", () => ({
   hasMeaningfulChannelConfig,
 }));
 
-vi.mock("./manifest-registry-installed.js", () => ({
-  loadPluginManifestRegistryForInstalledIndex,
-}));
+vi.mock("./manifest-registry-installed.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./manifest-registry-installed.js")>();
+  return {
+    ...actual,
+    loadPluginManifestRegistryForInstalledIndex,
+  };
+});
 
-vi.mock("./plugin-registry-snapshot.js", () => ({ loadPluginRegistrySnapshot }));
+vi.mock("./plugin-registry-snapshot.js", () => ({
+  loadPluginRegistrySnapshot,
+  loadPluginRegistrySnapshotWithMetadata: (params: unknown) => ({
+    snapshot: loadPluginRegistrySnapshot(params),
+    diagnostics: [],
+  }),
+}));
 
 vi.mock("./plugin-registry-contributions.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./plugin-registry-contributions.js")>();
@@ -62,6 +72,7 @@ import {
   listConfiguredAnnounceChannelIdsForConfig,
   listConfiguredChannelIdsForReadOnlyScope,
   listExplicitConfiguredChannelIdsForConfig,
+  loadGatewayStartupPluginPlan,
   resolveConfiguredChannelPresencePolicy,
   resolveConfiguredDeferredChannelPluginIds,
   resolveConfiguredChannelPluginIds,
@@ -104,6 +115,7 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         id: "browser",
         channels: [],
         activation: {
+          onStartup: true,
           onConfigPaths: ["browser"],
         },
         origin: "bundled",
@@ -212,6 +224,9 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
       {
         id: "voice-call",
         channels: [],
+        activation: {
+          onStartup: true,
+        },
         origin: "bundled",
         enabledByDefault: undefined,
         providers: [],
@@ -238,6 +253,9 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
       {
         id: "demo-global-sidecar",
         channels: [],
+        activation: {
+          onStartup: true,
+        },
         origin: "global",
         enabledByDefault: undefined,
         providers: [],
@@ -295,10 +313,6 @@ function normalizeStartupAgentHarnesses(record: PluginManifestRecord): readonly 
   ].toSorted((left, right) => left.localeCompare(right));
 }
 
-function hasRuntimeContractSurface(record: PluginManifestRecord): boolean {
-  return record.providers.length > 0 || record.cliBackends.length > 0;
-}
-
 function hasPluginKind(record: PluginManifestRecord, kind: string): boolean {
   return Array.isArray(record.kind) ? record.kind.includes(kind as never) : record.kind === kind;
 }
@@ -317,12 +331,7 @@ function createInstalledPluginRecordFixture(
     enabled: true,
     ...(record.enabledByDefault === true ? { enabledByDefault: true } : {}),
     startup: {
-      sidecar:
-        record.activation?.onStartup === true ||
-        (record.activation?.onStartup === undefined &&
-          record.channels.length === 0 &&
-          !hasRuntimeContractSurface(record) &&
-          !memory),
+      sidecar: record.activation?.onStartup === true,
       memory,
       deferConfiguredChannelFullLoadUntilAfterListen:
         record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
@@ -654,35 +663,7 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
-  it("keeps deprecated implicit startup sidecar fallback for legacy plugins", () => {
-    expectStartupPluginIdsCase({
-      config: createStartupConfig({
-        enabledPluginIds: ["demo-global-sidecar"],
-        allowPluginIds: ["demo-global-sidecar"],
-        noConfiguredChannels: true,
-        memorySlot: "none",
-      }),
-      expected: ["demo-global-sidecar"],
-    });
-  });
-
-  it("can disable deprecated implicit startup sidecar fallback for future-mode testing", () => {
-    expectStartupPluginIdsCase({
-      config: createStartupConfig({
-        enabledPluginIds: ["demo-global-sidecar"],
-        allowPluginIds: ["demo-global-sidecar"],
-        noConfiguredChannels: true,
-        memorySlot: "none",
-      }),
-      env: {
-        ...process.env,
-        OPENCLAW_DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS: "1",
-      },
-      expected: [],
-    });
-  });
-
-  it("skips deprecated implicit startup sidecar fallback when activation.onStartup is false", () => {
+  it("skips startup when activation.onStartup is false", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({
         enabledPluginIds: ["demo-global-startup-opt-out"],
@@ -702,10 +683,6 @@ describe("resolveGatewayStartupPluginIds", () => {
         noConfiguredChannels: true,
         memorySlot: "none",
       }),
-      env: {
-        ...process.env,
-        OPENCLAW_DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS: "1",
-      },
       expected: ["demo-global-explicit-startup"],
     });
   });
@@ -886,6 +863,31 @@ describe("resolveGatewayStartupPluginIds", () => {
         } as NodeJS.ProcessEnv,
       }),
     ).toEqual([]);
+  });
+
+  it("loads channel, deferred, and startup plugin ids from one manifest registry", () => {
+    const registry = createManifestRegistryFixture();
+    const index = createInstalledPluginIndexFixture(registry);
+    loadPluginRegistrySnapshot.mockReset().mockReturnValue(index);
+    loadPluginManifestRegistryForInstalledIndex.mockReset().mockReturnValue(registry);
+
+    const plan = loadGatewayStartupPluginPlan({
+      config: {
+        channels: {
+          "demo-channel": {
+            token: "configured",
+          },
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/tmp",
+      env: {},
+    });
+
+    expect(plan.channelPluginIds).toContain("demo-channel");
+    expect(plan.pluginIds).toContain("demo-channel");
+    expect(plan.configuredDeferredChannelPluginIds).toEqual([]);
+    expect(loadPluginRegistrySnapshot).toHaveBeenCalledOnce();
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
   });
 
   it("does not treat explicitly disabled stale channel config as deferred startup intent", () => {

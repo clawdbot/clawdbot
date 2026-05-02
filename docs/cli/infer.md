@@ -49,8 +49,8 @@ Benefits:
 
 For end-to-end provider checks, prefer `openclaw infer ...` once lower-level
 provider tests are green. It exercises the shipped CLI, config loading,
-default-agent resolution, bundled plugin activation, runtime-dependency repair,
-and the shared capability runtime before the provider request is made.
+default-agent resolution, bundled plugin activation, and the shared capability
+runtime before the provider request is made.
 
 ## Command tree
 

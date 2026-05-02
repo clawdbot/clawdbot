@@ -42,7 +42,7 @@ interface BuildLineMessageContextParams {
   historyLimit?: number;
 }
 
-export type LineSourceInfo = {
+type LineSourceInfo = {
   userId?: string;
   groupId?: string;
   roomId?: string;
@@ -576,6 +576,6 @@ export async function buildLinePostbackContext(params: {
   };
 }
 
-export type LineMessageContext = NonNullable<Awaited<ReturnType<typeof buildLineMessageContext>>>;
-export type LinePostbackContext = NonNullable<Awaited<ReturnType<typeof buildLinePostbackContext>>>;
+type LineMessageContext = NonNullable<Awaited<ReturnType<typeof buildLineMessageContext>>>;
+type LinePostbackContext = NonNullable<Awaited<ReturnType<typeof buildLinePostbackContext>>>;
 export type LineInboundContext = LineMessageContext | LinePostbackContext;

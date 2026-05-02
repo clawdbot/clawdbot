@@ -21,7 +21,7 @@ const QaChannelGroupConfigSchema = z
   })
   .strict();
 
-export const QaChannelAccountConfigSchema = z
+const QaChannelAccountConfigSchema = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
@@ -38,7 +38,7 @@ export const QaChannelAccountConfigSchema = z
   })
   .strict();
 
-export const QaChannelConfigSchema = QaChannelAccountConfigSchema.extend({
+const QaChannelConfigSchema = QaChannelAccountConfigSchema.extend({
   accounts: z.record(z.string(), QaChannelAccountConfigSchema.partial()).optional(),
   defaultAccount: z.string().optional(),
 }).strict();

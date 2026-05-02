@@ -93,7 +93,7 @@ afterEach(() => {
 });
 
 describe("stageBundledPluginRuntime", () => {
-  it("stages bundled dist plugins as runtime wrappers and links staged dist node_modules", () => {
+  it("stages bundled dist plugins as runtime wrappers without linking plugin node_modules", () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-");
     const distPluginDir = createDistPluginDir(repoRoot, "diffs");
     fs.mkdirSync(path.join(repoRoot, "dist"), { recursive: true });
@@ -124,10 +124,7 @@ describe("stageBundledPluginRuntime", () => {
       pluginId: "diffs",
       expectedImport: distRuntimeImportPath("diffs"),
     });
-    expect(fs.lstatSync(path.join(runtimePluginDir, "node_modules")).isSymbolicLink()).toBe(true);
-    expect(fs.realpathSync(path.join(runtimePluginDir, "node_modules"))).toBe(
-      fs.realpathSync(path.join(distPluginDir, "node_modules")),
-    );
+    expect(fs.existsSync(path.join(runtimePluginDir, "node_modules"))).toBe(false);
     expect(fs.existsSync(path.join(distPluginDir, "node_modules"))).toBe(true);
     expect(
       fs

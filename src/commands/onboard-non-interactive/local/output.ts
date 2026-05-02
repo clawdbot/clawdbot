@@ -22,7 +22,7 @@ export type GatewayHealthFailureClassification =
   | "service-missing"
   | "service-stopped"
   | "startup-blocked"
-  | "runtime-deps-broken";
+  | "module-missing";
 
 export function logNonInteractiveOnboardingJson(params: {
   opts: OnboardOptions;
@@ -107,7 +107,7 @@ function classifyGatewayHealthFailure(params: {
       combined,
     )
   ) {
-    return "runtime-deps-broken";
+    return "module-missing";
   }
   if (params.diagnostics?.service?.loaded === false && hasConnectionRefusedDetail(detail)) {
     return "service-missing";
@@ -136,7 +136,7 @@ function recoveryHintForGatewayHealthFailure(
   switch (classification) {
     case "auth-mismatch":
       return "Fix: run `openclaw doctor --fix`.";
-    case "runtime-deps-broken":
+    case "module-missing":
       return "Fix: run `openclaw doctor --fix`.";
     case "service-missing":
       return "Fix: run `openclaw gateway install --force`.";

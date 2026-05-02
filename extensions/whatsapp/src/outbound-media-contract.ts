@@ -24,7 +24,7 @@ type WhatsAppLoadedMediaLike = {
   fileName?: string;
 };
 
-export type NormalizedWhatsAppOutboundPayload<T extends WhatsAppOutboundPayloadLike> = Omit<
+type NormalizedWhatsAppOutboundPayload<T extends WhatsAppOutboundPayloadLike> = Omit<
   T,
   "text" | "mediaUrl" | "mediaUrls"
 > & {
@@ -40,7 +40,7 @@ export type DeliverableWhatsAppOutboundPayload<T extends WhatsAppOutboundPayload
   text?: string;
 };
 
-export type CanonicalWhatsAppLoadedMedia = {
+type CanonicalWhatsAppLoadedMedia = {
   buffer: Buffer;
   kind: "image" | "audio" | "video" | "document";
   mimetype: string;
@@ -109,7 +109,7 @@ export function normalizeWhatsAppOutboundPayload<T extends WhatsAppOutboundPaylo
   };
 }
 
-export function normalizeWhatsAppLoadedMedia(
+function normalizeWhatsAppLoadedMedia(
   media: WhatsAppLoadedMediaLike,
   mediaUrl?: string,
 ): CanonicalWhatsAppLoadedMedia {
@@ -236,7 +236,7 @@ function deriveWhatsAppDocumentFileName(mediaUrl: string | undefined): string | 
   }
 }
 
-export function isRetryableWhatsAppOutboundError(error: unknown): boolean {
+function isRetryableWhatsAppOutboundError(error: unknown): boolean {
   return /closed|reset|timed\s*out|disconnect/i.test(formatError(error));
 }
 

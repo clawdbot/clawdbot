@@ -341,6 +341,7 @@ export function createStatusReactionController(params: {
     // Directly enqueue to ensure we return the updated promise
     return enqueue(async () => {
       await applyEmoji(emoji);
+      await removeActiveEmojis({ keepEmoji: emoji });
       pendingEmoji = "";
     });
   }

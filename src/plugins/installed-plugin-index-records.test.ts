@@ -192,6 +192,41 @@ describe("plugin index install records store", () => {
     });
   });
 
+  it("preserves ClawHub ClawPack install metadata in persisted records", async () => {
+    const stateDir = makeStateDir();
+    const candidate = createPluginCandidate(stateDir, "clawpack-demo");
+    await writePersistedInstalledPluginIndexInstallRecords(
+      {
+        "clawpack-demo": {
+          source: "clawhub",
+          spec: "clawhub:clawpack-demo",
+          installPath: path.join(stateDir, "plugins", "clawpack-demo"),
+          clawhubUrl: "https://clawhub.ai",
+          clawhubPackage: "clawpack-demo",
+          clawhubFamily: "code-plugin",
+          clawhubChannel: "official",
+          clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          clawpackSpecVersion: 1,
+          clawpackManifestSha256:
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          clawpackSize: 4096,
+        },
+      },
+      { stateDir, candidates: [candidate] },
+    );
+
+    await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).resolves.toMatchObject({
+      "clawpack-demo": {
+        source: "clawhub",
+        spec: "clawhub:clawpack-demo",
+        clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        clawpackSpecVersion: 1,
+        clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        clawpackSize: 4096,
+      },
+    });
+  });
+
   it("returns an empty record map when no plugin index exists", () => {
     const stateDir = makeStateDir();
 

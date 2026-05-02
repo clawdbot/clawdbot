@@ -164,6 +164,110 @@ struct OpenClawConfigFileTests {
 
     @MainActor
     @Test
+    func `save dict preserves gateway auth unless explicitly allowed`() async throws {
+        let stateDir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+
+        defer { try? FileManager().removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "auth": [
+                        "mode": "token",
+                        "token": "existing-token", // pragma: allowlist secret
+                    ],
+                ],
+            ])
+
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "local",
+                ],
+            ])
+
+            let root = OpenClawConfigFile.loadDict()
+            let gateway = root["gateway"] as? [String: Any]
+            let auth = gateway?["auth"] as? [String: Any]
+            #expect(gateway?["mode"] as? String == "local")
+            #expect(auth?["mode"] as? String == "token")
+            #expect(auth?["token"] as? String == "existing-token") // pragma: allowlist secret
+
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "local",
+                ],
+            ], allowGatewayAuthMutation: true)
+
+            let allowedRoot = OpenClawConfigFile.loadDict()
+            let allowedGateway = allowedRoot["gateway"] as? [String: Any]
+            #expect(allowedGateway?["mode"] as? String == "local")
+            #expect((allowedGateway?["auth"] as? [String: Any]) == nil)
+        }
+    }
+
+    @MainActor
+    @Test
+    func `save dict can merge local fallback writes with fresh config`() async throws {
+        let stateDir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+
+        defer { try? FileManager().removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "auth": [
+                        "mode": "password",
+                        "password": "existing-password", // pragma: allowlist secret
+                    ],
+                ],
+                "browser": [
+                    "enabled": true,
+                    "profile": "work",
+                ],
+                "channels": [
+                    "discord": [
+                        "enabled": true,
+                    ],
+                ],
+            ])
+
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "local",
+                ],
+                "browser": [
+                    "enabled": false,
+                ],
+            ], preserveExistingKeys: true)
+
+            let root = OpenClawConfigFile.loadDict()
+            let gateway = root["gateway"] as? [String: Any]
+            let auth = gateway?["auth"] as? [String: Any]
+            let browser = root["browser"] as? [String: Any]
+            let discord = ((root["channels"] as? [String: Any])?["discord"] as? [String: Any])
+            #expect(gateway?["mode"] as? String == "local")
+            #expect(auth?["mode"] as? String == "password")
+            #expect(auth?["password"] as? String == "existing-password") // pragma: allowlist secret
+            #expect(browser?["enabled"] as? Bool == false)
+            #expect(browser?["profile"] as? String == "work")
+            #expect(discord?["enabled"] as? Bool == true)
+        }
+    }
+
+    @MainActor
+    @Test
     func `load dict audits suspicious out-of-band clobbers`() async throws {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)

@@ -43,10 +43,7 @@ export function setCommandJsonMode(command: Command, mode: JsonMode): Command {
   return command;
 }
 
-export function getCommandJsonMode(
-  command: Command,
-  argv: string[] = process.argv,
-): JsonMode | null {
+function getCommandJsonMode(command: Command, argv: string[] = process.argv): JsonMode | null {
   if (!commandSelectedJsonFlag(command, argv)) {
     return null;
   }

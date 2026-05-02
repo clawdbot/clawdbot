@@ -39,7 +39,7 @@ export type SlackStreamSession = {
   pendingText: string;
 };
 
-export type StartSlackStreamParams = {
+type StartSlackStreamParams = {
   client: WebClient;
   channel: string;
   threadTs: string;
@@ -59,12 +59,12 @@ export type StartSlackStreamParams = {
   userId?: string;
 };
 
-export type AppendSlackStreamParams = {
+type AppendSlackStreamParams = {
   session: SlackStreamSession;
   text: string;
 };
 
-export type StopSlackStreamParams = {
+type StopSlackStreamParams = {
   session: SlackStreamSession;
   /** Optional final markdown text to append before stopping. */
   text?: string;

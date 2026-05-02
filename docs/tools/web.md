@@ -76,10 +76,10 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
     AI-synthesized answers with citations via xAI web grounding.
   </Card>
   <Card title="Kimi" icon="moon" href="/tools/kimi-search">
-    AI-synthesized answers with citations via Moonshot web search.
+    AI-synthesized answers with citations via Moonshot web search; ungrounded chat fallbacks fail explicitly.
   </Card>
   <Card title="MiniMax Search" icon="globe" href="/tools/minimax-search">
-    Structured results via the MiniMax Coding Plan search API.
+    Structured results via the MiniMax Token Plan search API.
   </Card>
   <Card title="Ollama Web Search" icon="globe" href="/tools/ollama-search">
     Search via a signed-in local Ollama host or the hosted Ollama API.
@@ -97,20 +97,20 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
 
 ### Provider comparison
 
-| Provider                                  | Result style               | Filters                                          | API key                                                                                 |
-| ----------------------------------------- | -------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------- |
-| [Brave](/tools/brave-search)              | Structured snippets        | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                                                                         |
-| [DuckDuckGo](/tools/duckduckgo-search)    | Structured snippets        | --                                               | None (key-free)                                                                         |
-| [Exa](/tools/exa-search)                  | Structured + extracted     | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                                                                           |
-| [Firecrawl](/tools/firecrawl)             | Structured snippets        | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                                                                     |
-| [Gemini](/tools/gemini-search)            | AI-synthesized + citations | --                                               | `GEMINI_API_KEY`                                                                        |
-| [Grok](/tools/grok-search)                | AI-synthesized + citations | --                                               | `XAI_API_KEY`                                                                           |
-| [Kimi](/tools/kimi-search)                | AI-synthesized + citations | --                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`                                                     |
-| [MiniMax Search](/tools/minimax-search)   | Structured snippets        | Region (`global` / `cn`)                         | `MINIMAX_CODE_PLAN_KEY` / `MINIMAX_CODING_API_KEY`                                      |
-| [Ollama Web Search](/tools/ollama-search) | Structured snippets        | --                                               | None for signed-in local hosts; `OLLAMA_API_KEY` for direct `https://ollama.com` search |
-| [Perplexity](/tools/perplexity-search)    | Structured snippets        | Country, language, time, domains, content limits | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY`                                             |
-| [SearXNG](/tools/searxng-search)          | Structured snippets        | Categories, language                             | None (self-hosted)                                                                      |
-| [Tavily](/tools/tavily)                   | Structured snippets        | Via `tavily_search` tool                         | `TAVILY_API_KEY`                                                                        |
+| Provider                                  | Result style                                                   | Filters                                          | API key                                                                                 |
+| ----------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| [Brave](/tools/brave-search)              | Structured snippets                                            | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                                                                         |
+| [DuckDuckGo](/tools/duckduckgo-search)    | Structured snippets                                            | --                                               | None (key-free)                                                                         |
+| [Exa](/tools/exa-search)                  | Structured + extracted                                         | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                                                                           |
+| [Firecrawl](/tools/firecrawl)             | Structured snippets                                            | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                                                                     |
+| [Gemini](/tools/gemini-search)            | AI-synthesized + citations                                     | --                                               | `GEMINI_API_KEY`                                                                        |
+| [Grok](/tools/grok-search)                | AI-synthesized + citations                                     | --                                               | `XAI_API_KEY`                                                                           |
+| [Kimi](/tools/kimi-search)                | AI-synthesized + citations; fails on ungrounded chat fallbacks | --                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`                                                     |
+| [MiniMax Search](/tools/minimax-search)   | Structured snippets                                            | Region (`global` / `cn`)                         | `MINIMAX_CODE_PLAN_KEY` / `MINIMAX_CODING_API_KEY` / `MINIMAX_OAUTH_TOKEN`              |
+| [Ollama Web Search](/tools/ollama-search) | Structured snippets                                            | --                                               | None for signed-in local hosts; `OLLAMA_API_KEY` for direct `https://ollama.com` search |
+| [Perplexity](/tools/perplexity-search)    | Structured snippets                                            | Country, language, time, domains, content limits | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY`                                             |
+| [SearXNG](/tools/searxng-search)          | Structured snippets                                            | Categories, language                             | None (self-hosted)                                                                      |
+| [Tavily](/tools/tavily)                   | Structured snippets                                            | Via `tavily_search` tool                         | `TAVILY_API_KEY`                                                                        |
 
 ## Auto-detection
 
@@ -164,13 +164,13 @@ first one that is ready:
 API-backed providers first:
 
 1. **Brave** -- `BRAVE_API_KEY` or `plugins.entries.brave.config.webSearch.apiKey` (order 10)
-2. **MiniMax Search** -- `MINIMAX_CODE_PLAN_KEY` / `MINIMAX_CODING_API_KEY` or `plugins.entries.minimax.config.webSearch.apiKey` (order 15)
-3. **Gemini** -- `GEMINI_API_KEY` or `plugins.entries.google.config.webSearch.apiKey` (order 20)
+2. **MiniMax Search** -- `MINIMAX_CODE_PLAN_KEY` / `MINIMAX_CODING_API_KEY` / `MINIMAX_OAUTH_TOKEN` / `MINIMAX_API_KEY` or `plugins.entries.minimax.config.webSearch.apiKey` (order 15)
+3. **Gemini** -- `plugins.entries.google.config.webSearch.apiKey`, `GEMINI_API_KEY`, or `models.providers.google.apiKey` (order 20)
 4. **Grok** -- `XAI_API_KEY` or `plugins.entries.xai.config.webSearch.apiKey` (order 30)
 5. **Kimi** -- `KIMI_API_KEY` / `MOONSHOT_API_KEY` or `plugins.entries.moonshot.config.webSearch.apiKey` (order 40)
 6. **Perplexity** -- `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` or `plugins.entries.perplexity.config.webSearch.apiKey` (order 50)
 7. **Firecrawl** -- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey` (order 60)
-8. **Exa** -- `EXA_API_KEY` or `plugins.entries.exa.config.webSearch.apiKey` (order 65)
+8. **Exa** -- `EXA_API_KEY` or `plugins.entries.exa.config.webSearch.apiKey`; optional `plugins.entries.exa.config.webSearch.baseUrl` overrides the Exa endpoint (order 65)
 9. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey` (order 70)
 
 Key-free fallbacks after that:
@@ -213,14 +213,26 @@ error prompting you to configure one).
 ```
 
 Provider-specific config (API keys, base URLs, modes) lives under
-`plugins.entries.<plugin>.config.webSearch.*`. See the provider pages for
-examples.
+`plugins.entries.<plugin>.config.webSearch.*`. Gemini can also reuse
+`models.providers.google.apiKey` and `models.providers.google.baseUrl` as lower-priority
+fallbacks after its dedicated web-search config and `GEMINI_API_KEY`. See the
+provider pages for examples.
+
+`tools.web.search.provider` is validated against the web-search provider ids
+declared by bundled and installed plugin manifests. A typo such as `"brvae"`
+fails config validation instead of silently falling back to auto-detection. If a
+configured provider only has stale plugin evidence, such as a leftover
+`plugins.entries.<plugin>` block after uninstalling a third-party plugin,
+OpenClaw keeps startup resilient and reports a warning so you can reinstall the
+plugin or run `openclaw doctor --fix` to clean up the stale config.
 
 `web_fetch` fallback provider selection is separate:
 
 - choose it with `tools.web.fetch.provider`
 - or omit that field and let OpenClaw auto-detect the first ready web-fetch
   provider from available credentials
+- non-sandboxed `web_fetch` can use installed plugin providers that declare
+  `contracts.webFetchProviders`; sandboxed fetches stay bundled-only
 - today the bundled web-fetch provider is Firecrawl, configured under
   `plugins.entries.firecrawl.config.webFetch.*`
 
@@ -294,10 +306,12 @@ show the `x_search` prompt.
 
 <Warning>
   Not all parameters work with all providers. Brave `llm-context` mode
-  rejects `ui_lang`, `freshness`, `date_after`, and `date_before`.
+  rejects `ui_lang`; `date_before` also needs `date_after` because Brave custom
+  freshness ranges require both start and end dates.
   Gemini, Grok, and Kimi return one synthesized answer with citations. They
   accept `count` for shared-tool compatibility, but it does not change the
-  grounded answer shape.
+  grounded answer shape. Gemini supports `freshness`, `date_after`, and
+  `date_before` by converting them to Google Search grounding time ranges.
   Perplexity behaves the same way when you use the Sonar/OpenRouter
   compatibility path (`plugins.entries.perplexity.config.webSearch.baseUrl` /
   `model` or `OPENROUTER_API_KEY`).
@@ -334,6 +348,7 @@ tool on the request that serves this tool call.
           xSearch: {
             enabled: true,
             model: "grok-4-1-fast-non-reasoning",
+            baseUrl: "https://api.x.ai/v1", // optional, overrides webSearch.baseUrl
             inlineCitations: false,
             maxTurns: 2,
             timeoutSeconds: 30,
@@ -341,6 +356,7 @@ tool on the request that serves this tool call.
           },
           webSearch: {
             apiKey: "xai-...", // optional if XAI_API_KEY is set
+            baseUrl: "https://api.x.ai/v1", // optional shared xAI Responses base URL
           },
         },
       },
@@ -348,6 +364,11 @@ tool on the request that serves this tool call.
   },
 }
 ```
+
+`x_search` posts to `<baseUrl>/responses` when
+`plugins.entries.xai.config.xSearch.baseUrl` is set. If that field is omitted,
+it falls back to `plugins.entries.xai.config.webSearch.baseUrl`, then the
+legacy `tools.web.search.grok.baseUrl`, and finally the public xAI endpoint.
 
 ### x_search parameters
 

@@ -22,7 +22,9 @@ Pick a setup workflow based on how often you want updates and whether you want t
 ## Prereqs (from source)
 
 - Node 24 recommended (Node 22 LTS, currently `22.14+`, still supported)
-- `pnpm` preferred (or Bun if you intentionally use the [Bun workflow](/install/bun))
+- `pnpm` required for source checkouts. OpenClaw loads bundled plugins from the
+  `extensions/*` pnpm workspace packages in dev mode, so root `npm install` does
+  not prepare the full source tree.
 - Docker (optional; only for containerized setup/e2e — see [Docker](/install/docker))
 
 ## Tailoring strategy (so updates do not hurt)
@@ -44,7 +46,7 @@ From inside this repo, use the local CLI entry:
 openclaw setup
 ```
 
-If you don’t have a global install yet, run it via `pnpm openclaw setup` (or `bun run openclaw setup` if you are using the Bun workflow).
+If you don’t have a global install yet, run it via `pnpm openclaw setup`.
 
 ## Run the Gateway from this repo
 
@@ -105,15 +107,6 @@ reloads on relevant source, config, and bundled-plugin metadata changes.
 `pnpm openclaw setup` is the one-time local config/workspace initialization step for a fresh checkout.
 `pnpm gateway:watch` does not rebuild `dist/control-ui`, so rerun `pnpm ui:build` after `ui/` changes or use `pnpm ui:dev` while developing the Control UI.
 
-If you are intentionally using the Bun workflow, the equivalent commands are:
-
-```bash
-bun install
-# First run only (or after resetting local OpenClaw config/workspace)
-bun run openclaw setup
-bun run gateway:watch
-```
-
 ### 2) Point the macOS app at your running Gateway
 
 In **OpenClaw.app**:
@@ -158,7 +151,7 @@ Use this when debugging auth or deciding what to back up:
 ## Updating (without wrecking your setup)
 
 - Keep `~/.openclaw/workspace` and `~/.openclaw/` as “your stuff”; don’t put personal prompts/config into the `openclaw` repo.
-- Updating source: `git pull` + your chosen package-manager install step (`pnpm install` by default; `bun install` for Bun workflow) + keep using the matching `gateway:watch` command.
+- Updating source: `git pull` + `pnpm install` + keep using `pnpm gateway:watch`.
 
 ## Linux (systemd user service)
 

@@ -23,6 +23,7 @@ import {
   type MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
 import { resolveUserPath } from "../../utils.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import {
   coerceImageAssistantText,
@@ -117,6 +118,8 @@ function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requested
 export function resolveImageModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir: string;
+  workspaceDir?: string;
+  authStore?: AuthProfileStore;
 }): ImageModelConfig | null {
   // Note: We intentionally do NOT gate based on primarySupportsImages here.
   // Even when the primary model supports images, we keep the tool available
@@ -142,6 +145,7 @@ export function resolveImageModelConfigForTool(params: {
     }
     const providerDefault = imageToolProviderDeps.resolveDefaultMediaModel({
       cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       providerId: primary.provider,
       capability: "image",
     });
@@ -157,11 +161,13 @@ export function resolveImageModelConfigForTool(params: {
   const autoCandidates = imageToolProviderDeps
     .resolveAutoMediaKeyProviders({
       cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       capability: "image",
     })
     .map((providerId) => {
       const modelId = imageToolProviderDeps.resolveDefaultMediaModel({
         cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
         providerId,
         capability: "image",
       });
@@ -171,6 +177,7 @@ export function resolveImageModelConfigForTool(params: {
   return buildToolModelConfigFromCandidates({
     explicit,
     agentDir: params.agentDir,
+    authStore: params.authStore,
     candidates: [...primaryCandidates, ...autoCandidates],
   });
 }
@@ -366,25 +373,43 @@ async function runImagePrompt(params: {
 export function createImageTool(options?: {
   config?: OpenClawConfig;
   agentDir?: string;
+  authProfileStore?: AuthProfileStore;
   workspaceDir?: string;
   sandbox?: ImageSandboxConfig;
   fsPolicy?: ToolFsPolicy;
   /** If true, the model has native vision capability and images in the prompt are auto-injected */
   modelHasVision?: boolean;
+  /**
+   * Avoid resolving auto image-provider/model candidates while registering the
+   * tool. The concrete image model is still resolved before execution.
+   */
+  deferAutoModelResolution?: boolean;
 }): AnyAgentTool | null {
   const agentDir = options?.agentDir?.trim();
+  const explicit = coerceImageModelConfig(options?.config);
   if (!agentDir) {
-    const explicit = coerceImageModelConfig(options?.config);
     if (hasToolModelConfig(explicit)) {
       throw new Error("createImageTool requires agentDir when enabled");
     }
     return null;
   }
-  const imageModelConfig = resolveImageModelConfigForTool({
-    cfg: options?.config,
-    agentDir,
-  });
-  if (!imageModelConfig) {
+  const explicitImageModelConfig = hasToolModelConfig(explicit)
+    ? resolveConfiguredImageModelRefs({
+        cfg: options?.config,
+        imageModelConfig: explicit,
+      })
+    : null;
+  const shouldResolveAutoImageModel =
+    !explicitImageModelConfig && !options?.deferAutoModelResolution;
+  const resolvedImageModelConfig = shouldResolveAutoImageModel
+    ? resolveImageModelConfigForTool({
+        cfg: options?.config,
+        agentDir,
+        workspaceDir: options?.workspaceDir,
+        authStore: options?.authProfileStore,
+      })
+    : explicitImageModelConfig;
+  if (!resolvedImageModelConfig && !options?.deferAutoModelResolution) {
     return null;
   }
   const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(options?.config);
@@ -393,7 +418,9 @@ export function createImageTool(options?: {
   // so this tool is only needed when image wasn't provided in the prompt
   const description = options?.modelHasVision
     ? "Analyze one or more images with a vision model. Use image for a single path/URL, or images for multiple (up to 20). Only use this tool when images were NOT already provided in the user's message. Images mentioned in the prompt are automatically visible to you."
-    : "Analyze one or more images with the configured image model (agents.defaults.imageModel). Use image for a single path/URL, or images for multiple (up to 20). Provide a prompt describing what to analyze.";
+    : explicitImageModelConfig
+      ? "Analyze one or more images with the configured image model (agents.defaults.imageModel). Use image for a single path/URL, or images for multiple (up to 20). Provide a prompt describing what to analyze."
+      : "Analyze one or more images with an available vision model. Use image for a single path/URL, or images for multiple (up to 20). Provide a prompt describing what to analyze.";
 
   return {
     label: "Image",
@@ -593,6 +620,19 @@ export function createImageTool(options?: {
       }
 
       // MARK: - Run image prompt with all loaded images
+      const imageModelConfig =
+        resolvedImageModelConfig ??
+        resolveImageModelConfigForTool({
+          cfg: options?.config,
+          agentDir,
+          workspaceDir: options?.workspaceDir,
+          authStore: options?.authProfileStore,
+        });
+      if (!imageModelConfig) {
+        throw new Error(
+          "No image model is configured. Set agents.defaults.imageModel or configure an image-capable provider.",
+        );
+      }
       const result = await runImagePrompt({
         cfg: options?.config,
         agentDir,

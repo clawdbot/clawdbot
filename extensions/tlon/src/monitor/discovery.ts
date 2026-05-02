@@ -2,7 +2,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import type { Foreigns } from "../urbit/foreigns.js";
 import { asRecord, formatErrorMessage } from "./utils.js";
 
-export interface InitData {
+interface InitData {
   channels: string[];
   foreigns: Foreigns | null;
 }

@@ -19,6 +19,10 @@ type PackageJson = {
   };
 };
 
+type SyncPluginVersionsOptions = {
+  write?: boolean;
+};
+
 const OPENCLAW_VERSION_RANGE_RE = /^>=\d{4}\.\d{1,2}\.\d{1,2}(?:[-.][^"\s]+)?$/u;
 
 function syncOpenClawDependencyRange(
@@ -64,7 +68,7 @@ function syncBuildOpenClawVersion(pkg: PackageJson, targetVersion: string): bool
   return true;
 }
 
-function ensureChangelogEntry(changelogPath: string, version: string): boolean {
+function ensureChangelogEntry(changelogPath: string, version: string, write: boolean): boolean {
   if (!existsSync(changelogPath)) {
     return false;
   }
@@ -75,15 +79,23 @@ function ensureChangelogEntry(changelogPath: string, version: string): boolean {
   const entry = `## ${version}\n\n### Changes\n- Version alignment with core OpenClaw release numbers.\n\n`;
   if (content.startsWith("# Changelog\n\n")) {
     const next = content.replace("# Changelog\n\n", `# Changelog\n\n${entry}`);
-    writeFileSync(changelogPath, next);
+    if (write) {
+      writeFileSync(changelogPath, next);
+    }
     return true;
   }
   const next = `# Changelog\n\n${entry}${content.trimStart()}`;
-  writeFileSync(changelogPath, `${next}\n`);
+  if (write) {
+    writeFileSync(changelogPath, `${next}\n`);
+  }
   return true;
 }
 
-export function syncPluginVersions(rootDir = resolve(".")) {
+export function syncPluginVersions(
+  rootDir = resolve("."),
+  options: SyncPluginVersionsOptions = {},
+) {
+  const write = options.write ?? true;
   const rootPackagePath = join(rootDir, "package.json");
   const rootPackage = JSON.parse(readFileSync(rootPackagePath, "utf8")) as PackageJson;
   const targetVersion = rootPackage.version;
@@ -115,7 +127,7 @@ export function syncPluginVersions(rootDir = resolve(".")) {
     }
 
     const changelogPath = join(extensionsDir, dir.name, "CHANGELOG.md");
-    if (ensureChangelogEntry(changelogPath, targetVersion)) {
+    if (ensureChangelogEntry(changelogPath, targetVersion, write)) {
       changelogged.push(pkg.name);
     }
 
@@ -140,7 +152,9 @@ export function syncPluginVersions(rootDir = resolve(".")) {
     if (versionChanged) {
       pkg.version = targetVersion;
     }
-    writeFileSync(packagePath, `${JSON.stringify(pkg, null, 2)}\n`);
+    if (write) {
+      writeFileSync(packagePath, `${JSON.stringify(pkg, null, 2)}\n`);
+    }
     updated.push(pkg.name);
   }
 
@@ -153,8 +167,19 @@ export function syncPluginVersions(rootDir = resolve(".")) {
 }
 
 if (import.meta.main) {
-  const summary = syncPluginVersions();
+  const check = process.argv.includes("--check");
+  const summary = syncPluginVersions(resolve("."), { write: !check });
   console.log(
     `Synced plugin versions to ${summary.targetVersion}. Updated: ${summary.updated.length}. Changelogged: ${summary.changelogged.length}. Skipped: ${summary.skipped.length}.`,
   );
+  if (check && (summary.updated.length > 0 || summary.changelogged.length > 0)) {
+    for (const packageName of summary.updated) {
+      console.error(`  update required: ${packageName}`);
+    }
+    for (const packageName of summary.changelogged) {
+      console.error(`  changelog entry required: ${packageName}`);
+    }
+    console.error("Run `pnpm plugins:sync` and commit the plugin version alignment.");
+    process.exit(1);
+  }
 }

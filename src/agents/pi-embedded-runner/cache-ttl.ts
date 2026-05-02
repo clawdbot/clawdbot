@@ -11,7 +11,7 @@ import { isGooglePromptCacheEligible } from "./prompt-cache-retention.js";
 
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
 
-export const CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
+const CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 
 export type CacheTtlEntryData = {
   timestamp: number;

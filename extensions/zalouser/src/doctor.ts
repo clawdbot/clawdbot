@@ -9,7 +9,7 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-export const collectZalouserMutableAllowlistWarnings =
+const collectZalouserMutableAllowlistWarnings =
   createDangerousNameMatchingMutableAllowlistWarningCollector({
     channel: "zalouser",
     detector: isZalouserMutableGroupEntry,

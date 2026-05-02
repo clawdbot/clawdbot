@@ -5,18 +5,31 @@ import {
   type ManifestModelCatalogSuppressionEntry,
 } from "../model-catalog/index.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
+import {
+  isManifestPluginAvailableForControlPlane,
+  loadManifestMetadataSnapshot,
+} from "./manifest-contract-eligibility.js";
 
 function listManifestModelCatalogSuppressions(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): readonly ManifestModelCatalogSuppressionEntry[] {
-  const registry = loadPluginManifestRegistryForPluginRegistry({
+  const snapshot = loadManifestMetadataSnapshot({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
+  const registry = {
+    diagnostics: snapshot.diagnostics,
+    plugins: snapshot.plugins.filter((plugin) =>
+      isManifestPluginAvailableForControlPlane({
+        snapshot,
+        plugin,
+        config: params.config,
+      }),
+    ),
+  };
   const planned = planManifestModelCatalogSuppressions({ registry });
   return planned.suppressions;
 }
@@ -97,10 +110,6 @@ function manifestSuppressionMatchesConditions(params: {
     }
   }
   return true;
-}
-
-export function clearManifestModelSuppressionCacheForTest(): void {
-  // Manifest suppressions are read fresh. Keep the test hook as a no-op.
 }
 
 export function buildManifestBuiltInModelSuppressionResolver(params: {

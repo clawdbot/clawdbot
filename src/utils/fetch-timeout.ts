@@ -64,9 +64,19 @@ function abortDueToTimeout(
     return;
   }
   const sanitizedUrl = sanitizeTimeoutLogUrl(url);
+  const elapsedMs = Math.max(0, Date.now() - startedAtMs);
+  const consoleMessage = [
+    `fetch timeout after ${timeoutMs}ms`,
+    `(elapsed ${elapsedMs}ms)`,
+    operation ? `operation=${operation}` : null,
+    sanitizedUrl ? `url=${sanitizedUrl}` : null,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(" ");
   log.warn("fetch timeout reached; aborting operation", {
     timeoutMs,
-    elapsedMs: Math.max(0, Date.now() - startedAtMs),
+    elapsedMs,
+    consoleMessage,
     ...(operation ? { operation } : {}),
     ...(sanitizedUrl ? { url: sanitizedUrl } : {}),
   });

@@ -605,11 +605,9 @@ run_profile() {
   if [[ "$agent_model_provider" == "openai" ]]; then
     agent_model="$(set_agent_model "$profile" \
       "openai/gpt-5.5" \
-      "openai/gpt-4o-mini" \
-      "openai/gpt-4o")"
+      "openai/gpt-5.4-mini")"
     image_model="$(set_image_model "$profile" \
-      "openai/gpt-4o-mini" \
-      "openai/gpt-4o")"
+      "openai/gpt-5.4-image-2")"
   else
     agent_model="$(set_agent_model "$profile" \
       "anthropic/claude-opus-4-6" \

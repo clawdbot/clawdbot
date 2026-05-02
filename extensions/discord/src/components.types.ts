@@ -141,6 +141,8 @@ export type DiscordComponentEntry = {
   agentId?: string;
   accountId?: string;
   reusable?: boolean;
+  consumptionGroupId?: string;
+  consumptionGroupEntryIds?: string[];
   allowedUsers?: string[];
   messageId?: string;
   createdAt?: number;

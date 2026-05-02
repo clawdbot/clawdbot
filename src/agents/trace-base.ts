@@ -1,4 +1,4 @@
-export type AgentTraceBase = {
+type AgentTraceBase = {
   runId?: string;
   sessionId?: string;
   sessionKey?: string;

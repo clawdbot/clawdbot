@@ -150,7 +150,7 @@ function applyWhamCooldownResult(params: {
   };
 }
 
-export async function probeWhamForCooldown(
+async function probeWhamForCooldown(
   store: AuthProfileStore,
   profileId: string,
 ): Promise<WhamCooldownProbeResult | null> {

@@ -21,7 +21,7 @@ function loadSlackMediaModule(): Promise<SlackMediaModule> {
   return slackMediaModulePromise;
 }
 
-export type SlackThreadContextData = {
+type SlackThreadContextData = {
   threadStarterBody: string | undefined;
   threadHistoryBody: string | undefined;
   threadSessionPreviousTimestamp: number | undefined;

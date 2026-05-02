@@ -10,16 +10,16 @@ import {
 } from "./tool-config-shared.js";
 import { type XaiWebSearchResponse } from "./web-search-shared.js";
 
-export const XAI_CODE_EXECUTION_ENDPOINT = XAI_RESPONSES_ENDPOINT;
-export const XAI_DEFAULT_CODE_EXECUTION_MODEL = "grok-4-1-fast";
+const XAI_CODE_EXECUTION_ENDPOINT = XAI_RESPONSES_ENDPOINT;
+const XAI_DEFAULT_CODE_EXECUTION_MODEL = "grok-4-1-fast";
 
-export type XaiCodeExecutionResponse = XaiWebSearchResponse & {
+type XaiCodeExecutionResponse = XaiWebSearchResponse & {
   output?: Array<{
     type?: string;
   }>;
 };
 
-export type XaiCodeExecutionResult = {
+type XaiCodeExecutionResult = {
   content: string;
   citations: string[];
   usedCodeExecution: boolean;

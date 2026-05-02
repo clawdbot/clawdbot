@@ -3,7 +3,7 @@ import type { SlackMessageChangedEvent, SlackMessageDeletedEvent } from "../type
 
 type SupportedSubtype = "message_changed" | "message_deleted";
 
-export type SlackMessageSubtypeHandler = {
+type SlackMessageSubtypeHandler = {
   subtype: SupportedSubtype;
   eventKind: SupportedSubtype;
   describe: (channelLabel: string) => string;

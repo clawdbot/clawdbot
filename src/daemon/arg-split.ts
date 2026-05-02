@@ -1,4 +1,4 @@
-export type ArgSplitEscapeMode = "none" | "backslash" | "backslash-quote-only";
+type ArgSplitEscapeMode = "none" | "backslash" | "backslash-quote-only";
 
 export function splitArgsPreservingQuotes(
   value: string,

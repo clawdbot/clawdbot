@@ -61,11 +61,38 @@ describe("CodexAppServerClient", () => {
       expect(warn).toHaveBeenCalledWith(
         "failed to parse codex app-server message",
         expect.objectContaining({
+          consoleMessage: expect.stringContaining("<redacted>"),
           linePreview: '{"token":"<redacted>"} trailing',
         }),
       ),
     );
     expect(JSON.stringify(warn.mock.calls)).not.toContain("secret-value");
+  });
+
+  it("recovers app-server messages split by raw newlines inside JSON strings", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const notifications: unknown[] = [];
+    harness.client.addNotificationHandler((notification) => {
+      notifications.push(notification);
+    });
+
+    harness.process.stdout.write(
+      '{"method":"item/commandExecution/outputDelta","params":{"delta":"first' +
+        "\n" +
+        'second"}}\n',
+    );
+
+    await vi.waitFor(() =>
+      expect(notifications).toEqual([
+        {
+          method: "item/commandExecution/outputDelta",
+          params: { delta: "first\nsecond" },
+        },
+      ]),
+    );
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("preserves JSON-RPC error codes", async () => {

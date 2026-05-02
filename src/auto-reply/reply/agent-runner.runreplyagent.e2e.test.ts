@@ -219,8 +219,28 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
 
+  it("keeps typing alive when a followup is queued behind a live active run", async () => {
+    const { run, typing } = createMinimalRun({
+      opts: { isHeartbeat: false },
+      isActive: true,
+      isRunActive: () => true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+    });
+
+    const result = await run();
+
+    expect(result).toBeUndefined();
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
+    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(typing.startTypingLoop).toHaveBeenCalledTimes(1);
+    expect(typing.refreshTypingTtl).toHaveBeenCalledTimes(1);
+    expect(typing.cleanup).not.toHaveBeenCalled();
+  });
+
   it("starts draining immediately when the active snapshot is already stale", async () => {
-    const { run } = createMinimalRun({
+    const { run, typing } = createMinimalRun({
       opts: { isHeartbeat: false },
       isActive: true,
       isRunActive: () => false,
@@ -234,6 +254,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
   it("drains followup queue when an unexpected exception escapes the run path", async () => {

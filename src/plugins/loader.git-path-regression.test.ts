@@ -27,8 +27,8 @@ describe("plugin loader git path regression", () => {
     const copiedPluginSdkDir = path.join(copiedExtensionRoot, "plugin-sdk");
     mkdirSafe(copiedSourceDir);
     mkdirSafe(copiedPluginSdkDir);
-    const jitiBaseFile = path.join(copiedSourceDir, "__jiti-base__.mjs");
-    fs.writeFileSync(jitiBaseFile, "export {};\n", "utf-8");
+    const sourceLoaderBaseFile = path.join(copiedSourceDir, "__jiti-base__.mjs");
+    fs.writeFileSync(sourceLoaderBaseFile, "export {};\n", "utf-8");
     fs.writeFileSync(
       path.join(copiedSourceDir, "channel.runtime.ts"),
       `import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
@@ -59,7 +59,7 @@ export const copiedRuntimeMarker = {
     const copiedChannelRuntime = path.join(copiedExtensionRoot, "src", "channel.runtime.ts");
     const script = `
       import { createJiti } from "jiti";
-      const withoutAlias = createJiti(${JSON.stringify(jitiBaseFile)}, {
+      const withoutAlias = createJiti(${JSON.stringify(sourceLoaderBaseFile)}, {
         interopDefault: true,
         tryNative: false,
         extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
@@ -70,7 +70,7 @@ export const copiedRuntimeMarker = {
       } catch {
         withoutAliasThrew = true;
       }
-      const withAlias = createJiti(${JSON.stringify(jitiBaseFile)}, {
+      const withAlias = createJiti(${JSON.stringify(sourceLoaderBaseFile)}, {
         interopDefault: true,
         tryNative: false,
         extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],

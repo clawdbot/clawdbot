@@ -1,7 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
-export type RoleRef = {
+type RoleRef = {
   role: string;
   name?: string;
   /** Index used only when role+name duplicates exist. */
@@ -10,7 +10,7 @@ export type RoleRef = {
 
 export type RoleRefMap = Record<string, RoleRef>;
 
-export type RoleSnapshotStats = {
+type RoleSnapshotStats = {
   lines: number;
   chars: number;
   refs: number;

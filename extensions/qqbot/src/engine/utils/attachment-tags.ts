@@ -44,7 +44,7 @@ export type AttachmentSummary = RefAttachmentSummary;
  *   transcripts when `transcriptSource` is present. Tags are separated
  *   by spaces so the block fits on one line.
  */
-export type RenderMode = "inline" | "ref";
+type RenderMode = "inline" | "ref";
 
 /** Human-readable labels for transcript provenance (prompt contract). */
 export const TRANSCRIPT_SOURCE_LABELS: Record<
@@ -58,7 +58,7 @@ export const TRANSCRIPT_SOURCE_LABELS: Record<
 };
 
 /** Options controlling how the tag list is rendered. */
-export interface RenderOptions {
+interface RenderOptions {
   mode: RenderMode;
   /** Separator between tags. Defaults per mode: inline=`\n`, ref=` `. */
   separator?: string;

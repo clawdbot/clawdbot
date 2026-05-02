@@ -2,7 +2,7 @@ import { postTrustedWebToolsJson, wrapWebContent } from "openclaw/plugin-sdk/pro
 import {
   buildXaiResponsesToolBody,
   resolveXaiResponseTextCitationsAndInline,
-  XAI_RESPONSES_ENDPOINT,
+  resolveXaiResponsesEndpoint,
 } from "./responses-tool-shared.js";
 import {
   coerceXaiToolConfig,
@@ -11,11 +11,11 @@ import {
 } from "./tool-config-shared.js";
 import { type XaiWebSearchResponse } from "./web-search-shared.js";
 
-export const XAI_X_SEARCH_ENDPOINT = XAI_RESPONSES_ENDPOINT;
 export const XAI_DEFAULT_X_SEARCH_MODEL = "grok-4-1-fast-non-reasoning";
 
-export type XaiXSearchConfig = {
+type XaiXSearchConfig = {
   apiKey?: unknown;
+  baseUrl?: unknown;
   model?: unknown;
   inlineCitations?: unknown;
   maxTurns?: unknown;
@@ -31,13 +31,13 @@ export type XaiXSearchOptions = {
   enableVideoUnderstanding?: boolean;
 };
 
-export type XaiXSearchResult = {
+type XaiXSearchResult = {
   content: string;
   citations: string[];
   inlineCitations?: XaiWebSearchResponse["inline_citations"];
 };
 
-export function resolveXaiXSearchConfig(config?: Record<string, unknown>): XaiXSearchConfig {
+function resolveXaiXSearchConfig(config?: Record<string, unknown>): XaiXSearchConfig {
   return coerceXaiToolConfig(config) as XaiXSearchConfig;
 }
 
@@ -46,6 +46,10 @@ export function resolveXaiXSearchModel(config?: Record<string, unknown>): string
     config,
     defaultModel: XAI_DEFAULT_X_SEARCH_MODEL,
   });
+}
+
+export function resolveXaiXSearchEndpoint(config?: Record<string, unknown>): string {
+  return resolveXaiResponsesEndpoint(resolveXaiXSearchConfig(config).baseUrl);
 }
 
 export function resolveXaiXSearchInlineCitations(config?: Record<string, unknown>): boolean {
@@ -106,6 +110,7 @@ export function buildXaiXSearchPayload(params: {
 
 export async function requestXaiXSearch(params: {
   apiKey: string;
+  endpoint: string;
   model: string;
   timeoutSeconds: number;
   inlineCitations: boolean;
@@ -114,7 +119,7 @@ export async function requestXaiXSearch(params: {
 }): Promise<XaiXSearchResult> {
   return await postTrustedWebToolsJson(
     {
-      url: XAI_X_SEARCH_ENDPOINT,
+      url: params.endpoint,
       timeoutSeconds: params.timeoutSeconds,
       apiKey: params.apiKey,
       body: buildXaiResponsesToolBody({

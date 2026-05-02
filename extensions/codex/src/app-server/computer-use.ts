@@ -16,7 +16,7 @@ export type CodexComputerUseRequest = <T = JsonValue | undefined>(
   params?: unknown,
 ) => Promise<T>;
 
-export type CodexComputerUseStatusReason =
+type CodexComputerUseStatusReason =
   | "disabled"
   | "marketplace_missing"
   | "plugin_not_installed"
@@ -42,7 +42,7 @@ export type CodexComputerUseStatus = {
   message: string;
 };
 
-export class CodexComputerUseSetupError extends Error {
+class CodexComputerUseSetupError extends Error {
   readonly status: CodexComputerUseStatus;
 
   constructor(status: CodexComputerUseStatus) {

@@ -1,6 +1,7 @@
 import { ChannelType } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { resolveDiscordAccount } from "./accounts.js";
@@ -154,10 +155,7 @@ type DiscordComponentSendOpts = {
   sessionKey?: string;
   agentId?: string;
   mediaUrl?: string;
-  mediaAccess?: {
-    localRoots?: readonly string[];
-    readFile?: (filePath: string) => Promise<Buffer>;
-  };
+  mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   filename?: string;

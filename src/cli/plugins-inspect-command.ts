@@ -71,6 +71,24 @@ function formatInstallLines(install: PluginInstallRecord | undefined): string[] 
   if (install.version) {
     lines.push(`Recorded version: ${install.version}`);
   }
+  if (install.clawhubPackage) {
+    lines.push(`ClawHub package: ${install.clawhubPackage}`);
+  }
+  if (install.clawhubChannel) {
+    lines.push(`ClawHub channel: ${install.clawhubChannel}`);
+  }
+  if (install.clawpackSha256) {
+    lines.push(`ClawPack sha256: ${install.clawpackSha256}`);
+  }
+  if (install.clawpackSpecVersion !== undefined) {
+    lines.push(`ClawPack spec: ${install.clawpackSpecVersion}`);
+  }
+  if (install.clawpackManifestSha256) {
+    lines.push(`ClawPack manifest sha256: ${install.clawpackManifestSha256}`);
+  }
+  if (install.clawpackSize !== undefined) {
+    lines.push(`ClawPack size: ${install.clawpackSize} bytes`);
+  }
   if (install.installedAt) {
     lines.push(`Installed at: ${install.installedAt}`);
   }

@@ -109,6 +109,7 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
           provider: "twilio", // or "telnyx" | "plivo" | "mock"
           fromNumber: "+15550001234", // or TWILIO_FROM_NUMBER for Twilio
           toNumber: "+15550005678",
+          sessionScope: "per-phone", // per-phone | per-call
 
           twilio: {
             accountSid: "ACxxxxxxxx",
@@ -192,6 +193,14 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
   </Accordion>
 </AccordionGroup>
 
+## Session scope
+
+By default, Voice Call uses `sessionScope: "per-phone"` so repeat calls from
+the same caller keep conversation memory. Set `sessionScope: "per-call"` when
+each carrier call should start with fresh context, for example reception,
+booking, IVR, or Google Meet bridge flows where the same phone number may
+represent different meetings.
+
 ## Realtime voice conversations
 
 `realtime` selects a full-duplex realtime voice provider for live call
@@ -212,7 +221,7 @@ Current runtime behaviour:
 - Voice Call exposes the shared `openclaw_agent_consult` realtime tool by default. The realtime model can call it when the caller asks for deeper reasoning, current information, or normal OpenClaw tools.
 - `realtime.fastContext.enabled` is default-off. When enabled, Voice Call first searches indexed memory/session context for the consult question and returns those snippets to the realtime model within `realtime.fastContext.timeoutMs` before falling back to the full consult agent only if `realtime.fastContext.fallbackToConsult` is true.
 - If `realtime.provider` points at an unregistered provider, or no realtime voice provider is registered at all, Voice Call logs a warning and skips realtime media instead of failing the whole plugin.
-- Consult session keys reuse the existing voice session when available, then fall back to the caller/callee phone number so follow-up consult calls keep context during the call.
+- Consult session keys reuse the stored call session when available, then fall back to the configured `sessionScope` (`per-phone` by default, or `per-call` for isolated calls).
 
 ### Tool policy
 

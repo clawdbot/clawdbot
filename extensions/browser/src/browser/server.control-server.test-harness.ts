@@ -4,8 +4,6 @@ import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { installChromeUserDataDirHooks } from "./chrome-user-data-dir.test-harness.js";
 import { getFreePort } from "./test-port.js";
 
-export { getFreePort } from "./test-port.js";
-
 type HarnessState = {
   testPort: number;
   cdpBaseUrl: string;
@@ -49,7 +47,7 @@ export function getBrowserControlServerBaseUrl(): string {
   return `http://127.0.0.1:${state.testPort}`;
 }
 
-export function restoreGatewayPortEnv(prevGatewayPort: string | undefined): void {
+function restoreGatewayPortEnv(prevGatewayPort: string | undefined): void {
   if (prevGatewayPort === undefined) {
     delete process.env.OPENCLAW_GATEWAY_PORT;
     return;
@@ -486,7 +484,7 @@ export async function startBrowserControlServerFromConfig() {
   return await (await loadBrowserServerModule()).startBrowserControlServerFromConfig();
 }
 
-export async function stopBrowserControlServer(): Promise<void> {
+async function stopBrowserControlServer(): Promise<void> {
   await (await loadBrowserServerModule()).stopBrowserControlServer();
 }
 
@@ -535,7 +533,7 @@ export async function resetBrowserControlServerTestContext(): Promise<void> {
   delete process.env.OPENCLAW_GATEWAY_PASSWORD;
 }
 
-export function restoreGatewayAuthEnv(
+function restoreGatewayAuthEnv(
   prevGatewayToken: string | undefined,
   prevGatewayPassword: string | undefined,
 ): void {

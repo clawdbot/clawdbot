@@ -5,7 +5,7 @@ import {
   type FutureConfigActionBlock,
 } from "../config/future-version-guard.js";
 
-export async function readFutureConfigActionBlock(
+async function readFutureConfigActionBlock(
   action: string,
 ): Promise<FutureConfigActionBlock | null> {
   try {

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 
-export type MemoryWikiImportRunSummary = {
+type MemoryWikiImportRunSummary = {
   runId: string;
   importType: string;
   appliedAt: string;
@@ -18,7 +18,7 @@ export type MemoryWikiImportRunSummary = {
   samplePaths: string[];
 };
 
-export type MemoryWikiImportRunsStatus = {
+type MemoryWikiImportRunsStatus = {
   runs: MemoryWikiImportRunSummary[];
   totalRuns: number;
   activeRuns: number;

@@ -84,7 +84,7 @@ export function resolveNormalizedProviderModelMaxTokens(params: {
   return Math.min(safeMaxTokens, params.contextWindow);
 }
 
-export type SessionDefaultsOptions = {
+type SessionDefaultsOptions = {
   warn?: (message: string) => void;
   warnState?: WarnState;
 };

@@ -3,13 +3,13 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { detectBinary } from "./detect-binary.js";
 import { isWSL } from "./wsl.js";
 
-export type BrowserOpenCommand = {
+type BrowserOpenCommand = {
   argv: string[] | null;
   reason?: string;
   command?: string;
 };
 
-export type BrowserOpenSupport = {
+type BrowserOpenSupport = {
   ok: boolean;
   reason?: string;
   command?: string;
@@ -111,29 +111,6 @@ export async function openUrl(url: string): Promise<boolean> {
   command.push(normalizedUrl);
   try {
     await runCommandWithTimeout(command, { timeoutMs: 5_000 });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function openUrlInBackground(url: string): Promise<boolean> {
-  if (shouldSkipBrowserOpenInTests()) {
-    return false;
-  }
-  const normalizedUrl = normalizeBrowserOpenUrl(url);
-  if (!normalizedUrl) {
-    return false;
-  }
-  if (process.platform !== "darwin") {
-    return false;
-  }
-  const resolved = await resolveBrowserOpenCommand();
-  if (!resolved.argv || resolved.command !== "open") {
-    return false;
-  }
-  try {
-    await runCommandWithTimeout(["open", "-g", normalizedUrl], { timeoutMs: 5_000 });
     return true;
   } catch {
     return false;

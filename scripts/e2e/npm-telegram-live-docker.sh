@@ -304,12 +304,6 @@ if [ "${OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH:-0}" != "1" ]; then
   openclaw channels add --channel telegram --token "123456:openclaw-npm-telegram-hotpath" >/tmp/openclaw-npm-telegram-channel-add.log 2>&1 </dev/null
   openclaw doctor --fix --non-interactive >/tmp/openclaw-npm-telegram-doctor-fix.log 2>&1 </dev/null
   openclaw doctor --non-interactive >/tmp/openclaw-npm-telegram-doctor-check.log 2>&1 </dev/null
-  if grep -F -q "Bundled plugin runtime deps are missing." /tmp/openclaw-npm-telegram-doctor-check.log; then
-    exit 1
-  fi
-  if grep -F -q "Failed to install bundled plugin runtime deps" /tmp/openclaw-npm-telegram-doctor-fix.log; then
-    exit 1
-  fi
 fi
 
 export OPENCLAW_NPM_TELEGRAM_SUT_COMMAND="$(command -v openclaw)"

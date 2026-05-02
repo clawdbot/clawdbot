@@ -11,7 +11,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { getDiscordRuntime } from "../runtime.js";
 import { sanitizeVoiceReplyTextForSpeech } from "./sanitize.js";
 
-export type VoiceReplyAudioResult =
+type VoiceReplyAudioResult =
   | {
       status: "ok";
       audioPath: string;

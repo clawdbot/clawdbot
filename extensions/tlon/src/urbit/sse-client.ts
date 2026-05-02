@@ -5,7 +5,7 @@ import { ensureUrbitChannelOpen, pokeUrbitChannel, scryUrbitPath } from "./chann
 import { getUrbitContext, normalizeUrbitCookie } from "./context.js";
 import { urbitFetch } from "./fetch.js";
 
-export type UrbitSseLogger = {
+type UrbitSseLogger = {
   log?: (message: string) => void;
   error?: (message: string) => void;
 };

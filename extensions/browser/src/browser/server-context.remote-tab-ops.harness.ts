@@ -55,7 +55,7 @@ export function makeState(
   };
 }
 
-export function makeUnexpectedFetchMock() {
+function makeUnexpectedFetchMock() {
   return vi.fn(async () => {
     throw new Error("unexpected fetch");
   });

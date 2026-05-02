@@ -246,7 +246,13 @@ describe("minimax provider hooks", () => {
     expect(webSearchProviders[0]).toMatchObject({
       id: "minimax",
       label: "MiniMax Search",
-      envVars: ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY"],
+      onboardingScopes: ["text-inference"],
+      envVars: [
+        "MINIMAX_CODE_PLAN_KEY",
+        "MINIMAX_CODING_API_KEY",
+        "MINIMAX_OAUTH_TOKEN",
+        "MINIMAX_API_KEY",
+      ],
     });
   });
 
@@ -274,6 +280,49 @@ describe("minimax provider hooks", () => {
 
     expect(resolveOAuthToken).toHaveBeenCalledWith({ provider: "minimax-portal" });
     expect(resolveApiKeyFromConfigAndStore).not.toHaveBeenCalled();
+  });
+
+  it("uses the configured MiniMax base URL for usage snapshots", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: minimaxProviderPlugin,
+      id: "minimax",
+      name: "MiniMax Provider",
+    });
+    const apiProvider = requireRegisteredProvider(providers, "minimax");
+    const fetchFn = vi.fn(async (input: string | URL | Request) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      expect(url).toBe("https://api.minimax.io/v1/token_plan/remains");
+      return new Response(
+        JSON.stringify({
+          data: {
+            current_interval_total_count: 100,
+            current_interval_usage_count: 98,
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+
+    const result = await apiProvider.fetchUsageSnapshot?.({
+      provider: "minimax",
+      config: {
+        models: {
+          providers: {
+            minimax: {
+              baseUrl: "https://api.minimax.io/anthropic",
+              models: [],
+            },
+          },
+        },
+      },
+      env: {},
+      token: "key",
+      timeoutMs: 5000,
+      fetchFn: fetchFn as typeof fetch,
+    } as never);
+
+    expect(result?.windows).toEqual([{ label: "5h", usedPercent: 2, resetAt: undefined }]);
   });
 
   it("writes api and authHeader into the MiniMax portal OAuth config patch", async () => {

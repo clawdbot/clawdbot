@@ -157,7 +157,7 @@ Direct generation example:
   Output format hint when the provider supports it.
 </ParamField>
 <ParamField path="filename" type="string">Output filename hint.</ParamField>
-<ParamField path="timeoutMs" type="number">Optional provider request timeout in milliseconds.</ParamField>
+<ParamField path="timeoutMs" type="number">Optional provider request timeout in milliseconds. Values below 10000ms are raised to 10000ms and reported in the tool result.</ParamField>
 
 <Note>
 Not all providers support all parameters. OpenClaw still validates hard

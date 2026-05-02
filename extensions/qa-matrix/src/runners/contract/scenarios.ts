@@ -13,9 +13,6 @@ import {
   buildMatrixQaTopologyForScenarios,
   findMatrixQaScenarios,
   resolveMatrixQaScenarioRoomId,
-  type MatrixQaScenarioDefinition,
-  type MatrixQaScenarioId,
-  type MatrixQaProfile,
   __matrixQaProfileTesting,
 } from "./scenario-catalog.js";
 import {
@@ -27,39 +24,20 @@ import {
   runMatrixQaScenario,
   writeMatrixQaSyncCursor,
   type MatrixQaScenarioContext,
-  type MatrixQaSyncState,
 } from "./scenario-runtime.js";
-import type {
-  MatrixQaCanaryArtifact,
-  MatrixQaReplyArtifact,
-  MatrixQaScenarioArtifacts,
-  MatrixQaScenarioExecution,
-} from "./scenario-types.js";
+import type { MatrixQaCanaryArtifact, MatrixQaScenarioArtifacts } from "./scenario-types.js";
 
-export type { MatrixQaScenarioDefinition, MatrixQaScenarioId };
 export {
-  MATRIX_QA_PROFILE_NAMES,
   MATRIX_QA_SCENARIOS,
-  MATRIX_QA_STANDARD_SCENARIO_IDS,
-  buildMatrixReplyArtifact,
   buildMatrixReplyDetails,
-  buildMatrixQaE2eeScenarioRoomKey,
   buildMatrixQaTopologyForScenarios,
-  buildMentionPrompt,
   findMatrixQaScenarios,
-  resolveMatrixQaScenarioRoomId,
   runMatrixQaCanary,
   runMatrixQaScenario,
 };
-export type { MatrixQaProfile };
-export type {
-  MatrixQaCanaryArtifact,
-  MatrixQaReplyArtifact,
-  MatrixQaScenarioArtifacts,
-  MatrixQaScenarioExecution,
-};
+export type { MatrixQaCanaryArtifact, MatrixQaScenarioArtifacts };
 
-export type { MatrixQaScenarioContext, MatrixQaSyncState };
+export type { MatrixQaScenarioContext };
 
 export const __testing = {
   MATRIX_QA_BOT_DM_ROOM_KEY,

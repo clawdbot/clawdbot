@@ -15,7 +15,7 @@ type ConfiguredBindingResolution = NonNullable<
   NonNullable<ResolvedConfiguredBindingRoute>["bindingResolution"]
 >;
 
-export type DiscordNativeInteractionRouteState = {
+type DiscordNativeInteractionRouteState = {
   route: ResolvedAgentRoute;
   effectiveRoute: ResolvedAgentRoute;
   boundSessionKey?: string;

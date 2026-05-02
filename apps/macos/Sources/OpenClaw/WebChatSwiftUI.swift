@@ -133,6 +133,16 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             timeoutMs: 10000)
     }
 
+    func setActiveSessionKey(_ sessionKey: String) async throws {
+        await MainActor.run {
+            WebChatManager.shared.recordActiveSessionKey(sessionKey)
+        }
+        _ = try await GatewayConnection.shared.request(
+            method: "sessions.messages.subscribe",
+            params: ["key": AnyCodable(sessionKey)],
+            timeoutMs: 10000)
+    }
+
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
         AsyncStream { continuation in
             let task = Task {
@@ -184,6 +194,15 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
                     return nil
                 }
                 return .chat(chat)
+            case "session.message":
+                guard let payload = evt.payload else { return nil }
+                guard let message = try? JSONDecoder().decode(
+                    OpenClawSessionMessageEventPayload.self,
+                    from: JSONEncoder().encode(payload))
+                else {
+                    return nil
+                }
+                return .sessionMessage(message)
             case "agent":
                 guard let payload = evt.payload else { return nil }
                 guard let agent = try? JSONDecoder().decode(

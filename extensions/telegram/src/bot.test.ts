@@ -1061,6 +1061,9 @@ describe("createTelegramBot", () => {
       expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain(
         `${CHECK_MARK_EMOJI} Model reset to default`,
       );
+      expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain(
+        "Session selection cleared. New replies use the agent's configured default.",
+      );
 
       const entry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
       expect(entry?.providerOverride).toBeUndefined();
@@ -1205,6 +1208,9 @@ describe("createTelegramBot", () => {
       expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain(
         `${CHECK_MARK_EMOJI} Model reset to default`,
       );
+      expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain(
+        "Session selection cleared. New replies use the agent's configured default.",
+      );
 
       const entry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
       expect(entry?.providerOverride).toBeUndefined();
@@ -1275,7 +1281,7 @@ describe("createTelegramBot", () => {
       expect(editMessageTextSpy).toHaveBeenCalledWith(
         1234,
         17,
-        `${CHECK_MARK_EMOJI} Model changed to <b>openai/gpt-5.4</b>\n\nThis model will be used for your next message.`,
+        `${CHECK_MARK_EMOJI} Model changed to <b>openai/gpt-5.4</b>\n\nSession-only selection. The agent default in openclaw.json is unchanged; /reset or a new session may return to that default.`,
         expect.objectContaining({ parse_mode: "HTML" }),
       );
 

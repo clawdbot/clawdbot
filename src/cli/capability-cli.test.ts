@@ -585,6 +585,47 @@ describe("capability cli", () => {
     );
   });
 
+  it("surfaces gateway model fallback attempts in model probe JSON", async () => {
+    mocks.callGateway.mockResolvedValueOnce({
+      result: {
+        payloads: [{ text: "gateway fallback reply" }],
+        meta: {
+          agentMeta: {
+            provider: "openai",
+            model: "gpt-4.1-mini",
+            fallbackAttempts: [
+              {
+                provider: "openrouter",
+                model: "openrouter/auto",
+                error: "model unavailable",
+                reason: "model_not_found",
+              },
+            ],
+          },
+        },
+      },
+    } as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "model", "run", "--prompt", "hello", "--gateway", "--json"],
+    });
+
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        attempts: [
+          expect.objectContaining({
+            provider: "openrouter",
+            model: "openrouter/auto",
+            reason: "model_not_found",
+          }),
+        ],
+      }),
+    );
+  });
+
   it("requests admin scope for gateway model probes with provider/model overrides", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
@@ -779,6 +820,51 @@ describe("capability cli", () => {
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       expect.stringMatching(/No description returned for image/),
+    );
+  });
+
+  it("reports missing image understanding configuration for image describe", async () => {
+    mocks.describeImageFile.mockResolvedValueOnce({
+      text: undefined,
+      decision: {
+        capability: "image",
+        outcome: "skipped",
+        attachments: [{ attachmentIndex: 0, attempts: [] }],
+      },
+    } as never);
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "image", "describe", "--file", "photo.jpg", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("No image understanding provider is configured or ready"),
+    );
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("agents.defaults.imageModel.primary"),
+    );
+  });
+
+  it("reports missing image understanding configuration for image describe-many", async () => {
+    mocks.describeImageFile.mockResolvedValueOnce({
+      text: undefined,
+      decision: {
+        capability: "image",
+        outcome: "skipped",
+        attachments: [{ attachmentIndex: 0, attempts: [] }],
+      },
+    } as never);
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "image", "describe-many", "--file", "photo.jpg", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("No image understanding provider is configured or ready"),
     );
   });
 
@@ -1275,6 +1361,30 @@ describe("capability cli", () => {
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       expect.stringMatching(/No transcript returned for audio/),
+    );
+  });
+
+  it("reports missing audio transcription configuration for audio transcribe", async () => {
+    mocks.transcribeAudioFile.mockResolvedValueOnce({
+      text: undefined,
+      decision: {
+        capability: "audio",
+        outcome: "skipped",
+        attachments: [{ attachmentIndex: 0, attempts: [] }],
+      },
+    } as never);
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "audio", "transcribe", "--file", "memo.m4a", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("No audio transcription provider is configured or ready"),
+    );
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("tools.media.audio.models"),
     );
   });
 

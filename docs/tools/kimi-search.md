@@ -79,6 +79,15 @@ If you omit `model`, OpenClaw defaults to `kimi-k2.6`.
 Kimi uses Moonshot web search to synthesize answers with inline citations,
 similar to Gemini and Grok's grounded response approach.
 
+OpenClaw treats Kimi `web_search` as successful only after Moonshot returns
+native web-search grounding evidence, such as a replayable `$web_search` tool
+payload, `search_results`, or citation URLs. If Kimi stops immediately with a
+plain chat answer like "I cannot browse the internet" and no grounding evidence,
+OpenClaw returns a structured `kimi_web_search_ungrounded` error instead of
+wrapping that text as a search result. Retry the query, switch to a structured
+provider such as Brave, or use `web_fetch` / the browser tool when you already
+have a target URL.
+
 ## Supported parameters
 
 Kimi search supports `query`.

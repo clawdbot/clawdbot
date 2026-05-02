@@ -18,7 +18,7 @@ export function normalizeCommandDescriptorName(name: string): string | null {
   return SAFE_COMMAND_NAME_PATTERN.test(normalized) ? normalized : null;
 }
 
-export function assertSafeCommandDescriptorName(name: string): string {
+function assertSafeCommandDescriptorName(name: string): string {
   const normalized = normalizeCommandDescriptorName(name);
   if (!normalized) {
     throw new Error(`Invalid CLI command name: ${JSON.stringify(name.trim())}`);

@@ -1745,8 +1745,11 @@ export const registerTelegramHandlers = ({
             const actionText = isDefaultSelection
               ? "reset to default"
               : `changed to <b>${escapeHtml(selection.provider)}/${escapeHtml(selection.model)}</b>`;
+            const scopeText = isDefaultSelection
+              ? "Session selection cleared. New replies use the agent's configured default."
+              : "Session-only selection. The agent default in openclaw.json is unchanged; /reset or a new session may return to that default.";
             await editMessageWithButtons(
-              `✅ Model ${actionText}\n\nThis model will be used for your next message.`,
+              `✅ Model ${actionText}\n\n${scopeText}`,
               [], // Empty buttons = remove inline keyboard
               { parse_mode: "HTML" },
             );

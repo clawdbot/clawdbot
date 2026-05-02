@@ -113,7 +113,7 @@ type DiscordQaScenarioResult = {
   details: string;
 };
 
-export type DiscordQaRunResult = {
+type DiscordQaRunResult = {
   outputDir: string;
   reportPath: string;
   summaryPath: string;
@@ -197,7 +197,7 @@ const DISCORD_QA_SCENARIOS: DiscordQaScenarioDefinition[] = [
   },
 ];
 
-export const DISCORD_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
+const DISCORD_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
   scenarios: DISCORD_QA_SCENARIOS,
 });
 
@@ -232,9 +232,7 @@ function isTruthyOptIn(value: string | undefined) {
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
-export function resolveDiscordQaRuntimeEnv(
-  env: NodeJS.ProcessEnv = process.env,
-): DiscordQaRuntimeEnv {
+function resolveDiscordQaRuntimeEnv(env: NodeJS.ProcessEnv = process.env): DiscordQaRuntimeEnv {
   const runtimeEnv = {
     guildId: resolveEnvValue(env, "OPENCLAW_QA_DISCORD_GUILD_ID"),
     channelId: resolveEnvValue(env, "OPENCLAW_QA_DISCORD_CHANNEL_ID"),

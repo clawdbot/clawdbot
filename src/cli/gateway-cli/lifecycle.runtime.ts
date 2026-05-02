@@ -22,10 +22,6 @@ export { markUpdateRestartSentinelFailure } from "../../infra/restart-sentinel.j
 export { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 export { writeDiagnosticStabilityBundleForFailureSync } from "../../logging/diagnostic-stability-bundle.js";
 export {
-  getActiveBundledRuntimeDepsInstallCount,
-  waitForBundledRuntimeDepsInstallIdle,
-} from "../../plugins/bundled-runtime-deps-activity.js";
-export {
   getActiveTaskCount,
   markGatewayDraining,
   resetAllLanes,

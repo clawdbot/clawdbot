@@ -1,3 +1,4 @@
+import { isBillingErrorMessage } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { createXSearchTool } from "./x-search.js";
 
@@ -28,10 +29,20 @@ describeLive("xai x_search live", () => {
     });
 
     expect(tool).toBeTruthy();
-    const result = await tool!.execute("x-search:live", {
-      query: "OpenClaw from:steipete",
-      to_date: "2026-03-28",
-    });
+    let result: Awaited<ReturnType<NonNullable<typeof tool>["execute"]>>;
+    try {
+      result = await tool!.execute("x-search:live", {
+        query: "OpenClaw from:steipete",
+        to_date: "2026-03-28",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (isBillingErrorMessage(message)) {
+        console.warn(`[xai:x-search:live] skip: billing drift: ${message}`);
+        return;
+      }
+      throw error;
+    }
 
     const details = (result.details ?? {}) as {
       provider?: string;
@@ -41,6 +52,12 @@ describeLive("xai x_search live", () => {
       error?: string;
       message?: string;
     };
+
+    const errorMessage = [details.error, details.message].filter(Boolean).join(" ");
+    if (isBillingErrorMessage(errorMessage)) {
+      console.warn(`[xai:x-search:live] skip: billing drift: ${errorMessage}`);
+      return;
+    }
 
     expect(details.error, details.message).toBeUndefined();
     expect(details.provider).toBe("xai");

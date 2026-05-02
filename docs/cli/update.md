@@ -155,7 +155,7 @@ If an exact pinned npm plugin update resolves to an artifact whose integrity dif
 <Note>
 Post-update plugin sync failures fail the update result and stop restart follow-up work. Fix the plugin install or update error, then rerun `openclaw update`.
 
-When the updated Gateway starts, enabled bundled plugin runtime dependencies are staged before plugin activation. Package-manager `update.run` restarts bypass the normal idle deferral and restart cooldown after the package tree has been swapped, so the old process cannot keep lazy-loading removed chunks. Service-manager restarts still drain runtime-dependency staging before closing the Gateway.
+When the updated Gateway starts, plugin loading is verify-only: startup does not run package managers or mutate dependency trees. Package-manager `update.run` restarts bypass the normal idle deferral and restart cooldown after the package tree has been swapped, so the old process cannot keep lazy-loading removed chunks.
 
 If pnpm bootstrap still fails, the updater stops early with a package-manager-specific error instead of trying `npm run build` inside the checkout.
 </Note>

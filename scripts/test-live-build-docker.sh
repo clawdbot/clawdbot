@@ -40,5 +40,5 @@ if [[ "${OPENCLAW_SKIP_DOCKER_BUILD:-}" == "1" ]]; then
 fi
 
 echo "==> Build live-test image: $LIVE_IMAGE_NAME (target=build)"
-echo "==> Bundled plugin deps: ${DOCKER_BUILD_EXTENSIONS}"
+echo "==> Bundled plugins: ${DOCKER_BUILD_EXTENSIONS}"
 docker_build_run live-build "${DOCKER_BUILD_ARGS[@]}" --target build -t "$LIVE_IMAGE_NAME" -f "$ROOT_DIR/Dockerfile" "$ROOT_DIR"

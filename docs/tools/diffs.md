@@ -26,6 +26,11 @@ When enabled, the plugin prepends concise usage guidance into system-prompt spac
 ## Quick start
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install diffs
+    ```
+  </Step>
   <Step title="Enable the plugin">
     ```json5
     {

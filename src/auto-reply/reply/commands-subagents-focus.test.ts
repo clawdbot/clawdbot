@@ -77,7 +77,7 @@ vi.mock("../../channels/thread-bindings-policy.js", () => ({
   formatThreadBindingDisabledError: (params: { channel: string }) =>
     `channels.${params.channel}.threadBindings.enabled=true required`,
   formatThreadBindingSpawnDisabledError: (params: { channel: string }) =>
-    `channels.${params.channel}.threadBindings.spawnSubagentSessions=true`,
+    `channels.${params.channel}.threadBindings.spawnSessions=true`,
   resolveThreadBindingIdleTimeoutMsForChannel: () => 24 * 60 * 60 * 1000,
   resolveThreadBindingMaxAgeMsForChannel: () => undefined,
   resolveThreadBindingPlacementForCurrentContext: (params: {
@@ -92,9 +92,10 @@ vi.mock("../../channels/thread-bindings-policy.js", () => ({
     const settings = params.cfg.channels?.[params.channel]?.threadBindings;
     return {
       enabled: settings?.enabled !== false,
-      spawnEnabled: settings?.spawnSubagentSessions === true,
+      spawnEnabled: settings?.spawnSessions !== false,
       channel: params.channel,
       accountId: params.accountId,
+      defaultSpawnContext: "fork",
     };
   },
 }));
@@ -367,7 +368,7 @@ describe("focus actions", () => {
             [ROOM_CHANNEL]: {
               threadBindings: {
                 enabled: true,
-                spawnSubagentSessions: true,
+                spawnSessions: true,
               },
             },
           } as OpenClawConfig["channels"],
@@ -411,7 +412,7 @@ describe("focus actions", () => {
     );
   });
 
-  it("rejects room top-level thread creation when spawnSubagentSessions is disabled", async () => {
+  it("rejects room top-level thread creation when spawnSessions is disabled", async () => {
     hoisted.resolveConversationBindingContextMock.mockReturnValue({
       channel: ROOM_CHANNEL,
       accountId: "default",
@@ -426,6 +427,7 @@ describe("focus actions", () => {
             [ROOM_CHANNEL]: {
               threadBindings: {
                 enabled: true,
+                spawnSessions: false,
               },
             },
           } as OpenClawConfig["channels"],
@@ -434,7 +436,7 @@ describe("focus actions", () => {
     );
 
     expect(result.reply?.text).toContain(
-      `channels.${ROOM_CHANNEL}.threadBindings.spawnSubagentSessions=true`,
+      `channels.${ROOM_CHANNEL}.threadBindings.spawnSessions=true`,
     );
     expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
   });

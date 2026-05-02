@@ -51,7 +51,7 @@ export type CostUsageTotals = {
   missingCostEntries: number;
 };
 
-export type CostUsageDailyEntry = CostUsageTotals & {
+type CostUsageDailyEntry = CostUsageTotals & {
   date: string;
 };
 

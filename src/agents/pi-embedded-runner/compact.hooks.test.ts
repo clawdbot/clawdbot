@@ -309,6 +309,258 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     );
   });
 
+  it("uses the session model fallback chain when implicit compaction fails", async () => {
+    resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
+      model: { provider, api: "responses", id: modelId, input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    }));
+    sessionCompactImpl
+      .mockRejectedValueOnce(
+        Object.assign(
+          new Error(
+            "400 The response was filtered due to the prompt triggering Azure OpenAI's content management policy.",
+          ),
+          { status: 400 },
+        ),
+      )
+      .mockResolvedValueOnce({
+        summary: "fallback summary",
+        firstKeptEntryId: "entry-fallback",
+        tokensBefore: 120,
+        details: { ok: true },
+      });
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-primary",
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-primary",
+              fallbacks: ["anthropic/claude-fallback"],
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.result?.summary).toBe("fallback summary");
+    expect(resolveModelMock).toHaveBeenCalledWith(
+      "openai",
+      "gpt-primary",
+      expect.any(String),
+      expect.anything(),
+    );
+    expect(resolveModelMock).toHaveBeenCalledWith(
+      "anthropic",
+      "claude-fallback",
+      expect.any(String),
+      expect.anything(),
+    );
+  });
+
+  it("uses the session model fallback chain when overflow compaction fails", async () => {
+    resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
+      model: { provider, api: "responses", id: modelId, input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    }));
+    sessionCompactImpl
+      .mockRejectedValueOnce(
+        Object.assign(new Error("primary compaction rate limited"), {
+          status: 429,
+          code: "rate_limit_exceeded",
+        }),
+      )
+      .mockResolvedValueOnce({
+        summary: "overflow fallback summary",
+        firstKeptEntryId: "entry-fallback",
+        tokensBefore: 120,
+        details: { ok: true },
+      });
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-primary",
+      trigger: "overflow",
+      modelFallbacksOverride: ["anthropic/claude-fallback"],
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-primary",
+              fallbacks: [],
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.result?.summary).toBe("overflow fallback summary");
+    expect(resolveModelMock).toHaveBeenCalledWith(
+      "openai",
+      "gpt-primary",
+      expect.any(String),
+      expect.anything(),
+    );
+    expect(resolveModelMock).toHaveBeenCalledWith(
+      "anthropic",
+      "claude-fallback",
+      expect.any(String),
+      expect.anything(),
+    );
+  });
+
+  it("keeps compaction fallback selection ephemeral", async () => {
+    resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
+      model: { provider, api: "responses", id: modelId, input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    }));
+    sessionCompactImpl
+      .mockRejectedValueOnce(Object.assign(new Error("400 invalid request body"), { status: 400 }))
+      .mockResolvedValueOnce({
+        summary: "fallback summary",
+        firstKeptEntryId: "entry-fallback",
+        tokensBefore: 120,
+        details: { ok: true },
+      });
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-primary",
+            fallbacks: ["anthropic/claude-fallback"],
+          },
+        },
+      },
+      sessions: {
+        entries: {
+          [TEST_SESSION_KEY]: {
+            modelProvider: "openai",
+            model: "gpt-primary",
+          },
+        },
+      },
+    };
+    const configBefore = structuredClone(config);
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-primary",
+      config: config as never,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(config).toEqual(configBefore);
+  });
+
+  it("preserves explicit compaction.model behavior without session fallback", async () => {
+    resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
+      model: { provider, api: "responses", id: modelId, input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    }));
+    sessionCompactImpl.mockRejectedValueOnce(
+      Object.assign(new Error("400 invalid request body"), { status: 400 }),
+    );
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-primary",
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-primary",
+              fallbacks: ["anthropic/claude-fallback"],
+            },
+            compaction: {
+              model: "azure/compact-primary",
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(resolveModelMock).toHaveBeenCalledTimes(1);
+    expect(resolveModelMock).toHaveBeenCalledWith(
+      "azure",
+      "compact-primary",
+      expect.any(String),
+      expect.anything(),
+    );
+  });
+
+  it("preserves compaction failure status and code metadata", async () => {
+    resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
+      model: { provider, api: "responses", id: modelId, input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    }));
+    sessionCompactImpl.mockRejectedValueOnce(
+      Object.assign(new Error("primary compaction rate limited"), {
+        status: 429,
+        code: "rate_limit_exceeded",
+      }),
+    );
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-primary",
+      config: {
+        agents: {
+          defaults: {
+            compaction: {
+              model: "openai/gpt-primary",
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      compacted: false,
+      failure: {
+        reason: "rate_limit",
+        status: 429,
+        code: "rate_limit_exceeded",
+        rawError: "primary compaction rate limited",
+      },
+    });
+  });
+
   it("emits internal + plugin compaction hooks with counts", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
     await runCompactionHooks({
@@ -1052,7 +1304,7 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
     );
   });
 
-  it("rotates in the wrapper when a delegated result echoes the current transcript", async () => {
+  it("keeps a delegated result that echoes the current transcript on the active transcript", async () => {
     const maintain = vi.fn(async (_params?: unknown) => ({
       changed: false,
       bytesFreed: 0,
@@ -1098,13 +1350,13 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
     );
 
     expect(result.ok).toBe(true);
-    expect(rotateTranscriptAfterCompactionMock).toHaveBeenCalledTimes(1);
-    expect(result.result?.sessionId).toBe("wrapper-rotated-session");
-    expect(result.result?.sessionFile).toBe("/tmp/wrapper-rotated-session.jsonl");
+    expect(rotateTranscriptAfterCompactionMock).not.toHaveBeenCalled();
+    expect(result.result?.sessionId).toBeUndefined();
+    expect(result.result?.sessionFile).toBeUndefined();
     expect(maintain).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionId: "wrapper-rotated-session",
-        sessionFile: "/tmp/wrapper-rotated-session.jsonl",
+        sessionId: TEST_SESSION_ID,
+        sessionFile: TEST_SESSION_FILE,
       }),
     );
   });

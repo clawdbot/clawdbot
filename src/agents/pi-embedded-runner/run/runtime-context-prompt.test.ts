@@ -55,7 +55,7 @@ describe("runtime context prompt submission", () => {
         transcriptPrompt: "",
       }),
     ).toEqual({
-      prompt: "",
+      prompt: "Continue the OpenClaw runtime event.",
       runtimeContext: "internal event",
       runtimeOnly: true,
       runtimeSystemContext: expect.stringContaining("internal event"),

@@ -46,6 +46,40 @@ describe("exa web search provider", () => {
     expect(__testing.resolveExaApiKey({ apiKey: "exa-secret" })).toBe("exa-secret");
   });
 
+  it("resolves Exa search base URL overrides", () => {
+    expect(__testing.resolveExaSearchEndpoint()).toEqual({
+      endpoint: "https://api.exa.ai/search",
+    });
+    expect(__testing.resolveExaSearchEndpoint({ baseUrl: "https://proxy.example/exa" })).toEqual({
+      endpoint: "https://proxy.example/exa/search",
+    });
+    expect(__testing.resolveExaSearchEndpoint({ baseUrl: "proxy.example/exa/search/" })).toEqual({
+      endpoint: "https://proxy.example/exa/search",
+    });
+    expect(__testing.resolveExaSearchEndpoint({ baseUrl: "ftp://proxy.example/exa" })).toEqual(
+      expect.objectContaining({ error: "invalid_base_url" }),
+    );
+  });
+
+  it("partitions Exa cache keys by resolved endpoint", () => {
+    const base = {
+      type: "auto" as const,
+      query: "openclaw",
+      count: 5,
+    };
+    expect(
+      __testing.buildExaCacheKey({
+        ...base,
+        endpoint: "https://api.exa.ai/search",
+      }),
+    ).not.toBe(
+      __testing.buildExaCacheKey({
+        ...base,
+        endpoint: "https://proxy.example/exa/search",
+      }),
+    );
+  });
+
   it("normalizes Exa result descriptions from highlights before text", () => {
     expect(
       __testing.resolveExaDescription({

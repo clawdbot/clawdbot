@@ -13,7 +13,7 @@ import { runExec } from "../process/exec.js";
 import { DEFAULT_LINK_TIMEOUT_SECONDS } from "./defaults.js";
 import { extractLinksFromMessage } from "./detect.js";
 
-export type LinkUnderstandingResult = {
+type LinkUnderstandingResult = {
   urls: string[];
   outputs: string[];
 };

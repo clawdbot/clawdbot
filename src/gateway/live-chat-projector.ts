@@ -11,8 +11,6 @@ import {
   isSuppressedControlReplyText,
 } from "./control-reply-text.js";
 
-export { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
-
 export const MAX_LIVE_CHAT_BUFFER_CHARS = 500_000;
 
 function capLiveAssistantBuffer(text: string): string {

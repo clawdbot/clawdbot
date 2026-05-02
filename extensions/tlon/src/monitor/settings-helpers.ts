@@ -2,7 +2,7 @@ import type { PendingApproval, TlonSettingsStore } from "../settings.js";
 import { normalizeShip } from "../targets.js";
 import type { TlonResolvedAccount } from "../types.js";
 
-export type TlonMonitorSettingsState = {
+type TlonMonitorSettingsState = {
   effectiveDmAllowlist: string[];
   effectiveShowModelSig: boolean;
   effectiveAutoAcceptDmInvites: boolean;

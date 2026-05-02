@@ -53,7 +53,7 @@ type BaselineFindings = {
   warnings: string[];
 };
 
-export type LiveCacheRegressionResult = {
+type LiveCacheRegressionResult = {
   regressions: string[];
   summary: Record<string, Record<string, unknown>>;
   warnings: string[];

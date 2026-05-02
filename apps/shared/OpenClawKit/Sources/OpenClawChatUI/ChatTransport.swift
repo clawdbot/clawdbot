@@ -4,6 +4,7 @@ public enum OpenClawChatTransportEvent: Sendable {
     case health(ok: Bool)
     case tick
     case chat(OpenClawChatEventPayload)
+    case sessionMessage(OpenClawSessionMessageEventPayload)
     case agent(OpenClawAgentEventPayload)
     case seqGap
 }

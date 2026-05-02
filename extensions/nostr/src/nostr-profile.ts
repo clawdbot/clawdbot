@@ -88,7 +88,7 @@ const RELAY_PUBLISH_TIMEOUT_MS = 5000;
  * @param event - Signed profile event (kind:0)
  * @returns Publish results with successes and failures
  */
-export async function publishProfileEvent(
+async function publishProfileEvent(
   pool: SimplePool,
   relays: string[],
   event: Event,

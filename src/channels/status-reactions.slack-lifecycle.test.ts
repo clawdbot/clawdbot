@@ -65,7 +65,8 @@ describe("Slack status reaction lifecycle", () => {
 
     await ctrl.setDone();
     expect(active.has(DEFAULT_EMOJIS.done)).toBe(true);
-    expect(active.has(DEFAULT_EMOJIS.web)).toBe(true);
+    expect(active.has(DEFAULT_EMOJIS.web)).toBe(false);
+    expect(active.has(DEFAULT_EMOJIS.thinking)).toBe(false);
 
     await ctrl.clear();
     expect(active.size).toBe(0);
@@ -87,7 +88,7 @@ describe("Slack status reaction lifecycle", () => {
 
     await ctrl.setError();
     expect(active.has(DEFAULT_EMOJIS.error)).toBe(true);
-    expect(active.has("eyes")).toBe(true);
+    expect(active.has("eyes")).toBe(false);
 
     await ctrl.restoreInitial();
     expect(active.has("eyes")).toBe(true);
@@ -156,7 +157,8 @@ describe("Slack status reaction lifecycle", () => {
 
     expect(active.has("eyes")).toBe(true);
     expect(active.has(DEFAULT_EMOJIS.done)).toBe(false);
-    expect(adapter.removeReaction).toHaveBeenCalledTimes(1);
+    expect(adapter.removeReaction).toHaveBeenCalledTimes(2);
+    expect(adapter.removeReaction).toHaveBeenCalledWith("eyes");
     expect(adapter.removeReaction).toHaveBeenCalledWith(DEFAULT_EMOJIS.done);
     expect(adapter.removeReaction).not.toHaveBeenCalledWith(DEFAULT_EMOJIS.thinking);
   });

@@ -4,7 +4,7 @@ import path from "node:path";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
-export type MaybeCreateDynamicAgentResult = {
+type MaybeCreateDynamicAgentResult = {
   created: boolean;
   updatedCfg: OpenClawConfig;
   agentId?: string;

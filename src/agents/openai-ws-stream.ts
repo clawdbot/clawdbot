@@ -16,13 +16,13 @@ import * as piAi from "@mariozechner/pi-ai";
  * Key behaviours:
  *  - Per-session `OpenAIWebSocketManager` (keyed by sessionId)
  *  - Tracks `previous_response_id` to send only incremental tool-result inputs
- *  - Falls back to `streamSimple` (HTTP) if the WebSocket connection fails
+ *  - Falls back to the OpenClaw HTTP transport if the WebSocket connection fails
  *  - Cleanup helpers for releasing sessions after the run completes
  *
  * Complexity budget & risk mitigation:
  *  - **Transport aware**: respects `transport` (`auto` | `websocket` | `sse`)
  *  - **Transparent fallback in `auto` mode**: connect/send failures fall back to
- *    the existing HTTP `streamSimple`; forced `websocket` mode surfaces WS errors
+ *    the existing HTTP path; forced `websocket` mode surfaces WS errors
  *  - **Zero shared state**: per-session registry; session cleanup on dispose prevents leaks
  *  - **Full parity**: all generation options (temperature, top_p, max_output_tokens,
  *    tool_choice, reasoning) forwarded identically to the HTTP path
@@ -63,7 +63,7 @@ import type { ResponseCreateEvent } from "./openai-ws-types.js";
 import { log } from "./pi-embedded-runner/logger.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { normalizeProviderId } from "./provider-id.js";
-import { createBoundaryAwareStreamFnForModel } from "./provider-transport-stream.js";
+import { createOpenClawTransportStreamFnForModel } from "./provider-transport-stream.js";
 import {
   buildAssistantMessageWithZeroUsage,
   buildStreamErrorAssistantMessage,
@@ -124,7 +124,9 @@ type AssistantMessageWithPhase = AssistantMessage & { phase?: OpenAIResponsesAss
 
 const defaultOpenAIWsStreamDeps: OpenAIWsStreamDeps = {
   createManager: (options) => new OpenAIWebSocketManager(options),
-  createHttpFallbackStreamFn: (model) => createBoundaryAwareStreamFnForModel(model),
+  // WebSocket auto-mode HTTP fallback must keep the OpenClaw transport path so
+  // degraded sessions do not leak cache-boundary markers or lose strict tools.
+  createHttpFallbackStreamFn: (model) => createOpenClawTransportStreamFnForModel(model),
   streamSimple: (...args) => piAi.streamSimple(...args),
 };
 
@@ -697,8 +699,8 @@ async function runWarmUp(params: {
  * connection; subsequent calls reuse it, sending only incremental tool-result
  * inputs with `previous_response_id`.
  *
- * If the WebSocket connection is unavailable, the function falls back to the
- * standard `streamSimple` HTTP path and logs a warning.
+ * If the WebSocket connection is unavailable, the function falls back to an
+ * OpenClaw HTTP transport when available, or the standard `streamSimple` path.
  *
  * @param apiKey     OpenAI API key
  * @param sessionId  Agent session ID (used as the registry key)
@@ -1357,6 +1359,9 @@ export const __testing = {
           ...overrides,
         }
       : defaultOpenAIWsStreamDeps;
+  },
+  getDefaultHttpFallbackStreamFnForTest(model: ProviderRuntimeModel): StreamFn | undefined {
+    return defaultOpenAIWsStreamDeps.createHttpFallbackStreamFn(model);
   },
   setWsDegradeCooldownMsForTest(nextMs?: number) {
     wsDegradeCooldownMsOverride = nextMs;

@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
 
@@ -17,53 +17,51 @@ function isPathInsideOrEqual(baseDir: string, candidate: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-function validateExistingExportDirectory(params: {
+async function validateExistingExportDirectory(params: {
   dir: string;
   label: string;
   realWorkspace: string;
-}): string {
-  const linkStat = fs.lstatSync(params.dir);
+}): Promise<string> {
+  const linkStat = await fsp.lstat(params.dir);
   if (linkStat.isSymbolicLink() || !linkStat.isDirectory()) {
     throw new Error(`${params.label} must be a real directory inside the workspace`);
   }
-  const realDir = fs.realpathSync(params.dir);
+  const realDir = await fsp.realpath(params.dir);
   if (!isPathInsideOrEqual(params.realWorkspace, realDir)) {
     throw new Error("Trajectory exports directory must stay inside the workspace");
   }
   return realDir;
 }
 
-function mkdirIfMissingThenValidate(params: {
+async function mkdirIfMissingThenValidate(params: {
   dir: string;
   label: string;
   realWorkspace: string;
-}): string {
-  if (!fs.existsSync(params.dir)) {
-    try {
-      fs.mkdirSync(params.dir, { mode: 0o700 });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-        throw error;
-      }
+}): Promise<string> {
+  try {
+    await fsp.mkdir(params.dir, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+      throw error;
     }
   }
-  return validateExistingExportDirectory(params);
+  return await validateExistingExportDirectory(params);
 }
 
-function resolveTrajectoryExportBaseDir(workspaceDir: string): {
+async function resolveTrajectoryExportBaseDir(workspaceDir: string): Promise<{
   baseDir: string;
   realBase: string;
-} {
+}> {
   const workspacePath = path.resolve(workspaceDir);
-  const realWorkspace = fs.realpathSync(workspacePath);
+  const realWorkspace = await fsp.realpath(workspacePath);
   const stateDir = path.join(workspacePath, ".openclaw");
-  mkdirIfMissingThenValidate({
+  await mkdirIfMissingThenValidate({
     dir: stateDir,
     label: "OpenClaw state directory",
     realWorkspace,
   });
   const baseDir = path.join(stateDir, "trajectory-exports");
-  const realBase = mkdirIfMissingThenValidate({
+  const realBase = await mkdirIfMissingThenValidate({
     dir: baseDir,
     label: "Trajectory exports directory",
     realWorkspace,
@@ -71,12 +69,21 @@ function resolveTrajectoryExportBaseDir(workspaceDir: string): {
   return { baseDir: path.resolve(baseDir), realBase };
 }
 
-export function resolveTrajectoryCommandOutputDir(params: {
+async function pathExists(pathName: string): Promise<boolean> {
+  try {
+    await fsp.access(pathName);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function resolveTrajectoryCommandOutputDir(params: {
   outputPath?: string;
   workspaceDir: string;
   sessionId: string;
-}): string {
-  const { baseDir, realBase } = resolveTrajectoryExportBaseDir(params.workspaceDir);
+}): Promise<string> {
+  const { baseDir, realBase } = await resolveTrajectoryExportBaseDir(params.workspaceDir);
   const raw = params.outputPath?.trim();
   if (!raw) {
     const defaultDir = resolveDefaultTrajectoryExportDir({
@@ -95,36 +102,36 @@ export function resolveTrajectoryCommandOutputDir(params: {
     throw new Error("Output path must stay inside the workspace trajectory exports directory");
   }
   let existingParent = outputDir;
-  while (!fs.existsSync(existingParent)) {
+  while (!(await pathExists(existingParent))) {
     const next = path.dirname(existingParent);
     if (next === existingParent) {
       break;
     }
     existingParent = next;
   }
-  const realExistingParent = fs.realpathSync(existingParent);
+  const realExistingParent = await fsp.realpath(existingParent);
   if (!isPathInsideOrEqual(realBase, realExistingParent)) {
     throw new Error("Output path must stay inside the real trajectory exports directory");
   }
   return outputDir;
 }
 
-export function exportTrajectoryForCommand(params: {
+export async function exportTrajectoryForCommand(params: {
   outputDir?: string;
   outputPath?: string;
   sessionFile: string;
   sessionId: string;
   sessionKey: string;
   workspaceDir: string;
-}): TrajectoryCommandExportSummary {
+}): Promise<TrajectoryCommandExportSummary> {
   const outputDir =
     params.outputDir ??
-    resolveTrajectoryCommandOutputDir({
+    (await resolveTrajectoryCommandOutputDir({
       outputPath: params.outputPath,
       workspaceDir: params.workspaceDir,
       sessionId: params.sessionId,
-    });
-  const bundle = exportTrajectoryBundle({
+    }));
+  const bundle = await exportTrajectoryBundle({
     outputDir,
     sessionFile: params.sessionFile,
     sessionId: params.sessionId,

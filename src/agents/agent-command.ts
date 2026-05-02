@@ -51,7 +51,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveFastModeState } from "./fast-mode.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch.js";
-import { loadModelCatalog } from "./model-catalog.js";
+import { loadManifestModelCatalog } from "./model-catalog.js";
 import { runWithModelFallback } from "./model-fallback.js";
 import {
   buildAllowedModelSet,
@@ -729,12 +729,12 @@ async function agentCommandInternal(
     }
     const needsModelCatalog = Boolean(hasAllowlist);
     let allowedModelKeys = new Set<string>();
-    let allowedModelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> = [];
-    let modelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> | null = null;
+    let allowedModelCatalog: ReturnType<typeof loadManifestModelCatalog> = [];
+    let modelCatalog: ReturnType<typeof loadManifestModelCatalog> | null = null;
     let allowAnyModel = !hasAllowlist;
 
     if (needsModelCatalog) {
-      modelCatalog = await loadModelCatalog({ config: cfg });
+      modelCatalog = loadManifestModelCatalog({ config: cfg, workspaceDir });
       const allowed = buildAllowedModelSet({
         cfg,
         catalog: modelCatalog,
@@ -830,8 +830,11 @@ async function agentCommandInternal(
     }
 
     const catalogForThinking =
-      modelCatalog ??
-      (allowedModelCatalog.length > 0 ? allowedModelCatalog : configuredThinkingCatalog);
+      allowedModelCatalog.length > 0
+        ? allowedModelCatalog
+        : modelCatalog && modelCatalog.length > 0
+          ? modelCatalog
+          : configuredThinkingCatalog;
     const thinkingCatalog = catalogForThinking.length > 0 ? catalogForThinking : undefined;
     if (!resolvedThinkLevel) {
       resolvedThinkLevel = resolveThinkingDefault({
@@ -968,6 +971,7 @@ async function agentCommandInternal(
             return attemptExecutionRuntime.runAgentAttempt({
               providerOverride,
               modelOverride,
+              modelFallbacksOverride: effectiveFallbacksOverride,
               originalProvider: provider,
               cfg,
               sessionEntry,
@@ -1024,6 +1028,18 @@ async function agentCommandInternal(
         result = fallbackResult.result;
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
+        if (fallbackResult.attempts.length > 0 && result.meta.agentMeta) {
+          result = {
+            ...result,
+            meta: {
+              ...result.meta,
+              agentMeta: {
+                ...result.meta.agentMeta,
+                fallbackAttempts: fallbackResult.attempts,
+              },
+            },
+          };
+        }
         if (!lifecycleEnded) {
           const stopReason = result.meta.stopReason;
           if (stopReason && stopReason !== "end_turn") {

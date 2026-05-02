@@ -134,6 +134,8 @@ describe("native PDF provider API calls", () => {
     const [url, opts] = fetchMock.mock.calls[0];
     expect(url).toContain("generateContent");
     expect(url).toContain("gemini-2.5-pro");
+    expect(url).not.toContain("?key=");
+    expect(opts.headers["x-goog-api-key"]).toBe("test-key");
     expect(opts.signal).toBeInstanceOf(AbortSignal);
     expect(opts.signal.aborted).toBe(false);
     const body = JSON.parse(opts.body);

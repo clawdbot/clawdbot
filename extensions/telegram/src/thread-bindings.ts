@@ -35,7 +35,7 @@ async function loadTelegramSendModule() {
 
 type TelegramBindingTargetKind = "subagent" | "acp";
 
-export type TelegramThreadBindingRecord = {
+type TelegramThreadBindingRecord = {
   accountId: string;
   conversationId: string;
   targetKind: TelegramBindingTargetKind;
@@ -55,7 +55,7 @@ type StoredTelegramBindingState = {
   bindings: TelegramThreadBindingRecord[];
 };
 
-export type TelegramThreadBindingManager = {
+type TelegramThreadBindingManager = {
   accountId: string;
   shouldPersistMutations: () => boolean;
   getIdleTimeoutMs: () => number;

@@ -13,13 +13,13 @@ import type { CommandHandlerResult, HandleCommandsParams } from "../commands-typ
 import { resolveAcpCommandChannel, resolveAcpCommandThreadId } from "./context.js";
 
 export const COMMAND = "/acp";
-export const ACP_SPAWN_USAGE =
+const ACP_SPAWN_USAGE =
   "Usage: /acp spawn [harness-id] [--mode persistent|oneshot] [--thread auto|here|off] [--bind here|off] [--cwd <path>] [--label <label>].";
-export const ACP_STEER_USAGE =
+const ACP_STEER_USAGE =
   "Usage: /acp steer [--session <session-key|session-id|session-label>] <instruction>";
 export const ACP_SET_MODE_USAGE =
   "Usage: /acp set-mode <mode> [session-key|session-id|session-label]";
-export const ACP_SET_USAGE = "Usage: /acp set <key> <value> [session-key|session-id|session-label]";
+const ACP_SET_USAGE = "Usage: /acp set <key> <value> [session-key|session-id|session-label]";
 export const ACP_CWD_USAGE = "Usage: /acp cwd <path> [session-key|session-id|session-label]";
 export const ACP_PERMISSIONS_USAGE =
   "Usage: /acp permissions <profile> [session-key|session-id|session-label]";

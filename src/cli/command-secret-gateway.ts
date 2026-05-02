@@ -39,7 +39,7 @@ type CommandSecretResolutionModeInput =
   | CommandSecretResolutionMode
   | LegacyCommandSecretResolutionMode;
 
-export type CommandSecretTargetState =
+type CommandSecretTargetState =
   | "resolved_gateway"
   | "resolved_local"
   | "inactive_surface"

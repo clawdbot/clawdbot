@@ -37,7 +37,7 @@ export function appendStatusSectionHeading(params: {
   params.lines.push(params.heading(params.title));
 }
 
-export function appendStatusLinesSection(params: {
+function appendStatusLinesSection(params: {
   lines: string[];
   heading: HeadingFn;
   title: string;
@@ -47,7 +47,7 @@ export function appendStatusLinesSection(params: {
   params.lines.push(...params.body);
 }
 
-export function appendStatusTableSection<Row extends Record<string, string>>(params: {
+function appendStatusTableSection<Row extends Record<string, string>>(params: {
   lines: string[];
   heading: HeadingFn;
   title: string;

@@ -24,7 +24,7 @@ function isZero(value: number | undefined): value is 0 {
   return value === 0;
 }
 
-export function hasZeroTokenUsageSnapshot(usage: unknown): boolean {
+function hasZeroTokenUsageSnapshot(usage: unknown): boolean {
   if (!usage || typeof usage !== "object") {
     return false;
   }

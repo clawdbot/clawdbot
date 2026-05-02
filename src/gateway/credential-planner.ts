@@ -3,13 +3,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
-export type GatewayCredentialInputPath =
+type GatewayCredentialInputPath =
   | "gateway.auth.token"
   | "gateway.auth.password"
   | "gateway.remote.token"
   | "gateway.remote.password";
 
-export type GatewayConfiguredCredentialInput = {
+type GatewayConfiguredCredentialInput = {
   path: GatewayCredentialInputPath;
   configured: boolean;
   value?: string;

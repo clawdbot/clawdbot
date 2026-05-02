@@ -117,6 +117,12 @@ function createDmClient(channelId: string): DiscordClient {
   } as unknown as DiscordClient;
 }
 
+function createMissingChannelClient(): DiscordClient {
+  return {
+    fetchChannel: async () => null,
+  } as unknown as DiscordClient;
+}
+
 async function runThreadBoundPreflight(params: {
   threadId: string;
   parentId: string;
@@ -199,6 +205,26 @@ async function runDmPreflight(params: {
         message: params.message,
       } as DiscordMessageEvent,
       client: createDmClient(params.channelId),
+    }),
+  });
+}
+
+async function runUnresolvedDmPreflight(params: {
+  cfg?: import("openclaw/plugin-sdk/config-types").OpenClawConfig;
+  channelId: string;
+  message: import("../internal/discord.js").Message;
+  discordConfig: DiscordConfig;
+}) {
+  return preflightDiscordMessage({
+    ...createPreflightArgs({
+      cfg: params.cfg ?? DEFAULT_PREFLIGHT_CFG,
+      discordConfig: params.discordConfig,
+      data: {
+        channel_id: params.channelId,
+        author: params.message.author,
+        message: params.message,
+      } as DiscordMessageEvent,
+      client: createMissingChannelClient(),
     }),
   });
 }
@@ -483,6 +509,38 @@ describe("preflightDiscordMessage", () => {
     expect(result?.preflightAudioTranscript).toBe("hello openclaw from dm audio");
   });
 
+  it("keeps no-guild messages direct when channel lookup is unavailable", async () => {
+    const result = await runUnresolvedDmPreflight({
+      cfg: {
+        ...DEFAULT_PREFLIGHT_CFG,
+        session: {
+          ...DEFAULT_PREFLIGHT_CFG.session,
+          dmScope: "per-channel-peer",
+        },
+      },
+      channelId: "dm-channel-unresolved-1",
+      message: createDiscordMessage({
+        id: "m-dm-unresolved-1",
+        channelId: "dm-channel-unresolved-1",
+        content: "hello from a degraded dm",
+        author: {
+          id: "user-1",
+          bot: false,
+          username: "alice",
+        },
+      }),
+      discordConfig: {
+        dmPolicy: "open",
+      } as DiscordConfig,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.channelInfo).toBeNull();
+    expect(result?.isDirectMessage).toBe(true);
+    expect(result?.isGroupDm).toBe(false);
+    expect(result?.route.sessionKey).toBe("agent:main:discord:direct:user-1");
+  });
+
   it("falls back to the default discord account for omitted-account dm authorization", async () => {
     const message = createDiscordMessage({
       id: "m-dm-default-account",
@@ -566,7 +624,7 @@ describe("preflightDiscordMessage", () => {
     expect(result?.boundSessionKey).toBe(threadBinding.targetSessionKey);
   });
 
-  it("drops hydrated bound-thread webhook echoes after fetching an empty payload", async () => {
+  it("drops hydrated bound-thread webhook copies after fetching an empty payload", async () => {
     const threadBinding = createThreadBinding({
       targetKind: "session",
       targetSessionKey: "agent:main:acp:discord-thread-1",
@@ -624,6 +682,38 @@ describe("preflightDiscordMessage", () => {
     });
 
     expect(restGet).toHaveBeenCalledTimes(1);
+    expect(result).toBeNull();
+  });
+
+  it("drops bound-thread webhook copies from other webhook ids", async () => {
+    const threadBinding = createThreadBinding({
+      targetKind: "session",
+      targetSessionKey: "agent:main:acp:discord-thread-1",
+    });
+    const threadId = "thread-webhook-proxy-1";
+    const parentId = "channel-parent-webhook-proxy-1";
+    const message = createDiscordMessage({
+      id: "m-webhook-proxy-1",
+      channelId: threadId,
+      content: "proxied user message",
+      webhookId: "pluralkit-webhook-1",
+      author: {
+        id: "relay-bot-1",
+        bot: true,
+        username: "Proxy",
+      },
+    });
+
+    const result = await runThreadBoundPreflight({
+      threadId,
+      parentId,
+      message,
+      threadBinding,
+      discordConfig: {
+        allowBots: true,
+      } as DiscordConfig,
+    });
+
     expect(result).toBeNull();
   });
 
@@ -1387,24 +1477,35 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
     ).toBe(true);
   });
 
-  it("returns false when webhook ids differ", () => {
+  it("returns true when a bound thread receives a different webhook id", () => {
     expect(
       shouldIgnoreBoundThreadWebhookMessage({
+        threadId: "thread-1",
         webhookId: "wh-other",
         threadBinding: createThreadBinding(),
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
-  it("returns false when there is no bound thread webhook", () => {
+  it("returns true when a bound thread receives a webhook without a recorded bound webhook id", () => {
     expect(
       shouldIgnoreBoundThreadWebhookMessage({
+        threadId: "thread-1",
         webhookId: "wh-1",
         threadBinding: createThreadBinding({
           metadata: {
             webhookId: undefined,
           },
         }),
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false for differing webhook ids without a known thread id", () => {
+    expect(
+      shouldIgnoreBoundThreadWebhookMessage({
+        webhookId: "wh-other",
+        threadBinding: createThreadBinding(),
       }),
     ).toBe(false);
   });

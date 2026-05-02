@@ -2,7 +2,7 @@
 // Every tool returns the same { ok: false, code, message, canonicalPath? }
 // shape so the model can reason about errors uniformly.
 
-export type FileTransferErrCode =
+type FileTransferErrCode =
   // Path-shape errors (caller's fault)
   | "INVALID_PATH"
   | "INVALID_BASE64"
@@ -27,7 +27,7 @@ export type FileTransferErrCode =
   | "POLICY_DENIED"
   | "NO_POLICY";
 
-export type FileTransferErr = {
+type FileTransferErr = {
   ok: false;
   code: FileTransferErrCode;
   message: string;

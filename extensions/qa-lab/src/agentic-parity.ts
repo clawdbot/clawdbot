@@ -1,6 +1,6 @@
-export const QA_AGENTIC_PARITY_PACK = "agentic";
+const QA_AGENTIC_PARITY_PACK = "agentic";
 
-export const QA_AGENTIC_PARITY_SCENARIOS = [
+const QA_AGENTIC_PARITY_SCENARIOS = [
   {
     id: "approval-turn-tool-followthrough",
     title: "Approval turn tool followthrough",

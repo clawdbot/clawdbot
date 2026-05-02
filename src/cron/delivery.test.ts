@@ -1,8 +1,48 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "./delivery-plan.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
 
+function createPrefixOnlyChannelPlugin(
+  id: string,
+  targetPrefixes?: readonly string[],
+): ChannelPlugin {
+  return {
+    ...createChannelTestPluginBase({ id }),
+    messaging: targetPrefixes ? { targetPrefixes } : {},
+  };
+}
+
+function setCronDeliveryTestRegistry(
+  plugins: Array<{ pluginId: string; plugin: ChannelPlugin }>,
+): void {
+  setActivePluginRegistry(
+    createTestRegistry(
+      plugins.map((entry) => ({
+        ...entry,
+        source: `test:${entry.pluginId}`,
+      })),
+    ),
+  );
+}
+
 describe("resolveCronDeliveryPlan", () => {
+  beforeEach(() => {
+    setCronDeliveryTestRegistry([
+      {
+        pluginId: "telegram",
+        plugin: createPrefixOnlyChannelPlugin("telegram", ["telegram", "tg"]),
+      },
+      { pluginId: "slack", plugin: createPrefixOnlyChannelPlugin("slack", ["slack"]) },
+    ]);
+  });
+
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
+  });
+
   it("defaults to announce when delivery object has no mode", () => {
     const plan = resolveCronDeliveryPlan(
       makeCronJob({
@@ -86,9 +126,89 @@ describe("resolveCronDeliveryPlan", () => {
     expect(plan.to).toBe("-1001234567890");
     expect(plan.threadId).toBe("99");
   });
+
+  it("uses a provider-prefixed announce target as the channel when channel is last", () => {
+    const plan = resolveCronDeliveryPlan(
+      makeCronJob({
+        delivery: {
+          mode: "announce",
+          channel: "last",
+          to: "telegram:123",
+        },
+      }),
+    );
+    expect(plan.mode).toBe("announce");
+    expect(plan.channel).toBe("telegram");
+    expect(plan.to).toBe("telegram:123");
+  });
+
+  it("uses Synology Chat provider prefixes with underscores and short spelling", () => {
+    setCronDeliveryTestRegistry([
+      {
+        pluginId: "synology-chat",
+        plugin: createPrefixOnlyChannelPlugin("synology-chat", [
+          "synology-chat",
+          "synology_chat",
+          "synology",
+        ]),
+      },
+    ]);
+
+    for (const to of ["synology-chat:123", "synology_chat:123", "synology:123"]) {
+      const plan = resolveCronDeliveryPlan(
+        makeCronJob({
+          delivery: {
+            mode: "announce",
+            channel: "last",
+            to,
+          },
+        }),
+      );
+      expect(plan.mode).toBe("announce");
+      expect(plan.channel).toBe("synology-chat");
+      expect(plan.to).toBe(to);
+    }
+  });
+
+  it("does not treat channel-owned service prefixes as provider selection", () => {
+    setCronDeliveryTestRegistry([
+      {
+        pluginId: "bluebubbles",
+        plugin: createPrefixOnlyChannelPlugin("bluebubbles", ["bluebubbles"]),
+      },
+      { pluginId: "imessage", plugin: createPrefixOnlyChannelPlugin("imessage") },
+    ]);
+
+    const plan = resolveCronDeliveryPlan(
+      makeCronJob({
+        delivery: {
+          mode: "announce",
+          channel: "last",
+          to: "imessage:+15551234567",
+        },
+      }),
+    );
+    expect(plan.mode).toBe("announce");
+    expect(plan.channel).toBe("last");
+    expect(plan.to).toBe("imessage:+15551234567");
+  });
 });
 
 describe("resolveFailureDestination", () => {
+  beforeEach(() => {
+    setCronDeliveryTestRegistry([
+      {
+        pluginId: "telegram",
+        plugin: createPrefixOnlyChannelPlugin("telegram", ["telegram", "tg"]),
+      },
+      { pluginId: "slack", plugin: createPrefixOnlyChannelPlugin("slack", ["slack"]) },
+    ]);
+  });
+
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
+  });
+
   it("merges global defaults with job-level overrides", () => {
     const plan = resolveFailureDestination(
       makeCronJob({
@@ -142,6 +262,24 @@ describe("resolveFailureDestination", () => {
             channel: "telegram",
             to: "111",
             accountId: "bot-a",
+          },
+        },
+      }),
+      undefined,
+    );
+    expect(plan).toBeNull();
+  });
+
+  it("returns null when provider-prefixed failure destination matches a provider-prefixed primary target", () => {
+    const plan = resolveFailureDestination(
+      makeCronJob({
+        delivery: {
+          mode: "announce",
+          channel: "last",
+          to: "telegram:123",
+          failureDestination: {
+            mode: "announce",
+            to: "telegram:123",
           },
         },
       }),
@@ -216,6 +354,29 @@ describe("resolveFailureDestination", () => {
       mode: "announce",
       channel: "last",
       to: undefined,
+      accountId: undefined,
+    });
+  });
+
+  it("uses a provider-prefixed failure destination as the announce channel", () => {
+    const plan = resolveFailureDestination(
+      makeCronJob({
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "111",
+          failureDestination: {
+            mode: "announce",
+            to: "slack:U123",
+          },
+        },
+      }),
+      undefined,
+    );
+    expect(plan).toEqual({
+      mode: "announce",
+      channel: "slack",
+      to: "slack:U123",
       accountId: undefined,
     });
   });

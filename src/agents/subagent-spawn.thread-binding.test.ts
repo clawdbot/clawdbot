@@ -134,6 +134,7 @@ describe("spawnSubagentDirect thread binding delivery", () => {
         agentId: "bot-alpha",
         thread: true,
         mode: "session",
+        context: "isolated",
       },
       {
         agentSessionKey: "agent:main:main",
@@ -201,6 +202,7 @@ describe("spawnSubagentDirect thread binding delivery", () => {
         task: "reply with a marker",
         thread: true,
         mode: "session",
+        context: "isolated",
       },
       {
         agentSessionKey: "agent:main:main",

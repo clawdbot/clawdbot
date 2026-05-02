@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
+import { listChannelCatalogEntries } from "../plugins/channel-catalog-registry.js";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
@@ -11,7 +11,7 @@ type ChannelCatalogEntryLike = {
   };
 };
 
-export type BundledChannelCatalogEntry = {
+type BundledChannelCatalogEntry = {
   id: string;
   channel: PluginPackageChannel;
   aliases: readonly string[];
@@ -27,43 +27,12 @@ function listPackageRoots(): string[] {
   ].filter((entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index);
 }
 
-function listBundledExtensionPackageJsonPaths(env: NodeJS.ProcessEnv = process.env): string[] {
-  // Delegate to the plugin loader's resolver so channel metadata stays in lock
-  // step with whichever bundled plugin tree is actually loaded at runtime
-  // (source extensions/ in dev/test, dist/extensions in published installs,
-  // dist-runtime/extensions when paired with dist, etc.). See
-  // src/plugins/bundled-dir.ts for the full candidate-order policy and
-  // src/plugins/bundled-dir.test.ts for the precedence coverage. Reusing the
-  // resolver also picks up OPENCLAW_BUNDLED_PLUGINS_DIR overrides and the
-  // bun --compile sibling layout for free.
-  const extensionsRoot = resolveBundledPluginsDir(env);
-  if (!extensionsRoot) {
-    return [];
-  }
+function readBundledExtensionCatalogEntriesSync(): PluginPackageChannel[] {
   try {
-    return fs
-      .readdirSync(extensionsRoot, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => path.join(extensionsRoot, entry.name, "package.json"))
-      .filter((entry) => fs.existsSync(entry));
+    return listChannelCatalogEntries({ origin: "bundled" }).map((entry) => entry.channel);
   } catch {
     return [];
   }
-}
-
-function readBundledExtensionCatalogEntriesSync(): ChannelCatalogEntryLike[] {
-  const entries: ChannelCatalogEntryLike[] = [];
-  for (const packageJsonPath of listBundledExtensionPackageJsonPaths()) {
-    try {
-      const payload = JSON.parse(
-        fs.readFileSync(packageJsonPath, "utf8"),
-      ) as ChannelCatalogEntryLike;
-      entries.push(payload);
-    } catch {
-      continue;
-    }
-  }
-  return entries;
 }
 
 function readOfficialCatalogFileSync(): ChannelCatalogEntryLike[] {
@@ -84,8 +53,18 @@ function readOfficialCatalogFileSync(): ChannelCatalogEntryLike[] {
   return [];
 }
 
-function toBundledChannelEntry(entry: ChannelCatalogEntryLike): BundledChannelCatalogEntry | null {
-  const channel = entry.openclaw?.channel;
+function isChannelCatalogEntryLike(
+  entry: ChannelCatalogEntryLike | PluginPackageChannel,
+): entry is ChannelCatalogEntryLike {
+  return "openclaw" in entry;
+}
+
+function toBundledChannelEntry(
+  entry: ChannelCatalogEntryLike | PluginPackageChannel,
+): BundledChannelCatalogEntry | null {
+  const channel: PluginPackageChannel | undefined = isChannelCatalogEntryLike(entry)
+    ? entry.openclaw?.channel
+    : entry;
   const id = normalizeOptionalLowercaseString(channel?.id);
   if (!id || !channel) {
     return null;
@@ -108,13 +87,18 @@ function toBundledChannelEntry(entry: ChannelCatalogEntryLike): BundledChannelCa
 }
 
 export function listBundledChannelCatalogEntries(): BundledChannelCatalogEntry[] {
-  const bundledEntries = readBundledExtensionCatalogEntriesSync()
+  const entries = new Map<string, BundledChannelCatalogEntry>();
+  for (const entry of readOfficialCatalogFileSync()
     .map((entry) => toBundledChannelEntry(entry))
-    .filter((entry): entry is BundledChannelCatalogEntry => Boolean(entry));
-  if (bundledEntries.length > 0) {
-    return bundledEntries;
+    .filter((entry): entry is BundledChannelCatalogEntry => Boolean(entry))) {
+    entries.set(entry.id, entry);
   }
-  return readOfficialCatalogFileSync()
+  for (const entry of readBundledExtensionCatalogEntriesSync()
     .map((entry) => toBundledChannelEntry(entry))
-    .filter((entry): entry is BundledChannelCatalogEntry => Boolean(entry));
+    .filter((entry): entry is BundledChannelCatalogEntry => Boolean(entry))) {
+    entries.set(entry.id, entry);
+  }
+  return Array.from(entries.values()).toSorted(
+    (left, right) => left.order - right.order || left.id.localeCompare(right.id),
+  );
 }

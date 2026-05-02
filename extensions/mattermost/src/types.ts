@@ -5,7 +5,7 @@ export type MattermostReplyToMode = "off" | "first" | "all" | "batched";
 export type MattermostChatTypeKey = "direct" | "channel" | "group";
 
 export type MattermostChatMode = "oncall" | "onmessage" | "onchar";
-export type MattermostNetworkConfig = {
+type MattermostNetworkConfig = {
   /** Dangerous opt-in for self-hosted Mattermost on trusted private/internal hosts. */
   dangerouslyAllowPrivateNetwork?: boolean;
 };

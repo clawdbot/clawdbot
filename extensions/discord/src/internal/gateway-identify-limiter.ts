@@ -1,6 +1,6 @@
 const IDENTIFY_WINDOW_MS = 5_000;
 
-export class GatewayIdentifyLimiter {
+class GatewayIdentifyLimiter {
   private nextAllowedAtByKey = new Map<number, number>();
 
   async wait(params: { shardId?: number; maxConcurrency?: number }): Promise<void> {

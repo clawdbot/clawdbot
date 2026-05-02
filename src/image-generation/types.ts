@@ -33,7 +33,7 @@ export type ImageGenerationProviderOptions = {
   openai?: ImageGenerationOpenAIOptions;
 };
 
-export type ImageGenerationIgnoredOverrideKey =
+type ImageGenerationIgnoredOverrideKey =
   | "size"
   | "aspectRatio"
   | "resolution"
@@ -83,25 +83,25 @@ export type ImageGenerationResult = {
   metadata?: Record<string, unknown>;
 };
 
-export type ImageGenerationModeCapabilities = {
+type ImageGenerationModeCapabilities = {
   maxCount?: number;
   supportsSize?: boolean;
   supportsAspectRatio?: boolean;
   supportsResolution?: boolean;
 };
 
-export type ImageGenerationEditCapabilities = ImageGenerationModeCapabilities & {
+type ImageGenerationEditCapabilities = ImageGenerationModeCapabilities & {
   enabled: boolean;
   maxInputImages?: number;
 };
 
-export type ImageGenerationGeometryCapabilities = {
+type ImageGenerationGeometryCapabilities = {
   sizes?: string[];
   aspectRatios?: string[];
   resolutions?: ImageGenerationResolution[];
 };
 
-export type ImageGenerationOutputCapabilities = {
+type ImageGenerationOutputCapabilities = {
   qualities?: ImageGenerationQuality[];
   formats?: ImageGenerationOutputFormat[];
   backgrounds?: ImageGenerationBackground[];

@@ -41,6 +41,78 @@ enum VoiceWakeForwarder {
         var voiceWakeTrigger: String?
     }
 
+    private struct SessionListResponse: Decodable {
+        let sessions: [SessionRouteEntry]
+    }
+
+    struct SessionRouteEntry: Decodable, Equatable {
+        let key: String
+        let channel: String?
+        let lastChannel: String?
+        let lastTo: String?
+        let deliveryContext: DeliveryContext?
+    }
+
+    struct DeliveryContext: Decodable, Equatable {
+        let channel: String?
+        let to: String?
+    }
+
+    static func selectedSessionOptions(voiceWakeTrigger: String? = nil) async -> ForwardOptions {
+        let activeSessionKey = await MainActor.run { WebChatManager.shared.activeSessionKey }
+        let sessionKey: String = if let activeSessionKey = activeSessionKey?.trimmingCharacters(
+            in: .whitespacesAndNewlines),
+            !activeSessionKey.isEmpty
+        {
+            activeSessionKey
+        } else {
+            await GatewayConnection.shared.mainSessionKey()
+        }
+
+        let routeEntry = await self.loadSessionRouteEntry(sessionKey: sessionKey)
+        return self.forwardOptions(
+            sessionKey: sessionKey,
+            routeEntry: routeEntry,
+            voiceWakeTrigger: voiceWakeTrigger)
+    }
+
+    static func forwardOptions(
+        sessionKey: String,
+        routeEntry: SessionRouteEntry?,
+        voiceWakeTrigger: String? = nil) -> ForwardOptions
+    {
+        let parsedRoute = self.parseSessionKeyRoute(sessionKey)
+        let channelRaw = self.firstNonEmpty(
+            routeEntry?.deliveryContext?.channel,
+            routeEntry?.lastChannel,
+            routeEntry?.channel,
+            parsedRoute?.channel)
+        let channel = channelRaw
+            .flatMap { GatewayAgentChannel(rawValue: $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) }
+            ?? .webchat
+        let to = self.firstNonEmpty(
+            routeEntry?.deliveryContext?.to,
+            routeEntry?.lastTo,
+            parsedRoute?.to)
+
+        return ForwardOptions(
+            sessionKey: sessionKey,
+            thinking: "low",
+            deliver: true,
+            to: to,
+            channel: channel,
+            voiceWakeTrigger: voiceWakeTrigger)
+    }
+
+    @discardableResult
+    static func forwardToSelectedSession(
+        transcript: String,
+        voiceWakeTrigger: String? = nil) async -> Result<Void, VoiceWakeForwardError>
+    {
+        let options = await self.selectedSessionOptions(voiceWakeTrigger: voiceWakeTrigger)
+        return await self.forward(transcript: transcript, options: options)
+    }
+
     @discardableResult
     static func forward(
         transcript: String,
@@ -71,5 +143,57 @@ enum VoiceWakeForwarder {
         let status = await GatewayConnection.shared.status()
         if status.ok { return .success(()) }
         return .failure(.rpcFailed(status.error ?? "agent rpc unreachable"))
+    }
+
+    private static func loadSessionRouteEntry(sessionKey: String) async -> SessionRouteEntry? {
+        do {
+            let data = try await GatewayConnection.shared.request(
+                method: "sessions.list",
+                params: [
+                    "includeGlobal": AnyCodable(false),
+                    "includeUnknown": AnyCodable(false),
+                    "limit": AnyCodable(500),
+                ],
+                timeoutMs: 10000)
+            let response = try JSONDecoder().decode(SessionListResponse.self, from: data)
+            return response.sessions.first {
+                $0.key.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .caseInsensitiveCompare(sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame
+            }
+        } catch {
+            self.logger.debug(
+                "voice wake selected route lookup failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    private static func parseSessionKeyRoute(_ sessionKey: String) -> (channel: String, to: String?)? {
+        let trimmed = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let rawParts = trimmed.split(separator: ":", omittingEmptySubsequences: true).map(String.init)
+        let body: [String] = if rawParts.count >= 3, rawParts[0].caseInsensitiveCompare("agent") == .orderedSame {
+            Array(rawParts.dropFirst(2))
+        } else {
+            rawParts
+        }
+        guard body.count >= 3 else { return nil }
+        let kind = body[1].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard kind == "direct" || kind == "group" || kind == "channel" else { return nil }
+        let channel = body[0].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !channel.isEmpty else { return nil }
+        let to = body.dropFirst(2)
+            .joined(separator: ":")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (channel: channel, to: to.isEmpty ? nil : to)
+    }
+
+    private static func firstNonEmpty(_ values: String?...) -> String? {
+        for value in values {
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let trimmed, !trimmed.isEmpty {
+                return trimmed
+            }
+        }
+        return nil
     }
 }

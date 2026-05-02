@@ -31,7 +31,7 @@ import type { GatewayAccount, EngineLogger, GatewayPluginRuntime, WSPayload } fr
 
 // ============ Connection context ============
 
-export interface GatewayConnectionContext {
+interface GatewayConnectionContext {
   account: GatewayAccount;
   abortSignal: AbortSignal;
   cfg: unknown;

@@ -48,7 +48,7 @@ function normalizeBaseUrl(value: string | undefined): string | undefined {
   return value?.replace(/\/+$/u, "") || undefined;
 }
 
-export function resolveSearxngWebSearchConfig(
+function resolveSearxngWebSearchConfig(
   config?: OpenClawConfig,
 ): SearxngPluginConfig["webSearch"] | undefined {
   const pluginConfig = config?.plugins?.entries?.searxng?.config as SearxngPluginConfig | undefined;

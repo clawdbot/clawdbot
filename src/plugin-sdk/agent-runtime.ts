@@ -22,6 +22,7 @@ export * from "../agents/tools/common.js";
 export * from "../agents/tools/web-guarded-fetch.js";
 export * from "../agents/tools/web-shared.js";
 export * from "../agents/tools/web-fetch-utils.js";
+export * from "../tools/index.js";
 // Intentional public runtime surface: channel plugins use ingress agent helpers directly.
 export * from "../agents/agent-command.js";
 export * from "../tts/tts.js";

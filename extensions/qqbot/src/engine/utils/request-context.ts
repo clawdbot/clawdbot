@@ -18,7 +18,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 /** Context values available during one inbound message handling cycle. */
-export interface RequestContext {
+interface RequestContext {
   /** The account ID handling this request. */
   accountId: string;
   /**

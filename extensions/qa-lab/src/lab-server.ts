@@ -130,30 +130,33 @@ async function startQaGatewayLoop(params: { state: QaBusState; baseUrl: string }
   const cfg = createQaLabConfig(params.baseUrl);
   const account = qaChannelPlugin.config.resolveAccount(cfg, "default");
   const abort = new AbortController();
-  const task = qaChannelPlugin.gateway?.startAccount?.({
-    accountId: account.accountId,
-    account,
-    cfg,
-    runtime: {
-      log: () => undefined,
-      error: () => undefined,
-      exit: () => undefined,
-    },
-    abortSignal: abort.signal,
-    log: {
-      info: () => undefined,
-      warn: () => undefined,
-      error: () => undefined,
-      debug: () => undefined,
-    },
-    getStatus: () => ({
-      accountId: account.accountId,
-      configured: true,
-      enabled: true,
-      running: true,
-    }),
-    setStatus: () => undefined,
-  });
+  const task = Promise.resolve().then(
+    async () =>
+      await qaChannelPlugin.gateway?.startAccount?.({
+        accountId: account.accountId,
+        account,
+        cfg,
+        runtime: {
+          log: () => undefined,
+          error: () => undefined,
+          exit: () => undefined,
+        },
+        abortSignal: abort.signal,
+        log: {
+          info: () => undefined,
+          warn: () => undefined,
+          error: () => undefined,
+          debug: () => undefined,
+        },
+        getStatus: () => ({
+          accountId: account.accountId,
+          configured: true,
+          enabled: true,
+          running: true,
+        }),
+        setStatus: () => undefined,
+      }),
+  );
   return {
     cfg,
     async stop() {

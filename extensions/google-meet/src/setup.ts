@@ -4,13 +4,13 @@ import path from "node:path";
 import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
 
-export type SetupCheck = {
+type SetupCheck = {
   id: string;
   ok: boolean;
   message: string;
 };
 
-export type GoogleMeetSetupStatus = {
+type GoogleMeetSetupStatus = {
   ok: boolean;
   checks: SetupCheck[];
 };

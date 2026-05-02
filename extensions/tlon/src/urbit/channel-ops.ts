@@ -2,7 +2,7 @@ import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { UrbitHttpError } from "./errors.js";
 import { urbitFetch } from "./fetch.js";
 
-export type UrbitChannelDeps = {
+type UrbitChannelDeps = {
   baseUrl: string;
   cookie: string;
   ship: string;
@@ -94,7 +94,7 @@ export async function scryUrbitPath(
   }
 }
 
-export async function createUrbitChannel(
+async function createUrbitChannel(
   deps: UrbitChannelDeps,
   params: { body: unknown; auditContext: string },
 ): Promise<void> {
@@ -109,7 +109,7 @@ export async function createUrbitChannel(
   }
 }
 
-export async function wakeUrbitChannel(deps: UrbitChannelDeps): Promise<void> {
+async function wakeUrbitChannel(deps: UrbitChannelDeps): Promise<void> {
   const { response, release } = await putUrbitChannel(deps, {
     body: [
       {

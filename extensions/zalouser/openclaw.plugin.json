@@ -4,6 +4,9 @@
     "onStartup": false
   },
   "channels": ["zalouser"],
+  "contracts": {
+    "tools": ["zalouser"]
+  },
   "channelEnvVars": {
     "zalouser": ["ZALOUSER_PROFILE", "ZCA_PROFILE"]
   },

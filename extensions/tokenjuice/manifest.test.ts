@@ -3,11 +3,6 @@ import { describe, expect, it } from "vitest";
 
 type TokenjuicePackageManifest = {
   dependencies?: Record<string, string>;
-  openclaw?: {
-    bundle?: {
-      stageRuntimeDependencies?: boolean;
-    };
-  };
 };
 
 type TokenjuicePluginManifest = {
@@ -17,13 +12,12 @@ type TokenjuicePluginManifest = {
 };
 
 describe("tokenjuice package manifest", () => {
-  it("opts into staging bundled runtime dependencies", () => {
+  it("keeps runtime dependencies in the package manifest", () => {
     const packageJson = JSON.parse(
       fs.readFileSync(new URL("./package.json", import.meta.url), "utf8"),
     ) as TokenjuicePackageManifest;
 
     expect(packageJson.dependencies?.tokenjuice).toBe("0.7.0");
-    expect(packageJson.openclaw?.bundle?.stageRuntimeDependencies).toBe(true);
   });
 
   it("declares runtime-neutral tool result middleware ownership in the manifest contract", () => {

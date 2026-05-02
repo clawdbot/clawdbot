@@ -63,10 +63,44 @@ describe("media-understanding runtime", () => {
       provider: undefined,
       model: undefined,
       output: undefined,
+      decision: { capability: "image", outcome: "disabled", attachments: [] },
     });
 
     expect(mocks.buildProviderRegistry).not.toHaveBeenCalled();
     expect(mocks.runCapability).not.toHaveBeenCalled();
+  });
+
+  it("preserves skipped decisions when no media provider is available", async () => {
+    const decision = {
+      capability: "audio" as const,
+      outcome: "skipped" as const,
+      attachments: [{ attachmentIndex: 0, attempts: [] }],
+    };
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, path: "/tmp/sample.ogg", mime: "audio/ogg" },
+    ]);
+    mocks.runCapability.mockResolvedValue({
+      outputs: [],
+      decision,
+    });
+
+    await expect(
+      runMediaUnderstandingFile({
+        capability: "audio",
+        filePath: "/tmp/sample.ogg",
+        mime: "audio/ogg",
+        cfg: {} as OpenClawConfig,
+        agentDir: "/tmp/agent",
+      }),
+    ).resolves.toEqual({
+      text: undefined,
+      provider: undefined,
+      model: undefined,
+      output: undefined,
+      decision,
+    });
+
+    expect(mocks.cleanup).toHaveBeenCalledTimes(1);
   });
 
   it("returns the matching capability output", async () => {

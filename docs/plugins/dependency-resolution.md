@@ -1,214 +1,122 @@
 ---
-summary: "How OpenClaw plans, stages, and repairs bundled plugin runtime dependencies"
+summary: "How OpenClaw installs plugin packages and resolves plugin dependencies"
 read_when:
-  - You are debugging bundled plugin runtime dependency repair
+  - You are debugging plugin package installs
   - You are changing plugin startup, doctor, or package-manager install behavior
   - You are maintaining packaged OpenClaw installs or bundled plugin manifests
 title: "Plugin dependency resolution"
 sidebarTitle: "Dependencies"
 ---
 
-OpenClaw does not install every bundled plugin dependency tree at package install
-time. It first derives an effective plugin plan from config and plugin metadata,
-then stages runtime dependencies only for bundled OpenClaw-owned plugins that
-the plan can actually load.
+# Plugin dependency resolution
 
-This page covers packaged runtime dependencies for bundled OpenClaw plugins.
-Third-party plugins and custom plugin paths still use explicit plugin
-installation commands such as `openclaw plugins install` and
-`openclaw plugins update`.
+OpenClaw keeps plugin dependency work at install/update time. Runtime loading
+does not run package managers, repair dependency trees, or mutate the OpenClaw
+package directory.
 
 ## Responsibility split
 
-OpenClaw owns the plan and policy:
+Plugin packages own their dependency graph:
 
-- which plugins are active for this config
-- which dependency roots are writable or read-only
-- when repair is allowed
-- which plugin ids are staged for startup
-- final checks before importing plugin runtime modules
+- runtime dependencies live in the plugin package `dependencies` or
+  `optionalDependencies`
+- SDK/core imports are peer or supplied OpenClaw imports
+- local development plugins bring their own already-installed dependencies
+- npm and git plugins are installed into OpenClaw-owned package roots
 
-The package manager owns dependency convergence:
+OpenClaw owns only the plugin lifecycle:
 
-- package graph resolution
-- production, optional, and peer dependency handling
-- `node_modules` layout
-- package integrity
-- lock and install metadata
-
-In practice, OpenClaw should decide what needs to exist. `pnpm` or `npm` should
-make the filesystem match that decision.
-
-OpenClaw also owns the per-install-root coordination lock. Package managers
-protect their own install transaction, but they do not serialize OpenClaw's
-manifest writes, isolated-stage copy/rename, final validation, or plugin import
-against another Gateway, doctor, or CLI process touching the same runtime
-dependency root.
-
-## Effective plugin plan
-
-The effective plugin plan is derived from config plus discovered plugin
-metadata. These inputs can activate bundled plugin runtime dependencies:
-
-- `plugins.entries.<id>.enabled`
-- `plugins.allow`, `plugins.deny`, and `plugins.enabled`
-- legacy channel config such as `channels.telegram.enabled`
-- configured providers, models, or CLI backend references that require a plugin
-- bundled manifest defaults such as `enabledByDefault`
-- the installed plugin index and bundled manifest metadata
-
-Explicit disablement wins. A disabled plugin, denied plugin id, disabled plugin
-system, or disabled channel does not trigger runtime dependency repair. Persisted
-auth state alone also does not activate a bundled channel or provider.
-
-The plugin plan is the stable input. The generated dependency materialization is
-an output of that plan.
-
-## Startup flow
-
-Gateway startup parses config and builds the startup plugin lookup table before
-plugin runtime modules are loaded. Startup then stages runtime dependencies only
-for the `startupPluginIds` selected by that plan.
-
-For packaged installs, dependency staging is allowed before plugin import. After
-staging, the runtime loader imports startup plugins with install repair disabled;
-at that point missing dependency materialization is treated as a load failure,
-not another repair loop.
-
-When startup dependency staging is deferred behind the HTTP bind, Gateway
-readiness stays blocked on the `plugin-runtime-deps` reason until the selected
-startup plugin dependencies are materialized and the startup plugin runtime has
-loaded.
-
-## When repair runs
-
-Runtime dependency repair should run when one of these is true:
-
-- the effective plugin plan changed and adds bundled plugins that need runtime
-  dependencies
-- the generated dependency manifest no longer matches the effective plan
-- expected installed package sentinels are missing or incomplete
-- `openclaw doctor --fix` or `openclaw plugins deps --repair` was requested
-
-Runtime dependency repair should not run just because OpenClaw started. A normal
-startup with an unchanged plan and complete dependency materialization should
-skip package-manager work.
-
-Commands that edit config, enable plugins, or repair doctor findings can enter
-plugin plan mode once, materialize the newly required bundled dependencies, then
-return to the normal command flow. Local `openclaw onboard` and
-`openclaw configure` do this automatically after they successfully write config,
-so the next Gateway run does not discover missing bundled plugin packages after
-startup has already begun. Remote onboarding/configure stays read-only for local
-runtime deps.
-
-## Hot reload rule
-
-Hot reload paths that can change active plugins must go back through plugin plan
-mode before loading plugin runtime. The reload should compare the new effective
-plugin plan with the previous one, stage missing dependencies for newly active
-bundled plugins, then load or restart the affected runtime.
-
-If a config reload does not change the effective plugin plan, it should not
-repair bundled runtime dependencies.
-
-## Package manager execution
-
-OpenClaw writes a generated install manifest for the selected bundled runtime
-dependencies and runs the package manager in the runtime dependency install
-root. It prefers `pnpm` when available and falls back to the Node-bundled `npm`
-runner.
-
-The `pnpm` path uses production dependencies, disables lifecycle scripts, ignores
-the workspace, and keeps the store inside the install root:
-
-```bash
-pnpm install \
-  --prod \
-  --ignore-scripts \
-  --ignore-workspace \
-  --config.frozen-lockfile=false \
-  --config.minimum-release-age=0 \
-  --config.store-dir=<install-root>/.openclaw-pnpm-store \
-  --config.node-linker=hoisted \
-  --config.virtual-store-dir=.pnpm
-```
-
-The `npm` fallback uses the safe npm install wrapper with production
-dependencies, lifecycle scripts disabled, workspace mode disabled, audit
-disabled, fund output disabled, legacy peer dependency behavior, and package-lock
-output enabled for the generated install root.
-
-After install, OpenClaw validates the staged dependency tree before making it
-visible to the runtime dependency root. Isolated staging is copied into the
-runtime dependency root and validated again.
-
-The whole repair/materialization section is guarded by an install-root lock.
-Current lock owners record PID, process start-time when available, and creation
-time. Legacy locks without process start-time or creation-time evidence are only
-reclaimed by filesystem age, so recycled Docker PID 1 locks recover without
-expiring normal long-running current installs by age alone.
+- discover the plugin source
+- install or update the package when explicitly requested
+- record the install metadata
+- load the plugin entrypoint
+- fail with an actionable error when dependencies are missing
 
 ## Install roots
 
-Packaged installs must not mutate read-only package directories. OpenClaw can
-read dependency roots from packaged layers, but writes generated runtime
-dependencies to a writable stage such as:
+OpenClaw uses stable per-source roots:
 
-- `OPENCLAW_PLUGIN_STAGE_DIR`
-- `$STATE_DIRECTORY`
-- `~/.openclaw/plugin-runtime-deps`
-- `/var/lib/openclaw/plugin-runtime-deps` in container-style installs
+- npm packages install under `~/.openclaw/npm`
+- git packages clone under `~/.openclaw/git`
+- local/path/archive installs are copied or referenced without dependency repair
 
-The writable root is the final materialization target. Older read-only roots are
-kept as compatibility layers only when needed.
-
-When a packaged OpenClaw update changes the versioned writable root but the
-selected bundled-plugin dependency plan is still satisfied by a previous staged
-root, repair reuses that previous `node_modules` tree instead of running the
-package manager again. The new versioned root still gets its own current package
-runtime mirror, so plugin code comes from the current OpenClaw package while
-unchanged dependency trees are shared across updates. Reuse skips previous roots
-with an active OpenClaw runtime-dependency lock, so a new root does not link to a
-dependency tree that another Gateway, doctor, or CLI process is currently
-repairing.
-
-## Doctor and CLI commands
-
-Use `plugins deps` to inspect or repair bundled plugin runtime dependency
-materialization:
+npm installs run in the npm root with:
 
 ```bash
-openclaw plugins deps
-openclaw plugins deps --json
-openclaw plugins deps --repair
-openclaw plugins deps --prune
+npm install --prefix ~/.openclaw/npm <spec> --omit=dev --ignore-scripts --no-audit --no-fund
 ```
 
-Use doctor when the dependency state is part of broader install health:
+npm may hoist transitive dependencies to `~/.openclaw/npm/node_modules` beside
+the plugin package. OpenClaw scans the managed npm root before trusting the
+install and uses npm to remove npm-managed packages during uninstall, so hoisted
+runtime dependencies stay inside the managed cleanup boundary.
+
+git installs clone or refresh the repository, then run:
 
 ```bash
-openclaw doctor
+npm install --omit=dev --ignore-scripts --no-audit --no-fund
+```
+
+The installed plugin then loads from that package directory, so package-local
+and parent `node_modules` resolution works the same way it does for a normal
+Node package.
+
+## Local plugins
+
+Local plugins are treated as developer-controlled directories. OpenClaw does not
+run `npm install`, `pnpm install`, or dependency repair for them. If a local
+plugin has dependencies, install them in that plugin before loading it.
+
+Third-party TypeScript local plugins can use the emergency Jiti path. Packaged
+JavaScript plugins and bundled internal plugins load through native
+import/require instead of Jiti.
+
+## Startup and reload
+
+Gateway startup and config reload never install plugin dependencies. They read
+the plugin install records, compute the entrypoint, and load it.
+
+If a dependency is missing at runtime, the plugin fails to load and the error
+should point the operator to an explicit fix:
+
+```bash
+openclaw plugins update <id>
+openclaw plugins install <source>
 openclaw doctor --fix
 ```
 
-`plugins deps` and doctor operate on OpenClaw-owned bundled plugin runtime
-dependencies selected by the effective plugin plan. They are not third-party
-plugin install or update commands.
+`doctor --fix` can clean legacy OpenClaw-generated dependency state and install
+configured downloadable plugins that are missing from the local install records.
+It does not repair dependencies for an already-installed local plugin.
 
-## Troubleshooting
+## Bundled plugins
 
-If a packaged install reports missing bundled runtime dependencies:
+Lightweight and core-critical bundled plugins are shipped as part of OpenClaw.
+They should either have no heavy runtime dependency tree or be moved out to a
+downloadable package on ClawHub/npm.
 
-1. Run `openclaw plugins deps --json` to inspect the selected plan and missing
-   packages.
-2. Run `openclaw plugins deps --repair` or `openclaw doctor --fix` to repair the
-   writable dependency stage.
-3. If the install root is read-only, set `OPENCLAW_PLUGIN_STAGE_DIR` to a
-   writable path and rerun repair.
-4. Restart Gateway after repair if the missing dependency blocked startup plugin
-   loading.
+Bundled plugin manifests must not request dependency staging. Large or optional
+plugin functionality should be packaged as a normal plugin and installed through
+the same npm/git/ClawHub path as third-party plugins.
 
-In source checkouts, the workspace install usually provides bundled plugin
-dependencies. Run `pnpm install` for source dependency repair instead of using
-packaged runtime dependency repair as the first step.
+In source checkouts, OpenClaw treats the repository as a pnpm monorepo. After
+`pnpm install`, bundled plugins load from `extensions/<id>` so package-local
+workspace dependencies are available and edits are picked up directly. Source
+checkout development is pnpm-only; plain `npm install` at the repository root is
+not a supported way to prepare bundled plugin dependencies.
+
+| Install shape                    | Bundled plugin location               | Dependency owner                                                     |
+| -------------------------------- | ------------------------------------- | -------------------------------------------------------------------- |
+| `npm install -g openclaw`        | Built runtime tree inside the package | OpenClaw package and explicit plugin install/update/doctor flows     |
+| Git checkout plus `pnpm install` | `extensions/<id>` workspace packages  | The pnpm workspace, including each plugin package's own dependencies |
+| `openclaw plugins install ...`   | Managed npm/git/ClawHub plugin root   | The plugin install/update flow                                       |
+
+## Legacy cleanup
+
+Older OpenClaw versions generated bundled-plugin dependency roots at startup or
+during doctor repair. Current doctor cleanup removes those stale directories and
+symlinks when `--fix` is used, including old `plugin-runtime-deps` roots,
+`.openclaw-runtime-deps*` manifests, generated plugin `node_modules`, install
+stage directories, and package-local pnpm stores.
+
+These paths are legacy debris only. New installs should not create them.

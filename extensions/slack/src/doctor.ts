@@ -12,7 +12,7 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-export const collectSlackMutableAllowlistWarnings =
+const collectSlackMutableAllowlistWarnings =
   createDangerousNameMatchingMutableAllowlistWarningCollector({
     channel: "slack",
     detector: isSlackMutableAllowEntry,

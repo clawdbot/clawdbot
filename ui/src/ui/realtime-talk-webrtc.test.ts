@@ -11,11 +11,18 @@ class FakeDataChannel extends EventTarget {
 }
 
 class FakePeerConnection extends EventTarget {
+  static instances: FakePeerConnection[] = [];
+
   connectionState: RTCPeerConnectionState = "new";
   readonly channel = new FakeDataChannel();
   readonly addTrack = vi.fn();
   localDescription: RTCSessionDescriptionInit | null = null;
   remoteDescription: RTCSessionDescriptionInit | null = null;
+
+  constructor() {
+    super();
+    FakePeerConnection.instances.push(this);
+  }
 
   createDataChannel(): RTCDataChannel {
     return this.channel as unknown as RTCDataChannel;
@@ -44,6 +51,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
   });
 
   beforeEach(() => {
+    FakePeerConnection.instances = [];
     const track = { stop: vi.fn() } as unknown as MediaStreamTrack;
     const stream = {
       getAudioTracks: () => [track],
@@ -91,6 +99,77 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
         "Content-Type": "application/sdp",
       },
     });
+    transport.stop();
+  });
+
+  it("surfaces realtime provider errors from the OpenAI data channel", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("answer-sdp")) as unknown as typeof fetch,
+    );
+    const onStatus = vi.fn();
+    const transport = new WebRtcSdpRealtimeTalkTransport(
+      {
+        provider: "openai",
+        transport: "webrtc-sdp",
+        clientSecret: "client-secret-123",
+      },
+      {
+        client: {} as never,
+        sessionKey: "main",
+        callbacks: { onStatus },
+      },
+    );
+
+    await transport.start();
+    const peer = FakePeerConnection.instances[0];
+    peer?.channel.dispatchEvent(
+      new MessageEvent("message", {
+        data: JSON.stringify({
+          type: "error",
+          error: { message: "Realtime model rejected the session" },
+        }),
+      }),
+    );
+
+    expect(onStatus).toHaveBeenCalledWith("error", "Realtime model rejected the session");
+    transport.stop();
+  });
+
+  it("surfaces speech and response lifecycle status from the OpenAI data channel", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("answer-sdp")) as unknown as typeof fetch,
+    );
+    const onStatus = vi.fn();
+    const transport = new WebRtcSdpRealtimeTalkTransport(
+      {
+        provider: "openai",
+        transport: "webrtc-sdp",
+        clientSecret: "client-secret-123",
+      },
+      {
+        client: {} as never,
+        sessionKey: "main",
+        callbacks: { onStatus },
+      },
+    );
+
+    await transport.start();
+    const peer = FakePeerConnection.instances[0];
+    for (const type of [
+      "input_audio_buffer.speech_started",
+      "input_audio_buffer.speech_stopped",
+      "response.created",
+      "response.done",
+    ]) {
+      peer?.channel.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ type }) }));
+    }
+
+    expect(onStatus).toHaveBeenCalledWith("listening", "Speech detected");
+    expect(onStatus).toHaveBeenCalledWith("thinking", "Processing speech");
+    expect(onStatus).toHaveBeenCalledWith("thinking", "Generating response");
+    expect(onStatus).toHaveBeenCalledWith("listening", undefined);
     transport.stop();
   });
 });

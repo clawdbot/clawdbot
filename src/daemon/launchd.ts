@@ -181,7 +181,7 @@ export async function readLaunchAgentProgramArguments(
   return readLaunchAgentProgramArgumentsFromFile(plistPath);
 }
 
-export function buildLaunchAgentPlist({
+function buildLaunchAgentPlist({
   label = GATEWAY_LAUNCH_AGENT_LABEL,
   comment,
   programArguments,
@@ -344,7 +344,7 @@ async function ensureLaunchAgentEnvironmentDirectories(
   }
 }
 
-export type LaunchctlPrintInfo = {
+type LaunchctlPrintInfo = {
   state?: string;
   pid?: number;
   lastExitStatus?: number;
@@ -433,7 +433,7 @@ export async function readLaunchAgentRuntime(
   };
 }
 
-export type LaunchAgentBootstrapRepairResult =
+type LaunchAgentBootstrapRepairResult =
   | { ok: true; status: "repaired" | "already-loaded" }
   | { ok: false; status: "bootstrap-failed" | "kickstart-failed"; detail?: string };
 

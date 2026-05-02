@@ -8,7 +8,7 @@ export type QueuedFileWriter = {
   flush: () => Promise<void>;
 };
 
-export type QueuedFileWriterOptions = {
+type QueuedFileWriterOptions = {
   maxFileBytes?: number;
 };
 

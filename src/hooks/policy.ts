@@ -4,12 +4,12 @@ import type { HookEntry, HookSource } from "./types.js";
 
 export type HookEnableStateReason = "disabled in config" | "workspace hook (disabled by default)";
 
-export type HookEnableState = {
+type HookEnableState = {
   enabled: boolean;
   reason?: HookEnableStateReason;
 };
 
-export type HookSourcePolicy = {
+type HookSourcePolicy = {
   precedence: number;
   trustedLocalCode: boolean;
   defaultEnableMode: "default-on" | "explicit-opt-in";
@@ -17,7 +17,7 @@ export type HookSourcePolicy = {
   canBeOverriddenBy: HookSource[];
 };
 
-export type HookResolutionCollision = {
+type HookResolutionCollision = {
   name: string;
   kept: HookEntry;
   ignored: HookEntry;
@@ -54,7 +54,7 @@ const HOOK_SOURCE_POLICIES: Record<HookSource, HookSourcePolicy> = {
   },
 };
 
-export function getHookSourcePolicy(source: HookSource): HookSourcePolicy {
+function getHookSourcePolicy(source: HookSource): HookSourcePolicy {
   return HOOK_SOURCE_POLICIES[source];
 }
 

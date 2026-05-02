@@ -56,6 +56,23 @@ describe("resolveSourceReplyDeliveryMode", () => {
     }
   });
 
+  it("allows harnesses to default direct chats to message-tool-only delivery", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "direct" },
+        defaultVisibleReplies: "message_tool",
+      }),
+    ).toBe("message_tool_only");
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: { messages: { visibleReplies: "automatic" } },
+        ctx: { ChatType: "direct" },
+        defaultVisibleReplies: "message_tool",
+      }),
+    ).toBe("automatic");
+  });
+
   it("lets group/channel config override the global visible reply mode", () => {
     expect(
       resolveSourceReplyDeliveryMode({

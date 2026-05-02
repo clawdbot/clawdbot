@@ -348,6 +348,17 @@ async function readLockPayload(lockPath: string): Promise<LockFilePayload | null
   }
 }
 
+async function resolveNormalizedSessionFile(sessionFile: string): Promise<string> {
+  const resolvedSessionFile = path.resolve(sessionFile);
+  const sessionDir = path.dirname(resolvedSessionFile);
+  try {
+    const normalizedDir = await fs.realpath(sessionDir);
+    return path.join(normalizedDir, path.basename(resolvedSessionFile));
+  } catch {
+    return resolvedSessionFile;
+  }
+}
+
 function inspectLockPayload(
   payload: LockFilePayload | null,
   staleMs: number,
@@ -429,16 +440,51 @@ async function shouldReclaimContendedLockFile(
 function shouldTreatAsOrphanSelfLock(params: {
   payload: LockFilePayload | null;
   normalizedSessionFile: string;
+  reclaimLockWithoutStarttime: boolean;
 }): boolean {
   const pid = isValidLockNumber(params.payload?.pid) ? params.payload.pid : null;
   if (pid !== process.pid) {
     return false;
   }
-  const hasValidStarttime = isValidLockNumber(params.payload?.starttime);
-  if (hasValidStarttime) {
+  if (HELD_LOCKS.has(params.normalizedSessionFile)) {
     return false;
   }
-  return !HELD_LOCKS.has(params.normalizedSessionFile);
+
+  const storedStarttime = isValidLockNumber(params.payload?.starttime)
+    ? params.payload.starttime
+    : null;
+  if (storedStarttime === null) {
+    return params.reclaimLockWithoutStarttime;
+  }
+
+  const currentStarttime = getProcessStartTime(process.pid);
+  return currentStarttime !== null && currentStarttime === storedStarttime;
+}
+
+function inspectLockPayloadForSession(params: {
+  payload: LockFilePayload | null;
+  staleMs: number;
+  nowMs: number;
+  normalizedSessionFile: string;
+  reclaimLockWithoutStarttime: boolean;
+}): LockInspectionDetails {
+  const inspected = inspectLockPayload(params.payload, params.staleMs, params.nowMs);
+  if (
+    !shouldTreatAsOrphanSelfLock({
+      payload: params.payload,
+      normalizedSessionFile: params.normalizedSessionFile,
+      reclaimLockWithoutStarttime: params.reclaimLockWithoutStarttime,
+    })
+  ) {
+    return inspected;
+  }
+  return {
+    ...inspected,
+    stale: true,
+    staleReasons: inspected.staleReasons.includes("orphan-self-pid")
+      ? inspected.staleReasons
+      : [...inspected.staleReasons, "orphan-self-pid"],
+  };
 }
 
 export async function cleanStaleLockFiles(params: {
@@ -476,7 +522,15 @@ export async function cleanStaleLockFiles(params: {
   for (const entry of lockEntries) {
     const lockPath = path.join(sessionsDir, entry.name);
     const payload = await readLockPayload(lockPath);
-    const inspected = inspectLockPayload(payload, staleMs, nowMs);
+    const sessionFile = lockPath.slice(0, -".lock".length);
+    const normalizedSessionFile = await resolveNormalizedSessionFile(sessionFile);
+    const inspected = inspectLockPayloadForSession({
+      payload,
+      staleMs,
+      nowMs,
+      normalizedSessionFile,
+      reclaimLockWithoutStarttime: false,
+    });
     const lockInfo: SessionLockInspection = {
       lockPath,
       ...inspected,
@@ -515,13 +569,7 @@ export async function acquireSessionWriteLock(params: {
   const sessionFile = path.resolve(params.sessionFile);
   const sessionDir = path.dirname(sessionFile);
   await fs.mkdir(sessionDir, { recursive: true });
-  let normalizedDir = sessionDir;
-  try {
-    normalizedDir = await fs.realpath(sessionDir);
-  } catch {
-    // Fall back to the resolved path if realpath fails (permissions, transient FS).
-  }
-  const normalizedSessionFile = path.join(normalizedDir, path.basename(sessionFile));
+  const normalizedSessionFile = await resolveNormalizedSessionFile(sessionFile);
   const lockPath = `${normalizedSessionFile}.lock`;
 
   const held = HELD_LOCKS.get(normalizedSessionFile);
@@ -587,21 +635,14 @@ export async function acquireSessionWriteLock(params: {
       }
       const payload = await readLockPayload(lockPath);
       const nowMs = Date.now();
-      const inspected = inspectLockPayload(payload, staleMs, nowMs);
-      const orphanSelfLock = shouldTreatAsOrphanSelfLock({
+      const inspected = inspectLockPayloadForSession({
         payload,
+        staleMs,
+        nowMs,
         normalizedSessionFile,
+        reclaimLockWithoutStarttime: true,
       });
-      const reclaimDetails = orphanSelfLock
-        ? {
-            ...inspected,
-            stale: true,
-            staleReasons: inspected.staleReasons.includes("orphan-self-pid")
-              ? inspected.staleReasons
-              : [...inspected.staleReasons, "orphan-self-pid"],
-          }
-        : inspected;
-      if (await shouldReclaimContendedLockFile(lockPath, reclaimDetails, staleMs, nowMs)) {
+      if (await shouldReclaimContendedLockFile(lockPath, inspected, staleMs, nowMs)) {
         await fs.rm(lockPath, { force: true });
         continue;
       }

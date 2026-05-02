@@ -33,6 +33,7 @@ import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import { resolveUserPath } from "../../utils.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { optionalStringEnum } from "../schema/string-enum.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
@@ -195,10 +196,12 @@ function formatImageGenerationAuthHint(provider: {
 export function resolveImageGenerationModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
+  authStore?: AuthProfileStore;
 }): ToolModelConfig | null {
   return resolveCapabilityModelConfigForTool({
     cfg: params.cfg,
     agentDir: params.agentDir,
+    authStore: params.authStore,
     modelConfig: params.cfg?.agents?.defaults?.imageGenerationModel,
     providers: listRuntimeImageGenerationProviders({ config: params.cfg }),
   });
@@ -563,6 +566,7 @@ async function inferResolutionFromInputImages(
 export function createImageGenerateTool(options?: {
   config?: OpenClawConfig;
   agentDir?: string;
+  authProfileStore?: AuthProfileStore;
   workspaceDir?: string;
   sandbox?: ImageGenerateSandboxConfig;
   fsPolicy?: ToolFsPolicy;
@@ -572,8 +576,9 @@ export function createImageGenerateTool(options?: {
     !hasGenerationToolAvailability({
       cfg,
       agentDir: options?.agentDir,
+      workspaceDir: options?.workspaceDir,
+      authStore: options?.authProfileStore,
       modelConfig: cfg.agents?.defaults?.imageGenerationModel,
-      providers: () => listRuntimeImageGenerationProviders({ config: cfg }),
       providerKey: "imageGenerationProviders",
     })
   ) {
@@ -611,6 +616,7 @@ export function createImageGenerateTool(options?: {
                 provider,
                 cfg,
                 agentDir: options?.agentDir,
+                authStore: options?.authProfileStore,
               }),
               authEnvVars: getImageGenerationProviderAuthEnvVars(provider.id),
               capabilities: provider.capabilities,
@@ -662,6 +668,7 @@ export function createImageGenerateTool(options?: {
       const imageGenerationModelConfig = resolveImageGenerationModelConfigForTool({
         cfg,
         agentDir: options?.agentDir,
+        authStore: options?.authProfileStore,
       });
       if (!imageGenerationModelConfig) {
         throw new ToolInputError("No image-generation model configured.");

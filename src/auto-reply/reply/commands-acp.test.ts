@@ -505,7 +505,7 @@ const baseCfg = {
     discord: {
       threadBindings: {
         enabled: true,
-        spawnAcpSessions: true,
+        spawnSessions: true,
       },
     },
   },
@@ -1178,7 +1178,7 @@ describe("/acp command", () => {
         discord: {
           threadBindings: {
             enabled: true,
-            spawnAcpSessions: false,
+            spawnSessions: false,
           },
         },
       },
@@ -1290,7 +1290,7 @@ describe("/acp command", () => {
         matrix: {
           threadBindings: {
             enabled: true,
-            spawnAcpSessions: false,
+            spawnSessions: false,
           },
         },
       },
@@ -1318,7 +1318,7 @@ describe("/acp command", () => {
         matrix: {
           threadBindings: {
             enabled: true,
-            spawnAcpSessions: true,
+            spawnSessions: true,
           },
         },
       },
@@ -1346,7 +1346,7 @@ describe("/acp command", () => {
         matrix: {
           threadBindings: {
             enabled: true,
-            spawnAcpSessions: true,
+            spawnSessions: true,
           },
         },
       },
@@ -1417,14 +1417,14 @@ describe("/acp command", () => {
     expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
   });
 
-  it("rejects thread-bound ACP spawn when spawnAcpSessions is disabled", async () => {
+  it("rejects thread-bound ACP spawn when spawnSessions is disabled", async () => {
     const cfg = {
       ...baseCfg,
       channels: {
         discord: {
           threadBindings: {
             enabled: true,
-            spawnAcpSessions: false,
+            spawnSessions: false,
           },
         },
       },
@@ -1432,7 +1432,7 @@ describe("/acp command", () => {
 
     const result = await runDiscordAcpCommand("/acp spawn codex", cfg);
 
-    expect(result?.reply?.text).toContain("spawnAcpSessions=true");
+    expect(result?.reply?.text).toContain("spawnSessions=true");
     expect(hoisted.closeMock).toHaveBeenCalledTimes(2);
     expect(hoisted.callGatewayMock).toHaveBeenCalledWith(
       expect.objectContaining({ method: "sessions.delete" }),
@@ -1442,13 +1442,14 @@ describe("/acp command", () => {
     );
   });
 
-  it("rejects Matrix thread-bound ACP spawn when spawnAcpSessions is unset", async () => {
+  it("rejects Matrix thread-bound ACP spawn when spawnSessions is disabled", async () => {
     const cfg = {
       ...baseCfg,
       channels: {
         matrix: {
           threadBindings: {
             enabled: true,
+            spawnSessions: false,
           },
         },
       },
@@ -1456,7 +1457,7 @@ describe("/acp command", () => {
 
     const result = await runMatrixAcpCommand("/acp spawn codex", cfg);
 
-    expect(result?.reply?.text).toContain("spawnAcpSessions=true");
+    expect(result?.reply?.text).toContain("spawnSessions=true");
     expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
   });
 

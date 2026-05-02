@@ -173,6 +173,7 @@ export function createAcpReplyProjector(params: {
     payload: ReplyPayload,
     meta?: AcpProjectedDeliveryMeta,
   ) => Promise<boolean>;
+  onProgress?: () => void;
   provider?: string;
   accountId?: string;
 }): AcpReplyProjector {
@@ -403,6 +404,7 @@ export function createAcpReplyProjector(params: {
   };
 
   const onEvent = async (event: AcpRuntimeEvent): Promise<void> => {
+    params.onProgress?.();
     if (event.type === "text_delta") {
       if (event.stream && event.stream !== "output") {
         return;

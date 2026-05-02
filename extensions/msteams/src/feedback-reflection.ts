@@ -31,7 +31,7 @@ import { buildConversationReference } from "./messenger.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 
-export type FeedbackEvent = {
+type FeedbackEvent = {
   type: "custom";
   event: "feedback";
   ts: number;
@@ -65,7 +65,7 @@ export function buildFeedbackEvent(params: {
   };
 }
 
-export type RunFeedbackReflectionParams = {
+type RunFeedbackReflectionParams = {
   cfg: OpenClawConfig;
   adapter: MSTeamsAdapter;
   appId: string;

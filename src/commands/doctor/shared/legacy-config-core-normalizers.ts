@@ -262,6 +262,7 @@ function normalizeLegacyRuntimeAllowlistModels(
     const migrated = migrateLegacyRuntimeModelRef(rawKey);
     if (migrated?.runtime === selectedRuntime) {
       changed = true;
+      next[rawKey] = mergeModelEntry(entry, next[rawKey]);
       legacyEntries.push([migrated.ref, entry]);
       continue;
     }

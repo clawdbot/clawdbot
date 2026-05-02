@@ -8,6 +8,8 @@ type WebSearchProvidersSharedModule = typeof import("./web-search-providers.shar
 type PluginManifestRegistry = import("./manifest-registry.js").PluginManifestRegistry;
 type LoadPluginManifestRegistryForPluginRegistry =
   typeof import("./plugin-registry.js").loadPluginManifestRegistryForPluginRegistry;
+type LoadPluginManifestRegistryForInstalledIndex =
+  typeof import("./manifest-registry-installed.js").loadPluginManifestRegistryForInstalledIndex;
 
 const BUNDLED_WEB_SEARCH_PROVIDERS = [
   { pluginId: "brave", id: "brave", order: 10 },
@@ -24,6 +26,9 @@ const BUNDLED_WEB_SEARCH_PROVIDERS = [
 let createEmptyPluginRegistry: RegistryModule["createEmptyPluginRegistry"];
 let loadPluginManifestRegistryMock: ReturnType<
   typeof vi.fn<LoadPluginManifestRegistryForPluginRegistry>
+>;
+let loadInstalledPluginManifestRegistryMock: ReturnType<
+  typeof vi.fn<LoadPluginManifestRegistryForInstalledIndex>
 >;
 let setActivePluginRegistry: RuntimeModule["setActivePluginRegistry"];
 let resolvePluginWebSearchProviders: WebSearchProvidersRuntimeModule["resolvePluginWebSearchProviders"];
@@ -181,7 +186,7 @@ function expectLoaderCallCount(count: number) {
 }
 
 function expectScopedWebSearchCandidates(pluginIds: readonly string[]) {
-  expect(loadPluginManifestRegistryMock).toHaveBeenCalled();
+  expect(loadInstalledPluginManifestRegistryMock).toHaveBeenCalled();
   expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
     expect.objectContaining({
       onlyPluginIds: [...pluginIds],
@@ -320,14 +325,39 @@ function expectRuntimeProviderResolution(
 describe("resolvePluginWebSearchProviders", () => {
   beforeAll(async () => {
     loadPluginManifestRegistryMock = vi.fn<LoadPluginManifestRegistryForPluginRegistry>();
+    loadInstalledPluginManifestRegistryMock = vi.fn<LoadPluginManifestRegistryForInstalledIndex>();
     vi.doMock("./plugin-registry.js", async () => {
       const actual =
         await vi.importActual<typeof import("./plugin-registry.js")>("./plugin-registry.js");
       return {
         ...actual,
+        loadPluginRegistrySnapshotWithMetadata: () => ({
+          source: "derived",
+          snapshot: {
+            plugins: [
+              {
+                pluginId: "__test_manifest_registry_fixture__",
+                origin: "bundled",
+                enabled: true,
+              },
+            ],
+          },
+          diagnostics: [],
+        }),
         loadPluginManifestRegistryForPluginRegistry: (
           ...args: Parameters<LoadPluginManifestRegistryForPluginRegistry>
         ) => loadPluginManifestRegistryMock(...args),
+      };
+    });
+    vi.doMock("./manifest-registry-installed.js", async () => {
+      const actual = await vi.importActual<typeof import("./manifest-registry-installed.js")>(
+        "./manifest-registry-installed.js",
+      );
+      return {
+        ...actual,
+        loadPluginManifestRegistryForInstalledIndex: (
+          ...args: Parameters<LoadPluginManifestRegistryForInstalledIndex>
+        ) => loadInstalledPluginManifestRegistryMock(...args),
       };
     });
 
@@ -354,6 +384,8 @@ describe("resolvePluginWebSearchProviders", () => {
       );
     loadPluginManifestRegistryMock.mockReset();
     loadPluginManifestRegistryMock.mockReturnValue(createManifestRegistryFixture());
+    loadInstalledPluginManifestRegistryMock.mockReset();
+    loadInstalledPluginManifestRegistryMock.mockReturnValue(createManifestRegistryFixture());
     loadOpenClawPluginsMock = vi
       .spyOn(loaderModule, "loadOpenClawPlugins")
       .mockImplementation((params) => {
@@ -435,7 +467,7 @@ describe("resolvePluginWebSearchProviders", () => {
       env,
     });
 
-    expect(loadPluginManifestRegistryMock).toHaveBeenCalledWith(
+    expect(loadInstalledPluginManifestRegistryMock).toHaveBeenCalledWith(
       expect.objectContaining({
         workspaceDir: "/tmp/runtime-workspace",
       }),

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { uniqueSortedStrings } from "../../plugin-sdk/test-helpers/string-utils.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
+import { isPackageIncludedInCoreBundle } from "../manifest.js";
 import { resolveManifestContractPluginIds } from "../plugin-registry.js";
 import {
   pluginRegistrationContractRegistry,
@@ -44,7 +45,11 @@ describe("plugin contract registry", () => {
     }) => boolean,
   ) {
     return loadPluginManifestRegistry({})
-      .plugins.filter(predicate)
+      .plugins.filter(
+        (plugin) =>
+          (plugin.origin !== "bundled" || isPackageIncludedInCoreBundle(plugin.packageManifest)) &&
+          predicate(plugin),
+      )
       .map((plugin) => plugin.id)
       .toSorted((left, right) => left.localeCompare(right));
   }

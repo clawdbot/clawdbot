@@ -3,7 +3,7 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export type VolcengineTtsEncoding = "ogg_opus" | "mp3" | "pcm" | "wav";
 
-export type VolcengineTTSParams = {
+type VolcengineTTSParams = {
   text: string;
   apiKey?: string;
   appId?: string;

@@ -628,6 +628,38 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("defers implicit image model discovery during hot-path tool registration", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const resolveDefaultMediaModelSpy = vi.fn(() => "gpt-5.4-mini");
+      const resolveAutoMediaKeyProvidersSpy = vi.fn(() => ["openai"]);
+      __testing.setProviderDepsForTest({
+        buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+          imageProviderHarness.buildProviderRegistry(overrides),
+        getMediaUnderstandingProvider: (
+          id: string,
+          registry: Map<string, MediaUnderstandingProvider>,
+        ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+        describeImageWithModel: describeGenericImageWithModel,
+        describeImagesWithModel: describeGenericImagesWithModel,
+        resolveDefaultMediaModel: resolveDefaultMediaModelSpy,
+        resolveAutoMediaKeyProviders: resolveAutoMediaKeyProvidersSpy,
+      });
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+      };
+
+      const tool = createImageTool({
+        config: cfg,
+        agentDir,
+        deferAutoModelResolution: true,
+      });
+
+      expect(tool).not.toBeNull();
+      expect(resolveDefaultMediaModelSpy).not.toHaveBeenCalled();
+      expect(resolveAutoMediaKeyProvidersSpy).not.toHaveBeenCalled();
+    });
+  });
+
   it("pairs minimax primary with MiniMax-VL-01 (and fallbacks) when auth exists", async () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("MINIMAX_API_KEY", "minimax-test");

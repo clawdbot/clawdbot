@@ -8,15 +8,15 @@ import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveGatewayLaunchAgentLabel } from "./constants.js";
 import { renderPosixRestartLogSetup } from "./restart-logs.js";
 
-export type LaunchdRestartHandoffMode = "kickstart" | "start-after-exit";
+type LaunchdRestartHandoffMode = "kickstart" | "start-after-exit";
 
-export type LaunchdRestartHandoffResult = {
+type LaunchdRestartHandoffResult = {
   ok: boolean;
   pid?: number;
   detail?: string;
 };
 
-export type LaunchdRestartTarget = {
+type LaunchdRestartTarget = {
   domain: string;
   label: string;
   plistPath: string;
@@ -77,7 +77,7 @@ function resolveLaunchAgentLabel(env?: Record<string, string | undefined>): stri
   return assertValidLaunchAgentLabel(resolveGatewayLaunchAgentLabel(env?.OPENCLAW_PROFILE));
 }
 
-export function resolveLaunchdRestartTarget(
+function resolveLaunchdRestartTarget(
   env: Record<string, string | undefined> = process.env,
 ): LaunchdRestartTarget {
   const domain = resolveGuiDomain();

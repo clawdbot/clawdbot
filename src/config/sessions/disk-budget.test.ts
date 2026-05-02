@@ -196,4 +196,50 @@ describe("enforceSessionDiskBudget", () => {
       );
     });
   });
+
+  it("does not evict protected thread session entries under store pressure", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const protectedKey = "agent:main:slack:channel:C123:thread:1710000000.000100";
+      const removableKey = "agent:main:subagent:old-worker";
+      const activeKey = "agent:main:main";
+      const store: Record<string, SessionEntry> = {
+        [protectedKey]: {
+          sessionId: "protected-thread",
+          updatedAt: 1,
+          displayName: "p".repeat(2000),
+        },
+        [removableKey]: {
+          sessionId: "removable-worker",
+          updatedAt: 2,
+          displayName: "r".repeat(2000),
+        },
+        [activeKey]: {
+          sessionId: "active",
+          updatedAt: 3,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        activeSessionKey: activeKey,
+        maintenance: {
+          maxDiskBytes: 1000,
+          highWaterBytes: 500,
+        },
+        warnOnly: false,
+      });
+
+      expect(store[protectedKey]).toBeDefined();
+      expect(store[removableKey]).toBeUndefined();
+      expect(store[activeKey]).toBeDefined();
+      expect(result).toEqual(
+        expect.objectContaining({
+          removedEntries: 1,
+        }),
+      );
+    });
+  });
 });

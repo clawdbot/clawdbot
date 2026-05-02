@@ -3,7 +3,7 @@ import { CHANNEL_IDS } from "../../../channels/ids.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-records.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../../../plugins/plugin-registry.js";
+import { loadPluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { asObjectRecord } from "./object.js";
 
@@ -29,12 +29,11 @@ function collectPluginRegistryState(
   env?: NodeJS.ProcessEnv,
 ): StalePluginRegistryState {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
-  const registry = loadPluginManifestRegistryForPluginRegistry({
+  const registry = loadPluginMetadataSnapshot({
     config: cfg,
     workspaceDir: workspaceDir ?? undefined,
-    env,
-    includeDisabled: true,
-  });
+    env: env ?? process.env,
+  }).manifestRegistry;
   const knownIds = new Set(registry.plugins.map((plugin) => plugin.id));
   const installedIds = new Set<string>();
   for (const pluginId of Object.keys(cfg.plugins?.installs ?? {})) {

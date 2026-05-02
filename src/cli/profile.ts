@@ -11,7 +11,7 @@ import { isValidProfileName } from "./profile-utils.js";
 import { scanCliRootOptions } from "./root-option-scan.js";
 import { takeCliRootOptionValue } from "./root-option-value.js";
 
-export type CliProfileParseResult =
+type CliProfileParseResult =
   | { ok: true; profile: string | null; argv: string[] }
   | { ok: false; error: string };
 

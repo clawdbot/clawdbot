@@ -35,6 +35,14 @@ describe("redactSensitiveUrlLikeString", () => {
     );
   });
 
+  it("redacts every URL-like userinfo occurrence in arbitrary text", () => {
+    expect(
+      redactSensitiveUrlLikeString(
+        "fatal https://a:b@github.com/one.git and https://c:d@github.com/two.git",
+      ),
+    ).toBe("fatal https://***:***@github.com/one.git and https://***:***@github.com/two.git");
+  });
+
   it("redacts protocol URLs that are too malformed to parse", () => {
     expect(
       redactSensitiveUrlLikeString(

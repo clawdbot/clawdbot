@@ -8,7 +8,7 @@ type GatewayRequestContextClient = GatewayClient & {
   usesSharedGatewayAuth?: boolean;
 };
 
-export type GatewayRequestContextParams = {
+type GatewayRequestContextParams = {
   deps: GatewayRequestContext["deps"];
   runtimeState: Pick<GatewayServerLiveState, "cronState">;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];

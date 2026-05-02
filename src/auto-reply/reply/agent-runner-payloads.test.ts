@@ -26,6 +26,26 @@ async function expectSameTargetRepliesSuppressed(params: { provider: string; to:
 }
 
 describe("buildReplyPayloads media filter integration", () => {
+  it("strips legacy bracket tool blocks from heartbeat replies", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      payloads: [
+        {
+          text: [
+            "Before",
+            '[TOOL_CALL]{tool => "exec", args => {"command":"ls"}}[/TOOL_CALL]',
+            '[TOOL_RESULT]{"output":"secret result"}[/TOOL_RESULT]',
+            "After",
+          ].join("\n"),
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("Before\n\n\nAfter");
+  });
+
   it("strips media URL from payload when in messagingToolSentMediaUrls", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,

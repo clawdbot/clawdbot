@@ -11,6 +11,7 @@ actor TalkModeRuntime {
 
     enum PlaybackPlan: Equatable {
         case elevenLabsThenSystemVoice(apiKey: String, voiceId: String)
+        case gatewayTalkSpeakThenSystemVoice
         case mlxThenSystemVoice
         case systemVoiceOnly
     }
@@ -225,7 +226,7 @@ actor TalkModeRuntime {
         input.removeTap(onBus: 0)
         let meter = self.rmsMeter
         input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak request, meter] buffer, _ in
-            request?.append(buffer)
+            request?.append(SpeechAudioBufferNormalizer.speechCompatibleBuffer(from: buffer))
             if let rms = Self.rmsLevel(buffer: buffer) {
                 meter.set(rms)
             }
@@ -504,6 +505,21 @@ actor TalkModeRuntime {
                     self.ttsLogger.error("talk system voice failed: \(error.localizedDescription, privacy: .public)")
                 }
             }
+        case .gatewayTalkSpeakThenSystemVoice:
+            do {
+                try await self.playGatewayTalkSpeak(input: input)
+                return
+            } catch {
+                self.ttsLogger
+                    .error(
+                        "talk gateway TTS failed: \(error.localizedDescription, privacy: .public); " +
+                            "falling back to system voice")
+                do {
+                    try await self.playSystemVoice(input: input)
+                } catch {
+                    self.ttsLogger.error("talk system voice failed: \(error.localizedDescription, privacy: .public)")
+                }
+            }
         case .mlxThenSystemVoice:
             do {
                 try await self.playMLX(input: input)
@@ -547,7 +563,7 @@ actor TalkModeRuntime {
         case self.systemTalkProvider:
             return .systemVoiceOnly
         default:
-            return .systemVoiceOnly
+            return .gatewayTalkSpeakThenSystemVoice
         }
     }
 
@@ -614,8 +630,10 @@ actor TalkModeRuntime {
 
         let voiceId: String? = if provider == Self.defaultTalkProvider, let apiKey, !apiKey.isEmpty {
             await self.resolveVoiceId(preferred: preferredVoice, apiKey: apiKey)
-        } else {
+        } else if provider == Self.mlxTalkProvider || provider == Self.systemTalkProvider {
             nil
+        } else {
+            preferredVoice?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? preferredVoice : nil
         }
 
         if provider == Self.defaultTalkProvider, apiKey?.isEmpty != false {
@@ -1093,7 +1111,7 @@ extension TalkModeRuntime {
             } else {
                 self.ttsLogger
                     .info(
-                        "talk provider \(parsed.activeProvider, privacy: .public) unsupported; using system voice")
+                        "talk provider \(parsed.activeProvider, privacy: .public) uses gateway talk.speak with system voice fallback")
             }
             return parsed
         } catch {

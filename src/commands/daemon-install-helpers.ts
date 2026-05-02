@@ -35,7 +35,7 @@ import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 export { resolveGatewayDevMode } from "./daemon-install-plan.shared.js";
 
-export type GatewayInstallPlan = {
+type GatewayInstallPlan = {
   programArguments: string[];
   workingDirectory?: string;
   environment: Record<string, string | undefined>;

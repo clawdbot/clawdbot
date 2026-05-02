@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   VoiceCallConfigSchema,
   resolveTwilioAuthToken,
+  resolveVoiceCallSessionKey,
   validateProviderConfig,
   normalizeVoiceCallConfig,
   resolveVoiceCallConfig,
@@ -255,6 +256,53 @@ describe("resolveVoiceCallConfig", () => {
     const config = resolveVoiceCallConfig({ enabled: true, provider: "mock" });
 
     expect(config.staleCallReaperSeconds).toBe(120);
+  });
+
+  it("keeps voice sessions scoped by phone by default", () => {
+    const config = resolveVoiceCallConfig({ enabled: true, provider: "mock" });
+
+    expect(config.sessionScope).toBe("per-phone");
+    expect(
+      resolveVoiceCallSessionKey({
+        config,
+        callId: "call-123",
+        phone: "+1 (555) 000-1111",
+      }),
+    ).toBe("voice:15550001111");
+  });
+
+  it("can scope voice sessions to each call", () => {
+    const config = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+      sessionScope: "per-call",
+    });
+
+    expect(config.sessionScope).toBe("per-call");
+    expect(
+      resolveVoiceCallSessionKey({
+        config,
+        callId: "call-123",
+        phone: "+1 (555) 000-1111",
+      }),
+    ).toBe("voice:call:call-123");
+  });
+
+  it("preserves explicit voice session keys", () => {
+    const config = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+      sessionScope: "per-call",
+    });
+
+    expect(
+      resolveVoiceCallSessionKey({
+        config,
+        callId: "call-123",
+        phone: "+1 (555) 000-1111",
+        explicitSessionKey: "meet-room-1",
+      }),
+    ).toBe("meet-room-1");
   });
 });
 

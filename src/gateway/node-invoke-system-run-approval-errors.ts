@@ -1,4 +1,4 @@
-export type SystemRunApprovalGuardError = {
+type SystemRunApprovalGuardError = {
   ok: false;
   message: string;
   details: Record<string, unknown>;

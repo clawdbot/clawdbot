@@ -36,10 +36,5 @@ export async function ensureCliCommandBootstrap(params: {
   await ensureCliPluginRegistryLoaded({
     scope: pluginRegistryLoadPolicy.scope,
     routeLogsToStderr: params.suppressDoctorStdout,
-    ...(pluginRegistryLoadPolicy.installBundledRuntimeDeps !== undefined
-      ? {
-          installBundledRuntimeDeps: pluginRegistryLoadPolicy.installBundledRuntimeDeps,
-        }
-      : {}),
   });
 }

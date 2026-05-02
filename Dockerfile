@@ -63,7 +63,6 @@ COPY openclaw.mjs ./
 COPY ui/package.json ./ui/package.json
 COPY patches ./patches
 COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/npm-runner.mjs scripts/windows-cmd-helpers.mjs ./scripts/
-COPY scripts/lib/bundled-runtime-deps-install.mjs ./scripts/lib/bundled-runtime-deps-install.mjs
 COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs
 
 COPY --from=ext-deps /out/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/
@@ -268,12 +267,10 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
 
-# Pre-create the default state and runtime-deps dirs so first-run Docker named
-# volumes mounted here inherit node ownership instead of root-owned state.
+# Pre-create the default state dir so first-run Docker named volumes mounted
+# here inherit node ownership instead of root-owned state.
 RUN install -d -m 0700 -o node -g node /home/node/.openclaw && \
-    install -d -m 0700 -o node -g node /var/lib/openclaw/plugin-runtime-deps && \
-    stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700' && \
-    stat -c '%U:%G %a' /var/lib/openclaw/plugin-runtime-deps | grep -qx 'node:node 700'
+    stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'
 
 ENV NODE_ENV=production
 

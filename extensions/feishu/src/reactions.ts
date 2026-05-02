@@ -2,7 +2,7 @@ import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 
-export type FeishuReaction = {
+type FeishuReaction = {
   reactionId: string;
   emojiType: string;
   operatorType: "app" | "user";

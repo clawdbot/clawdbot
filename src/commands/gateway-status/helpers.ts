@@ -338,7 +338,7 @@ function colorForGatewayProbeCapability(capability: GatewayProbeCapability) {
   }
 }
 
-export function renderProbeCapabilityLine(probe: GatewayProbeResult, rich: boolean) {
+function renderProbeCapabilityLine(probe: GatewayProbeResult, rich: boolean) {
   const capability = getGatewayProbeCapability(probe);
   return colorize(
     rich,

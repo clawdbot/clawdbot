@@ -5,7 +5,7 @@ import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "./secret-input.js";
 import type { ZaloConfig } from "./types.js";
 
-export type ZaloTokenResolution = BaseTokenResolution & {
+type ZaloTokenResolution = BaseTokenResolution & {
   source: "env" | "config" | "configFile" | "none";
 };
 

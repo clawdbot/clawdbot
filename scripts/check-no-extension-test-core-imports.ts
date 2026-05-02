@@ -100,7 +100,6 @@ const RETIRED_EXTENSION_TEST_HELPER_BRIDGE_FILES = [
   "test/helpers/plugins/contracts-testkit.ts",
   "test/helpers/plugins/direct-smoke.ts",
   "test/helpers/plugins/directory.ts",
-  "test/helpers/plugins/jiti-runtime-api.ts",
   "test/helpers/plugins/onboard-config.ts",
   "test/helpers/plugins/outbound-delivery.ts",
   "test/helpers/plugins/package-manifest-contract.ts",

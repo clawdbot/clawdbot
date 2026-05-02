@@ -437,6 +437,49 @@ describe("provider-runtime", () => {
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
   });
 
+  it("does not reuse runtime provider cache entries across env-resolved plugin roots", () => {
+    const firstProvider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo one",
+      auth: [],
+    };
+    const secondProvider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo two",
+      auth: [],
+    };
+    const config = {} as OpenClawConfig;
+    const originalHome = process.env.HOME;
+    const originalOpenClawHome = process.env.OPENCLAW_HOME;
+    try {
+      process.env.HOME = "/home/one";
+      delete process.env.OPENCLAW_HOME;
+      resolvePluginProvidersMock.mockReturnValueOnce([firstProvider]);
+      expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID, config })).toBe(
+        firstProvider,
+      );
+
+      process.env.HOME = "/home/two";
+      resolvePluginProvidersMock.mockReturnValueOnce([secondProvider]);
+      expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID, config })).toBe(
+        secondProvider,
+      );
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      if (originalOpenClawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = originalOpenClawHome;
+      }
+    }
+
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
+  });
+
   it("does not reuse auto-enabled runtime providers for synthetic auth fallback", () => {
     const runtimeProvider: ProviderPlugin = {
       id: DEMO_PROVIDER_ID,
@@ -451,8 +494,7 @@ describe("provider-runtime", () => {
     resolvePluginProvidersMock.mockImplementation((params) =>
       params.applyAutoEnable === false &&
       params.bundledProviderAllowlistCompat === false &&
-      params.bundledProviderVitestCompat === false &&
-      params.installBundledRuntimeDeps === false
+      params.bundledProviderVitestCompat === false
         ? []
         : [runtimeProvider],
     );

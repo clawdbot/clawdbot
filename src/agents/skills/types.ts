@@ -52,6 +52,8 @@ export type SkillCommandSpec = {
   name: string;
   skillName: string;
   description: string;
+  /** Localized descriptions for native command surfaces that support them. */
+  descriptionLocalizations?: Record<string, string>;
   /** Optional deterministic dispatch behavior for this command. */
   dispatch?: SkillCommandDispatchSpec;
   /** Native prompt template used by Claude-bundle command markdown files. */

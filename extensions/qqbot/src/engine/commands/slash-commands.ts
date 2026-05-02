@@ -58,14 +58,14 @@ export interface QueueSnapshot {
 export type SlashCommandResult = string | SlashCommandFileResult | null;
 
 /** Slash command result that sends text first and then a local file. */
-export interface SlashCommandFileResult {
+interface SlashCommandFileResult {
   text: string;
   /** Local file path to send. */
   filePath: string;
 }
 
 /** Slash command definition. */
-export interface SlashCommand {
+interface SlashCommand {
   /** Command name without the leading slash. */
   name: string;
   /** Short description. */

@@ -11,6 +11,7 @@ import {
   buildAgentToAgentAnnounceContext,
   buildAgentToAgentReplyContext,
   isAnnounceSkip,
+  isNonDeliverableSessionsReply,
   isReplySkip,
 } from "./sessions-send-helpers.js";
 
@@ -60,6 +61,9 @@ export async function runSessionsSendA2AFlow(params: {
     if (!latestReply) {
       return;
     }
+    if (isNonDeliverableSessionsReply(latestReply)) {
+      return;
+    }
 
     const announceTarget = await resolveAnnounceTarget({
       sessionKey: params.targetSessionKey,
@@ -98,7 +102,7 @@ export async function runSessionsSendA2AFlow(params: {
             nextSessionKey === params.requesterSessionKey ? params.requesterChannel : targetChannel,
           sourceTool: "sessions_send",
         });
-        if (!replyText || isReplySkip(replyText)) {
+        if (!replyText || isReplySkip(replyText) || isNonDeliverableSessionsReply(replyText)) {
           break;
         }
         latestReply = replyText;
@@ -124,11 +128,18 @@ export async function runSessionsSendA2AFlow(params: {
       extraSystemPrompt: announcePrompt,
       timeoutMs: params.announceTimeoutMs,
       lane: resolveNestedAgentLaneForSession(params.targetSessionKey),
+      transcriptMessage: "",
       sourceSessionKey: params.requesterSessionKey,
       sourceChannel: params.requesterChannel,
       sourceTool: "sessions_send",
     });
-    if (announceTarget && announceReply && announceReply.trim() && !isAnnounceSkip(announceReply)) {
+    if (
+      announceTarget &&
+      announceReply &&
+      announceReply.trim() &&
+      !isAnnounceSkip(announceReply) &&
+      !isNonDeliverableSessionsReply(announceReply)
+    ) {
       try {
         await sessionsSendA2ADeps.callGateway({
           method: "send",

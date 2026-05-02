@@ -14,7 +14,6 @@ import { probeGateway } from "../gateway/probe.js";
 import {
   detectBrowserOpenSupport,
   openUrl,
-  openUrlInBackground,
   resolveBrowserOpenCommand,
 } from "../infra/browser-open.js";
 import { detectBinary } from "../infra/detect-binary.js";
@@ -28,7 +27,7 @@ import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types
 export { randomToken } from "./random-token.js";
 
 export { detectBinary };
-export { detectBrowserOpenSupport, openUrl, openUrlInBackground, resolveBrowserOpenCommand };
+export { detectBrowserOpenSupport, openUrl, resolveBrowserOpenCommand };
 export { resolveControlUiLinks };
 
 export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {

@@ -3,7 +3,7 @@ import path from "node:path";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
-export type PluginInstallPathIssue = {
+type PluginInstallPathIssue = {
   kind: "custom-path" | "missing-path";
   pluginId: string;
   path: string;

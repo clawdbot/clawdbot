@@ -20,6 +20,7 @@ Directory lookups for channels that support it (contacts/peers, groups, and “m
 
 - `directory` is meant to help you find IDs you can paste into other commands (especially `openclaw message send --target ...`).
 - For many channels, results are config-backed (allowlists / configured groups) rather than a live provider directory.
+- Installed channel plugins can still omit directory support; in that case the command reports the unsupported directory operation instead of reinstalling the plugin.
 - Default output is `id` (and sometimes `name`) separated by a tab; use `--json` for scripting.
 
 ## Using results with `message send`

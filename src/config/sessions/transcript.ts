@@ -13,6 +13,7 @@ import {
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { loadSessionStore, normalizeStoreSessionKey } from "./store.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
+import { appendSessionTranscriptMessage } from "./transcript-append.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
 import type { SessionEntry } from "./types.js";
 
@@ -261,7 +262,11 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     ? await transcriptHasIdempotencyKey(sessionFile, explicitIdempotencyKey)
     : undefined;
   if (existingMessageId) {
-    return { ok: true, sessionFile, messageId: existingMessageId };
+    return {
+      ok: true,
+      sessionFile,
+      messageId: existingMessageId === true ? (explicitIdempotencyKey ?? "") : existingMessageId,
+    };
   }
 
   const latestEquivalentAssistantId = isRedundantDeliveryMirror(params.message)
@@ -275,9 +280,10 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     ...params.message,
     ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
   } as Parameters<SessionManager["appendMessage"]>[0];
-  const { SessionManager } = await loadPiCodingAgentModule();
-  const sessionManager = SessionManager.open(sessionFile);
-  const messageId = sessionManager.appendMessage(message);
+  const { messageId } = await appendSessionTranscriptMessage({
+    transcriptPath: sessionFile,
+    message,
+  });
 
   switch (params.updateMode ?? "inline") {
     case "inline":
@@ -295,7 +301,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
 async function transcriptHasIdempotencyKey(
   transcriptPath: string,
   idempotencyKey: string,
-): Promise<string | undefined> {
+): Promise<string | true | undefined> {
   try {
     const raw = await fs.promises.readFile(transcriptPath, "utf-8");
     for (const line of raw.split(/\r?\n/)) {
@@ -313,6 +319,9 @@ async function transcriptHasIdempotencyKey(
           parsed.id
         ) {
           return parsed.id;
+        }
+        if (parsed.message?.idempotencyKey === idempotencyKey) {
+          return true;
         }
       } catch {
         continue;

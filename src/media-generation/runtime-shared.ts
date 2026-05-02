@@ -493,17 +493,50 @@ export function throwCapabilityGenerationFailure(params: {
   if (params.attempts.length <= 1 && params.lastError) {
     throw params.lastError;
   }
-  const summary =
-    params.attempts.length > 0
-      ? params.attempts
-          .map((attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error}`)
-          .join(" | ")
-      : "unknown";
+  const summary = formatCapabilityFailureAttempts(params.attempts);
   throw new Error(
     `All ${params.capabilityLabel} models failed (${params.attempts.length}): ${summary}`,
     {
       cause: params.lastError instanceof Error ? params.lastError : undefined,
     },
+  );
+}
+
+function formatCapabilityFailureAttempts(attempts: FallbackAttempt[]): string {
+  if (attempts.length === 0) {
+    return "unknown";
+  }
+
+  const abortedAttempts = attempts.filter(isAbortLikeFallbackAttempt);
+  if (abortedAttempts.length === 0) {
+    return attempts.map(formatCapabilityFailureAttempt).join(" | ");
+  }
+  if (abortedAttempts.length === attempts.length) {
+    return `${abortedAttempts.length} fallback(s) aborted after the request was cancelled or timed out: ${abortedAttempts.map(formatCapabilityAttemptRef).join(", ")}`;
+  }
+
+  const primaryFailures = attempts.filter((attempt) => !isAbortLikeFallbackAttempt(attempt));
+  return [
+    primaryFailures.map(formatCapabilityFailureAttempt).join(" | "),
+    `${abortedAttempts.length} fallback(s) aborted after the request was cancelled or timed out: ${abortedAttempts.map(formatCapabilityAttemptRef).join(", ")}`,
+  ].join(" | ");
+}
+
+function formatCapabilityFailureAttempt(attempt: FallbackAttempt): string {
+  return `${formatCapabilityAttemptRef(attempt)}: ${attempt.error}`;
+}
+
+function formatCapabilityAttemptRef(attempt: FallbackAttempt): string {
+  return `${attempt.provider}/${attempt.model}`;
+}
+
+function isAbortLikeFallbackAttempt(attempt: FallbackAttempt): boolean {
+  const message = attempt.error.trim().toLowerCase();
+  return (
+    message === "this operation was aborted" ||
+    message === "operation was aborted" ||
+    message.includes("operation was aborted") ||
+    message.includes("request was aborted")
   );
 }
 

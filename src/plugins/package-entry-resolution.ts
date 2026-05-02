@@ -28,14 +28,14 @@ function runtimeExtensionsLengthMismatchMessage(params: {
   );
 }
 
-export function normalizePackageManifestStringList(value: unknown): string[] {
+function normalizePackageManifestStringList(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
   return value.map((entry) => normalizeOptionalString(entry) ?? "").filter(Boolean);
 }
 
-export function resolvePackageRuntimeExtensionEntries(params: {
+function resolvePackageRuntimeExtensionEntries(params: {
   manifest: PackageManifest | null | undefined;
   extensions: readonly string[];
 }): RuntimeExtensionsResolution {
@@ -165,6 +165,64 @@ export async function validatePackageExtensionEntriesForInstall(params: {
 
     if (!foundBuiltEntry) {
       return { ok: false, error: `extension entry not found: ${entry}` };
+    }
+  }
+
+  const packageManifest = getPackageManifestMetadata(params.manifest);
+  const setupEntry = normalizeOptionalString(packageManifest?.setupEntry);
+  const runtimeSetupEntry = normalizeOptionalString(packageManifest?.runtimeSetupEntry);
+  if (runtimeSetupEntry && !setupEntry) {
+    return {
+      ok: false,
+      error: "package.json openclaw.runtimeSetupEntry requires openclaw.setupEntry",
+    };
+  }
+  if (setupEntry) {
+    const sourceEntry = await validatePackageExtensionEntry({
+      packageDir: params.packageDir,
+      entry: setupEntry,
+      label: "setup entry",
+      requireExisting: false,
+    });
+    if (!sourceEntry.ok) {
+      return sourceEntry;
+    }
+
+    if (runtimeSetupEntry) {
+      const runtimeResult = await validatePackageExtensionEntry({
+        packageDir: params.packageDir,
+        entry: runtimeSetupEntry,
+        label: "runtime setup entry",
+        requireExisting: true,
+      });
+      if (!runtimeResult.ok) {
+        return runtimeResult;
+      }
+      return { ok: true };
+    }
+
+    if (sourceEntry.exists) {
+      return { ok: true };
+    }
+
+    let foundBuiltSetupEntry = false;
+    for (const builtEntry of listBuiltRuntimeEntryCandidates(setupEntry)) {
+      const builtResult = await validatePackageExtensionEntry({
+        packageDir: params.packageDir,
+        entry: builtEntry,
+        label: "inferred runtime setup entry",
+        requireExisting: false,
+      });
+      if (!builtResult.ok) {
+        return builtResult;
+      }
+      if (builtResult.exists) {
+        foundBuiltSetupEntry = true;
+        break;
+      }
+    }
+    if (!foundBuiltSetupEntry) {
+      return { ok: false, error: `setup entry not found: ${setupEntry}` };
     }
   }
 
@@ -307,6 +365,7 @@ function resolvePackageRuntimeEntrySource(params: {
   packageRootRealPath?: string;
   entryPath: string;
   runtimeEntryPath?: string;
+  runtimeEntryLabel?: string;
   origin: PluginOrigin;
   sourceLabel: string;
   diagnostics: PluginDiagnostic[];
@@ -340,6 +399,12 @@ function resolvePackageRuntimeEntrySource(params: {
     if (runtimeSource) {
       return runtimeSource;
     }
+    params.diagnostics.push({
+      level: "error",
+      message: `${params.runtimeEntryLabel ?? "runtime entry"} not found: ${params.runtimeEntryPath}`,
+      source: params.sourceLabel,
+    });
+    return null;
   }
 
   if (shouldInferBuiltRuntimeEntry(params.origin)) {
@@ -397,6 +462,7 @@ export function resolvePackageSetupSource(params: {
       : {}),
     entryPath: setupEntryPath,
     runtimeEntryPath: normalizeOptionalString(packageManifest?.runtimeSetupEntry),
+    runtimeEntryLabel: "runtime setup entry",
     origin: params.origin,
     sourceLabel: params.sourceLabel,
     diagnostics: params.diagnostics,
@@ -435,6 +501,7 @@ export function resolvePackageRuntimeExtensionSources(params: {
         : {}),
       entryPath,
       runtimeEntryPath: runtimeResolution.runtimeExtensions[index],
+      runtimeEntryLabel: "runtime extension entry",
       origin: params.origin,
       sourceLabel: params.sourceLabel,
       diagnostics: params.diagnostics,

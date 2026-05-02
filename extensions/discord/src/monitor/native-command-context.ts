@@ -4,7 +4,7 @@ import { resolveDiscordConversationIdentity } from "../conversation-identity.js"
 import { type DiscordChannelConfigResolved, type DiscordGuildEntryResolved } from "./allow-list.js";
 import { buildDiscordInboundAccessContext } from "./inbound-context.js";
 
-export type BuildDiscordNativeCommandContextParams = {
+type BuildDiscordNativeCommandContextParams = {
   prompt: string;
   commandArgs: CommandArgs;
   sessionKey: string;

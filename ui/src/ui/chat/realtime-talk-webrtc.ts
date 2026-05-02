@@ -14,6 +14,11 @@ type RealtimeServerEvent = {
   delta?: string;
   transcript?: string;
   arguments?: string;
+  error?: unknown;
+  response?: {
+    status?: string;
+    status_details?: unknown;
+  };
 };
 
 type ToolBuffer = {
@@ -133,9 +138,40 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       case "response.function_call_arguments.done":
         void this.handleToolCall(event);
         return;
+      case "input_audio_buffer.speech_started":
+        this.ctx.callbacks.onStatus?.("listening", "Speech detected");
+        return;
+      case "input_audio_buffer.speech_stopped":
+        this.ctx.callbacks.onStatus?.("thinking", "Processing speech");
+        return;
+      case "response.created":
+        this.ctx.callbacks.onStatus?.("thinking", "Generating response");
+        return;
+      case "response.done":
+        this.ctx.callbacks.onStatus?.("listening", this.extractResponseStatus(event));
+        return;
+      case "error":
+        this.ctx.callbacks.onStatus?.("error", this.extractErrorDetail(event.error));
+        return;
       default:
         return;
     }
+  }
+
+  private extractResponseStatus(event: RealtimeServerEvent): string | undefined {
+    const status = event.response?.status;
+    return status && status !== "completed" ? `Response ${status}` : undefined;
+  }
+
+  private extractErrorDetail(error: unknown): string {
+    if (!error || typeof error !== "object") {
+      return "Realtime provider error";
+    }
+    const record = error as Record<string, unknown>;
+    const message = typeof record.message === "string" ? record.message.trim() : "";
+    const code = typeof record.code === "string" ? record.code.trim() : "";
+    const type = typeof record.type === "string" ? record.type.trim() : "";
+    return message || code || type || "Realtime provider error";
   }
 
   private bufferToolDelta(event: RealtimeServerEvent): void {

@@ -24,7 +24,7 @@ import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
 
-export type GatewayScopedToolSurface = "http" | "loopback";
+type GatewayScopedToolSurface = "http" | "loopback";
 
 export function resolveGatewayScopedTools(params: {
   cfg: OpenClawConfig;

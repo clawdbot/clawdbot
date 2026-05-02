@@ -27,7 +27,7 @@ export type TelegramLogger = {
   info: (obj: Record<string, unknown>, msg: string) => void;
 };
 
-export type ResolveTelegramGroupConfig = (
+type ResolveTelegramGroupConfig = (
   chatId: string | number,
   messageThreadId?: number,
 ) => {
@@ -35,16 +35,16 @@ export type ResolveTelegramGroupConfig = (
   topicConfig?: TelegramTopicConfig;
 };
 
-export type ResolveGroupActivation = (params: {
+type ResolveGroupActivation = (params: {
   chatId: string | number;
   agentId?: string;
   messageThreadId?: number;
   sessionKey?: string;
 }) => boolean | undefined;
 
-export type ResolveGroupRequireMention = (chatId: string | number) => boolean;
+type ResolveGroupRequireMention = (chatId: string | number) => boolean;
 
-export type TelegramMessageContextRuntimeOverrides = Partial<
+type TelegramMessageContextRuntimeOverrides = Partial<
   Pick<
     typeof import("./bot-message-context.runtime.js"),
     | "createStatusReactionController"

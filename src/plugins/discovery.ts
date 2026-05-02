@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -7,6 +8,7 @@ import {
 } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
+import { resolveSourceCheckoutDependencyDiagnostic } from "./bundled-dir.js";
 import { resolvePackagedBundledLoadPathAlias } from "./bundled-load-path-aliases.js";
 import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
@@ -355,6 +357,32 @@ function mergeDiscoveryResult(
     target.candidates.push(candidate);
   }
   target.diagnostics.push(...source.diagnostics);
+}
+
+function collectInstalledPluginRecordPaths(
+  installRecords: Record<string, PluginInstallRecord> | undefined,
+  env: NodeJS.ProcessEnv,
+): string[] {
+  const paths: string[] = [];
+  const seen = new Set<string>();
+  for (const record of Object.values(installRecords ?? {})) {
+    const rawPath =
+      typeof record.installPath === "string" && record.installPath.trim()
+        ? record.installPath
+        : typeof record.sourcePath === "string" && record.sourcePath.trim()
+          ? record.sourcePath
+          : undefined;
+    if (!rawPath) {
+      continue;
+    }
+    const resolved = resolveUserPath(rawPath, env);
+    if (seen.has(resolved) || !fs.existsSync(resolved)) {
+      continue;
+    }
+    seen.add(resolved);
+    paths.push(resolved);
+  }
+  return paths;
 }
 
 function readPackageManifest(
@@ -845,6 +873,7 @@ function discoverFromPath(params: {
 export function discoverOpenClawPlugins(params: {
   workspaceDir?: string;
   extraPaths?: string[];
+  installRecords?: Record<string, PluginInstallRecord>;
   ownershipUid?: number | null;
   env?: NodeJS.ProcessEnv;
 }): PluginDiscoveryResult {
@@ -943,11 +972,32 @@ export function discoverOpenClawPlugins(params: {
             "using bind-mounted bundled plugin source overlay; this source overrides the packaged dist bundle for the same plugin id",
         });
       }
+      const sourceCheckoutDependencyDiagnostic = resolveSourceCheckoutDependencyDiagnostic(env);
+      if (sourceCheckoutDependencyDiagnostic) {
+        result.diagnostics.push({
+          level: "warn",
+          source: sourceCheckoutDependencyDiagnostic.source,
+          message: sourceCheckoutDependencyDiagnostic.message,
+        });
+      }
       if (roots.stock) {
         discoverInDirectory({
           dir: roots.stock,
           origin: "bundled",
           ownershipUid: params.ownershipUid,
+          candidates: result.candidates,
+          diagnostics: result.diagnostics,
+          seen,
+          realpathCache,
+        });
+      }
+      for (const installedPath of collectInstalledPluginRecordPaths(params.installRecords, env)) {
+        discoverFromPath({
+          rawPath: installedPath,
+          origin: "global",
+          ownershipUid: params.ownershipUid,
+          workspaceDir,
+          env,
           candidates: result.candidates,
           diagnostics: result.diagnostics,
           seen,

@@ -25,7 +25,7 @@ type FastContextLookupResult =
   | { status: "unavailable"; error?: string }
   | { status: "hits"; hits: MemorySearchHit[] };
 
-export type RealtimeFastContextConsultResult =
+type RealtimeFastContextConsultResult =
   | { handled: false }
   | { handled: true; result: RealtimeVoiceAgentConsultResult };
 

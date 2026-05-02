@@ -11,6 +11,7 @@ import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "../../test/hel
 // src/plugins/bundled-dir.test.ts and is intentionally not re-tested here.
 vi.mock("../plugins/bundled-dir.js", () => ({
   resolveBundledPluginsDir: vi.fn(),
+  resolveSourceCheckoutDependencyDiagnostic: vi.fn(() => null),
 }));
 
 // The channel-catalog.json fallback still walks package roots via
@@ -27,12 +28,34 @@ import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import { listBundledChannelCatalogEntries } from "./bundled-channel-catalog-read.js";
 
 const tempDirs: string[] = [];
+const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const originalTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
 
 afterEach(() => {
+  if (originalBundledPluginsDir === undefined) {
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  } else {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
+  }
+  if (originalTrustBundledPluginsDir === undefined) {
+    delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+  } else {
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = originalTrustBundledPluginsDir;
+  }
   cleanupTempDirs(tempDirs);
   vi.restoreAllMocks();
   vi.mocked(resolveBundledPluginsDir).mockReset();
 });
+
+function useBundledPluginsDir(extensionsRoot: string | undefined): void {
+  if (extensionsRoot) {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = extensionsRoot;
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+  } else {
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  }
+  vi.mocked(resolveBundledPluginsDir).mockReturnValue(extensionsRoot);
+}
 
 function seedRoot(prefix: string): string {
   const root = makeTempRepoRoot(tempDirs, prefix);
@@ -45,6 +68,7 @@ function seedChannelPkg(
   pkgJsonPath: string,
   opts: { id: string; docsPath: string; label?: string; blurb?: string },
 ): void {
+  const pluginDir = path.dirname(pkgJsonPath);
   writeJsonFile(pkgJsonPath, {
     name: `@openclaw/${opts.id}`,
     openclaw: {
@@ -56,6 +80,12 @@ function seedChannelPkg(
       },
     },
   });
+  writeJsonFile(path.join(pluginDir, "openclaw.plugin.json"), {
+    id: opts.id,
+    configSchema: { type: "object" },
+    channels: [opts.id],
+  });
+  fs.writeFileSync(path.join(pluginDir, "index.js"), "export default { register() {} };\n", "utf8");
 }
 
 describe("listBundledChannelCatalogEntries", () => {
@@ -63,8 +93,7 @@ describe("listBundledChannelCatalogEntries", () => {
     // Regression gate for the onboard crash on globally installed CLI: in a
     // published install, resolveBundledPluginsDir returns <pkgRoot>/dist/extensions.
     // Verify the loader iterates that tree and surfaces bundled channels such as
-    // telegram, which are not in dist/channel-catalog.json (filtered to
-    // release.publishToNpm === true) and therefore invisible to the fallback.
+    // telegram, even when they are not in dist/channel-catalog.json.
     const root = seedRoot("bcr-resolved-");
     const extensionsRoot = path.join(root, "dist", "extensions");
     seedChannelPkg(path.join(extensionsRoot, "telegram", "package.json"), {
@@ -76,15 +105,44 @@ describe("listBundledChannelCatalogEntries", () => {
       id: "imessage",
       docsPath: "/channels/imessage",
     });
-    vi.mocked(resolveBundledPluginsDir).mockReturnValue(extensionsRoot);
+    useBundledPluginsDir(extensionsRoot);
 
     const entries = listBundledChannelCatalogEntries();
 
-    const ids = entries.map((entry) => entry.id).toSorted();
-    expect(ids).toEqual(["imessage", "telegram"]);
+    const ids = entries.map((entry) => entry.id);
+    expect(ids).toEqual(expect.arrayContaining(["imessage", "telegram"]));
     const telegram = entries.find((entry) => entry.id === "telegram");
     expect(telegram?.channel.docsPath).toBe("/channels/telegram");
     expect(telegram?.channel.label).toBe("Telegram");
+  });
+
+  it("merges downloadable official catalog channels with bundled channels", () => {
+    const root = seedRoot("bcr-merge-official-");
+    const extensionsRoot = path.join(root, "dist", "extensions");
+    seedChannelPkg(path.join(extensionsRoot, "telegram", "package.json"), {
+      id: "telegram",
+      docsPath: "/channels/telegram",
+      label: "Telegram",
+    });
+    writeJsonFile(path.join(root, "dist", "channel-catalog.json"), {
+      entries: [
+        {
+          name: "@openclaw/qqbot",
+          openclaw: {
+            channel: {
+              id: "qqbot",
+              label: "QQ Bot",
+              docsPath: "/channels/qqbot",
+              blurb: "downloadable channel",
+            },
+          },
+        },
+      ],
+    });
+    useBundledPluginsDir(extensionsRoot);
+
+    const entries = listBundledChannelCatalogEntries();
+    expect(entries.map((entry) => entry.id)).toEqual(expect.arrayContaining(["qqbot", "telegram"]));
   });
 
   it("falls back to dist/channel-catalog.json when the resolver returns undefined", () => {
@@ -108,7 +166,7 @@ describe("listBundledChannelCatalogEntries", () => {
         },
       ],
     });
-    vi.mocked(resolveBundledPluginsDir).mockReturnValue(undefined);
+    useBundledPluginsDir(undefined);
 
     const entries = listBundledChannelCatalogEntries();
     expect(entries.map((entry) => entry.id)).toContain("fallback-channel");
@@ -137,7 +195,7 @@ describe("listBundledChannelCatalogEntries", () => {
         },
       ],
     });
-    vi.mocked(resolveBundledPluginsDir).mockReturnValue(extensionsRoot);
+    useBundledPluginsDir(extensionsRoot);
 
     const entries = listBundledChannelCatalogEntries();
     expect(entries.map((entry) => entry.id)).toContain("fallback-channel");

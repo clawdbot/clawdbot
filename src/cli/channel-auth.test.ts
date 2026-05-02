@@ -260,9 +260,10 @@ describe("channel-auth", () => {
 
     await runChannelLogout({}, runtime);
 
-    expect(mocks.logoutAccount).toHaveBeenCalledWith(
+    expect(mocks.callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
-        cfg: autoEnabledCfg,
+        config: autoEnabledCfg,
+        method: "channels.logout",
       }),
     );
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
@@ -518,7 +519,28 @@ describe("channel-auth", () => {
     );
   });
 
-  it("runs logout with resolved account and explicit account id", async () => {
+  it("runs logout through the live gateway with resolved account and explicit account id", async () => {
+    await runChannelLogout({ channel: "whatsapp", account: " acct-2 " }, runtime);
+
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      config: { channels: { whatsapp: {} } },
+      method: "channels.logout",
+      params: {
+        channel: "whatsapp",
+        accountId: "acct-2",
+      },
+      mode: "backend",
+      clientName: "gateway-client",
+      deviceIdentity: null,
+    });
+    expect(mocks.resolveAccount).not.toHaveBeenCalled();
+    expect(mocks.logoutAccount).not.toHaveBeenCalled();
+    expect(mocks.setVerbose).not.toHaveBeenCalled();
+  });
+
+  it("falls back to local auth cleanup when a local gateway logout is unreachable", async () => {
+    mocks.callGateway.mockRejectedValue(new Error("gateway unreachable"));
+
     await runChannelLogout({ channel: "whatsapp", account: " acct-2 " }, runtime);
 
     expect(mocks.resolveAccount).toHaveBeenCalledWith({ channels: { whatsapp: {} } }, "acct-2");
@@ -528,6 +550,9 @@ describe("channel-auth", () => {
       account: { id: "resolved-account" },
       runtime,
     });
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("running gateway did not stop it: gateway unreachable"),
+    );
     expect(mocks.setVerbose).not.toHaveBeenCalled();
   });
 

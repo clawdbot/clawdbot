@@ -271,6 +271,8 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
       },
       allowNameMatching,
       useAccessGroups,
+      cfg,
+      rest: interaction.client.rest,
     });
     if (dmAccess.decision !== "allow") {
       return false;

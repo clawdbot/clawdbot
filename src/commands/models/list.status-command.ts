@@ -25,6 +25,7 @@ import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import {
   buildModelAliasIndex,
   isCliProvider,
+  modelKey,
   normalizeProviderId,
   parseModelRef,
   resolveConfiguredModelRef,
@@ -202,7 +203,7 @@ export async function modelsStatusCommand(
 
   const rawDefaultsModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ?? "";
   const rawModel = agentModelPrimary ?? rawDefaultsModel;
-  const resolvedLabel = `${resolved.provider}/${resolved.model}`;
+  const resolvedLabel = modelKey(resolved.provider, resolved.model);
   const defaultLabel = rawModel || resolvedLabel;
   const defaultsFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
   const fallbacks = agentFallbacksOverride ?? defaultsFallbacks;

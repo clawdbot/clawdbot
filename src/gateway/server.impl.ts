@@ -35,7 +35,6 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
-import { getActiveBundledRuntimeDepsInstallCount } from "../plugins/bundled-runtime-deps-activity.js";
 import {
   clearCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
@@ -545,7 +544,6 @@ export async function startGatewayServer(
       getTotalQueueSize() +
       getTotalPendingReplies() +
       getActiveEmbeddedRunCount() +
-      getActiveBundledRuntimeDepsInstallCount() +
       getInspectableTaskRegistrySummary().active,
   );
   // Unconditional startup migration: seed gateway.controlUi.allowedOrigins for existing
@@ -743,6 +741,9 @@ export async function startGatewayServer(
     getStartupPending: () => !startupSidecarsReady,
     getStartupPendingReason: () => startupPendingReason,
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
+    shouldSkipChannelReadiness: () =>
+      isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
+      isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
   });
   log.info("starting HTTP server...");
   const {
@@ -1206,7 +1207,7 @@ export async function startGatewayServer(
                 pluginLookUpTable,
               }),
         onStartupPluginsLoading: () => {
-          startupPendingReason = "plugin-runtime-deps";
+          startupPendingReason = "startup-sidecars";
         },
         onStartupPluginsLoaded: async (loaded) => {
           replaceAttachedPluginRuntime(loaded);

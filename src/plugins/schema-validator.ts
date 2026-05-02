@@ -3,6 +3,7 @@ import type { ErrorObject, ValidateFunction } from "ajv";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
+import { PluginLruCache } from "./plugin-cache-primitives.js";
 
 const require = createRequire(import.meta.url);
 type AjvLike = {
@@ -52,7 +53,7 @@ type CachedValidator = {
   schema: JsonSchemaObject;
 };
 
-const schemaCache = new Map<string, CachedValidator>();
+const schemaCache = new PluginLruCache<CachedValidator>(512);
 
 function cloneValidationValue<T>(value: T): T {
   if (value === undefined || value === null) {

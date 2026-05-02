@@ -449,6 +449,81 @@ Example:
 
   </Tab>
 
+  <Tab title="DM access groups">
+    Discord DMs can use dynamic `accessGroup:<name>` entries in `channels.discord.allowFrom`.
+
+    Access group names are shared across message channels. Use `type: "message.senders"` for a static group whose members are expressed in each channel's normal `allowFrom` syntax, or `type: "discord.channelAudience"` when a Discord channel's current `ViewChannel` audience should define membership dynamically. Shared access-group behavior is documented here: [Access groups](/channels/access-groups).
+
+```json5
+{
+  accessGroups: {
+    operators: {
+      type: "message.senders",
+      members: {
+        "*": ["global-owner-id"],
+        discord: ["discord:123456789012345678"],
+        telegram: ["987654321"],
+      },
+    },
+  },
+  channels: {
+    discord: {
+      dmPolicy: "allowlist",
+      allowFrom: ["accessGroup:operators"],
+    },
+  },
+}
+```
+
+    A Discord text channel has no separate member list. `type: "discord.channelAudience"` models membership as: the DM sender is a member of the configured guild and currently has effective `ViewChannel` permission on the configured channel after role and channel overwrites are applied.
+
+    Example: allow anyone who can see `#maintainers` to DM the bot, while keeping DMs closed to everyone else.
+
+```json5
+{
+  accessGroups: {
+    maintainers: {
+      type: "discord.channelAudience",
+      guildId: "1456350064065904867",
+      channelId: "1456744319972282449",
+      membership: "canViewChannel",
+    },
+  },
+  channels: {
+    discord: {
+      dmPolicy: "allowlist",
+      allowFrom: ["accessGroup:maintainers"],
+    },
+  },
+}
+```
+
+    You can mix dynamic and static entries:
+
+```json5
+{
+  accessGroups: {
+    maintainers: {
+      type: "discord.channelAudience",
+      guildId: "1456350064065904867",
+      channelId: "1456744319972282449",
+    },
+  },
+  channels: {
+    discord: {
+      dmPolicy: "allowlist",
+      allowFrom: ["accessGroup:maintainers", "discord:123456789012345678"],
+    },
+  },
+}
+```
+
+    Lookups fail closed. If Discord returns `Missing Access`, the member lookup fails, or the channel belongs to a different guild, the DM sender is treated as unauthorized.
+
+    Enable the Discord Developer Portal **Server Members Intent** for the bot when using channel-audience access groups. DMs do not include guild member state, so OpenClaw resolves the member through Discord REST at authorization time.
+
+  </Tab>
+
   <Tab title="Guild policy">
     Guild handling is controlled by `channels.discord.groupPolicy`:
 
@@ -663,7 +738,8 @@ Default slash command settings:
         enabled: true,
         idleHours: 24,
         maxAgeHours: 0,
-        spawnSubagentSessions: false, // opt-in
+        spawnSessions: true,
+        defaultSpawnContext: "fork",
       },
     },
   },
@@ -674,8 +750,9 @@ Default slash command settings:
 
     - `session.threadBindings.*` sets global defaults.
     - `channels.discord.threadBindings.*` overrides Discord behavior.
-    - `spawnSubagentSessions` must be true to auto-create/bind threads for `sessions_spawn({ thread: true })`.
-    - `spawnAcpSessions` must be true to auto-create/bind threads for ACP (`/acp spawn ... --thread ...` or `sessions_spawn({ runtime: "acp", thread: true })`).
+    - `spawnSessions` controls auto-create/bind threads for `sessions_spawn({ thread: true })` and ACP thread spawns. Default: `true`.
+    - `defaultSpawnContext` controls native subagent context for thread-bound spawns. Default: `"fork"`.
+    - Deprecated `spawnSubagentSessions`/`spawnAcpSessions` keys are migrated by `openclaw doctor --fix`.
     - If thread bindings are disabled for an account, `/focus` and related thread binding operations are unavailable.
 
     See [Sub-agents](/tools/subagents), [ACP Agents](/tools/acp-agents), and [Configuration Reference](/gateway/configuration-reference).
@@ -741,7 +818,7 @@ Default slash command settings:
 
     - `/acp spawn codex --bind here` binds the current channel or thread in place and keeps future messages on the same ACP session. Thread messages inherit the parent channel binding.
     - In a bound channel or thread, `/new` and `/reset` reset the same ACP session in place. Temporary thread bindings can override target resolution while active.
-    - `spawnAcpSessions` is only required when OpenClaw needs to create/bind a child thread via `--thread auto|here`.
+    - `spawnSessions` gates child thread creation/binding via `--thread auto|here`.
 
     See [ACP Agents](/tools/acp-agents) for binding behavior details.
 
@@ -848,6 +925,30 @@ Default slash command settings:
     - member display names are matched by name/slug only when `channels.discord.dangerouslyAllowNameMatching: true`
     - lookups use original message ID and are time-window constrained
     - if lookup fails, proxied messages are treated as bot messages and dropped unless `allowBots=true`
+
+  </Accordion>
+
+  <Accordion title="Outbound mention aliases">
+    Use `mentionAliases` when agents need deterministic outbound mentions for known Discord users. Keys are handles without the leading `@`; values are Discord user IDs. Unknown handles, `@everyone`, `@here`, and mentions inside Markdown code spans are left unchanged.
+
+```json5
+{
+  channels: {
+    discord: {
+      mentionAliases: {
+        Vladislava: "123456789012345678",
+      },
+      accounts: {
+        ops: {
+          mentionAliases: {
+            OpsLead: "234567890123456789",
+          },
+        },
+      },
+    },
+  },
+}
+```
 
   </Accordion>
 
@@ -1180,6 +1281,22 @@ openclaw logs --follow
 
   </Accordion>
 
+  <Accordion title="Gateway READY timeout restarts">
+    OpenClaw waits for Discord's gateway `READY` event during startup and after runtime reconnects. Multi-account setups with startup staggering can need a longer startup READY window than the default.
+
+    READY timeout knobs:
+
+    - startup single-account: `channels.discord.gatewayReadyTimeoutMs`
+    - startup multi-account: `channels.discord.accounts.<accountId>.gatewayReadyTimeoutMs`
+    - startup env fallback when config is unset: `OPENCLAW_DISCORD_READY_TIMEOUT_MS`
+    - startup default: `15000` (15 seconds), max: `120000`
+    - runtime single-account: `channels.discord.gatewayRuntimeReadyTimeoutMs`
+    - runtime multi-account: `channels.discord.accounts.<accountId>.gatewayRuntimeReadyTimeoutMs`
+    - runtime env fallback when config is unset: `OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS`
+    - runtime default: `30000` (30 seconds), max: `120000`
+
+  </Accordion>
+
   <Accordion title="Permissions audit mismatches">
     `channels status --probe` permission checks only work for numeric channel IDs.
 
@@ -1226,7 +1343,7 @@ Primary reference: [Configuration reference - Discord](/gateway/config-channels#
 - policy: `groupPolicy`, `dm.*`, `guilds.*`, `guilds.*.channels.*`
 - command: `commands.native`, `commands.useAccessGroups`, `configWrites`, `slashCommand.*`
 - event queue: `eventQueue.listenerTimeout` (listener budget), `eventQueue.maxQueueSize`, `eventQueue.maxConcurrency`
-- gateway metadata: `gatewayInfoTimeoutMs`
+- gateway: `gatewayInfoTimeoutMs`, `gatewayReadyTimeoutMs`, `gatewayRuntimeReadyTimeoutMs`
 - reply/history: `replyToMode`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - delivery: `textChunkLimit`, `chunkMode`, `maxLinesPerMessage`
 - streaming: `streaming` (legacy alias: `streamMode`), `streaming.preview.toolProgress`, `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`

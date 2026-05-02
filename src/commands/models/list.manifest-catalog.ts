@@ -4,11 +4,11 @@ import {
   planManifestModelCatalogRows,
 } from "../../model-catalog/index.js";
 import type { NormalizedModelCatalogRow } from "../../model-catalog/index.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "../../plugins/manifest-registry-installed.js";
+import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
+import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   getPluginRecord,
   isPluginEnabled,
-  loadPluginRegistrySnapshot,
   resolvePluginContributionOwners,
   type PluginRegistrySnapshot,
 } from "../../plugins/plugin-registry.js";
@@ -19,6 +19,7 @@ function loadManifestCatalogRowsForPluginIds(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   index: PluginRegistrySnapshot;
+  registry: PluginManifestRegistry;
   mode: ManifestCatalogRowsForListMode;
   pluginIds?: readonly string[];
   providerFilter?: string;
@@ -26,12 +27,13 @@ function loadManifestCatalogRowsForPluginIds(params: {
   if (params.pluginIds && params.pluginIds.length === 0) {
     return [];
   }
-  const registry = loadPluginManifestRegistryForInstalledIndex({
-    index: params.index,
-    config: params.cfg,
-    env: params.env,
-    pluginIds: params.pluginIds,
-  });
+  const pluginIdSet = params.pluginIds ? new Set(params.pluginIds) : undefined;
+  const registry = pluginIdSet
+    ? {
+        ...params.registry,
+        plugins: params.registry.plugins.filter((plugin) => pluginIdSet.has(plugin.id)),
+      }
+    : params.registry;
   const plan = planManifestModelCatalogRows({
     registry,
     ...(params.providerFilter ? { providerFilter: params.providerFilter } : {}),
@@ -86,7 +88,7 @@ function resolveDeclaredModelCatalogPluginIds(params: {
   });
 }
 
-export function loadManifestCatalogRowsForList(params: {
+function loadManifestCatalogRowsForList(params: {
   cfg: OpenClawConfig;
   providerFilter?: string;
   env?: NodeJS.ProcessEnv;
@@ -96,15 +98,17 @@ export function loadManifestCatalogRowsForList(params: {
     ? normalizeModelCatalogProviderId(params.providerFilter)
     : undefined;
   const mode = params.mode ?? "static-authoritative";
-  const index = loadPluginRegistrySnapshot({
+  const snapshot = loadPluginMetadataSnapshot({
     config: params.cfg,
-    env: params.env,
+    env: params.env ?? process.env,
   });
+  const index = snapshot.index;
   if (!providerFilter) {
     return loadManifestCatalogRowsForPluginIds({
       cfg: params.cfg,
       env: params.env,
       index,
+      registry: snapshot.manifestRegistry,
       mode,
     });
   }
@@ -112,6 +116,7 @@ export function loadManifestCatalogRowsForList(params: {
     cfg: params.cfg,
     env: params.env,
     index,
+    registry: snapshot.manifestRegistry,
     mode,
     pluginIds: resolveConventionModelCatalogPluginIds({
       cfg: params.cfg,
@@ -127,6 +132,7 @@ export function loadManifestCatalogRowsForList(params: {
     cfg: params.cfg,
     env: params.env,
     index,
+    registry: snapshot.manifestRegistry,
     mode,
     pluginIds: resolveDeclaredModelCatalogPluginIds({
       cfg: params.cfg,

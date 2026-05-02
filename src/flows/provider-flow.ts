@@ -5,15 +5,15 @@ import { resolveProviderInstallCatalogEntries } from "../plugins/provider-instal
 import type { FlowContribution, FlowOption } from "./types.js";
 import { sortFlowContributionsByLabel } from "./types.js";
 
-export type ProviderFlowScope = "text-inference" | "image-generation";
+type ProviderFlowScope = "text-inference" | "image-generation";
 
 const DEFAULT_PROVIDER_FLOW_SCOPE: ProviderFlowScope = "text-inference";
 
-export type ProviderSetupFlowOption = FlowOption & {
+type ProviderSetupFlowOption = FlowOption & {
   onboardingScopes?: ProviderFlowScope[];
 };
 
-export type ProviderSetupFlowContribution = FlowContribution & {
+type ProviderSetupFlowContribution = FlowContribution & {
   kind: "provider";
   surface: "setup";
   providerId: string;
@@ -151,5 +151,3 @@ export function resolveProviderSetupFlowContributions(params?: {
   }).filter((contribution) => !seenOptionValues.has(contribution.option.value));
   return sortFlowContributionsByLabel([...manifestContributions, ...installCatalogContributions]);
 }
-
-export { includesProviderFlowScope };

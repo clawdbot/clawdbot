@@ -7,6 +7,7 @@ import { resolveOpenClawAgentDir } from "../src/agents/agent-paths.js";
 import { collectProviderApiKeys } from "../src/agents/live-auth-keys.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../src/agents/live-test-helpers.js";
 import { resolveApiKeyForProvider } from "../src/agents/model-auth.js";
+import { isBillingErrorMessage } from "../src/agents/pi-embedded-helpers/failover-matches.js";
 import { loadConfig, type OpenClawConfig } from "../src/config/config.js";
 import {
   DEFAULT_LIVE_IMAGE_MODELS,
@@ -266,6 +267,13 @@ describeLive("image generation live (provider sweep)", () => {
             );
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
+            if (isBillingErrorMessage(message)) {
+              skipped.push(`${testCase.id} (${authLabel}): billing drift`);
+              console.warn(
+                `[live:image-generation] skip ${testCase.id} ms=${Date.now() - startedAt} reason=billing drift error=${message}`,
+              );
+              continue;
+            }
             failures.push(`${testCase.id} (${authLabel}): ${message}`);
             console.error(
               `[live:image-generation] failed ${testCase.id} ms=${Date.now() - startedAt} error=${message}`,

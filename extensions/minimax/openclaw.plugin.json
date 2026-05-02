@@ -97,8 +97,8 @@
   },
   "uiHints": {
     "webSearch.apiKey": {
-      "label": "MiniMax Coding Plan key",
-      "help": "MiniMax Coding Plan key (fallback: MINIMAX_CODE_PLAN_KEY, MINIMAX_CODING_API_KEY, or MINIMAX_API_KEY if it already points at a coding-plan token).",
+      "label": "MiniMax Token Plan key",
+      "help": "MiniMax Token Plan key or OAuth token (fallback: MINIMAX_CODE_PLAN_KEY, MINIMAX_CODING_API_KEY, MINIMAX_OAUTH_TOKEN, or MINIMAX_API_KEY if it already points at a token-plan credential).",
       "sensitive": true,
       "placeholder": "sk-cp-..."
     },

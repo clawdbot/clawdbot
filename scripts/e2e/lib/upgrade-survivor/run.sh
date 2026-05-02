@@ -53,6 +53,7 @@ BASELINE_INSTALL_LOG="$ARTIFACT_ROOT/baseline-install.log"
 UPDATE_JSON="$ARTIFACT_ROOT/update.json"
 UPDATE_ERR="$ARTIFACT_ROOT/update.err"
 DOCTOR_LOG="$ARTIFACT_ROOT/doctor.log"
+BASELINE_DOCTOR_LOG="$ARTIFACT_ROOT/baseline-doctor.log"
 GATEWAY_LOG="$ARTIFACT_ROOT/gateway.log"
 HEALTHZ_JSON="$ARTIFACT_ROOT/healthz.json"
 READYZ_JSON="$ARTIFACT_ROOT/readyz.json"
@@ -260,6 +261,141 @@ legacy_runtime_deps_symlink_source() {
     "$plugin"
 }
 
+plugin_deps_cleanup_enabled() {
+  [ "$SCENARIO" = "plugin-deps-cleanup" ]
+}
+
+plugin_deps_cleanup_plugins() {
+  printf '%s\n' "${OPENCLAW_UPGRADE_SURVIVOR_PLUGIN_DEPS_CLEANUP_PLUGINS:-discord telegram}"
+}
+
+legacy_plugin_dependency_probe_paths() {
+  local plugin="$1"
+  local plugin_dir
+  plugin_dir="$(package_root)/dist/extensions/$plugin"
+  printf '%s\n' \
+    "$plugin_dir/node_modules" \
+    "$plugin_dir/.openclaw-runtime-deps.json" \
+    "$plugin_dir/.openclaw-runtime-deps-stamp.json" \
+    "$plugin_dir/.openclaw-runtime-deps-copy-upgrade-survivor" \
+    "$plugin_dir/.openclaw-install-stage-upgrade-survivor" \
+    "$plugin_dir/.openclaw-pnpm-store" \
+    "$(package_root)/.local/bundled-plugin-runtime-deps/$plugin-upgrade-survivor" \
+    "$OPENCLAW_STATE_DIR/.local/bundled-plugin-runtime-deps/$plugin-upgrade-survivor" \
+    "$OPENCLAW_STATE_DIR/plugin-runtime-deps/$plugin-upgrade-survivor"
+}
+
+install_baseline_plugin_dependencies() {
+  plugin_deps_cleanup_enabled || return 0
+  echo "Running baseline doctor to install configured plugin dependencies before update."
+  if ! openclaw doctor --fix --non-interactive >"$BASELINE_DOCTOR_LOG" 2>&1; then
+    echo "baseline openclaw doctor failed while preparing plugin dependency cleanup scenario" >&2
+    cat "$BASELINE_DOCTOR_LOG" >&2 || true
+    return 1
+  fi
+}
+
+seed_legacy_plugin_dependency_debris() {
+  plugin_deps_cleanup_enabled || return 0
+
+  local found=0
+  local plugin
+  for plugin in $(plugin_deps_cleanup_plugins); do
+    local plugin_dir
+    plugin_dir="$(package_root)/dist/extensions/$plugin"
+    if [ ! -d "$plugin_dir" ]; then
+      continue
+    fi
+    found=1
+    mkdir -p \
+      "$plugin_dir/node_modules/openclaw-upgrade-survivor-dep" \
+      "$plugin_dir/.openclaw-runtime-deps-copy-upgrade-survivor/node_modules/openclaw-upgrade-survivor-dep" \
+      "$plugin_dir/.openclaw-install-stage-upgrade-survivor" \
+      "$plugin_dir/.openclaw-pnpm-store" \
+      "$(package_root)/.local/bundled-plugin-runtime-deps/$plugin-upgrade-survivor/node_modules/openclaw-upgrade-survivor-dep" \
+      "$OPENCLAW_STATE_DIR/.local/bundled-plugin-runtime-deps/$plugin-upgrade-survivor/node_modules/openclaw-upgrade-survivor-dep" \
+      "$OPENCLAW_STATE_DIR/plugin-runtime-deps/$plugin-upgrade-survivor/node_modules/openclaw-upgrade-survivor-dep"
+    printf '{"name":"openclaw-upgrade-survivor-dep","version":"0.0.0"}\n' \
+      >"$plugin_dir/node_modules/openclaw-upgrade-survivor-dep/package.json"
+    printf '{"plugin":"%s","scenario":"plugin-deps-cleanup"}\n' "$plugin" \
+      >"$plugin_dir/.openclaw-runtime-deps.json"
+    printf '{"plugin":"%s","scenario":"plugin-deps-cleanup","stale":true}\n' "$plugin" \
+      >"$plugin_dir/.openclaw-runtime-deps-stamp.json"
+    printf '{"name":"openclaw-upgrade-survivor-dep","version":"0.0.0"}\n' \
+      >"$plugin_dir/.openclaw-runtime-deps-copy-upgrade-survivor/node_modules/openclaw-upgrade-survivor-dep/package.json"
+    printf '{"name":"openclaw-upgrade-survivor-dep","version":"0.0.0"}\n' \
+      >"$(package_root)/.local/bundled-plugin-runtime-deps/$plugin-upgrade-survivor/node_modules/openclaw-upgrade-survivor-dep/package.json"
+    printf '{"name":"openclaw-upgrade-survivor-dep","version":"0.0.0"}\n' \
+      >"$OPENCLAW_STATE_DIR/.local/bundled-plugin-runtime-deps/$plugin-upgrade-survivor/node_modules/openclaw-upgrade-survivor-dep/package.json"
+    printf '{"name":"openclaw-upgrade-survivor-dep","version":"0.0.0"}\n' \
+      >"$OPENCLAW_STATE_DIR/plugin-runtime-deps/$plugin-upgrade-survivor/node_modules/openclaw-upgrade-survivor-dep/package.json"
+    echo "Seeded legacy plugin dependency debris for configured plugin: $plugin"
+  done
+
+  if [ "$found" -ne 1 ]; then
+    echo "plugin-deps-cleanup scenario could not find a packaged Discord or Telegram plugin directory" >&2
+    find "$(package_root)/dist" -maxdepth 3 -type d 2>/dev/null >&2 || true
+    return 1
+  fi
+}
+
+assert_legacy_plugin_dependency_debris_present() {
+  plugin_deps_cleanup_enabled || return 0
+
+  local found
+  found="$(legacy_plugin_dependency_debris_count)"
+  if [ "$found" -eq 0 ]; then
+    echo "plugin-deps-cleanup scenario did not create legacy plugin dependency debris" >&2
+    return 1
+  fi
+}
+
+legacy_plugin_dependency_debris_count() {
+  local found=0
+  local plugin
+  for plugin in $(plugin_deps_cleanup_plugins); do
+    local probe
+    while IFS= read -r probe; do
+      if [ -e "$probe" ] || [ -L "$probe" ]; then
+        found=1
+      fi
+    done < <(legacy_plugin_dependency_probe_paths "$plugin")
+  done
+  printf '%s\n' "$found"
+}
+
+assert_legacy_plugin_dependency_debris_before_doctor() {
+  plugin_deps_cleanup_enabled || return 0
+
+  local found
+  found="$(legacy_plugin_dependency_debris_count)"
+  if [ "$found" -eq 0 ]; then
+    echo "Legacy plugin dependency debris was already removed before doctor; post-doctor cleanup assertion will verify it stays gone."
+  else
+    echo "Legacy plugin dependency debris survived update and will be cleaned by doctor."
+  fi
+}
+
+assert_legacy_plugin_dependency_debris_cleaned() {
+  plugin_deps_cleanup_enabled || return 0
+
+  local remaining=0
+  local plugin
+  for plugin in $(plugin_deps_cleanup_plugins); do
+    local probe
+    while IFS= read -r probe; do
+      if [ -e "$probe" ] || [ -L "$probe" ]; then
+        echo "legacy plugin dependency debris survived update/doctor: $probe" >&2
+        remaining=1
+      fi
+    done < <(legacy_plugin_dependency_probe_paths "$plugin")
+  done
+  if [ "$remaining" -ne 0 ]; then
+    return 1
+  fi
+  echo "Legacy plugin dependency debris cleaned for configured plugin dependencies."
+}
+
 seed_legacy_runtime_deps_symlink() {
   local plugin
   plugin="$(legacy_runtime_deps_symlink_plugin)" || {
@@ -302,7 +438,7 @@ assert_legacy_runtime_deps_symlink_repaired() {
   local target_dir
   target_dir="$(legacy_runtime_deps_symlink_target "$plugin")"
   if [ -L "$target_dir" ]; then
-    echo "legacy runtime deps symlink survived package update: $target_dir -> $(readlink "$target_dir")" >&2
+    echo "legacy runtime deps symlink survived update/doctor: $target_dir -> $(readlink "$target_dir")" >&2
     return 1
   fi
   echo "Legacy runtime deps symlink repaired for $plugin."
@@ -317,8 +453,17 @@ storage_preflight() {
   df -h "$ARTIFACT_ROOT" "$TMPDIR" /tmp || true
 }
 
+rm_rf_retry() {
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    rm -rf "$@" && return 0
+    sleep "$attempt"
+  done
+  rm -rf "$@"
+}
+
 reset_run_state() {
-  rm -rf "$npm_config_prefix" "$TMPDIR" "$ARTIFACT_ROOT/state-home"
+  rm_rf_retry "$npm_config_prefix" "$TMPDIR" "$ARTIFACT_ROOT/state-home"
   mkdir -p "$npm_config_prefix" "$npm_config_cache" "$TMPDIR"
 }
 
@@ -462,12 +607,17 @@ probe_gateway_endpoint() {
   local out_file="$3"
   local start_epoch
   local end_epoch
+  local args=(
+    --base-url "http://127.0.0.1:18789"
+    --path "$path"
+    --expect "$expect_kind"
+  )
+  if [ -n "${OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_FAILING:-}" ]; then
+    args+=(--allow-failing "$OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_FAILING")
+  fi
+  args+=(--out "$out_file")
   start_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
-  node scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs \
-    --base-url "http://127.0.0.1:18789" \
-    --path "$path" \
-    --expect "$expect_kind" \
-    --out "$out_file"
+  node scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs "${args[@]}"
   end_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
   printf '%s\n' "$(((end_epoch - start_epoch + 999) / 1000))"
 }
@@ -492,7 +642,9 @@ start_gateway() {
 
 check_gateway_probes() {
   healthz_seconds="$(probe_gateway_endpoint /healthz live "$HEALTHZ_JSON")"
+  export OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_FAILING="discord,telegram,whatsapp,feishu"
   readyz_seconds="$(probe_gateway_endpoint /readyz ready "$READYZ_JSON")"
+  unset OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_FAILING
 }
 
 check_gateway_status() {
@@ -523,12 +675,17 @@ phase install-baseline install_baseline
 phase seed-state seed_state
 phase apply-baseline-config-recipe apply_baseline_config_recipe
 phase validate-baseline-config validate_baseline_config
+phase install-baseline-plugin-dependencies install_baseline_plugin_dependencies
+phase seed-legacy-plugin-dependency-debris seed_legacy_plugin_dependency_debris
+phase assert-legacy-plugin-dependency-debris assert_legacy_plugin_dependency_debris_present
 phase assert-baseline assert_baseline_state
 phase seed-legacy-runtime-deps-symlink seed_legacy_runtime_deps_symlink
 phase resolve-candidate resolve_candidate_version
 phase update-candidate update_candidate
-phase assert-legacy-runtime-deps-symlink-repaired assert_legacy_runtime_deps_symlink_repaired
+phase assert-legacy-plugin-dependency-debris-before-doctor assert_legacy_plugin_dependency_debris_before_doctor
 phase doctor run_doctor
+phase assert-legacy-plugin-dependency-debris-cleaned assert_legacy_plugin_dependency_debris_cleaned
+phase assert-legacy-runtime-deps-symlink-repaired assert_legacy_runtime_deps_symlink_repaired
 phase validate-post-doctor-config validate_post_doctor_config
 phase assert-survival assert_survival
 phase gateway-start start_gateway

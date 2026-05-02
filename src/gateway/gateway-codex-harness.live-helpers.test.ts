@@ -78,6 +78,22 @@ describe("gateway codex harness live helpers", () => {
     expect(isExpectedCodexStatusCommandText(text)).toBe(true);
   });
 
+  it("accepts the OpenAI Codex status card emitted by the GPT-5.5 Docker harness", () => {
+    const text = [
+      "OpenClaw 2026.4.30-beta.1 is running on `openai/gpt-5.5`.",
+      "",
+      "Session is healthy:",
+      "- Context: `21k/272k` used, `8%`",
+      "- Cache: `19%` hit",
+      "- Runtime: `OpenAI Codex`",
+      "- Execution: `direct`",
+      "- Active tasks: `1` (`/codex status`)",
+      "- Queue: `steer`, depth `0`",
+    ].join("\n");
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
   it("rejects status prose for a different codex session", () => {
     const text =
       "OpenClaw is running on `openai/gpt-5.5` with low reasoning/text settings. Context is at `22k/272k` tokens, no compactions, and the current session is `agent:dev:other`.";
@@ -139,6 +155,22 @@ describe("gateway codex harness live helpers", () => {
       "  - Configured: `false`",
       "",
       "No other agent models are currently exposed for this session.",
+    ].join("\n");
+
+    expect(
+      EXPECTED_CODEX_MODELS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+    expect(isExpectedCodexModelsCommandText(text)).toBe(true);
+  });
+
+  it("accepts the singular Codex agent model list from the live harness", () => {
+    const text = [
+      "Available Codex agent model:",
+      "",
+      "- `dev`: `openai/gpt-5.5`",
+      "- Runtime: `codex`",
+      "- Fallback: `none`",
+      "- Configured override: `false`",
     ].join("\n");
 
     expect(

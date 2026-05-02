@@ -98,17 +98,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     }
   });
 
-  it("retries transient bundled runtime deps staging failures during agent turns", () => {
-    expect(
-      shouldRetryCrossOsAgentTurnError(
-        new Error("document-extract: failed to install bundled runtime deps: npm install failed"),
-      ),
-    ).toBe(true);
-    expect(
-      shouldRetryCrossOsAgentTurnError(
-        new Error("document-extract failed to stage bundled runtime deps after 463ms"),
-      ),
-    ).toBe(true);
+  it("retries transient agent-turn failures", () => {
     expect(
       shouldRetryCrossOsAgentTurnError(
         new Error("Agent output did not contain the expected OK marker."),
@@ -147,6 +137,19 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(resolveProviderConfig("openai", {})?.model).toBe("openai/gpt-5.5");
   });
 
+  it("keeps release cross-OS OpenAI smoke on GPT-5.5", () => {
+    const workflow = readFileSync(
+      ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
+      "utf8",
+    );
+    const releaseChecks = readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8");
+
+    expect(workflow).toContain(
+      "OPENCLAW_CROSS_OS_OPENAI_MODEL: ${{ inputs.openai_model || vars.OPENCLAW_CROSS_OS_OPENAI_MODEL || 'openai/gpt-5.5' }}",
+    );
+    expect(releaseChecks).toContain("openai_model: openai/gpt-5.5");
+  });
+
   it("keeps release smoke plugin allowlists focused on agent-turn essentials", () => {
     const allowlist = buildCrossOsReleaseSmokePluginAllowlist({ extensionId: "openai" });
 
@@ -157,11 +160,17 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(allowlist).not.toContain("web-readability");
   });
 
-  it("keeps cross-OS live smoke agent turns on minimal thinking", () => {
+  it("keeps cross-OS live smoke agent turns on GPT-5.5-safe timeouts and minimal thinking", () => {
     const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
+    const providerOverride = "models.providers.${params.providerConfig.extensionId}";
 
     expect(source).toContain('"--thinking",\n    "minimal"');
-    expect(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS).toBeLessThanOrEqual(180);
+    expect(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS).toBeGreaterThanOrEqual(600);
+    expect(source).toContain("buildReleaseProviderConfigOverride");
+    expect(source).toContain("models: []");
+    expect(source).toContain('"--merge"');
+    expect(source).toContain(providerOverride);
+    expect(source).not.toContain("models.providers.${params.providerConfig.extensionId}.baseUrl");
     expect(source).toContain('"--timeout",\n    String(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS)');
     expect(source.match(/buildReleaseAgentTurnArgs\(sessionId\)/g)?.length).toBeGreaterThanOrEqual(
       2,
@@ -671,7 +680,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     }
   });
 
-  it("rejects bundled runtime-deps staging debris before candidate inventory generation", async () => {
+  it("rejects legacy plugin dependency staging debris before candidate inventory generation", async () => {
     const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-cross-os-stage-debris-"));
     try {
       mkdirSync(
@@ -689,7 +698,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
           sourceDir: packageRoot,
           logPath: join(packageRoot, "npm-pack-dry-run.log"),
         }),
-      ).rejects.toThrow("unexpected bundled-runtime-deps install staging debris");
+      ).rejects.toThrow("unexpected legacy plugin dependency staging debris");
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }

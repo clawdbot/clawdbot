@@ -1,4 +1,4 @@
-export type LiveSessionModelSelection = {
+type LiveSessionModelSelection = {
   provider: string;
   model: string;
   authProfileId?: string;

@@ -38,7 +38,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       "npm-onboard-channel-agent",
       "doctor-switch",
       "update-channel-switch",
-      "bundled-channel-deps-compat",
       "plugins-offline",
       "plugins",
       "kitchen-sink-plugin",
@@ -108,6 +107,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(script).toContain("scripts/e2e/lib/kitchen-sink-plugin/sweep.sh");
     expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_SPEC"');
     expect(sweepScript).toContain("KITCHEN_SINK_PERSONALITY");
+    expect(sweepScript).toContain("OPENCLAW_KITCHEN_SINK_PERSONALITY");
     expect(sweepScript).toContain('plugins uninstall "$KITCHEN_SINK_SPEC" --force');
     const successScenario = sweepScript.slice(
       sweepScript.indexOf("run_success_scenario()"),
@@ -119,18 +119,17 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(successScenario.indexOf("configure_kitchen_sink_runtime")).toBeLessThan(
       successScenario.indexOf('plugins enable "$KITCHEN_SINK_ID"'),
     );
+    expect(successScenario).toContain('plugins inspect "$KITCHEN_SINK_ID" --runtime --json');
+    expect(successScenario).toContain("plugins inspect --all --runtime --json");
     expect(sweepScript).toContain("run_failure_scenario");
     expect(assertionsScript).toContain("record.source !== source");
     expect(assertionsScript).toContain("record.clawhubPackage !== packageName");
     expect(assertionsScript).toContain("assertClawHubExternalInstallContract");
     expect(assertionsScript).toContain("expectedErrorMessages");
     expect(assertionsScript).toContain(
-      'const INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES = new Set(["full", "adversarial"]);',
+      'const INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES = new Set(["full", "conformance", "adversarial"]);',
     );
     expect(assertionsScript).toContain("!INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES.has(surfaceMode)");
-    expect(assertionsScript).not.toContain(
-      'const INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES = new Set(["full", "conformance"',
-    );
     expect(readFileSync("scripts/e2e/lib/clawhub-fixture-server.cjs", "utf8")).toContain(
       'from "openclaw/plugin-sdk/plugin-entry"',
     );
@@ -159,7 +158,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(clawhubScript).toContain('plugins install "$CLAWHUB_PLUGIN_SPEC"');
     expect(assertionsScript).toContain("assertClawHubExternalInstallContract");
     expect(assertionsScript).toContain('node_modules", "openclaw');
-    expect(assertionsScript).toContain('node_modules", "is-number');
     expect(fixtureServer).toContain('"is-number": "7.0.0"');
     expect(fixtureServer).toContain('openclaw: ">=2026.4.11"');
   });

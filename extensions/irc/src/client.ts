@@ -11,7 +11,7 @@ import {
 const IRC_ERROR_CODES = new Set(["432", "464", "465"]);
 const IRC_NICK_COLLISION_CODES = new Set(["433", "436"]);
 
-export type IrcPrivmsgEvent = {
+type IrcPrivmsgEvent = {
   senderNick: string;
   senderUser?: string;
   senderHost?: string;
@@ -39,7 +39,7 @@ export type IrcClientOptions = {
   onLine?: (line: string) => void;
 };
 
-export type IrcNickServOptions = {
+type IrcNickServOptions = {
   enabled?: boolean;
   service?: string;
   password?: string;

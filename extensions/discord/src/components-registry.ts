@@ -222,6 +222,31 @@ function deletePersistentEntry<T extends { id: string }>(params: {
   void store.delete(params.id).catch(disablePersistentComponentRegistry);
 }
 
+function resolveComponentConsumptionIds(entry: DiscordComponentEntry): string[] {
+  if (!entry.consumptionGroupId) {
+    return [entry.id];
+  }
+  const ids = entry.consumptionGroupEntryIds?.filter((id) => typeof id === "string" && id) ?? [];
+  return ids.length > 0 ? Array.from(new Set(ids)) : [entry.id];
+}
+
+function deleteComponentConsumptionGroup(entry: DiscordComponentEntry): void {
+  const store = getComponentEntries();
+  for (const id of resolveComponentConsumptionIds(entry)) {
+    store.delete(id);
+  }
+}
+
+function deletePersistentComponentConsumptionGroup(entry: DiscordComponentEntry): void {
+  const store = getPersistentComponentStore();
+  if (!store) {
+    return;
+  }
+  for (const id of resolveComponentConsumptionIds(entry)) {
+    void store.delete(id).catch(disablePersistentComponentRegistry);
+  }
+}
+
 async function resolvePersistentRegistryEntry<T extends { id: string }>(params: {
   id: string;
   consume?: boolean;
@@ -270,7 +295,11 @@ export function resolveDiscordComponentEntry(params: {
   id: string;
   consume?: boolean;
 }): DiscordComponentEntry | null {
-  return resolveEntry(getComponentEntries(), params);
+  const entry = resolveEntry(getComponentEntries(), params);
+  if (entry && params.consume !== false) {
+    deleteComponentConsumptionGroup(entry);
+  }
+  return entry;
 }
 
 export async function resolveDiscordComponentEntryWithPersistence(params: {
@@ -280,14 +309,18 @@ export async function resolveDiscordComponentEntryWithPersistence(params: {
   const inMemory = resolveDiscordComponentEntry(params);
   if (inMemory) {
     if (params.consume !== false) {
-      deletePersistentEntry({ ...params, openStore: getPersistentComponentStore });
+      deletePersistentComponentConsumptionGroup(inMemory);
     }
     return inMemory;
   }
-  return await resolvePersistentRegistryEntry({
+  const persisted = await resolvePersistentRegistryEntry({
     ...params,
     openStore: getPersistentComponentStore,
   });
+  if (persisted && params.consume !== false) {
+    deletePersistentComponentConsumptionGroup(persisted);
+  }
+  return persisted;
 }
 
 export function resolveDiscordModalEntry(params: {

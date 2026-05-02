@@ -1,9 +1,8 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
 import { isInstalledPluginEnabled } from "../../plugins/installed-plugin-index.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "../../plugins/manifest-registry-installed.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
-import { loadPluginRegistrySnapshot } from "../../plugins/plugin-registry.js";
+import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
@@ -65,20 +64,13 @@ export function resolveReadOnlyChannelCommandDefaults(
   if (!normalizedChannelId || !isSafeManifestChannelId(normalizedChannelId)) {
     return undefined;
   }
-  const index = loadPluginRegistrySnapshot({
+  const snapshot = loadPluginMetadataSnapshot({
     config: options.config,
     stateDir: options.stateDir,
     workspaceDir: options.workspaceDir,
     env: options.env ?? process.env,
   });
-  const registry = loadPluginManifestRegistryForInstalledIndex({
-    index,
-    config: options.config,
-    workspaceDir: options.workspaceDir,
-    env: options.env ?? process.env,
-    includeDisabled: true,
-  });
-  for (const record of registry.plugins) {
+  for (const record of snapshot.plugins) {
     if (!record.channels.includes(normalizedChannelId)) {
       continue;
     }
@@ -88,7 +80,7 @@ export function resolveReadOnlyChannelCommandDefaults(
     ) {
       continue;
     }
-    if (!isInstalledPluginEnabled(index, record.id, options.config)) {
+    if (!isInstalledPluginEnabled(snapshot.index, record.id, options.config)) {
       continue;
     }
     const channelConfigValue = record.channelConfigs

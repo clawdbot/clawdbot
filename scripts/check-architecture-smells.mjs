@@ -216,7 +216,7 @@ function formatInventoryHuman(inventory) {
   return lines.join("\n");
 }
 
-export async function runArchitectureSmellsCheck(argv = process.argv.slice(2), io) {
+async function runArchitectureSmellsCheck(argv = process.argv.slice(2), io) {
   const streams = io ?? { stdout: process.stdout, stderr: process.stderr };
   const json = argv.includes("--json");
   const inventory = await collectArchitectureSmells();

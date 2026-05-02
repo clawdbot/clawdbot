@@ -9,13 +9,23 @@ const GOOGLE_MEET_API_HOST = "meet.googleapis.com";
 const GOOGLE_MEET_MEDIA_SCOPE =
   "https://www.googleapis.com/auth/meetings.conference.media.readonly";
 const GOOGLE_MEET_SPACE_SCOPE = "https://www.googleapis.com/auth/meetings.space.readonly";
+const GOOGLE_MEET_SPACE_CREATED_SCOPE = "https://www.googleapis.com/auth/meetings.space.created";
+const GOOGLE_MEET_SPACE_SETTINGS_SCOPE = "https://www.googleapis.com/auth/meetings.space.settings";
+
+export type GoogleMeetAccessType = "OPEN" | "TRUSTED" | "RESTRICTED";
+export type GoogleMeetEntryPointAccess = "ALL" | "CREATOR_APP_ONLY";
+
+export type GoogleMeetSpaceConfig = {
+  accessType?: GoogleMeetAccessType;
+  entryPointAccess?: GoogleMeetEntryPointAccess;
+};
 
 export type GoogleMeetSpace = {
   name: string;
   meetingCode?: string;
   meetingUri?: string;
   activeConference?: Record<string, unknown>;
-  config?: Record<string, unknown>;
+  config?: GoogleMeetSpaceConfig & Record<string, unknown>;
 };
 
 export type GoogleMeetPreflightReport = {
@@ -34,6 +44,11 @@ export type GoogleMeetCreateSpaceResult = {
   meetingUri: string;
 };
 
+export type GoogleMeetEndActiveConferenceResult = {
+  space: string;
+  ended: true;
+};
+
 export type GoogleMeetConferenceRecord = {
   name: string;
   space?: string;
@@ -42,7 +57,7 @@ export type GoogleMeetConferenceRecord = {
   expireTime?: string;
 };
 
-export type GoogleMeetParticipant = {
+type GoogleMeetParticipant = {
   name: string;
   earliestStartTime?: string;
   latestEndTime?: string;
@@ -58,20 +73,20 @@ export type GoogleMeetParticipant = {
   };
 };
 
-export type GoogleMeetParticipantSession = {
+type GoogleMeetParticipantSession = {
   name: string;
   startTime?: string;
   endTime?: string;
 };
 
-export type GoogleMeetRecording = {
+type GoogleMeetRecording = {
   name: string;
   startTime?: string;
   endTime?: string;
   driveDestination?: Record<string, unknown>;
 };
 
-export type GoogleMeetTranscript = {
+type GoogleMeetTranscript = {
   name: string;
   startTime?: string;
   endTime?: string;
@@ -80,7 +95,7 @@ export type GoogleMeetTranscript = {
   documentTextError?: string;
 };
 
-export type GoogleMeetTranscriptEntry = {
+type GoogleMeetTranscriptEntry = {
   name: string;
   participant?: string;
   text?: string;
@@ -89,13 +104,13 @@ export type GoogleMeetTranscriptEntry = {
   endTime?: string;
 };
 
-export type GoogleMeetTranscriptEntries = {
+type GoogleMeetTranscriptEntries = {
   transcript: string;
   entries: GoogleMeetTranscriptEntry[];
   entriesError?: string;
 };
 
-export type GoogleMeetSmartNote = {
+type GoogleMeetSmartNote = {
   name: string;
   startTime?: string;
   endTime?: string;
@@ -104,7 +119,7 @@ export type GoogleMeetSmartNote = {
   documentTextError?: string;
 };
 
-export type GoogleMeetArtifactsEntry = {
+type GoogleMeetArtifactsEntry = {
   conferenceRecord: GoogleMeetConferenceRecord;
   participants: GoogleMeetParticipant[];
   recordings: GoogleMeetRecording[];
@@ -127,7 +142,7 @@ export type GoogleMeetLatestConferenceRecordResult = {
   conferenceRecord?: GoogleMeetConferenceRecord;
 };
 
-export type GoogleMeetAttendanceRow = {
+type GoogleMeetAttendanceRow = {
   conferenceRecord: string;
   participant: string;
   participants?: string[];
@@ -353,7 +368,12 @@ export async function fetchGoogleMeetSpace(params: {
 
 export async function createGoogleMeetSpace(params: {
   accessToken: string;
+  config?: GoogleMeetSpaceConfig;
 }): Promise<GoogleMeetCreateSpaceResult> {
+  const body =
+    params.config && Object.keys(params.config).length > 0
+      ? JSON.stringify({ config: params.config })
+      : "{}";
   const { response, release } = await fetchWithSsrFGuard({
     url: `${GOOGLE_MEET_API_BASE_URL}/spaces`,
     init: {
@@ -363,7 +383,7 @@ export async function createGoogleMeetSpace(params: {
         Accept: "application/json",
         "Content-Type": "application/json",
       },
-      body: "{}",
+      body,
     },
     policy: { allowedHostnames: [GOOGLE_MEET_API_HOST] },
     auditContext: "google-meet.spaces.create",
@@ -375,7 +395,10 @@ export async function createGoogleMeetSpace(params: {
         response,
         detail,
         prefix: "Google Meet spaces.create",
-        scopes: ["https://www.googleapis.com/auth/meetings.space.created"],
+        scopes:
+          params.config && Object.keys(params.config).length > 0
+            ? [GOOGLE_MEET_SPACE_CREATED_SCOPE, GOOGLE_MEET_SPACE_SETTINGS_SCOPE]
+            : [GOOGLE_MEET_SPACE_CREATED_SCOPE],
       });
     }
     const payload = (await response.json()) as GoogleMeetSpace;
@@ -392,7 +415,46 @@ export async function createGoogleMeetSpace(params: {
   }
 }
 
-export async function fetchGoogleMeetConferenceRecord(params: {
+export async function endGoogleMeetActiveConference(params: {
+  accessToken: string;
+  meeting: string;
+}): Promise<GoogleMeetEndActiveConferenceResult> {
+  const resolved = await fetchGoogleMeetSpace({
+    accessToken: params.accessToken,
+    meeting: params.meeting,
+  });
+  const space = resolved.name;
+  const { response, release } = await fetchWithSsrFGuard({
+    url: `${GOOGLE_MEET_API_BASE_URL}/${encodeSpaceNameForPath(space)}:endActiveConference`,
+    init: {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${params.accessToken}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: "{}",
+    },
+    policy: { allowedHostnames: [GOOGLE_MEET_API_HOST] },
+    auditContext: "google-meet.spaces.endActiveConference",
+  });
+  try {
+    if (!response.ok) {
+      const detail = await response.text();
+      throw await googleApiError({
+        response,
+        detail,
+        prefix: "Google Meet spaces.endActiveConference",
+        scopes: [GOOGLE_MEET_SPACE_CREATED_SCOPE],
+      });
+    }
+    return { space, ended: true };
+  } finally {
+    await release();
+  }
+}
+
+async function fetchGoogleMeetConferenceRecord(params: {
   accessToken: string;
   conferenceRecord: string;
 }): Promise<GoogleMeetConferenceRecord> {
@@ -409,7 +471,7 @@ export async function fetchGoogleMeetConferenceRecord(params: {
   return payload;
 }
 
-export async function listGoogleMeetConferenceRecords(params: {
+async function listGoogleMeetConferenceRecords(params: {
   accessToken: string;
   meeting?: string;
   pageSize?: number;
@@ -453,7 +515,7 @@ export async function fetchLatestGoogleMeetConferenceRecord(params: {
   };
 }
 
-export async function listGoogleMeetParticipants(params: {
+async function listGoogleMeetParticipants(params: {
   accessToken: string;
   conferenceRecord: string;
   pageSize?: number;
@@ -469,7 +531,7 @@ export async function listGoogleMeetParticipants(params: {
   });
 }
 
-export async function listGoogleMeetParticipantSessions(params: {
+async function listGoogleMeetParticipantSessions(params: {
   accessToken: string;
   participant: string;
   pageSize?: number;
@@ -484,7 +546,7 @@ export async function listGoogleMeetParticipantSessions(params: {
   });
 }
 
-export async function listGoogleMeetRecordings(params: {
+async function listGoogleMeetRecordings(params: {
   accessToken: string;
   conferenceRecord: string;
   pageSize?: number;
@@ -500,7 +562,7 @@ export async function listGoogleMeetRecordings(params: {
   });
 }
 
-export async function listGoogleMeetTranscripts(params: {
+async function listGoogleMeetTranscripts(params: {
   accessToken: string;
   conferenceRecord: string;
   pageSize?: number;
@@ -516,7 +578,7 @@ export async function listGoogleMeetTranscripts(params: {
   });
 }
 
-export async function listGoogleMeetTranscriptEntries(params: {
+async function listGoogleMeetTranscriptEntries(params: {
   accessToken: string;
   transcript: string;
   pageSize?: number;
@@ -531,7 +593,7 @@ export async function listGoogleMeetTranscriptEntries(params: {
   });
 }
 
-export async function listGoogleMeetSmartNotes(params: {
+async function listGoogleMeetSmartNotes(params: {
   accessToken: string;
   conferenceRecord: string;
   pageSize?: number;

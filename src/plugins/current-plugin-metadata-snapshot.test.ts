@@ -100,6 +100,40 @@ describe("current plugin metadata snapshot", () => {
     ).toBeUndefined();
   });
 
+  it("rejects a current snapshot when env-resolved plugin load paths change", () => {
+    const config = { plugins: { load: { paths: ["~/plugins"] } } };
+    const snapshot = createSnapshot({ config });
+    const snapshotEnv = {
+      HOME: "/home/snapshot",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    const requestedEnv = {
+      HOME: "/home/requested",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    setCurrentPluginMetadataSnapshot(snapshot, { config, env: snapshotEnv });
+
+    expect(getCurrentPluginMetadataSnapshot({ config, env: snapshotEnv })).toBe(snapshot);
+    expect(getCurrentPluginMetadataSnapshot({ config, env: requestedEnv })).toBeUndefined();
+  });
+
+  it("rejects a current snapshot when env-resolved plugin roots change", () => {
+    const config = {};
+    const snapshot = createSnapshot({ config });
+    const snapshotEnv = {
+      HOME: "/home/snapshot",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    const requestedEnv = {
+      HOME: "/home/requested",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    setCurrentPluginMetadataSnapshot(snapshot, { config, env: snapshotEnv });
+
+    expect(getCurrentPluginMetadataSnapshot({ config, env: snapshotEnv })).toBe(snapshot);
+    expect(getCurrentPluginMetadataSnapshot({ config, env: requestedEnv })).toBeUndefined();
+  });
+
   it("keeps source-policy compatibility when storing an auto-enabled runtime config", () => {
     const sourceConfig = { channels: { telegram: { botToken: "token" } } };
     const autoEnabledConfig = {

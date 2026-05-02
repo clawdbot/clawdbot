@@ -26,7 +26,7 @@ export async function fetchHealthUrl(url: string): Promise<{ ok: boolean }> {
   }
 }
 
-export function describeError(error: unknown) {
+function describeError(error: unknown) {
   if (error instanceof Error) {
     return error.message;
   }

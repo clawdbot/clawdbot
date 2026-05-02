@@ -88,6 +88,7 @@ export type TtsTelephonyRequestParams = {
   text: string;
   cfg: OpenClawConfig;
   prefsPath?: string;
+  overrides?: TtsDirectiveOverrides;
 };
 
 export type ListSpeechVoicesParams = {

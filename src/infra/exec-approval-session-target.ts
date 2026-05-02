@@ -10,12 +10,6 @@ import type { ExecApprovalRequest } from "./exec-approvals.js";
 import { resolveSessionDeliveryTarget } from "./outbound/targets.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
-export {
-  doesApprovalRequestMatchChannelAccount,
-  resolveApprovalRequestAccountId,
-  resolveApprovalRequestChannelAccountId,
-} from "./approval-request-account-binding.js";
-
 export type ExecApprovalSessionTarget = {
   channel?: string;
   to: string;

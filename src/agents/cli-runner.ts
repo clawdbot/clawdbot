@@ -1,6 +1,7 @@
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { loadCliSessionHistoryMessages } from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
@@ -76,9 +77,8 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
         workspaceDir: params.workspaceDir,
-        messageProvider: params.messageProvider,
         trigger: params.trigger,
-        channelId: params.messageChannel ?? params.messageProvider,
+        ...buildAgentHookContextChannelFields(params),
       } as const;
       const hookResult = await hookRunner.runBeforeAgentReply(
         { cleanedBody: params.prompt },
@@ -129,7 +129,7 @@ export async function runPreparedCliAgent(
   const hasAgentEndHooks = hookRunner?.hasHooks("agent_end") === true;
   const historyMessages =
     hasLlmInputHooks || hasAgentEndHooks
-      ? loadCliSessionHistoryMessages({
+      ? await loadCliSessionHistoryMessages({
           sessionId: params.sessionId,
           sessionFile: params.sessionFile,
           sessionKey: params.sessionKey,
@@ -154,9 +154,8 @@ export async function runPreparedCliAgent(
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     workspaceDir: params.workspaceDir,
-    messageProvider: params.messageProvider,
     trigger: params.trigger,
-    channelId: params.messageChannel ?? params.messageProvider,
+    ...buildAgentHookContextChannelFields(params),
   } as const;
 
   const buildAgentEndMessages = (lastAssistant?: unknown): unknown[] => [

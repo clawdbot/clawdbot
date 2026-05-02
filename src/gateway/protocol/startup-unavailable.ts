@@ -1,7 +1,7 @@
 export const GATEWAY_STARTUP_UNAVAILABLE_REASON = "startup-sidecars";
 export const GATEWAY_STARTUP_RETRY_AFTER_MS = 500;
-export const GATEWAY_STARTUP_RETRY_MIN_MS = 100;
-export const GATEWAY_STARTUP_RETRY_MAX_MS = 2_000;
+const GATEWAY_STARTUP_RETRY_MIN_MS = 100;
+const GATEWAY_STARTUP_RETRY_MAX_MS = 2_000;
 
 export type GatewayStartupUnavailableDetails = {
   reason: typeof GATEWAY_STARTUP_UNAVAILABLE_REASON;
@@ -11,7 +11,7 @@ export function gatewayStartupUnavailableDetails(): GatewayStartupUnavailableDet
   return { reason: GATEWAY_STARTUP_UNAVAILABLE_REASON };
 }
 
-export function isGatewayStartupUnavailableDetails(
+function isGatewayStartupUnavailableDetails(
   details: unknown,
 ): details is GatewayStartupUnavailableDetails {
   return (

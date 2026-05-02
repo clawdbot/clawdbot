@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv } from "../runtime.js";
 import { createCrestodianTestRuntime } from "./crestodian.test-helpers.js";
 import {
   executeCrestodianOperation,
@@ -205,6 +206,27 @@ describe("parseCrestodianOperation", () => {
     expect(parseCrestodianOperation("doctor fix")).toEqual({ kind: "doctor-fix" });
   });
 
+  it("parses plugin management operations", () => {
+    expect(parseCrestodianOperation("plugins list")).toEqual({ kind: "plugin-list" });
+    expect(parseCrestodianOperation("list plugin")).toEqual({ kind: "plugin-list" });
+    expect(parseCrestodianOperation("plugins search calendar sync")).toEqual({
+      kind: "plugin-search",
+      query: "calendar sync",
+    });
+    expect(parseCrestodianOperation("install npm plugin @openclaw/demo")).toEqual({
+      kind: "plugin-install",
+      spec: "npm:@openclaw/demo",
+    });
+    expect(parseCrestodianOperation("plugin install clawhub:openclaw-demo")).toEqual({
+      kind: "plugin-install",
+      spec: "clawhub:openclaw-demo",
+    });
+    expect(parseCrestodianOperation("plugin uninstall openclaw-demo")).toEqual({
+      kind: "plugin-uninstall",
+      pluginId: "openclaw-demo",
+    });
+  });
+
   it("parses agent creation requests", () => {
     expect(
       parseCrestodianOperation("create agent Work workspace /tmp/work model openai/gpt-5.2"),
@@ -336,6 +358,119 @@ describe("parseCrestodianOperation", () => {
         path: "gateway.auth.token",
         source: "env",
         provider: "default",
+      },
+    });
+  });
+
+  it("runs plugin list and search as read-only operations", async () => {
+    const { runtime, lines } = createCrestodianTestRuntime();
+    const runPluginsList = vi.fn(async (pluginRuntime: RuntimeEnv) => {
+      pluginRuntime.log("plugin rows");
+    });
+    const runPluginsSearch = vi.fn(async (query: string, pluginRuntime: RuntimeEnv) => {
+      pluginRuntime.log(`search rows: ${query}`);
+    });
+
+    await expect(
+      executeCrestodianOperation({ kind: "plugin-list" }, runtime, {
+        deps: { runPluginsList, runPluginsSearch },
+      }),
+    ).resolves.toMatchObject({ applied: false });
+    await expect(
+      executeCrestodianOperation({ kind: "plugin-search", query: "calendar" }, runtime, {
+        deps: { runPluginsList, runPluginsSearch },
+      }),
+    ).resolves.toMatchObject({ applied: false });
+
+    expect(runPluginsList).toHaveBeenCalledWith(runtime);
+    expect(runPluginsSearch).toHaveBeenCalledWith("calendar", runtime);
+    expect(lines.join("\n")).toContain("plugin rows");
+    expect(lines.join("\n")).toContain("search rows: calendar");
+    expect(lines.join("\n")).toContain("[crestodian] done: plugins.search");
+  });
+
+  it("installs plugins only after approval and audits the write", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "crestodian-plugin-install-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+    const { runtime, lines } = createCrestodianTestRuntime();
+    const runPluginInstall = vi.fn(async (spec: string, pluginRuntime: RuntimeEnv) => {
+      pluginRuntime.log(`installed ${spec}`);
+    });
+
+    const plan = await executeCrestodianOperation(
+      { kind: "plugin-install", spec: "clawhub:openclaw-demo" },
+      runtime,
+      { deps: { runPluginInstall } },
+    );
+    expect(plan).toMatchObject({
+      applied: false,
+      message: "Plan: install plugin clawhub:openclaw-demo. Say yes to apply.",
+    });
+    expect(runPluginInstall).not.toHaveBeenCalled();
+
+    await expect(
+      executeCrestodianOperation(
+        { kind: "plugin-install", spec: "clawhub:openclaw-demo" },
+        runtime,
+        {
+          approved: true,
+          deps: { runPluginInstall },
+          auditDetails: { rescue: true },
+        },
+      ),
+    ).resolves.toMatchObject({ applied: true });
+
+    expect(runPluginInstall).toHaveBeenCalledWith("clawhub:openclaw-demo", expect.any(Object));
+    expect(lines.join("\n")).toContain("[crestodian] done: plugin.install");
+    const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
+    const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
+    expect(audit).toMatchObject({
+      operation: "plugin.install",
+      summary: "Installed plugin clawhub:openclaw-demo",
+      details: {
+        rescue: true,
+        spec: "clawhub:openclaw-demo",
+      },
+    });
+  });
+
+  it("uninstalls plugins only after approval and audits the write", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "crestodian-plugin-uninstall-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+    const { runtime, lines } = createCrestodianTestRuntime();
+    const runPluginUninstall = vi.fn(async (pluginId: string, pluginRuntime: RuntimeEnv) => {
+      pluginRuntime.log(`uninstalled ${pluginId}`);
+    });
+
+    const plan = await executeCrestodianOperation(
+      { kind: "plugin-uninstall", pluginId: "openclaw-demo" },
+      runtime,
+      { deps: { runPluginUninstall } },
+    );
+    expect(plan).toMatchObject({
+      applied: false,
+      message: "Plan: uninstall plugin openclaw-demo. Say yes to apply.",
+    });
+    expect(runPluginUninstall).not.toHaveBeenCalled();
+
+    await expect(
+      executeCrestodianOperation({ kind: "plugin-uninstall", pluginId: "openclaw-demo" }, runtime, {
+        approved: true,
+        deps: { runPluginUninstall },
+        auditDetails: { rescue: true },
+      }),
+    ).resolves.toMatchObject({ applied: true });
+
+    expect(runPluginUninstall).toHaveBeenCalledWith("openclaw-demo", expect.any(Object));
+    expect(lines.join("\n")).toContain("[crestodian] done: plugin.uninstall");
+    const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
+    const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
+    expect(audit).toMatchObject({
+      operation: "plugin.uninstall",
+      summary: "Uninstalled plugin openclaw-demo",
+      details: {
+        rescue: true,
+        pluginId: "openclaw-demo",
       },
     });
   });

@@ -168,6 +168,27 @@ describe("createOpenClawTools TTS config wiring", () => {
     }
   });
 
+  it("keeps direct TTS tool guidance explicit even when the tool is available", async () => {
+    const { __testing, createOpenClawTools } = await import("./openclaw-tools.js");
+    __testing.setDepsForTest({ config: {} });
+
+    try {
+      const tool = createOpenClawTools({
+        disableMessageTool: true,
+        disablePluginTools: true,
+      }).find((candidate) => candidate.name === "tts");
+
+      if (!tool) {
+        throw new Error("missing tts tool");
+      }
+
+      expect(tool.description).toContain("Use only for explicit audio intent");
+      expect(tool.description).toContain("Never use for ordinary text replies");
+    } finally {
+      __testing.setDepsForTest();
+    }
+  });
+
   it("passes the resolved session agent id into the tts tool", async () => {
     const injectedConfig = {
       agents: {

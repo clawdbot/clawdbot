@@ -23,8 +23,6 @@ import {
 } from "./shared.js";
 import { formatConfigChannelsStatusLines } from "./status-config-format.js";
 
-export { formatConfigChannelsStatusLines } from "./status-config-format.js";
-
 export type ChannelsStatusOptions = {
   json?: boolean;
   probe?: boolean;

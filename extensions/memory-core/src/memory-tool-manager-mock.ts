@@ -1,7 +1,7 @@
 import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { vi } from "vitest";
 
-export type SearchImpl = (opts?: {
+type SearchImpl = (opts?: {
   maxResults?: number;
   minScore?: number;
   sessionKey?: string;
@@ -9,7 +9,7 @@ export type SearchImpl = (opts?: {
   onDebug?: (debug: MemorySearchRuntimeDebug) => void;
 }) => Promise<unknown[]>;
 export type MemoryReadParams = { relPath: string; from?: number; lines?: number };
-export type MemoryReadResult = {
+type MemoryReadResult = {
   text: string;
   path: string;
   truncated?: boolean;

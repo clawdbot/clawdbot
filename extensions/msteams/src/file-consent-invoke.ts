@@ -10,7 +10,7 @@ import type { MSTeamsTurnContext } from "./sdk-types.js";
 /**
  * Handle fileConsent/invoke activities for large file uploads.
  */
-export async function handleMSTeamsFileConsentInvoke(
+async function handleMSTeamsFileConsentInvoke(
   context: MSTeamsTurnContext,
   log: MSTeamsMonitorLogger,
 ): Promise<boolean> {

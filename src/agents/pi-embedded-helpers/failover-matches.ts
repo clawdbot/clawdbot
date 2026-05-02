@@ -179,6 +179,8 @@ const ERROR_PATTERNS = {
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
     "payment required",
     "insufficient credits",
+    /used\s+all\s+available\s+credits/i,
+    /(?:monthly\s+)?spend(?:ing)?\s+limit/i,
     /insufficient[_ ]quota/i,
     "credit balance",
     "plans & billing",

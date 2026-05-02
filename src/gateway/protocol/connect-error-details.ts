@@ -277,7 +277,7 @@ export function buildPairingConnectErrorMessage(
     : "pairing required";
 }
 
-export function buildPairingConnectRemediationHint(
+function buildPairingConnectRemediationHint(
   reason: ConnectPairingRequiredReason | undefined,
 ): string {
   return reason

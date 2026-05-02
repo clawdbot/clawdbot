@@ -92,6 +92,7 @@ export async function runCrestodian(
   const outputIsTty = (output as { isTTY?: boolean }).isTTY === true;
   if (!interactive || !inputIsTty || !outputIsTty) {
     runtime.error("Crestodian needs an interactive TTY. Use --message for one command.");
+    runtime.exit(1);
     return;
   }
 

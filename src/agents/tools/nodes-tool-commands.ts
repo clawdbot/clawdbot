@@ -8,9 +8,9 @@ import { callGatewayTool } from "./gateway.js";
 import { POLICY_REDIRECT_INVOKE_COMMANDS } from "./nodes-tool-media.js";
 import { resolveNodeId } from "./nodes-utils.js";
 
-export const BLOCKED_INVOKE_COMMANDS = new Set(["system.run", "system.run.prepare"]);
+const BLOCKED_INVOKE_COMMANDS = new Set(["system.run", "system.run.prepare"]);
 
-export const NODE_READ_ACTION_COMMANDS = {
+const NODE_READ_ACTION_COMMANDS = {
   camera_list: "camera.list",
   notifications_list: "notifications.list",
   device_status: "device.status",
@@ -169,7 +169,7 @@ export async function executeNodeCommandAction(params: {
   throw new Error("Unsupported node command action");
 }
 
-export async function invokeNodeCommandPayload(params: {
+async function invokeNodeCommandPayload(params: {
   gatewayOpts: GatewayCallOptions;
   node: string;
   command: string;

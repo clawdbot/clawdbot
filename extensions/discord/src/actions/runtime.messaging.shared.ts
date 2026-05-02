@@ -12,6 +12,11 @@ import { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
 import { createDiscordActionOptions } from "./runtime.shared.js";
 
 export type DiscordMessagingActionOptions = {
+  mediaAccess?: {
+    localRoots?: readonly string[];
+    readFile?: (filePath: string) => Promise<Buffer>;
+    workspaceDir?: string;
+  };
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };

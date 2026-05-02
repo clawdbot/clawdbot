@@ -15,7 +15,7 @@ type LineChannelRuntime = {
   sendMessageLine?: typeof import("./send.js").sendMessageLine;
 };
 
-export type LineRuntime = PluginRuntime & {
+type LineRuntime = PluginRuntime & {
   channel: PluginRuntime["channel"] & {
     line?: LineChannelRuntime;
   };

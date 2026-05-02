@@ -1,8 +1,18 @@
 import { parseByteSize } from "../../cli/parse-bytes.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { normalizeStringifiedOptionalString } from "../../shared/string-coerce.js";
+import {
+  isAcpSessionKey,
+  isCronSessionKey,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+} from "../../sessions/session-key-utils.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringifiedOptionalString,
+} from "../../shared/string-coerce.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
+import { parseSessionThreadInfoFast } from "./thread-info.js";
 import type { SessionEntry } from "./types.js";
 
 const log = createSubsystemLogger("sessions/store");
@@ -176,7 +186,7 @@ export function pruneStaleEntries(
   const cutoffMs = Date.now() - maxAgeMs;
   let pruned = 0;
   for (const [key, entry] of Object.entries(store)) {
-    if (opts.preserveKeys?.has(key)) {
+    if (shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: opts.preserveKeys })) {
       continue;
     }
     if (entry?.updatedAt != null && entry.updatedAt < cutoffMs) {
@@ -195,6 +205,64 @@ function getEntryUpdatedAt(entry?: SessionEntry): number {
   return entry?.updatedAt ?? Number.NEGATIVE_INFINITY;
 }
 
+function isSyntheticSessionMaintenanceKey(sessionKey: string): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const rest = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
+  return (
+    isSubagentSessionKey(sessionKey) ||
+    isAcpSessionKey(sessionKey) ||
+    isCronSessionKey(sessionKey) ||
+    rest.startsWith("hook:") ||
+    rest.startsWith("node:") ||
+    rest === "heartbeat" ||
+    rest.endsWith(":heartbeat") ||
+    rest.includes(":heartbeat:")
+  );
+}
+
+function isTelegramTopicSessionKey(sessionKey: string): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const rest = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
+  return /^telegram:(?:group|channel|direct|dm):.+:topic:[^:]+$/.test(rest);
+}
+
+function isExternalGroupOrChannelSessionKey(sessionKey: string): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const rest = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
+  return /^[^:]+:(?:group|channel):.+$/.test(rest);
+}
+
+export function isProtectedSessionMaintenanceEntry(
+  sessionKey: string,
+  entry: SessionEntry | undefined,
+): boolean {
+  if (isSyntheticSessionMaintenanceKey(sessionKey)) {
+    return false;
+  }
+  if (parseSessionThreadInfoFast(sessionKey).threadId) {
+    return true;
+  }
+  if (isTelegramTopicSessionKey(sessionKey)) {
+    return true;
+  }
+  if (isExternalGroupOrChannelSessionKey(sessionKey)) {
+    return true;
+  }
+  const chatType = normalizeLowercaseStringOrEmpty(entry?.chatType ?? entry?.origin?.chatType);
+  return chatType === "group" || chatType === "channel" || chatType === "thread";
+}
+
+function shouldPreserveMaintenanceEntry(params: {
+  key: string;
+  entry: SessionEntry | undefined;
+  preserveKeys?: ReadonlySet<string>;
+}): boolean {
+  return (
+    params.preserveKeys?.has(params.key) === true ||
+    isProtectedSessionMaintenanceEntry(params.key, params.entry)
+  );
+}
+
 export function getActiveSessionMaintenanceWarning(params: {
   store: Record<string, SessionEntry>;
   activeSessionKey: string;
@@ -208,6 +276,9 @@ export function getActiveSessionMaintenanceWarning(params: {
   }
   const activeEntry = params.store[activeSessionKey];
   if (!activeEntry) {
+    return null;
+  }
+  if (isProtectedSessionMaintenanceEntry(activeSessionKey, activeEntry)) {
     return null;
   }
   const now = params.nowMs ?? Date.now();
@@ -251,6 +322,15 @@ function wouldCapActiveSession(params: {
     return true;
   }
 
+  const protectedCount = params.keys.filter(
+    (key) =>
+      key !== params.activeSessionKey && isProtectedSessionMaintenanceEntry(key, params.store[key]),
+  ).length;
+  const maxRemovableEntries = Math.max(0, params.maxEntries - protectedCount);
+  if (maxRemovableEntries <= 0) {
+    return true;
+  }
+
   const activeUpdatedAt = getEntryUpdatedAt(params.activeEntry);
   let newerOrTieBeforeActive = 0;
   let seenActive = false;
@@ -259,10 +339,13 @@ function wouldCapActiveSession(params: {
       seenActive = true;
       continue;
     }
+    if (isProtectedSessionMaintenanceEntry(key, params.store[key])) {
+      continue;
+    }
     const entryUpdatedAt = getEntryUpdatedAt(params.store[key]);
     if (entryUpdatedAt > activeUpdatedAt || (!seenActive && entryUpdatedAt === activeUpdatedAt)) {
       newerOrTieBeforeActive++;
-      if (newerOrTieBeforeActive >= params.maxEntries) {
+      if (newerOrTieBeforeActive >= maxRemovableEntries) {
         return true;
       }
     }
@@ -286,11 +369,18 @@ export function capEntryCount(
   } = {},
 ): number {
   const maxEntries = overrideMax ?? resolveMaintenanceConfigFromInput().maxEntries;
-  const preservedCount = opts.preserveKeys
-    ? Object.keys(store).filter((key) => opts.preserveKeys?.has(key)).length
-    : 0;
+  const preservedCount = Object.entries(store).filter(([key, entry]) =>
+    shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: opts.preserveKeys }),
+  ).length;
   const maxRemovableEntries = Math.max(0, maxEntries - preservedCount);
-  const keys = Object.keys(store).filter((key) => !opts.preserveKeys?.has(key));
+  const keys = Object.keys(store).filter(
+    (key) =>
+      !shouldPreserveMaintenanceEntry({
+        key,
+        entry: store[key],
+        preserveKeys: opts.preserveKeys,
+      }),
+  );
   if (keys.length <= maxRemovableEntries) {
     return 0;
   }

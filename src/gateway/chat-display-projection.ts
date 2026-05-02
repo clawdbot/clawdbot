@@ -509,7 +509,7 @@ export function projectChatDisplayMessages(
   );
 }
 
-export function limitChatDisplayMessages<T>(messages: T[], maxMessages?: number): T[] {
+function limitChatDisplayMessages<T>(messages: T[], maxMessages?: number): T[] {
   if (
     typeof maxMessages !== "number" ||
     !Number.isFinite(maxMessages) ||

@@ -241,11 +241,8 @@ export async function resolveDeliveryTarget(
 
   let effectiveAllowFrom: string[] | undefined;
   if (mode === "implicit") {
-    const {
-      getLoadedChannelPluginForRead,
-      mapAllowFromEntries,
-      readChannelAllowFromStoreEntriesSync,
-    } = await loadDeliveryTargetRuntime();
+    const { getLoadedChannelPluginForRead, mapAllowFromEntries } =
+      await loadDeliveryTargetRuntime();
     const channelPlugin = getLoadedChannelPluginForRead(channel);
     const resolvedAccountId = normalizeAccountId(accountId);
     const configuredAllowFromRaw = channelPlugin?.config.resolveAllowFrom?.({
@@ -255,12 +252,7 @@ export async function resolveDeliveryTarget(
     const configuredAllowFrom = configuredAllowFromRaw
       ? mapAllowFromEntries(configuredAllowFromRaw)
       : [];
-    const storeAllowFrom = readChannelAllowFromStoreEntriesSync(
-      channel,
-      process.env,
-      resolvedAccountId,
-    );
-    const allowFromOverride = [...new Set([...configuredAllowFrom, ...storeAllowFrom])];
+    const allowFromOverride = [...new Set(configuredAllowFrom)];
     effectiveAllowFrom = allowFromOverride;
 
     if (toCandidate && allowFromOverride.length > 0) {

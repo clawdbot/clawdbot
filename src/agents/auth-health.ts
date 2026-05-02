@@ -10,11 +10,11 @@ import { resolveEffectiveOAuthCredential } from "./auth-profiles/effective-oauth
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import { normalizeProviderId } from "./provider-id.js";
 
-export type AuthProfileSource = "store";
+type AuthProfileSource = "store";
 
 export type AuthProfileHealthStatus = "ok" | "expiring" | "expired" | "missing" | "static";
 
-export type AuthProfileHealth = {
+type AuthProfileHealth = {
   profileId: string;
   provider: string;
   type: "oauth" | "token" | "api_key";
@@ -45,7 +45,7 @@ export type AuthHealthSummary = {
 
 export const DEFAULT_OAUTH_WARN_MS = 24 * 60 * 60 * 1000;
 
-export function resolveAuthProfileSource(_profileId: string): AuthProfileSource {
+function resolveAuthProfileSource(_profileId: string): AuthProfileSource {
   return "store";
 }
 

@@ -18,7 +18,7 @@ const MAX_RELAY_SESSIONS_PER_CONN = 2;
 const MAX_RELAY_SESSIONS_GLOBAL = 64;
 const RELAY_EVENT = "talk.realtime.relay";
 
-export type TalkRealtimeRelayEvent =
+type TalkRealtimeRelayEvent =
   | { relaySessionId: string; type: "ready" }
   | { relaySessionId: string; type: "audio"; audioBase64: string }
   | { relaySessionId: string; type: "clear" }
@@ -50,7 +50,7 @@ type RelaySession = {
   cleanupTimer: ReturnType<typeof setTimeout>;
 };
 
-export type CreateTalkRealtimeRelaySessionParams = {
+type CreateTalkRealtimeRelaySessionParams = {
   context: GatewayRequestContext;
   connId: string;
   provider: RealtimeVoiceProviderPlugin;
@@ -61,7 +61,7 @@ export type CreateTalkRealtimeRelaySessionParams = {
   voice?: string;
 };
 
-export type TalkRealtimeRelaySessionResult = {
+type TalkRealtimeRelaySessionResult = {
   provider: string;
   transport: "gateway-relay";
   relaySessionId: string;

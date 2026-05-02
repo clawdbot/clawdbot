@@ -38,7 +38,7 @@ import {
   isLegacyGroupSessionKey,
 } from "./session-contract.js";
 
-export const WHATSAPP_CHANNEL = "whatsapp" as const;
+const WHATSAPP_CHANNEL = "whatsapp" as const;
 
 const WHATSAPP_GROUP_SCOPE_FIELDS = ["groupPolicy", "groupAllowFrom", "groups"] as const;
 
@@ -123,7 +123,7 @@ const whatsappResolveDmPolicy = createScopedDmSecurityResolver<ResolvedWhatsAppA
   inheritSharedDefaultsFromDefaultAccount: true,
 });
 
-export function createWhatsAppSetupWizardProxy(
+function createWhatsAppSetupWizardProxy(
   loadWizard: () => Promise<ChannelSetupWizard>,
 ): ChannelSetupWizard {
   return createDelegatedSetupWizardProxy({

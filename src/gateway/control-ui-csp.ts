@@ -47,6 +47,6 @@ export function buildControlUiCspHeader(opts?: { inlineScriptHashes?: string[] }
     "img-src 'self' data: blob:",
     "font-src 'self' https://fonts.gstatic.com",
     "worker-src 'self'",
-    "connect-src 'self' ws: wss:",
+    "connect-src 'self' ws: wss: https://api.openai.com",
   ].join("; ");
 }

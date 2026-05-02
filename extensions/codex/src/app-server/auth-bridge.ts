@@ -123,7 +123,7 @@ export async function applyCodexAppServerAuthProfile(params: {
   await params.client.request("account/login/start", loginParams);
 }
 
-export function resolveCodexAppServerAuthProfileLoginParams(params: {
+function resolveCodexAppServerAuthProfileLoginParams(params: {
   agentDir: string;
   authProfileId?: string;
 }): Promise<LoginAccountParams | undefined> {

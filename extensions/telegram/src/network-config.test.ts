@@ -202,31 +202,53 @@ describe("resolveTelegramDnsResultOrderDecision", () => {
       name: "ignores invalid env and config values before applying Node 22 default",
       env: { OPENCLAW_TELEGRAM_DNS_RESULT_ORDER: "bogus" },
       network: { dnsResultOrder: "invalid" } as unknown as TelegramNetworkConfig,
+      defaultResultOrder: "ipv6first",
       nodeMajor: 22,
       expected: { value: "ipv4first", source: "default-node22" },
+    },
+    {
+      name: "inherits process default when env and config are unset",
+      defaultResultOrder: "ipv4first",
+      nodeMajor: 20,
+      expected: { value: "ipv4first", source: "process-default" },
+    },
+    {
+      name: "prefers config over process default",
+      network: { dnsResultOrder: "verbatim" },
+      defaultResultOrder: "ipv4first",
+      nodeMajor: 20,
+      expected: { value: "verbatim", source: "config" },
     },
   ] satisfies Array<{
     name: string;
     env?: NodeJS.ProcessEnv;
     network?: TelegramNetworkConfig;
+    defaultResultOrder?: string | null;
     nodeMajor: number;
     expected: ReturnType<typeof resolveTelegramDnsResultOrderDecision>;
-  }>)("$name", ({ env, network, nodeMajor, expected }) => {
+  }>)("$name", ({ env, network, defaultResultOrder, nodeMajor, expected }) => {
     const decision = resolveTelegramDnsResultOrderDecision({
       env,
       network,
+      defaultResultOrder,
       nodeMajor,
     });
     expect(decision).toEqual(expected);
   });
 
   it("defaults to ipv4first on Node 22", () => {
-    const decision = resolveTelegramDnsResultOrderDecision({ nodeMajor: 22 });
+    const decision = resolveTelegramDnsResultOrderDecision({
+      defaultResultOrder: null,
+      nodeMajor: 22,
+    });
     expect(decision).toEqual({ value: "ipv4first", source: "default-node22" });
   });
 
   it("returns null when no dns decision applies", () => {
-    const decision = resolveTelegramDnsResultOrderDecision({ nodeMajor: 20 });
+    const decision = resolveTelegramDnsResultOrderDecision({
+      defaultResultOrder: null,
+      nodeMajor: 20,
+    });
     expect(decision).toEqual({ value: null });
   });
 });

@@ -15,19 +15,15 @@ type ChannelMediaContractApi = {
 };
 type ChannelMediaRootResolver = keyof ChannelMediaContractApi;
 
-const mediaContractApiByResolver = new Map<string, ChannelMediaContractApi | null>();
-
-function mediaContractCacheKey(channelId: string, resolver: ChannelMediaRootResolver): string {
-  return `${channelId}:${resolver}`;
-}
+const mediaContractApiByChannel = new Map<string, ChannelMediaContractApi | null>();
 
 function loadChannelMediaContractApi(
   channelId: string,
   resolver: ChannelMediaRootResolver,
 ): ChannelMediaContractApi | undefined {
-  const cacheKey = mediaContractCacheKey(channelId, resolver);
-  if (mediaContractApiByResolver.has(cacheKey)) {
-    return mediaContractApiByResolver.get(cacheKey) ?? undefined;
+  if (mediaContractApiByChannel.has(channelId)) {
+    const cached = mediaContractApiByChannel.get(channelId);
+    return cached && typeof cached[resolver] === "function" ? cached : undefined;
   }
 
   try {
@@ -35,10 +31,11 @@ function loadChannelMediaContractApi(
       dirName: channelId,
       artifactBasename: "media-contract-api.js",
     });
+    mediaContractApiByChannel.set(channelId, loaded);
     if (typeof loaded[resolver] === "function") {
-      mediaContractApiByResolver.set(cacheKey, loaded);
       return loaded;
     }
+    return undefined;
   } catch (error) {
     if (
       !(
@@ -50,7 +47,7 @@ function loadChannelMediaContractApi(
     }
   }
 
-  mediaContractApiByResolver.set(cacheKey, null);
+  mediaContractApiByChannel.set(channelId, null);
   return undefined;
 }
 

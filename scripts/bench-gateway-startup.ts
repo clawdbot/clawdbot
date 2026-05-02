@@ -138,16 +138,6 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
     config: BASE_CONFIG,
   },
   {
-    id: "fiftyPluginsFutureStrict",
-    name: "gateway, 50 manifest plugins with legacy startup fallback disabled",
-    env: {
-      OPENCLAW_DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS: "1",
-      OPENCLAW_SKIP_CHANNELS: "1",
-    },
-    pluginCount: 50,
-    config: BASE_CONFIG,
-  },
-  {
     id: "fiftyStartupLazyPlugins",
     name: "gateway, 50 startup-lazy manifest plugins",
     env: { OPENCLAW_SKIP_CHANNELS: "1" },

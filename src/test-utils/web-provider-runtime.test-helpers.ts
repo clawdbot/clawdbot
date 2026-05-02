@@ -12,6 +12,7 @@ type CommonWebProviderTestParams = {
   requiresCredential?: boolean;
   getCredentialValue?: (config?: Record<string, unknown>) => unknown;
   getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
+  getConfiguredCredentialFallback?: PluginWebSearchProviderEntry["getConfiguredCredentialFallback"];
 };
 
 export type WebSearchTestProviderParams = CommonWebProviderTestParams & {
@@ -37,6 +38,7 @@ function createCommonProviderFields(params: CommonWebProviderTestParams) {
     getCredentialValue: params.getCredentialValue ?? (() => undefined),
     setCredentialValue: () => {},
     getConfiguredCredentialValue: params.getConfiguredCredentialValue,
+    getConfiguredCredentialFallback: params.getConfiguredCredentialFallback,
   };
 }
 

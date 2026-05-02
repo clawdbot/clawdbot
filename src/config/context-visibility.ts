@@ -8,7 +8,7 @@ type ChannelContextVisibilityConfig = {
   accounts?: Record<string, { contextVisibility?: ContextVisibilityMode }>;
 };
 
-export type ContextVisibilityDefaultsConfig = {
+type ContextVisibilityDefaultsConfig = {
   channels?: {
     defaults?: {
       contextVisibility?: ContextVisibilityMode;

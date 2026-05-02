@@ -20,7 +20,7 @@ export function noteSourceInstallIssues(root: string | null) {
 
   if (fs.existsSync(nodeModules) && !fs.existsSync(pnpmStore)) {
     warnings.push(
-      "- node_modules was not installed by pnpm (missing node_modules/.pnpm). Run: pnpm install",
+      "- node_modules was not installed by pnpm (missing node_modules/.pnpm). Run: pnpm install so bundled plugins can load package-local dependencies.",
     );
   }
 
@@ -31,7 +31,7 @@ export function noteSourceInstallIssues(root: string | null) {
   }
 
   if (fs.existsSync(srcEntry) && !fs.existsSync(tsxBin)) {
-    warnings.push("- tsx binary is missing for source runs. Run: pnpm install");
+    warnings.push("- tsx binary is missing for source runs. Run: pnpm install.");
   }
 
   if (warnings.length > 0) {

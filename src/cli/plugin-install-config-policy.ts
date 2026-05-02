@@ -6,7 +6,7 @@ import { loadPluginManifest } from "../plugins/manifest.js";
 import { resolveUserPath } from "../utils.js";
 import { parseNpmPrefixSpec, resolveFileNpmSpecToLocalPath } from "./plugins-command-helpers.js";
 
-export type PluginInstallInvalidConfigPolicy = "deny" | "allow-bundled-recovery";
+type PluginInstallInvalidConfigPolicy = "deny" | "allow-bundled-recovery";
 
 export type PluginInstallRequestContext = {
   rawSpec: string;

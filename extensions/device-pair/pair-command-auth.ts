@@ -3,7 +3,7 @@ type PairingCommandAuthParams = {
   gatewayClientScopes?: readonly string[] | null;
 };
 
-export type PairingCommandAuthState = {
+type PairingCommandAuthState = {
   isInternalGatewayCaller: boolean;
   isMissingInternalPairingPrivilege: boolean;
   approvalCallerScopes?: readonly string[];

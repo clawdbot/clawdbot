@@ -5,7 +5,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { createEmptyUninstallActions } from "../plugins/uninstall.js";
-import { createCliRuntimeCapture } from "./test-runtime-capture.js";
+import type { CliMockOutputRuntime } from "./test-runtime-capture.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
@@ -81,8 +81,40 @@ export const installHooksFromNpmSpec: AsyncUnknownMock = vi.fn();
 export const installHooksFromPath: AsyncUnknownMock = vi.fn();
 export const recordHookInstall: UnknownMock = vi.fn();
 
-const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } =
-  createCliRuntimeCapture();
+const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } = vi.hoisted(() => {
+  const runtimeLogs: string[] = [];
+  const runtimeErrors: string[] = [];
+  const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
+  const normalizeStdout = (value: string) => (value.endsWith("\n") ? value.slice(0, -1) : value);
+  const stringifyJson = (value: unknown, space = 2) =>
+    JSON.stringify(value, null, space > 0 ? space : undefined);
+  const defaultRuntime = {
+    log: vi.fn((...args: unknown[]) => {
+      runtimeLogs.push(stringifyArgs(args));
+    }),
+    error: vi.fn((...args: unknown[]) => {
+      runtimeErrors.push(stringifyArgs(args));
+    }),
+    writeStdout: vi.fn((value: string) => {
+      defaultRuntime.log(normalizeStdout(value));
+    }),
+    writeJson: vi.fn((value: unknown, space = 2) => {
+      defaultRuntime.log(stringifyJson(value, space));
+    }),
+    exit: vi.fn((code: number) => {
+      throw new Error(`__exit__:${code}`);
+    }),
+  } as CliMockOutputRuntime;
+  return {
+    defaultRuntime,
+    runtimeLogs,
+    runtimeErrors,
+    resetRuntimeCapture: () => {
+      runtimeLogs.length = 0;
+      runtimeErrors.length = 0;
+    },
+  };
+});
 
 export { runtimeErrors, runtimeLogs };
 
@@ -119,6 +151,8 @@ function restoreRuntimeCaptureMocks() {
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime,
+  writeRuntimeJson: (runtime: CliMockOutputRuntime, value: unknown, space = 2) =>
+    runtime.writeJson(value, space),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -292,6 +326,11 @@ vi.mock("../plugins/plugin-registry.js", () => ({
     invokeMock<unknown[], unknown>(loadPluginManifestRegistry, ...args)) as (
     ...args: unknown[]
   ) => unknown,
+  loadPluginRegistrySnapshotWithMetadata: () => ({
+    source: "derived",
+    snapshot: { plugins: [] },
+    diagnostics: [],
+  }),
   inspectPluginRegistry: ((
     ...args: Parameters<(typeof import("../plugins/plugin-registry.js"))["inspectPluginRegistry"]>
   ) =>
@@ -607,9 +646,11 @@ export function resetPluginsCliTestState() {
     ok: false,
     error: "marketplace install failed",
   });
-  enablePluginInConfig.mockImplementation(((cfg: OpenClawConfig) => ({ config: cfg })) as (
-    ...args: unknown[]
-  ) => unknown);
+  enablePluginInConfig.mockImplementation(((cfg: OpenClawConfig, pluginId: string) => ({
+    config: cfg,
+    enabled: true,
+    pluginId,
+  })) as (...args: unknown[]) => unknown);
   recordPluginInstall.mockImplementation(
     ((cfg: OpenClawConfig) => cfg) as (...args: unknown[]) => unknown,
   );

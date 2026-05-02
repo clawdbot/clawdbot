@@ -33,3 +33,12 @@ export function resolveTelegramRequestTimeoutMs(method: string | null): number |
   }
   return TELEGRAM_REQUEST_TIMEOUTS_MS[method as keyof typeof TELEGRAM_REQUEST_TIMEOUTS_MS];
 }
+
+export function resolveTelegramStartupProbeTimeoutMs(timeoutSeconds: unknown): number {
+  const getMeTimeoutMs = resolveTelegramRequestTimeoutMs("getme") ?? 15_000;
+  if (typeof timeoutSeconds !== "number" || !Number.isFinite(timeoutSeconds)) {
+    return getMeTimeoutMs;
+  }
+  const configuredTimeoutMs = Math.max(1, Math.floor(timeoutSeconds)) * 1000;
+  return Math.max(getMeTimeoutMs, configuredTimeoutMs);
+}

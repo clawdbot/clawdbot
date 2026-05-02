@@ -1,6 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../../cron/types.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 
 const getRuntimeConfig = vi.hoisted(() =>
   vi.fn<() => OpenClawConfig>(() => ({}) as OpenClawConfig),
@@ -16,6 +22,53 @@ vi.mock("../../config/config.js", async () => {
 });
 
 import { cronHandlers } from "./cron.js";
+
+function createPrefixOnlyChannelPlugin(
+  id: string,
+  targetPrefixes: readonly string[],
+  aliases?: readonly string[],
+): ChannelPlugin {
+  const base = createChannelTestPluginBase({ id });
+  return {
+    ...base,
+    meta: {
+      ...base.meta,
+      ...(aliases ? { aliases } : {}),
+    },
+    messaging: { targetPrefixes },
+  };
+}
+
+function setCronValidationTestRegistry(): void {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "telegram",
+        plugin: createPrefixOnlyChannelPlugin("telegram", ["telegram", "tg"]),
+        source: "test:telegram",
+      },
+      {
+        pluginId: "slack",
+        plugin: createPrefixOnlyChannelPlugin("slack", ["slack"]),
+        source: "test:slack",
+      },
+      {
+        pluginId: "msteams",
+        plugin: createPrefixOnlyChannelPlugin("msteams", ["msteams", "teams"], ["teams"]),
+        source: "test:msteams",
+      },
+      {
+        pluginId: "synology-chat",
+        plugin: createPrefixOnlyChannelPlugin("synology-chat", [
+          "synology-chat",
+          "synology_chat",
+          "synology",
+        ]),
+        source: "test:synology-chat",
+      },
+    ]),
+  );
+}
 
 function createCronContext(currentJob?: CronJob) {
   return {
@@ -80,6 +133,11 @@ function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
 describe("cron method validation", () => {
   beforeEach(() => {
     getRuntimeConfig.mockReset().mockReturnValue({} as OpenClawConfig);
+    setCronValidationTestRegistry();
+  });
+
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
   });
 
   it("accepts threadId on announce delivery add params", async () => {
@@ -207,6 +265,195 @@ describe("cron method validation", () => {
       undefined,
       expect.objectContaining({
         message: expect.stringContaining("delivery.channel is required"),
+      }),
+    );
+  });
+
+  it("accepts provider-prefixed announce target without delivery.channel when multiple channels are configured", async () => {
+    getRuntimeConfig.mockReturnValue({
+      session: {
+        mainKey: "main",
+      },
+      channels: {
+        telegram: {
+          botToken: "telegram-token",
+        },
+        slack: {
+          botToken: "xoxb-slack-token",
+          appToken: "xapp-slack-token",
+        },
+      },
+      plugins: {
+        entries: {
+          telegram: { enabled: true },
+          slack: { enabled: true },
+        },
+      },
+    } as OpenClawConfig);
+
+    const { context, respond } = await invokeCronAdd({
+      name: "prefixed announce add",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "hello" },
+      delivery: { mode: "announce", to: "telegram:123" },
+    });
+
+    expect(context.cron.add).toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(true, { id: "cron-1" }, undefined);
+  });
+
+  it("rejects announce targets prefixed for a different explicit delivery channel", async () => {
+    getRuntimeConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          botToken: "telegram-token",
+        },
+        slack: {
+          botToken: "xoxb-slack-token",
+          appToken: "xapp-slack-token",
+        },
+      },
+      plugins: {
+        entries: {
+          telegram: { enabled: true },
+          slack: { enabled: true },
+        },
+      },
+    } as OpenClawConfig);
+
+    const { context, respond } = await invokeCronAdd({
+      name: "mismatched announce add",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "hello" },
+      delivery: { mode: "announce", channel: "slack", to: "telegram:123" },
+    });
+
+    expect(context.cron.add).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("belongs to telegram, not slack"),
+      }),
+    );
+  });
+
+  it("accepts provider-prefixed announce targets when delivery.channel uses a channel alias", async () => {
+    getRuntimeConfig.mockReturnValue({
+      channels: {
+        msteams: {
+          botToken: "teams-token",
+        },
+      },
+      plugins: {
+        entries: {
+          msteams: { enabled: true },
+        },
+      },
+    } as OpenClawConfig);
+
+    for (const to of ["teams:19:meeting_abc@thread.tacv2", "msteams:19:meeting_abc@thread.tacv2"]) {
+      const { context, respond } = await invokeCronAdd({
+        name: `aliased announce add ${to}`,
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "hello" },
+        delivery: {
+          mode: "announce",
+          channel: "teams",
+          to,
+        },
+      });
+
+      expect(context.cron.add).toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(true, { id: "cron-1" }, undefined);
+    }
+  });
+
+  it("validates announce delivery patches that omit mode", async () => {
+    getRuntimeConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          botToken: "telegram-token",
+        },
+        slack: {
+          botToken: "xoxb-slack-token",
+          appToken: "xapp-slack-token",
+        },
+      },
+      plugins: {
+        entries: {
+          telegram: { enabled: true },
+          slack: { enabled: true },
+        },
+      },
+    } as OpenClawConfig);
+
+    const { context, respond } = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: {
+          delivery: { channel: "slack", to: "telegram:123" },
+        },
+      },
+      createCronJob({
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      }),
+    );
+
+    expect(context.cron.update).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("belongs to telegram, not slack"),
+      }),
+    );
+  });
+
+  it("rejects underscored provider prefixes for a different explicit delivery channel", async () => {
+    getRuntimeConfig.mockReturnValue({
+      channels: {
+        slack: {
+          botToken: "xoxb-slack-token",
+          appToken: "xapp-slack-token",
+        },
+        "synology-chat": {
+          token: "synology-token",
+        },
+      },
+      plugins: {
+        entries: {
+          slack: { enabled: true },
+          "synology-chat": { enabled: true },
+        },
+      },
+    } as OpenClawConfig);
+
+    const { context, respond } = await invokeCronAdd({
+      name: "underscored mismatch add",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "hello" },
+      delivery: { mode: "announce", channel: "slack", to: "synology_chat:123" },
+    });
+
+    expect(context.cron.add).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("belongs to synology-chat, not slack"),
       }),
     );
   });

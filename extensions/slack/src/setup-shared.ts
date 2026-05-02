@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "./channel-api.js";
 
 export const SLACK_CHANNEL = "slack" as const;
 
-function buildSlackManifest(botName: string) {
+export function buildSlackManifest(botName = "OpenClaw") {
   const safeName = botName.trim() || "OpenClaw";
   const manifest = {
     display_information: {
@@ -56,6 +56,7 @@ function buildSlackManifest(botName: string) {
           "pins:write",
           "reactions:read",
           "reactions:write",
+          "usergroups:read",
           "users:read",
         ],
       },
@@ -84,18 +85,16 @@ function buildSlackManifest(botName: string) {
   return JSON.stringify(manifest, null, 2);
 }
 
-export function buildSlackSetupLines(botName = "OpenClaw"): string[] {
+export function buildSlackSetupLines(): string[] {
   return [
     "1) Slack API -> Create App -> From scratch or From manifest (with the JSON below)",
     "2) Add Socket Mode + enable it to get the app-level token (xapp-...)",
     "3) Install App to workspace to get the xoxb- bot token",
     "4) Enable Event Subscriptions (socket) for message and App Home events",
     "5) App Home -> enable the Home tab and Messages tab for DMs",
+    "Manifest JSON follows as plain text for copy/paste.",
     "Tip: set SLACK_BOT_TOKEN + SLACK_APP_TOKEN in your env.",
     `Docs: ${formatDocsLink("/slack", "slack")}`,
-    "",
-    "Manifest (JSON):",
-    buildSlackManifest(botName),
   ];
 }
 

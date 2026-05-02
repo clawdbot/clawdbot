@@ -37,7 +37,7 @@ export type LiveTransportQaCliRegistration = {
   register(qa: Command): void;
 };
 
-export type LiveTransportQaCredentialCliOptions = {
+type LiveTransportQaCredentialCliOptions = {
   sourceDescription?: string;
   roleDescription?: string;
 };
@@ -50,7 +50,7 @@ export function createLazyCliRuntimeLoader<T>(load: () => Promise<T>) {
   };
 }
 
-export function mapLiveTransportQaCommanderOptions(
+function mapLiveTransportQaCommanderOptions(
   opts: LiveTransportQaCommanderOptions,
 ): LiveTransportQaCommandOptions {
   return {
@@ -69,7 +69,7 @@ export function mapLiveTransportQaCommanderOptions(
   };
 }
 
-export function registerLiveTransportQaCli(params: {
+function registerLiveTransportQaCli(params: {
   qa: Command;
   commandName: string;
   credentialOptions?: LiveTransportQaCredentialCliOptions;

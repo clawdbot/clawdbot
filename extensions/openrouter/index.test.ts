@@ -218,4 +218,111 @@ describe("openrouter provider hooks", () => {
     expect(capturedPayload).toEqual({});
     expect(baseStreamFn).toHaveBeenCalledOnce();
   });
+
+  it("strips OpenRouter-routed Anthropic assistant prefill when reasoning is enabled", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    let capturedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn = vi.fn(
+      (
+        ...args: Parameters<import("@mariozechner/pi-agent-core").StreamFn>
+      ): ReturnType<import("@mariozechner/pi-agent-core").StreamFn> => {
+        const payload = {
+          messages: [
+            { role: "user", content: "Return JSON." },
+            { role: "assistant", content: "{" },
+          ],
+        };
+        void args[2]?.onPayload?.(payload, args[0]);
+        capturedPayload = payload;
+        return { async *[Symbol.asyncIterator]() {} } as never;
+      },
+    );
+
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "openrouter",
+      modelId: "anthropic/claude-opus-4.6",
+      streamFn: baseStreamFn,
+      thinkingLevel: "high",
+    } as never);
+
+    void wrapped?.(
+      {
+        provider: "openrouter",
+        api: "openai-completions",
+        id: "anthropic/claude-opus-4.6",
+        baseUrl: "https://openrouter.ai/api/v1",
+        compat: {},
+      } as never,
+      { messages: [] } as never,
+      {},
+    );
+
+    expect(capturedPayload).toMatchObject({
+      messages: [{ role: "user", content: "Return JSON." }],
+      reasoning: { effort: "high" },
+    });
+    expect(baseStreamFn).toHaveBeenCalledOnce();
+  });
+
+  it("keeps OpenRouter Anthropic prefill when reasoning is disabled or the route is custom", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn = vi.fn(
+      (
+        ...args: Parameters<import("@mariozechner/pi-agent-core").StreamFn>
+      ): ReturnType<import("@mariozechner/pi-agent-core").StreamFn> => {
+        const payload = {
+          messages: [
+            { role: "user", content: "Return JSON." },
+            { role: "assistant", content: "{" },
+          ],
+        };
+        void args[2]?.onPayload?.(payload, args[0]);
+        payloads.push(payload);
+        return { async *[Symbol.asyncIterator]() {} } as never;
+      },
+    );
+
+    const disabled = provider.wrapStreamFn?.({
+      provider: "openrouter",
+      modelId: "anthropic/claude-opus-4.6",
+      streamFn: baseStreamFn,
+      thinkingLevel: "off",
+    } as never);
+    void disabled?.(
+      {
+        provider: "openrouter",
+        api: "openai-completions",
+        id: "anthropic/claude-opus-4.6",
+        baseUrl: "https://openrouter.ai/api/v1",
+        compat: {},
+      } as never,
+      { messages: [] } as never,
+      {},
+    );
+
+    const customRoute = provider.wrapStreamFn?.({
+      provider: "openrouter",
+      modelId: "anthropic/claude-opus-4.6",
+      streamFn: baseStreamFn,
+      thinkingLevel: "high",
+    } as never);
+    void customRoute?.(
+      {
+        provider: "openrouter",
+        api: "openai-completions",
+        id: "anthropic/claude-opus-4.6",
+        baseUrl: "https://proxy.example.com/v1",
+        compat: {},
+      } as never,
+      { messages: [] } as never,
+      {},
+    );
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.messages).toHaveLength(2);
+    expect(payloads[0]).not.toHaveProperty("reasoning");
+    expect(payloads[1]?.messages).toHaveLength(2);
+    expect(payloads[1]).toMatchObject({ reasoning: { effort: "high" } });
+  });
 });

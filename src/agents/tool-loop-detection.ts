@@ -6,14 +6,14 @@ import { isPlainObject } from "../utils.js";
 
 const log = createSubsystemLogger("agents/loop-detection");
 
-export type LoopDetectorKind =
+type LoopDetectorKind =
   | "generic_repeat"
   | "unknown_tool_repeat"
   | "known_poll_no_progress"
   | "global_circuit_breaker"
   | "ping_pong";
 
-export type LoopDetectionResult =
+type LoopDetectionResult =
   | { stuck: false }
   | {
       stuck: true;
@@ -58,7 +58,7 @@ type ResolvedLoopDetectionConfig = {
   };
 };
 
-export type ToolLoopDetectionScope = {
+type ToolLoopDetectionScope = {
   runId?: string;
 };
 

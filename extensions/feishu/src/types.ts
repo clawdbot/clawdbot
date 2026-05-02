@@ -11,7 +11,7 @@ export type FeishuDefaultAccountSelectionSource =
   | "explicit-default"
   | "mapped-default"
   | "fallback";
-export type FeishuAccountSelectionSource = "explicit" | FeishuDefaultAccountSelectionSource;
+type FeishuAccountSelectionSource = "explicit" | FeishuDefaultAccountSelectionSource;
 
 export type ResolvedFeishuAccount = {
   accountId: string;

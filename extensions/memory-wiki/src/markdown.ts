@@ -7,13 +7,13 @@ import {
 } from "openclaw/plugin-sdk/text-runtime";
 import YAML from "yaml";
 
-export const WIKI_PAGE_KINDS = ["entity", "concept", "source", "synthesis", "report"] as const;
+const WIKI_PAGE_KINDS = ["entity", "concept", "source", "synthesis", "report"] as const;
 export const WIKI_RELATED_START_MARKER = "<!-- openclaw:wiki:related:start -->";
 export const WIKI_RELATED_END_MARKER = "<!-- openclaw:wiki:related:end -->";
 
 export type WikiPageKind = (typeof WIKI_PAGE_KINDS)[number];
 
-export type ParsedWikiMarkdown = {
+type ParsedWikiMarkdown = {
   frontmatter: Record<string, unknown>;
   body: string;
 };
@@ -39,7 +39,7 @@ export type WikiClaim = {
   updatedAt?: string;
 };
 
-export type WikiPersonCard = {
+type WikiPersonCard = {
   canonicalId?: string;
   handles: string[];
   socials: string[];
@@ -180,7 +180,7 @@ export function renderWikiMarkdown(params: {
   return `---\n${frontmatter}\n---\n\n${params.body.trimStart()}`;
 }
 
-export function extractTitleFromMarkdown(body: string): string | undefined {
+function extractTitleFromMarkdown(body: string): string | undefined {
   const match = body.match(/^#\s+(.+?)\s*$/m);
   return normalizeOptionalString(match?.[1]);
 }
@@ -365,7 +365,7 @@ function normalizeWikiRelationships(value: unknown): WikiRelationship[] {
   });
 }
 
-export function extractWikiLinks(markdown: string): string[] {
+function extractWikiLinks(markdown: string): string[] {
   const searchable = markdown.replace(RELATED_BLOCK_PATTERN, "");
   const links: string[] = [];
   for (const match of searchable.matchAll(OBSIDIAN_LINK_PATTERN)) {

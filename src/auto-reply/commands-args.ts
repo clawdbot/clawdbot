@@ -4,7 +4,7 @@ import {
 } from "../shared/string-coerce.js";
 import type { CommandArgValues } from "./commands-registry.types.js";
 
-export type CommandArgsFormatter = (values: CommandArgValues) => string | undefined;
+type CommandArgsFormatter = (values: CommandArgValues) => string | undefined;
 
 function normalizeArgValue(value: unknown): string | undefined {
   if (value == null) {

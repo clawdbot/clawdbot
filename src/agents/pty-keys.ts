@@ -102,13 +102,13 @@ const modifiableNamedKeys = new Set([
   "dc",
 ]);
 
-export type KeyEncodingRequest = {
+type KeyEncodingRequest = {
   keys?: string[];
   hex?: string[];
   literal?: string;
 };
 
-export type KeyEncodingResult = {
+type KeyEncodingResult = {
   data: string;
   warnings: string[];
 };

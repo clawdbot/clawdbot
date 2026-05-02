@@ -47,7 +47,7 @@ describe("command-execution-startup", () => {
         hideBanner: false,
         skipConfigGuard: true,
         loadPlugins: false,
-        pluginRegistry: { scope: "channels", installBundledRuntimeDeps: false },
+        pluginRegistry: { scope: "channels" },
       },
     });
   });
@@ -153,7 +153,7 @@ describe("command-execution-startup", () => {
         hideBanner: false,
         skipConfigGuard: true,
         loadPlugins: false,
-        pluginRegistry: { scope: "channels", installBundledRuntimeDeps: false },
+        pluginRegistry: { scope: "channels" },
       },
     });
 
@@ -163,7 +163,7 @@ describe("command-execution-startup", () => {
       suppressDoctorStdout: true,
       allowInvalid: undefined,
       loadPlugins: false,
-      pluginRegistry: { scope: "channels", installBundledRuntimeDeps: false },
+      pluginRegistry: { scope: "channels" },
       skipConfigGuard: true,
     });
 

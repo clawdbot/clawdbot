@@ -1,4 +1,4 @@
-export type MediaUnderstandingSkipReason =
+type MediaUnderstandingSkipReason =
   | "maxBytes"
   | "timeout"
   | "unsupported"

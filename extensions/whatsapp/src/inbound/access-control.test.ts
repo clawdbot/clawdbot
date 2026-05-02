@@ -59,6 +59,29 @@ async function checkCommandAuthorizedForDm(params: {
   });
 }
 
+async function checkCommandAuthorizedForGroup(params: {
+  cfg: Record<string, unknown>;
+  accountId?: string;
+  from?: string;
+  senderE164?: string;
+  selfE164?: string;
+}) {
+  return await resolveWhatsAppCommandAuthorized({
+    cfg: params.cfg as never,
+    msg: {
+      accountId: params.accountId ?? "work",
+      chatType: "group",
+      from: params.from ?? "120363401234567890@g.us",
+      conversationId: params.from ?? "120363401234567890@g.us",
+      chatId: params.from ?? "120363401234567890@g.us",
+      senderE164: params.senderE164 ?? "+15550001111",
+      selfE164: params.selfE164 ?? "+15550009999",
+      body: "/status",
+      to: params.selfE164 ?? "+15550009999",
+    } as never,
+  });
+}
+
 describe("checkInboundAccessControl pairing grace", () => {
   async function runPairingGraceCase(messageTimestampMs: number) {
     const connectedAtMs = 1_000_000;
@@ -199,6 +222,94 @@ describe("WhatsApp dmPolicy precedence", () => {
       senderE164: "+15550009999",
       selfE164: "+15550009999",
     });
+
+    expect(result.allowed).toBe(true);
+    expect(commandAuthorized).toBe(true);
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+    expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("allows DMs from generic message sender access groups", async () => {
+    const cfg = {
+      accessGroups: {
+        owners: {
+          type: "message.senders",
+          members: {
+            whatsapp: ["+15550001111"],
+          },
+        },
+      },
+      channels: {
+        whatsapp: {
+          dmPolicy: "allowlist",
+          accounts: {
+            work: {
+              allowFrom: ["accessGroup:owners"],
+            },
+          },
+        },
+      },
+    };
+    setAccessControlTestConfig(cfg);
+
+    const result = await checkInboundAccessControl({
+      cfg: getAccessControlTestConfig() as never,
+      accountId: "work",
+      from: "+15550001111",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      group: false,
+      pushName: "Sam",
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "15550001111@s.whatsapp.net",
+    });
+    const commandAuthorized = await checkCommandAuthorizedForDm({ cfg });
+
+    expect(result.allowed).toBe(true);
+    expect(commandAuthorized).toBe(true);
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+    expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("allows group messages from generic message sender access groups", async () => {
+    const cfg = {
+      accessGroups: {
+        operators: {
+          type: "message.senders",
+          members: {
+            whatsapp: ["+15550001111"],
+          },
+        },
+      },
+      channels: {
+        whatsapp: {
+          dmPolicy: "allowlist",
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["accessGroup:operators"],
+          accounts: {
+            work: {
+              allowFrom: ["+15559999999"],
+            },
+          },
+        },
+      },
+    };
+    setAccessControlTestConfig(cfg);
+
+    const result = await checkInboundAccessControl({
+      cfg: getAccessControlTestConfig() as never,
+      accountId: "work",
+      from: "120363401234567890@g.us",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      group: true,
+      pushName: "Sam",
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "120363401234567890@g.us",
+    });
+    const commandAuthorized = await checkCommandAuthorizedForGroup({ cfg });
 
     expect(result.allowed).toBe(true);
     expect(commandAuthorized).toBe(true);

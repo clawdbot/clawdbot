@@ -21,11 +21,6 @@ const packageJson = JSON.parse(
   readFileSync(new URL("./package.json", import.meta.url), "utf8"),
 ) as {
   dependencies?: Record<string, string>;
-  openclaw?: {
-    bundle?: {
-      stageRuntimeDependencies?: boolean;
-    };
-  };
 };
 
 function manifestComparableWizardFields(choice: {
@@ -64,10 +59,9 @@ function providerWizardByKey() {
 }
 
 describe("OpenAI plugin manifest", () => {
-  it("opts into staging bundled runtime dependencies", () => {
-    expect(packageJson.dependencies?.["@mariozechner/pi-ai"]).toBe("0.70.6");
+  it("keeps runtime dependencies in the package manifest", () => {
+    expect(packageJson.dependencies?.["@mariozechner/pi-ai"]).toBe("0.71.1");
     expect(packageJson.dependencies?.ws).toBe("^8.20.0");
-    expect(packageJson.openclaw?.bundle?.stageRuntimeDependencies).toBe(true);
   });
 
   it("keeps removed Codex CLI import auth choice as a deprecated browser-login alias", () => {

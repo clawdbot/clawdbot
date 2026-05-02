@@ -7,6 +7,7 @@ import {
   resolveClosestAspectRatio,
   resolveClosestResolution,
   resolveClosestSize,
+  throwCapabilityGenerationFailure,
 } from "./runtime-shared.js";
 
 function parseModelRef(raw?: string) {
@@ -218,5 +219,58 @@ describe("media-generation runtime shared normalization", () => {
   it("clamps durations to the closest supported max", () => {
     expect(normalizeDurationToClosestMax(12, 8)).toBe(8);
     expect(normalizeDurationToClosestMax(6, 8)).toBe(6);
+  });
+});
+
+describe("media-generation runtime shared failure summaries", () => {
+  it("collapses abort cascades behind the non-abort failure", () => {
+    expect(() =>
+      throwCapabilityGenerationFailure({
+        capabilityLabel: "music generation",
+        attempts: [
+          {
+            provider: "google",
+            model: "lyria-3-clip-preview",
+            error: "Manually set deadline 1s is too short. Minimum allowed deadline is 10s.",
+          },
+          {
+            provider: "minimax",
+            model: "music-2.6",
+            error: "This operation was aborted",
+          },
+          {
+            provider: "minimax-portal",
+            model: "music-2.6",
+            error: "This operation was aborted",
+          },
+        ],
+        lastError: new Error("This operation was aborted"),
+      }),
+    ).toThrow(
+      "All music generation models failed (3): google/lyria-3-clip-preview: Manually set deadline 1s is too short. Minimum allowed deadline is 10s. | 2 fallback(s) aborted after the request was cancelled or timed out: minimax/music-2.6, minimax-portal/music-2.6",
+    );
+  });
+
+  it("summarizes all-aborted attempts once", () => {
+    expect(() =>
+      throwCapabilityGenerationFailure({
+        capabilityLabel: "music generation",
+        attempts: [
+          {
+            provider: "minimax",
+            model: "music-2.6",
+            error: "This operation was aborted",
+          },
+          {
+            provider: "minimax-portal",
+            model: "music-2.6",
+            error: "This operation was aborted",
+          },
+        ],
+        lastError: new Error("This operation was aborted"),
+      }),
+    ).toThrow(
+      "All music generation models failed (2): 2 fallback(s) aborted after the request was cancelled or timed out: minimax/music-2.6, minimax-portal/music-2.6",
+    );
   });
 });

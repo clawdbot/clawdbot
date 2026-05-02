@@ -19,11 +19,9 @@ import { formatErrorMessage } from "../src/infra/errors.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import {
-  collectBundledPluginRootRuntimeMirrorErrors,
-  collectRootDistBundledRuntimeMirrors,
   collectRuntimeDependencySpecs,
   packageNameFromSpecifier,
-} from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
+} from "./lib/plugin-package-dependencies.mjs";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mjs";
 import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
 
@@ -112,7 +110,6 @@ export function collectInstalledPackageErrors(params: {
 
   errors.push(...collectInstalledContextEngineRuntimeErrors(params.packageRoot));
   errors.push(...collectInstalledRootDependencyManifestErrors(params.packageRoot));
-  errors.push(...collectInstalledMirroredRootDependencyManifestErrors(params.packageRoot));
 
   return errors;
 }
@@ -438,52 +435,6 @@ function readBundledExtensionPackageJsons(packageRoot: string): {
   }
 
   return { manifests, errors };
-}
-
-export function collectInstalledMirroredRootDependencyManifestErrors(
-  packageRoot: string,
-): string[] {
-  const packageJsonPath = join(packageRoot, "package.json");
-  if (!existsSync(packageJsonPath)) {
-    return ["installed package is missing package.json."];
-  }
-
-  const rootPackageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as InstalledPackageJson;
-  const { manifests, errors } = readBundledExtensionPackageJsons(packageRoot);
-  const bundledRuntimeDependencySpecs = new Map<
-    string,
-    { conflicts: Array<{ pluginId: string; spec: string }>; pluginIds: string[]; spec: string }
-  >();
-
-  for (const { id, manifest: extensionPackageJson } of manifests) {
-    const extensionRuntimeDeps = collectRuntimeDependencySpecs(extensionPackageJson);
-    for (const [dependencyName, spec] of extensionRuntimeDeps) {
-      const existing = bundledRuntimeDependencySpecs.get(dependencyName);
-      if (existing) {
-        if (existing.spec !== spec) {
-          existing.conflicts.push({ pluginId: id, spec });
-        } else if (!existing.pluginIds.includes(id)) {
-          existing.pluginIds.push(id);
-        }
-        continue;
-      }
-      bundledRuntimeDependencySpecs.set(dependencyName, { conflicts: [], pluginIds: [id], spec });
-    }
-  }
-
-  const requiredRootMirrors = collectRootDistBundledRuntimeMirrors({
-    bundledRuntimeDependencySpecs,
-    distDir: join(packageRoot, "dist"),
-  });
-  errors.push(
-    ...collectBundledPluginRootRuntimeMirrorErrors({
-      bundledRuntimeDependencySpecs,
-      requiredRootMirrors,
-      rootPackageJson,
-    }),
-  );
-
-  return errors;
 }
 
 function npmExec(args: string[], cwd: string): string {

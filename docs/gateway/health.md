@@ -19,6 +19,12 @@ Short guide to verify channel connectivity without guessing.
 - Send `/status` as a standalone message in WhatsApp/WebChat to get a status reply without invoking the agent.
 - Logs: tail `/tmp/openclaw/openclaw-*.log` and filter for `web-heartbeat`, `web-reconnect`, `web-auto-reply`, `web-inbound`.
 
+For Discord and other chat providers, session rows are not socket liveness.
+`openclaw sessions`, Gateway `sessions.list`, and the agent `sessions_list` tool
+read stored conversation state. A provider can reconnect and show healthy channel
+status before any new session row is materialized. Use the channel status and
+health commands above for live connectivity checks.
+
 ## Deep diagnostics
 
 - Creds on disk: `ls -l ~/.openclaw/credentials/whatsapp/<accountId>/creds.json` (mtime should be recent).

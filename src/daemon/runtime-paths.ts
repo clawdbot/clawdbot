@@ -79,7 +79,7 @@ async function resolveNodeVersion(
   }
 }
 
-export type SystemNodeInfo = {
+type SystemNodeInfo = {
   path: string;
   version: string | null;
   supported: boolean;

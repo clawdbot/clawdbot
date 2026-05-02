@@ -658,6 +658,62 @@ describe("sessions_send gating", () => {
     expect(result.details).toMatchObject({ status: "forbidden" });
   });
 
+  it("rejects direct thread session targets before dispatching an agent run", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all" },
+      },
+    });
+    const threadSessionKey = "agent:main:slack:channel:C123:thread:1710000000.000100";
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-thread-target", {
+      sessionKey: threadSessionKey,
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      sessionKey: threadSessionKey,
+    });
+    expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
+      "cannot target a thread session",
+    );
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects label targets that resolve to canonical thread sessions", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all" },
+      },
+    });
+    const threadSessionKey = "agent:main:discord:channel:123456:thread:987654";
+    callGatewayMock.mockResolvedValueOnce({ key: threadSessionKey });
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-thread-label", {
+      label: "active thread",
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      sessionKey: threadSessionKey,
+    });
+    expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
+      "cannot target a thread session",
+    );
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.resolve" });
+  });
+
   it("does not reuse a stale assistant reply when no new reply appears", async () => {
     const tool = createMainSessionsSendTool();
     let historyCalls = 0;

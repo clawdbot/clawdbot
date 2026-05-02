@@ -49,7 +49,7 @@ const TOOL_MEDIA_SEND_TIMEOUT = 45_000;
 
 // ============ Dependencies ============
 
-export interface OutboundDispatchDeps {
+interface OutboundDispatchDeps {
   runtime: GatewayPluginRuntime;
   cfg: unknown;
   account: GatewayAccount;

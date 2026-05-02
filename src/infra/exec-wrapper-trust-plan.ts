@@ -9,7 +9,7 @@ import {
   unwrapKnownShellMultiplexerInvocation,
 } from "./shell-wrapper-resolution.js";
 
-export type ExecWrapperTrustPlan = {
+type ExecWrapperTrustPlan = {
   argv: string[];
   policyArgv: string[];
   wrapperChain: string[];

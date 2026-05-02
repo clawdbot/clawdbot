@@ -934,57 +934,6 @@ describe("qa bundled plugin dir", () => {
     ).resolves.toBeTruthy();
   });
 
-  it("skips transient runtime dependency artifacts while staging built bundled plugins", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-runtime-deps-"));
-    cleanups.push(async () => {
-      await rm(repoRoot, { recursive: true, force: true });
-    });
-    await writeFile(
-      path.join(repoRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", type: "module" }, null, 2),
-      "utf8",
-    );
-    const pluginDir = path.join(repoRoot, "dist", "extensions", "qa-channel");
-    await mkdir(path.join(pluginDir, ".openclaw-runtime-deps-copy-active", "node_modules"), {
-      recursive: true,
-    });
-    await writeFile(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify({ name: "@openclaw/qa-channel", type: "module" }, null, 2),
-      "utf8",
-    );
-    await writeFile(path.join(pluginDir, "index.js"), "export const ok = true;\n", "utf8");
-    await writeFile(path.join(pluginDir, ".openclaw-runtime-deps.json"), "{}\n", "utf8");
-    await writeFile(path.join(pluginDir, ".openclaw-runtime-deps-stamp.json"), "{}\n", "utf8");
-    await writeFile(
-      path.join(pluginDir, ".openclaw-runtime-deps-copy-active", "node_modules", "transient.js"),
-      "export {};\n",
-      "utf8",
-    );
-    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-runtime-deps-target-"));
-    cleanups.push(async () => {
-      await rm(tempRoot, { recursive: true, force: true });
-    });
-
-    const { bundledPluginsDir } = await __testing.createQaBundledPluginsDir({
-      repoRoot,
-      tempRoot,
-      allowedPluginIds: ["qa-channel"],
-    });
-
-    const stagedPluginDir = path.join(bundledPluginsDir, "qa-channel");
-    await expect(readFile(path.join(stagedPluginDir, "index.js"), "utf8")).resolves.toContain("ok");
-    await expect(lstat(path.join(stagedPluginDir, ".openclaw-runtime-deps.json"))).rejects.toThrow(
-      /ENOENT/u,
-    );
-    await expect(
-      lstat(path.join(stagedPluginDir, ".openclaw-runtime-deps-stamp.json")),
-    ).rejects.toThrow(/ENOENT/u);
-    await expect(
-      lstat(path.join(stagedPluginDir, ".openclaw-runtime-deps-copy-active")),
-    ).rejects.toThrow(/ENOENT/u);
-  });
-
   it("preserves dist-runtime-only root chunks when dist also exists", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-mixed-runtime-"));
     cleanups.push(async () => {

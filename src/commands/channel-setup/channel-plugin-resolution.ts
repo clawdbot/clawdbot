@@ -32,6 +32,7 @@ type ResolveInstallableChannelPluginResult = {
   catalogEntry?: ChannelPluginCatalogEntry;
   configChanged: boolean;
   pluginInstalled: boolean;
+  supportsRequestedCapability?: boolean;
 };
 
 function resolveWorkspaceDir(cfg: OpenClawConfig) {
@@ -52,7 +53,7 @@ function resolveResolvedChannelId(params: {
   return normalizeChannelId(params.catalogEntry.id) ?? (params.catalogEntry.id as ChannelId);
 }
 
-export function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
+function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
   const trimmed = normalizeOptionalLowercaseString(raw);
   if (!trimmed) {
     return undefined;
@@ -76,17 +77,21 @@ export function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | nu
 function findScopedChannelPlugin(
   snapshot: ChannelPluginSnapshot,
   channelId: ChannelId,
+  supports: (plugin: ChannelPlugin) => boolean,
 ): ChannelPlugin | undefined {
-  return (
-    snapshot.channels.find((entry) => entry.plugin.id === channelId)?.plugin ??
-    snapshot.channelSetups.find((entry) => entry.plugin.id === channelId)?.plugin
-  );
+  const runtimePlugin = snapshot.channels.find((entry) => entry.plugin.id === channelId)?.plugin;
+  if (runtimePlugin) {
+    return runtimePlugin;
+  }
+  const setupPlugin = snapshot.channelSetups.find((entry) => entry.plugin.id === channelId)?.plugin;
+  return setupPlugin && supports(setupPlugin) ? setupPlugin : undefined;
 }
 
 function loadScopedChannelPlugin(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
   channelId: ChannelId;
+  supports: (plugin: ChannelPlugin) => boolean;
   pluginId?: string;
   workspaceDir?: string;
 }): ChannelPlugin | undefined {
@@ -97,7 +102,7 @@ function loadScopedChannelPlugin(params: {
     ...(params.pluginId ? { pluginId: params.pluginId } : {}),
     workspaceDir: params.workspaceDir,
   });
-  return findScopedChannelPlugin(snapshot, params.channelId);
+  return findScopedChannelPlugin(snapshot, params.channelId, params.supports);
 }
 
 export async function resolveInstallableChannelPlugin(params: {
@@ -136,7 +141,7 @@ export async function resolveInstallableChannelPlugin(params: {
   }
 
   const existing = getChannelPlugin(channelId);
-  if (existing && supports(existing)) {
+  if (existing) {
     return {
       cfg: nextCfg,
       channelId,
@@ -144,6 +149,7 @@ export async function resolveInstallableChannelPlugin(params: {
       catalogEntry,
       configChanged: false,
       pluginInstalled: false,
+      supportsRequestedCapability: supports(existing),
     };
   }
 
@@ -153,10 +159,11 @@ export async function resolveInstallableChannelPlugin(params: {
       cfg: nextCfg,
       runtime: params.runtime,
       channelId,
+      supports,
       pluginId: resolvedPluginId,
       workspaceDir,
     });
-    if (scoped && supports(scoped)) {
+    if (scoped) {
       return {
         cfg: nextCfg,
         channelId,
@@ -164,6 +171,7 @@ export async function resolveInstallableChannelPlugin(params: {
         catalogEntry,
         configChanged: false,
         pluginInstalled: false,
+        supportsRequestedCapability: supports(scoped),
       };
     }
 
@@ -182,6 +190,7 @@ export async function resolveInstallableChannelPlugin(params: {
             cfg: nextCfg,
             runtime: params.runtime,
             channelId,
+            supports,
             pluginId: installedPluginId,
             workspaceDir: resolveWorkspaceDir(nextCfg),
           })
@@ -196,6 +205,7 @@ export async function resolveInstallableChannelPlugin(params: {
             : catalogEntry,
         configChanged: nextCfg !== params.cfg,
         pluginInstalled: installResult.installed,
+        supportsRequestedCapability: installedPlugin ? supports(installedPlugin) : undefined,
       };
     }
   }

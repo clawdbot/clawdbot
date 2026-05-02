@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect } from "vitest";
 import type { OpenClawConfig } from "../../../../config/config.js";
 import type { RuntimeEnv } from "../../../../runtime.js";
 import type {
@@ -80,18 +80,6 @@ function expectFocusedBindingShape(binding: ChannelFocusedBindingContext) {
   expect(["current", "child"]).toContain(binding.placement);
   expect(typeof binding.labelNoun).toBe("string");
   expect(binding.labelNoun.trim()).not.toBe("");
-}
-
-export function installChannelThreadingContractSuite(params: {
-  plugin: Pick<ChannelPlugin, "id" | "threading">;
-}) {
-  it("exposes the base threading contract", () => {
-    expectChannelThreadingBaseContract(params.plugin);
-  });
-
-  it("keeps threading return values normalized", () => {
-    expectChannelThreadingReturnValuesNormalized(params.plugin);
-  });
 }
 
 export function expectChannelThreadingBaseContract(
@@ -183,17 +171,6 @@ export function expectChannelThreadingReturnValuesNormalized(
   if (focusedBinding) {
     expectFocusedBindingShape(focusedBinding);
   }
-}
-
-export function installChannelDirectoryContractSuite(params: {
-  plugin: Pick<ChannelPlugin, "id" | "directory">;
-  coverage?: "lookups" | "presence";
-  cfg?: OpenClawConfig;
-  accountId?: string;
-}) {
-  it("exposes the base directory contract", async () => {
-    await expectChannelDirectoryBaseContract(params);
-  });
 }
 
 export async function expectChannelDirectoryBaseContract(params: {

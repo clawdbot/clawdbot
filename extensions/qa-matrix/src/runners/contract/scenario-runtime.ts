@@ -123,7 +123,6 @@ import {
   runTopologyScopedTopLevelScenario,
   writeMatrixQaSyncCursor,
   type MatrixQaScenarioContext,
-  type MatrixQaSyncState,
 } from "./scenario-runtime-shared.js";
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 
@@ -135,7 +134,7 @@ export {
   runMatrixQaCanary,
   writeMatrixQaSyncCursor,
 };
-export type { MatrixQaScenarioContext, MatrixQaSyncState };
+export type { MatrixQaScenarioContext };
 
 async function runDriverTopologyScopedScenario(params: {
   context: MatrixQaScenarioContext;

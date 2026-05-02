@@ -207,23 +207,6 @@ function snapshotTree(rootName) {
   return stats;
 }
 
-export function isIgnoredDistRuntimeWatchPath(entry) {
-  return (
-    entry === "dist-runtime/extensions/node_modules" ||
-    entry.startsWith("dist-runtime/extensions/node_modules/")
-  );
-}
-
-function summarizeDistRuntimeAddedPaths(added) {
-  const addedPaths = added.filter((entry) => entry.startsWith("dist-runtime/"));
-  const ignoredDependencyAddedPaths = addedPaths.filter(isIgnoredDistRuntimeWatchPath);
-  const topologyAddedPaths = addedPaths.filter((entry) => !isIgnoredDistRuntimeWatchPath(entry));
-  return {
-    ignoredDependencyAddedPaths,
-    topologyAddedPaths,
-  };
-}
-
 function writeSnapshot(snapshotDir) {
   ensureDir(snapshotDir);
   const pathEntries = [...listTreeEntries("dist"), ...listTreeEntries("dist-runtime")];
@@ -684,10 +667,9 @@ async function main() {
   const post = writeSnapshot(postDir);
   const diff = writeDiffArtifacts(options.outputDir, preDir, postDir);
 
-  const distRuntimeAddedPathSummary = summarizeDistRuntimeAddedPaths(diff.added);
-  const distRuntimeAddedPaths = distRuntimeAddedPathSummary.topologyAddedPaths.length;
-  const distRuntimeIgnoredDependencyAddedPaths =
-    distRuntimeAddedPathSummary.ignoredDependencyAddedPaths.length;
+  const distRuntimeAddedPaths = diff.added.filter((entry) =>
+    entry.startsWith("dist-runtime/"),
+  ).length;
   const distRuntimeFileGrowth = distRuntimeAddedPaths;
   const distRuntimeByteGrowth =
     distRuntimeAddedPaths === 0
@@ -721,7 +703,6 @@ async function main() {
     distRuntimeByteGrowth,
     distRuntimeByteGrowthMax: options.distRuntimeByteGrowthMax,
     distRuntimeAddedPaths,
-    distRuntimeIgnoredDependencyAddedPaths,
     addedPaths: diff.added.length,
     removedPaths: diff.removed.length,
     watchExit: watchResult.exit,

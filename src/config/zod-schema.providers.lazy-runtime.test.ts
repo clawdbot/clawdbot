@@ -1,10 +1,13 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { BundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginManifestChannelConfig } from "../plugins/manifest.js";
 
-const listBundledPluginMetadataMock = vi.hoisted(() =>
-  vi.fn<(options?: unknown) => readonly BundledPluginMetadata[]>(() => []),
+const loadPluginManifestRegistryMock = vi.hoisted(() =>
+  vi.fn<(options?: Record<string, unknown>) => PluginManifestRegistry>(() => ({
+    plugins: [],
+    diagnostics: [],
+  })),
 );
 const collectBundledChannelConfigsMock = vi.hoisted(() =>
   vi.fn<(params: unknown) => Record<string, PluginManifestChannelConfig> | undefined>(
@@ -14,10 +17,25 @@ const collectBundledChannelConfigsMock = vi.hoisted(() =>
 
 describe("ChannelsSchema bundled runtime loading", () => {
   beforeEach(() => {
-    listBundledPluginMetadataMock.mockClear();
+    loadPluginManifestRegistryMock.mockClear();
+    loadPluginManifestRegistryMock.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
     collectBundledChannelConfigsMock.mockClear();
-    vi.doMock("../plugins/bundled-plugin-metadata.js", () => ({
-      listBundledPluginMetadata: (options?: unknown) => listBundledPluginMetadataMock(options),
+    vi.doMock("../plugins/plugin-registry.js", () => ({
+      loadPluginManifestRegistryForPluginRegistry: (options?: Record<string, unknown>) =>
+        loadPluginManifestRegistryMock(options),
+      loadPluginRegistrySnapshotWithMetadata: () => ({
+        source: "derived",
+        snapshot: { plugins: [] },
+        diagnostics: [],
+      }),
+    }));
+    vi.doMock("../plugins/plugin-metadata-snapshot.js", () => ({
+      loadPluginMetadataSnapshot: () => ({
+        manifestRegistry: loadPluginManifestRegistryMock({ includeDisabled: true }),
+      }),
     }));
     vi.doMock("../plugins/bundled-channel-config-metadata.js", () => ({
       collectBundledChannelConfigs: (params: unknown) => collectBundledChannelConfigsMock(params),
@@ -42,18 +60,20 @@ describe("ChannelsSchema bundled runtime loading", () => {
     });
 
     expect(parsed?.defaults?.groupPolicy).toBe("open");
-    expect(listBundledPluginMetadataMock).not.toHaveBeenCalledWith(
+    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalledWith(
       expect.objectContaining({
-        includeChannelConfigs: true,
+        bundledChannelConfigCollector: expect.any(Function),
       }),
     );
   });
 
   it("loads bundled channel runtime discovery only when plugin-owned channel config is present", async () => {
-    listBundledPluginMetadataMock.mockReturnValueOnce([
-      {
-        dirName: "discord",
-        manifest: {
+    loadPluginManifestRegistryMock.mockReturnValueOnce({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "discord",
+          origin: "bundled",
           channels: ["discord"],
           channelConfigs: {
             discord: {
@@ -62,9 +82,9 @@ describe("ChannelsSchema bundled runtime loading", () => {
               },
             },
           },
-        },
-      } as unknown as BundledPluginMetadata,
-    ]);
+        } as unknown as PluginManifestRegistry["plugins"][number],
+      ],
+    });
 
     const runtime = await importFreshModule<typeof import("./zod-schema.providers.js")>(
       import.meta.url,
@@ -75,24 +95,15 @@ describe("ChannelsSchema bundled runtime loading", () => {
       discord: {},
     });
 
-    expect(listBundledPluginMetadataMock.mock.calls).toContainEqual([
+    expect(loadPluginManifestRegistryMock.mock.calls).toContainEqual([
       expect.objectContaining({
-        includeChannelConfigs: false,
-        includeSyntheticChannelConfigs: false,
+        includeDisabled: true,
       }),
     ]);
     expect(collectBundledChannelConfigsMock).not.toHaveBeenCalled();
   });
 
   it("loads a single plugin-owned runtime surface when the manifest omits runtime metadata", async () => {
-    listBundledPluginMetadataMock.mockReturnValueOnce([
-      {
-        dirName: "discord",
-        manifest: {
-          channels: ["discord"],
-        },
-      } as unknown as BundledPluginMetadata,
-    ]);
     collectBundledChannelConfigsMock.mockReturnValueOnce({
       discord: {
         schema: {},
@@ -101,6 +112,18 @@ describe("ChannelsSchema bundled runtime loading", () => {
         },
       },
     });
+    loadPluginManifestRegistryMock.mockImplementationOnce(() => ({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "discord",
+          origin: "bundled",
+          rootDir: "/repo/extensions/discord",
+          channels: ["discord"],
+          channelConfigs: {},
+        } as unknown as PluginManifestRegistry["plugins"][number],
+      ],
+    }));
 
     const runtime = await importFreshModule<typeof import("./zod-schema.providers.js")>(
       import.meta.url,
@@ -111,12 +134,20 @@ describe("ChannelsSchema bundled runtime loading", () => {
       discord: {},
     });
 
-    expect(listBundledPluginMetadataMock.mock.calls).toContainEqual([
+    expect(loadPluginManifestRegistryMock.mock.calls).toContainEqual([
       expect.objectContaining({
-        includeChannelConfigs: false,
-        includeSyntheticChannelConfigs: false,
+        includeDisabled: true,
       }),
     ]);
     expect(collectBundledChannelConfigsMock).toHaveBeenCalledTimes(1);
+    expect(collectBundledChannelConfigsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginDir: "/repo/extensions/discord",
+        manifest: expect.objectContaining({
+          id: "discord",
+          channels: ["discord"],
+        }),
+      }),
+    );
   });
 });

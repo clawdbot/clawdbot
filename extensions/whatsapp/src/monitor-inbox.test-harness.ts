@@ -34,6 +34,7 @@ export const upsertPairingRequestMock = pairingUpsertPairingRequestMock;
 
 export type MockSock = {
   ev: EventEmitter;
+  end: AnyMockFn;
   ws: { close: AnyMockFn };
   sendPresenceUpdate: AnyMockFn;
   sendMessage: AnyMockFn;
@@ -107,6 +108,7 @@ function createMockSock(): MockSock {
   const ev = new EventEmitter();
   return {
     ev,
+    end: vi.fn(),
     ws: { close: vi.fn() },
     sendPresenceUpdate: createResolvedMock(),
     sendMessage: createResolvedMock(),

@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   clearApprovalNativeRouteStateForTest,
@@ -41,6 +42,7 @@ const diagnosticMocks = vi.hoisted(() => ({
   logMessageQueued: vi.fn(),
   logMessageProcessed: vi.fn(),
   logSessionStateChange: vi.fn(),
+  markDiagnosticSessionProgress: vi.fn(),
 }));
 const hookMocks = vi.hoisted(() => ({
   registry: {
@@ -146,6 +148,9 @@ const ttsMocks = vi.hoisted(() => {
     resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
   };
 });
+const transcriptMocks = vi.hoisted(() => ({
+  persistAcpDispatchTranscript: vi.fn(async (_params: unknown) => undefined),
+}));
 const replyMediaPathMocks = vi.hoisted(() => ({
   createReplyMediaPathNormalizer: vi.fn(
     (_params?: unknown) => async (payload: ReplyPayload) => payload,
@@ -339,6 +344,7 @@ vi.mock("../../logging/diagnostic.js", () => ({
   logMessageQueued: diagnosticMocks.logMessageQueued,
   logMessageProcessed: diagnosticMocks.logMessageProcessed,
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
+  markDiagnosticSessionProgress: diagnosticMocks.markDiagnosticSessionProgress,
 }));
 vi.mock("../../config/sessions/thread-info.js", () => ({
   parseSessionThreadInfo: (sessionKey: string | undefined) =>
@@ -472,6 +478,10 @@ vi.mock("../../tts/status-config.js", () => ({
 }));
 vi.mock("./dispatch-acp-tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+}));
+vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
+  persistAcpDispatchTranscript: (params: unknown) =>
+    transcriptMocks.persistAcpDispatchTranscript(params),
 }));
 vi.mock("./dispatch-acp-session.runtime.js", () => ({
   readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
@@ -695,6 +705,7 @@ async function dispatchTwiceWithFreshDispatchers(params: Omit<DispatchReplyArgs,
 
 describe("dispatchReplyFromConfig", () => {
   beforeEach(() => {
+    clearAgentHarnesses();
     const discordTestPlugin = {
       ...createChannelTestPluginBase({
         id: "discord",
@@ -740,6 +751,7 @@ describe("dispatchReplyFromConfig", () => {
     diagnosticMocks.logMessageQueued.mockClear();
     diagnosticMocks.logMessageProcessed.mockClear();
     diagnosticMocks.logSessionStateChange.mockClear();
+    diagnosticMocks.markDiagnosticSessionProgress.mockClear();
     hookMocks.runner.hasHooks.mockClear();
     hookMocks.runner.hasHooks.mockImplementation(
       (hookName?: string) => hookName === "reply_dispatch",
@@ -794,6 +806,7 @@ describe("dispatchReplyFromConfig", () => {
     ttsMocks.resolveTtsConfig.mockReturnValue({
       mode: "final",
     });
+    transcriptMocks.persistAcpDispatchTranscript.mockClear();
     replyMediaPathMocks.createReplyMediaPathNormalizer.mockReset();
     replyMediaPathMocks.createReplyMediaPathNormalizer.mockReturnValue(
       async (payload: ReplyPayload) => payload,
@@ -2798,7 +2811,7 @@ describe("dispatchReplyFromConfig", () => {
       RawBody: "who are you",
       Body: "who are you",
       MessageSid: "msg-claim-1",
-      SessionKey: "agent:main:telegram:group:-10099:77",
+      SessionKey: "agent:main:hook-test",
     });
     const replyResolver = vi.fn(async () => ({ text: "core reply" }) satisfies ReplyPayload);
 
@@ -2829,7 +2842,7 @@ describe("dispatchReplyFromConfig", () => {
       expect.objectContaining({
         type: "message",
         action: "received",
-        sessionKey: "agent:main:telegram:group:-10099:77",
+        sessionKey: "agent:main:hook-test",
       }),
     );
     expect(replyResolver).toHaveBeenCalledTimes(1);
@@ -2947,6 +2960,89 @@ describe("dispatchReplyFromConfig", () => {
         sessionKey: "agent:main:main",
       }),
     );
+  });
+
+  it("marks diagnostic progress for real reply events but not reply start callbacks", async () => {
+    setNoAbort();
+    const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      SessionKey: "agent:main:main",
+      To: "slack:C123",
+    });
+    const onReplyStart = vi.fn(async () => {});
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onReplyStart?.();
+      await opts?.onToolResult?.({ text: "tool progress" });
+      return { text: "hi" };
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyOptions: { onReplyStart },
+      replyResolver,
+    });
+
+    expect(onReplyStart).toHaveBeenCalledTimes(1);
+    expect(diagnosticMocks.markDiagnosticSessionProgress).toHaveBeenCalledTimes(1);
+    expect(diagnosticMocks.markDiagnosticSessionProgress).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+    });
+  });
+
+  it("keeps diagnostic progress when source progress callbacks are suppressed", async () => {
+    setNoAbort();
+    const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "channel",
+      SessionKey: "agent:main:discord:channel:C1",
+      To: "discord:channel:C1",
+    });
+    const callbacks = {
+      toolStart: vi.fn(async () => {}),
+      itemEvent: vi.fn(async () => {}),
+      commandOutput: vi.fn(async () => {}),
+    };
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onToolStart?.({ name: "lookup" });
+      await opts?.onItemEvent?.({ progressText: "working" });
+      await opts?.onCommandOutput?.({ output: "line", status: "running" });
+      return { text: "hi" };
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        onToolStart: callbacks.toolStart,
+        onItemEvent: callbacks.itemEvent,
+        onCommandOutput: callbacks.commandOutput,
+      },
+      replyResolver,
+    });
+
+    expect(callbacks.toolStart).not.toHaveBeenCalled();
+    expect(callbacks.itemEvent).not.toHaveBeenCalled();
+    expect(callbacks.commandOutput).not.toHaveBeenCalled();
+    expect(diagnosticMocks.markDiagnosticSessionProgress).toHaveBeenCalledTimes(3);
+    expect(diagnosticMocks.markDiagnosticSessionProgress).toHaveBeenCalledWith({
+      sessionKey: "agent:main:discord:channel:C1",
+    });
   });
 
   it("routes plugin-owned bindings to the owning plugin before generic inbound claim broadcast", async () => {
@@ -4391,6 +4487,42 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       ctx: buildTestCtx({
         ChatType: "channel",
         SessionKey: "test:discord:channel:C1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(false);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("uses harness defaults for direct source delivery when config is unset", async () => {
+    setNoAbort();
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      deliveryDefaults: { sourceVisibleReplies: "message_tool" },
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(async () => ({}) as never),
+    });
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      agentHarnessId: "codex",
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
+      return { text: "final reply" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "direct",
+        SessionKey: "agent:main:main",
       }),
       cfg: emptyConfig,
       dispatcher,

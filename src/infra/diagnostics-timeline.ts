@@ -6,9 +6,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "./diagnostic-flags.js";
 import { isTruthyEnvValue } from "./env.js";
 
-export const OPENCLAW_DIAGNOSTICS_TIMELINE_SCHEMA_VERSION = "openclaw.diagnostics.v1";
+const OPENCLAW_DIAGNOSTICS_TIMELINE_SCHEMA_VERSION = "openclaw.diagnostics.v1";
 
-export type DiagnosticsTimelineEventType =
+type DiagnosticsTimelineEventType =
   | "span.start"
   | "span.end"
   | "span.error"
@@ -17,9 +17,9 @@ export type DiagnosticsTimelineEventType =
   | "provider.request"
   | "childProcess.exit";
 
-export type DiagnosticsTimelineAttributes = Record<string, string | number | boolean | null>;
+type DiagnosticsTimelineAttributes = Record<string, string | number | boolean | null>;
 
-export type DiagnosticsTimelineEvent = {
+type DiagnosticsTimelineEvent = {
   type: DiagnosticsTimelineEventType;
   name: string;
   timestamp?: string;

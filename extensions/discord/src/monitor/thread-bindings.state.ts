@@ -32,8 +32,9 @@ type ThreadBindingsGlobalState = {
   lastPersistedAtMs: number;
 };
 
-// Plugin hooks can load this module via Jiti while core imports it via ESM.
-// Store mutable state on globalThis so both loader paths share one registry.
+// Plugin hooks can load this module through a separate runtime path while core
+// imports it via ESM. Store mutable state on globalThis so both paths share one
+// registry.
 const THREAD_BINDINGS_STATE_KEY = Symbol.for("openclaw.discordThreadBindingsState");
 let threadBindingsState: ThreadBindingsGlobalState | undefined;
 

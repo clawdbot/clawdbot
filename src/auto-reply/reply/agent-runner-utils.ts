@@ -189,7 +189,7 @@ export function buildEmbeddedRunBaseParams(
   });
 }
 
-export function buildEmbeddedContextFromTemplate(params: {
+function buildEmbeddedContextFromTemplate(params: {
   run: FollowupRun["run"];
   sessionCtx: TemplateContext;
   hasRepliedRef: { value: boolean } | undefined;
@@ -229,7 +229,7 @@ function normalizeMemberRoleIds(value: TemplateContext["MemberRoleIds"]): string
   return roles.length > 0 ? roles : undefined;
 }
 
-export function buildTemplateSenderContext(sessionCtx: TemplateContext) {
+function buildTemplateSenderContext(sessionCtx: TemplateContext) {
   return {
     senderId: normalizeOptionalString(sessionCtx.SenderId),
     senderName: normalizeOptionalString(sessionCtx.SenderName),

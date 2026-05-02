@@ -9,7 +9,7 @@ import type { AllowlistMatch, ChannelGroupContext } from "../runtime-api.js";
 import { detectIdType } from "./targets.js";
 import type { FeishuConfig } from "./types.js";
 
-export type FeishuAllowlistMatch = AllowlistMatch<"wildcard" | "id">;
+type FeishuAllowlistMatch = AllowlistMatch<"wildcard" | "id">;
 
 const FEISHU_PROVIDER_PREFIX_RE = /^(feishu|lark):/i;
 

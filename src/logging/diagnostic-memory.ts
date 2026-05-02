@@ -14,7 +14,7 @@ const DEFAULT_RSS_GROWTH_CRITICAL_BYTES = 1024 * MB;
 const DEFAULT_GROWTH_WINDOW_MS = 10 * 60 * 1000;
 const DEFAULT_PRESSURE_REPEAT_MS = 5 * 60 * 1000;
 
-export type DiagnosticMemoryThresholds = {
+type DiagnosticMemoryThresholds = {
   rssWarningBytes?: number;
   rssCriticalBytes?: number;
   heapUsedWarningBytes?: number;

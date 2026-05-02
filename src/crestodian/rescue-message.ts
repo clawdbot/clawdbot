@@ -127,6 +127,12 @@ function formatUnsupportedRemoteOperation(operation: CrestodianOperation): strin
       "Use local `openclaw` for agent handoff, or ask for status, doctor, config, gateway, agents, or models.",
     ].join(" ");
   }
+  if (operation.kind === "plugin-install") {
+    return [
+      "Crestodian rescue cannot install plugins from a message channel by default because plugin install downloads executable code.",
+      "Use local `openclaw crestodian` or `openclaw plugins install` instead.",
+    ].join(" ");
+  }
   return null;
 }
 

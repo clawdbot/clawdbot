@@ -5,12 +5,12 @@ import {
   listChannelCatalogEntries,
   type PluginChannelCatalogEntry,
 } from "../../plugins/channel-catalog-registry.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
-  isJavaScriptModulePath,
-  loadChannelPluginModule,
-  resolveExistingPluginModulePath,
-} from "./module-loader.js";
+  getCachedPluginModuleLoader,
+  type PluginModuleLoaderCache,
+} from "../../plugins/plugin-module-loader-cache.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { loadChannelPluginModule, resolveExistingPluginModulePath } from "./module-loader.js";
 
 type ChannelPackageStateChecker = (params: {
   cfg: OpenClawConfig;
@@ -20,11 +20,51 @@ type ChannelPackageStateChecker = (params: {
 type ChannelPackageStateMetadata = {
   specifier?: string;
   exportName?: string;
+  env?: {
+    allOf?: readonly string[];
+    anyOf?: readonly string[];
+  };
 };
 
 export type ChannelPackageStateMetadataKey = "configuredState" | "persistedAuthState";
 
 const log = createSubsystemLogger("channels");
+const sourcePackageStateLoaderCache: PluginModuleLoaderCache = new Map();
+
+function isSourceModulePath(modulePath: string): boolean {
+  return /\.(?:c|m)?tsx?$/iu.test(modulePath);
+}
+
+function loadChannelPackageStateModule(params: { modulePath: string; rootDir: string }): unknown {
+  try {
+    return loadChannelPluginModule(params);
+  } catch (error) {
+    if (!isSourceModulePath(params.modulePath)) {
+      throw error;
+    }
+    const loader = getCachedPluginModuleLoader({
+      cache: sourcePackageStateLoaderCache,
+      modulePath: params.modulePath,
+      importerUrl: import.meta.url,
+      tryNative: true,
+      cacheScopeKey: "channel-package-state",
+    });
+    return loader(params.modulePath);
+  }
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => normalizeOptionalString(entry))
+    .filter((entry): entry is string => Boolean(entry));
+}
+
+function hasNonEmptyEnvValue(env: NodeJS.ProcessEnv | undefined, key: string): boolean {
+  return typeof env?.[key] === "string" && env[key].trim().length > 0;
+}
 
 function resolveChannelPackageStateMetadata(
   entry: PluginChannelCatalogEntry,
@@ -36,10 +76,18 @@ function resolveChannelPackageStateMetadata(
   }
   const specifier = normalizeOptionalString(metadata.specifier) ?? "";
   const exportName = normalizeOptionalString(metadata.exportName) ?? "";
-  if (!specifier || !exportName) {
+  const envMetadata = "env" in metadata ? metadata.env : undefined;
+  const allOf = normalizeStringList(envMetadata?.allOf);
+  const anyOf = normalizeStringList(envMetadata?.anyOf);
+  const env = allOf.length > 0 || anyOf.length > 0 ? { allOf, anyOf } : undefined;
+  if ((!specifier || !exportName) && !env) {
     return null;
   }
-  return { specifier, exportName };
+  return {
+    ...(specifier ? { specifier } : {}),
+    ...(exportName ? { exportName } : {}),
+    ...(env ? { env } : {}),
+  };
 }
 
 function listChannelPackageStateCatalog(
@@ -59,11 +107,21 @@ function resolveChannelPackageStateChecker(params: {
     return null;
   }
 
+  if (metadata.env) {
+    return ({ env }) => {
+      const allOf = metadata.env?.allOf ?? [];
+      const anyOf = metadata.env?.anyOf ?? [];
+      return (
+        allOf.every((key) => hasNonEmptyEnvValue(env, key)) &&
+        (anyOf.length === 0 || anyOf.some((key) => hasNonEmptyEnvValue(env, key)))
+      );
+    };
+  }
+
   try {
-    const moduleExport = loadChannelPluginModule({
+    const moduleExport = loadChannelPackageStateModule({
       modulePath: resolveExistingPluginModulePath(params.entry.rootDir, metadata.specifier!),
       rootDir: params.entry.rootDir,
-      shouldTryNativeRequire: isJavaScriptModulePath,
     }) as Record<string, unknown>;
     const checker = moduleExport[metadata.exportName!] as ChannelPackageStateChecker | undefined;
     if (typeof checker !== "function") {

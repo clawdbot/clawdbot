@@ -20,7 +20,7 @@ export type ChatAbortControllerEntry = {
   kind?: "chat-send" | "agent";
 };
 
-export type RegisteredChatAbortController = {
+type RegisteredChatAbortController = {
   controller: AbortController;
   registered: boolean;
   entry?: ChatAbortControllerEntry;
@@ -31,7 +31,7 @@ export function isChatStopCommandText(text: string): boolean {
   return isAbortRequestText(text);
 }
 
-export function resolveChatRunExpiresAtMs(params: {
+function resolveChatRunExpiresAtMs(params: {
   now: number;
   timeoutMs: number;
   graceMs?: number;

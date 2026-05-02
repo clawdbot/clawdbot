@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   resolveCompatibleRuntimePluginRegistry: vi.fn(),
   resolvePluginRegistryLoadCacheKey: vi.fn((options: unknown) => JSON.stringify(options)),
   resolveRuntimePluginRegistry: vi.fn(),
+  getActivePluginRegistry: vi.fn<() => Record<string, unknown> | null>(() => null),
   getActivePluginRegistryWorkspaceDir: vi.fn(() => undefined),
   buildPluginRuntimeLoadOptionsFromValues: vi.fn(
     (_values: unknown, overrides?: Record<string, unknown>) => ({
@@ -29,6 +30,7 @@ vi.mock("./loader.js", () => ({
 }));
 
 vi.mock("./runtime.js", () => ({
+  getActivePluginRegistry: mocks.getActivePluginRegistry,
   getActivePluginRegistryWorkspaceDir: mocks.getActivePluginRegistryWorkspaceDir,
 }));
 
@@ -56,6 +58,8 @@ describe("web-provider-runtime-shared", () => {
       JSON.stringify(options),
     );
     mocks.resolveRuntimePluginRegistry.mockReset();
+    mocks.getActivePluginRegistry.mockReset();
+    mocks.getActivePluginRegistry.mockReturnValue(null);
     mocks.getActivePluginRegistryWorkspaceDir.mockReset();
     mocks.getActivePluginRegistryWorkspaceDir.mockReturnValue(undefined);
     mocks.buildPluginRuntimeLoadOptionsFromValues.mockReset();
@@ -153,6 +157,205 @@ describe("web-provider-runtime-shared", () => {
     expect(mapRegistryProviders).toHaveBeenCalledWith(
       expect.objectContaining({
         onlyPluginIds: ["alpha"],
+      }),
+    );
+  });
+
+  it("reuses the active registry after deriving web provider candidates from resolved config", () => {
+    const activeRegistry = { source: "active" };
+    const resolvedConfig = { plugins: { entries: { brave: { enabled: true } } } };
+    const resolveCandidatePluginIds = vi.fn(() => ["brave"]);
+    const mapRegistryProviders = vi.fn(() => ["provider"]);
+    mocks.resolveCompatibleRuntimePluginRegistry.mockReturnValue(null);
+    mocks.getActivePluginRegistry.mockReturnValue(activeRegistry);
+
+    const providers = resolvePluginWebProviders(
+      {
+        config: { plugins: { entries: {} } },
+        env: { BRAVE_API_KEY: "key" },
+        onlyPluginIds: ["brave", "firecrawl"],
+        origin: "bundled",
+        workspaceDir: "/workspace",
+      },
+      {
+        resolveBundledResolutionConfig: () => ({
+          config: resolvedConfig,
+          activationSourceConfig: { plugins: { entries: {} } },
+          autoEnabledReasons: { brave: ["env"] },
+        }),
+        resolveCandidatePluginIds,
+        mapRegistryProviders,
+      },
+    );
+
+    expect(providers).toEqual(["provider"]);
+    expect(resolveCandidatePluginIds).toHaveBeenCalledWith({
+      config: resolvedConfig,
+      workspaceDir: "/workspace",
+      env: { BRAVE_API_KEY: "key" },
+      onlyPluginIds: ["brave", "firecrawl"],
+      origin: "bundled",
+    });
+    expect(mapRegistryProviders).toHaveBeenCalledWith({
+      registry: activeRegistry,
+      onlyPluginIds: ["brave"],
+    });
+    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+  });
+
+  it("preserves explicit empty candidate scopes when reusing the active registry", () => {
+    const activeRegistry = { source: "active" };
+    const mapRegistryProviders = vi.fn(() => []);
+    mocks.resolveCompatibleRuntimePluginRegistry.mockReturnValue(null);
+    mocks.getActivePluginRegistry.mockReturnValue(activeRegistry);
+
+    resolvePluginWebProviders(
+      {
+        config: {},
+        onlyPluginIds: [],
+      },
+      {
+        resolveBundledResolutionConfig: () => ({
+          config: {},
+          activationSourceConfig: {},
+          autoEnabledReasons: {},
+        }),
+        resolveCandidatePluginIds: () => [],
+        mapRegistryProviders,
+      },
+    );
+
+    expect(mapRegistryProviders).toHaveBeenCalledWith({
+      registry: activeRegistry,
+      onlyPluginIds: [],
+    });
+    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+  });
+
+  it("caches runtime web provider plugin loads by default", () => {
+    const loadedRegistry = { source: "loaded" };
+    const mapRegistryProviders = vi.fn(() => ["provider"]);
+    mocks.loadOpenClawPlugins.mockReturnValue(loadedRegistry as never);
+
+    const providers = resolvePluginWebProviders(
+      {
+        config: {},
+        onlyPluginIds: ["brave"],
+      },
+      {
+        resolveBundledResolutionConfig: () => ({
+          config: {},
+          activationSourceConfig: {},
+          autoEnabledReasons: {},
+        }),
+        resolveCandidatePluginIds: () => ["brave"],
+        mapRegistryProviders,
+      },
+    );
+
+    expect(providers).toEqual(["provider"]);
+    expect(mocks.resolveCompatibleRuntimePluginRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cache: true,
+        onlyPluginIds: ["brave"],
+      }),
+    );
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cache: true,
+        onlyPluginIds: ["brave"],
+      }),
+    );
+  });
+
+  it("keeps explicit runtime web provider cache opt-outs", () => {
+    const loadedRegistry = { source: "loaded" };
+    const mapRegistryProviders = vi.fn(() => ["provider"]);
+    mocks.loadOpenClawPlugins.mockReturnValue(loadedRegistry as never);
+
+    resolvePluginWebProviders(
+      {
+        cache: false,
+        config: {},
+        onlyPluginIds: ["brave"],
+      },
+      {
+        resolveBundledResolutionConfig: () => ({
+          config: {},
+          activationSourceConfig: {},
+          autoEnabledReasons: {},
+        }),
+        resolveCandidatePluginIds: () => ["brave"],
+        mapRegistryProviders,
+      },
+    );
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cache: false,
+        onlyPluginIds: ["brave"],
+      }),
+    );
+  });
+
+  it("caches setup web provider plugin loads by default", () => {
+    const loadedRegistry = { source: "setup" };
+    const mapRegistryProviders = vi.fn(() => ["provider"]);
+    mocks.loadOpenClawPlugins.mockReturnValue(loadedRegistry as never);
+
+    const providers = resolvePluginWebProviders(
+      {
+        config: {},
+        mode: "setup",
+      },
+      {
+        resolveBundledResolutionConfig: () => ({
+          config: {},
+          activationSourceConfig: {},
+          autoEnabledReasons: {},
+        }),
+        resolveCandidatePluginIds: () => ["brave"],
+        mapRegistryProviders,
+        resolveBundledPublicArtifactProviders: () => null,
+      },
+    );
+
+    expect(providers).toEqual(["provider"]);
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cache: true,
+        onlyPluginIds: ["brave"],
+      }),
+    );
+  });
+
+  it("keeps explicit setup web provider cache opt-outs", () => {
+    const loadedRegistry = { source: "setup" };
+    const mapRegistryProviders = vi.fn(() => ["provider"]);
+    mocks.loadOpenClawPlugins.mockReturnValue(loadedRegistry as never);
+
+    resolvePluginWebProviders(
+      {
+        cache: false,
+        config: {},
+        mode: "setup",
+      },
+      {
+        resolveBundledResolutionConfig: () => ({
+          config: {},
+          activationSourceConfig: {},
+          autoEnabledReasons: {},
+        }),
+        resolveCandidatePluginIds: () => ["brave"],
+        mapRegistryProviders,
+        resolveBundledPublicArtifactProviders: () => null,
+      },
+    );
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cache: false,
+        onlyPluginIds: ["brave"],
       }),
     );
   });

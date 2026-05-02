@@ -1,7 +1,7 @@
 import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
-export type AcpSessionInteractionMode = "interactive" | "parent-owned-background";
+type AcpSessionInteractionMode = "interactive" | "parent-owned-background";
 
 type SessionInteractionEntry = Pick<SessionEntry, "spawnedBy" | "parentSessionKey" | "acp">;
 

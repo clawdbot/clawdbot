@@ -9,7 +9,7 @@ type StoreFile = {
   review?: SkillWorkshopReviewState;
 };
 
-export type SkillWorkshopReviewState = {
+type SkillWorkshopReviewState = {
   turnsSinceReview: number;
   toolCallsSinceReview: number;
   lastReviewAt?: number;

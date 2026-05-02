@@ -67,7 +67,7 @@ export type ModelProviderRequestTransportOverrides = ProviderRequestTransportOve
   allowPrivateNetwork?: boolean;
 };
 
-export type ResolvedProviderRequestAuthConfig =
+type ResolvedProviderRequestAuthConfig =
   | {
       configured: false;
       mode: "provider-default" | "authorization-bearer";
@@ -89,7 +89,7 @@ export type ResolvedProviderRequestAuthConfig =
       injectAuthorizationHeader: false;
     };
 
-export type ResolvedProviderRequestProxyConfig =
+type ResolvedProviderRequestProxyConfig =
   | {
       configured: false;
     }
@@ -105,7 +105,7 @@ export type ResolvedProviderRequestProxyConfig =
       tls: ResolvedProviderRequestTlsConfig;
     };
 
-export type ResolvedProviderRequestTlsConfig =
+type ResolvedProviderRequestTlsConfig =
   | {
       configured: false;
     }
@@ -119,7 +119,7 @@ export type ResolvedProviderRequestTlsConfig =
       rejectUnauthorized?: boolean;
     };
 
-export type ResolvedProviderRequestExtraHeadersConfig = {
+type ResolvedProviderRequestExtraHeadersConfig = {
   configured: boolean;
   headers?: Record<string, string>;
 };
@@ -135,9 +135,9 @@ export type ResolvedProviderRequestConfig = {
   policy: ProviderRequestPolicyResolution;
 };
 
-export type ProviderRequestHeaderPrecedence = "caller-wins" | "defaults-win";
+type ProviderRequestHeaderPrecedence = "caller-wins" | "defaults-win";
 
-export type ResolvedProviderRequestPolicyConfig = ResolvedProviderRequestConfig & {
+type ResolvedProviderRequestPolicyConfig = ResolvedProviderRequestConfig & {
   allowPrivateNetwork: boolean;
   capabilities: ProviderRequestCapabilities;
 };
@@ -400,7 +400,7 @@ export function normalizeBaseUrl(
   return raw.replace(/\/+$/, "");
 }
 
-export function mergeProviderRequestHeaders(
+function mergeProviderRequestHeaders(
   ...headerSets: Array<Record<string, string> | undefined>
 ): Record<string, string> | undefined {
   let merged: Record<string, string> | undefined;

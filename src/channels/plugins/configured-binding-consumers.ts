@@ -63,7 +63,3 @@ export function registerConfiguredBindingConsumer(consumer: ConfiguredBindingCon
     id,
   });
 }
-
-export function unregisterConfiguredBindingConsumer(id: string): void {
-  registeredConfiguredBindingConsumers.delete(id.trim());
-}

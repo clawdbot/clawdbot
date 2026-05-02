@@ -1,4 +1,4 @@
-export type CrestodianRescueConfig = {
+type CrestodianRescueConfig = {
   /**
    * Remote message rescue gate.
    * "auto" enables only for YOLO host posture with sandboxing off.

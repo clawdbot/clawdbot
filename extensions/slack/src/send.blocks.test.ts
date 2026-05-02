@@ -6,6 +6,17 @@ const { sendMessageSlack } = await import("./send.js");
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 const SLACK_TEXT_LIMIT = 8000;
 
+function slackDnsRequestError(): Error {
+  return Object.assign(new Error("A request error occurred: getaddrinfo EAI_AGAIN slack.com"), {
+    code: "slack_webapi_request_error",
+    original: Object.assign(new Error("getaddrinfo EAI_AGAIN slack.com"), {
+      code: "EAI_AGAIN",
+      syscall: "getaddrinfo",
+      hostname: "slack.com",
+    }),
+  });
+}
+
 describe("sendMessageSlack NO_REPLY guard", () => {
   it("suppresses NO_REPLY text before any Slack API call", async () => {
     const client = createSlackSendTestClient();
@@ -113,6 +124,84 @@ describe("sendMessageSlack blocks", () => {
       }),
     );
     expect(result).toEqual({ messageId: "171234.567", channelId: "C123" });
+  });
+
+  it("posts user-target block messages directly without conversations.open", async () => {
+    const client = createSlackSendTestClient();
+    client.conversations.open.mockRejectedValueOnce(new Error("missing_scope"));
+
+    const result = await sendMessageSlack("user:U123", "", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      blocks: [{ type: "divider" }],
+    });
+
+    expect(client.conversations.open).not.toHaveBeenCalled();
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "U123",
+        text: "Shared a Block Kit message",
+      }),
+    );
+    expect(result).toEqual({ messageId: "171234.567", channelId: "U123" });
+  });
+
+  it("retries Slack postMessage DNS request errors without enabling broad write retries", async () => {
+    const client = createSlackSendTestClient();
+    client.chat.postMessage
+      .mockRejectedValueOnce(slackDnsRequestError())
+      .mockResolvedValueOnce({ ts: "171234.999" });
+
+    const result = await sendMessageSlack("channel:C123", "hello", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ messageId: "171234.999", channelId: "C123" });
+  });
+
+  it("retries Slack conversations.open DNS request errors for threaded DMs", async () => {
+    const client = createSlackSendTestClient();
+    client.conversations.open
+      .mockRejectedValueOnce(slackDnsRequestError())
+      .mockResolvedValueOnce({ channel: { id: "D123" } });
+
+    const result = await sendMessageSlack("user:U123", "hello", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      threadTs: "171234.100",
+    });
+
+    expect(client.conversations.open).toHaveBeenCalledTimes(2);
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "D123", thread_ts: "171234.100" }),
+    );
+    expect(result).toEqual({ messageId: "171234.567", channelId: "D123" });
+  });
+
+  it("does not retry Slack platform errors", async () => {
+    const client = createSlackSendTestClient();
+    const platformError = Object.assign(
+      new Error("An API error occurred: message_limit_exceeded"),
+      {
+        data: { ok: false, error: "message_limit_exceeded" },
+      },
+    );
+    client.chat.postMessage.mockRejectedValue(platformError);
+
+    await expect(
+      sendMessageSlack("channel:C123", "hello", {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+      }),
+    ).rejects.toThrow("message_limit_exceeded");
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(1);
   });
 
   it("derives fallback text from image blocks", async () => {

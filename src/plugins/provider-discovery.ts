@@ -1,7 +1,7 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import {
   listPluginContributionIds,
   loadPluginRegistrySnapshot,
@@ -43,7 +43,7 @@ export type ResolveRuntimePluginDiscoveryProvidersParams = {
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry">;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
 };
 
 export type ResolveInstalledPluginProviderContributionIdsParams = LoadPluginRegistryParams & {

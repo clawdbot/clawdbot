@@ -1,8 +1,8 @@
 import { requiresExecApproval, type ExecAsk, type ExecSecurity } from "../infra/exec-approvals.js";
 
-export type ExecApprovalDecision = "allow-once" | "allow-always" | null;
+type ExecApprovalDecision = "allow-once" | "allow-always" | null;
 
-export type SystemRunPolicyDecision = {
+type SystemRunPolicyDecision = {
   analysisOk: boolean;
   allowlistSatisfied: boolean;
   shellWrapperBlocked: boolean;

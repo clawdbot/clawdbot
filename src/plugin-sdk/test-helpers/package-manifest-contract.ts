@@ -16,7 +16,6 @@ type PackageManifest = {
 type PackageManifestContractParams = {
   pluginId: string;
   pluginLocalRuntimeDeps?: string[];
-  mirroredRootRuntimeDeps?: string[];
   minHostVersionBaseline?: string;
 };
 
@@ -48,24 +47,6 @@ export function describePackageManifestContract(params: PackageManifestContractP
 
           expect(pluginSpec).toBeTruthy();
           expect(rootSpec).toBeUndefined();
-        });
-      }
-    }
-
-    if (params.mirroredRootRuntimeDeps?.length) {
-      for (const dependencyName of params.mirroredRootRuntimeDeps) {
-        it(`mirrors ${dependencyName} at the root package`, () => {
-          const rootManifest = readJson<PackageManifest>("package.json");
-          const pluginManifest = readJson<PackageManifest>(packagePath);
-          const pluginSpec =
-            pluginManifest.dependencies?.[dependencyName] ??
-            pluginManifest.optionalDependencies?.[dependencyName];
-          const rootSpec =
-            rootManifest.dependencies?.[dependencyName] ??
-            rootManifest.optionalDependencies?.[dependencyName];
-
-          expect(pluginSpec).toBeTruthy();
-          expect(rootSpec).toBe(pluginSpec);
         });
       }
     }

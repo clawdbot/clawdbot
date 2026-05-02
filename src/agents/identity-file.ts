@@ -181,7 +181,7 @@ export function mergeIdentityMarkdownContent(
   return nextLines.join("\n").replace(/\n*$/, "\n");
 }
 
-export function loadIdentityFromFile(identityPath: string): AgentIdentityFile | null {
+function loadIdentityFromFile(identityPath: string): AgentIdentityFile | null {
   try {
     const content = fs.readFileSync(identityPath, "utf-8");
     const parsed = parseIdentityMarkdown(content);

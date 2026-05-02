@@ -331,5 +331,3 @@ export function resolveActivatedBundledPluginPublicSurfaceAccessOrThrow(params: 
   }
   return access;
 }
-
-export function resetFacadeActivationCheckRuntimeStateForTest(): void {}

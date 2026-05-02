@@ -1,8 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
-import { loadPluginRegistrySnapshot } from "./plugin-registry.js";
+import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import { resolveDiscoveredProviderPluginIds } from "./providers.js";
 import { resolvePluginProviders } from "./providers.runtime.js";
 import { createPluginSourceLoader } from "./source-loader.js";
@@ -77,18 +76,17 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry">;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderDiscoveryEntryResult {
-  const registry = params.pluginMetadataSnapshot?.index ?? loadPluginRegistrySnapshot(params);
-  const manifestRegistry =
-    params.pluginMetadataSnapshot?.manifestRegistry ??
-    loadPluginManifestRegistryForInstalledIndex({
-      index: registry,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      includeDisabled: true,
+  const metadataSnapshot =
+    params.pluginMetadataSnapshot ??
+    loadPluginMetadataSnapshot({
+      config: params.config ?? {},
+      env: params.env ?? process.env,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     });
+  const registry = metadataSnapshot.index;
+  const manifestRegistry = metadataSnapshot.manifestRegistry;
   const pluginIds = resolveDiscoveredProviderPluginIds({
     ...params,
     registry,
@@ -148,10 +146,10 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry">;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
-  const entryResult = resolveProviderDiscoveryEntryPlugins(params);
+  const entryResult = resolveProviderDiscoveryEntryPlugins({ ...params, env });
   if (params.discoveryEntriesOnly === true) {
     return entryResult.providers;
   }

@@ -6,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/extension-shared";
 import { z } from "openclaw/plugin-sdk/zod";
 
-export type OpenShellPluginConfig = {
+type OpenShellPluginConfig = {
   mode?: "mirror" | "remote";
   command?: string;
   gateway?: string;
@@ -101,7 +101,7 @@ function isManagedOpenShellRemotePath(value: string): boolean {
   );
 }
 
-export function normalizeOpenShellRemotePath(
+function normalizeOpenShellRemotePath(
   value: string | undefined,
   fallback: string,
   fieldName = "remote path",

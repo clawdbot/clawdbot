@@ -2,11 +2,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub.js";
 import type { PluginKind } from "../plugins/plugin-kind.types.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { applyExclusiveSlotSelection } from "../plugins/slots.js";
 import { buildPluginDiagnosticsReport } from "../plugins/status.js";
 import type { PluginLogger } from "../plugins/types.js";
-import { defaultRuntime } from "../runtime.js";
+import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { theme } from "../terminal/theme.js";
 
@@ -59,13 +59,12 @@ function buildSlotSelectionRegistry(
   config: OpenClawConfig,
   pluginId: string,
 ): SlotSelectionRegistry {
-  const registry = loadPluginManifestRegistryForPluginRegistry({
+  const plugins = loadPluginMetadataSnapshot({
     config,
-    includeDisabled: true,
-    pluginIds: [pluginId],
-  });
+    env: process.env,
+  }).plugins.filter((plugin) => plugin.id === pluginId);
   return {
-    plugins: registry.plugins.map((plugin) => ({
+    plugins: plugins.map((plugin) => ({
       id: plugin.id,
       kind: plugin.kind,
     })),
@@ -129,23 +128,23 @@ export function applySlotSelectionForPlugin(
   return { config: result.config, warnings: result.warnings };
 }
 
-export function createPluginInstallLogger(): {
+export function createPluginInstallLogger(runtime: RuntimeEnv = defaultRuntime): {
   info: (msg: string) => void;
   warn: (msg: string) => void;
 } {
   return {
-    info: (msg) => defaultRuntime.log(msg),
-    warn: (msg) => defaultRuntime.log(theme.warn(msg)),
+    info: (msg) => runtime.log(msg),
+    warn: (msg) => runtime.log(theme.warn(msg)),
   };
 }
 
-export function createHookPackInstallLogger(): {
+export function createHookPackInstallLogger(runtime: RuntimeEnv = defaultRuntime): {
   info: (msg: string) => void;
   warn: (msg: string) => void;
 } {
   return {
-    info: (msg) => defaultRuntime.log(msg),
-    warn: (msg) => defaultRuntime.log(theme.warn(msg)),
+    info: (msg) => runtime.log(msg),
+    warn: (msg) => runtime.log(theme.warn(msg)),
   };
 }
 
@@ -191,16 +190,16 @@ export function formatPluginInstallWithHookFallbackError(
   return `${pluginError}\nAlso not a valid hook pack: ${hookError}`;
 }
 
-export function logHookPackRestartHint() {
-  defaultRuntime.log("Restart the gateway to load hooks.");
+export function logHookPackRestartHint(runtime: RuntimeEnv = defaultRuntime) {
+  runtime.log("Restart the gateway to load hooks.");
 }
 
-export function logSlotWarnings(warnings: string[]) {
+export function logSlotWarnings(warnings: string[], runtime: RuntimeEnv = defaultRuntime) {
   if (warnings.length === 0) {
     return;
   }
   for (const warning of warnings) {
-    defaultRuntime.log(theme.warn(warning));
+    runtime.log(theme.warn(warning));
   }
 }
 
@@ -220,7 +219,7 @@ export function parseNpmPrefixSpec(raw: string): string | null {
   return trimmed.slice("npm:".length).trim();
 }
 
-export const PREFERRED_CLAWHUB_FALLBACK_DECISION = {
+const PREFERRED_CLAWHUB_FALLBACK_DECISION = {
   FALLBACK_TO_NPM: "fallback_to_npm",
   STOP: "stop",
 } as const;

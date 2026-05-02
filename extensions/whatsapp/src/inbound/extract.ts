@@ -197,7 +197,9 @@ function extractContextInfoFromMessage(message: proto.IMessage): proto.IContextI
   return undefined;
 }
 
-function extractContextInfo(message: proto.IMessage | undefined): proto.IContextInfo | undefined {
+export function extractContextInfo(
+  message: proto.IMessage | undefined,
+): proto.IContextInfo | undefined {
   for (const candidate of buildMessageChain(message)) {
     const contextInfo = extractContextInfoFromMessage(candidate);
     if (contextInfo) {

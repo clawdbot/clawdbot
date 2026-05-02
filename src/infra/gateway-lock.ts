@@ -29,7 +29,7 @@ const LockPayloadSchema = z.object({
   startTime: z.number().optional(),
 }) as z.ZodType<LockPayload>;
 
-export type GatewayLockHandle = {
+type GatewayLockHandle = {
   lockPath: string;
   configPath: string;
   release: () => Promise<void>;

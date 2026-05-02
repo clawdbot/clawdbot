@@ -6,11 +6,9 @@ import {
   type SecretInput,
 } from "openclaw/plugin-sdk/secret-input";
 import { z } from "openclaw/plugin-sdk/zod";
-import { TtsAutoSchema, TtsConfigSchema, TtsModeSchema, TtsProviderSchema } from "../api.js";
+import { TtsConfigSchema } from "../api.js";
 import { deepMergeDefined } from "./deep-merge.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
-
-export { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 
 // -----------------------------------------------------------------------------
 // Phone Number Validation
@@ -20,7 +18,7 @@ export { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js
  * E.164 phone number format: +[country code][number]
  * Examples use 555 prefix (reserved for fictional numbers)
  */
-export const E164Schema = z
+const E164Schema = z
   .string()
   .regex(/^\+[1-9]\d{1,14}$/, "Expected E.164 format, e.g. +15550001234");
 
@@ -35,7 +33,7 @@ export const E164Schema = z
  * - "pairing": Unknown callers can request pairing (future)
  * - "open": Accept all inbound calls (dangerous!)
  */
-export const InboundPolicySchema = z.enum(["disabled", "allowlist", "pairing", "open"]);
+const InboundPolicySchema = z.enum(["disabled", "allowlist", "pairing", "open"]);
 
 // -----------------------------------------------------------------------------
 // Provider-Specific Configuration
@@ -43,7 +41,7 @@ export const InboundPolicySchema = z.enum(["disabled", "allowlist", "pairing", "
 
 const SecretInputSchema = buildSecretInputSchema();
 
-export const TelnyxConfigSchema = z
+const TelnyxConfigSchema = z
   .object({
     /** Telnyx API v2 key */
     apiKey: z.string().min(1).optional(),
@@ -55,7 +53,7 @@ export const TelnyxConfigSchema = z
   .strict();
 export type TelnyxConfig = z.infer<typeof TelnyxConfigSchema>;
 
-export const TwilioConfigSchema = z
+const TwilioConfigSchema = z
   .object({
     /** Twilio Account SID */
     accountSid: z.string().min(1).optional(),
@@ -64,7 +62,7 @@ export const TwilioConfigSchema = z
   })
   .strict();
 
-export const PlivoConfigSchema = z
+const PlivoConfigSchema = z
   .object({
     /** Plivo Auth ID (starts with MA/SA) */
     authId: z.string().min(1).optional(),
@@ -74,14 +72,13 @@ export const PlivoConfigSchema = z
   .strict();
 export type PlivoConfig = z.infer<typeof PlivoConfigSchema>;
 
-export { TtsAutoSchema, TtsConfigSchema, TtsModeSchema, TtsProviderSchema };
 export type VoiceCallTtsConfig = z.infer<typeof TtsConfigSchema>;
 
 // -----------------------------------------------------------------------------
 // Webhook Server Configuration
 // -----------------------------------------------------------------------------
 
-export const VoiceCallServeConfigSchema = z
+const VoiceCallServeConfigSchema = z
   .object({
     /** Port to listen on */
     port: z.number().int().positive().default(3334),
@@ -93,7 +90,7 @@ export const VoiceCallServeConfigSchema = z
   .strict()
   .default({ port: 3334, bind: "127.0.0.1", path: "/voice/webhook" });
 
-export const VoiceCallTailscaleConfigSchema = z
+const VoiceCallTailscaleConfigSchema = z
   .object({
     /**
      * Tailscale exposure mode:
@@ -112,7 +109,7 @@ export const VoiceCallTailscaleConfigSchema = z
 // Tunnel Configuration (unified ngrok/tailscale)
 // -----------------------------------------------------------------------------
 
-export const VoiceCallTunnelConfigSchema = z
+const VoiceCallTunnelConfigSchema = z
   .object({
     /**
      * Tunnel provider:
@@ -142,7 +139,7 @@ export const VoiceCallTunnelConfigSchema = z
 // Webhook Security Configuration
 // -----------------------------------------------------------------------------
 
-export const VoiceCallWebhookSecurityConfigSchema = z
+const VoiceCallWebhookSecurityConfigSchema = z
   .object({
     /**
      * Allowed hostnames for webhook URL reconstruction.
@@ -173,10 +170,13 @@ export type WebhookSecurityConfig = z.infer<typeof VoiceCallWebhookSecurityConfi
  * - "notify": Deliver message and auto-hangup after delay (one-way notification)
  * - "conversation": Stay open for back-and-forth until explicit end or timeout
  */
-export const CallModeSchema = z.enum(["notify", "conversation"]);
+const CallModeSchema = z.enum(["notify", "conversation"]);
 export type CallMode = z.infer<typeof CallModeSchema>;
 
-export const OutboundConfigSchema = z
+const VoiceCallSessionScopeSchema = z.enum(["per-phone", "per-call"]);
+export type VoiceCallSessionScope = z.infer<typeof VoiceCallSessionScopeSchema>;
+
+const OutboundConfigSchema = z
   .object({
     /** Default call mode for outbound calls */
     defaultMode: CallModeSchema.default("notify"),
@@ -190,7 +190,7 @@ export const OutboundConfigSchema = z
 // Realtime Voice Configuration
 // -----------------------------------------------------------------------------
 
-export const RealtimeToolSchema = z
+const RealtimeToolSchema = z
   .object({
     type: z.literal("function"),
     name: z.string().min(1),
@@ -202,17 +202,17 @@ export const RealtimeToolSchema = z
     }),
   })
   .strict();
-export type RealtimeToolConfig = z.infer<typeof RealtimeToolSchema>;
+type RealtimeToolConfig = z.infer<typeof RealtimeToolSchema>;
 
-export const VoiceCallRealtimeProvidersConfigSchema = z
+const VoiceCallRealtimeProvidersConfigSchema = z
   .record(z.string(), z.record(z.string(), z.unknown()))
   .default({});
 
-export const VoiceCallRealtimeToolPolicySchema = z.enum(REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES);
+const VoiceCallRealtimeToolPolicySchema = z.enum(REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES);
 
-export const VoiceCallRealtimeFastContextSourceSchema = z.enum(["memory", "sessions"]);
+const VoiceCallRealtimeFastContextSourceSchema = z.enum(["memory", "sessions"]);
 
-export const VoiceCallRealtimeFastContextConfigSchema = z
+const VoiceCallRealtimeFastContextConfigSchema = z
   .object({
     /** Enable bounded memory/session lookup before the full consult agent. */
     enabled: z.boolean().default(false),
@@ -240,11 +240,11 @@ export type VoiceCallRealtimeFastContextConfig = z.infer<
   typeof VoiceCallRealtimeFastContextConfigSchema
 >;
 
-export const VoiceCallStreamingProvidersConfigSchema = z
+const VoiceCallStreamingProvidersConfigSchema = z
   .record(z.string(), z.record(z.string(), z.unknown()))
   .default({});
 
-export const VoiceCallRealtimeConfigSchema = z
+const VoiceCallRealtimeConfigSchema = z
   .object({
     /** Enable realtime voice-to-voice mode. */
     enabled: z.boolean().default(false),
@@ -284,7 +284,7 @@ export type VoiceCallRealtimeConfig = z.infer<typeof VoiceCallRealtimeConfigSche
 // Streaming Configuration (Realtime Transcription)
 // -----------------------------------------------------------------------------
 
-export const VoiceCallStreamingConfigSchema = z
+const VoiceCallStreamingConfigSchema = z
   .object({
     /** Enable real-time audio streaming (requires WebSocket support) */
     enabled: z.boolean().default(false),
@@ -395,6 +395,9 @@ export const VoiceCallConfigSchema = z
 
     /** Realtime voice-to-voice configuration */
     realtime: VoiceCallRealtimeConfigSchema,
+
+    /** Session memory scope for voice conversations. */
+    sessionScope: VoiceCallSessionScopeSchema.default("per-phone"),
 
     /** Public webhook URL override (if set, bypasses tunnel auto-detection) */
     publicUrl: z.string().url().optional(),
@@ -550,6 +553,23 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
     },
     tts: normalizeVoiceCallTtsConfig(defaults.tts, config.tts),
   };
+}
+
+export function resolveVoiceCallSessionKey(params: {
+  config: Pick<VoiceCallConfig, "sessionScope">;
+  callId: string;
+  phone?: string;
+  explicitSessionKey?: string;
+}): string {
+  const explicit = params.explicitSessionKey?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  if (params.config.sessionScope === "per-call") {
+    return `voice:call:${params.callId}`;
+  }
+  const normalizedPhone = params.phone?.replace(/\D/g, "");
+  return normalizedPhone ? `voice:${normalizedPhone}` : `voice:${params.callId}`;
 }
 
 /**

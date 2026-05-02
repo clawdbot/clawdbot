@@ -122,7 +122,7 @@ describe("matrix qa config", () => {
         threadBindings: {
           enabled: true,
           idleHours: 1,
-          spawnSubagentSessions: true,
+          spawnSessions: true,
         },
         threadReplies: "always",
         toolProfile: "coding",
@@ -182,7 +182,7 @@ describe("matrix qa config", () => {
       threadBindings: {
         enabled: true,
         idleHours: 1,
-        spawnSubagentSessions: true,
+        spawnSessions: true,
       },
       threadReplies: "always",
     });

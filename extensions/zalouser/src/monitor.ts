@@ -436,6 +436,8 @@ async function processMessage(
     configuredGroupAllowFrom: configGroupAllowFrom,
     senderId,
     isSenderAllowed,
+    channel: "zalouser",
+    accountId: account.accountId,
     readAllowFromStore: async () => storeAllowFrom,
     shouldComputeCommandAuthorized: (body, cfg) =>
       core.channel.commands.shouldComputeCommandAuthorized(body, cfg),

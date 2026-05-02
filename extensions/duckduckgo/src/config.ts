@@ -12,7 +12,7 @@ type DdgPluginConfig = {
   };
 };
 
-export function resolveDdgWebSearchConfig(
+function resolveDdgWebSearchConfig(
   config?: OpenClawConfig,
 ): DdgPluginConfig["webSearch"] | undefined {
   const pluginConfig = config?.plugins?.entries?.duckduckgo?.config as DdgPluginConfig | undefined;

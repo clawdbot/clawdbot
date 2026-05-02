@@ -52,6 +52,7 @@ async function writeWorkspacePlugin(params: {
   workspaceDir: string;
   id: string;
   body: string;
+  activation?: { onStartup?: boolean };
 }): Promise<void> {
   const pluginDir = path.join(params.workspaceDir, ".openclaw", "extensions", params.id);
   await fs.mkdir(pluginDir, { recursive: true });
@@ -60,6 +61,7 @@ async function writeWorkspacePlugin(params: {
     `${JSON.stringify(
       {
         id: params.id,
+        ...(params.activation ? { activation: params.activation } : {}),
         configSchema: { type: "object", additionalProperties: false, properties: {} },
       },
       null,
@@ -233,6 +235,7 @@ describe("gateway e2e", () => {
       await writeWorkspacePlugin({
         workspaceDir,
         id: "http-probe",
+        activation: { onStartup: true },
         body: `
 const fs = require("node:fs");
 const counterPath = ${JSON.stringify(registerCountPath)};

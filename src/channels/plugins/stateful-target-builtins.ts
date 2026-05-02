@@ -1,7 +1,4 @@
-import {
-  registerStatefulBindingTargetDriver,
-  unregisterStatefulBindingTargetDriver,
-} from "./stateful-target-drivers.js";
+import { registerStatefulBindingTargetDriver } from "./stateful-target-drivers.js";
 
 type AcpStatefulTargetDriverModule = typeof import("./acp-stateful-target-driver.js");
 
@@ -32,10 +29,4 @@ export async function ensureStatefulTargetBuiltinsRegistered(): Promise<void> {
     builtinsRegisteredPromise = null;
     throw error;
   }
-}
-
-export async function resetStatefulTargetBuiltinsForTesting(): Promise<void> {
-  builtinsRegisteredPromise = null;
-  const { acpStatefulBindingTargetDriver } = await loadAcpStatefulTargetDriverModule();
-  unregisterStatefulBindingTargetDriver(acpStatefulBindingTargetDriver.id);
 }

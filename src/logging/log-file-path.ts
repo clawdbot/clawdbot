@@ -31,7 +31,7 @@ function formatLocalDate(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-export function resolveDefaultRollingLogFile(date = new Date()): string {
+function resolveDefaultRollingLogFile(date = new Date()): string {
   const logDir = canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : POSIX_OPENCLAW_TMP_DIR;
   return path.join(logDir, `${LOG_PREFIX}-${formatLocalDate(date)}${LOG_SUFFIX}`);
 }

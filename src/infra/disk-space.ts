@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export const LOW_DISK_SPACE_WARNING_THRESHOLD_BYTES = 1024 * 1024 * 1024;
+const LOW_DISK_SPACE_WARNING_THRESHOLD_BYTES = 1024 * 1024 * 1024;
 
-export type DiskSpaceSnapshot = {
+type DiskSpaceSnapshot = {
   targetPath: string;
   checkedPath: string;
   availableBytes: number;

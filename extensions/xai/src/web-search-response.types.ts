@@ -8,13 +8,13 @@ export type XaiWebSearchResponse = {
       annotations?: Array<{
         type?: string;
         url?: string;
-      }>;
-    }>;
+      } | null>;
+    } | null>;
     annotations?: Array<{
       type?: string;
       url?: string;
-    }>;
-  }>;
+    } | null>;
+  } | null>;
   output_text?: string;
   citations?: string[];
   inline_citations?: Array<{

@@ -13,7 +13,7 @@ export type HermesSource = {
   archivePaths: HermesArchivePath[];
 };
 
-export type HermesArchivePath = {
+type HermesArchivePath = {
   id: string;
   path: string;
   relativePath: string;

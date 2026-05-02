@@ -2384,7 +2384,7 @@ describe("update-cli", () => {
               id: "telegram",
               origin: "bundled",
               activated: true,
-              error: "failed to install bundled runtime deps: ENOSPC",
+              error: "failed to load plugin dependency: ENOSPC",
             },
           ],
         },
@@ -2407,7 +2407,7 @@ describe("update-cli", () => {
         .mocked(defaultRuntime.log)
         .mock.calls.map((call) => String(call[0]))
         .join("\n"),
-    ).toContain("- telegram: failed to install bundled runtime deps: ENOSPC");
+    ).toContain("- telegram: failed to load plugin dependency: ENOSPC");
   });
 
   it.each([

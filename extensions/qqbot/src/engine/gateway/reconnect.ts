@@ -18,7 +18,7 @@ import {
 } from "./constants.js";
 
 /** Actions the caller should take after processing a close event. */
-export interface CloseAction {
+interface CloseAction {
   /** Whether to schedule a reconnect. */
   shouldReconnect: boolean;
   /** Custom delay override (ms), or undefined to use the default backoff. */

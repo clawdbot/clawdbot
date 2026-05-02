@@ -10,7 +10,9 @@ title: "Configure"
 Interactive prompt to set up credentials, devices, and agent defaults.
 
 <Note>
-The **Model** section includes a multi-select for the `agents.defaults.models` allowlist (what shows up in `/model` and the model picker). Provider-scoped setup choices merge their selected models into the existing allowlist instead of replacing unrelated providers already in the config. Re-running provider auth from configure preserves an existing `agents.defaults.model.primary`. Use `openclaw models auth login --provider <id> --set-default` or `openclaw models set <model>` when you intentionally want to change the default model.
+The **Model** section includes a multi-select for the `agents.defaults.models` allowlist (what shows up in `/model` and the model picker). Provider-scoped setup choices merge their selected models into the existing allowlist instead of replacing unrelated providers already in the config.
+
+Re-running provider auth from configure preserves an existing `agents.defaults.model.primary`, even when the provider's auth step returns a config patch with its own recommended default model. That means adding or reauthing xAI, OpenRouter, or another provider should make the new model available without taking over from your current primary model. Use `openclaw models auth login --provider <id> --set-default` or `openclaw models set <model>` when you intentionally want to change the default model.
 </Note>
 
 When configure starts from a provider auth choice, the default-model and allowlist pickers prefer that provider automatically. For paired providers such as Volcengine and BytePlus, the same preference also matches their coding-plan variants (`volcengine-plan/*`, `byteplus-plan/*`). If the preferred-provider filter would produce an empty list, configure falls back to the unfiltered catalog instead of showing a blank picker.
@@ -52,7 +54,7 @@ Available sections:
 Notes:
 
 - Choosing where the Gateway runs always updates `gateway.mode`. You can select "Continue" without other sections if that is all you need.
-- After local config writes, configure materializes newly required bundled plugin runtime dependencies. This is a narrow package-manager repair step, not a full `openclaw doctor` run. Remote gateway config does not install local plugin dependencies.
+- After local config writes, configure installs selected downloadable plugins when the chosen setup path requires them. Remote gateway config does not install local plugin packages.
 - Channel-oriented services (Slack/Discord/Matrix/Microsoft Teams) prompt for channel/room allowlists during setup. You can enter names or IDs; the wizard resolves names to IDs when possible.
 - If you run the daemon install step, token auth requires a token, and `gateway.auth.token` is SecretRef-managed, configure validates the SecretRef but does not persist resolved plaintext token values into supervisor service environment metadata.
 - If token auth requires a token and the configured token SecretRef is unresolved, configure blocks daemon install with actionable remediation guidance.

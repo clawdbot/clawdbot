@@ -46,6 +46,19 @@ node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-dir --runtime --json >/tmp/pl
 
 node scripts/e2e/lib/plugins/assertions.mjs plugin-dir
 
+node "$OPENCLAW_ENTRY" plugins update demo-plugin-dir >/tmp/plugins-dir-update.log 2>&1
+node scripts/e2e/lib/plugins/assertions.mjs plugin-dir-update-skipped
+
+echo "Testing install from local folder with preinstalled dependencies..."
+dir_deps_plugin="$(mktemp -d "/tmp/openclaw-plugin-dir-deps.XXXXXX")"
+write_fixture_plugin_with_vendored_dependency "$dir_deps_plugin" demo-plugin-dir-deps 0.0.1 demo.dir.deps "Demo Plugin DIR Deps"
+
+run_logged install-dir-deps node "$OPENCLAW_ENTRY" plugins install "$dir_deps_plugin"
+node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins-dir-deps.json
+node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-dir-deps --runtime --json >/tmp/plugins-dir-deps-inspect.json
+
+node scripts/e2e/lib/plugins/assertions.mjs plugin-dir-deps "$dir_deps_plugin"
+
 echo "Testing install from npm spec (file:)..."
 file_pack_dir="$(mktemp -d "/tmp/openclaw-plugin-filepack.XXXXXX")"
 write_fixture_plugin "$file_pack_dir/package" demo-plugin-file 0.0.1 demo.file "Demo Plugin FILE"
@@ -55,6 +68,24 @@ node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins4.json
 node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-file --runtime --json >/tmp/plugins4-inspect.json
 
 node scripts/e2e/lib/plugins/assertions.mjs plugin-file
+
+echo "Testing install and update from npm registry..."
+npm_pack_dir="$(mktemp -d "/tmp/openclaw-plugin-npm-pack.XXXXXX")"
+npm_dep_pack_dir="$(mktemp -d "/tmp/openclaw-plugin-npm-dep-pack.XXXXXX")"
+npm_registry_dir="$(mktemp -d "/tmp/openclaw-plugin-npm-registry.XXXXXX")"
+pack_fixture_plugin_with_cli_registry_dependency "$npm_pack_dir" /tmp/demo-plugin-npm.tgz demo-plugin-npm 0.0.1 demo.npm "Demo Plugin NPM" demo-npm "demo-plugin-npm:pong"
+pack_fake_is_number_package "$npm_dep_pack_dir" /tmp/is-number-7.0.0.tgz
+start_npm_fixture_registry "@openclaw/demo-plugin-npm" "0.0.1" /tmp/demo-plugin-npm.tgz "$npm_registry_dir" "is-number" "7.0.0" /tmp/is-number-7.0.0.tgz
+
+run_logged install-npm node "$OPENCLAW_ENTRY" plugins install "npm:@openclaw/demo-plugin-npm@0.0.1"
+node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins-npm.json
+node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-npm --runtime --json >/tmp/plugins-npm-inspect.json
+run_logged exec-npm-plugin-cli bash -c 'node "$OPENCLAW_ENTRY" demo-npm ping >/tmp/plugins-npm-cli.txt'
+
+node scripts/e2e/lib/plugins/assertions.mjs plugin-npm
+
+node "$OPENCLAW_ENTRY" plugins update demo-plugin-npm >/tmp/plugins-npm-update.log 2>&1
+node scripts/e2e/lib/plugins/assertions.mjs plugin-npm-update
 
 echo "Testing install from git repo and plugin CLI execution..."
 git_fixture_root="$(mktemp -d "/tmp/openclaw-plugin-git.XXXXXX")"
@@ -74,6 +105,31 @@ node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-git --runtime --json >/tmp/pl
 run_logged exec-git-plugin-cli bash -c 'node "$OPENCLAW_ENTRY" demo-git ping >/tmp/plugins-git-cli.txt'
 
 node scripts/e2e/lib/plugins/assertions.mjs plugin-git "$git_repo_url" "$git_ref"
+
+echo "Testing git plugin update from moving ref..."
+git_update_fixture_root="$(mktemp -d "/tmp/openclaw-plugin-git-update.XXXXXX")"
+git_update_repo="$git_update_fixture_root/repo"
+git_update_repo_url="file://$git_update_repo"
+write_fixture_plugin_with_cli "$git_update_repo" demo-plugin-git-update 0.0.1 demo.git.update.v1 "Demo Plugin Git Update" demo-git-update "demo-plugin-git-update:pong-v1"
+git -C "$git_update_repo" init -q
+git -C "$git_update_repo" config user.email "docker-e2e@openclaw.local"
+git -C "$git_update_repo" config user.name "OpenClaw Docker E2E"
+git -C "$git_update_repo" checkout -qb main
+git -C "$git_update_repo" add -A
+git -C "$git_update_repo" commit -qm "test fixture v1"
+git_update_ref_v1="$(git -C "$git_update_repo" rev-parse HEAD)"
+
+run_logged install-git-update node "$OPENCLAW_ENTRY" plugins install "git:$git_update_repo_url@main"
+write_fixture_plugin_with_cli "$git_update_repo" demo-plugin-git-update 0.0.2 demo.git.update.v2 "Demo Plugin Git Update" demo-git-update "demo-plugin-git-update:pong-v2"
+git -C "$git_update_repo" add -A
+git -C "$git_update_repo" commit -qm "test fixture v2"
+
+node "$OPENCLAW_ENTRY" plugins update demo-plugin-git-update >/tmp/plugins-git-update.log 2>&1
+node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins-git-update.json
+node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-git-update --runtime --json >/tmp/plugins-git-update-inspect.json
+run_logged exec-updated-git-plugin-cli bash -c 'node "$OPENCLAW_ENTRY" demo-git-update ping >/tmp/plugins-git-update-cli.txt'
+
+node scripts/e2e/lib/plugins/assertions.mjs plugin-git-updated "$git_update_ref_v1"
 
 echo "Testing Claude bundle enable and inspect flow..."
 bundle_plugin_id="claude-bundle-e2e"

@@ -39,6 +39,7 @@ export function createReadinessChecker(deps: {
   getStartupPending?: () => boolean;
   getStartupPendingReason?: () => string | undefined;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
+  shouldSkipChannelReadiness?: () => boolean;
   cacheTtlMs?: number;
 }): ReadinessChecker {
   const { channelManager, startedAt } = deps;
@@ -55,6 +56,9 @@ export function createReadinessChecker(deps: {
         { ready: false, failing: [reason], uptimeMs },
         deps.getEventLoopHealth,
       );
+    }
+    if (deps.shouldSkipChannelReadiness?.()) {
+      return withEventLoopHealth({ ready: true, failing: [], uptimeMs }, deps.getEventLoopHealth);
     }
     if (cachedState && now - cachedAt < cacheTtlMs) {
       return withEventLoopHealth({ ...cachedState, uptimeMs }, deps.getEventLoopHealth);

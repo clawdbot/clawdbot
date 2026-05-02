@@ -18,6 +18,11 @@ on:
         required: false
         default: ""
         type: string
+      package_artifact_run_id:
+        description: Advanced run id containing package_artifact_name; blank downloads from this run
+        required: false
+        default: ""
+        type: string
       harness_ref:
         description: Source ref for the private QA harness; defaults to the dispatched workflow ref
         required: false
@@ -42,7 +47,12 @@ on:
         required: true
         type: string
       package_artifact_name:
-        description: Optional package-under-test artifact from the current workflow run
+        description: Optional package-under-test artifact from the current or specified workflow run
+        required: false
+        default: ""
+        type: string
+      package_artifact_run_id:
+        description: Optional run id containing package_artifact_name
         required: false
         default: ""
         type: string
@@ -93,6 +103,7 @@ jobs:
     timeout-minutes: 60
     environment: qa-live-shared
     permissions:
+      actions: read
       contents: read
     env:
       DOCKER_BUILD_SUMMARY: "false"
@@ -169,11 +180,20 @@ jobs:
           fi
 
       - name: Download package-under-test artifact
-        if: inputs.package_artifact_name != ''
+        if: inputs.package_artifact_name != '' && inputs.package_artifact_run_id == ''
         uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.package_artifact_name }}
           path: .artifacts/telegram-package-under-test
+
+      - name: Download package-under-test artifact from release run
+        if: inputs.package_artifact_name != '' && inputs.package_artifact_run_id != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.package_artifact_name }}
+          path: .artifacts/telegram-package-under-test
+          run-id: ${{ inputs.package_artifact_run_id }}
+          github-token: ${{ github.token }}
 
       - name: Run package Telegram E2E
         id: run_lane

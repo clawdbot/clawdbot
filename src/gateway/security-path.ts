@@ -1,6 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
-export type SecurityPathCanonicalization = {
+type SecurityPathCanonicalization = {
   canonicalPath: string;
   candidates: string[];
   decodePasses: number;

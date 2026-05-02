@@ -3,7 +3,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentRuntimePolicy } from "./agent-runtime-policy.js";
 import { normalizeProviderId } from "./provider-id.js";
 
-export type LegacyRuntimeModelProviderAlias = {
+type LegacyRuntimeModelProviderAlias = {
   /** Legacy provider id that encoded the runtime in the model ref. */
   legacyProvider: string;
   /** Canonical provider id that should own model selection. */
@@ -50,7 +50,7 @@ export function listLegacyRuntimeModelProviderAliases(): readonly LegacyRuntimeM
   return LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES;
 }
 
-export function resolveLegacyRuntimeModelProviderAlias(
+function resolveLegacyRuntimeModelProviderAlias(
   provider: string,
 ): LegacyRuntimeModelProviderAlias | undefined {
   return LEGACY_ALIAS_BY_PROVIDER.get(normalizeProviderId(provider));

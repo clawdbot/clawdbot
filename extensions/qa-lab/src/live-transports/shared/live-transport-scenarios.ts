@@ -1,4 +1,4 @@
-export type LiveTransportStandardScenarioId =
+type LiveTransportStandardScenarioId =
   | "canary"
   | "mention-gating"
   | "allowlist-block"
@@ -16,60 +16,59 @@ export type LiveTransportScenarioDefinition<TId extends string = string> = {
   title: string;
 };
 
-export type LiveTransportStandardScenarioDefinition = {
+type LiveTransportStandardScenarioDefinition = {
   description: string;
   id: LiveTransportStandardScenarioId;
   title: string;
 };
 
-export const LIVE_TRANSPORT_STANDARD_SCENARIOS: readonly LiveTransportStandardScenarioDefinition[] =
-  [
-    {
-      id: "canary",
-      title: "Transport canary",
-      description: "The lane can trigger one known-good reply on the real transport.",
-    },
-    {
-      id: "mention-gating",
-      title: "Mention gating",
-      description: "Messages without the required mention do not trigger a reply.",
-    },
-    {
-      id: "allowlist-block",
-      title: "Sender allowlist block",
-      description: "Non-allowlisted senders do not trigger a reply.",
-    },
-    {
-      id: "top-level-reply-shape",
-      title: "Top-level reply shape",
-      description: "Top-level replies stay top-level when the lane is configured that way.",
-    },
-    {
-      id: "restart-resume",
-      title: "Restart resume",
-      description: "The lane still responds after a gateway restart.",
-    },
-    {
-      id: "thread-follow-up",
-      title: "Thread follow-up",
-      description: "Threaded prompts receive threaded replies with the expected relation metadata.",
-    },
-    {
-      id: "thread-isolation",
-      title: "Thread isolation",
-      description: "Fresh top-level prompts stay out of prior threads.",
-    },
-    {
-      id: "reaction-observation",
-      title: "Reaction observation",
-      description: "Reaction events are observed and normalized correctly.",
-    },
-    {
-      id: "help-command",
-      title: "Help command",
-      description: "The transport-specific help command path replies successfully.",
-    },
-  ] as const;
+const LIVE_TRANSPORT_STANDARD_SCENARIOS: readonly LiveTransportStandardScenarioDefinition[] = [
+  {
+    id: "canary",
+    title: "Transport canary",
+    description: "The lane can trigger one known-good reply on the real transport.",
+  },
+  {
+    id: "mention-gating",
+    title: "Mention gating",
+    description: "Messages without the required mention do not trigger a reply.",
+  },
+  {
+    id: "allowlist-block",
+    title: "Sender allowlist block",
+    description: "Non-allowlisted senders do not trigger a reply.",
+  },
+  {
+    id: "top-level-reply-shape",
+    title: "Top-level reply shape",
+    description: "Top-level replies stay top-level when the lane is configured that way.",
+  },
+  {
+    id: "restart-resume",
+    title: "Restart resume",
+    description: "The lane still responds after a gateway restart.",
+  },
+  {
+    id: "thread-follow-up",
+    title: "Thread follow-up",
+    description: "Threaded prompts receive threaded replies with the expected relation metadata.",
+  },
+  {
+    id: "thread-isolation",
+    title: "Thread isolation",
+    description: "Fresh top-level prompts stay out of prior threads.",
+  },
+  {
+    id: "reaction-observation",
+    title: "Reaction observation",
+    description: "Reaction events are observed and normalized correctly.",
+  },
+  {
+    id: "help-command",
+    title: "Help command",
+    description: "The transport-specific help command path replies successfully.",
+  },
+] as const;
 
 export const LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS: readonly LiveTransportStandardScenarioId[] =
   [

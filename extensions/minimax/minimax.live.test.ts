@@ -12,6 +12,7 @@ const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY?.trim() ?? "";
 const MINIMAX_SEARCH_KEY =
   process.env.MINIMAX_CODE_PLAN_KEY?.trim() ||
   process.env.MINIMAX_CODING_API_KEY?.trim() ||
+  process.env.MINIMAX_OAUTH_TOKEN?.trim() ||
   MINIMAX_API_KEY ||
   "";
 const MINIMAX_TTS_TOKEN_PLAN_KEY =

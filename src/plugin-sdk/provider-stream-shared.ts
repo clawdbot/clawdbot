@@ -179,10 +179,8 @@ function assistantMessageHasAnthropicToolUse(message: Record<string, unknown>): 
   );
 }
 
-export function stripTrailingAnthropicAssistantPrefillWhenThinking(
-  payload: Record<string, unknown>,
-): number {
-  if (!isAnthropicThinkingEnabled(payload) || !Array.isArray(payload.messages)) {
+export function stripTrailingAssistantPrefillMessages(payload: Record<string, unknown>): number {
+  if (!Array.isArray(payload.messages)) {
     return 0;
   }
 
@@ -202,6 +200,15 @@ export function stripTrailingAnthropicAssistantPrefillWhenThinking(
     stripped += 1;
   }
   return stripped;
+}
+
+export function stripTrailingAnthropicAssistantPrefillWhenThinking(
+  payload: Record<string, unknown>,
+): number {
+  if (!isAnthropicThinkingEnabled(payload)) {
+    return 0;
+  }
+  return stripTrailingAssistantPrefillMessages(payload);
 }
 
 export function createAnthropicThinkingPrefillPayloadWrapper(

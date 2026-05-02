@@ -31,7 +31,7 @@ Multiple flags:
 ```json
 {
   "diagnostics": {
-    "flags": ["telegram.http", "gateway.*"]
+    "flags": ["telegram.http", "brave.http", "gateway.*"]
   }
 }
 ```
@@ -111,6 +111,12 @@ Filter for Telegram HTTP diagnostics:
 rg "telegram http error" /tmp/openclaw/openclaw-*.log
 ```
 
+Filter for Brave Search HTTP diagnostics:
+
+```bash
+rg "brave http" /tmp/openclaw/openclaw-*.log
+```
+
 Or tail while reproducing:
 
 ```bash
@@ -122,6 +128,7 @@ For remote gateways, you can also use `openclaw logs --follow` (see [/cli/logs](
 ## Notes
 
 - If `logging.level` is set higher than `warn`, these logs may be suppressed. Default `info` is fine.
+- `brave.http` logs Brave Search request URLs/query params, response status/timing, and cache hit/miss/write events. It does not log API keys or response bodies, but search queries can be sensitive.
 - Flags are safe to leave enabled; they only affect log volume for the specific subsystem.
 - Use [/logging](/logging) to change log destinations, levels, and redaction.
 

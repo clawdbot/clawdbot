@@ -3,10 +3,6 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { removePathIfExists } from "./runtime-postbuild-shared.mjs";
 
-function symlinkType() {
-  return process.platform === "win32" ? "junction" : "dir";
-}
-
 function relativeSymlinkTarget(sourcePath, targetPath) {
   const relativeTarget = path.relative(path.dirname(targetPath), sourcePath);
   return relativeTarget || ".";
@@ -75,27 +71,6 @@ function symlinkPath(sourcePath, targetPath, type) {
 function writeJsonFile(targetPath, value) {
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
   fs.writeFileSync(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
-function removeStaleOpenClawSelfReference(sourcePluginNodeModulesDir, repoRoot) {
-  if (!fs.existsSync(sourcePluginNodeModulesDir)) {
-    return;
-  }
-
-  const selfReferencePath = path.join(sourcePluginNodeModulesDir, "openclaw");
-  try {
-    const existing = fs.lstatSync(selfReferencePath);
-    if (!existing.isSymbolicLink()) {
-      return;
-    }
-    if (fs.realpathSync(selfReferencePath) === fs.realpathSync(repoRoot)) {
-      removePathIfExists(selfReferencePath);
-    }
-  } catch (error) {
-    if (error?.code !== "ENOENT") {
-      throw error;
-    }
-  }
 }
 
 function ensureOpenClawExtensionAlias(params) {
@@ -231,21 +206,6 @@ function stagePluginRuntimeOverlay(sourceDir, targetDir, relativeDir = "") {
   }
 }
 
-function linkPluginNodeModules(params) {
-  const runtimeNodeModulesDir = path.join(params.runtimePluginDir, "node_modules");
-  removePathIfExists(runtimeNodeModulesDir);
-  if (!fs.existsSync(params.sourcePluginNodeModulesDir)) {
-    return;
-  }
-  removeStaleOpenClawSelfReference(params.sourcePluginNodeModulesDir, params.repoRoot);
-  ensureSymlink(
-    params.sourcePluginNodeModulesDir,
-    runtimeNodeModulesDir,
-    symlinkType(),
-    params.sourcePluginNodeModulesDir,
-  );
-}
-
 export function stageBundledPluginRuntime(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const distRoot = path.join(repoRoot, "dist");
@@ -268,14 +228,8 @@ export function stageBundledPluginRuntime(params = {}) {
     }
     const distPluginDir = path.join(distExtensionsRoot, dirent.name);
     const runtimePluginDir = path.join(runtimeExtensionsRoot, dirent.name);
-    const distPluginNodeModulesDir = path.join(distPluginDir, "node_modules");
 
     stagePluginRuntimeOverlay(distPluginDir, runtimePluginDir);
-    linkPluginNodeModules({
-      repoRoot,
-      runtimePluginDir,
-      sourcePluginNodeModulesDir: distPluginNodeModulesDir,
-    });
   }
 }
 

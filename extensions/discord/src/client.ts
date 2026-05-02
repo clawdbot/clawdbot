@@ -61,13 +61,6 @@ function resolveToken(params: { accountId: string; fallbackToken?: string }) {
   return fallback;
 }
 
-export function resolveDiscordProxyFetch(
-  opts: Pick<DiscordClientOpts, "cfg" | "accountId">,
-  runtime?: Pick<RuntimeEnv, "error">,
-): typeof fetch | undefined {
-  return resolveDiscordClientAccountContext(opts, runtime).proxyFetch;
-}
-
 function resolveRest(
   token: string,
   account: ResolvedDiscordAccount,

@@ -3,10 +3,10 @@
 
 import os from "node:os";
 
-export const DEFAULT_LOCAL_FULL_SUITE_PARALLELISM = 4;
-export const LARGE_LOCAL_FULL_SUITE_PARALLELISM = 10;
-export const DEFAULT_LOCAL_FULL_SUITE_VITEST_WORKERS = 1;
-export const LARGE_LOCAL_FULL_SUITE_VITEST_WORKERS = 2;
+const DEFAULT_LOCAL_FULL_SUITE_PARALLELISM = 4;
+const LARGE_LOCAL_FULL_SUITE_PARALLELISM = 10;
+const DEFAULT_LOCAL_FULL_SUITE_VITEST_WORKERS = 1;
+const LARGE_LOCAL_FULL_SUITE_VITEST_WORKERS = 2;
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 

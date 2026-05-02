@@ -4,7 +4,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { renderCodexPromptOverlay } from "../../prompt-overlay.js";
 import { isModernCodexModel } from "../../provider.js";
-import type { CodexAppServerClient } from "./client.js";
+import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
 import {
   assertCodexThreadResumeResponse,
@@ -86,6 +86,9 @@ export async function startOrResumeThread(params: {
           dynamicToolsFingerprint,
         };
       } catch (error) {
+        if (isCodexAppServerConnectionClosedError(error)) {
+          throw error;
+        }
         embeddedAgentLog.warn("codex app-server thread resume failed; starting a new thread", {
           error,
         });

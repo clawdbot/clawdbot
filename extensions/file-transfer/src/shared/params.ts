@@ -1,7 +1,7 @@
 // Shared param-validation helpers used by all four agent tools.
 // Goal: identical validation behavior + identical error shapes everywhere.
 
-export type GatewayCallOptions = {
+type GatewayCallOptions = {
   gatewayUrl?: string;
   gatewayToken?: string;
   timeoutMs?: number;

@@ -4,7 +4,7 @@ import {
 } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-export type DeferredCleanupDecision =
+type DeferredCleanupDecision =
   | {
       kind: "defer-descendants";
       delayMs: number;

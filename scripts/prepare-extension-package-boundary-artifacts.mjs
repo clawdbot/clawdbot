@@ -168,7 +168,7 @@ function abortSiblingSteps(abortController) {
   }
 }
 
-export function runNodeStep(label, args, timeoutMs, params = {}) {
+function runNodeStep(label, args, timeoutMs, params = {}) {
   const abortController = params.abortController;
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(process.execPath, args, {
@@ -258,7 +258,7 @@ export async function runNodeSteps(steps, env = process.env) {
   }
 }
 
-export async function main(argv = process.argv.slice(2)) {
+async function main(argv = process.argv.slice(2)) {
   try {
     const mode = parseMode(argv);
     const rootDtsFresh =

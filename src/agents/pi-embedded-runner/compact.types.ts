@@ -44,6 +44,8 @@ export type CompactEmbeddedPiSessionParams = {
   skillsSnapshot?: SkillSnapshot;
   provider?: string;
   model?: string;
+  /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */
+  modelFallbacksOverride?: string[];
   /** Optional caller-resolved context engine for harness-owned compaction. */
   contextEngine?: ContextEngine;
   /** Optional caller-resolved token budget for harness-owned compaction. */

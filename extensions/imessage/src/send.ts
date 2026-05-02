@@ -9,7 +9,7 @@ import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { formatIMessageChatTarget, type IMessageService, parseIMessageTarget } from "./targets.js";
 
-export type IMessageSendOpts = {
+type IMessageSendOpts = {
   cliPath?: string;
   dbPath?: string;
   service?: IMessageService;
@@ -36,7 +36,7 @@ export type IMessageSendOpts = {
   createClient?: (params: { cliPath: string; dbPath?: string }) => Promise<IMessageRpcClient>;
 };
 
-export type IMessageSendResult = {
+type IMessageSendResult = {
   messageId: string;
   sentText: string;
 };

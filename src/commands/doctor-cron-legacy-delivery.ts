@@ -152,7 +152,7 @@ export function normalizeLegacyDeliveryInput(params: {
   };
 }
 
-export function stripLegacyDeliveryFields(payload: Record<string, unknown>) {
+function stripLegacyDeliveryFields(payload: Record<string, unknown>) {
   if ("deliver" in payload) {
     delete payload.deliver;
   }

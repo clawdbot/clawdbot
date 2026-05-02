@@ -12,7 +12,7 @@ type ManagedCodexAppServerPaths = {
   candidateCommandPaths: string[];
 };
 
-export type ResolveManagedCodexAppServerOptions = {
+type ResolveManagedCodexAppServerOptions = {
   platform?: NodeJS.Platform;
   pluginRoot?: string;
   pathExists?: (filePath: string, platform: NodeJS.Platform) => Promise<boolean>;
@@ -105,7 +105,7 @@ async function findManagedCodexAppServerCommandPath(params: {
   throw new Error(
     [
       `Managed Codex app-server binary was not found for ${MANAGED_CODEX_APP_SERVER_PACKAGE}.`,
-      "Run OpenClaw with bundled plugin runtime dependencies enabled, or run pnpm install in a source checkout.",
+      "Reinstall or update OpenClaw, or run pnpm install in a source checkout.",
       "Set plugins.entries.codex.config.appServer.command or OPENCLAW_CODEX_APP_SERVER_BIN to use a custom Codex binary.",
     ].join(" "),
   );

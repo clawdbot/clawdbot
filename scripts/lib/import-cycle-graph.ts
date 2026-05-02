@@ -7,11 +7,11 @@ type SourceFileCollectionOptions = {
   shouldSkipRepoPath?: (repoPath: string) => boolean;
 };
 
-export function normalizeRepoPath(filePath: string, repoRoot: string): string {
+function normalizeRepoPath(filePath: string, repoRoot: string): string {
   return path.relative(repoRoot, filePath).split(path.sep).join("/");
 }
 
-export function cycleSignature(files: readonly string[]): string {
+function cycleSignature(files: readonly string[]): string {
   return files.toSorted((left, right) => left.localeCompare(right)).join("\n");
 }
 
@@ -90,7 +90,7 @@ export function collectStronglyConnectedComponents(
   );
 }
 
-export function findCycleWitness(
+function findCycleWitness(
   component: readonly string[],
   graph: ReadonlyMap<string, readonly string[]>,
 ): string[] {

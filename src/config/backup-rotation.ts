@@ -1,15 +1,15 @@
 import path from "node:path";
 
-export const CONFIG_BACKUP_COUNT = 5;
+const CONFIG_BACKUP_COUNT = 5;
 
-export interface BackupRotationFs {
+interface BackupRotationFs {
   unlink: (path: string) => Promise<void>;
   rename: (from: string, to: string) => Promise<void>;
   chmod?: (path: string, mode: number) => Promise<void>;
   readdir?: (path: string) => Promise<string[]>;
 }
 
-export interface BackupMaintenanceFs extends BackupRotationFs {
+interface BackupMaintenanceFs extends BackupRotationFs {
   copyFile: (from: string, to: string) => Promise<void>;
 }
 

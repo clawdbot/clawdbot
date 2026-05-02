@@ -10,7 +10,7 @@ export type ParsedSlashCommand =
   | { ok: true; action: string; args: string }
   | { ok: false; message: string };
 
-export function parseSlashCommandActionArgs(raw: string, slash: string): SlashCommandParseResult {
+function parseSlashCommandActionArgs(raw: string, slash: string): SlashCommandParseResult {
   const trimmed = raw.trim();
   const slashLower = normalizeLowercaseStringOrEmpty(slash);
   if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith(slashLower)) {

@@ -41,7 +41,7 @@ export type DaemonActionResponse = {
   };
 };
 
-export function emitDaemonActionJson(payload: DaemonActionResponse) {
+function emitDaemonActionJson(payload: DaemonActionResponse) {
   defaultRuntime.writeJson(payload);
 }
 
@@ -90,7 +90,7 @@ export function buildDaemonServiceSnapshot(service: GatewayService, loaded: bool
   };
 }
 
-export function createNullWriter(): Writable {
+function createNullWriter(): Writable {
   return new Writable({
     write(_chunk, _encoding, callback) {
       callback();

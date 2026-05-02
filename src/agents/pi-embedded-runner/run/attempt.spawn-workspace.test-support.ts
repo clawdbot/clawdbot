@@ -62,6 +62,7 @@ type AttemptSpawnWorkspaceHoisted = {
   ensureGlobalUndiciEnvProxyDispatcherMock: UnknownMock;
   ensureGlobalUndiciStreamTimeoutsMock: UnknownMock;
   buildEmbeddedMessageActionDiscoveryInputMock: UnknownMock;
+  createOpenClawCodingToolsMock: UnknownMock;
   subscribeEmbeddedPiSessionMock: Mock<SubscribeEmbeddedPiSessionFn>;
   acquireSessionWriteLockMock: Mock<AcquireSessionWriteLockFn>;
   installToolResultContextGuardMock: UnknownMock;
@@ -94,6 +95,7 @@ export function createSubscriptionMock(): SubscriptionMock {
     getMessagingToolSentTexts: () => [] as string[],
     getMessagingToolSentMediaUrls: () => [] as string[],
     getMessagingToolSentTargets: () => [] as MessagingToolSend[],
+    getHeartbeatToolResponse: () => undefined,
     getPendingToolMediaReply: () => null,
     getSuccessfulCronAdds: () => 0,
     getReplayState: () => ({
@@ -120,6 +122,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const ensureGlobalUndiciEnvProxyDispatcherMock = vi.fn();
   const ensureGlobalUndiciStreamTimeoutsMock = vi.fn();
   const buildEmbeddedMessageActionDiscoveryInputMock = vi.fn((params: unknown) => params);
+  const createOpenClawCodingToolsMock = vi.fn(() => []);
   const installToolResultContextGuardMock = vi.fn(() => () => {});
   const installContextEngineLoopHookMock = vi.fn(() => () => {});
   const flushPendingToolResultsAfterIdleMock = vi.fn(async () => {});
@@ -169,6 +172,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     ensureGlobalUndiciEnvProxyDispatcherMock,
     ensureGlobalUndiciStreamTimeoutsMock,
     buildEmbeddedMessageActionDiscoveryInputMock,
+    createOpenClawCodingToolsMock,
     subscribeEmbeddedPiSessionMock,
     acquireSessionWriteLockMock,
     installToolResultContextGuardMock,
@@ -426,26 +430,8 @@ vi.mock("../../cache-trace.js", () => ({
 }));
 
 vi.mock("../../pi-tools.js", () => ({
-  createOpenClawCodingTools: (options?: { workspaceDir?: string; spawnWorkspaceDir?: string }) => [
-    {
-      name: "sessions_spawn",
-      execute: async (
-        _callId: string,
-        input: { task?: string },
-        _session?: unknown,
-        _abortSignal?: unknown,
-        _ctx?: unknown,
-      ) =>
-        await hoisted.spawnSubagentDirectMock(
-          {
-            task: input.task ?? "",
-          },
-          {
-            workspaceDir: options?.spawnWorkspaceDir ?? options?.workspaceDir,
-          },
-        ),
-    },
-  ],
+  createOpenClawCodingTools: (options?: { workspaceDir?: string; spawnWorkspaceDir?: string }) =>
+    hoisted.createOpenClawCodingToolsMock(options),
   resolveToolLoopDetectionConfig: () => undefined,
 }));
 
@@ -525,6 +511,9 @@ vi.mock("../../tool-call-id.js", async (importOriginal) => {
 });
 
 vi.mock("../../tool-fs-policy.js", () => ({
+  createToolFsPolicy: (params: { workspaceOnly?: boolean }) => ({
+    workspaceOnly: params.workspaceOnly === true,
+  }),
   resolveEffectiveToolFsWorkspaceOnly: () => false,
 }));
 
@@ -766,6 +755,34 @@ export function resetEmbeddedAttemptHarness(
   hoisted.buildEmbeddedMessageActionDiscoveryInputMock
     .mockReset()
     .mockImplementation((params) => params);
+  hoisted.createOpenClawCodingToolsMock.mockReset().mockImplementation((...args: unknown[]) => {
+    const options = args[0] as
+      | {
+          workspaceDir?: string;
+          spawnWorkspaceDir?: string;
+        }
+      | undefined;
+    return [
+      {
+        name: "sessions_spawn",
+        execute: async (
+          _callId: string,
+          input: { task?: string },
+          _session?: unknown,
+          _abortSignal?: unknown,
+          _ctx?: unknown,
+        ) =>
+          await hoisted.spawnSubagentDirectMock(
+            {
+              task: input.task ?? "",
+            },
+            {
+              workspaceDir: options?.spawnWorkspaceDir ?? options?.workspaceDir,
+            },
+          ),
+      },
+    ];
+  });
   hoisted.subscribeEmbeddedPiSessionMock
     .mockReset()
     .mockImplementation(() => createSubscriptionMock());
@@ -1010,6 +1027,7 @@ export async function createContextEngineAttemptRunner(params: {
     modelId: "gpt-test",
     model: testModel,
     authStorage: testAuthStorage as never,
+    authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
     thinkLevel: "off",
     senderIsOwner: true,

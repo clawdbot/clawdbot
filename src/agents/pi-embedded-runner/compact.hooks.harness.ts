@@ -313,6 +313,7 @@ export async function loadCompactHooksHarness(): Promise<{
   vi.doMock("../model-auth.js", () => ({
     applyAuthHeaderOverride: vi.fn((model: unknown) => model),
     applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
+    ensureAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({})),
     getApiKeyForModel: vi.fn(async () => ({ apiKey: "test", mode: "env" })),
     resolveModelAuthMode: vi.fn(() => "env"),
   }));
@@ -503,8 +504,13 @@ export async function loadCompactHooksHarness(): Promise<{
     listAgentEntries: vi.fn(() => []),
     resolveAgentConfig: vi.fn(() => undefined),
     resolveDefaultAgentId: vi.fn(() => "main"),
+    resolveRunModelFallbacksOverride: vi.fn(() => undefined),
     resolveSessionAgentId: resolveSessionAgentIdMock,
     resolveSessionAgentIds: vi.fn(() => ({ defaultAgentId: "main", sessionAgentId: "main" })),
+  }));
+
+  vi.doMock("../auth-profiles/source-check.js", () => ({
+    hasAnyAuthProfileStoreSource: vi.fn(() => false),
   }));
 
   vi.doMock("../memory-search.js", () => ({

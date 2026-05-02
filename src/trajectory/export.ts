@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { FileEntry, SessionEntry, SessionHeader } from "@mariozechner/pi-coding-agent";
@@ -113,12 +113,12 @@ function migrateLegacySessionEntries(entries: FileEntry[]): void {
   }
 }
 
-function readSessionBranch(filePath: string): {
+async function readSessionBranch(filePath: string): Promise<{
   header: SessionHeader | null;
   leafId: string | null;
   branchEntries: SessionEntry[];
-} {
-  const fileEntries = parseSessionEntries(fs.readFileSync(filePath, "utf8"));
+}> {
+  const fileEntries = parseSessionEntries(await fsp.readFile(filePath, "utf8"));
   migrateLegacySessionEntries(fileEntries);
   const header =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
@@ -140,24 +140,32 @@ function readSessionBranch(filePath: string): {
   return { header, leafId, branchEntries };
 }
 
-function parseJsonlFile<T>(
+async function parseJsonlFile<T>(
   filePath: string,
   params: {
     maxBytes: number;
     maxEvents: number;
     validate?: (value: unknown) => value is T;
   },
-): T[] {
-  if (!fs.existsSync(filePath)) {
+): Promise<T[]> {
+  let stat;
+  try {
+    stat = await fsp.stat(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+  if (!stat.isFile()) {
     return [];
   }
-  const stat = fs.statSync(filePath);
   if (stat.size > params.maxBytes) {
     throw new Error(
       `Trajectory runtime file is too large to export (${stat.size} bytes; limit ${params.maxBytes})`,
     );
   }
-  const content = fs.readFileSync(filePath, "utf8");
+  const content = await fsp.readFile(filePath, "utf8");
   const rows = content
     .split(/\r?\n/u)
     .map((line) => line.trim())
@@ -209,26 +217,29 @@ function isRuntimeTrajectoryEventForSession(
   );
 }
 
-function isRegularNonSymlinkFile(filePath: string): boolean {
+async function isRegularNonSymlinkFile(filePath: string): Promise<boolean> {
   try {
-    const linkStat = fs.lstatSync(filePath);
+    const linkStat = await fsp.lstat(filePath);
     if (linkStat.isSymbolicLink() || !linkStat.isFile()) {
       return false;
     }
-    const stat = fs.statSync(filePath);
+    const stat = await fsp.stat(filePath);
     return stat.isFile() && stat.dev === linkStat.dev && stat.ino === linkStat.ino;
   } catch {
     return false;
   }
 }
 
-function readRuntimePointerFile(sessionFile: string, sessionId: string): string | undefined {
+async function readRuntimePointerFile(
+  sessionFile: string,
+  sessionId: string,
+): Promise<string | undefined> {
   const pointerPath = resolveTrajectoryPointerFilePath(sessionFile);
-  if (!isRegularNonSymlinkFile(pointerPath)) {
+  if (!(await isRegularNonSymlinkFile(pointerPath))) {
     return undefined;
   }
   try {
-    const parsed = JSON.parse(fs.readFileSync(pointerPath, "utf8")) as unknown;
+    const parsed = JSON.parse(await fsp.readFile(pointerPath, "utf8")) as unknown;
     if (!isRecord(parsed)) {
       return undefined;
     }
@@ -253,16 +264,16 @@ function readRuntimePointerFile(sessionFile: string, sessionId: string): string 
   }
 }
 
-function resolveTrajectoryRuntimeFile(params: {
+async function resolveTrajectoryRuntimeFile(params: {
   runtimeFile?: string;
   sessionFile: string;
   sessionId: string;
-}): string | undefined {
+}): Promise<string | undefined> {
   if (params.runtimeFile) {
     return params.runtimeFile;
   }
   const candidates = [
-    readRuntimePointerFile(params.sessionFile, params.sessionId),
+    await readRuntimePointerFile(params.sessionFile, params.sessionId),
     resolveTrajectoryFilePath({
       env: {},
       sessionFile: params.sessionFile,
@@ -273,7 +284,12 @@ function resolveTrajectoryRuntimeFile(params: {
       sessionId: params.sessionId,
     }),
   ].filter((candidate): candidate is string => Boolean(candidate));
-  return candidates.find((candidate) => isRegularNonSymlinkFile(candidate));
+  for (const candidate of candidates) {
+    if (await isRegularNonSymlinkFile(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
 }
 
 function normalizeTimestamp(value: unknown): string {
@@ -814,31 +830,31 @@ export function resolveDefaultTrajectoryExportDir(params: {
   );
 }
 
-export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
+export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): Promise<{
   manifest: TrajectoryBundleManifest;
   outputDir: string;
   events: TrajectoryEvent[];
   header: SessionHeader | null;
   runtimeFile?: string;
   supplementalFiles: string[];
-} {
+}> {
   const redaction = buildTrajectoryExportRedaction({
     workspaceDir: params.workspaceDir,
   });
-  const sessionStat = fs.statSync(params.sessionFile);
+  const sessionStat = await fsp.stat(params.sessionFile);
   if (sessionStat.size > MAX_TRAJECTORY_SESSION_FILE_BYTES) {
     throw new Error(
       `Trajectory session file is too large to export (${sessionStat.size} bytes; limit ${MAX_TRAJECTORY_SESSION_FILE_BYTES})`,
     );
   }
-  const { header, leafId, branchEntries } = readSessionBranch(params.sessionFile);
-  const runtimeFile = resolveTrajectoryRuntimeFile({
+  const { header, leafId, branchEntries } = await readSessionBranch(params.sessionFile);
+  const runtimeFile = await resolveTrajectoryRuntimeFile({
     runtimeFile: params.runtimeFile,
     sessionFile: params.sessionFile,
     sessionId: params.sessionId,
   });
   const runtimeEvents = runtimeFile
-    ? parseJsonlFile<TrajectoryEvent>(runtimeFile, {
+    ? await parseJsonlFile<TrajectoryEvent>(runtimeFile, {
         maxBytes: TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
         maxEvents: MAX_TRAJECTORY_RUNTIME_EVENTS,
         validate: (value): value is TrajectoryEvent =>
@@ -876,7 +892,7 @@ export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
     sourceFiles: {
       session: maybeRedactPathString(params.sessionFile, redaction),
       runtime:
-        runtimeFile && isRegularNonSymlinkFile(runtimeFile)
+        runtimeFile && (await isRegularNonSymlinkFile(runtimeFile))
           ? maybeRedactPathString(runtimeFile, redaction)
           : undefined,
     },
@@ -955,7 +971,7 @@ export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
   const contents: DiagnosticSupportBundleContent[] = [...supportBundleContents(files)];
   manifest.contents = contents;
 
-  writeSupportBundleDirectory({
+  await writeSupportBundleDirectory({
     outputDir: params.outputDir,
     files: [jsonSupportBundleFile("manifest.json", manifest), ...files],
   });
@@ -965,7 +981,8 @@ export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
     outputDir: params.outputDir,
     events,
     header,
-    runtimeFile: runtimeFile && isRegularNonSymlinkFile(runtimeFile) ? runtimeFile : undefined,
+    runtimeFile:
+      runtimeFile && (await isRegularNonSymlinkFile(runtimeFile)) ? runtimeFile : undefined,
     supplementalFiles,
   };
 }

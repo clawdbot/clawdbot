@@ -2,10 +2,10 @@ import { normalizeProviderId } from "../agents/provider-id.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export const ANTHROPIC_SETUP_TOKEN_PREFIX = "sk-ant-oat01-";
-export const ANTHROPIC_SETUP_TOKEN_MIN_LENGTH = 80;
-export const DEFAULT_TOKEN_PROFILE_NAME = "default";
+const ANTHROPIC_SETUP_TOKEN_MIN_LENGTH = 80;
+const DEFAULT_TOKEN_PROFILE_NAME = "default";
 
-export function normalizeTokenProfileName(raw: string): string {
+function normalizeTokenProfileName(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
     return DEFAULT_TOKEN_PROFILE_NAME;

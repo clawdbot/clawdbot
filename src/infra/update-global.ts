@@ -21,7 +21,7 @@ export type CommandRunner = (
   options: { timeoutMs: number; cwd?: string; env?: NodeJS.ProcessEnv },
 ) => Promise<{ stdout: string; stderr: string; code: number | null }>;
 
-export type ResolvedGlobalInstallCommand = {
+type ResolvedGlobalInstallCommand = {
   manager: GlobalInstallManager;
   command: string;
 };

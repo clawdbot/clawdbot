@@ -1,4 +1,5 @@
 import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
+import { expandAllowFromWithAccessGroups } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -204,6 +205,16 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
   });
   const groupEntry = groupConfigResolved.entry;
   const groupUsers = groupEntry?.users ?? account.config.groupAllowFrom ?? [];
+  const isGoogleChatSenderAllowed = (_senderId: string, allowFrom: string[]) =>
+    isSenderAllowed(senderId, senderEmail, allowFrom, allowNameMatching);
+  const expandedGroupUsers = await expandAllowFromWithAccessGroups({
+    cfg: config,
+    allowFrom: groupUsers,
+    channel: "googlechat",
+    accountId: account.accountId,
+    senderId,
+    isSenderAllowed: isGoogleChatSenderAllowed,
+  });
   let effectiveWasMentioned: boolean | undefined;
 
   if (isGroup) {
@@ -231,10 +242,9 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
       return { ok: false };
     }
 
-    if (groupUsers.length > 0) {
-      const normalizedGroupUsers = groupUsers.map((v) => String(v));
-      warnDeprecatedUsersEmailEntries(logVerbose, normalizedGroupUsers);
-      const ok = isSenderAllowed(senderId, senderEmail, normalizedGroupUsers, allowNameMatching);
+    if (expandedGroupUsers.length > 0) {
+      warnDeprecatedUsersEmailEntries(logVerbose, expandedGroupUsers);
+      const ok = isSenderAllowed(senderId, senderEmail, expandedGroupUsers, allowNameMatching);
       if (!ok) {
         logVerbose(`drop group message (sender not allowed, ${senderId})`);
         return { ok: false };
@@ -243,8 +253,8 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
   }
 
   const dmPolicy = account.config.dm?.policy ?? "pairing";
-  const configAllowFrom = (account.config.dm?.allowFrom ?? []).map((v) => String(v));
-  const normalizedGroupUsers = groupUsers.map((v) => String(v));
+  const rawConfigAllowFrom = (account.config.dm?.allowFrom ?? []).map((v) => String(v));
+  const normalizedGroupUsers = expandedGroupUsers;
   const senderGroupPolicy =
     groupConfigResolved.allowlistConfigured && normalizedGroupUsers.length === 0
       ? groupPolicy
@@ -257,13 +267,31 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
     !isGroup && dmPolicy !== "allowlist" && dmPolicy !== "open"
       ? await pairing.readAllowFromStore().catch(() => [])
       : [];
+  const [configAllowFrom, effectiveStoreAllowFrom] = await Promise.all([
+    expandAllowFromWithAccessGroups({
+      cfg: config,
+      allowFrom: rawConfigAllowFrom,
+      channel: "googlechat",
+      accountId: account.accountId,
+      senderId,
+      isSenderAllowed: isGoogleChatSenderAllowed,
+    }),
+    expandAllowFromWithAccessGroups({
+      cfg: config,
+      allowFrom: storeAllowFrom,
+      channel: "googlechat",
+      accountId: account.accountId,
+      senderId,
+      isSenderAllowed: isGoogleChatSenderAllowed,
+    }),
+  ]);
   const access = resolveDmGroupAccessWithLists({
     isGroup,
     dmPolicy,
     groupPolicy: senderGroupPolicy,
     allowFrom: configAllowFrom,
     groupAllowFrom: normalizedGroupUsers,
-    storeAllowFrom,
+    storeAllowFrom: effectiveStoreAllowFrom,
     groupAllowFromFallbackToAllowFrom: false,
     isSenderAllowed: (allowFrom) =>
       isSenderAllowed(senderId, senderEmail, allowFrom, allowNameMatching),

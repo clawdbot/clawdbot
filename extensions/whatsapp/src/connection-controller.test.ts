@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
-import { WhatsAppConnectionController } from "./connection-controller.js";
+import { closeWaSocket, WhatsAppConnectionController } from "./connection-controller.js";
 import type { WhatsAppSendKind, WhatsAppSendResult } from "./inbound/send-result.js";
 import { createWaSocket, waitForWaConnection } from "./session.js";
 
@@ -40,6 +40,7 @@ function createSocketWithTransportEmitter() {
   const ws = new EventEmitter() as EventEmitter & { close: ReturnType<typeof vi.fn> };
   ws.close = vi.fn();
   return {
+    end: vi.fn(),
     ws,
   };
 }
@@ -74,6 +75,7 @@ describe("WhatsAppConnectionController", () => {
 
   it("closes the socket when open fails before listener creation", async () => {
     const sock = {
+      end: vi.fn(),
       ws: {
         close: vi.fn(),
       },
@@ -91,9 +93,19 @@ describe("WhatsAppConnectionController", () => {
     ).rejects.toThrow("handshake failed");
 
     expect(createListener).not.toHaveBeenCalled();
-    expect(sock.ws.close).toHaveBeenCalledOnce();
+    expect(sock.end).toHaveBeenCalledOnce();
+    expect(sock.end).toHaveBeenCalledWith(expect.any(Error));
+    expect(sock.ws.close).not.toHaveBeenCalled();
     expect(controller.socketRef.current).toBeNull();
     expect(controller.getActiveListener()).toBeNull();
+  });
+
+  it("falls back to raw websocket close when Baileys end is unavailable", () => {
+    const sock = { ws: { close: vi.fn() } };
+
+    closeWaSocket(sock);
+
+    expect(sock.ws.close).toHaveBeenCalledOnce();
   });
 
   it("lets createWaSocket own the auth barrier before opening a socket", async () => {

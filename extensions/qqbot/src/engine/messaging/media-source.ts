@@ -73,7 +73,7 @@ const DATA_URL_RE = /^data:([^;,]+);base64,(.+)$/i;
  * base64 encoding. Non-base64 data URLs are intentionally rejected because
  * the QQ upload API ingests raw base64, not arbitrary URL-encoded payloads.
  */
-export function tryParseDataUrl(value: string): { mime: string; data: string } | null {
+function tryParseDataUrl(value: string): { mime: string; data: string } | null {
   if (!value.startsWith("data:")) {
     return null;
   }
@@ -92,7 +92,7 @@ export function tryParseDataUrl(value: string): { mime: string; data: string } |
  *
  * Callers MUST call {@link OpenedLocalFile.close} (typically in a `finally`).
  */
-export interface OpenedLocalFile {
+interface OpenedLocalFile {
   handle: fs.promises.FileHandle;
   size: number;
   close(): Promise<void>;

@@ -20,7 +20,7 @@ export function isLocalCheckEnabled(env) {
   return raw !== "0" && raw !== "false";
 }
 
-export function isCiLikeEnv(env = process.env) {
+function isCiLikeEnv(env = process.env) {
   return env.CI === "true" || env.GITHUB_ACTIONS === "true";
 }
 
@@ -35,7 +35,7 @@ export function resolveLocalHeavyCheckEnv(env = process.env) {
   };
 }
 
-export function hasFlag(args, name) {
+function hasFlag(args, name) {
   return args.some((arg) => arg === name || arg.startsWith(`${name}=`));
 }
 
@@ -85,6 +85,7 @@ export function applyLocalOxlintPolicy(args, env, hostResources) {
 
   insertBeforeSeparator(nextArgs, "--type-aware");
   insertBeforeSeparator(nextArgs, "--tsconfig", "tsconfig.oxlint.json");
+  insertBeforeSeparator(nextArgs, "--allow", "eslint/no-underscore-dangle");
   if (
     !hasFlag(nextArgs, "--report-unused-disable-directives") &&
     !hasFlag(nextArgs, "--report-unused-disable-directives-severity")
@@ -160,7 +161,7 @@ export function shouldAcquireLocalHeavyCheckLockForTsgo(args, env = process.env)
   );
 }
 
-export function shouldThrottleLocalHeavyChecks(env, hostResources, defaultMode = "throttled") {
+function shouldThrottleLocalHeavyChecks(env, hostResources, defaultMode = "throttled") {
   if (!isLocalCheckEnabled(env)) {
     return false;
   }
@@ -272,7 +273,7 @@ export function acquireLocalHeavyCheckLockSync(params) {
   }
 }
 
-export function resolveGitCommonDir(cwd) {
+function resolveGitCommonDir(cwd) {
   const result = spawnSync("git", ["rev-parse", "--git-common-dir"], {
     cwd,
     encoding: "utf8",

@@ -129,6 +129,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
         },
       },
       messaging: {
+        targetPrefixes: ["bluebubbles"],
         normalizeTarget: normalizeBlueBubblesMessagingTarget,
         inferTargetChatType: ({ to }) => inferBlueBubblesTargetChatType(to),
         resolveOutboundSessionRoute: (params) => resolveBlueBubblesOutboundSessionRoute(params),

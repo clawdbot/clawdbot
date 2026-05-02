@@ -68,7 +68,7 @@ describe("deliverDiscordReply", () => {
     });
   });
 
-  it("bridges regular replies to shared outbound with Discord runtime deps", async () => {
+  it("bridges regular replies to shared outbound with Discord package deps", async () => {
     const rest = {} as RequestClient;
     const replies = [{ text: "shared path" }];
 

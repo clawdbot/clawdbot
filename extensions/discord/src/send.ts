@@ -29,6 +29,7 @@ export {
 export {
   createThreadDiscord,
   deleteMessageDiscord,
+  DiscordThreadInitialMessageError,
   editMessageDiscord,
   fetchMessageDiscord,
   listPinsDiscord,
@@ -43,6 +44,7 @@ export { sendWebhookMessageDiscord } from "./send.webhook.js";
 export { sendVoiceMessageDiscord } from "./send.voice.js";
 export { sendTypingDiscord } from "./send.typing.js";
 export {
+  canViewDiscordGuildChannel,
   fetchChannelPermissionsDiscord,
   hasAllGuildPermissionsDiscord,
   hasAnyGuildPermissionDiscord,

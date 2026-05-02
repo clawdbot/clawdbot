@@ -1,25 +1,12 @@
 import { ButtonStyle } from "discord-api-types/v10";
 import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
-import type {
-  ExecApprovalDecision,
-  ExecApprovalRequest,
-  ExecApprovalResolved,
-  PluginApprovalRequest,
-  PluginApprovalResolved,
-} from "openclaw/plugin-sdk/approval-runtime";
+import type { ExecApprovalDecision } from "openclaw/plugin-sdk/approval-runtime";
 import type { DiscordExecApprovalConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { Button, type ButtonInteraction, type ComponentData } from "../internal/discord.js";
 export { buildExecApprovalCustomId } from "../approval-handler.runtime.js";
 import { getDiscordExecApprovalApprovers } from "../exec-approvals.js";
 
 export { extractDiscordChannelId } from "../approval-native.js";
-export type {
-  ExecApprovalRequest,
-  ExecApprovalResolved,
-  PluginApprovalRequest,
-  PluginApprovalResolved,
-} from "openclaw/plugin-sdk/approval-runtime";
-
 function decodeCustomIdValue(value: string): string {
   try {
     return decodeURIComponent(value);
@@ -51,7 +38,7 @@ export function parseExecApprovalData(
   };
 }
 
-export type ExecApprovalButtonContext = {
+type ExecApprovalButtonContext = {
   getApprovers: () => string[];
   resolveApproval: (
     approvalId: string,

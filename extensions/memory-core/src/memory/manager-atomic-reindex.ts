@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 
-export async function moveMemoryIndexFiles(sourceBase: string, targetBase: string): Promise<void> {
+async function moveMemoryIndexFiles(sourceBase: string, targetBase: string): Promise<void> {
   const suffixes = ["", "-wal", "-shm"];
   for (const suffix of suffixes) {
     const source = `${sourceBase}${suffix}`;
@@ -16,12 +16,12 @@ export async function moveMemoryIndexFiles(sourceBase: string, targetBase: strin
   }
 }
 
-export async function removeMemoryIndexFiles(basePath: string): Promise<void> {
+async function removeMemoryIndexFiles(basePath: string): Promise<void> {
   const suffixes = ["", "-wal", "-shm"];
   await Promise.all(suffixes.map((suffix) => fs.rm(`${basePath}${suffix}`, { force: true })));
 }
 
-export async function swapMemoryIndexFiles(targetPath: string, tempPath: string): Promise<void> {
+async function swapMemoryIndexFiles(targetPath: string, tempPath: string): Promise<void> {
   const backupPath = `${targetPath}.backup-${randomUUID()}`;
   await moveMemoryIndexFiles(targetPath, backupPath);
   try {

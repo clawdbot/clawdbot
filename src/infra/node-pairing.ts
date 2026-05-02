@@ -14,7 +14,7 @@ import {
 import { rejectPendingPairingRequest } from "./pairing-pending.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
-export type NodeDeclaredSurface = {
+type NodeDeclaredSurface = {
   nodeId: string;
   displayName?: string;
   platform?: string;
@@ -29,7 +29,7 @@ export type NodeDeclaredSurface = {
   remoteIp?: string;
 };
 
-export type NodeApprovedSurface = NodeDeclaredSurface;
+type NodeApprovedSurface = NodeDeclaredSurface;
 
 export type NodePairingRequestInput = NodeDeclaredSurface & {
   silent?: boolean;
@@ -41,7 +41,7 @@ export type NodePairingPendingRequest = NodePairingRequestInput & {
   ts: number;
 };
 
-export type NodePairingPendingEntry = NodePairingPendingRequest & {
+type NodePairingPendingEntry = NodePairingPendingRequest & {
   requiredApproveScopes: NodeApprovalScope[];
 };
 
@@ -55,7 +55,7 @@ export type NodePairingPairedNode = NodeApprovedSurface & {
   lastSeenReason?: string;
 };
 
-export type NodePairingList = {
+type NodePairingList = {
   pending: NodePairingPendingEntry[];
   paired: NodePairingPairedNode[];
 };

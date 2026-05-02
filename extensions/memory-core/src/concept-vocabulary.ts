@@ -3,7 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtim
 
 export const MAX_CONCEPT_TAGS = 8;
 
-export type ConceptTagScriptFamily = "latin" | "cjk" | "mixed" | "other";
+type ConceptTagScriptFamily = "latin" | "cjk" | "mixed" | "other";
 
 export type ConceptTagScriptCoverage = {
   latinEntryCount: number;

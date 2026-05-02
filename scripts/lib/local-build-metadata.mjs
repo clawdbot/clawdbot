@@ -2,19 +2,9 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import {
-  BUILD_STAMP_FILE,
-  LOCAL_BUILD_METADATA_DIST_PATHS,
-  RUNTIME_POSTBUILD_STAMP_FILE,
-  isLocalBuildMetadataDistPath,
-} from "./local-build-metadata-paths.mjs";
+import { BUILD_STAMP_FILE, RUNTIME_POSTBUILD_STAMP_FILE } from "./local-build-metadata-paths.mjs";
 
-export {
-  BUILD_STAMP_FILE,
-  LOCAL_BUILD_METADATA_DIST_PATHS,
-  RUNTIME_POSTBUILD_STAMP_FILE,
-  isLocalBuildMetadataDistPath,
-};
+export { BUILD_STAMP_FILE, RUNTIME_POSTBUILD_STAMP_FILE };
 
 export function resolveGitHead(params = {}) {
   const cwd = params.cwd ?? process.cwd();

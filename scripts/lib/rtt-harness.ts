@@ -7,16 +7,7 @@ const execFileAsync = promisify(execFile);
 
 export type RttProviderMode = "mock-openai" | "live-frontier";
 
-export type RttCliOptions = {
-  providerMode: RttProviderMode;
-  runs: number;
-  harnessRoot: string;
-  output: string;
-  scenarios: string[];
-  timeoutMs: number;
-};
-
-export type RttResult = {
+type RttResult = {
   package: {
     spec: string;
     version: string;
@@ -35,6 +26,12 @@ export type RttResult = {
   rtt: {
     canaryMs?: number;
     mentionReplyMs?: number;
+    warmSamples?: number[];
+    avgMs?: number;
+    p50Ms?: number;
+    p95Ms?: number;
+    maxMs?: number;
+    failedSamples?: number;
   };
   artifacts: {
     rawSummaryPath: string;
@@ -44,16 +41,30 @@ export type RttResult = {
   };
 };
 
-export type TelegramQaSummary = {
+type TelegramQaSummary = {
   scenarios?: Array<{
     id?: string;
     rttMs?: number;
     status?: string;
+    samples?: Array<{
+      index?: number;
+      status?: string;
+      rttMs?: number;
+    }>;
+    stats?: {
+      total?: number;
+      passed?: number;
+      failed?: number;
+      avgMs?: number;
+      p50Ms?: number;
+      p95Ms?: number;
+      maxMs?: number;
+    };
   }>;
 };
 
 const OPENCLAW_PACKAGE_SPEC_RE =
-  /^openclaw@(beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-beta\.[1-9][0-9]*)?)$/u;
+  /^openclaw@(main|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-beta\.[1-9][0-9]*)?)$/u;
 
 const REQUIRED_TELEGRAM_ENV = [
   "OPENCLAW_QA_TELEGRAM_GROUP_ID",
@@ -64,7 +75,7 @@ const REQUIRED_TELEGRAM_ENV = [
 export function validateOpenClawPackageSpec(spec: string) {
   if (!OPENCLAW_PACKAGE_SPEC_RE.test(spec)) {
     throw new Error(
-      `Package spec must be openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: ${spec}`,
+      `Package spec must be openclaw@main, openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: ${spec}`,
     );
   }
   return spec;
@@ -82,30 +93,51 @@ export function buildRunId(params: { now: Date; spec: string; index?: number }) 
 
 export function extractRtt(summary: TelegramQaSummary) {
   const scenarios = summary.scenarios ?? [];
-  return {
+  const mention = scenarios.find((scenario) => scenario.id === "telegram-mentioned-message-reply");
+  const warmSamples = mention?.samples
+    ?.filter((sample) => sample.status === "pass" && sample.rttMs !== undefined)
+    .toSorted((left, right) => (left.index ?? 0) - (right.index ?? 0))
+    .flatMap((sample) => (sample.rttMs === undefined ? [] : [sample.rttMs]));
+  const rtt: RttResult["rtt"] = {
     canaryMs: scenarios.find((scenario) => scenario.id === "telegram-canary")?.rttMs,
-    mentionReplyMs: scenarios.find((scenario) => scenario.id === "telegram-mentioned-message-reply")
-      ?.rttMs,
+    mentionReplyMs: mention?.stats?.p50Ms ?? mention?.rttMs,
   };
+  if (warmSamples?.length) {
+    rtt.warmSamples = warmSamples;
+  }
+  if (mention?.stats) {
+    rtt.avgMs = mention.stats.avgMs;
+    rtt.p50Ms = mention.stats.p50Ms;
+    rtt.p95Ms = mention.stats.p95Ms;
+    rtt.maxMs = mention.stats.maxMs;
+    rtt.failedSamples = mention.stats.failed;
+  }
+  return rtt;
 }
 
 export function createHarnessEnv(params: {
   baseEnv: NodeJS.ProcessEnv;
+  packageTgz?: string;
   providerMode: RttProviderMode;
   scenarios: string[];
   spec: string;
   version: string;
   rawOutputDir: string;
+  samples: number;
+  sampleTimeoutMs: number;
   timeoutMs: number;
 }) {
   return {
     ...params.baseEnv,
     OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC: params.spec,
+    ...(params.packageTgz ? { OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ: params.packageTgz } : {}),
     OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL: `${params.spec} (${params.version})`,
     OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE: params.providerMode,
     OPENCLAW_NPM_TELEGRAM_SCENARIOS: params.scenarios.join(","),
     OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR: params.rawOutputDir,
     OPENCLAW_NPM_TELEGRAM_FAST: params.baseEnv.OPENCLAW_NPM_TELEGRAM_FAST ?? "1",
+    OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES: String(params.samples),
+    OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS: String(params.sampleTimeoutMs),
     OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS: String(params.timeoutMs),
     OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS: String(params.timeoutMs),
   };
@@ -146,6 +178,20 @@ export async function resolvePublishedVersion(spec: string) {
     throw new Error(`npm did not return a version for ${spec}.`);
   }
   return parsed.trim();
+}
+
+export async function resolveMainVersion(harnessRoot: string) {
+  const packageJson = JSON.parse(
+    await fs.readFile(path.join(harnessRoot, "package.json"), "utf8"),
+  ) as { version?: unknown };
+  if (typeof packageJson.version !== "string" || packageJson.version.trim().length === 0) {
+    throw new Error("OpenClaw package.json must contain a non-empty version.");
+  }
+  const { stdout } = await execFileAsync("git", ["rev-parse", "--short=10", "HEAD"], {
+    cwd: harnessRoot,
+    timeout: 10_000,
+  });
+  return `${packageJson.version.trim()}+${stdout.trim()}`;
 }
 
 export async function readTelegramSummary(summaryPath: string) {
@@ -208,7 +254,3 @@ export function buildRttResult(params: {
     artifacts: params.artifacts,
   };
 }
-
-export const __testing = {
-  REQUIRED_TELEGRAM_ENV,
-};

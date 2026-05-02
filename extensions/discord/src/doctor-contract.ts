@@ -7,6 +7,7 @@ import { asObjectRecord, normalizeLegacyChannelAliases } from "openclaw/plugin-s
 import { resolveDiscordPreviewStreamMode } from "./preview-streaming.js";
 
 const LEGACY_TTS_PROVIDER_KEYS = ["openai", "elevenlabs", "microsoft", "edge"] as const;
+type AgentBindingConfig = NonNullable<OpenClawConfig["bindings"]>[number];
 
 function hasLegacyTtsProviderKeys(value: unknown): boolean {
   const tts = asObjectRecord(value);
@@ -44,12 +45,36 @@ function hasLegacyDiscordGuildChannelAllowAlias(value: unknown): boolean {
   });
 }
 
+function hasLegacyDiscordGuildChannelAgentId(value: unknown): boolean {
+  const guilds = asObjectRecord(asObjectRecord(value)?.guilds);
+  if (!guilds) {
+    return false;
+  }
+  return Object.values(guilds).some((guildValue) => {
+    const channels = asObjectRecord(asObjectRecord(guildValue)?.channels);
+    if (!channels) {
+      return false;
+    }
+    return Object.values(channels).some((channel) =>
+      Object.prototype.hasOwnProperty.call(asObjectRecord(channel) ?? {}, "agentId"),
+    );
+  });
+}
+
 function hasLegacyDiscordAccountGuildChannelAllowAlias(value: unknown): boolean {
   const accounts = asObjectRecord(value);
   if (!accounts) {
     return false;
   }
   return Object.values(accounts).some((account) => hasLegacyDiscordGuildChannelAllowAlias(account));
+}
+
+function hasLegacyDiscordAccountGuildChannelAgentId(value: unknown): boolean {
+  const accounts = asObjectRecord(value);
+  if (!accounts) {
+    return false;
+  }
+  return Object.values(accounts).some((account) => hasLegacyDiscordGuildChannelAgentId(account));
 }
 
 function mergeMissing(target: Record<string, unknown>, source: Record<string, unknown>) {
@@ -179,6 +204,108 @@ function normalizeDiscordGuildChannelAllowAliases(params: {
     : { entry: params.entry, changed: false };
 }
 
+function isDiscordChannelAgentBinding(
+  value: unknown,
+  match: { accountId?: string; guildId: string; channelId: string },
+): value is Record<string, unknown> {
+  const binding = asObjectRecord(value);
+  const bindingMatch = asObjectRecord(binding?.match);
+  const peer = asObjectRecord(bindingMatch?.peer);
+  if (!binding || !bindingMatch || !peer) {
+    return false;
+  }
+  return (
+    bindingMatch.channel === "discord" &&
+    bindingMatch.guildId === match.guildId &&
+    (match.accountId === undefined || bindingMatch.accountId === match.accountId) &&
+    peer.kind === "channel" &&
+    peer.id === match.channelId
+  );
+}
+
+function normalizeDiscordGuildChannelAgentIds(params: {
+  cfg: OpenClawConfig;
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  accountId?: string;
+  changes: string[];
+  bindingsToAdd: AgentBindingConfig[];
+}): { entry: Record<string, unknown>; changed: boolean } {
+  const guilds = asObjectRecord(params.entry.guilds);
+  if (!guilds) {
+    return { entry: params.entry, changed: false };
+  }
+
+  const existingBindings = Array.isArray(params.cfg.bindings) ? params.cfg.bindings : [];
+  let changed = false;
+  const nextGuilds = { ...guilds };
+  for (const [guildId, guildValue] of Object.entries(guilds)) {
+    const guild = asObjectRecord(guildValue);
+    const channels = asObjectRecord(guild?.channels);
+    if (!guild || !channels) {
+      continue;
+    }
+    let channelsChanged = false;
+    const nextChannels = { ...channels };
+    for (const [channelId, channelValue] of Object.entries(channels)) {
+      const channel = asObjectRecord(channelValue);
+      if (!channel || !Object.prototype.hasOwnProperty.call(channel, "agentId")) {
+        continue;
+      }
+      const nextChannel = { ...channel };
+      const rawAgentId = nextChannel.agentId;
+      delete nextChannel.agentId;
+      nextChannels[channelId] = nextChannel;
+      channelsChanged = true;
+
+      const path = `${params.pathPrefix}.guilds.${guildId}.channels.${channelId}.agentId`;
+      const agentId = typeof rawAgentId === "string" ? rawAgentId.trim() : "";
+      if (!agentId) {
+        params.changes.push(
+          `Removed ${path}; configure top-level bindings[] for per-channel Discord agent routing.`,
+        );
+        continue;
+      }
+
+      const match = { accountId: params.accountId, guildId, channelId };
+      const existingBinding = existingBindings.find((binding) =>
+        isDiscordChannelAgentBinding(binding, match),
+      );
+      if (existingBinding) {
+        params.changes.push(
+          `Removed ${path}; a matching top-level bindings[] route already exists for Discord channel ${channelId}.`,
+        );
+        continue;
+      }
+
+      const bindingMatch: AgentBindingConfig["match"] = {
+        channel: "discord",
+        guildId,
+        peer: { kind: "channel", id: channelId },
+      };
+      if (params.accountId) {
+        bindingMatch.accountId = params.accountId;
+      }
+      params.bindingsToAdd.push({
+        agentId,
+        match: bindingMatch,
+      });
+      params.changes.push(
+        `Moved ${path} → top-level bindings[] route for Discord channel ${channelId}.`,
+      );
+    }
+    if (!channelsChanged) {
+      continue;
+    }
+    nextGuilds[guildId] = { ...guild, channels: nextChannels };
+    changed = true;
+  }
+
+  return changed
+    ? { entry: { ...params.entry, guilds: nextGuilds }, changed: true }
+    : { entry: params.entry, changed: false };
+}
+
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["channels", "discord", "voice", "tts"],
@@ -204,6 +331,18 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
       'channels.discord.accounts.<id>.guilds.<id>.channels.<id>.allow is legacy; use channels.discord.accounts.<id>.guilds.<id>.channels.<id>.enabled instead. Run "openclaw doctor --fix".',
     match: hasLegacyDiscordAccountGuildChannelAllowAlias,
   },
+  {
+    path: ["channels", "discord"],
+    message:
+      'channels.discord.guilds.<id>.channels.<id>.agentId is legacy; use top-level bindings[] for per-channel Discord agent routing. Run "openclaw doctor --fix".',
+    match: hasLegacyDiscordGuildChannelAgentId,
+  },
+  {
+    path: ["channels", "discord", "accounts"],
+    message:
+      'channels.discord.accounts.<id>.guilds.<id>.channels.<id>.agentId is legacy; use top-level bindings[] with match.accountId for per-channel Discord agent routing. Run "openclaw doctor --fix".',
+    match: hasLegacyDiscordAccountGuildChannelAgentId,
+  },
 ];
 
 export function normalizeCompatibilityConfig({
@@ -219,6 +358,7 @@ export function normalizeCompatibilityConfig({
   const changes: string[] = [];
   let updated = rawEntry;
   let changed = false;
+  const bindingsToAdd: AgentBindingConfig[] = [];
 
   const aliases = normalizeLegacyChannelAliases({
     entry: rawEntry,
@@ -262,6 +402,16 @@ export function normalizeCompatibilityConfig({
   updated = guildAliases.entry;
   changed = changed || guildAliases.changed;
 
+  const channelAgentIds = normalizeDiscordGuildChannelAgentIds({
+    cfg,
+    entry: updated,
+    pathPrefix: "channels.discord",
+    changes,
+    bindingsToAdd,
+  });
+  updated = channelAgentIds.entry;
+  changed = changed || channelAgentIds.changed;
+
   const accounts = asObjectRecord(updated.accounts);
   if (accounts) {
     let accountsChanged = false;
@@ -276,10 +426,22 @@ export function normalizeCompatibilityConfig({
         pathPrefix: `channels.discord.accounts.${accountId}`,
         changes,
       });
-      if (!normalized.changed) {
+      let nextAccount = normalized.entry;
+      let accountChanged = normalized.changed;
+      const normalizedAgentIds = normalizeDiscordGuildChannelAgentIds({
+        cfg,
+        entry: nextAccount,
+        pathPrefix: `channels.discord.accounts.${accountId}`,
+        accountId,
+        changes,
+        bindingsToAdd,
+      });
+      nextAccount = normalizedAgentIds.entry;
+      accountChanged = accountChanged || normalizedAgentIds.changed;
+      if (!accountChanged) {
         continue;
       }
-      nextAccounts[accountId] = normalized.entry;
+      nextAccounts[accountId] = nextAccount;
       accountsChanged = true;
     }
     if (accountsChanged) {
@@ -307,6 +469,8 @@ export function normalizeCompatibilityConfig({
         ...cfg.channels,
         discord: updated,
       } as OpenClawConfig["channels"],
+      bindings:
+        bindingsToAdd.length > 0 ? [...(cfg.bindings ?? []), ...bindingsToAdd] : cfg.bindings,
     },
     changes,
   };

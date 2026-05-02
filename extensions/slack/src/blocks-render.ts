@@ -21,7 +21,7 @@ const SLACK_ACTION_BLOCK_ELEMENTS_MAX = 25;
 
 export type SlackBlock = Block | KnownBlock;
 
-export type SlackInteractiveBlockRenderOptions = {
+type SlackInteractiveBlockRenderOptions = {
   buttonIndexOffset?: number;
   selectIndexOffset?: number;
 };

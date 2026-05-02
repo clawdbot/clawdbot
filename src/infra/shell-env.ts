@@ -194,12 +194,12 @@ function probeLoginShellEnv(params: {
   }
 }
 
-export type ShellEnvFallbackResult =
+type ShellEnvFallbackResult =
   | { ok: true; applied: string[]; skippedReason?: never }
   | { ok: true; applied: []; skippedReason: "already-has-keys" | "disabled" }
   | { ok: false; error: string; applied: [] };
 
-export type ShellEnvFallbackOptions = {
+type ShellEnvFallbackOptions = {
   enabled: boolean;
   env: NodeJS.ProcessEnv;
   expectedKeys: string[];

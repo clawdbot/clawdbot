@@ -19,7 +19,7 @@ type TelegramMediaFileRef =
   | NonNullable<Message["document"]>
   | NonNullable<Message["sticker"]>;
 
-export type TelegramPrimaryMedia = {
+type TelegramPrimaryMedia = {
   placeholder: string;
   fileRef: TelegramMediaFileRef;
 };

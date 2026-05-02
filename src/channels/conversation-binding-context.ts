@@ -4,7 +4,7 @@ import {
   type ResolveCommandConversationResolutionInput,
 } from "./conversation-resolution.js";
 
-export type ConversationBindingContext = {
+type ConversationBindingContext = {
   channel: string;
   accountId: string;
   conversationId: string;
@@ -12,7 +12,7 @@ export type ConversationBindingContext = {
   threadId?: string;
 };
 
-export type ResolveConversationBindingContextInput = Omit<
+type ResolveConversationBindingContextInput = Omit<
   ResolveCommandConversationResolutionInput,
   "includePlacementHint"
 > & {

@@ -946,7 +946,7 @@ async function createAuditExecutionContext(
     execDockerRawFn: opts.execDockerRawFn,
     probeGatewayFn: opts.probeGatewayFn,
     plugins: opts.plugins,
-    loadPluginSecurityCollectors: opts.loadPluginSecurityCollectors !== false,
+    loadPluginSecurityCollectors: opts.loadPluginSecurityCollectors ?? deep,
     workspaceDir,
     configSnapshot,
     codeSafetySummaryCache: opts.codeSafetySummaryCache ?? new Map<string, Promise<unknown>>(),

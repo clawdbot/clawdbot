@@ -21,7 +21,7 @@ export function isPrimaryTrackedBrowserSessionKey(sessionKey: string): boolean {
   );
 }
 
-export function resolveBrowserTabCleanupRuntimeConfig(): ResolvedBrowserTabCleanupConfig {
+function resolveBrowserTabCleanupRuntimeConfig(): ResolvedBrowserTabCleanupConfig {
   const cfg = getRuntimeConfig();
   return resolveBrowserConfig(cfg.browser, cfg).tabCleanup;
 }

@@ -15,9 +15,10 @@ async function resolveAuthorization(params: {
   senderId: string;
   configuredAllowFrom?: string[];
   configuredGroupAllowFrom?: string[];
+  cfg?: OpenClawConfig;
 }) {
   return resolveSenderCommandAuthorization({
-    cfg: baseCfg,
+    cfg: params.cfg ?? baseCfg,
     rawBody: "/status",
     isGroup: true,
     dmPolicy: "pairing",
@@ -25,6 +26,8 @@ async function resolveAuthorization(params: {
     configuredGroupAllowFrom: params.configuredGroupAllowFrom ?? ["group-owner"],
     senderId: params.senderId,
     isSenderAllowed: (senderId, allowFrom) => allowFrom.includes(senderId),
+    channel: "zalouser",
+    accountId: "default",
     readAllowFromStore: async () => ["paired-user"],
     shouldComputeCommandAuthorized: () => true,
     resolveCommandAuthorizedFromAuthorizers: ({ useAccessGroups, authorizers }) =>
@@ -90,6 +93,30 @@ describe("plugin-sdk/command-auth", () => {
     expect(result.effectiveAllowFrom).toEqual(["paired-user"]);
     expect(result.senderAllowedForCommands).toBe(true);
     expect(result.commandAuthorized).toBeUndefined();
+  });
+
+  it("resolves generic message sender access groups for group command authorization", async () => {
+    const result = await resolveAuthorization({
+      senderId: "group-admin",
+      configuredAllowFrom: [],
+      configuredGroupAllowFrom: ["accessGroup:admins"],
+      cfg: {
+        ...baseCfg,
+        accessGroups: {
+          admins: {
+            type: "message.senders",
+            members: {
+              zalouser: ["group-admin"],
+              telegram: ["12345"],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result.effectiveGroupAllowFrom).toEqual(["accessGroup:admins", "group-admin"]);
+    expect(result.senderAllowedForCommands).toBe(true);
+    expect(result.commandAuthorized).toBe(true);
   });
 
   it("does not treat open DM policy as an allowlist bypass", async () => {

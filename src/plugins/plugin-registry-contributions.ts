@@ -12,6 +12,8 @@ import type {
   PluginManifestRecord,
   PluginManifestRegistry,
 } from "./manifest-registry.js";
+import { isPackageIncludedInCoreBundle } from "./manifest.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import {
   createPluginRegistryIdNormalizer,
@@ -27,22 +29,10 @@ export {
   type PluginRegistryIdNormalizerOptions,
 } from "./plugin-registry-id-normalizer.js";
 
-export type PluginLookUpTable = {
-  index: PluginRegistrySnapshot;
-  manifestRegistry: PluginManifestRegistry;
-  plugins: readonly PluginManifestRecord[];
-  normalizePluginId: (pluginId: string) => string;
-  owners: {
-    channels: ReadonlyMap<string, readonly string[]>;
-    channelConfigs: ReadonlyMap<string, readonly string[]>;
-    providers: ReadonlyMap<string, readonly string[]>;
-    modelCatalogProviders: ReadonlyMap<string, readonly string[]>;
-    cliBackends: ReadonlyMap<string, readonly string[]>;
-    setupProviders: ReadonlyMap<string, readonly string[]>;
-    commandAliases: ReadonlyMap<string, readonly string[]>;
-    contracts: ReadonlyMap<string, readonly string[]>;
-  };
-};
+export type PluginLookUpTable = Pick<
+  PluginMetadataSnapshot,
+  "index" | "manifestRegistry" | "plugins" | "normalizePluginId" | "owners"
+>;
 
 export type PluginRegistryContributionOptions = LoadPluginRegistryParams & {
   includeDisabled?: boolean;
@@ -117,6 +107,10 @@ function sortUnique(values: Iterable<string>): string[] {
   return [...new Set([...values].map((value) => value.trim()).filter(Boolean))].toSorted(
     (left, right) => left.localeCompare(right),
   );
+}
+
+function isCoreBundledManifestSurface(plugin: PluginManifestRecord): boolean {
+  return plugin.origin !== "bundled" || isPackageIncludedInCoreBundle(plugin.packageManifest);
 }
 
 function collectObjectKeys(value: Record<string, unknown> | undefined): readonly string[] {
@@ -415,6 +409,7 @@ export function resolveManifestContractPluginIds(
     .plugins.filter(
       (plugin) =>
         (!params.origin || plugin.origin === params.origin) &&
+        isCoreBundledManifestSurface(plugin) &&
         listManifestContractValues(plugin, params.contract).length > 0,
     )
     .map((plugin) => plugin.id)
@@ -432,6 +427,7 @@ export function resolveManifestContractPluginIdsByCompatibilityRuntimePath(
     .plugins.filter(
       (plugin) =>
         (!params.origin || plugin.origin === params.origin) &&
+        isCoreBundledManifestSurface(plugin) &&
         listManifestContractValues(plugin, params.contract).length > 0 &&
         (plugin.configContracts?.compatibilityRuntimePaths ?? []).includes(normalizedPath),
     )

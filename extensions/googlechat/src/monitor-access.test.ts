@@ -216,6 +216,89 @@ describe("googlechat inbound access policy", () => {
     });
   });
 
+  it("allows group traffic from generic message sender access groups", async () => {
+    primeCommonDefaults();
+    allowInboundGroupTraffic();
+
+    await expect(
+      applyInboundAccessPolicy({
+        config: {
+          ...baseAccessConfig,
+          accessGroups: {
+            operators: {
+              type: "message.senders",
+              members: {
+                googlechat: ["users/alice"],
+              },
+            },
+          },
+        } as never,
+        account: {
+          accountId: "default",
+          config: {
+            groups: {
+              "spaces/AAA": {
+                users: ["accessGroup:operators"],
+                requireMention: false,
+              },
+            },
+          },
+        } as never,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+    });
+  });
+
+  it("expands generic message sender access groups before DM access checks", async () => {
+    primeCommonDefaults();
+    const readAllowFromStore = vi.fn(async () => []);
+    createChannelPairingController.mockReturnValue({
+      readAllowFromStore,
+      issueChallenge: vi.fn(),
+    });
+    resolveDmGroupAccessWithLists.mockReturnValue({
+      decision: "allow",
+      effectiveAllowFrom: ["accessGroup:operators", "users/alice"],
+      effectiveGroupAllowFrom: [],
+    });
+
+    await expect(
+      applyInboundAccessPolicy({
+        isGroup: false,
+        config: {
+          ...baseAccessConfig,
+          accessGroups: {
+            operators: {
+              type: "message.senders",
+              members: {
+                googlechat: ["users/alice"],
+              },
+            },
+          },
+        } as never,
+        account: {
+          accountId: "default",
+          config: {
+            dm: {
+              policy: "allowlist",
+              allowFrom: ["accessGroup:operators"],
+            },
+          },
+        } as never,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+    });
+
+    expect(resolveDmGroupAccessWithLists).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowFrom: ["accessGroup:operators", "users/alice"],
+      }),
+    );
+    expect(readAllowFromStore).not.toHaveBeenCalled();
+  });
+
   it("preserves allowlist group policy when a routed space has no sender allowlist", async () => {
     primeCommonDefaults();
     allowInboundGroupTraffic({

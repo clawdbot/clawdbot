@@ -33,7 +33,7 @@ type UserInputOption = {
   description: string;
 };
 
-export type CodexUserInputBridge = {
+type CodexUserInputBridge = {
   handleRequest: (request: {
     id: number | string;
     params?: JsonValue;

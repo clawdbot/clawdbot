@@ -1,6 +1,7 @@
+import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   CircularIncludeError,
@@ -614,6 +615,33 @@ describe("security: path traversal protection (CWE-22)", () => {
       });
     });
 
+    it("fails closed when include realpath resolution fails for reasons other than ENOENT", () => {
+      const includePath = configPath("denied.json");
+      const originalRealpathSync = nodeFs.realpathSync;
+      const realpathSpy = vi.spyOn(nodeFs, "realpathSync").mockImplementation((target) => {
+        if (path.normalize(String(target)) === includePath) {
+          const error = new Error("permission denied") as NodeJS.ErrnoException;
+          error.code = "EACCES";
+          throw error;
+        }
+        return originalRealpathSync(target);
+      });
+
+      try {
+        expectResolveIncludeError(
+          () =>
+            resolveConfigIncludes(
+              { $include: "./denied.json" },
+              DEFAULT_BASE_PATH,
+              createMockResolver({ [includePath]: { leaked: true } }),
+            ),
+          /Failed to resolve include file realpath/,
+        );
+      } finally {
+        realpathSpy.mockRestore();
+      }
+    });
+
     it("rejects include files that are hardlinked aliases", async () => {
       if (process.platform === "win32") {
         return;
@@ -656,6 +684,116 @@ describe("security: path traversal protection (CWE-22)", () => {
           resolveConfigIncludes({ $include: "./big.json5" }, path.join(configDir, "openclaw.json")),
         ).toThrow(/security checks|max/i);
       });
+    });
+  });
+});
+
+describe("OPENCLAW_INCLUDE_ROOTS allowlist", () => {
+  it("permits an include outside the config directory when its root is allowed", () => {
+    const sharedFile = sharedPath("common.json");
+    const files = { [sharedFile]: { shared: true } };
+    expect(
+      resolveConfigIncludes(
+        { $include: sharedFile },
+        DEFAULT_BASE_PATH,
+        createMockResolver(files),
+        { allowedRoots: [SHARED_DIR] },
+      ),
+    ).toEqual({ shared: true });
+  });
+
+  it("still rejects include paths that fall outside every allowed root", () => {
+    const obj = { $include: etcOpenClawPath("agents.json") };
+    expect(() =>
+      resolveConfigIncludes(obj, DEFAULT_BASE_PATH, createMockResolver({}), {
+        allowedRoots: [SHARED_DIR],
+      }),
+    ).toThrow(/escapes config directory/);
+  });
+
+  it.each([
+    { name: "unset", allowedRoots: undefined },
+    { name: "empty", allowedRoots: [] as string[] },
+  ])(
+    "preserves the original config-directory boundary when allowedRoots is $name",
+    ({ allowedRoots }) => {
+      const obj = { $include: sharedPath("common.json") };
+      expect(() =>
+        resolveConfigIncludes(obj, DEFAULT_BASE_PATH, createMockResolver({}), { allowedRoots }),
+      ).toThrow(/escapes config directory/);
+    },
+  );
+
+  it("ignores non-absolute or empty allowedRoots entries while honoring valid ones", () => {
+    const sharedFile = sharedPath("common.json");
+    const files = { [sharedFile]: { shared: true } };
+    expect(
+      resolveConfigIncludes(
+        { $include: sharedFile },
+        DEFAULT_BASE_PATH,
+        createMockResolver(files),
+        { allowedRoots: ["", "./relative", SHARED_DIR] },
+      ),
+    ).toEqual({ shared: true });
+  });
+
+  it("resolves a symlinked include whose realpath lands inside an allowed root", async () => {
+    await withTempDir({ prefix: "openclaw-includes-allowed-symlink-" }, async (tempRoot) => {
+      const configDir = path.join(tempRoot, "config");
+      const sharedDir = path.join(tempRoot, "shared");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.mkdir(sharedDir, { recursive: true });
+      const sharedTarget = path.join(sharedDir, "extra.json5");
+      await fs.writeFile(sharedTarget, "{ logging: { redactSensitive: 'tools' } }\n", "utf-8");
+      const linkInConfig = path.join(configDir, "extra.json5");
+      await fs.symlink(
+        sharedTarget,
+        linkInConfig,
+        process.platform === "win32" ? "file" : undefined,
+      );
+
+      const result = resolveConfigIncludes(
+        { $include: "./extra.json5" },
+        path.join(configDir, "openclaw.json"),
+        undefined,
+        { allowedRoots: [sharedDir] },
+      );
+      expect(result).toEqual({ logging: { redactSensitive: "tools" } });
+    });
+  });
+
+  it("rejects a symlinked include that escapes both the config directory and every allowed root", async () => {
+    await withTempDir({ prefix: "openclaw-includes-allowed-escape-" }, async (tempRoot) => {
+      const configDir = path.join(tempRoot, "config");
+      const allowedDir = path.join(tempRoot, "allowed");
+      const offRootDir = path.join(tempRoot, "off-limits");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.mkdir(allowedDir, { recursive: true });
+      await fs.mkdir(offRootDir, { recursive: true });
+      const offRootTarget = path.join(offRootDir, "secret.json5");
+      await fs.writeFile(offRootTarget, "{ leaked: true }\n", "utf-8");
+      const linkInConfig = path.join(configDir, "secret.json5");
+      try {
+        await fs.symlink(
+          offRootTarget,
+          linkInConfig,
+          process.platform === "win32" ? "file" : undefined,
+        );
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EPERM") {
+          return;
+        }
+        throw err;
+      }
+
+      expect(() =>
+        resolveConfigIncludes(
+          { $include: "./secret.json5" },
+          path.join(configDir, "openclaw.json"),
+          undefined,
+          { allowedRoots: [allowedDir] },
+        ),
+      ).toThrow(/resolves outside config directory/);
     });
   });
 });

@@ -285,7 +285,8 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
         enabled: true,
         idleHours: 24,
         maxAgeHours: 0,
-        spawnSubagentSessions: false, // opt-in for sessions_spawn({ thread: true })
+        spawnSessions: true,
+        defaultSpawnContext: "fork",
       },
       voice: {
         enabled: true,
@@ -330,12 +331,14 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged name (no `#`). Prefer guild IDs.
 - Bot-authored messages are ignored by default. `allowBots: true` enables them; use `allowBots: "mentions"` to only accept bot messages that mention the bot (own messages still filtered).
 - `channels.discord.guilds.<id>.ignoreOtherMentions` (and channel overrides) drops messages that mention another user or role but not the bot (excluding @everyone/@here).
+- `channels.discord.mentionAliases` maps stable outbound `@handle` text to Discord user IDs before sending, so known teammates can be mentioned deterministically even when the transient directory cache is empty. Per-account overrides live under `channels.discord.accounts.<accountId>.mentionAliases`.
 - `maxLinesPerMessage` (default 17) splits tall messages even when under 2000 chars.
 - `channels.discord.threadBindings` controls Discord thread-bound routing:
   - `enabled`: Discord override for thread-bound session features (`/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`, and bound delivery/routing)
   - `idleHours`: Discord override for inactivity auto-unfocus in hours (`0` disables)
   - `maxAgeHours`: Discord override for hard max age in hours (`0` disables)
-  - `spawnSubagentSessions`: opt-in switch for `sessions_spawn({ thread: true })` auto thread creation/binding
+  - `spawnSessions`: switch for `sessions_spawn({ thread: true })` and ACP thread-spawn auto thread creation/binding (default: `true`)
+  - `defaultSpawnContext`: native subagent context for thread-bound spawns (`"fork"` by default)
 - Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for channels and threads (use channel/thread id in `match.peer.id`). Field semantics are shared in [ACP Agents](/tools/acp-agents#channel-specific-settings).
 - `channels.discord.ui.components.accentColor` sets the accent color for Discord components v2 containers.
 - `channels.discord.voice` enables Discord voice channel conversations and optional auto-join + LLM + TTS overrides. Text-only Discord configs leave voice off by default; set `channels.discord.voice.enabled=true` to opt in.
@@ -774,7 +777,7 @@ See the full channel index: [Channels](/channels).
 
 Group messages default to **require mention** (metadata mention or safe regex patterns). Applies to WhatsApp, Telegram, Discord, Google Chat, and iMessage group chats.
 
-Visible replies are controlled separately. Group/channel rooms default to `messages.groupChat.visibleReplies: "message_tool"`: OpenClaw still processes the turn, but normal final replies stay private and visible room output requires `message(action=send)`. Set `"automatic"` only when you want the legacy behavior where normal replies are posted back to the room. To apply the same tool-only visible-reply behavior to direct chats too, set `messages.visibleReplies: "message_tool"`.
+Visible replies are controlled separately. Group/channel rooms default to `messages.groupChat.visibleReplies: "message_tool"`: OpenClaw still processes the turn, but normal final replies stay private and visible room output requires `message(action=send)`. Set `"automatic"` only when you want the legacy behavior where normal replies are posted back to the room. To apply the same tool-only visible-reply behavior to direct chats too, set `messages.visibleReplies: "message_tool"`; the Codex harness also uses that tool-only behavior as its unset direct-chat default.
 
 If the message tool is unavailable under the active tool policy, OpenClaw falls back to automatic visible replies instead of silently suppressing the response. `openclaw doctor` warns about this mismatch.
 
@@ -789,7 +792,7 @@ The gateway hot-reloads `messages` config after the file is saved. Restart only 
 ```json5
 {
   messages: {
-    visibleReplies: "automatic", // global default for direct/source chats
+    visibleReplies: "automatic", // global default for direct/source chats; Codex harness defaults unset direct chats to message_tool
     groupChat: {
       historyLimit: 50,
       visibleReplies: "message_tool", // default; use "automatic" for legacy final replies
@@ -803,7 +806,7 @@ The gateway hot-reloads `messages` config after the file is saved. Restart only 
 
 `messages.groupChat.historyLimit` sets the global default. Channels can override with `channels.<channel>.historyLimit` (or per-account). Set `0` to disable.
 
-`messages.visibleReplies` is the global source-turn default; `messages.groupChat.visibleReplies` overrides it for group/channel source turns. Channel allowlists and mention gating still decide whether a turn is processed.
+`messages.visibleReplies` is the global source-turn default; `messages.groupChat.visibleReplies` overrides it for group/channel source turns. When `messages.visibleReplies` is unset, a harness can provide its own direct/source default; the Codex harness defaults to `message_tool`. Channel allowlists and mention gating still decide whether a turn is processed.
 
 #### DM history limits
 

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -241,6 +242,60 @@ describe("clawhub helpers", () => {
       await archive.cleanup();
       await expect(fs.stat(archiveDir)).rejects.toThrow();
     }
+  });
+
+  it("downloads ClawPack package artifacts from the version route and verifies response headers", async () => {
+    const bytes = new Uint8Array([7, 8, 9]);
+    const sha256Hex = createHash("sha256").update(bytes).digest("hex");
+    let requestedUrl = "";
+    const archive = await downloadClawHubPackageArchive({
+      name: "demo",
+      version: "1.2.3",
+      artifact: "clawpack",
+      fetchImpl: async (input) => {
+        requestedUrl = input instanceof Request ? input.url : String(input);
+        return new Response(bytes, {
+          status: 200,
+          headers: {
+            "content-type": "application/zip",
+            "X-ClawHub-ClawPack-Sha256": sha256Hex,
+            "X-ClawHub-ClawPack-Spec-Version": "1",
+          },
+        });
+      },
+    });
+
+    try {
+      expect(new URL(requestedUrl).pathname).toBe("/api/v1/packages/demo/versions/1.2.3/clawpack");
+      expect(path.basename(archive.archivePath)).toBe("demo.clawpack.zip");
+      expect(archive.artifact).toBe("clawpack");
+      expect(archive.sha256Hex).toBe(sha256Hex);
+      expect(archive.clawpackHeaderSha256).toBe(sha256Hex);
+      expect(archive.clawpackHeaderSpecVersion).toBe(1);
+      await expect(fs.readFile(archive.archivePath)).resolves.toEqual(Buffer.from(bytes));
+    } finally {
+      const archiveDir = path.dirname(archive.archivePath);
+      await archive.cleanup();
+      await expect(fs.stat(archiveDir)).rejects.toThrow();
+    }
+  });
+
+  it("rejects ClawPack package artifacts when the declared digest does not match the bytes", async () => {
+    await expect(
+      downloadClawHubPackageArchive({
+        name: "demo",
+        version: "1.2.3",
+        artifact: "clawpack",
+        fetchImpl: async () =>
+          new Response(new Uint8Array([7, 8, 9]), {
+            status: 200,
+            headers: {
+              "content-type": "application/zip",
+              "X-ClawHub-ClawPack-Sha256": "0".repeat(64),
+            },
+          }),
+      }),
+    ).rejects.toThrow(/declared sha256/);
   });
 
   it("downloads skill archives to sanitized temp paths and cleans them up", async () => {

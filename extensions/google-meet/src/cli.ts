@@ -10,9 +10,11 @@ import {
   type GoogleMeetCalendarLookupResult,
 } from "./calendar.js";
 import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
+import { hasCreateSpaceConfigInput, resolveCreateSpaceConfig } from "./create.js";
 import {
   buildGoogleMeetPreflightReport,
   createGoogleMeetSpace,
+  endGoogleMeetActiveConference,
   fetchGoogleMeetArtifacts,
   fetchGoogleMeetAttendance,
   fetchLatestGoogleMeetConferenceRecord,
@@ -35,6 +37,7 @@ type JoinOptions = {
   transport?: GoogleMeetTransport;
   mode?: GoogleMeetMode;
   message?: string;
+  timeoutMs?: string;
   dialInNumber?: string;
   pin?: string;
   dtmfSequence?: string;
@@ -159,6 +162,8 @@ type CreateOptions = {
   clientId?: string;
   clientSecret?: string;
   expiresAt?: string;
+  accessType?: string;
+  entryPointAccess?: string;
   join?: boolean;
   transport?: GoogleMeetTransport;
   mode?: GoogleMeetMode;
@@ -222,6 +227,17 @@ function formatBoolean(value: boolean | undefined): string {
 
 function formatOptional(value: unknown): string {
   return typeof value === "string" && value.trim() ? value : "n/a";
+}
+
+function parsePositiveNumber(value: string | undefined, label: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive number`);
+  }
+  return parsed;
 }
 
 function formatDuration(value: number | undefined): string {
@@ -1037,7 +1053,7 @@ function renderTranscriptMarkdown(result: GoogleMeetArtifactsResult): string {
   return `${lines.join("\n")}\n`;
 }
 
-export function collectGoogleMeetArtifactWarnings(
+function collectGoogleMeetArtifactWarnings(
   result: GoogleMeetArtifactsResult,
 ): GoogleMeetExportWarning[] {
   const warnings: GoogleMeetExportWarning[] = [];
@@ -1367,6 +1383,14 @@ export function registerGoogleMeetCli(params: {
     .option("--client-id <id>", "OAuth client id override")
     .option("--client-secret <secret>", "OAuth client secret override")
     .option("--expires-at <ms>", "Cached access token expiry as unix epoch milliseconds")
+    .option(
+      "--access-type <type>",
+      "Google Meet SpaceConfig accessType for API create: OPEN, TRUSTED, or RESTRICTED",
+    )
+    .option(
+      "--entry-point-access <type>",
+      "Google Meet SpaceConfig entryPointAccess for API create: ALL or CREATOR_APP_ONLY",
+    )
     .option("--no-join", "Only create the meeting URL; do not join it")
     .option("--transport <transport>", "Join transport: chrome, chrome-node, or twilio")
     .option(
@@ -1380,6 +1404,11 @@ export function registerGoogleMeetCli(params: {
     .option("--json", "Print JSON output", false)
     .action(async (options: CreateOptions) => {
       if (!hasCreateOAuth(params.config, options)) {
+        if (hasCreateSpaceConfigInput(options as Record<string, unknown>)) {
+          throw new Error(
+            "Google Meet access policy options require OAuth/API room creation. Configure Google Meet OAuth or remove --access-type/--entry-point-access.",
+          );
+        }
         const rt = await params.ensureRuntime();
         const result = await rt.createViaBrowser();
         const join =
@@ -1423,7 +1452,10 @@ export function registerGoogleMeetCli(params: {
       const token = await resolveGoogleMeetAccessToken(
         resolveCreateTokenOptions(params.config, options),
       );
-      const result = await createGoogleMeetSpace({ accessToken: token.accessToken });
+      const result = await createGoogleMeetSpace({
+        accessToken: token.accessToken,
+        config: resolveCreateSpaceConfig(options as Record<string, unknown>),
+      });
       const join =
         options.join !== false
           ? await (
@@ -1461,6 +1493,39 @@ export function registerGoogleMeetCli(params: {
       } else {
         writeStdoutLine("joined: no (run `openclaw googlemeet join %s`)", result.meetingUri);
       }
+    });
+
+  root
+    .command("end-active-conference")
+    .description("End the active conference for a Google Meet space")
+    .argument("[meeting]", "Meet URL, meeting code, or spaces/{id}")
+    .option("--access-token <token>", "Access token override")
+    .option("--refresh-token <token>", "Refresh token override")
+    .option("--client-id <id>", "OAuth client id override")
+    .option("--client-secret <secret>", "OAuth client secret override")
+    .option("--expires-at <ms>", "Cached access token expiry as unix epoch milliseconds")
+    .option("--json", "Print JSON output", false)
+    .action(async (meeting: string | undefined, options: ResolveSpaceOptions & JsonOptions) => {
+      const token = await resolveGoogleMeetAccessToken(
+        resolveOAuthTokenOptions(params.config, options),
+      );
+      const result = await endGoogleMeetActiveConference({
+        accessToken: token.accessToken,
+        meeting: resolveMeetingInput(params.config, meeting ?? options.meeting),
+      });
+      if (options.json) {
+        writeStdoutJson({
+          ...result,
+          tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
+        });
+        return;
+      }
+      writeStdoutLine("space: %s", result.space);
+      writeStdoutLine("ended: yes");
+      writeStdoutLine(
+        "token source: %s",
+        token.refreshed ? "refresh-token" : "cached-access-token",
+      );
     });
 
   root
@@ -1510,6 +1575,22 @@ export function registerGoogleMeetCli(params: {
           transport: options.transport,
           mode: options.mode,
           message: options.message,
+        }),
+      );
+    });
+
+  root
+    .command("test-listen")
+    .argument("[url]", "Explicit https://meet.google.com/... URL")
+    .option("--transport <transport>", "Transport: chrome or chrome-node")
+    .option("--timeout-ms <ms>", "How long to wait for fresh captions/transcript movement")
+    .action(async (url: string | undefined, options: JoinOptions) => {
+      const rt = await params.ensureRuntime();
+      writeStdoutJson(
+        await rt.testListen({
+          url: resolveMeetingInput(params.config, url),
+          transport: options.transport,
+          timeoutMs: parsePositiveNumber(options.timeoutMs, "timeout-ms"),
         }),
       );
     });

@@ -1,6 +1,7 @@
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { isGpt5ModelId } from "../gpt5-prompt-overlay.js";
 import type { ModelFallbackResultClassification } from "../model-fallback.js";
+import { hasOutboundDeliveryEvidence, hasVisibleAgentPayload } from "./delivery-evidence.js";
 import type { EmbeddedPiRunResult } from "./types.js";
 
 const EMPTY_TERMINAL_REPLY_RE = /Agent couldn't generate a response/i;
@@ -13,31 +14,6 @@ function isEmbeddedPiRunResult(value: unknown): value is EmbeddedPiRunResult {
     "meta" in value &&
     (value as { meta?: unknown }).meta &&
     typeof (value as { meta?: unknown }).meta === "object",
-  );
-}
-
-function hasVisibleNonErrorPayload(result: EmbeddedPiRunResult): boolean {
-  return (result.payloads ?? []).some((payload) => {
-    if (!payload || payload.isError === true || payload.isReasoning === true) {
-      return false;
-    }
-    const text = typeof payload.text === "string" ? payload.text.trim() : "";
-    return (
-      text.length > 0 ||
-      Boolean(payload.mediaUrl) ||
-      (Array.isArray(payload.mediaUrls) && payload.mediaUrls.length > 0)
-    );
-  });
-}
-
-function hasOutboundSideEffects(result: EmbeddedPiRunResult): boolean {
-  return (
-    result.didSendViaMessagingTool === true ||
-    (result.messagingToolSentTexts?.length ?? 0) > 0 ||
-    (result.messagingToolSentMediaUrls?.length ?? 0) > 0 ||
-    (result.messagingToolSentTargets?.length ?? 0) > 0 ||
-    (result.successfulCronAdds ?? 0) > 0 ||
-    (result.meta.toolSummary?.calls ?? 0) > 0
   );
 }
 
@@ -90,11 +66,14 @@ export function classifyEmbeddedPiRunResultForModelFallback(params: {
     params.result.meta.aborted ||
     params.hasDirectlySentBlockReply === true ||
     params.hasBlockReplyPipelineOutput === true ||
-    hasVisibleNonErrorPayload(params.result)
+    hasVisibleAgentPayload(params.result, {
+      includeErrorPayloads: false,
+      includeReasoningPayloads: false,
+    })
   ) {
     return null;
   }
-  if (hasOutboundSideEffects(params.result)) {
+  if (hasOutboundDeliveryEvidence(params.result)) {
     return null;
   }
 

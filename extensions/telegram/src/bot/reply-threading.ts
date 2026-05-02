@@ -21,7 +21,7 @@ export function markReplyApplied(progress: DeliveryProgress, replyToId?: number)
   }
 }
 
-export function markDelivered(progress: DeliveryProgress): void {
+function markDelivered(progress: DeliveryProgress): void {
   progress.hasDelivered = true;
 }
 

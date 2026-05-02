@@ -1,7 +1,11 @@
 {
   "name": "@openclaw/zalo",
-  "version": "2026.4.25",
+  "version": "2026.5.1-beta.2",
   "description": "OpenClaw Zalo channel plugin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "dependencies": {
     "undici": "8.1.0"
@@ -45,7 +49,7 @@
       "pluginApi": ">=2026.4.25"
     },
     "build": {
-      "openclawVersion": "2026.4.25"
+      "openclawVersion": "2026.5.1-beta.2"
     },
     "release": {
       "publishToClawHub": true,

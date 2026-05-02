@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../auto-reply/reply/commands-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { extractCrestodianRescueMessage, runCrestodianRescueMessage } from "./rescue-message.js";
 
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -194,6 +195,41 @@ describe("Crestodian rescue message", () => {
       "cannot open the local TUI",
     );
     expect(deps.runTui).not.toHaveBeenCalled();
+  });
+
+  it("refuses plugin install from remote rescue", async () => {
+    const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
+    const deps = {
+      runPluginInstall: vi.fn(async () => {
+        throw new Error("remote rescue must not install plugins");
+      }),
+    };
+
+    await expect(
+      runRescue("/crestodian plugin install clawhub:openclaw-demo", cfg, commandContext(), deps),
+    ).resolves.toContain("cannot install plugins from a message channel");
+    expect(deps.runPluginInstall).not.toHaveBeenCalled();
+  });
+
+  it("allows plugin list and search from remote rescue", async () => {
+    const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
+    const deps = {
+      runPluginsList: vi.fn(async (runtime: RuntimeEnv) => {
+        runtime.log("plugin rows");
+      }),
+      runPluginsSearch: vi.fn(async (query: string, runtime: RuntimeEnv) => {
+        runtime.log(`search rows: ${query}`);
+      }),
+    };
+
+    await expect(
+      runRescue("/crestodian plugins list", cfg, commandContext(), deps),
+    ).resolves.toContain("plugin rows");
+    await expect(
+      runRescue("/crestodian plugins search calendar", cfg, commandContext(), deps),
+    ).resolves.toContain("search rows: calendar");
+    expect(deps.runPluginsList).toHaveBeenCalledTimes(1);
+    expect(deps.runPluginsSearch).toHaveBeenCalledWith("calendar", expect.any(Object));
   });
 
   it("queues and applies persistent writes through conversational approval", async () => {

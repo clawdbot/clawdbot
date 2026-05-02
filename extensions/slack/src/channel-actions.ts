@@ -19,6 +19,21 @@ async function loadSlackActionRuntime() {
   return await slackActionRuntimePromise;
 }
 
+function resolveSlackActionContext(params: {
+  toolContext: unknown;
+  mediaLocalRoots: readonly string[] | undefined;
+  mediaReadFile: ((filePath: string) => Promise<Buffer>) | undefined;
+}): SlackActionContext | undefined {
+  if (!params.toolContext && !params.mediaLocalRoots && !params.mediaReadFile) {
+    return undefined;
+  }
+  return {
+    ...(params.toolContext as SlackActionContext | undefined),
+    ...(params.mediaLocalRoots ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
+    ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
+  };
+}
+
 export function createSlackActions(
   providerId: string,
   options?: { invoke?: SlackActionInvoke },
@@ -32,14 +47,16 @@ export function createSlackActions(
         ctx,
         normalizeChannelId: resolveSlackChannelId,
         includeReadThreadId: true,
-        invoke: async (action, cfg, toolContext) =>
-          await (options?.invoke
-            ? options.invoke(action, cfg, toolContext)
-            : (await loadSlackActionRuntime()).handleSlackAction(action, cfg, {
-                ...(toolContext as SlackActionContext | undefined),
-                mediaLocalRoots: ctx.mediaLocalRoots,
-                mediaReadFile: ctx.mediaReadFile,
-              })),
+        invoke: async (action, cfg, toolContext) => {
+          const actionContext = resolveSlackActionContext({
+            toolContext,
+            mediaLocalRoots: ctx.mediaLocalRoots,
+            mediaReadFile: ctx.mediaReadFile,
+          });
+          return await (options?.invoke
+            ? options.invoke(action, cfg, actionContext)
+            : (await loadSlackActionRuntime()).handleSlackAction(action, cfg, actionContext));
+        },
       });
     },
   };

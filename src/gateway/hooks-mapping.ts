@@ -27,19 +27,19 @@ export type HookMappingResolved = {
   transform?: HookMappingTransformResolved;
 };
 
-export type HookMappingTransformResolved = {
+type HookMappingTransformResolved = {
   modulePath: string;
   exportName?: string;
 };
 
-export type HookMappingContext = {
+type HookMappingContext = {
   payload: Record<string, unknown>;
   headers: Record<string, string>;
   url: URL;
   path: string;
 };
 
-export type HookAction =
+type HookAction =
   | {
       kind: "wake";
       text: string;
@@ -62,9 +62,9 @@ export type HookAction =
       timeoutSeconds?: number;
     };
 
-export type HookSessionKeyTemplateSource = "static" | "templated";
+type HookSessionKeyTemplateSource = "static" | "templated";
 
-export type HookMappingResult =
+type HookMappingResult =
   | { ok: true; action: HookAction }
   | { ok: true; action: null; skipped: true }
   | { ok: false; error: string };

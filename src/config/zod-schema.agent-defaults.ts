@@ -17,7 +17,7 @@ import {
   TypingModeSchema,
 } from "./zod-schema.core.js";
 
-export const SilentReplyPolicySchema = z.union([z.literal("allow"), z.literal("disallow")]);
+const SilentReplyPolicySchema = z.union([z.literal("allow"), z.literal("disallow")]);
 
 const NonNegativeByteSizeSchema = z.union([
   z.number().int().nonnegative(),

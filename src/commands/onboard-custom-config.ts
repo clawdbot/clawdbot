@@ -322,7 +322,7 @@ function buildAnthropicHeaders(apiKey: string) {
   return headers;
 }
 
-export type VerificationRequest = {
+type VerificationRequest = {
   endpoint: string;
   headers: Record<string, string>;
   body: Record<string, unknown>;

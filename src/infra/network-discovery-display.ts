@@ -2,7 +2,7 @@ import type { GatewayBindMode } from "../config/types.js";
 import { pickPrimaryLanIPv4, resolveGatewayBindHost } from "../gateway/net.js";
 import { pickPrimaryTailnetIPv4 } from "./tailnet.js";
 
-export function summarizeDisplayNetworkError(error: unknown): string {
+function summarizeDisplayNetworkError(error: unknown): string {
   if (error instanceof Error) {
     const message = error.message.trim();
     if (message) {
@@ -12,10 +12,7 @@ export function summarizeDisplayNetworkError(error: unknown): string {
   return "network interface discovery failed";
 }
 
-export function fallbackBindHostForDisplay(
-  bindMode: GatewayBindMode,
-  customBindHost?: string,
-): string {
+function fallbackBindHostForDisplay(bindMode: GatewayBindMode, customBindHost?: string): string {
   if (bindMode === "lan") {
     return "0.0.0.0";
   }

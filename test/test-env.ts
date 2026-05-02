@@ -18,8 +18,7 @@ const LIVE_EXTERNAL_AUTH_FILES = [
 ] as const;
 const requireFromHere = createRequire(import.meta.url);
 
-type LegacyConfigCompatApi =
-  typeof import("../src/commands/doctor/shared/legacy-config-migrate.js");
+type LegacyConfigCompatApi = typeof import("../src/commands/doctor/shared/legacy-config-compat.js");
 type ConfigValidationApi = typeof import("../src/config/validation.js");
 
 let cachedLegacyConfigCompatApi: LegacyConfigCompatApi | undefined;
@@ -53,7 +52,7 @@ function restoreEnv(entries: RestoreEntry[]): void {
 
 function loadLegacyConfigCompatApi(): LegacyConfigCompatApi {
   cachedLegacyConfigCompatApi ??= requireFromHere(
-    "../src/commands/doctor/shared/legacy-config-migrate.js",
+    "../src/commands/doctor/shared/legacy-config-compat.js",
   ) as LegacyConfigCompatApi;
   return cachedLegacyConfigCompatApi;
 }

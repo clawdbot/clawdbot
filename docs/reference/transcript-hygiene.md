@@ -177,6 +177,12 @@ inter-session user turns that only have provenance metadata.
 
 - Thought signature cleanup: strip non-base64 `thought_signature` values (keep base64).
 
+**OpenRouter Anthropic**
+
+- Trailing assistant prefill turns are stripped from verified OpenRouter
+  OpenAI-compatible Anthropic model payloads when reasoning is enabled, matching
+  direct Anthropic and Cloudflare Anthropic replay behavior.
+
 **Everything else**
 
 - Image sanitization only.

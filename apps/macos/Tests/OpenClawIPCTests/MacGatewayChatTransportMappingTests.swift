@@ -80,6 +80,37 @@ struct MacGatewayChatTransportMappingTests {
         }
     }
 
+    @Test func `session message event maps to session message`() {
+        let payload = OpenClawProtocol.AnyCodable([
+            "sessionKey": OpenClawProtocol.AnyCodable("agent:main:main"),
+            "messageId": OpenClawProtocol.AnyCodable("msg-1"),
+            "messageSeq": OpenClawProtocol.AnyCodable(7),
+            "message": OpenClawProtocol.AnyCodable([
+                "role": OpenClawProtocol.AnyCodable("user"),
+                "content": OpenClawProtocol.AnyCodable([
+                    OpenClawProtocol.AnyCodable([
+                        "type": OpenClawProtocol.AnyCodable("text"),
+                        "text": OpenClawProtocol.AnyCodable("spoken transcript"),
+                    ]),
+                ]),
+                "timestamp": OpenClawProtocol.AnyCodable(1234.5),
+            ]),
+        ])
+        let frame = EventFrame(type: "event", event: "session.message", payload: payload, seq: 1, stateversion: nil)
+        let mapped = MacGatewayChatTransport.mapPushToTransportEvent(.event(frame))
+
+        switch mapped {
+        case let .sessionMessage(message):
+            #expect(message.sessionKey == "agent:main:main")
+            #expect(message.messageId == "msg-1")
+            #expect(message.messageSeq == 7)
+            #expect(message.message?.role == "user")
+            #expect(message.message?.content.first?.text == "spoken transcript")
+        default:
+            Issue.record("expected .sessionMessage from session.message event, got \(String(describing: mapped))")
+        }
+    }
+
     @Test func `unknown event maps to nil`() {
         let frame = EventFrame(
             type: "event",

@@ -12,7 +12,7 @@ import { createLineWebhookReplayCache, handleLineWebhookEvents } from "./bot-han
 import type { LineInboundContext } from "./bot-message-context.js";
 import type { ResolvedLineAccount } from "./types.js";
 
-export interface LineBotOptions {
+interface LineBotOptions {
   channelAccessToken: string;
   channelSecret: string;
   accountId?: string;
@@ -22,7 +22,7 @@ export interface LineBotOptions {
   onMessage?: (ctx: LineInboundContext) => Promise<void>;
 }
 
-export interface LineBot {
+interface LineBot {
   handleWebhook: (body: webhook.CallbackRequest) => Promise<void>;
   account: ResolvedLineAccount;
 }

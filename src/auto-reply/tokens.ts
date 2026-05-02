@@ -43,7 +43,7 @@ export function isSilentReplyText(
 
 type SilentReplyActionEnvelope = { action?: unknown };
 
-export function isSilentReplyEnvelopeText(
+function isSilentReplyEnvelopeText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,
 ): boolean {

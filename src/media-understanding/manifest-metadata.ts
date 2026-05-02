@@ -1,17 +1,19 @@
 import type { OpenClawConfig } from "../config/types.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
+import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
 export function buildMediaUnderstandingManifestMetadataRegistry(
   cfg?: OpenClawConfig,
+  workspaceDir?: string,
 ): Map<string, MediaUnderstandingProvider> {
   const registry = new Map<string, MediaUnderstandingProvider>();
-  for (const plugin of loadPluginManifestRegistryForPluginRegistry({
+  const snapshot = loadManifestMetadataSnapshot({
     config: cfg,
     env: process.env,
-    includeDisabled: true,
-  }).plugins) {
+    ...(workspaceDir ? { workspaceDir } : {}),
+  });
+  for (const plugin of snapshot.plugins) {
     const declaredProviders = new Set(
       (plugin.contracts?.mediaUnderstandingProviders ?? []).map((providerId) =>
         normalizeMediaProviderId(providerId),

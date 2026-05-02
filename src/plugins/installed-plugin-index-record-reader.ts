@@ -30,7 +30,7 @@ function readRecordMap(value: unknown): Record<string, PluginInstallRecord> | nu
   return records;
 }
 
-export function extractPluginInstallRecordsFromPersistedInstalledPluginIndex(
+function extractPluginInstallRecordsFromPersistedInstalledPluginIndex(
   index: unknown,
 ): Record<string, PluginInstallRecord> | null {
   if (!isRecord(index) || !Array.isArray(index.plugins)) {

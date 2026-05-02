@@ -5,6 +5,7 @@ import {
   type RetryConfig,
 } from "openclaw/plugin-sdk/retry-runtime";
 import { resolveDiscordAccount } from "./accounts.js";
+import { DiscordError } from "./internal/discord.js";
 
 const DISCORD_DELIVERY_RETRY_DEFAULTS = {
   attempts: 3,
@@ -13,7 +14,10 @@ const DISCORD_DELIVERY_RETRY_DEFAULTS = {
   jitter: 0,
 } satisfies Required<RetryConfig>;
 
-function isRetryableDiscordDeliveryError(err: unknown): boolean {
+export function isRetryableDiscordDeliveryError(err: unknown): boolean {
+  if (err instanceof DiscordError) {
+    return false;
+  }
   const status = (err as { status?: number }).status ?? (err as { statusCode?: number }).statusCode;
   return status === 429 || (status !== undefined && status >= 500);
 }

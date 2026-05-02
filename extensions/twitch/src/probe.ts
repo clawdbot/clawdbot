@@ -8,7 +8,7 @@ import { normalizeToken } from "./utils/twitch.js";
 /**
  * Result of probing a Twitch account
  */
-export type ProbeTwitchResult = BaseProbeResult<string> & {
+type ProbeTwitchResult = BaseProbeResult<string> & {
   username?: string;
   elapsedMs: number;
   connected?: boolean;

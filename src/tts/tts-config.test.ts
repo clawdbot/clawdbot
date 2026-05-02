@@ -46,6 +46,17 @@ describe("shouldAttemptTtsPayload", () => {
     expect(shouldAttemptTtsPayload({ cfg: {} as OpenClawConfig })).toBe(false);
   });
 
+  it("does not infer automatic TTS from a dashboard text turn without opt-in state", () => {
+    expect(
+      shouldAttemptTtsPayload({
+        cfg: {} as OpenClawConfig,
+        agentId: "main",
+        channelId: "webchat",
+        accountId: "dashboard",
+      }),
+    ).toBe(false);
+  });
+
   it("honors session auto state before prefs and config", () => {
     writeFileSync(prefsPath, JSON.stringify({ tts: { auto: "off" } }));
     const cfg = { messages: { tts: { auto: "off" } } } as OpenClawConfig;

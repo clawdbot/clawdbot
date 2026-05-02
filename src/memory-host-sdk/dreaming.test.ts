@@ -175,6 +175,37 @@ describe("memory dreaming host helpers", () => {
     ]);
   });
 
+  it("includes the runtime primary workspace alongside configured subagent workspaces", () => {
+    const cfg = {
+      agents: {
+        list: [
+          { id: "agi-ceo", workspace: "/workspace/agi-ceo" },
+          { id: "agi-cdo", workspace: "/workspace/agi-cdo" },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveMemoryDreamingWorkspaces(cfg, {
+        primaryWorkspaceDir: "/workspace/main",
+        primaryAgentId: "main",
+      }),
+    ).toEqual([
+      {
+        workspaceDir: "/workspace/agi-ceo",
+        agentIds: ["agi-ceo"],
+      },
+      {
+        workspaceDir: "/workspace/agi-cdo",
+        agentIds: ["agi-cdo"],
+      },
+      {
+        workspaceDir: "/workspace/main",
+        agentIds: ["main"],
+      },
+    ]);
+  });
+
   it("uses default agent fallback and timezone-aware day helpers", () => {
     const cfg = {
       agents: {

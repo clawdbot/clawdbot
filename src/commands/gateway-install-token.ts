@@ -24,7 +24,7 @@ type GatewayInstallTokenOptions = {
   persistGeneratedToken?: boolean;
 };
 
-export type GatewayInstallTokenResolution = {
+type GatewayInstallTokenResolution = {
   token?: string;
   tokenRefConfigured: boolean;
   unavailableReason?: string;

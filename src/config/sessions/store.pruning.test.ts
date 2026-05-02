@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import {
+  isProtectedSessionMaintenanceEntry,
   resolveMaintenanceConfigFromInput,
   resolveSessionEntryMaintenanceHighWater,
 } from "./store-maintenance.js";
@@ -47,6 +48,28 @@ describe("pruneStaleEntries", () => {
     expect(store.old).toBeUndefined();
     expect(store.fresh).toBeDefined();
   });
+
+  it("preserves durable external conversation entries", () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["old", makeEntry(now - 31 * DAY_MS)],
+      ["agent:main:slack:channel:C123:thread:1710000000.000100", makeEntry(now - 31 * DAY_MS)],
+      ["agent:main:telegram:group:-100123:topic:77", makeEntry(now - 31 * DAY_MS)],
+      ["agent:main:slack:channel:C999", makeEntry(now - 31 * DAY_MS)],
+      ["agent:main:telegram:group:-100123", { ...makeEntry(now - 31 * DAY_MS), chatType: "group" }],
+      ["agent:main:discord:channel:ops", { ...makeEntry(now - 31 * DAY_MS), chatType: "channel" }],
+    ]);
+
+    const pruned = pruneStaleEntries(store, 30 * DAY_MS);
+
+    expect(pruned).toBe(1);
+    expect(store.old).toBeUndefined();
+    expect(store["agent:main:slack:channel:C123:thread:1710000000.000100"]).toBeDefined();
+    expect(store["agent:main:telegram:group:-100123:topic:77"]).toBeDefined();
+    expect(store["agent:main:slack:channel:C999"]).toBeDefined();
+    expect(store["agent:main:telegram:group:-100123"]).toBeDefined();
+    expect(store["agent:main:discord:channel:ops"]).toBeDefined();
+  });
 });
 
 describe("capEntryCount", () => {
@@ -69,6 +92,78 @@ describe("capEntryCount", () => {
     expect(store.mid).toBeDefined();
     expect(store.oldest).toBeUndefined();
     expect(store.old).toBeUndefined();
+  });
+
+  it("preserves durable external conversation entries when capping", () => {
+    const now = Date.now();
+    const threadKey = "agent:main:discord:channel:123456:thread:987654";
+    const store = makeStore([
+      [threadKey, makeEntry(now - 5 * DAY_MS)],
+      ["oldest", makeEntry(now - 4 * DAY_MS)],
+      ["old", makeEntry(now - 3 * DAY_MS)],
+      ["recent", makeEntry(now - 1 * DAY_MS)],
+      ["newest", makeEntry(now)],
+    ]);
+
+    const evicted = capEntryCount(store, 3);
+
+    expect(evicted).toBe(2);
+    expect(Object.keys(store)).toHaveLength(3);
+    expect(store[threadKey]).toBeDefined();
+    expect(store.newest).toBeDefined();
+    expect(store.recent).toBeDefined();
+    expect(store.oldest).toBeUndefined();
+    expect(store.old).toBeUndefined();
+  });
+});
+
+describe("isProtectedSessionMaintenanceEntry", () => {
+  it("does not protect synthetic sessions just because they carry group metadata", () => {
+    expect(
+      isProtectedSessionMaintenanceEntry("agent:main:subagent:worker", {
+        ...makeEntry(Date.now()),
+        chatType: "group",
+      }),
+    ).toBe(false);
+    expect(
+      isProtectedSessionMaintenanceEntry("agent:main:cron:job:run:123", {
+        ...makeEntry(Date.now()),
+        origin: { chatType: "group" },
+      }),
+    ).toBe(false);
+  });
+
+  it("protects metadata-less Telegram topic keys without treating every :topic: id as a thread", () => {
+    expect(
+      isProtectedSessionMaintenanceEntry(
+        "agent:main:telegram:group:-100123:topic:77",
+        makeEntry(Date.now()),
+      ),
+    ).toBe(true);
+    expect(
+      isProtectedSessionMaintenanceEntry(
+        "agent:main:opaque:topic:om_topic_root:sender:ou_topic_user",
+        makeEntry(Date.now()),
+      ),
+    ).toBe(false);
+  });
+
+  it("protects metadata-less channel session keys and channel chat metadata", () => {
+    expect(
+      isProtectedSessionMaintenanceEntry("agent:main:slack:channel:C123", makeEntry(Date.now())),
+    ).toBe(true);
+    expect(
+      isProtectedSessionMaintenanceEntry(
+        "agent:main:custom:channel:room-one:with:colon",
+        makeEntry(Date.now()),
+      ),
+    ).toBe(true);
+    expect(
+      isProtectedSessionMaintenanceEntry("agent:main:opaque", {
+        ...makeEntry(Date.now()),
+        chatType: "channel",
+      }),
+    ).toBe(true);
   });
 });
 

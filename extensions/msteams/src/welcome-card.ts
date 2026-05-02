@@ -8,7 +8,7 @@ const DEFAULT_PROMPT_STARTERS = [
   "Help me draft an email",
 ];
 
-export type WelcomeCardOptions = {
+type WelcomeCardOptions = {
   /** Bot display name. Falls back to "OpenClaw". */
   botName?: string;
   /** Custom prompt starters. Falls back to defaults. */

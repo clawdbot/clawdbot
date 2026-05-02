@@ -13,7 +13,7 @@ import {
   resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 
-export type XaiFallbackAuth = {
+type XaiFallbackAuth = {
   apiKey: string;
   source: string;
 };

@@ -5,11 +5,11 @@ export const DEFAULT_FILL_FIELD_TYPE = "text";
 
 type BrowserFormFieldValue = NonNullable<BrowserFormField["value"]>;
 
-export function normalizeBrowserFormFieldRef(value: unknown): string {
+function normalizeBrowserFormFieldRef(value: unknown): string {
   return normalizeOptionalString(value) ?? "";
 }
 
-export function normalizeBrowserFormFieldType(value: unknown): string {
+function normalizeBrowserFormFieldType(value: unknown): string {
   const type = normalizeOptionalString(value) ?? "";
   return type || DEFAULT_FILL_FIELD_TYPE;
 }

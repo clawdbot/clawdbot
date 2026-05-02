@@ -1,6 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
-export type HttpHeaderMap = Record<string, string | string[] | undefined>;
+type HttpHeaderMap = Record<string, string | string[] | undefined>;
 
 export function getHeader(headers: HttpHeaderMap, name: string): string | undefined {
   const target = normalizeLowercaseStringOrEmpty(name);

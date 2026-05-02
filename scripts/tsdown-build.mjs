@@ -4,7 +4,6 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { collectBundledPluginBuildEntries } from "./lib/bundled-plugin-build-entries.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 import {
@@ -22,7 +21,6 @@ const DEFAULT_CAPTURE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_HEARTBEAT_MS = 30_000;
 const TERMINATION_GRACE_MS = 5_000;
 const TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
-const DIST_RUNTIME_DEPS_ROOT = "extensions";
 
 function removeDistPluginNodeModulesSymlinks(rootDir) {
   const extensionsDir = path.join(rootDir, "extensions");
@@ -56,101 +54,13 @@ function pruneStaleRuntimeSymlinks() {
 
 export function cleanTsdownOutputRoots(params = {}) {
   const cwd = params.cwd ?? process.cwd();
-  const stagedRuntimeDependencyPluginIds = collectStagedRuntimeDependencyPluginIds({
-    cwd,
-    env: params.env ?? process.env,
-  });
   const fsImpl = params.fs ?? fs;
   for (const root of TSDOWN_OUTPUT_ROOTS) {
     const rootPath = path.join(cwd, root);
-    if (root === "dist") {
-      cleanDistOutputRoot(rootPath, stagedRuntimeDependencyPluginIds, fsImpl);
-      continue;
-    }
     try {
       fsImpl.rmSync(rootPath, { force: true, recursive: true });
     } catch {
       // Best-effort cleanup. tsdown will recreate the output tree it needs.
-    }
-  }
-}
-
-function collectStagedRuntimeDependencyPluginIds(params) {
-  try {
-    return new Set(
-      collectBundledPluginBuildEntries(params)
-        .filter(({ packageJson }) => shouldStageBundledPluginRuntimeDependencies(packageJson))
-        .map(({ id }) => id),
-    );
-  } catch {
-    return new Set();
-  }
-}
-
-function shouldStageBundledPluginRuntimeDependencies(packageJson) {
-  return packageJson?.openclaw?.bundle?.stageRuntimeDependencies === true;
-}
-
-function cleanDistOutputRoot(distRoot, stagedRuntimeDependencyPluginIds, fsImpl) {
-  let entries = [];
-  try {
-    entries = fsImpl.readdirSync(distRoot, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  for (const entry of entries) {
-    const entryPath = path.join(distRoot, entry.name);
-    try {
-      if (entry.isDirectory() && entry.name === DIST_RUNTIME_DEPS_ROOT) {
-        cleanDistExtensionsRoot(entryPath, stagedRuntimeDependencyPluginIds, fsImpl);
-        continue;
-      }
-      fsImpl.rmSync(entryPath, { force: true, recursive: true });
-    } catch {
-      // Best-effort cleanup. tsdown will overwrite or recreate generated output.
-    }
-  }
-}
-
-function cleanDistExtensionsRoot(extensionsDistRoot, stagedRuntimeDependencyPluginIds, fsImpl) {
-  let entries = [];
-  try {
-    entries = fsImpl.readdirSync(extensionsDistRoot, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  for (const entry of entries) {
-    const pluginDistRoot = path.join(extensionsDistRoot, entry.name);
-    try {
-      if (!entry.isDirectory() || !stagedRuntimeDependencyPluginIds.has(entry.name)) {
-        fsImpl.rmSync(pluginDistRoot, { force: true, recursive: true });
-        continue;
-      }
-      cleanDistPluginOutputRoot(pluginDistRoot, fsImpl);
-    } catch {
-      // Best-effort cleanup. Runtime postbuild validates current plugin metadata next.
-    }
-  }
-}
-
-function cleanDistPluginOutputRoot(pluginDistRoot, fsImpl) {
-  let entries = [];
-  try {
-    entries = fsImpl.readdirSync(pluginDistRoot, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  for (const entry of entries) {
-    if (entry.isDirectory() && entry.name === "node_modules") {
-      continue;
-    }
-    try {
-      fsImpl.rmSync(path.join(pluginDistRoot, entry.name), { force: true, recursive: true });
-    } catch {
-      // Best-effort cleanup. tsdown/runtime-postbuild will rewrite generated files.
     }
   }
 }

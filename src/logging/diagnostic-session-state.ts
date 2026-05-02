@@ -4,6 +4,7 @@ export type SessionState = {
   sessionId?: string;
   sessionKey?: string;
   lastActivity: number;
+  lastStuckWarnAgeMs?: number;
   state: SessionStateValue;
   queueDepth: number;
   toolCallHistory?: ToolCallRecord[];

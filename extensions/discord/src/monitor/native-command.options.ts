@@ -28,6 +28,25 @@ export function truncateDiscordCommandDescription(params: {
   return value.slice(0, DISCORD_COMMAND_DESCRIPTION_MAX);
 }
 
+export function truncateDiscordCommandDescriptionLocalizations(params: {
+  value?: Record<string, string>;
+  label: string;
+}): Record<string, string> | undefined {
+  const entries = Object.entries(params.value ?? {});
+  if (entries.length === 0) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    entries.map(([locale, description]) => [
+      locale,
+      truncateDiscordCommandDescription({
+        value: description,
+        label: `${params.label} locale:${locale}`,
+      }),
+    ]),
+  );
+}
+
 function resolveDiscordCommandLogLabel(command: ChatCommandDefinition): string {
   if (typeof command.nativeName === "string" && command.nativeName.trim().length > 0) {
     return command.nativeName;

@@ -14,7 +14,7 @@ export const DEFAULT_GMAIL_SERVE_PORT = 8788;
 export const DEFAULT_GMAIL_SERVE_PATH = "/gmail-pubsub";
 export const DEFAULT_GMAIL_MAX_BYTES = 20_000;
 export const DEFAULT_GMAIL_RENEW_MINUTES = 12 * 60;
-export const DEFAULT_HOOKS_PATH = "/hooks";
+const DEFAULT_HOOKS_PATH = "/hooks";
 const GMAIL_WATCH_SENSITIVE_FLAGS = new Set(["--token", "--hook-url", "--hook-token"]);
 
 export type GmailHookOverrides = {

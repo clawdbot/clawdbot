@@ -4,11 +4,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { getDefaultLocalRoots } from "../../media/web-media.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
-import { resolveBundledCapabilityProviderIds } from "../../plugins/capability-provider-runtime.js";
+import { loadCapabilityManifestSnapshot } from "../../plugins/capability-provider-runtime.js";
+import { listAvailableManifestContractValues } from "../../plugins/manifest-contract-eligibility.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { normalizeModelRef } from "../model-selection.js";
 import { normalizeProviderId } from "../provider-id.js";
 import {
@@ -18,6 +20,10 @@ import {
   readStringParam,
 } from "./common.js";
 import type { ImageModelConfig } from "./image-tool.helpers.js";
+import {
+  getCurrentCapabilityMetadataSnapshot,
+  hasSnapshotCapabilityAvailability,
+} from "./manifest-capability-availability.js";
 import {
   buildToolModelConfigFromCandidates,
   coerceToolModelConfig,
@@ -137,7 +143,7 @@ type GenerationCapabilityProviderKey =
   | "videoGenerationProviders"
   | "musicGenerationProviders";
 
-export function findCapabilityProviderById<T extends CapabilityProvider>(params: {
+function findCapabilityProviderById<T extends CapabilityProvider>(params: {
   providers: T[];
   providerId?: string;
 }): T | undefined {
@@ -155,6 +161,7 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
   providerId?: string;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  authStore?: AuthProfileStore;
 }): boolean {
   const provider =
     params.provider ??
@@ -164,7 +171,11 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
     });
   if (!provider) {
     return params.providerId
-      ? hasAuthForProvider({ provider: params.providerId, agentDir: params.agentDir })
+      ? hasAuthForProvider({
+          provider: params.providerId,
+          agentDir: params.agentDir,
+          authStore: params.authStore,
+        })
       : false;
   }
   if (provider.isConfigured) {
@@ -173,7 +184,11 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
       agentDir: params.agentDir,
     });
   }
-  return hasAuthForProvider({ provider: provider.id, agentDir: params.agentDir });
+  return hasAuthForProvider({
+    provider: provider.id,
+    agentDir: params.agentDir,
+    authStore: params.authStore,
+  });
 }
 
 export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(params: {
@@ -193,9 +208,10 @@ export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(
   });
 }
 
-export function resolveCapabilityModelCandidatesForTool(params: {
+function resolveCapabilityModelCandidatesForTool(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
+  authStore?: AuthProfileStore;
   providers: CapabilityProvider[];
 }): string[] {
   const providerDefaults = new Map<string, { ref: string; aliases: string[] }>();
@@ -211,6 +227,7 @@ export function resolveCapabilityModelCandidatesForTool(params: {
         provider,
         cfg: params.cfg,
         agentDir: params.agentDir,
+        authStore: params.authStore,
       })
     ) {
       continue;
@@ -252,6 +269,7 @@ export function resolveCapabilityModelCandidatesForTool(params: {
 export function resolveCapabilityModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
+  authStore?: AuthProfileStore;
   modelConfig?: AgentModelConfig;
   providers: CapabilityProvider[];
 }): ToolModelConfig | null {
@@ -262,9 +280,11 @@ export function resolveCapabilityModelConfigForTool(params: {
   return buildToolModelConfigFromCandidates({
     explicit,
     agentDir: params.agentDir,
+    authStore: params.authStore,
     candidates: resolveCapabilityModelCandidatesForTool({
       cfg: params.cfg,
       agentDir: params.agentDir,
+      authStore: params.authStore,
       providers: params.providers,
     }),
     isProviderConfigured: (providerId) =>
@@ -273,6 +293,7 @@ export function resolveCapabilityModelConfigForTool(params: {
         providerId,
         cfg: params.cfg,
         agentDir: params.agentDir,
+        authStore: params.authStore,
       }),
   });
 }
@@ -280,10 +301,15 @@ export function resolveCapabilityModelConfigForTool(params: {
 export function hasGenerationToolAvailability(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
+  authStore?: AuthProfileStore;
   modelConfig?: AgentModelConfig;
   providers?: CapabilityProvider[] | (() => CapabilityProvider[]);
   providerKey: GenerationCapabilityProviderKey;
 }): boolean {
+  if (params.cfg?.plugins?.enabled === false) {
+    return false;
+  }
   if (hasToolModelConfig(coerceToolModelConfig(params.modelConfig))) {
     return true;
   }
@@ -295,13 +321,40 @@ export function hasGenerationToolAvailability(params: {
         provider,
         cfg: params.cfg,
         agentDir: params.agentDir,
+        authStore: params.authStore,
       }),
     );
   }
-  return resolveBundledCapabilityProviderIds({
-    key: params.providerKey,
-    cfg: params.cfg,
-  }).some((providerId) => hasAuthForProvider({ provider: providerId, agentDir: params.agentDir }));
+  const snapshot =
+    getCurrentCapabilityMetadataSnapshot({
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+    }) ??
+    loadCapabilityManifestSnapshot({
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+    });
+  if (
+    hasSnapshotCapabilityAvailability({
+      snapshot,
+      key: params.providerKey,
+      config: params.cfg,
+      authStore: params.authStore,
+    })
+  ) {
+    return true;
+  }
+  return listAvailableManifestContractValues({
+    snapshot,
+    contract: params.providerKey,
+    config: params.cfg,
+  }).some((providerId) =>
+    hasAuthForProvider({
+      provider: providerId,
+      agentDir: params.agentDir,
+      authStore: params.authStore,
+    }),
+  );
 }
 
 function formatQuotedList(values: readonly string[]): string {

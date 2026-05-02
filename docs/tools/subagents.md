@@ -26,8 +26,10 @@ Primary goals:
 default. For heavy or repetitive tasks, set a cheaper model for sub-agents
 and keep your main agent on a higher-quality model. Configure via
 `agents.defaults.subagents.model` or per-agent overrides. When a child
-genuinely needs the requester's current transcript, the agent can request
-`context: "fork"` on that one spawn.
+    genuinely needs the requester's current transcript, the agent can request
+    `context: "fork"` on that one spawn. Thread-bound subagent sessions default
+    to `context: "fork"` because they branch the current conversation into a
+    follow-up thread.
 </Note>
 
 ## Slash command
@@ -179,7 +181,7 @@ session to confirm the effective tool list.
   `require` rejects spawn unless the target child runtime is sandboxed.
 </ParamField>
 <ParamField path="context" type='"isolated" | "fork"' default="isolated">
-  `fork` branches the requester's current transcript into the child session. Native sub-agents only. Use `fork` only when the child needs the current transcript.
+  `fork` branches the requester's current transcript into the child session. Native sub-agents only. Thread-bound spawns default to `fork`; non-thread spawns default to `isolated`.
 </ParamField>
 
 <Warning>
@@ -203,7 +205,7 @@ persistent thread-bound subagent sessions (`sessions_spawn` with
 `channels.discord.threadBindings.enabled`,
 `channels.discord.threadBindings.idleHours`,
 `channels.discord.threadBindings.maxAgeHours`, and
-`channels.discord.threadBindings.spawnSubagentSessions`.
+`channels.discord.threadBindings.spawnSessions`.
 
 ### Quick flow
 

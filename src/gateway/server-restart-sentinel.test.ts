@@ -208,13 +208,18 @@ vi.mock("../infra/heartbeat-wake.js", async () => {
   };
 });
 
-vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: vi.fn(() => ({
+vi.mock("../logging/subsystem.js", () => {
+  const logger = {
     info: mocks.logInfo,
     warn: mocks.logWarn,
     error: mocks.logError,
-  })),
-}));
+    child: vi.fn(),
+  };
+  logger.child.mockReturnValue(logger);
+  return {
+    createSubsystemLogger: vi.fn(() => logger),
+  };
+});
 
 vi.mock("./server-methods/agent-timestamp.js", () => ({
   injectTimestamp: mocks.injectTimestamp,

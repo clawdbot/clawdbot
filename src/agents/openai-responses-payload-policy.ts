@@ -41,7 +41,7 @@ type OpenAIResponsesEndpointClass =
   | "custom"
   | "invalid";
 
-export type OpenAIResponsesPayloadPolicy = {
+type OpenAIResponsesPayloadPolicy = {
   allowsServiceTier: boolean;
   compactThreshold: number;
   explicitStore: boolean | undefined;

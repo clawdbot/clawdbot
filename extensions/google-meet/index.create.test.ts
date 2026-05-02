@@ -62,6 +62,7 @@ function setup(
         unknown
       >,
   );
+  googleMeetPluginTesting.setPlatformForTests(() => options?.registerPlatform ?? "darwin");
   return harness;
 }
 
@@ -106,9 +107,10 @@ describe("google-meet create flow", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     googleMeetPluginTesting.setCallGatewayFromCliForTests();
+    googleMeetPluginTesting.setPlatformForTests();
   });
 
-  it("CLI create prints the new meeting URL", async () => {
+  it("CLI create can configure API-created space access", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       const url = input instanceof Request ? input.url : input.toString();
       if (url.includes("oauth2.googleapis.com")) {
@@ -142,9 +144,27 @@ describe("google-meet create flow", () => {
     });
 
     try {
-      await program.parseAsync(["googlemeet", "create", "--no-join"], { from: "user" });
+      await program.parseAsync(
+        [
+          "googlemeet",
+          "create",
+          "--no-join",
+          "--access-type",
+          "OPEN",
+          "--entry-point-access",
+          "ALL",
+        ],
+        { from: "user" },
+      );
       expect(stdout.output()).toContain("meeting uri: https://meet.google.com/new-abcd-xyz");
       expect(stdout.output()).toContain("space: spaces/new-space");
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://meet.googleapis.com/v2/spaces",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ config: { accessType: "OPEN", entryPointAccess: "ALL" } }),
+        }),
+      );
     } finally {
       stdout.restore();
     }
@@ -218,6 +238,27 @@ describe("google-meet create flow", () => {
         }),
       }),
     );
+  });
+
+  it("rejects access policy flags when tool create would use browser fallback", async () => {
+    const { methods } = setup(
+      {
+        defaultTransport: "chrome-node",
+        chromeNode: { node: "parallels-macos" },
+      },
+      {
+        nodesInvokeHandler: async () => {
+          throw new Error("browser fallback should not run");
+        },
+      },
+    );
+
+    await expect(
+      invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.create", {
+        join: false,
+        accessType: "OPEN",
+      }),
+    ).rejects.toThrow("access policy options require OAuth/API room creation");
   });
 
   it("reports structured manual action when browser creation needs Google login", async () => {

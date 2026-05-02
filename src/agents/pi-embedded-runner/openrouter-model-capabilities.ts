@@ -238,7 +238,7 @@ function triggerFetch(): void {
  * triggers a background API fetch as a last resort.
  * Does not block — returns immediately.
  */
-export function ensureOpenRouterModelCache(): void {
+function ensureOpenRouterModelCache(): void {
   if (cache) {
     return;
   }

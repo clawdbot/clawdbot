@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
-export type ParsedGenerationModelRef = {
+type ParsedGenerationModelRef = {
   provider: string;
   model: string;
 };

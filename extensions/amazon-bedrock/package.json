@@ -5,17 +5,14 @@
   "description": "OpenClaw Amazon Bedrock provider plugin",
   "type": "module",
   "dependencies": {
-    "@aws-sdk/client-bedrock": "3.1040.0",
-    "@aws-sdk/client-bedrock-runtime": "3.1040.0",
-    "@aws-sdk/credential-provider-node": "3.972.38"
+    "@aws-sdk/client-bedrock": "3.1041.0",
+    "@aws-sdk/client-bedrock-runtime": "3.1041.0",
+    "@aws-sdk/credential-provider-node": "3.972.39"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
-    "bundle": {
-      "stageRuntimeDependencies": true
-    },
     "extensions": [
       "./index.ts"
     ]

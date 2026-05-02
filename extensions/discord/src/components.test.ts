@@ -118,6 +118,41 @@ describe("discord component registry", () => {
     expect(resolveDiscordComponentEntry({ id: "btn_1" })).toBeNull();
   });
 
+  it("consumes sibling entries from the same non-reusable component message", () => {
+    const result = buildDiscordComponentMessage({
+      spec: {
+        text: "Confirm action",
+        blocks: [
+          {
+            type: "actions",
+            buttons: [
+              { label: "Confirm", callbackData: "confirm" },
+              { label: "Cancel", callbackData: "cancel" },
+            ],
+          },
+        ],
+      },
+    });
+    const confirm = result.entries.find((entry) => entry.label === "Confirm");
+    const cancel = result.entries.find((entry) => entry.label === "Cancel");
+    expect(confirm?.consumptionGroupId).toBeTruthy();
+    expect(cancel?.consumptionGroupId).toBe(confirm?.consumptionGroupId);
+    expect(confirm?.consumptionGroupEntryIds).toEqual(
+      expect.arrayContaining([confirm?.id, cancel?.id]),
+    );
+
+    registerDiscordComponentEntries({
+      entries: result.entries,
+      modals: [],
+      messageId: "msg_1",
+      ttlMs: 1000,
+    });
+
+    const consumed = resolveDiscordComponentEntry({ id: confirm?.id ?? "" });
+    expect(consumed?.label).toBe("Confirm");
+    expect(resolveDiscordComponentEntry({ id: cancel?.id ?? "", consume: false })).toBeNull();
+  });
+
   it("shares registry state across duplicate module instances", async () => {
     const first = (await import(
       `${componentsRegistryModuleUrl}?t=first-${Date.now()}`
@@ -206,6 +241,49 @@ describe("discord component registry", () => {
     expect(componentLookup).toHaveBeenCalledWith("btn_persisted");
     expect(modalLookup).toHaveBeenCalledWith("mdl_persisted");
     expect(openKeyedStore).toHaveBeenCalledTimes(4);
+  });
+
+  it("deletes sibling persistent component entries when a group entry is consumed", async () => {
+    const componentDelete = vi.fn().mockResolvedValue(true);
+    const componentStore = {
+      register: vi.fn(),
+      lookup: vi.fn(),
+      consume: vi.fn().mockResolvedValue({
+        version: 1,
+        entry: {
+          id: "btn_confirm",
+          kind: "button",
+          label: "Confirm",
+          consumptionGroupId: "grp_1",
+          consumptionGroupEntryIds: ["btn_confirm", "btn_cancel"],
+        },
+      }),
+      delete: componentDelete,
+    };
+    const modalStore = {
+      register: vi.fn(),
+      lookup: vi.fn(),
+      consume: vi.fn(),
+      delete: vi.fn(),
+    };
+    const openKeyedStore = vi.fn((opts: { namespace: string }) =>
+      opts.namespace === "discord.components" ? componentStore : modalStore,
+    );
+    const { setDiscordRuntime } = await import("./runtime.js");
+    setDiscordRuntime({
+      state: { openKeyedStore },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+
+    clearDiscordComponentEntries();
+    await expect(
+      resolveDiscordComponentEntryWithPersistence({ id: "btn_confirm" }),
+    ).resolves.toMatchObject({
+      id: "btn_confirm",
+    });
+
+    await vi.waitFor(() => expect(componentDelete).toHaveBeenCalledWith("btn_cancel"));
+    expect(componentDelete).toHaveBeenCalledWith("btn_confirm");
   });
 
   it("falls back to the in-memory registry when persistent state cannot open", async () => {

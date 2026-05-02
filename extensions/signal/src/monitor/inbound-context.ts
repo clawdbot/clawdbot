@@ -11,7 +11,7 @@ import {
 } from "../identity.js";
 import type { SignalDataMessage } from "./event-handler.types.js";
 
-export type SignalQuoteContext = {
+type SignalQuoteContext = {
   contextVisibilityMode: ReturnType<typeof resolveChannelContextVisibilityMode>;
   decision: ContextVisibilityDecision;
   quoteSenderAllowed: boolean;

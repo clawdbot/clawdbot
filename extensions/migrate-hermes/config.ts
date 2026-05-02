@@ -57,7 +57,7 @@ function providerConfig(entry: HermesProviderConfig): Record<string, unknown> {
   };
 }
 
-export function collectHermesProviders(
+function collectHermesProviders(
   config: Record<string, unknown>,
   modelRef?: string,
 ): HermesProviderConfig[] {

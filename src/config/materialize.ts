@@ -12,7 +12,7 @@ import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.
 import { normalizeConfigPaths } from "./normalize-paths.js";
 import type { OpenClawConfig, ResolvedSourceConfig, RuntimeConfig } from "./types.js";
 
-export type ConfigMaterializationMode = "load" | "missing" | "snapshot";
+type ConfigMaterializationMode = "load" | "missing" | "snapshot";
 
 type MaterializationProfile = {
   includeCompactionDefaults: boolean;

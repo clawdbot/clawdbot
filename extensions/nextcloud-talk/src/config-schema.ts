@@ -10,7 +10,7 @@ import { requireChannelOpenAllowFrom } from "openclaw/plugin-sdk/extension-share
 import { z } from "openclaw/plugin-sdk/zod";
 import { buildSecretInputSchema } from "./secret-input.js";
 
-export const NextcloudTalkRoomSchema = z
+const NextcloudTalkRoomSchema = z
   .object({
     requireMention: z.boolean().optional(),
     tools: ToolPolicySchema,
@@ -29,7 +29,7 @@ const NextcloudTalkNetworkSchema = z
   .strict()
   .optional();
 
-export const NextcloudTalkAccountSchemaBase = z
+const NextcloudTalkAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
@@ -55,17 +55,15 @@ export const NextcloudTalkAccountSchemaBase = z
   })
   .strict();
 
-export const NextcloudTalkAccountSchema = NextcloudTalkAccountSchemaBase.superRefine(
-  (value, ctx) => {
-    requireChannelOpenAllowFrom({
-      channel: "nextcloud-talk",
-      policy: value.dmPolicy,
-      allowFrom: value.allowFrom,
-      ctx,
-      requireOpenAllowFrom,
-    });
-  },
-);
+const NextcloudTalkAccountSchema = NextcloudTalkAccountSchemaBase.superRefine((value, ctx) => {
+  requireChannelOpenAllowFrom({
+    channel: "nextcloud-talk",
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    requireOpenAllowFrom,
+  });
+});
 
 export const NextcloudTalkConfigSchema = NextcloudTalkAccountSchemaBase.extend({
   accounts: z.record(z.string(), NextcloudTalkAccountSchema.optional()).optional(),

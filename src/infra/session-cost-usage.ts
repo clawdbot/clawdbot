@@ -51,18 +51,11 @@ export type {
   DiscoveredSession,
   SessionCostSummary,
   SessionDailyLatency,
-  SessionDailyMessageCounts,
   SessionDailyModelUsage,
-  SessionDailyUsage,
   SessionLatencyStats,
-  SessionLogEntry,
   SessionMessageCounts,
   SessionModelUsage,
-  SessionUtcQuarterHourMessageCounts,
-  SessionUtcQuarterHourTokenUsage,
   SessionToolUsage,
-  SessionUsageTimePoint,
-  SessionUsageTimeSeries,
 } from "./session-cost-usage.types.js";
 
 const emptyTotals = (): CostUsageTotals => ({

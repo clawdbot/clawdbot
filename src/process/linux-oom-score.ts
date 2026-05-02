@@ -17,7 +17,7 @@ import fs from "node:fs";
  * `params.env` for per-child overrides.
  */
 
-export const CHILD_OOM_SCORE_ADJ_ENV_KEY = "OPENCLAW_CHILD_OOM_SCORE_ADJ";
+const CHILD_OOM_SCORE_ADJ_ENV_KEY = "OPENCLAW_CHILD_OOM_SCORE_ADJ";
 const OOM_SCORE_WRAP_SHELL = "/bin/sh";
 const OOM_SCORE_WRAP_SCRIPT = 'echo 1000 > /proc/self/oom_score_adj 2>/dev/null; exec "$0" "$@"';
 

@@ -8,18 +8,76 @@ import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
 import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
 
 const callGatewayTool = vi.hoisted(() => vi.fn());
+const connectToolsMcpServerToStdioMock = vi.hoisted(() => vi.fn());
+const createToolsMcpServerMock = vi.hoisted(() => vi.fn(() => ({ close: vi.fn() })));
+const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({ plugins: { enabled: true } })));
+const resolvePluginToolsMock = vi.hoisted(() => vi.fn<() => AnyAgentTool[]>(() => []));
+const routeLogsToStderrMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../agents/tools/gateway.js", () => ({
   callGatewayTool,
 }));
 
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: getRuntimeConfigMock,
+}));
+
+vi.mock("../logging/console.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/console.js")>();
+  return {
+    ...actual,
+    routeLogsToStderr: routeLogsToStderrMock,
+  };
+});
+
+vi.mock("../plugins/tools.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/tools.js")>();
+  return {
+    ...actual,
+    resolvePluginTools: resolvePluginToolsMock,
+  };
+});
+
+vi.mock("./tools-stdio-server.js", () => ({
+  connectToolsMcpServerToStdio: connectToolsMcpServerToStdioMock,
+  createToolsMcpServer: createToolsMcpServerMock,
+}));
+
 afterEach(() => {
   vi.restoreAllMocks();
   callGatewayTool.mockReset();
+  connectToolsMcpServerToStdioMock.mockReset();
+  createToolsMcpServerMock.mockClear();
+  getRuntimeConfigMock.mockClear();
+  resolvePluginToolsMock.mockReset();
+  resolvePluginToolsMock.mockReturnValue([]);
+  routeLogsToStderrMock.mockReset();
   resetGlobalHookRunner();
 });
 
 describe("plugin tools MCP server", () => {
+  it("routes logs to stderr before resolving tools for stdio", async () => {
+    const { servePluginToolsMcp } = await import("./plugin-tools-serve.js");
+    resolvePluginToolsMock.mockReturnValue([
+      {
+        name: "memory_recall",
+        label: "Recall memory",
+        description: "Recall stored memory",
+        parameters: { type: "object", properties: {} },
+        execute: vi.fn(),
+      },
+    ]);
+
+    await servePluginToolsMcp();
+
+    expect(routeLogsToStderrMock).toHaveBeenCalledTimes(1);
+    expect(resolvePluginToolsMock).toHaveBeenCalledTimes(1);
+    expect(routeLogsToStderrMock.mock.invocationCallOrder[0]).toBeLessThan(
+      resolvePluginToolsMock.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(connectToolsMcpServerToStdioMock).toHaveBeenCalledOnce();
+  });
+
   it("lists registered plugin tools and serializes non-array tool content", async () => {
     const execute = vi.fn().mockResolvedValue({
       content: "Stored.",

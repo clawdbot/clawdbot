@@ -7,11 +7,14 @@ type PiSdkModule = typeof import("./pi-model-discovery.js");
 let __setModelCatalogImportForTest: typeof import("./model-catalog.js").__setModelCatalogImportForTest;
 let findModelCatalogEntry: typeof import("./model-catalog.js").findModelCatalogEntry;
 let findModelInCatalog: typeof import("./model-catalog.js").findModelInCatalog;
+let loadManifestModelCatalog: typeof import("./model-catalog.js").loadManifestModelCatalog;
 let loadModelCatalog: typeof import("./model-catalog.js").loadModelCatalog;
 let modelSupportsInput: typeof import("./model-catalog.js").modelSupportsInput;
 let resetModelCatalogCacheForTest: typeof import("./model-catalog.js").resetModelCatalogCacheForTest;
 let augmentCatalogMock: ReturnType<typeof vi.fn>;
 let ensureOpenClawModelsJsonMock: ReturnType<typeof vi.fn>;
+let currentPluginMetadataSnapshotMock: ReturnType<typeof vi.fn>;
+let loadPluginMetadataSnapshotMock: ReturnType<typeof vi.fn>;
 
 vi.mock("./model-suppression.runtime.js", () => ({
   shouldSuppressBuiltInModel: (params: { provider?: string; id?: string }) =>
@@ -77,11 +80,20 @@ describe("loadModelCatalog", () => {
     vi.doMock("../plugins/provider-runtime.runtime.js", () => ({
       augmentModelCatalogWithProviderPlugins: vi.fn().mockResolvedValue([]),
     }));
+    currentPluginMetadataSnapshotMock = vi.fn();
+    loadPluginMetadataSnapshotMock = vi.fn();
+    vi.doMock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+      getCurrentPluginMetadataSnapshot: currentPluginMetadataSnapshotMock,
+    }));
+    vi.doMock("../plugins/plugin-metadata-snapshot.js", () => ({
+      loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
+    }));
 
     ({
       __setModelCatalogImportForTest,
       findModelCatalogEntry,
       findModelInCatalog,
+      loadManifestModelCatalog,
       loadModelCatalog,
       modelSupportsInput,
       resetModelCatalogCacheForTest,
@@ -93,6 +105,9 @@ describe("loadModelCatalog", () => {
   beforeEach(() => {
     resetModelCatalogCacheForTest();
     ensureOpenClawModelsJsonMock.mockClear();
+    augmentCatalogMock.mockClear();
+    currentPluginMetadataSnapshotMock.mockReset();
+    loadPluginMetadataSnapshotMock.mockReset();
   });
 
   afterEach(() => {
@@ -105,6 +120,8 @@ describe("loadModelCatalog", () => {
     vi.doUnmock("./models-config.js");
     vi.doUnmock("./agent-paths.js");
     vi.doUnmock("../plugins/provider-runtime.runtime.js");
+    vi.doUnmock("../plugins/current-plugin-metadata-snapshot.js");
+    vi.doUnmock("../plugins/plugin-metadata-snapshot.js");
   });
 
   it("retries after import failure without poisoning the cache", async () => {
@@ -365,6 +382,59 @@ describe("loadModelCatalog", () => {
         name: "Gemini 3 Pro Preview",
       }),
     );
+  });
+
+  it("loads manifest catalog rows from the current metadata snapshot without provider runtime", () => {
+    const snapshot = {
+      policyHash: "policy",
+      index: {
+        policyHash: "policy",
+        plugins: [
+          {
+            pluginId: "external-provider",
+            enabled: true,
+            origin: "global",
+          },
+        ],
+      },
+      plugins: [
+        {
+          id: "external-provider",
+          origin: "global",
+          modelCatalog: {
+            providers: {
+              external: {
+                models: [
+                  {
+                    id: "external-fast",
+                    name: "External Fast",
+                    input: ["text", "image"],
+                    reasoning: true,
+                    contextWindow: 32000,
+                  },
+                ],
+              },
+            },
+          },
+        },
+      ],
+    };
+    currentPluginMetadataSnapshotMock.mockReturnValue(snapshot);
+
+    const result = loadManifestModelCatalog({ config: {} as OpenClawConfig });
+
+    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(augmentCatalogMock).not.toHaveBeenCalled();
+    expect(result).toEqual([
+      {
+        provider: "external",
+        id: "external-fast",
+        name: "External Fast",
+        input: ["text", "image"],
+        reasoning: true,
+        contextWindow: 32000,
+      },
+    ]);
   });
 
   it("dedupes supplemental models against registry entries", async () => {

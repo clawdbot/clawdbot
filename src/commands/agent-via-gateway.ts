@@ -39,7 +39,7 @@ const EMBEDDED_FALLBACK_META = {
 } as const;
 const GATEWAY_TIMEOUT_FALLBACK_SESSION_PREFIX = "gateway-fallback-";
 
-export type AgentCliOpts = {
+type AgentCliOpts = {
   message: string;
   agent?: string;
   model?: string;
@@ -120,7 +120,7 @@ function createGatewayTimeoutFallbackSession(agentId?: string): {
   };
 }
 
-export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
+async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
   protectJsonStdout(opts);
   const body = (opts.message ?? "").trim();
   if (!body) {

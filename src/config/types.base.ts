@@ -153,6 +153,17 @@ export type SessionThreadBindingsConfig = {
    * Session auto-unfocuses once this age is reached even if active. Set to 0 to disable. Default: 0.
    */
   maxAgeHours?: number;
+  /**
+   * Allow channel integrations to create thread-bound work sessions from
+   * sessions_spawn or native ACP spawn flows. Channel/account keys can override.
+   * Default: true when thread bindings are enabled.
+   */
+  spawnSessions?: boolean;
+  /**
+   * Default context mode for native subagents spawned into a bound thread.
+   * Default: "fork" so the child starts from the requester transcript.
+   */
+  defaultSpawnContext?: "isolated" | "fork";
 };
 
 export type SessionConfig = {
@@ -170,12 +181,6 @@ export type SessionConfig = {
   store?: string;
   typingIntervalSeconds?: number;
   typingMode?: TypingMode;
-  /**
-   * Max parent transcript token count allowed for thread/session forking.
-   * If parent totalTokens is above this value, OpenClaw skips parent fork and
-   * starts a fresh thread session instead. Set to 0 to disable this guard.
-   */
-  parentForkMaxTokens?: number;
   mainKey?: string;
   sendPolicy?: SessionSendPolicyConfig;
   agentToAgent?: {
@@ -276,7 +281,7 @@ export type DiagnosticsConfig = {
   enabled?: boolean;
   /** Optional ad-hoc diagnostics flags (e.g. "telegram.http"). */
   flags?: string[];
-  /** Threshold in ms before a processing session logs "stuck session" diagnostics. */
+  /** Threshold in ms before a processing session with no observed progress logs diagnostics. */
   stuckSessionWarnMs?: number;
   otel?: DiagnosticsOtelConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;

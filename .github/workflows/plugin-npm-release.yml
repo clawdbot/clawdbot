@@ -8,6 +8,7 @@ on:
       - ".github/workflows/plugin-npm-release.yml"
       - "extensions/**"
       - "package.json"
+      - "scripts/lib/plugin-npm-package-manifest.mjs"
       - "scripts/lib/plugin-npm-release.ts"
       - "scripts/plugin-npm-publish.sh"
       - "scripts/plugin-npm-release-check.ts"
@@ -23,7 +24,7 @@ on:
           - selected
           - all-publishable
       ref:
-        description: Commit SHA on main to publish from (copy from the preview run)
+        description: Commit SHA on main or a release branch to publish from (copy from the preview run)
         required: true
         type: string
       plugins:
@@ -69,11 +70,22 @@ jobs:
         id: ref
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Validate ref is on main
+      - name: Validate ref is on main or a release branch
         run: |
           set -euo pipefail
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          git merge-base --is-ancestor HEAD origin/main
+          git fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main \
+            '+refs/heads/release/*:refs/remotes/origin/release/*'
+          if git merge-base --is-ancestor HEAD origin/main; then
+            exit 0
+          fi
+          while IFS= read -r release_ref; do
+            if git merge-base --is-ancestor HEAD "${release_ref}"; then
+              exit 0
+            fi
+          done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/release)
+          echo "Plugin npm publishes must target a commit reachable from main or release/*." >&2
+          exit 1
 
       - name: Validate publishable plugin metadata
         env:
@@ -162,14 +174,12 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "false"
-          install-deps: "false"
 
       - name: Preview publish command
         run: bash scripts/plugin-npm-publish.sh --dry-run "${{ matrix.plugin.packageDir }}"
 
       - name: Preview npm pack contents
-        working-directory: ${{ matrix.plugin.packageDir }}
-        run: npm pack --dry-run --json --ignore-scripts
+        run: bash scripts/plugin-npm-publish.sh --pack-dry-run "${{ matrix.plugin.packageDir }}"
 
   publish_plugins_npm:
     needs: [preview_plugins_npm, preview_plugin_pack]
@@ -197,7 +207,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "false"
-          install-deps: "false"
 
       - name: Ensure version is not already published
         env:
@@ -214,4 +223,5 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          OPENCLAW_NPM_PUBLISH_AUTH_MODE: trusted-publisher
         run: bash scripts/plugin-npm-publish.sh --publish "${{ matrix.plugin.packageDir }}"

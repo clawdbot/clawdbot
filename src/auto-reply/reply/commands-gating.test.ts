@@ -66,6 +66,7 @@ vi.mock("../../channels/plugins/config-writes.js", () => ({
 }));
 
 vi.mock("../../channels/registry.js", () => ({
+  normalizeAnyChannelId: vi.fn((value?: string) => value),
   normalizeChannelId: vi.fn((value?: string) => value),
 }));
 

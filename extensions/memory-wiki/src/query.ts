@@ -127,7 +127,7 @@ type QueryDigestBundle = {
   claims: QueryDigestClaim[];
 };
 
-export type WikiSearchResult = {
+type WikiSearchResult = {
   corpus: "wiki" | "memory";
   path: string;
   title: string;
@@ -156,7 +156,7 @@ export type WikiSearchResult = {
   evidenceSourceIds?: string[];
 };
 
-export type WikiGetResult = {
+type WikiGetResult = {
   corpus: "wiki" | "memory";
   path: string;
   title: string;

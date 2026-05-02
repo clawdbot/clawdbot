@@ -25,7 +25,7 @@ function buildMissingScopeError(overrides?: {
   scopes?: string[];
   acceptedScopes?: string[];
 }): SlackMissingScopeError {
-  const err = new Error("missing_scope") as SlackMissingScopeError;
+  const err = new Error("An API error occurred: missing_scope") as SlackMissingScopeError;
   const response_metadata =
     overrides?.scopes || overrides?.acceptedScopes
       ? {
@@ -131,7 +131,7 @@ describe("sendMessageSlack customize-scope fallback", () => {
         client,
         identity: { username: "Bot" },
       }),
-    ).rejects.toBe(err);
+    ).rejects.toThrow("An API error occurred: missing_scope (needed: channels:history)");
 
     expect(client.chat.postMessage).toHaveBeenCalledTimes(1);
     expect(vi.mocked(logVerbose)).not.toHaveBeenCalled();
@@ -148,9 +148,52 @@ describe("sendMessageSlack customize-scope fallback", () => {
         cfg: SLACK_TEST_CFG,
         client,
       }),
-    ).rejects.toBe(err);
+    ).rejects.toThrow("An API error occurred: missing_scope (needed: chat:write.customize)");
 
     expect(client.chat.postMessage).toHaveBeenCalledTimes(1);
     expect(vi.mocked(logVerbose)).not.toHaveBeenCalled();
+  });
+
+  it("preserves Slack missing-scope details for delivery queue recovery", async () => {
+    const client = createSlackSendTestClient();
+    vi.mocked(client.chat.postMessage).mockRejectedValueOnce(
+      buildMissingScopeError({
+        needed: "im:write",
+        scopes: ["chat:write", "users:read"],
+        acceptedScopes: ["im:write", "mpim:write"],
+      }),
+    );
+
+    await expect(
+      sendMessageSlack("channel:C123", "hello", {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+      }),
+    ).rejects.toThrow(
+      "An API error occurred: missing_scope (needed: im:write; granted: chat:write, users:read; accepted: im:write, mpim:write)",
+    );
+  });
+
+  it("preserves Slack missing-scope details while opening DMs", async () => {
+    const client = createSlackSendTestClient();
+    vi.mocked(client.conversations.open).mockRejectedValueOnce(
+      buildMissingScopeError({
+        needed: "im:write",
+        scopes: ["chat:write"],
+      }),
+    );
+
+    await expect(
+      sendMessageSlack("user:U123", "hello", {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+        threadTs: "171234.100",
+      }),
+    ).rejects.toThrow(
+      "An API error occurred: missing_scope (needed: im:write; granted: chat:write)",
+    );
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
   });
 });

@@ -66,6 +66,43 @@ function hasRealtimeAudioOutputAdvanced(
   return (health?.lastOutputBytes ?? 0) > startOutputBytes;
 }
 
+type TranscriptCheckpoint = {
+  lines: number;
+  lastCaptionAt?: string;
+  lastCaptionText?: string;
+};
+
+function transcriptCheckpoint(health: GoogleMeetChromeHealth | undefined): TranscriptCheckpoint {
+  return {
+    lines: health?.transcriptLines ?? 0,
+    lastCaptionAt: health?.lastCaptionAt,
+    lastCaptionText: health?.lastCaptionText,
+  };
+}
+
+function hasTranscriptAdvanced(
+  health: GoogleMeetChromeHealth | undefined,
+  start: TranscriptCheckpoint,
+): boolean {
+  if ((health?.transcriptLines ?? 0) > start.lines) {
+    return true;
+  }
+  if (health?.lastCaptionAt && health.lastCaptionAt !== start.lastCaptionAt) {
+    return true;
+  }
+  return Boolean(health?.lastCaptionText && health.lastCaptionText !== start.lastCaptionText);
+}
+
+function resolveProbeTimeoutMs(input: number | undefined, fallback: number): number {
+  if (input === undefined) {
+    return Math.min(Math.max(fallback, 1), 120_000);
+  }
+  if (!Number.isFinite(input) || input <= 0) {
+    throw new Error("timeoutMs must be a positive number");
+  }
+  return Math.min(Math.trunc(input), 120_000);
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -593,6 +630,88 @@ export class GoogleMeetRuntime {
       speechBlockedMessage: health?.speechBlockedMessage,
       audioOutputActive: health?.audioOutputActive,
       lastOutputBytes: health?.lastOutputBytes,
+      session: result.session,
+    };
+  }
+
+  async testListen(request: GoogleMeetJoinRequest): Promise<{
+    createdSession: boolean;
+    inCall?: boolean;
+    manualActionRequired?: boolean;
+    manualActionReason?: GoogleMeetChromeHealth["manualActionReason"];
+    manualActionMessage?: string;
+    listenVerified: boolean;
+    listenTimedOut: boolean;
+    captioning?: boolean;
+    captionsEnabledAttempted?: boolean;
+    transcriptLines?: number;
+    lastCaptionAt?: string;
+    lastCaptionSpeaker?: string;
+    lastCaptionText?: string;
+    recentTranscript?: GoogleMeetChromeHealth["recentTranscript"];
+    session: GoogleMeetSession;
+  }> {
+    if (request.mode === "realtime") {
+      throw new Error(
+        "test_listen requires mode: transcribe; use test_speech for realtime talk-back.",
+      );
+    }
+    const url = normalizeMeetUrl(request.url);
+    const transport = resolveTransport(request.transport, this.params.config);
+    if (transport === "twilio") {
+      throw new Error("test_listen supports chrome or chrome-node transports");
+    }
+    const beforeSessions = this.list();
+    const before = new Set(beforeSessions.map((session) => session.id));
+    const existingSession = beforeSessions.find(
+      (session) =>
+        session.state === "active" &&
+        isSameMeetUrlForReuse(session.url, url) &&
+        session.transport === transport &&
+        session.mode === "transcribe",
+    );
+    const start = transcriptCheckpoint(existingSession?.chrome?.health);
+    const result = await this.join({
+      ...request,
+      transport,
+      url,
+      mode: "transcribe",
+      message: undefined,
+    });
+    let health = result.session.chrome?.health;
+    const timeoutMs = resolveProbeTimeoutMs(
+      request.timeoutMs,
+      this.params.config.chrome.joinTimeoutMs,
+    );
+    const shouldWait =
+      health?.manualActionRequired !== true && isManagedChromeBrowserSession(result.session);
+    if (shouldWait && !hasTranscriptAdvanced(health, start)) {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        await sleep(250);
+        await this.#refreshCaptionHealthForSession(result.session);
+        health = result.session.chrome?.health;
+        if (health?.manualActionRequired || hasTranscriptAdvanced(health, start)) {
+          break;
+        }
+      }
+    }
+    const listenVerified = hasTranscriptAdvanced(health, start);
+    return {
+      createdSession: !before.has(result.session.id),
+      inCall: health?.inCall,
+      manualActionRequired: health?.manualActionRequired,
+      manualActionReason: health?.manualActionReason,
+      manualActionMessage: health?.manualActionMessage,
+      listenVerified,
+      listenTimedOut: shouldWait && !listenVerified && health?.manualActionRequired !== true,
+      captioning: health?.captioning,
+      captionsEnabledAttempted: health?.captionsEnabledAttempted,
+      transcriptLines: health?.transcriptLines,
+      lastCaptionAt: health?.lastCaptionAt,
+      lastCaptionSpeaker: health?.lastCaptionSpeaker,
+      lastCaptionText: health?.lastCaptionText,
+      recentTranscript: health?.recentTranscript,
       session: result.session,
     };
   }

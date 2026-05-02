@@ -345,6 +345,8 @@ describe("createSynologyChatPlugin", () => {
     it("normalizeTarget strips prefix and trims", () => {
       const plugin = createSynologyChatPlugin();
       expect(plugin.messaging.normalizeTarget("synology-chat:123")).toBe("123");
+      expect(plugin.messaging.normalizeTarget("synology_chat:123")).toBe("123");
+      expect(plugin.messaging.normalizeTarget("synology:123")).toBe("123");
       expect(plugin.messaging.normalizeTarget("  456  ")).toBe("456");
       expect(plugin.messaging.normalizeTarget("")).toBeUndefined();
     });
@@ -353,6 +355,8 @@ describe("createSynologyChatPlugin", () => {
       const plugin = createSynologyChatPlugin();
       expect(plugin.messaging.targetResolver.looksLikeId("12345")).toBe(true);
       expect(plugin.messaging.targetResolver.looksLikeId("synology-chat:99")).toBe(true);
+      expect(plugin.messaging.targetResolver.looksLikeId("synology_chat:99")).toBe(true);
+      expect(plugin.messaging.targetResolver.looksLikeId("synology:99")).toBe(true);
       expect(plugin.messaging.targetResolver.looksLikeId("notanumber")).toBe(false);
       expect(plugin.messaging.targetResolver.looksLikeId("")).toBe(false);
     });

@@ -4,7 +4,7 @@ import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { hardenManualCompactionBoundary } from "./manual-compaction-boundary.js";
 
 let tmpDir = "";
@@ -95,7 +95,11 @@ describe("hardenManualCompactionBoundary", () => {
       .messages.map((message) => messageText(message));
     expect(beforeTexts.join("\n")).toContain("detailed new answer");
 
+    const openSpy = vi.spyOn(SessionManager, "open").mockImplementation(() => {
+      throw new Error("SessionManager.open should not be used for boundary hardening");
+    });
     const hardened = await hardenManualCompactionBoundary({ sessionFile: sessionFile! });
+    openSpy.mockRestore();
     expect(hardened.applied).toBe(true);
     expect(hardened.firstKeptEntryId).toBe(latestCompactionId);
     expect(hardened.messages.map((message) => message.role)).toEqual(["compactionSummary"]);

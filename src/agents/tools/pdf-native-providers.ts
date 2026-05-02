@@ -153,11 +153,11 @@ export async function geminiAnalyzePdf(params: {
     /\/v1beta$/i,
     "",
   );
-  const url = `${baseUrl}/v1beta/models/${encodeURIComponent(params.modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const url = `${baseUrl}/v1beta/models/${encodeURIComponent(params.modelId)}:generateContent`;
 
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
     body: JSON.stringify({
       contents: [{ role: "user", parts }],
     }),

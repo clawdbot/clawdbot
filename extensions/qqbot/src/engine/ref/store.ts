@@ -206,19 +206,3 @@ export function flushRefIndex(): void {
     compactFile();
   }
 }
-
-/** Return ref-index stats for diagnostics. */
-export function getRefIndexStats(): {
-  size: number;
-  maxEntries: number;
-  totalLinesOnDisk: number;
-  filePath: string;
-} {
-  const store = loadFromFile();
-  return {
-    size: store.size,
-    maxEntries: MAX_ENTRIES,
-    totalLinesOnDisk,
-    filePath: getRefIndexFile(),
-  };
-}

@@ -63,9 +63,15 @@ vi.mock("../plugins/manifest-registry.js", () => ({
 }));
 vi.mock("../plugins/manifest-registry-installed.js", () => ({
   loadPluginManifestRegistryForInstalledIndex: loadPluginManifestRegistry,
+  resolveInstalledManifestRegistryIndexFingerprint: () => "test-index",
 }));
 vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginRegistrySnapshot: () => ({ plugins: [] }),
+  loadPluginRegistrySnapshotWithMetadata: () => ({
+    source: "derived",
+    snapshot: { plugins: [] },
+    diagnostics: [],
+  }),
   loadPluginManifestRegistryForPluginRegistry: () => loadPluginManifestRegistry(),
 }));
 vi.mock("../plugins/provider-runtime.js", () => ({

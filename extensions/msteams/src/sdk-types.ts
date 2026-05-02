@@ -7,7 +7,7 @@
  * objects), so we model the minimal structural shape we rely on.
  */
 
-export type MSTeamsActivity = {
+type MSTeamsActivity = {
   type: string;
   id?: string;
   timestamp?: string;

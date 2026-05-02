@@ -213,8 +213,8 @@ async function expectBuiltArtifactNodeRequireFastPath(
     const importerPath = path.join(pluginRoot, "index.js");
     const sidecarPath = path.join(pluginRoot, "fast-path-sidecar.cjs");
     fs.writeFileSync(importerPath, "export default {};\n", "utf8");
-    // CommonJS so `nodeRequire` succeeds without falling back to jiti, even
-    // after runtime-deps mirroring writes a `type: "module"` package boundary.
+    // CommonJS so `nodeRequire` succeeds without falling back to the source loader, even
+    // inside built plugin artifacts with a `type: "module"` package boundary.
     fs.writeFileSync(sidecarPath, "module.exports = { sentinel: 7 };\n", "utf8");
 
     expect(
@@ -228,10 +228,10 @@ async function expectBuiltArtifactNodeRequireFastPath(
       .map((args) => String(args[0] ?? ""))
       .find((line) => line.startsWith("[plugin-load-profile] phase=bundled-entry-module-load"));
     expect(profileLine, "expected a bundled-entry-module-load profile line").toBeDefined();
-    expect(profileLine).toMatch(/getJitiMs=\d/u);
-    expect(profileLine).toMatch(/jitiCallMs=\d/u);
-    expect(profileLine).not.toMatch(/getJitiMs=-/);
-    expect(profileLine).not.toMatch(/jitiCallMs=-/);
+    expect(profileLine).toMatch(/sourceLoaderCreateMs=\d/u);
+    expect(profileLine).toMatch(/sourceLoaderCallMs=\d/u);
+    expect(profileLine).not.toMatch(/sourceLoaderCreateMs=-/);
+    expect(profileLine).not.toMatch(/sourceLoaderCallMs=-/);
   } finally {
     errorSpy.mockRestore();
   }
@@ -267,7 +267,7 @@ describe("loadBundledEntryExportSync", () => {
     expect(message).toContain("ENOENT");
   });
 
-  it("keeps Windows dist sidecar loads off Jiti native import", async () => {
+  it("keeps Windows dist sidecar loads off source-transform loading", async () => {
     const createJiti = vi.fn(() => vi.fn(() => ({ load: 42 })));
     vi.doMock("jiti", () => ({
       createJiti,
@@ -306,7 +306,7 @@ describe("loadBundledEntryExportSync", () => {
     }
   });
 
-  it("normalizes Windows absolute sidecar paths before Jiti loads them", async () => {
+  it("normalizes Windows absolute sidecar paths before module loads them", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
     tempDirs.push(tempRoot);
     const openedFdPath = path.join(tempRoot, "opened");
@@ -337,7 +337,6 @@ describe("loadBundledEntryExportSync", () => {
             specifier: "./helper.ts",
             exportName: "load",
           },
-          { installRuntimeDeps: false },
         ),
       ).toBe(42);
       expect(jitiLoad).toHaveBeenCalledWith(
@@ -397,10 +396,10 @@ describe("loadBundledEntryExportSync", () => {
     });
   });
 
-  it("emits non-negative jiti sub-step timings on the built-artifact load path", async () => {
-    // Built artifacts prefer `nodeRequire`, but runtime-deps staging can still
-    // make Node reject a sidecar and fall back through jiti. The profile line
-    // must never report negative or missing jiti sub-step timings either way.
+  it("emits non-negative source-loader sub-step timings on the built-artifact load path", async () => {
+    // Built artifacts prefer `nodeRequire`, but Node can still reject a sidecar
+    // and fall back through jiti. The profile line must never report negative
+    // or missing source-loader sub-step timings either way.
     await expectBuiltArtifactNodeRequireFastPath("built-artifact-profile-fast-path");
   });
 

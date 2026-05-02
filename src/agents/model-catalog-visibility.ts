@@ -3,7 +3,7 @@ import type { ModelCatalogEntry } from "./model-catalog.js";
 import { createProviderAuthChecker } from "./model-provider-auth.js";
 import { buildAllowedModelSet, buildConfiguredModelCatalog, modelKey } from "./model-selection.js";
 
-export type ModelCatalogVisibilityView = "default" | "configured" | "all";
+type ModelCatalogVisibilityView = "default" | "configured" | "all";
 
 function sortModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntry[] {
   return entries.toSorted(

@@ -55,7 +55,7 @@ export type SlackInteractiveHandlerRegistration = PluginInteractiveRegistration<
   "slack"
 >;
 
-export type SlackInteractiveDispatchContext = Omit<
+type SlackInteractiveDispatchContext = Omit<
   SlackInteractiveHandlerContext,
   | "interaction"
   | "respond"

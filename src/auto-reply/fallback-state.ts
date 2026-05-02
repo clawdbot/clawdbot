@@ -49,7 +49,7 @@ function formatFallbackAttemptErrorPreview(attempt: RuntimeFallbackAttempt): str
   return formatted;
 }
 
-export function formatFallbackAttemptReason(attempt: RuntimeFallbackAttempt): string {
+function formatFallbackAttemptReason(attempt: RuntimeFallbackAttempt): string {
   const errorPreview = formatFallbackAttemptErrorPreview(attempt);
   if (errorPreview) {
     return errorPreview;
@@ -72,7 +72,7 @@ function formatFallbackAttemptSummary(attempt: RuntimeFallbackAttempt): string {
   return `${formatProviderModelRef(attempt.provider, attempt.model)} ${formatFallbackAttemptReason(attempt)}`;
 }
 
-export function buildFallbackReasonSummary(attempts: RuntimeFallbackAttempt[]): string {
+function buildFallbackReasonSummary(attempts: RuntimeFallbackAttempt[]): string {
   const firstAttempt = attempts[0];
   const firstReason = firstAttempt
     ? formatFallbackAttemptReason(firstAttempt)
@@ -81,7 +81,7 @@ export function buildFallbackReasonSummary(attempts: RuntimeFallbackAttempt[]): 
   return `${truncateFallbackReasonPart(firstReason)}${moreAttempts}`;
 }
 
-export function buildFallbackAttemptSummaries(attempts: RuntimeFallbackAttempt[]): string[] {
+function buildFallbackAttemptSummaries(attempts: RuntimeFallbackAttempt[]): string[] {
   return attempts.map((attempt) =>
     truncateFallbackReasonPart(formatFallbackAttemptSummary(attempt)),
   );
@@ -116,7 +116,7 @@ export function buildFallbackClearedNotice(params: {
   return `↪️ Model Fallback cleared: ${selected}`;
 }
 
-export type ResolvedFallbackTransition = {
+type ResolvedFallbackTransition = {
   selectedModelRef: string;
   activeModelRef: string;
   fallbackActive: boolean;

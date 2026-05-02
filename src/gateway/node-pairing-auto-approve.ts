@@ -6,7 +6,7 @@ export type NodePairingAutoApproveReason =
   | "scope-upgrade"
   | "metadata-upgrade";
 
-export type NodePairingAutoApproveClientIpSource =
+type NodePairingAutoApproveClientIpSource =
   | "direct"
   | "trusted-proxy"
   | "loopback-trusted-proxy"

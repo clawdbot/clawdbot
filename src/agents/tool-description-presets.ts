@@ -28,14 +28,20 @@ export function describeSessionsHistoryTool(): string {
 export function describeSessionsSendTool(): string {
   return [
     "Send a message into another visible session by sessionKey or label.",
+    "Thread-scoped chat sessions are rejected; target the parent channel session for inter-agent coordination.",
     "Use this to delegate follow-up work to an existing session; waits for the target run and returns the updated assistant reply when available.",
   ].join(" ");
 }
 
-export function describeSessionsSpawnTool(options?: { acpAvailable?: boolean }): string {
+export function describeSessionsSpawnTool(options?: {
+  acpAvailable?: boolean;
+  threadAvailable?: boolean;
+}): string {
   const baseDescription = [
     'Spawn a clean isolated session by default with `runtime="subagent"` or `runtime="acp"`.',
-    '`mode="run"` is one-shot and `mode="session"` is persistent or thread-bound.',
+    options?.threadAvailable
+      ? '`mode="run"` is one-shot and `mode="session"` is persistent and thread-bound.'
+      : '`mode="run"` is one-shot background work.',
     "Subagents inherit the parent workspace directory automatically.",
     'For native subagents only, set `context="fork"` when the child needs the current transcript context; otherwise omit it or use `context="isolated"`.',
     "Use this when the work should happen in a fresh child session instead of the current one.",

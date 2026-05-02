@@ -308,7 +308,7 @@ export function defaultGatewayBindMode(tailscaleMode?: string): GatewayBindMode 
  * @param host - The host address to test
  * @returns True if we can successfully bind to this address
  */
-export async function canBindToHost(host: string): Promise<boolean> {
+async function canBindToHost(host: string): Promise<boolean> {
   return new Promise((resolve) => {
     const testServer = net.createServer();
     testServer.once("error", () => {

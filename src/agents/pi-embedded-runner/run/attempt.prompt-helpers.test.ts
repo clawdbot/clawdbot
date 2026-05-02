@@ -111,7 +111,7 @@ describe("resolvePromptSubmissionSkipReason", () => {
     ).toBeNull();
   });
 
-  it("allows blank prompt on runtimeOnly turns", () => {
+  it("skips blank prompt on runtimeOnly turns", () => {
     expect(
       resolvePromptSubmissionSkipReason({
         prompt: "",
@@ -119,7 +119,7 @@ describe("resolvePromptSubmissionSkipReason", () => {
         runtimeOnly: true,
         imageCount: 0,
       }),
-    ).toBeNull();
+    ).toBe("empty_prompt_history_images");
   });
 
   it("treats undefined runtimeOnly as a visible user submission", () => {

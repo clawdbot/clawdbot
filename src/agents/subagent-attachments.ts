@@ -27,7 +27,7 @@ export function decodeStrictBase64(value: string, maxDecodedBytes: number): Buff
   return decoded;
 }
 
-export type SubagentInlineAttachment = {
+type SubagentInlineAttachment = {
   name: string;
   content: string;
   encoding?: "utf8" | "base64";
@@ -48,14 +48,14 @@ export type SubagentAttachmentReceiptFile = {
   sha256: string;
 };
 
-export type SubagentAttachmentReceipt = {
+type SubagentAttachmentReceipt = {
   count: number;
   totalBytes: number;
   files: SubagentAttachmentReceiptFile[];
   relDir: string;
 };
 
-export type MaterializeSubagentAttachmentsResult =
+type MaterializeSubagentAttachmentsResult =
   | {
       status: "ok";
       receipt: SubagentAttachmentReceipt;

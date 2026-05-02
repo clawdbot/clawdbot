@@ -252,7 +252,7 @@ export interface TaglineOptions {
   mode?: TaglineMode;
 }
 
-export function activeTaglines(options: TaglineOptions = {}): string[] {
+function activeTaglines(options: TaglineOptions = {}): string[] {
   if (TAGLINES.length === 0) {
     return [DEFAULT_TAGLINE];
   }
@@ -283,4 +283,4 @@ export function pickTagline(options: TaglineOptions = {}): string {
   return pool[index];
 }
 
-export { TAGLINES, HOLIDAY_RULES, DEFAULT_TAGLINE };
+export { DEFAULT_TAGLINE };

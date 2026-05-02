@@ -4,6 +4,9 @@
     "onStartup": false
   },
   "kind": "memory",
+  "contracts": {
+    "tools": ["memory_forget", "memory_recall", "memory_store"]
+  },
   "uiHints": {
     "embedding.apiKey": {
       "label": "Embedding API Key",

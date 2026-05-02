@@ -3,7 +3,6 @@ import path from "node:path";
 import { defineConfig, type UserConfig } from "tsdown";
 import {
   collectBundledPluginBuildEntries,
-  listBundledPluginRuntimeDependencies,
   NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { buildPluginSdkEntrySources } from "./scripts/lib/plugin-sdk-entries.mjs";
@@ -92,7 +91,6 @@ function nodeBuildConfig(config: UserConfig): UserConfig {
 }
 
 const bundledPluginBuildEntries = collectBundledPluginBuildEntries();
-const bundledPluginRuntimeDependencies = listBundledPluginRuntimeDependencies();
 const shouldBuildPrivateQaEntries = process.env.OPENCLAW_BUILD_PRIVATE_QA === "1";
 
 function buildBundledHookEntries(): Record<string, string> {
@@ -128,7 +126,6 @@ const explicitNeverBundleDependencies = [
   "@lancedb/lancedb",
   "@matrix-org/matrix-sdk-crypto-nodejs",
   "matrix-js-sdk",
-  ...bundledPluginRuntimeDependencies,
 ].toSorted((left, right) => left.localeCompare(right));
 
 function shouldNeverBundleDependency(id: string): boolean {
@@ -137,19 +134,9 @@ function shouldNeverBundleDependency(id: string): boolean {
   });
 }
 
-function shouldStageBundledPluginRuntimeDependencies(packageJson: unknown): boolean {
-  return (
-    typeof packageJson === "object" &&
-    packageJson !== null &&
-    (packageJson as { openclaw?: { bundle?: { stageRuntimeDependencies?: boolean } } }).openclaw
-      ?.bundle?.stageRuntimeDependencies === true
-  );
-}
-
 function listBundledPluginEntrySources(
   entries: Array<{
     id: string;
-    packageJson: unknown;
     sourceEntries: string[];
   }>,
 ): Record<string, string> {
@@ -165,40 +152,6 @@ function listBundledPluginEntrySources(
       }),
     ),
   );
-}
-
-function normalizeBundledPluginOutEntry(entry: string): string {
-  return entry.replace(/^\.\//u, "").replace(/\.[^.]+$/u, "");
-}
-
-function isPluginSdkSelfReference(id: string): boolean {
-  return (
-    id === "openclaw/plugin-sdk" ||
-    id.startsWith("openclaw/plugin-sdk/") ||
-    id === "@openclaw/plugin-sdk" ||
-    id.startsWith("@openclaw/plugin-sdk/")
-  );
-}
-
-function buildBundledPluginNeverBundlePredicate(packageJson: {
-  dependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
-}) {
-  const runtimeDependencies = shouldStageBundledPluginRuntimeDependencies(packageJson)
-    ? [
-        ...Object.keys(packageJson.dependencies ?? {}),
-        ...Object.keys(packageJson.optionalDependencies ?? {}),
-      ].toSorted((left, right) => left.localeCompare(right))
-    : [];
-
-  return (id: string): boolean => {
-    if (isPluginSdkSelfReference(id)) {
-      return true;
-    }
-    return runtimeDependencies.some((dependency) => {
-      return id === dependency || id.startsWith(`${dependency}/`);
-    });
-  };
 }
 
 function buildCoreDistEntries(): Record<string, string> {
@@ -252,6 +205,8 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
       "src/agents/pi-embedded-runner/run/runtime-context-prompt.ts",
     "auto-reply/reply/commands-crestodian": "src/auto-reply/reply/commands-crestodian.ts",
     "cli/run-main": "src/cli/run-main.ts",
+    "commitments/runtime": "src/commitments/runtime.ts",
+    "commitments/store": "src/commitments/store.ts",
     "config/config": "src/config/config.ts",
     "crestodian/crestodian": "src/crestodian/crestodian.ts",
     "crestodian/rescue-message": "src/crestodian/rescue-message.ts",
@@ -266,13 +221,8 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
 
 const coreDistEntries = buildCoreDistEntries();
 const dockerE2eHarnessEntries = buildDockerE2eHarnessEntries();
-const stagedBundledPluginBuildEntries = bundledPluginBuildEntries.filter(({ packageJson }) =>
-  shouldStageBundledPluginRuntimeDependencies(packageJson),
-);
 const rootBundledPluginBuildEntries = bundledPluginBuildEntries.filter(
-  ({ id, packageJson }) =>
-    !shouldStageBundledPluginRuntimeDependencies(packageJson) &&
-    (shouldBuildPrivateQaEntries || !NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(id)),
+  ({ id }) => shouldBuildPrivateQaEntries || !NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(id),
 );
 
 function buildUnifiedDistEntries(): Record<string, string> {
@@ -298,29 +248,6 @@ function buildUnifiedDistEntries(): Record<string, string> {
   };
 }
 
-function buildBundledPluginConfigs(): UserConfig[] {
-  return stagedBundledPluginBuildEntries.map(({ id, packageJson, sourceEntries }) =>
-    nodeBuildConfig({
-      clean: false,
-      entry: Object.fromEntries(
-        sourceEntries.map((entry) => [
-          normalizeBundledPluginOutEntry(entry),
-          `extensions/${id}/${entry.replace(/^\.\//u, "")}`,
-        ]),
-      ),
-      outDir: `dist/extensions/${id}`,
-      deps: {
-        neverBundle: buildBundledPluginNeverBundlePredicate(
-          (packageJson ?? {}) as {
-            dependencies?: Record<string, string>;
-            optionalDependencies?: Record<string, string>;
-          },
-        ),
-      },
-    }),
-  );
-}
-
 export default defineConfig([
   nodeBuildConfig({
     // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
@@ -331,5 +258,4 @@ export default defineConfig([
       neverBundle: shouldNeverBundleDependency,
     },
   }),
-  ...buildBundledPluginConfigs(),
 ]);

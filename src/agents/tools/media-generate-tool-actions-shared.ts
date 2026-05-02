@@ -86,7 +86,7 @@ export function createMediaGenerateTaskStatusActions<Task>(params: {
   };
 }
 
-export function createMediaGenerateStatusActionResult<Task>(params: {
+function createMediaGenerateStatusActionResult<Task>(params: {
   sessionKey?: string;
   inactiveText: string;
   findActiveTask: (sessionKey?: string) => Task | undefined;
@@ -112,7 +112,7 @@ export function createMediaGenerateStatusActionResult<Task>(params: {
   };
 }
 
-export function createMediaGenerateDuplicateGuardResult<Task>(params: {
+function createMediaGenerateDuplicateGuardResult<Task>(params: {
   sessionKey?: string;
   findActiveTask: (sessionKey?: string) => Task | undefined;
   buildStatusText: TaskStatusTextBuilder<Task>;

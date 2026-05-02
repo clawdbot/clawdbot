@@ -35,7 +35,7 @@ const DEFAULT_CACHE_TTL_MS = 15_000;
 const DEFAULT_MAX_CACHE_ENTRIES = 1000;
 const CACHE_SWEEP_INTERVAL_MS = 1000;
 const DEFAULT_MIN_TIMEOUT_MS = 250;
-const DEFAULT_SETUP_GRACE_TIMEOUT_MS = 30_000;
+const DEFAULT_SETUP_GRACE_TIMEOUT_MS = 0;
 const DEFAULT_QUERY_MODE = "recent" as const;
 const DEFAULT_QMD_SEARCH_MODE = "search" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
@@ -91,6 +91,7 @@ type ActiveRecallPluginConfig = {
   promptOverride?: string;
   promptAppend?: string;
   timeoutMs?: number;
+  setupGraceTimeoutMs?: number;
   queryMode?: "message" | "recent" | "full";
   maxSummaryChars?: number;
   recentUserTurns?: number;
@@ -130,6 +131,7 @@ type ResolvedActiveRecallPluginConfig = {
   promptOverride?: string;
   promptAppend?: string;
   timeoutMs: number;
+  setupGraceTimeoutMs: number;
   queryMode: "message" | "recent" | "full";
   maxSummaryChars: number;
   recentUserTurns: number;
@@ -746,6 +748,7 @@ function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPlugi
       minimumTimeoutMs,
       120_000,
     ),
+    setupGraceTimeoutMs: clampInt(raw.setupGraceTimeoutMs, setupGraceTimeoutMs, 0, 30_000),
     queryMode:
       raw.queryMode === "message" || raw.queryMode === "recent" || raw.queryMode === "full"
         ? raw.queryMode
@@ -2280,7 +2283,7 @@ async function maybeResolveActiveRecall(params: {
   const controller = new AbortController();
   const TIMEOUT_SENTINEL = Symbol("timeout");
   let sessionFile: string | undefined;
-  const watchdogTimeoutMs = params.config.timeoutMs + setupGraceTimeoutMs;
+  const watchdogTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
   const timeoutId = setTimeout(() => {
     controller.abort(new Error(`active-memory timeout after ${watchdogTimeoutMs}ms`));
   }, watchdogTimeoutMs);
@@ -2535,7 +2538,7 @@ export default definePluginEntry({
       },
     });
 
-    const beforePromptBuildTimeoutMs = config.timeoutMs + setupGraceTimeoutMs;
+    const beforePromptBuildTimeoutMs = config.timeoutMs + config.setupGraceTimeoutMs;
     api.on(
       "before_prompt_build",
       async (event, ctx) => {

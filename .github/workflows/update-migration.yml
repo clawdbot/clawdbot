@@ -1,0 +1,46 @@
+name: Update Migration
+
+on:
+  workflow_dispatch:
+    inputs:
+      workflow_ref:
+        description: Trusted workflow/harness ref
+        default: main
+        required: true
+        type: string
+      package_ref:
+        description: Branch, tag, or SHA to package as the update target
+        default: main
+        required: true
+        type: string
+      baselines:
+        description: Published baselines to migrate; use all-since-2026.4.23 for full coverage
+        default: all-since-2026.4.23
+        required: true
+        type: string
+      scenarios:
+        description: Update survivor scenarios
+        default: plugin-deps-cleanup
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  packages: write
+  pull-requests: read
+
+jobs:
+  update_migration:
+    name: Update migration matrix
+    uses: ./.github/workflows/package-acceptance.yml
+    with:
+      workflow_ref: ${{ inputs.workflow_ref }}
+      source: ref
+      package_ref: ${{ inputs.package_ref }}
+      suite_profile: custom
+      docker_lanes: update-migration
+      published_upgrade_survivor_baselines: ${{ inputs.baselines }}
+      published_upgrade_survivor_scenarios: ${{ inputs.scenarios }}
+      telegram_mode: none
+    secrets: inherit

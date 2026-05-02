@@ -2,7 +2,7 @@ import { normalizeOptionalString } from "./string-coerce.js";
 
 export const NODE_PRESENCE_ALIVE_EVENT = "node.presence.alive";
 
-export const NODE_PRESENCE_ALIVE_REASONS = [
+const NODE_PRESENCE_ALIVE_REASONS = [
   "background",
   "silent_push",
   "bg_app_refresh",

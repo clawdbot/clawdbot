@@ -18,7 +18,7 @@ const SIGNED_CHANNEL_ID_CONTEXT_KEY = "__openclaw_channel_id";
  * Sent by Mattermost when a user clicks an action button.
  * See: https://developers.mattermost.com/integrate/plugins/interactive-messages/
  */
-export type MattermostInteractionPayload = {
+type MattermostInteractionPayload = {
   user_id: string;
   user_name?: string;
   channel_id: string;
@@ -38,7 +38,7 @@ export type MattermostInteractionResponse = {
   ephemeral_text?: string;
 };
 
-export type MattermostInteractionAuthorizationResult =
+type MattermostInteractionAuthorizationResult =
   | { ok: true }
   | { ok: false; statusCode?: number; response?: MattermostInteractionResponse };
 
@@ -235,7 +235,7 @@ export function verifyInteractionToken(
 
 // ── Button builder helpers ─────────────────────────────────────────────
 
-export type MattermostButton = {
+type MattermostButton = {
   id: string;
   type: "button" | "select";
   name: string;
@@ -246,7 +246,7 @@ export type MattermostButton = {
   };
 };
 
-export type MattermostAttachment = {
+type MattermostAttachment = {
   text?: string;
   actions?: MattermostButton[];
   [key: string]: unknown;

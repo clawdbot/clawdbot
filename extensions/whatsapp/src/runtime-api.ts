@@ -27,7 +27,6 @@ export {
   resolveWhatsAppGroupIntroHint,
   resolveWhatsAppMentionStripRegexes,
 } from "./group-intro.js";
-export { resolveWhatsAppHeartbeatRecipients } from "./heartbeat-recipients.js";
 export { createWhatsAppOutboundBase } from "./outbound-base.js";
 export {
   isWhatsAppGroupJid,

@@ -12,8 +12,8 @@ import type {
 } from "./qa-transport.js";
 import { qaChannelPlugin } from "./runtime-api.js";
 
-export const QA_CHANNEL_ID = "qa-channel";
-export const QA_CHANNEL_ACCOUNT_ID = "default";
+const QA_CHANNEL_ID = "qa-channel";
+const QA_CHANNEL_ACCOUNT_ID = "default";
 export const QA_CHANNEL_REQUIRED_PLUGIN_IDS = Object.freeze([QA_CHANNEL_ID]);
 export const QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY = 4;
 

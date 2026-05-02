@@ -9,7 +9,7 @@ import {
 } from "../plugins/installed-plugin-index-records.js";
 import type { PluginInstallUpdate } from "../plugins/installs.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
-import { defaultRuntime } from "../runtime.js";
+import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
 import {
   applySlotSelectionForPlugin,
@@ -65,7 +65,9 @@ export async function persistPluginInstall(params: {
   enable?: boolean;
   successMessage?: string;
   warningMessage?: string;
+  runtime?: RuntimeEnv;
 }): Promise<OpenClawConfig> {
+  const runtime = params.runtime ?? defaultRuntime;
   const installConfig =
     params.enable === false
       ? params.snapshot.config
@@ -114,15 +116,15 @@ export async function persistPluginInstall(params: {
     installRecords: nextInstallRecords,
     traceCommand: "install",
     logger: {
-      warn: (message) => defaultRuntime.log(theme.warn(message)),
+      warn: (message) => runtime.log(theme.warn(message)),
     },
   });
-  logSlotWarnings(slotResult.warnings);
+  logSlotWarnings(slotResult.warnings, runtime);
   if (params.warningMessage) {
-    defaultRuntime.log(theme.warn(params.warningMessage));
+    runtime.log(theme.warn(params.warningMessage));
   }
-  defaultRuntime.log(params.successMessage ?? `Installed plugin: ${params.pluginId}`);
-  defaultRuntime.log("Restart the gateway to load plugins.");
+  runtime.log(params.successMessage ?? `Installed plugin: ${params.pluginId}`);
+  runtime.log("Restart the gateway to load plugins.");
   return next;
 }
 
@@ -132,7 +134,9 @@ export async function persistHookPackInstall(params: {
   hooks: string[];
   install: Omit<HookInstallUpdate, "hookId" | "hooks">;
   successMessage?: string;
+  runtime?: RuntimeEnv;
 }): Promise<OpenClawConfig> {
+  const runtime = params.runtime ?? defaultRuntime;
   let next = enableInternalHookEntries(params.snapshot.config, params.hooks);
   next = recordHookInstall(next, {
     hookId: params.hookPackId,
@@ -143,7 +147,7 @@ export async function persistHookPackInstall(params: {
     nextConfig: next,
     baseHash: params.snapshot.baseHash,
   });
-  defaultRuntime.log(params.successMessage ?? `Installed hook pack: ${params.hookPackId}`);
-  logHookPackRestartHint();
+  runtime.log(params.successMessage ?? `Installed hook pack: ${params.hookPackId}`);
+  logHookPackRestartHint(runtime);
   return next;
 }

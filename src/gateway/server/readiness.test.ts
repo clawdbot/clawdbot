@@ -66,6 +66,9 @@ function createReadinessHarness(params: {
   getStartupPending?: () => boolean;
   getStartupPendingReason?: Parameters<typeof createReadinessChecker>[0]["getStartupPendingReason"];
   getEventLoopHealth?: Parameters<typeof createReadinessChecker>[0]["getEventLoopHealth"];
+  shouldSkipChannelReadiness?: Parameters<
+    typeof createReadinessChecker
+  >[0]["shouldSkipChannelReadiness"];
   cacheTtlMs?: number;
 }) {
   const startedAt = Date.now() - params.startedAgoMs;
@@ -78,6 +81,7 @@ function createReadinessHarness(params: {
       getStartupPending: params.getStartupPending,
       getStartupPendingReason: params.getStartupPendingReason,
       getEventLoopHealth: params.getEventLoopHealth,
+      shouldSkipChannelReadiness: params.shouldSkipChannelReadiness,
       cacheTtlMs: params.cacheTtlMs,
     }),
   };
@@ -115,11 +119,11 @@ describe("createReadinessChecker", () => {
         startedAgoMs: 5 * 60_000,
         accounts: {},
         getStartupPending: () => true,
-        getStartupPendingReason: () => "plugin-runtime-deps",
+        getStartupPendingReason: () => "startup-sidecars",
       });
       expect(readiness()).toEqual({
         ready: false,
-        failing: ["plugin-runtime-deps"],
+        failing: ["startup-sidecars"],
         uptimeMs: 300_000,
       });
     });
@@ -203,6 +207,32 @@ describe("createReadinessChecker", () => {
         },
       });
       expect(readiness()).toEqual({ ready: false, failing: ["discord"], uptimeMs: 300_000 });
+    });
+  });
+
+  it("treats intentionally skipped channels as ready", () => {
+    withReadinessClock(() => {
+      const { manager, readiness } = createReadinessHarness({
+        startedAgoMs: 5 * 60_000,
+        accounts: {
+          discord: {
+            running: false,
+            enabled: true,
+            configured: true,
+            lastStartAt: Date.now() - 5 * 60_000,
+          },
+          telegram: {
+            running: false,
+            enabled: true,
+            configured: true,
+            lastStartAt: Date.now() - 5 * 60_000,
+          },
+        },
+        shouldSkipChannelReadiness: () => true,
+      });
+
+      expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 300_000 });
+      expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
     });
   });
 

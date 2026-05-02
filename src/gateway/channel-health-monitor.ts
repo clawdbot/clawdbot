@@ -23,13 +23,13 @@ const ONE_HOUR_MS = 60 * 60_000;
  * Providers should only publish that timestamp from transport/heartbeat/poll
  * signals, not from ordinary app messages.
  */
-export type ChannelHealthTimingPolicy = {
+type ChannelHealthTimingPolicy = {
   monitorStartupGraceMs: number;
   channelConnectGraceMs: number;
   staleEventThresholdMs: number;
 };
 
-export type ChannelHealthMonitorDeps = {
+type ChannelHealthMonitorDeps = {
   channelManager: ChannelManager;
   checkIntervalMs?: number;
   /** @deprecated use timing.monitorStartupGraceMs */

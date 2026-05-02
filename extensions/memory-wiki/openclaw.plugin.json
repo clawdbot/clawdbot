@@ -5,6 +5,9 @@
   },
   "name": "Memory Wiki",
   "description": "Persistent wiki compiler and Obsidian-friendly knowledge vault for OpenClaw.",
+  "contracts": {
+    "tools": ["wiki_apply", "wiki_get", "wiki_lint", "wiki_search", "wiki_status"]
+  },
   "skills": ["./skills"],
   "uiHints": {
     "vaultMode": {

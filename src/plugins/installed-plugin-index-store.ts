@@ -3,7 +3,11 @@ import { saveJsonFile } from "../infra/json-file.js";
 import { readJsonFile, readJsonFileSync, writeJsonAtomic } from "../infra/json-files.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
+import { resolveCompatibilityHostVersion } from "../version.js";
+import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { clearCurrentPluginMetadataSnapshotState } from "./current-plugin-metadata-state.js";
+import { hashJson } from "./installed-plugin-index-hash.js";
+import { resolveCompatRegistryVersion } from "./installed-plugin-index-policy.js";
 import {
   resolveInstalledPluginIndexStorePath,
   type InstalledPluginIndexStoreOptions,
@@ -15,6 +19,7 @@ import {
   INSTALLED_PLUGIN_INDEX_VERSION,
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
   loadInstalledPluginIndex,
+  resolveInstalledPluginIndexPolicyHash,
   refreshInstalledPluginIndex,
   type InstalledPluginIndex,
   type InstalledPluginInstallRecordInfo,
@@ -185,6 +190,65 @@ export function writePersistedInstalledPluginIndexSync(
   return filePath;
 }
 
+function hasPolicyRefreshTargets(
+  persisted: InstalledPluginIndex,
+  policyPluginIds: readonly string[] | undefined,
+): boolean {
+  if (!policyPluginIds || policyPluginIds.length === 0) {
+    return true;
+  }
+  const pluginIds = new Set(persisted.plugins.map((plugin) => plugin.pluginId));
+  return policyPluginIds.every((pluginId) => pluginIds.has(pluginId));
+}
+
+function canRefreshPersistedPolicyState(
+  persisted: InstalledPluginIndex | null,
+  params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
+): persisted is InstalledPluginIndex {
+  if (!persisted || params.reason !== "policy-changed") {
+    return false;
+  }
+  const env = params.env ?? process.env;
+  if (
+    persisted.version !== INSTALLED_PLUGIN_INDEX_VERSION ||
+    persisted.hostContractVersion !== resolveCompatibilityHostVersion(env) ||
+    persisted.compatRegistryVersion !== resolveCompatRegistryVersion() ||
+    persisted.migrationVersion !== INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION
+  ) {
+    return false;
+  }
+  if (
+    params.installRecords &&
+    hashJson(params.installRecords) !== hashJson(persisted.installRecords ?? {})
+  ) {
+    return false;
+  }
+  return hasPolicyRefreshTargets(persisted, params.policyPluginIds);
+}
+
+function refreshPersistedPolicyState(
+  persisted: InstalledPluginIndex,
+  params: RefreshInstalledPluginIndexParams,
+): InstalledPluginIndex {
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  return {
+    ...persisted,
+    policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
+    generatedAtMs: (params.now?.() ?? new Date()).getTime(),
+    refreshReason: params.reason,
+    plugins: persisted.plugins.map((plugin) => ({
+      ...plugin,
+      enabled: resolveEffectiveEnableState({
+        id: plugin.pluginId,
+        origin: plugin.origin,
+        config: normalizedConfig,
+        rootConfig: params.config,
+        enabledByDefault: plugin.enabledByDefault,
+      }).enabled,
+    })),
+  };
+}
+
 export async function inspectPersistedInstalledPluginIndex(
   params: LoadInstalledPluginIndexParams & InstalledPluginIndexStoreOptions = {},
 ): Promise<InstalledPluginIndexStoreInspection> {
@@ -215,7 +279,15 @@ export async function inspectPersistedInstalledPluginIndex(
 export async function refreshPersistedInstalledPluginIndex(
   params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
 ): Promise<InstalledPluginIndex> {
-  const persisted = params.installRecords ? null : await readPersistedInstalledPluginIndex(params);
+  const persisted =
+    params.reason === "policy-changed" || !params.installRecords
+      ? await readPersistedInstalledPluginIndex(params)
+      : null;
+  if (canRefreshPersistedPolicyState(persisted, params)) {
+    const index = refreshPersistedPolicyState(persisted, params);
+    await writePersistedInstalledPluginIndex(index, params);
+    return index;
+  }
   const index = refreshInstalledPluginIndex({
     ...params,
     installRecords:
@@ -228,7 +300,15 @@ export async function refreshPersistedInstalledPluginIndex(
 export function refreshPersistedInstalledPluginIndexSync(
   params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
 ): InstalledPluginIndex {
-  const persisted = params.installRecords ? null : readPersistedInstalledPluginIndexSync(params);
+  const persisted =
+    params.reason === "policy-changed" || !params.installRecords
+      ? readPersistedInstalledPluginIndexSync(params)
+      : null;
+  if (canRefreshPersistedPolicyState(persisted, params)) {
+    const index = refreshPersistedPolicyState(persisted, params);
+    writePersistedInstalledPluginIndexSync(index, params);
+    return index;
+  }
   const index = refreshInstalledPluginIndex({
     ...params,
     installRecords:

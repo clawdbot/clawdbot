@@ -86,6 +86,7 @@ function setup(
         unknown
       >,
   );
+  googleMeetPluginTesting.setPlatformForTests(() => options?.registerPlatform ?? "darwin");
   return harness;
 }
 
@@ -303,6 +304,7 @@ describe("google-meet plugin", () => {
     vi.unstubAllGlobals();
     chromeTransportTesting.setDepsForTest(null);
     googleMeetPluginTesting.setCallGatewayFromCliForTests();
+    googleMeetPluginTesting.setPlatformForTests();
   });
 
   it("defaults to chrome realtime with safe read-only tools", () => {
@@ -507,6 +509,42 @@ describe("google-meet plugin", () => {
     );
   });
 
+  it("keeps the agent tool visible on non-macOS hosts but blocks local Chrome realtime joins", async () => {
+    const { cliRegistrations, methods, tools } = setup(undefined, { registerPlatform: "linux" });
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<{ isError?: boolean; content: unknown }>;
+    };
+
+    expect(tools).toHaveLength(1);
+    expect(cliRegistrations).toHaveLength(1);
+    expect(methods.has("googlemeet.setup")).toBe(true);
+    expect(
+      googleMeetPluginTesting.isGoogleMeetAgentToolActionUnsupportedOnHost({
+        config: resolveGoogleMeetConfig({}),
+        raw: { action: "join" },
+        platform: "linux",
+      }),
+    ).toBe(true);
+
+    const blocked = await tool.execute("id", { action: "join" });
+    expect(JSON.stringify(blocked)).toContain("local Chrome realtime audio is macOS-only");
+
+    expect(
+      googleMeetPluginTesting.isGoogleMeetAgentToolActionUnsupportedOnHost({
+        config: resolveGoogleMeetConfig({}),
+        raw: { action: "join", mode: "transcribe" },
+        platform: "linux",
+      }),
+    ).toBe(false);
+    expect(
+      googleMeetPluginTesting.isGoogleMeetAgentToolActionUnsupportedOnHost({
+        config: resolveGoogleMeetConfig({}),
+        raw: { action: "join", transport: "chrome-node" },
+        platform: "linux",
+      }),
+    ).toBe(false);
+  });
+
   it("returns structured gateway errors for missing session ids", async () => {
     const { methods } = setup();
     for (const method of ["googlemeet.leave", "googlemeet.speak"]) {
@@ -557,8 +595,10 @@ describe("google-meet plugin", () => {
             "export",
             "recover_current_tab",
             "leave",
+            "end_active_conference",
             "speak",
             "test_speech",
+            "test_listen",
           ],
           description: expect.stringContaining("recover_current_tab"),
         },
@@ -2394,6 +2434,52 @@ describe("google-meet plugin", () => {
     expect(result.details).toMatchObject({ createdSession: true });
   });
 
+  it("exposes a test-listen action that proves transcript movement", async () => {
+    const { tools, nodesInvoke } = setup(
+      {
+        defaultTransport: "chrome-node",
+      },
+      {
+        browserActResult: {
+          inCall: true,
+          captioning: true,
+          transcriptLines: 1,
+          lastCaptionText: "hello from the meeting",
+          title: "Meet call",
+          url: "https://meet.google.com/abc-defg-hij",
+        },
+        nodesInvokeResult: {
+          payload: {
+            launched: true,
+          },
+        },
+      },
+    );
+    const tool = tools[0] as {
+      execute: (
+        id: string,
+        params: unknown,
+      ) => Promise<{ details: { listenVerified?: boolean; transcriptLines?: number } }>;
+    };
+
+    const result = await tool.execute("id", {
+      action: "test_listen",
+      url: "https://meet.google.com/abc-defg-hij",
+      timeoutMs: 100,
+    });
+
+    expect(nodesInvoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "googlemeet.chrome",
+        params: expect.objectContaining({
+          action: "start",
+          mode: "transcribe",
+        }),
+      }),
+    );
+    expect(result.details).toMatchObject({ listenVerified: true, transcriptLines: 1 });
+  });
+
   it("does not start a second realtime response for test speech", async () => {
     const runtime = new GoogleMeetRuntime({
       config: resolveGoogleMeetConfig({}),
@@ -2453,6 +2539,29 @@ describe("google-meet plugin", () => {
         mode: "transcribe",
       }),
     ).rejects.toThrow("test_speech requires mode: realtime");
+  });
+
+  it("rejects realtime and Twilio modes for test listen", async () => {
+    const runtime = new GoogleMeetRuntime({
+      config: resolveGoogleMeetConfig({}),
+      fullConfig: {} as never,
+      runtime: {} as never,
+      logger: noopLogger,
+    });
+
+    await expect(
+      runtime.testListen({
+        url: "https://meet.google.com/abc-defg-hij",
+        mode: "realtime",
+      }),
+    ).rejects.toThrow("test_listen requires mode: transcribe");
+
+    await expect(
+      runtime.testListen({
+        url: "https://meet.google.com/abc-defg-hij",
+        transport: "twilio",
+      }),
+    ).rejects.toThrow("test_listen supports chrome or chrome-node");
   });
 
   it("reports manual action when the browser profile needs Google login", async () => {

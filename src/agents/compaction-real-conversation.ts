@@ -2,7 +2,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { isSilentReplyText } from "../auto-reply/tokens.js";
 
-export const TOOL_RESULT_REAL_CONVERSATION_LOOKBACK = 20;
+const TOOL_RESULT_REAL_CONVERSATION_LOOKBACK = 20;
 const NON_CONVERSATION_BLOCK_TYPES = new Set([
   "toolCall",
   "toolUse",

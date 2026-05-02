@@ -1,6 +1,7 @@
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveDiscordDmAccessGroupEntries } from "./access-groups.js";
 import {
   resolveComponentInteractionContext,
   resolveDiscordChannelContext,
@@ -45,6 +46,24 @@ async function ensureDmComponentAuthorized(params: {
         })
       : { allowed: false };
   };
+  const resolveAllowMatchWithAccessGroups = async (entries: string[]) => {
+    const staticMatch = resolveAllowMatch(entries);
+    if (staticMatch.allowed) {
+      return staticMatch;
+    }
+    const matchedGroups = await resolveDiscordDmAccessGroupEntries({
+      cfg: ctx.cfg,
+      allowFrom: entries,
+      sender: { id: user.id },
+      accountId: ctx.accountId,
+      token: ctx.token,
+      isSenderAllowed: (senderId, allowFrom) =>
+        resolveAllowMatch(allowFrom).allowed || allowFrom.includes(senderId),
+    });
+    return matchedGroups.length > 0
+      ? resolveAllowMatch([...entries, `discord:${user.id}`])
+      : staticMatch;
+  };
   const dmPolicy = ctx.dmPolicy ?? "pairing";
   if (dmPolicy === "disabled") {
     logVerbose(`agent ${componentLabel}: blocked (DM policy disabled)`);
@@ -52,7 +71,7 @@ async function ensureDmComponentAuthorized(params: {
     return false;
   }
   if (dmPolicy === "allowlist") {
-    const allowMatch = resolveAllowMatch(ctx.allowFrom ?? []);
+    const allowMatch = await resolveAllowMatchWithAccessGroups(ctx.allowFrom ?? []);
     if (allowMatch.allowed) {
       return true;
     }
@@ -73,7 +92,10 @@ async function ensureDmComponentAuthorized(params: {
           dmPolicy,
         });
   const allowMatch = resolveAllowMatch([...(ctx.allowFrom ?? []), ...storeAllowFrom]);
-  if (allowMatch.allowed) {
+  const dynamicAllowMatch = allowMatch.allowed
+    ? allowMatch
+    : await resolveAllowMatchWithAccessGroups([...(ctx.allowFrom ?? []), ...storeAllowFrom]);
+  if (dynamicAllowMatch.allowed) {
     return true;
   }
 

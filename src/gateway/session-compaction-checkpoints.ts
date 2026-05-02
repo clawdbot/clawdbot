@@ -1,8 +1,12 @@
 import { randomUUID } from "node:crypto";
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import {
+  CURRENT_SESSION_VERSION,
+  migrateSessionEntries,
+  SessionManager,
+  type FileEntry as PiSessionFileEntry,
+} from "@mariozechner/pi-coding-agent";
 import { updateSessionStore } from "../config/sessions.js";
 import type {
   SessionCompactionCheckpoint,
@@ -22,6 +26,11 @@ export type CapturedCompactionCheckpointSnapshot = {
   sessionId: string;
   sessionFile: string;
   leafId: string;
+};
+
+type ForkedCompactionCheckpointTranscript = {
+  sessionId: string;
+  sessionFile: string;
 };
 
 function trimSessionCheckpoints(checkpoints: SessionCompactionCheckpoint[] | undefined): {
@@ -82,7 +91,9 @@ async function readFileRangeAsync(
   return offset === length ? buffer : buffer.subarray(0, offset);
 }
 
-async function readSessionIdFromTranscriptHeaderAsync(sessionFile: string): Promise<string | null> {
+async function readSessionHeaderFromTranscriptAsync(
+  sessionFile: string,
+): Promise<{ id: string; cwd?: string } | null> {
   let fileHandle: AsyncTranscriptFileHandle | undefined;
   try {
     fileHandle = await fs.open(sessionFile, "r");
@@ -98,10 +109,14 @@ async function readSessionIdFromTranscriptHeaderAsync(sessionFile: string): Prom
     if (!firstLine) {
       return null;
     }
-    const parsed = JSON.parse(firstLine) as { type?: unknown; id?: unknown };
-    return parsed.type === "session" && typeof parsed.id === "string" && parsed.id.trim()
-      ? parsed.id.trim()
-      : null;
+    const parsed = JSON.parse(firstLine) as { type?: unknown; id?: unknown; cwd?: unknown };
+    if (parsed.type !== "session" || typeof parsed.id !== "string" || !parsed.id.trim()) {
+      return null;
+    }
+    return {
+      id: parsed.id.trim(),
+      ...(typeof parsed.cwd === "string" && parsed.cwd.trim() ? { cwd: parsed.cwd } : {}),
+    };
   } catch {
     return null;
   } finally {
@@ -109,6 +124,10 @@ async function readSessionIdFromTranscriptHeaderAsync(sessionFile: string): Prom
       await fileHandle.close().catch(() => undefined);
     }
   }
+}
+
+async function readSessionIdFromTranscriptHeaderAsync(sessionFile: string): Promise<string | null> {
+  return (await readSessionHeaderFromTranscriptAsync(sessionFile))?.id ?? null;
 }
 
 function parseTranscriptLineId(
@@ -126,6 +145,39 @@ function parseTranscriptLineId(
     return null;
   }
   return null;
+}
+
+async function readTranscriptEntriesForForkAsync(
+  sessionFile: string,
+): Promise<PiSessionFileEntry[] | null> {
+  let fileHandle: AsyncTranscriptFileHandle | undefined;
+  try {
+    fileHandle = await fs.open(sessionFile, "r");
+    const content = await fileHandle.readFile("utf-8");
+    const entries: PiSessionFileEntry[] = [];
+    for (const line of content.trim().split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+      try {
+        entries.push(JSON.parse(trimmed) as PiSessionFileEntry);
+      } catch {
+        // Match pi-coding-agent's loader: malformed JSONL entries are ignored.
+      }
+    }
+    const firstEntry = entries[0] as { type?: unknown; id?: unknown } | undefined;
+    if (firstEntry?.type !== "session" || typeof firstEntry.id !== "string") {
+      return null;
+    }
+    return entries;
+  } catch {
+    return null;
+  } finally {
+    if (fileHandle) {
+      await fileHandle.close().catch(() => undefined);
+    }
+  }
 }
 
 export async function readSessionLeafIdFromTranscriptAsync(
@@ -187,77 +239,63 @@ export async function readSessionLeafIdFromTranscriptAsync(
   return null;
 }
 
-/**
- * Synchronous version — kept for callers that cannot be made async.
- * Prefer captureCompactionCheckpointSnapshotAsync for large transcripts
- * to avoid blocking the event loop during file copy.
- */
-export function captureCompactionCheckpointSnapshot(params: {
-  sessionManager: Pick<SessionManager, "getLeafId">;
-  sessionFile: string;
-  maxBytes?: number;
-}): CapturedCompactionCheckpointSnapshot | null {
-  const getLeafId =
-    params.sessionManager && typeof params.sessionManager.getLeafId === "function"
-      ? params.sessionManager.getLeafId.bind(params.sessionManager)
-      : null;
-  const sessionFile = params.sessionFile.trim();
-  if (!getLeafId || !sessionFile) {
+export async function forkCompactionCheckpointTranscriptAsync(params: {
+  sourceFile: string;
+  targetCwd?: string;
+  sessionDir?: string;
+}): Promise<ForkedCompactionCheckpointTranscript | null> {
+  const sourceFile = params.sourceFile.trim();
+  if (!sourceFile) {
     return null;
   }
-  const maxBytes = params.maxBytes ?? MAX_COMPACTION_CHECKPOINT_SNAPSHOT_BYTES;
+  const sourceHeader = await readSessionHeaderFromTranscriptAsync(sourceFile);
+  if (!sourceHeader) {
+    return null;
+  }
+  const entries = await readTranscriptEntriesForForkAsync(sourceFile);
+  if (!entries) {
+    return null;
+  }
+  migrateSessionEntries(entries);
+
+  const targetCwd = params.targetCwd ?? sourceHeader.cwd ?? process.cwd();
+  const sessionDir = params.sessionDir ?? path.dirname(sourceFile);
+  const sessionId = randomUUID();
+  const timestamp = new Date().toISOString();
+  const fileTimestamp = timestamp.replace(/[:.]/g, "-");
+  const sessionFile = path.join(sessionDir, `${fileTimestamp}_${sessionId}.jsonl`);
+  const header = {
+    type: "session",
+    version: CURRENT_SESSION_VERSION,
+    id: sessionId,
+    timestamp,
+    cwd: targetCwd,
+    parentSession: sourceFile,
+  };
+
   try {
-    const stat = fsSync.statSync(sessionFile);
-    if (!stat.isFile() || stat.size > maxBytes) {
-      return null;
+    await fs.mkdir(sessionDir, { recursive: true });
+    const lines = [JSON.stringify(header)];
+    for (const entry of entries) {
+      if ((entry as { type?: unknown }).type !== "session") {
+        lines.push(JSON.stringify(entry));
+      }
     }
-  } catch {
-    return null;
-  }
-  const leafId = getLeafId();
-  if (!leafId) {
-    return null;
-  }
-  const parsedSessionFile = path.parse(sessionFile);
-  const snapshotFile = path.join(
-    parsedSessionFile.dir,
-    `${parsedSessionFile.name}.checkpoint.${randomUUID()}${parsedSessionFile.ext || ".jsonl"}`,
-  );
-  try {
-    fsSync.copyFileSync(sessionFile, snapshotFile);
-  } catch {
-    return null;
-  }
-  let snapshotSession: SessionManager;
-  try {
-    snapshotSession = SessionManager.open(snapshotFile, path.dirname(snapshotFile));
+    await fs.writeFile(sessionFile, `${lines.join("\n")}\n`, { encoding: "utf-8", flag: "wx" });
+    return { sessionId, sessionFile };
   } catch {
     try {
-      fsSync.unlinkSync(snapshotFile);
+      await fs.unlink(sessionFile);
     } catch {
-      // Best-effort cleanup if the copied transcript cannot be reopened.
+      // Best-effort cleanup for partial fork files.
     }
     return null;
   }
-  const getSessionId =
-    snapshotSession && typeof snapshotSession.getSessionId === "function"
-      ? snapshotSession.getSessionId.bind(snapshotSession)
-      : null;
-  if (!getSessionId) {
-    return null;
-  }
-  return {
-    sessionId: getSessionId(),
-    sessionFile: snapshotFile,
-    leafId,
-  };
 }
 
 /**
- * Async version of captureCompactionCheckpointSnapshot that uses async file
- * operations to avoid blocking the event loop. Large transcript files (20MB+)
- * were observed blocking the event loop for minutes when copied synchronously
- * (see issue #75414).
+ * Capture a bounded pre-compaction transcript snapshot without blocking the
+ * Gateway event loop on synchronous file reads/copies.
  */
 export async function captureCompactionCheckpointSnapshotAsync(params: {
   sessionManager?: Pick<SessionManager, "getLeafId">;

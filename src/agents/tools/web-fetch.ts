@@ -34,8 +34,6 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-export { extractReadableContent } from "../../web-fetch/content-extractors.runtime.js";
-
 const EXTRACT_MODES = ["markdown", "text"] as const;
 
 const DEFAULT_FETCH_MAX_CHARS = 20_000;

@@ -52,7 +52,11 @@ enum OpenClawConfigFile {
         }
     }
 
-    static func saveDict(_ dict: [String: Any]) {
+    static func saveDict(
+        _ dict: [String: Any],
+        preserveExistingKeys: Bool = false,
+        allowGatewayAuthMutation: Bool = false)
+    {
         self.withFileLock {
             // Nix mode disables config writes in production, but tests rely on saving temp configs.
             if ProcessInfo.processInfo.isNixMode, !ProcessInfo.processInfo.isRunningTests { return }
@@ -64,7 +68,15 @@ enum OpenClawConfigFile {
             let hadMetaBefore = self.hasMeta(previousRoot)
             let gatewayModeBefore = self.gatewayMode(previousRoot)
 
-            var output = dict
+            var output = if preserveExistingKeys, let previousRoot {
+                self.mergeExistingConfig(previousRoot, overridingWith: dict)
+            } else {
+                dict
+            }
+            let preservedGatewayAuth = self.preserveGatewayAuthIfNeeded(
+                previousRoot: previousRoot,
+                output: &output,
+                allowGatewayAuthMutation: allowGatewayAuthMutation)
             self.stampMeta(&output)
 
             do {
@@ -76,13 +88,16 @@ enum OpenClawConfigFile {
                 let nextBytes = data.count
                 let nextAttributes = try? FileManager().attributesOfItem(atPath: url.path)
                 let gatewayModeAfter = self.gatewayMode(output)
-                let suspicious = self.configWriteSuspiciousReasons(
+                var suspicious = self.configWriteSuspiciousReasons(
                     existsBefore: previousData != nil,
                     previousBytes: previousBytes,
                     nextBytes: nextBytes,
                     hadMetaBefore: hadMetaBefore,
                     gatewayModeBefore: gatewayModeBefore,
                     gatewayModeAfter: gatewayModeAfter)
+                if preservedGatewayAuth {
+                    suspicious.append("gateway-auth-preserved")
+                }
                 if !suspicious.isEmpty {
                     self.logger.warning("config write anomaly (\(suspicious.joined(separator: ", "))) at \(url.path)")
                 }
@@ -123,7 +138,7 @@ enum OpenClawConfigFile {
                     "hasMetaAfter": self.hasMeta(output),
                     "gatewayModeBefore": gatewayModeBefore ?? NSNull(),
                     "gatewayModeAfter": self.gatewayMode(output) ?? NSNull(),
-                    "suspicious": [],
+                    "suspicious": preservedGatewayAuth ? ["gateway-auth-preserved"] : [],
                     "error": error.localizedDescription,
                 ])
             }
@@ -329,6 +344,52 @@ enum OpenClawConfigFile {
         else { return nil }
         let trimmed = mode.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func gatewayAuth(_ root: [String: Any]?) -> [String: Any]? {
+        guard let root,
+              let gateway = root["gateway"] as? [String: Any]
+        else { return nil }
+        return gateway["auth"] as? [String: Any]
+    }
+
+    private static func configDictionariesEqual(_ left: [String: Any]?, _ right: [String: Any]) -> Bool {
+        guard let left else { return false }
+        return NSDictionary(dictionary: left).isEqual(NSDictionary(dictionary: right))
+    }
+
+    private static func mergeExistingConfig(
+        _ existing: [String: Any],
+        overridingWith next: [String: Any]) -> [String: Any]
+    {
+        var merged = existing
+        for (key, value) in next {
+            if let nextDict = value as? [String: Any],
+               let existingDict = merged[key] as? [String: Any]
+            {
+                merged[key] = self.mergeExistingConfig(existingDict, overridingWith: nextDict)
+            } else {
+                merged[key] = value
+            }
+        }
+        return merged
+    }
+
+    private static func preserveGatewayAuthIfNeeded(
+        previousRoot: [String: Any]?,
+        output: inout [String: Any],
+        allowGatewayAuthMutation: Bool) -> Bool
+    {
+        guard !allowGatewayAuthMutation,
+              let previousAuth = self.gatewayAuth(previousRoot)
+        else {
+            return false
+        }
+        var gateway = output["gateway"] as? [String: Any] ?? [:]
+        let changed = !self.configDictionariesEqual(gateway["auth"] as? [String: Any], previousAuth)
+        gateway["auth"] = previousAuth
+        output["gateway"] = gateway
+        return changed
     }
 
     private static func configWriteSuspiciousReasons(

@@ -3,13 +3,13 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { Mock } from "vitest";
 import { expect, vi } from "vitest";
 
-export type NativeCommandSpecMock = {
+type NativeCommandSpecMock = {
   name: string;
   description: string;
   acceptsArgs: boolean;
 };
 
-export type PluginCommandSpecMock = {
+type PluginCommandSpecMock = {
   name: string;
   description: string;
   acceptsArgs: boolean;
@@ -65,7 +65,7 @@ type ProviderMonitorTestMocks = {
   voiceRuntimeModuleLoadedMock: Mock<() => void>;
 };
 
-export function baseDiscordAccountConfig() {
+function baseDiscordAccountConfig() {
   return {
     commands: { native: true, nativeSkills: false },
     voice: { enabled: false },

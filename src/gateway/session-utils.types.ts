@@ -18,14 +18,14 @@ export type GatewaySessionsDefaults = {
   thinkingDefault?: string;
 };
 
-export type GatewayThinkingLevelOption = {
+type GatewayThinkingLevelOption = {
   id: string;
   label: string;
 };
 
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
 
-export type SubagentRunState = "active" | "interrupted" | "historical";
+type SubagentRunState = "active" | "interrupted" | "historical";
 
 export type GatewaySessionRow = {
   key: string;

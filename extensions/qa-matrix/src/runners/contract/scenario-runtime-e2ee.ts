@@ -702,28 +702,19 @@ async function createMatrixQaCliGatewayRuntime(params: {
   context: MatrixQaScenarioContext;
 }) {
   const outputDir = requireMatrixQaE2eeOutputDir(params.context);
-  const rootDir = await mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-matrix-gateway-cli-qa-"),
-  );
   const artifactDir = path.join(
     outputDir,
     params.artifactLabel,
     randomUUID().replaceAll("-", "").slice(0, 12),
   );
-  const pluginStageDir = path.join(rootDir, "plugin-stage");
-  await chmod(rootDir, 0o700).catch(() => undefined);
-  await assertMatrixQaPrivatePathMode(rootDir, "Matrix QA CLI temp directory");
   await mkdir(artifactDir, { mode: 0o700, recursive: true });
   await chmod(artifactDir, 0o700).catch(() => undefined);
   await assertMatrixQaPrivatePathMode(artifactDir, "Matrix QA CLI artifact directory");
-  await mkdir(pluginStageDir, { mode: 0o700, recursive: true });
-  await chmod(pluginStageDir, 0o700).catch(() => undefined);
   const env = {
     ...requireMatrixQaCliRuntimeEnv(params.context),
     FORCE_COLOR: "0",
     NO_COLOR: "1",
     OPENCLAW_DISABLE_AUTO_UPDATE: "1",
-    OPENCLAW_PLUGIN_STAGE_DIR: pluginStageDir,
   };
   const run = async (args: string[], timeoutMs = params.context.timeoutMs) =>
     await runMatrixQaOpenClawCli({
@@ -732,9 +723,7 @@ async function createMatrixQaCliGatewayRuntime(params: {
       timeoutMs,
     });
   return {
-    dispose: async () => {
-      await rm(rootDir, { force: true, recursive: true });
-    },
+    dispose: async () => undefined,
     rootDir: artifactDir,
     run,
   };

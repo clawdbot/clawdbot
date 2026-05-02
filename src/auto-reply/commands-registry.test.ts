@@ -154,6 +154,7 @@ describe("commands registry", () => {
         name: "demo_skill",
         skillName: "demo-skill",
         description: "Demo skill",
+        descriptionLocalizations: { ko: "데모 스킬" },
       },
     ];
     const commands = listChatCommandsForConfig(
@@ -171,7 +172,9 @@ describe("commands registry", () => {
       { commands: { config: false, plugins: false, debug: false, native: true } },
       { skillCommands },
     );
-    expect(native.find((spec) => spec.name === "demo_skill")).toBeTruthy();
+    expect(native.find((spec) => spec.name === "demo_skill")).toMatchObject({
+      descriptionLocalizations: { ko: "데모 스킬" },
+    });
   });
 
   it("applies discord native command overrides", () => {

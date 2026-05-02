@@ -194,7 +194,7 @@ describe("qa suite runtime agent process helpers", () => {
     child.stdout.emit(
       "data",
       Buffer.from(
-        '\u001b[35m[plugins]\u001b[39m \u001b[36mcodex installed bundled runtime deps\u001b[39m\n{"results":[{"text":"ORBIT-10"}]}\n',
+        '\u001b[35m[plugins]\u001b[39m \u001b[36mcodex loaded plugin package metadata\u001b[39m\n{"results":[{"text":"ORBIT-10"}]}\n',
       ),
     );
     child.emit("exit", 0);
@@ -225,7 +225,7 @@ describe("qa suite runtime agent process helpers", () => {
     child.stdout.emit(
       "data",
       Buffer.from(
-        '[plugins] memory-core installed bundled runtime deps\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n',
+        '[plugins] memory-core loaded plugin package metadata\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n',
       ),
     );
     child.emit("exit", 0);

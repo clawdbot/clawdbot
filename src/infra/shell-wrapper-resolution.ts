@@ -51,7 +51,7 @@ const SHELL_WRAPPER_SPECS: ReadonlyArray<ShellWrapperSpec> = [
   { kind: "powershell", names: POWERSHELL_WRAPPER_CANONICAL },
 ];
 
-export type ShellWrapperCommand = {
+type ShellWrapperCommand = {
   isWrapper: boolean;
   command: string | null;
 };
@@ -158,7 +158,7 @@ function findShellWrapperSpec(baseExecutable: string): ShellWrapperSpec | null {
   return null;
 }
 
-export type ShellMultiplexerUnwrapResult =
+type ShellMultiplexerUnwrapResult =
   | { kind: "not-wrapper" }
   | { kind: "blocked"; wrapper: string }
   | { kind: "unwrapped"; wrapper: string; argv: string[] };

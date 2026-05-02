@@ -12,9 +12,11 @@ export function registerMessageReadEditDeleteCommands(
       ),
     )
     .option("--limit <n>", "Result limit")
+    .option("--message-id <id>", "Read a specific message id")
     .option("--before <id>", "Read/search before id")
     .option("--after <id>", "Read/search after id")
     .option("--around <id>", "Read around id")
+    .option("--thread-id <id>", "Thread id (Slack thread timestamp)")
     .option("--include-thread", "Include thread replies (Discord)", false)
     .action(async (opts) => {
       await helpers.runMessageAction("read", opts);

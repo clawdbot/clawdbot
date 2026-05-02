@@ -107,4 +107,4 @@ export { formatZonedTimestamp } from "openclaw/plugin-sdk/time-runtime";
 export type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 // resolveMatrixAccountStringValues already comes from the Matrix API barrel.
-// Re-exporting auth-precedence here makes Jiti try to define the same export twice.
+// Re-exporting auth-precedence here makes TS source loaders define the export twice.

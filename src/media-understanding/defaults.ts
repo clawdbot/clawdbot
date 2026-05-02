@@ -38,17 +38,17 @@ function cacheConfigRegistry(
   return registry;
 }
 
-function resolveDefaultRegistry(cfg?: OpenClawConfig) {
+function resolveDefaultRegistry(cfg?: OpenClawConfig, workspaceDir?: string) {
   if (!cfg) {
     defaultRegistryCache ??= buildMediaUnderstandingManifestMetadataRegistry();
     return defaultRegistryCache;
   }
-  const cacheKey = resolveRuntimeConfigCacheKey(cfg);
+  const cacheKey = `${resolveRuntimeConfigCacheKey(cfg)}:${workspaceDir ?? ""}`;
   const cached = configRegistryCache.get(cacheKey);
   if (cached) {
     return cached;
   }
-  const registry = buildMediaUnderstandingManifestMetadataRegistry(cfg);
+  const registry = buildMediaUnderstandingManifestMetadataRegistry(cfg, workspaceDir);
   return cacheConfigRegistry(cacheKey, registry);
 }
 
@@ -112,6 +112,7 @@ export function resolveDefaultMediaModel(params: {
   providerId: string;
   capability: MediaUnderstandingCapability;
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   providerRegistry?: Map<string, MediaUnderstandingProvider>;
 }): string | undefined {
   if (!params.providerRegistry) {
@@ -126,7 +127,8 @@ export function resolveDefaultMediaModel(params: {
       return configuredImageModel;
     }
   }
-  const registry = params.providerRegistry ?? resolveDefaultRegistry(params.cfg);
+  const registry =
+    params.providerRegistry ?? resolveDefaultRegistry(params.cfg, params.workspaceDir);
   const provider = registry.get(normalizeMediaProviderId(params.providerId));
   return normalizeOptionalString(provider?.defaultModels?.[params.capability]);
 }
@@ -134,9 +136,11 @@ export function resolveDefaultMediaModel(params: {
 export function resolveAutoMediaKeyProviders(params: {
   capability: MediaUnderstandingCapability;
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   providerRegistry?: Map<string, MediaUnderstandingProvider>;
 }): string[] {
-  const registry = params.providerRegistry ?? resolveDefaultRegistry(params.cfg);
+  const registry =
+    params.providerRegistry ?? resolveDefaultRegistry(params.cfg, params.workspaceDir);
   type AutoProviderEntry = {
     provider: MediaUnderstandingProvider;
     priority: number;
@@ -167,9 +171,11 @@ export function resolveAutoMediaKeyProviders(params: {
 export function providerSupportsNativePdfDocument(params: {
   providerId: string;
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   providerRegistry?: Map<string, MediaUnderstandingProvider>;
 }): boolean {
-  const registry = params.providerRegistry ?? resolveDefaultRegistry(params.cfg);
+  const registry =
+    params.providerRegistry ?? resolveDefaultRegistry(params.cfg, params.workspaceDir);
   const provider = registry.get(normalizeMediaProviderId(params.providerId));
   return provider?.nativeDocumentInputs?.includes("pdf") ?? false;
 }

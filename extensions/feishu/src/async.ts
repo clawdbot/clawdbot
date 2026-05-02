@@ -1,7 +1,7 @@
 const RACE_TIMEOUT = Symbol("race-timeout");
 const RACE_ABORT = Symbol("race-abort");
 
-export type RaceWithTimeoutAndAbortResult<T> =
+type RaceWithTimeoutAndAbortResult<T> =
   | { status: "resolved"; value: T }
   | { status: "timeout" }
   | { status: "aborted" };

@@ -3,10 +3,10 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-export const DIR_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
-export const DIR_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
+const DIR_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
+const DIR_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 
-export type DirFetchParams = {
+type DirFetchParams = {
   path?: unknown;
   maxBytes?: unknown;
   includeDotfiles?: unknown;
@@ -14,7 +14,7 @@ export type DirFetchParams = {
   preflightOnly?: unknown;
 };
 
-export type DirFetchOk = {
+type DirFetchOk = {
   ok: true;
   path: string;
   tarBase64: string;
@@ -25,7 +25,7 @@ export type DirFetchOk = {
   preflightOnly?: boolean;
 };
 
-export type DirFetchErrCode =
+type DirFetchErrCode =
   | "INVALID_PATH"
   | "NOT_FOUND"
   | "IS_FILE"
@@ -33,14 +33,14 @@ export type DirFetchErrCode =
   | "SYMLINK_REDIRECT"
   | "READ_ERROR";
 
-export type DirFetchErr = {
+type DirFetchErr = {
   ok: false;
   code: DirFetchErrCode;
   message: string;
   canonicalPath?: string;
 };
 
-export type DirFetchResult = DirFetchOk | DirFetchErr;
+type DirFetchResult = DirFetchOk | DirFetchErr;
 
 function clampMaxBytes(input: unknown): number {
   if (typeof input !== "number" || !Number.isFinite(input) || input <= 0) {

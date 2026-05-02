@@ -6,13 +6,14 @@ import {
 } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
-export const GOOGLE_MEET_REDIRECT_URI = "http://localhost:8085/oauth2callback";
-export const GOOGLE_MEET_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
-export const GOOGLE_MEET_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const GOOGLE_MEET_REDIRECT_URI = "http://localhost:8085/oauth2callback";
+const GOOGLE_MEET_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
+const GOOGLE_MEET_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_MEET_TOKEN_HOST = "oauth2.googleapis.com";
-export const GOOGLE_MEET_SCOPES = [
+const GOOGLE_MEET_SCOPES = [
   "https://www.googleapis.com/auth/meetings.space.created",
   "https://www.googleapis.com/auth/meetings.space.readonly",
+  "https://www.googleapis.com/auth/meetings.space.settings",
   "https://www.googleapis.com/auth/meetings.conference.media.readonly",
   "https://www.googleapis.com/auth/calendar.events.readonly",
   "https://www.googleapis.com/auth/drive.meet.readonly",
@@ -137,7 +138,7 @@ export async function refreshGoogleMeetAccessToken(params: {
   );
 }
 
-export function shouldUseCachedGoogleMeetAccessToken(params: {
+function shouldUseCachedGoogleMeetAccessToken(params: {
   accessToken?: string;
   expiresAt?: number;
   now?: number;

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 
-export type CrestodianAuditEntry = {
+type CrestodianAuditEntry = {
   timestamp: string;
   operation: string;
   summary: string;

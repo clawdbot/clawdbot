@@ -36,7 +36,7 @@ export function resolveRetentionMs(cronConfig?: CronConfig): number | null {
   return DEFAULT_RETENTION_MS;
 }
 
-export type ReaperResult = {
+type ReaperResult = {
   swept: boolean;
   pruned: number;
 };

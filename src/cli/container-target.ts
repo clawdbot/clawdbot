@@ -10,7 +10,7 @@ type CliContainerParseResult =
   | { ok: true; container: string | null; argv: string[] }
   | { ok: false; error: string };
 
-export type CliContainerTargetResult =
+type CliContainerTargetResult =
   | { handled: true; exitCode: number }
   | { handled: false; argv: string[] };
 

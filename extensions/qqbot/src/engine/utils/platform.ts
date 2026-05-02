@@ -90,7 +90,7 @@ function getOpenClawMediaDir(): string {
 
 // ---- Basic platform information ----
 
-export type PlatformType = "darwin" | "linux" | "win32" | "other";
+type PlatformType = "darwin" | "linux" | "win32" | "other";
 
 export function getPlatform(): PlatformType {
   const p = process.platform;

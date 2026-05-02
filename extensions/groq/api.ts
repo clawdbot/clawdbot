@@ -7,10 +7,10 @@ const GROQ_GPT_OSS_REASONING_IDS = new Set([
   "openai/gpt-oss-safeguard-20b",
 ]);
 
-export const GROQ_QWEN_REASONING_EFFORTS = ["none", "default"] as const;
-export const GROQ_GPT_OSS_REASONING_EFFORTS = ["low", "medium", "high"] as const;
+const GROQ_QWEN_REASONING_EFFORTS = ["none", "default"] as const;
+const GROQ_GPT_OSS_REASONING_EFFORTS = ["low", "medium", "high"] as const;
 
-export const GROQ_QWEN_REASONING_EFFORT_MAP: Record<string, string> = {
+const GROQ_QWEN_REASONING_EFFORT_MAP: Record<string, string> = {
   off: "none",
   none: "none",
   minimal: "default",

@@ -82,12 +82,10 @@ function resolveBundledPluginLookupParams(params: { rootDir: string; scanDir?: s
 }
 
 function collectBundledPluginMetadata(
-  packageRoot: string,
+  resolvedScanDir: string | undefined,
   includeChannelConfigs: boolean,
   includeSyntheticChannelConfigs: boolean,
-  scanDir?: string,
 ): readonly BundledPluginMetadata[] {
-  const resolvedScanDir = resolveBundledPluginMetadataScanDir(packageRoot, scanDir);
   if (!resolvedScanDir || !fs.existsSync(resolvedScanDir)) {
     return [];
   }
@@ -183,22 +181,28 @@ export function listBundledPluginMetadata(params?: {
 }): readonly BundledPluginMetadata[] {
   const rootDir = path.resolve(params?.rootDir ?? OPENCLAW_PACKAGE_ROOT);
   const scanDir = params?.scanDir ? path.resolve(params.scanDir) : undefined;
+  const resolvedScanDir = resolveBundledPluginMetadataScanDir(rootDir, scanDir);
   const includeChannelConfigs = params?.includeChannelConfigs ?? !RUNNING_FROM_BUILT_ARTIFACT;
   const includeSyntheticChannelConfigs =
     params?.includeSyntheticChannelConfigs ?? includeChannelConfigs;
-  return Object.freeze(
+  const metadata = Object.freeze(
     collectBundledPluginMetadata(
-      rootDir,
+      resolvedScanDir,
       includeChannelConfigs,
       includeSyntheticChannelConfigs,
-      scanDir,
     ),
   );
+  return metadata;
 }
 
 export function findBundledPluginMetadataById(
   pluginId: string,
-  params?: { rootDir?: string; scanDir?: string },
+  params?: {
+    rootDir?: string;
+    scanDir?: string;
+    includeChannelConfigs?: boolean;
+    includeSyntheticChannelConfigs?: boolean;
+  },
 ): BundledPluginMetadata | undefined {
   return listBundledPluginMetadata(params).find((entry) => entry.manifest.id === pluginId);
 }
@@ -208,13 +212,14 @@ export function resolveBundledPluginWorkspaceSourcePath(params: {
   scanDir?: string;
   pluginId: string;
 }): string | null {
-  const metadata = findBundledPluginMetadataById(
-    params.pluginId,
-    resolveBundledPluginLookupParams({
+  const metadata = findBundledPluginMetadataById(params.pluginId, {
+    ...resolveBundledPluginLookupParams({
       rootDir: params.rootDir,
       scanDir: params.scanDir,
     }),
-  );
+    includeChannelConfigs: false,
+    includeSyntheticChannelConfigs: false,
+  });
   if (!metadata) {
     return null;
   }
@@ -275,13 +280,14 @@ export function resolveBundledPluginRepoEntryPath(params: {
   preferBuilt?: boolean;
   scanDir?: string;
 }): string | null {
-  const metadata = findBundledPluginMetadataById(
-    params.pluginId,
-    resolveBundledPluginLookupParams({
+  const metadata = findBundledPluginMetadataById(params.pluginId, {
+    ...resolveBundledPluginLookupParams({
       rootDir: params.rootDir,
       scanDir: params.scanDir,
     }),
-  );
+    includeChannelConfigs: false,
+    includeSyntheticChannelConfigs: false,
+  });
   if (!metadata) {
     return null;
   }

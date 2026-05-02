@@ -1,7 +1,7 @@
 import type { messagingApi } from "@line/bot-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 
-export type LineReplyMessage = messagingApi.TextMessage;
+type LineReplyMessage = messagingApi.TextMessage;
 
 export type SendLineReplyChunksParams = {
   to: string;

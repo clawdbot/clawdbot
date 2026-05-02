@@ -10,26 +10,27 @@ import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 function createBlockReplyHarness(blockReplyBreak: "message_end" | "text_end") {
   const { session, emit } = createStubSessionHarness();
   const onBlockReply = vi.fn();
-  subscribeEmbeddedPiSession({
+  const subscription = subscribeEmbeddedPiSession({
     session,
     runId: "run",
     onBlockReply,
     blockReplyBreak,
   });
-  return { emit, onBlockReply };
+  return { emit, onBlockReply, subscription };
 }
 
 async function emitMessageToolLifecycle(params: {
   emit: (evt: unknown) => void;
   toolCallId: string;
   message: string;
+  media?: string;
   result: unknown;
 }) {
   params.emit({
     type: "tool_execution_start",
     toolName: "message",
     toolCallId: params.toolCallId,
-    args: { action: "send", to: "+1555", message: params.message },
+    args: { action: "send", to: "+1555", message: params.message, media: params.media },
   });
   // Wait for async handler to complete.
   await Promise.resolve();
@@ -77,6 +78,23 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(onBlockReply).not.toHaveBeenCalled();
   });
+
+  it("tracks media-only message tool sends as messaging delivery", async () => {
+    const { emit, subscription } = createBlockReplyHarness("message_end");
+
+    await emitMessageToolLifecycle({
+      emit,
+      toolCallId: "tool-message-media",
+      message: "",
+      media: "file:///tmp/render.mp4",
+      result: "ok",
+    });
+    await Promise.resolve();
+
+    expect(subscription.didSendViaMessagingTool()).toBe(true);
+    expect(subscription.getMessagingToolSentMediaUrls()).toEqual(["file:///tmp/render.mp4"]);
+  });
+
   it("does not suppress message_end replies when message tool reports error", async () => {
     const { emit, onBlockReply } = createBlockReplyHarness("message_end");
 

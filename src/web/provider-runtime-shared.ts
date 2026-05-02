@@ -58,6 +58,11 @@ export function hasWebProviderEntryCredential<
     config: OpenClawConfig | undefined;
     toolConfig: TConfig;
   }) => unknown;
+  resolveFallbackRawValue?: (params: {
+    provider: TProvider;
+    config: OpenClawConfig | undefined;
+    toolConfig: TConfig;
+  }) => unknown;
   resolveEnvValue: (params: {
     provider: TProvider;
     configuredEnvVarId?: string;
@@ -81,11 +86,34 @@ export function hasWebProviderEntryCredential<
   if (fromConfig) {
     return true;
   }
-  return Boolean(
+  if (
     params.resolveEnvValue({
       provider: params.provider,
       configuredEnvVarId: configuredRef?.source === "env" ? configuredRef.id : undefined,
-    }),
+    })
+  ) {
+    return true;
+  }
+  const fallbackRawValue = params.resolveFallbackRawValue?.({
+    provider: params.provider,
+    config: params.config,
+    toolConfig: params.toolConfig,
+  });
+  const fallbackRef = resolveSecretInputRef({ value: fallbackRawValue }).ref;
+  if (fallbackRef && fallbackRef.source !== "env") {
+    return true;
+  }
+  const fallbackConfig = normalizeSecretInput(normalizeSecretInputString(fallbackRawValue));
+  if (fallbackConfig) {
+    return true;
+  }
+  return Boolean(
+    fallbackRef?.source === "env"
+      ? params.resolveEnvValue({
+          provider: params.provider,
+          configuredEnvVarId: fallbackRef.id,
+        })
+      : undefined,
   );
 }
 

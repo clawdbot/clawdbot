@@ -64,7 +64,7 @@ describe("loadCliSessionHistoryMessages", () => {
     vi.unstubAllEnvs();
   });
 
-  it("reads the canonical session transcript instead of an arbitrary external path", () => {
+  it("reads the canonical session transcript instead of an arbitrary external path", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-outside-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -82,7 +82,7 @@ describe("loadCliSessionHistoryMessages", () => {
 
     try {
       expect(
-        loadCliSessionHistoryMessages({
+        await loadCliSessionHistoryMessages({
           sessionId: "session-test",
           sessionFile: outsideFile,
           sessionKey: "agent:main:main",
@@ -95,7 +95,7 @@ describe("loadCliSessionHistoryMessages", () => {
     }
   });
 
-  it("keeps only the newest bounded history window", () => {
+  it("keeps only the newest bounded history window", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const sessionFile = createSessionTranscript({
@@ -108,7 +108,7 @@ describe("loadCliSessionHistoryMessages", () => {
     });
 
     try {
-      const history = loadCliSessionHistoryMessages({
+      const history = await loadCliSessionHistoryMessages({
         sessionId: "session-bounded",
         sessionFile,
         sessionKey: "agent:main:main",
@@ -125,7 +125,7 @@ describe("loadCliSessionHistoryMessages", () => {
     }
   });
 
-  it("rejects symlinked transcripts instead of following them outside the sessions directory", () => {
+  it("rejects symlinked transcripts instead of following them outside the sessions directory", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-outside-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -147,7 +147,7 @@ describe("loadCliSessionHistoryMessages", () => {
 
     try {
       expect(
-        loadCliSessionHistoryMessages({
+        await loadCliSessionHistoryMessages({
           sessionId: "session-symlink",
           sessionFile: canonicalSessionFile,
           sessionKey: "agent:main:main",
@@ -160,7 +160,7 @@ describe("loadCliSessionHistoryMessages", () => {
     }
   });
 
-  it("drops oversized transcript files instead of loading them into hook payloads", () => {
+  it("drops oversized transcript files instead of loading them into hook payloads", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const sessionFile = path.join(
@@ -175,7 +175,7 @@ describe("loadCliSessionHistoryMessages", () => {
 
     try {
       expect(
-        loadCliSessionHistoryMessages({
+        await loadCliSessionHistoryMessages({
           sessionId: "session-oversized",
           sessionFile,
           sessionKey: "agent:main:main",
@@ -187,7 +187,7 @@ describe("loadCliSessionHistoryMessages", () => {
     }
   });
 
-  it("honors custom session store roots when resolving hook history transcripts", () => {
+  it("honors custom session store roots when resolving hook history transcripts", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     const customStoreDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-store-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -202,7 +202,7 @@ describe("loadCliSessionHistoryMessages", () => {
 
     try {
       expect(
-        loadCliSessionHistoryMessages({
+        await loadCliSessionHistoryMessages({
           sessionId: "session-custom-store",
           sessionFile,
           sessionKey: "agent:main:main",
@@ -226,7 +226,7 @@ describe("loadCliSessionReseedMessages", () => {
     vi.unstubAllEnvs();
   });
 
-  it("does not reseed fresh CLI sessions from raw transcript history before compaction", () => {
+  it("does not reseed fresh CLI sessions from raw transcript history before compaction", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const sessionFile = createSessionTranscript({
@@ -237,7 +237,7 @@ describe("loadCliSessionReseedMessages", () => {
 
     try {
       expect(
-        loadCliSessionReseedMessages({
+        await loadCliSessionReseedMessages({
           sessionId: "session-no-compaction",
           sessionFile,
           sessionKey: "agent:main:main",
@@ -249,7 +249,7 @@ describe("loadCliSessionReseedMessages", () => {
     }
   });
 
-  it("reseeds fresh CLI sessions from the latest compaction summary and post-compaction tail", () => {
+  it("reseeds fresh CLI sessions from the latest compaction summary and post-compaction tail", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const sessionFile = createSessionTranscript({
@@ -287,7 +287,7 @@ describe("loadCliSessionReseedMessages", () => {
     );
 
     try {
-      const reseed = loadCliSessionReseedMessages({
+      const reseed = await loadCliSessionReseedMessages({
         sessionId: "session-compacted",
         sessionFile,
         sessionKey: "agent:main:main",

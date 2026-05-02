@@ -1,7 +1,11 @@
 {
   "name": "@openclaw/nostr",
-  "version": "2026.4.25",
+  "version": "2026.5.1-beta.2",
   "description": "OpenClaw Nostr channel plugin for NIP-04 encrypted DMs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "dependencies": {
     "nostr-tools": "^2.23.3",
@@ -53,10 +57,7 @@
       "pluginApi": ">=2026.4.25"
     },
     "build": {
-      "openclawVersion": "2026.4.25"
-    },
-    "bundle": {
-      "stageRuntimeDependencies": true
+      "openclawVersion": "2026.5.1-beta.2"
     },
     "release": {
       "publishToClawHub": true,

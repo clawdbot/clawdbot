@@ -144,6 +144,7 @@ export const googlechatPlugin = createChatChannelPlugin({
     },
     groups: googlechatGroupsAdapter,
     messaging: {
+      targetPrefixes: ["googlechat", "google-chat", "gchat"],
       normalizeTarget: normalizeGoogleChatTarget,
       targetResolver: {
         looksLikeId: (raw, normalized) => {

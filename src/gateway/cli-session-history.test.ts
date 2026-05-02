@@ -256,6 +256,73 @@ describe("cli session history", () => {
     });
   });
 
+  it("augments anthropic-routed chat history when a Claude CLI binding has local messages", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
+      const messages = augmentChatHistoryWithCliSessionImports({
+        entry: {
+          sessionId: "openclaw-session",
+          updatedAt: Date.now(),
+          cliSessionBindings: {
+            "claude-cli": {
+              sessionId,
+            },
+          },
+        },
+        provider: "anthropic",
+        localMessages: [
+          {
+            role: "assistant",
+            content: "local assistant turn",
+            timestamp: Date.parse("2026-03-26T16:29:57.000Z"),
+          },
+        ],
+        homeDir,
+      });
+
+      expect(messages).toHaveLength(4);
+      expect(messages).toContainEqual(
+        expect.objectContaining({
+          role: "assistant",
+          content: "local assistant turn",
+        }),
+      );
+      expect(messages).toContainEqual(
+        expect.objectContaining({
+          role: "user",
+          __openclaw: expect.objectContaining({ cliSessionId: sessionId }),
+        }),
+      );
+    });
+  });
+
+  it("does not import stale Claude CLI history for unrelated providers with local messages", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
+      const localMessages = [
+        {
+          role: "assistant",
+          content: "local OpenAI turn",
+          timestamp: Date.parse("2026-03-26T16:29:57.000Z"),
+        },
+      ];
+      const messages = augmentChatHistoryWithCliSessionImports({
+        entry: {
+          sessionId: "openclaw-session",
+          updatedAt: Date.now(),
+          cliSessionBindings: {
+            "claude-cli": {
+              sessionId,
+            },
+          },
+        },
+        provider: "openai",
+        localMessages,
+        homeDir,
+      });
+
+      expect(messages).toBe(localMessages);
+    });
+  });
+
   it("falls back to legacy cliSessionIds when bindings are absent", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
       const messages = augmentChatHistoryWithCliSessionImports({

@@ -199,6 +199,14 @@ function detectXmlToolCall(text: string): ToolCallShapedTextDetection | null {
 }
 
 function detectBracketedToolCall(text: string): ToolCallShapedTextDetection | null {
+  const legacyMatch =
+    /\[\s*TOOL_CALL\s*\]\s*{[\s\S]{0,8000}?\btool\s*=>\s*["']([A-Za-z_][A-Za-z0-9_.:-]{0,119})["'][\s\S]{0,8000}?\bargs\s*=>[\s\S]*?(?:\[\s*\/\s*TOOL_CALL\s*\]|$)/i.exec(
+      text,
+    );
+  if (legacyMatch?.[1]) {
+    return { kind: "bracketed_tool_call", toolName: legacyMatch[1] };
+  }
+
   const match =
     /^\s*\[([A-Za-z_][A-Za-z0-9_.:-]{0,119})\]\s+[\s\S]*?\[END_TOOL_REQUEST\]\s*$/i.exec(text);
   if (!match?.[1]) {

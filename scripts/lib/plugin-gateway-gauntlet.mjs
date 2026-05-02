@@ -383,7 +383,6 @@ function collectGatewayCpuObservations(params) {
 }
 
 export {
-  collectCommandAliasRecords,
   collectQaBaselineRegressionObservations,
   collectGatewayCpuObservations,
   collectMetricObservations,

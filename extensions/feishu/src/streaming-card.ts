@@ -18,7 +18,7 @@ type CardState = {
 };
 
 /** Options for customising the initial streaming card appearance. */
-export type StreamingCardOptions = {
+type StreamingCardOptions = {
   /** Optional header with title and color template. */
   header?: CardHeaderConfig;
   /** Optional grey note footer text. */
@@ -26,7 +26,7 @@ export type StreamingCardOptions = {
 };
 
 /** Optional header for streaming cards (title bar with color template) */
-export type StreamingCardHeader = {
+type StreamingCardHeader = {
   title: string;
   /** Color template: blue, green, red, orange, purple, indigo, wathet, turquoise, yellow, grey, carmine, violet, lime */
   template?: string;

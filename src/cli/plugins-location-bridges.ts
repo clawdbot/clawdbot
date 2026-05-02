@@ -21,6 +21,7 @@ function buildBridgeFromPersistedBundledRecord(
   return {
     bundledPluginId: record.pluginId,
     pluginId: record.pluginId,
+    preferredSource: "npm",
     npmSpec,
     ...(record.enabledByDefault ? { enabledByDefault: true } : {}),
     ...(manifest?.channels.length ? { channelIds: manifest.channels } : {}),

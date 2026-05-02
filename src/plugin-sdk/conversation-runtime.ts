@@ -45,6 +45,7 @@ export {
 } from "../channels/thread-bindings-messages.js";
 export {
   formatThreadBindingDisabledError,
+  formatThreadBindingSpawnDisabledError,
   resolveThreadBindingEffectiveExpiresAt,
   resolveThreadBindingIdleTimeoutMs,
   resolveThreadBindingIdleTimeoutMsForChannel,

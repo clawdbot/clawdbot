@@ -2,16 +2,16 @@ import { createHash, randomBytes } from "node:crypto";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
-export const CHUTES_OAUTH_ISSUER = "https://api.chutes.ai";
+const CHUTES_OAUTH_ISSUER = "https://api.chutes.ai";
 export const CHUTES_AUTHORIZE_ENDPOINT = `${CHUTES_OAUTH_ISSUER}/idp/authorize`;
 export const CHUTES_TOKEN_ENDPOINT = `${CHUTES_OAUTH_ISSUER}/idp/token`;
 export const CHUTES_USERINFO_ENDPOINT = `${CHUTES_OAUTH_ISSUER}/idp/userinfo`;
 
 const DEFAULT_EXPIRES_BUFFER_MS = 5 * 60 * 1000;
 
-export type ChutesPkce = { verifier: string; challenge: string };
+type ChutesPkce = { verifier: string; challenge: string };
 
-export type ChutesUserInfo = {
+type ChutesUserInfo = {
   sub?: string;
   username?: string;
   created_at?: string;
@@ -24,7 +24,7 @@ export type ChutesOAuthAppConfig = {
   scopes: string[];
 };
 
-export type ChutesStoredOAuth = OAuthCredentials & {
+type ChutesStoredOAuth = OAuthCredentials & {
   clientId?: string;
 };
 
@@ -86,7 +86,7 @@ function coerceExpiresAt(expiresInSeconds: number, now: number): number {
   return Math.max(value, now + 30_000);
 }
 
-export async function fetchChutesUserInfo(params: {
+async function fetchChutesUserInfo(params: {
   accessToken: string;
   fetchFn?: typeof fetch;
 }): Promise<ChutesUserInfo | null> {

@@ -1,7 +1,7 @@
 import { normalizeDeviceMetadataForAuth } from "./device-metadata-normalization.js";
 export { normalizeDeviceMetadataForAuth };
 
-export type DeviceAuthPayloadParams = {
+type DeviceAuthPayloadParams = {
   deviceId: string;
   clientId: string;
   clientMode: string;
@@ -12,7 +12,7 @@ export type DeviceAuthPayloadParams = {
   nonce: string;
 };
 
-export type DeviceAuthPayloadV3Params = DeviceAuthPayloadParams & {
+type DeviceAuthPayloadV3Params = DeviceAuthPayloadParams & {
   platform?: string | null;
   deviceFamily?: string | null;
 };

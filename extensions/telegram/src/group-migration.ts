@@ -7,7 +7,7 @@ type TelegramGroups = Record<string, TelegramGroupConfig>;
 
 type MigrationScope = "account" | "global";
 
-export type TelegramGroupMigrationResult = {
+type TelegramGroupMigrationResult = {
   migrated: boolean;
   skippedExisting: boolean;
   scopes: MigrationScope[];

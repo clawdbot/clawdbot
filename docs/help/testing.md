@@ -160,9 +160,9 @@ inside every shard.
 - `pnpm test:docker:npm-onboard-channel-agent`
   - Builds an npm tarball from the current checkout, installs it globally in
     Docker, runs non-interactive OpenAI API-key onboarding, configures Telegram
-    by default, verifies enabling the plugin installs runtime dependencies on
-    demand, runs doctor, and runs one local agent turn against a mocked OpenAI
-    endpoint.
+    by default, verifies the packaged plugin runtime loads without startup
+    dependency repair, runs doctor, and runs one local agent turn against a
+    mocked OpenAI endpoint.
   - Use `OPENCLAW_NPM_ONBOARD_CHANNEL=discord` to run the same packaged-install
     lane with Discord.
 - `pnpm test:docker:session-runtime-context`
@@ -227,17 +227,17 @@ gh workflow run package-acceptance.yml --ref main \
   -f suite_profile=smoke
 ```
 
-- `pnpm test:docker:bundled-channel-deps`
+- `pnpm test:docker:plugins`
   - Packs and installs the current OpenClaw build in Docker, starts the Gateway
     with OpenAI configured, then enables bundled channel/plugins via config
     edits.
-  - Verifies setup discovery leaves unconfigured plugin runtime dependencies
-    absent, the first configured Gateway or doctor run installs each bundled
-    plugin's runtime dependencies on demand, and a second restart does not
-    reinstall dependencies that were already activated.
+  - Verifies setup discovery leaves unconfigured downloadable plugins absent,
+    the first configured doctor repair installs each missing downloadable
+    plugin explicitly, and a second restart does not run hidden dependency
+    repair.
   - Also installs a known older npm baseline, enables Telegram before running
     `openclaw update --tag <candidate>`, and verifies the candidate's
-    post-update doctor repairs bundled channel runtime dependencies without a
+    post-update doctor cleans legacy plugin dependency debris without a
     harness-side postinstall repair.
 - `pnpm test:parallels:npm-update`
   - Runs the native packaged-install update smoke across Parallels guests. Each
@@ -263,9 +263,9 @@ gh workflow run package-acceptance.yml --ref main \
   - The script writes nested lane logs under `/tmp/openclaw-parallels-npm-update.*`.
     Inspect `windows-update.log`, `macos-update.log`, or `linux-update.log`
     before assuming the outer wrapper is hung.
-  - Windows update can spend 10 to 15 minutes in post-update doctor/runtime
-    dependency repair on a cold guest; that is still healthy when the nested
-    npm debug log is advancing.
+  - Windows update can spend 10 to 15 minutes in post-update doctor and package
+    update work on a cold guest; that is still healthy when the nested npm
+    debug log is advancing.
   - Do not run this aggregate wrapper in parallel with individual Parallels
     macOS, Windows, or Linux smoke lanes. They share VM state and can collide on
     snapshot restore, package serving, or guest gateway state.
@@ -585,7 +585,9 @@ Use this decision table:
 For the live model matrix, CLI backend smokes, ACP smokes, Codex app-server
 harness, and all media-provider live tests (Deepgram, BytePlus, ComfyUI, image,
 music, video, media harness) — plus credential handling for live runs — see
-[Testing — live suites](/help/testing-live).
+[Testing live suites](/help/testing-live). For the dedicated update and
+plugin validation checklist, see
+[Testing updates and plugins](/help/testing-updates-plugins).
 
 ## Docker runners (optional "works in Linux" checks)
 
@@ -600,7 +602,7 @@ These Docker runners split into two buckets:
   `OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=90000`. Override those env vars when you
   explicitly want the larger exhaustive scan.
 - `test:docker:all` builds the live Docker image once via `test:docker:live-build`, packs OpenClaw once as an npm tarball through `scripts/package-openclaw-for-docker.mjs`, then builds/reuses two `scripts/e2e/Dockerfile` images. The bare image is only the Node/Git runner for install/update/plugin-dependency lanes; those lanes mount the prebuilt tarball. The functional image installs the same tarball into `/app` for built-app functionality lanes. Docker lane definitions live in `scripts/lib/docker-e2e-scenarios.mjs`; planner logic lives in `scripts/lib/docker-e2e-plan.mjs`; `scripts/test-docker-all.mjs` executes the selected plan. The aggregate uses a weighted local scheduler: `OPENCLAW_DOCKER_ALL_PARALLELISM` controls process slots, while resource caps keep heavy live, npm-install, and multi-service lanes from all starting at once. If a single lane is heavier than the active caps, the scheduler can still start it when the pool is empty and then keeps it running alone until capacity is available again. Defaults are 10 slots, `OPENCLAW_DOCKER_ALL_LIVE_LIMIT=9`, `OPENCLAW_DOCKER_ALL_NPM_LIMIT=10`, and `OPENCLAW_DOCKER_ALL_SERVICE_LIMIT=7`; tune `OPENCLAW_DOCKER_ALL_WEIGHT_LIMIT` or `OPENCLAW_DOCKER_ALL_DOCKER_LIMIT` only when the Docker host has more headroom. The runner performs a Docker preflight by default, removes stale OpenClaw E2E containers, prints status every 30 seconds, stores successful lane timings in `.artifacts/docker-tests/lane-timings.json`, and uses those timings to start longer lanes first on later runs. Use `OPENCLAW_DOCKER_ALL_DRY_RUN=1` to print the weighted lane manifest without building or running Docker, or `node scripts/test-docker-all.mjs --plan-json` to print the CI plan for selected lanes, package/image needs, and credentials.
-- `Package Acceptance` is the GitHub-native package gate for "does this installable tarball work as a product?" It resolves one candidate package from `source=npm`, `source=ref`, `source=url`, or `source=artifact`, uploads it as `package-under-test`, then runs the reusable Docker E2E lanes against that exact tarball instead of repacking the selected ref. `workflow_ref` selects the trusted workflow/harness scripts, while `package_ref` selects the source commit/branch/tag to pack when `source=ref`; this lets current acceptance logic validate older trusted commits. Profiles are ordered by breadth: `smoke` is quick install/channel/agent plus gateway/config, `package` is the package/update/plugin contract plus the keyless upgrade-survivor fixture, the published-baseline upgrade survivor lane, and the default native replacement for most Parallels package/update coverage, `product` adds MCP channels, cron/subagent cleanup, OpenAI web search, and OpenWebUI, and `full` runs the release-path Docker chunks with OpenWebUI. For `published-upgrade-survivor`, Package Acceptance always uses `package-under-test` as the candidate and `published_upgrade_survivor_baseline` as the fallback published baseline, defaulting to `openclaw@latest`; set `published_upgrade_survivor_baselines=release-history` to shard the lane across a deduped matrix of the latest six stable releases, `2026.4.23`, and the latest stable release before `2026-03-15`. The published lane configures its baseline with a baked `openclaw config set` command recipe, then records recipe steps in the lane summary. Release validation runs a custom package delta (`bundled-channel-deps-compat plugins-offline`) plus Telegram package QA because the release-path Docker chunks already cover the overlapping package/update/plugin lanes. Targeted GitHub Docker rerun commands generated from artifacts include prior package artifact, prepared image inputs, and the published upgrade-survivor baseline list when available, so failed lanes can avoid rebuilding the package and images.
+- `Package Acceptance` is the GitHub-native package gate for "does this installable tarball work as a product?" It resolves one candidate package from `source=npm`, `source=ref`, `source=url`, or `source=artifact`, uploads it as `package-under-test`, then runs the reusable Docker E2E lanes against that exact tarball instead of repacking the selected ref. Profiles are ordered by breadth: `smoke`, `package`, `product`, and `full`. See [Testing updates and plugins](/help/testing-updates-plugins) for the package/update/plugin contract, published-upgrade survivor matrix, release defaults, and failure triage.
 - Build and release checks run `scripts/check-cli-bootstrap-imports.mjs` after tsdown. The guard walks the static built graph from `dist/entry.js` and `dist/cli/run-main.js` and fails if pre-dispatch startup imports package dependencies such as Commander, prompt UI, undici, or logging before command dispatch; it also keeps the bundled gateway run chunk under budget and rejects static imports of known cold gateway paths. Packaged CLI smoke also covers root help, onboard help, doctor help, status, config schema, and a model-list command.
 - Package Acceptance legacy compatibility is capped at `2026.4.25` (`2026.4.25-beta.*` included). Through that cutoff, the harness tolerates only shipped-package metadata gaps: omitted private QA inventory entries, missing `gateway install --wrapper`, missing patch files in the tarball-derived git fixture, missing persisted `update.channel`, legacy plugin install-record locations, missing marketplace install-record persistence, and config metadata migration during `plugins update`. For packages after `2026.4.25`, those paths are strict failures.
 - Container smoke runners: `test:docker:openwebui`, `test:docker:onboard`, `test:docker:npm-onboard-channel-agent`, `test:docker:update-channel-switch`, `test:docker:upgrade-survivor`, `test:docker:published-upgrade-survivor`, `test:docker:session-runtime-context`, `test:docker:agents-delete-shared-workspace`, `test:docker:gateway-network`, `test:docker:browser-cdp-snapshot`, `test:docker:mcp-channels`, `test:docker:pi-bundle-mcp-tools`, `test:docker:cron-mcp-cleanup`, `test:docker:plugins`, `test:docker:plugin-update`, and `test:docker:config-reload` boot one or more real containers and verify higher-level integration paths.
@@ -615,9 +617,9 @@ The live-model Docker runners also bind-mount only the needed CLI auth homes (or
 - Observability smoke: `pnpm qa:otel:smoke` is a private QA source-checkout lane. It is intentionally not part of package Docker release lanes because the npm tarball omits QA Lab.
 - Open WebUI live smoke: `pnpm test:docker:openwebui` (script: `scripts/e2e/openwebui-docker.sh`)
 - Onboarding wizard (TTY, full scaffolding): `pnpm test:docker:onboard` (script: `scripts/e2e/onboard-docker.sh`)
-- Npm tarball onboarding/channel/agent smoke: `pnpm test:docker:npm-onboard-channel-agent` installs the packed OpenClaw tarball globally in Docker, configures OpenAI via env-ref onboarding plus Telegram by default, verifies doctor repairs activated plugin runtime deps, and runs one mocked OpenAI agent turn. Reuse a prebuilt tarball with `OPENCLAW_CURRENT_PACKAGE_TGZ=/path/to/openclaw-*.tgz`, skip the host rebuild with `OPENCLAW_NPM_ONBOARD_HOST_BUILD=0`, or switch channel with `OPENCLAW_NPM_ONBOARD_CHANNEL=discord`.
+- Npm tarball onboarding/channel/agent smoke: `pnpm test:docker:npm-onboard-channel-agent` installs the packed OpenClaw tarball globally in Docker, configures OpenAI via env-ref onboarding plus Telegram by default, runs doctor, and runs one mocked OpenAI agent turn. Reuse a prebuilt tarball with `OPENCLAW_CURRENT_PACKAGE_TGZ=/path/to/openclaw-*.tgz`, skip the host rebuild with `OPENCLAW_NPM_ONBOARD_HOST_BUILD=0`, or switch channel with `OPENCLAW_NPM_ONBOARD_CHANNEL=discord`.
 - Update channel switch smoke: `pnpm test:docker:update-channel-switch` installs the packed OpenClaw tarball globally in Docker, switches from package `stable` to git `dev`, verifies the persisted channel and plugin post-update work, then switches back to package `stable` and checks update status.
-- Upgrade survivor smoke: `pnpm test:docker:upgrade-survivor` installs the packed OpenClaw tarball over a dirty old-user fixture with agents, channel config, plugin allowlists, stale plugin runtime-deps state, and existing workspace/session files. It runs package update plus non-interactive doctor without live provider or channel keys, then starts a loopback Gateway and checks config/state preservation plus startup/status budgets.
+- Upgrade survivor smoke: `pnpm test:docker:upgrade-survivor` installs the packed OpenClaw tarball over a dirty old-user fixture with agents, channel config, plugin allowlists, stale plugin dependency state, and existing workspace/session files. It runs package update plus non-interactive doctor without live provider or channel keys, then starts a loopback Gateway and checks config/state preservation plus startup/status budgets.
 - Published upgrade survivor smoke: `pnpm test:docker:published-upgrade-survivor` installs `openclaw@latest` by default, seeds realistic existing-user files, configures that baseline with a baked command recipe, validates the resulting config, updates that published install to the candidate tarball, runs non-interactive doctor, writes `.artifacts/upgrade-survivor/summary.json`, then starts a loopback Gateway and checks configured intents, state preservation, startup, `/healthz`, `/readyz`, and RPC status budgets. Override one baseline with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC`, ask the aggregate scheduler to expand exact baselines with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS`, and expand issue-shaped fixtures with `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS` such as `reported-issues`; Package Acceptance exposes those as `published_upgrade_survivor_baseline`, `published_upgrade_survivor_baselines`, and `published_upgrade_survivor_scenarios`.
 - Session runtime context smoke: `pnpm test:docker:session-runtime-context` verifies hidden runtime context transcript persistence plus doctor repair of affected duplicated prompt-rewrite branches.
 - Bun global install smoke: `bash scripts/e2e/bun-global-install-smoke.sh` packs the current tree, installs it with `bun install -g` in an isolated home, and verifies `openclaw infer image providers --json` returns bundled image providers instead of hanging. Reuse a prebuilt tarball with `OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ=/path/to/openclaw-*.tgz`, skip the host build with `OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD=0`, or copy `dist/` from a built Docker image with `OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE=openclaw-dockerfile-smoke:local`.
@@ -630,13 +632,11 @@ The live-model Docker runners also bind-mount only the needed CLI auth homes (or
 - MCP channel bridge (seeded Gateway + stdio bridge + raw Claude notification-frame smoke): `pnpm test:docker:mcp-channels` (script: `scripts/e2e/mcp-channels-docker.sh`)
 - Pi bundle MCP tools (real stdio MCP server + embedded Pi profile allow/deny smoke): `pnpm test:docker:pi-bundle-mcp-tools` (script: `scripts/e2e/pi-bundle-mcp-tools-docker.sh`)
 - Cron/subagent MCP cleanup (real Gateway + stdio MCP child teardown after isolated cron and one-shot subagent runs): `pnpm test:docker:cron-mcp-cleanup` (script: `scripts/e2e/cron-mcp-cleanup-docker.sh`)
-- Plugins (install smoke, ClawHub kitchen-sink install/uninstall, marketplace updates, and Claude-bundle enable/inspect): `pnpm test:docker:plugins` (script: `scripts/e2e/plugins-docker.sh`)
+- Plugins (install/update smoke for local path, `file:`, npm registry with hoisted dependencies, git moving refs, ClawHub kitchen-sink, marketplace updates, and Claude-bundle enable/inspect): `pnpm test:docker:plugins` (script: `scripts/e2e/plugins-docker.sh`)
   Set `OPENCLAW_PLUGINS_E2E_CLAWHUB=0` to skip the ClawHub block, or override the default kitchen-sink package/runtime pair with `OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC` and `OPENCLAW_PLUGINS_E2E_CLAWHUB_ID`. Without `OPENCLAW_CLAWHUB_URL`/`CLAWHUB_URL`, the test uses a hermetic local ClawHub fixture server.
 - Plugin update unchanged smoke: `pnpm test:docker:plugin-update` (script: `scripts/e2e/plugin-update-unchanged-docker.sh`)
 - Config reload metadata smoke: `pnpm test:docker:config-reload` (script: `scripts/e2e/config-reload-source-docker.sh`)
-- Bundled plugin runtime deps: `pnpm test:docker:bundled-channel-deps` builds a small Docker runner image by default, builds and packs OpenClaw once on the host, then mounts that tarball into each Linux install scenario. Reuse the image with `OPENCLAW_SKIP_DOCKER_BUILD=1`, skip the host rebuild after a fresh local build with `OPENCLAW_BUNDLED_CHANNEL_HOST_BUILD=0`, or point at an existing tarball with `OPENCLAW_CURRENT_PACKAGE_TGZ=/path/to/openclaw-*.tgz`. The full Docker aggregate and release-path bundled-channel chunks pre-pack this tarball once, then shard bundled channel checks into independent lanes, including separate update lanes for Telegram, Discord, Slack, Feishu, memory-lancedb, and ACPX. Release chunks split channel smokes, update targets, and setup/runtime contracts into `bundled-channels-core`, `bundled-channels-update-a`, `bundled-channels-update-b`, and `bundled-channels-contracts`; the aggregate `bundled-channels` chunk remains available for manual reruns. The release workflow also splits provider installer chunks and bundled plugin install/uninstall chunks; legacy `package-update`, `plugins-runtime`, and `plugins-integrations` chunks remain aggregate aliases for manual reruns. Use `OPENCLAW_BUNDLED_CHANNELS=telegram,slack` to narrow the channel matrix when running the bundled lane directly, or `OPENCLAW_BUNDLED_CHANNEL_UPDATE_TARGETS=telegram,acpx` to narrow the update scenario. Per-scenario Docker runs default to `OPENCLAW_BUNDLED_CHANNEL_DOCKER_RUN_TIMEOUT=900s`; the multi-target update scenario defaults to `OPENCLAW_BUNDLED_CHANNEL_UPDATE_DOCKER_RUN_TIMEOUT=2400s`. The lane also verifies that `channels.<id>.enabled=false` and `plugins.entries.<id>.enabled=false` suppress doctor/runtime-dependency repair.
-- Narrow bundled plugin runtime deps while iterating by disabling unrelated scenarios, for example:
-  `OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=0 pnpm test:docker:bundled-channel-deps`.
+- Plugins: `pnpm test:docker:plugins` covers install/update smoke for local path, `file:`, npm registry with hoisted dependencies, git moving refs, ClawHub fixtures, marketplace updates, and Claude-bundle enable/inspect. `pnpm test:docker:plugin-update` covers unchanged update behavior for installed plugins.
 
 To prebuild and reuse the shared functional image manually:
 
@@ -816,4 +816,5 @@ When you fix a provider/model issue discovered in live:
 ## Related
 
 - [Testing live](/help/testing-live)
+- [Testing updates and plugins](/help/testing-updates-plugins)
 - [CI](/ci)

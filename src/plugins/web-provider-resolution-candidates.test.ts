@@ -3,6 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   loadPluginRegistrySnapshot: vi.fn(),
   loadPluginManifestRegistryForInstalledIndex: vi.fn(),
+  loadPluginMetadataSnapshot: vi.fn(),
 }));
 
 vi.mock("./plugin-registry.js", () => ({
@@ -17,6 +18,10 @@ vi.mock("./plugin-registry.js", () => ({
 vi.mock("./manifest-registry-installed.js", () => ({
   loadPluginManifestRegistryForInstalledIndex: (...args: unknown[]) =>
     mocks.loadPluginManifestRegistryForInstalledIndex(...args),
+}));
+
+vi.mock("./plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: (...args: unknown[]) => mocks.loadPluginMetadataSnapshot(...args),
 }));
 
 let resolveManifestDeclaredWebProviderCandidatePluginIds: typeof import("./web-provider-resolution-shared.js").resolveManifestDeclaredWebProviderCandidatePluginIds;
@@ -52,6 +57,10 @@ describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
       ],
       diagnostics: [],
     });
+    mocks.loadPluginMetadataSnapshot.mockReset();
+    mocks.loadPluginMetadataSnapshot.mockImplementation((...args: unknown[]) => ({
+      plugins: mocks.loadPluginManifestRegistryForInstalledIndex(...args).plugins,
+    }));
   });
 
   it("treats explicit empty plugin scopes as scoped-empty", () => {
@@ -73,11 +82,7 @@ describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
         onlyPluginIds: ["missing-plugin"],
       }),
     ).toEqual([]);
-    expect(mocks.loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pluginIds: ["missing-plugin"],
-      }),
-    );
+    expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
   });
 
   it("keeps origin filters with no declared web candidates scoped-empty", () => {
@@ -110,7 +115,7 @@ describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
         configKey: "webSearch",
       }),
     ).toEqual(["alpha", "beta"]);
-    expect(mocks.loadPluginRegistrySnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
     expect(mocks.loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(1);
   });
 });

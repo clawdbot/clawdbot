@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { QaProviderMode } from "./model-selection.js";
 import type { QaTransportActionName, QaTransportAdapter } from "./qa-transport.js";
 
-export type QaRuntimeGatewayClient = {
+type QaRuntimeGatewayClient = {
   baseUrl: string;
   tempRoot: string;
   workspaceDir: string;
@@ -27,7 +27,7 @@ export type QaRuntimeGatewayClient = {
   ) => Promise<unknown>;
 };
 
-export type QaRuntimeTransport = QaTransportAdapter;
+type QaRuntimeTransport = QaTransportAdapter;
 
 export type QaSuiteRuntimeEnv = {
   gateway: QaRuntimeGatewayClient;

@@ -9,6 +9,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   captureCompactionCheckpointSnapshotAsync,
@@ -34,7 +35,7 @@ import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveRunModelFallbacksOverride, resolveSessionAgentIds } from "../agent-scope.js";
 import {
   makeBootstrapWarn,
   resolveBootstrapContextForRun,
@@ -53,6 +54,7 @@ import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawReferencePaths } from "../docs-path.js";
+import { coerceToFailoverError, describeFailoverError } from "../failover-error.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
   applyAuthHeaderOverride,
@@ -60,6 +62,7 @@ import {
   getApiKeyForModel,
   resolveModelAuthMode,
 } from "../model-auth.js";
+import { isFallbackSummaryError, runWithModelFallback } from "../model-fallback.js";
 import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { resolveOwnerDisplaySetting } from "../owner-display.js";
@@ -150,6 +153,7 @@ import {
   toSessionToolAllowlist,
 } from "./tool-name-allowlist.js";
 import { splitSdkTools } from "./tool-split.js";
+import { readTranscriptFileState } from "./transcript-file-state.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
 import { mapThinkingLevel } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
@@ -320,11 +324,105 @@ function containsRealConversationMessages(messages: AgentMessage[]): boolean {
   );
 }
 
+function hasExplicitCompactionModel(params: CompactEmbeddedPiSessionParams): boolean {
+  return Boolean(params.config?.agents?.defaults?.compaction?.model?.trim());
+}
+
+function resolveCompactionFallbacksOverride(
+  params: CompactEmbeddedPiSessionParams,
+): string[] | undefined {
+  return (
+    params.modelFallbacksOverride ??
+    resolveRunModelFallbacksOverride({
+      cfg: params.config,
+      sessionKey: params.sessionKey,
+    })
+  );
+}
+
+function hasCompactionModelFallbackCandidates(params: CompactEmbeddedPiSessionParams): boolean {
+  const fallbacksOverride = resolveCompactionFallbacksOverride(params);
+  const defaultFallbacks = resolveAgentModelFallbackValues(params.config?.agents?.defaults?.model);
+  return (fallbacksOverride ?? defaultFallbacks).length > 0;
+}
+
+function classifyCompactionFallbackResult(
+  result: EmbeddedPiCompactResult,
+  provider: string,
+  model: string,
+) {
+  if (result.ok) {
+    return null;
+  }
+  const reason = result.reason?.trim();
+  if (!reason) {
+    return null;
+  }
+  const failureError = Object.assign(new Error(result.failure?.rawError ?? reason), {
+    status: result.failure?.status,
+    code: result.failure?.code,
+  });
+  const failoverError = coerceToFailoverError(failureError, { provider, model });
+  return failoverError ? { error: failoverError } : null;
+}
+
+function fallbackFailureToCompactionResult(err: unknown): EmbeddedPiCompactResult {
+  const reason = isFallbackSummaryError(err) ? err.message : formatErrorMessage(err);
+  return {
+    ok: false,
+    compacted: false,
+    reason,
+  };
+}
+
 /**
  * Core compaction logic without lane queueing.
  * Use this when already inside a session/global lane to avoid deadlocks.
  */
 export async function compactEmbeddedPiSessionDirect(
+  params: CompactEmbeddedPiSessionParams,
+): Promise<EmbeddedPiCompactResult> {
+  if (hasExplicitCompactionModel(params) || !hasCompactionModelFallbackCandidates(params)) {
+    return await compactEmbeddedPiSessionDirectOnce(params);
+  }
+  const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
+    config: params.config,
+    provider: params.provider,
+    modelId: params.model,
+    authProfileId: params.authProfileId,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const primaryProvider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
+  const primaryModel = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
+  const fallbacksOverride = resolveCompactionFallbacksOverride(params);
+  try {
+    const fallbackResult = await runWithModelFallback<EmbeddedPiCompactResult>({
+      cfg: params.config,
+      provider: primaryProvider,
+      model: primaryModel,
+      runId: params.runId ?? params.sessionId,
+      agentDir: params.agentDir,
+      fallbacksOverride,
+      classifyResult: ({ result, provider, model }) =>
+        classifyCompactionFallbackResult(result, provider, model),
+      run: async (provider, model) => {
+        const authProfileId = provider === primaryProvider ? params.authProfileId : undefined;
+        return await compactEmbeddedPiSessionDirectOnce({
+          ...params,
+          provider,
+          model,
+          authProfileId,
+        });
+      },
+    });
+    return fallbackResult.result;
+  } catch (err) {
+    return fallbackFailureToCompactionResult(err);
+  }
+}
+
+async function compactEmbeddedPiSessionDirectOnce(
   params: CompactEmbeddedPiSessionParams,
 ): Promise<EmbeddedPiCompactResult> {
   const startedAt = Date.now();
@@ -352,8 +450,9 @@ export async function compactEmbeddedPiSessionDirect(
   const authProfileId = resolvedCompactionTarget.authProfileId;
   let thinkLevel: ThinkLevel = params.thinkLevel ?? "off";
   const attemptedThinking = new Set<ThinkLevel>();
-  const fail = (reason: string): EmbeddedPiCompactResult => {
+  const fail = (reason: string, err?: unknown): EmbeddedPiCompactResult => {
     const failureReason = classifyCompactionReason(reason);
+    const failure = err ? describeFailoverError(err) : undefined;
     const detail =
       failureReason === "unknown" ? formatUnknownCompactionReasonDetail(reason) : undefined;
     const detailSuffix = detail ? ` detail=${detail}` : "";
@@ -367,6 +466,14 @@ export async function compactEmbeddedPiSessionDirect(
       ok: false,
       compacted: false,
       reason,
+      failure: failure
+        ? {
+            reason: failure.reason,
+            status: failure.status,
+            code: failure.code,
+            rawError: failure.rawError ?? failure.message,
+          }
+        : undefined,
     };
   };
   const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
@@ -430,7 +537,7 @@ export async function compactEmbeddedPiSessionDirect(
     }
   } catch (err) {
     const reason = formatErrorMessage(err);
-    return fail(reason);
+    return fail(reason, err);
   }
 
   await fs.mkdir(resolvedWorkspace, { recursive: true });
@@ -1066,7 +1173,9 @@ export async function compactEmbeddedPiSessionDirect(
             typeof sessionManager.getLeafId === "function"
               ? (sessionManager.getLeafId() ?? undefined)
               : undefined;
-          let transcriptRotationSessionManager = sessionManager;
+          let transcriptRotationSessionManager: Parameters<
+            typeof rotateTranscriptAfterCompaction
+          >[0]["sessionManager"] = sessionManager;
           if (params.trigger === "manual") {
             try {
               const hardenedBoundary = await hardenManualCompactionBoundary({
@@ -1079,7 +1188,9 @@ export async function compactEmbeddedPiSessionDirect(
                   hardenedBoundary.firstKeptEntryId ?? effectiveFirstKeptEntryId;
                 postCompactionLeafId = hardenedBoundary.leafId ?? postCompactionLeafId;
                 session.agent.state.messages = hardenedBoundary.messages;
-                transcriptRotationSessionManager = SessionManager.open(params.sessionFile);
+                transcriptRotationSessionManager = await readTranscriptFileState(
+                  params.sessionFile,
+                );
               }
             } catch (err) {
               log.warn("[compaction] failed to harden manual compaction boundary", {
@@ -1247,7 +1358,7 @@ export async function compactEmbeddedPiSessionDirect(
       reason: formatErrorMessage(err),
       safeguardCancelReason: consumeCompactionSafeguardCancelReason(compactionSessionManager),
     });
-    return fail(reason);
+    return fail(reason, err);
   } finally {
     if (!checkpointSnapshotRetained) {
       await cleanupCompactionCheckpointSnapshot(checkpointSnapshot);

@@ -1,4 +1,4 @@
-export type DiscordMonitorStatusPatch = {
+type DiscordMonitorStatusPatch = {
   connected?: boolean;
   lastEventAt?: number | null;
   lastTransportActivityAt?: number | null;

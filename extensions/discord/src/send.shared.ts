@@ -7,6 +7,7 @@ import { extensionForMime } from "openclaw/plugin-sdk/media-runtime";
 import {
   normalizePollDurationHours,
   normalizePollInput,
+  type OutboundMediaAccess,
   type PollInput,
 } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
@@ -345,6 +346,7 @@ async function sendDiscordMedia(
   text: string,
   mediaUrl: string,
   filename: string | undefined,
+  mediaAccess: OutboundMediaAccess | undefined,
   mediaLocalRoots: readonly string[] | undefined,
   mediaReadFile: ((filePath: string) => Promise<Buffer>) | undefined,
   maxBytes: number | undefined,
@@ -359,7 +361,7 @@ async function sendDiscordMedia(
 ) {
   const media = await loadWebMedia(
     mediaUrl,
-    buildOutboundMediaLoadOptions({ maxBytes, mediaLocalRoots, mediaReadFile }),
+    buildOutboundMediaLoadOptions({ maxBytes, mediaAccess, mediaLocalRoots, mediaReadFile }),
   );
   const requestedFileName = filename?.trim();
   const resolvedFileName =

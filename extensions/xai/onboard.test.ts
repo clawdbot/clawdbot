@@ -36,6 +36,7 @@ describe("xai onboard", () => {
     expect(cfg.models?.providers?.xai?.models.map((m) => m.id)).toEqual(
       expect.arrayContaining([
         "custom-model",
+        "grok-4.3",
         "grok-4",
         "grok-4-1-fast",
         "grok-4.20-beta-latest-reasoning",

@@ -1,7 +1,12 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
-import { createGoogleMeetSpace } from "./meet.js";
+import {
+  createGoogleMeetSpace,
+  type GoogleMeetAccessType,
+  type GoogleMeetEntryPointAccess,
+  type GoogleMeetSpaceConfig,
+} from "./meet.js";
 import { resolveGoogleMeetAccessToken } from "./oauth.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 import { createMeetWithBrowserProxyOnNode } from "./transports/chrome-create.js";
@@ -14,6 +19,47 @@ function normalizeMode(value: unknown): GoogleMeetMode | undefined {
   return value === "realtime" || value === "transcribe" ? value : undefined;
 }
 
+function normalizeGoogleMeetAccessType(value: unknown): GoogleMeetAccessType | undefined {
+  const normalized = normalizeOptionalString(value)?.toUpperCase().replaceAll("-", "_");
+  return normalized === "OPEN" || normalized === "TRUSTED" || normalized === "RESTRICTED"
+    ? normalized
+    : undefined;
+}
+
+function normalizeGoogleMeetEntryPointAccess(
+  value: unknown,
+): GoogleMeetEntryPointAccess | undefined {
+  const normalized = normalizeOptionalString(value)?.toUpperCase().replaceAll("-", "_");
+  return normalized === "ALL" || normalized === "CREATOR_APP_ONLY" ? normalized : undefined;
+}
+
+export function resolveCreateSpaceConfig(
+  raw: Record<string, unknown>,
+): GoogleMeetSpaceConfig | undefined {
+  const rawAccessType = normalizeOptionalString(raw.accessType);
+  const rawEntryPointAccess = normalizeOptionalString(raw.entryPointAccess);
+  const accessType = normalizeGoogleMeetAccessType(raw.accessType);
+  const entryPointAccess = normalizeGoogleMeetEntryPointAccess(raw.entryPointAccess);
+  if (rawAccessType !== undefined && !accessType) {
+    throw new Error("Invalid Google Meet accessType. Expected OPEN, TRUSTED, or RESTRICTED.");
+  }
+  if (rawEntryPointAccess !== undefined && !entryPointAccess) {
+    throw new Error("Invalid Google Meet entryPointAccess. Expected ALL or CREATOR_APP_ONLY.");
+  }
+  const config = {
+    ...(accessType ? { accessType } : {}),
+    ...(entryPointAccess ? { entryPointAccess } : {}),
+  };
+  return Object.keys(config).length > 0 ? config : undefined;
+}
+
+export function hasCreateSpaceConfigInput(raw: Record<string, unknown>): boolean {
+  return (
+    normalizeOptionalString(raw.accessType) !== undefined ||
+    normalizeOptionalString(raw.entryPointAccess) !== undefined
+  );
+}
+
 async function createSpaceFromParams(config: GoogleMeetConfig, raw: Record<string, unknown>) {
   const token = await resolveGoogleMeetAccessToken({
     clientId: normalizeOptionalString(raw.clientId) ?? config.oauth.clientId,
@@ -22,7 +68,10 @@ async function createSpaceFromParams(config: GoogleMeetConfig, raw: Record<strin
     accessToken: normalizeOptionalString(raw.accessToken) ?? config.oauth.accessToken,
     expiresAt: typeof raw.expiresAt === "number" ? raw.expiresAt : config.oauth.expiresAt,
   });
-  const result = await createGoogleMeetSpace({ accessToken: token.accessToken });
+  const result = await createGoogleMeetSpace({
+    accessToken: token.accessToken,
+    config: resolveCreateSpaceConfig(raw),
+  });
   return { source: "api" as const, token, ...result };
 }
 
@@ -33,10 +82,6 @@ function hasGoogleMeetOAuth(config: GoogleMeetConfig, raw: Record<string, unknow
     config.oauth.accessToken ??
     config.oauth.refreshToken,
   );
-}
-
-export function shouldJoinCreatedMeet(raw: Record<string, unknown>): boolean {
-  return raw.join !== false && raw.join !== "false";
 }
 
 export async function createMeetFromParams(params: {
@@ -52,6 +97,11 @@ export async function createMeetFromParams(params: {
       nextAction:
         "URL-only creation was requested. Call google_meet with action=join and url=meetingUri to enter the meeting.",
     };
+  }
+  if (hasCreateSpaceConfigInput(params.raw)) {
+    throw new Error(
+      "Google Meet access policy options require OAuth/API room creation. Configure Google Meet OAuth or remove accessType/entryPointAccess.",
+    );
   }
   const browser = await createMeetWithBrowserProxyOnNode({
     runtime: params.runtime,

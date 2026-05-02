@@ -3,7 +3,7 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runti
 /** Max chars of the thumbed-down response to include in the reflection prompt. */
 const MAX_RESPONSE_CHARS = 500;
 
-export type ParsedReflectionResponse = {
+type ParsedReflectionResponse = {
   learning: string;
   followUp: boolean;
   userMessage?: string;

@@ -217,5 +217,3 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
     },
     outbound: zalouserOutboundAdapter,
   });
-
-export type { ResolvedZalouserAccount };

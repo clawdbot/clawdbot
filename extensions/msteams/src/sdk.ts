@@ -20,13 +20,13 @@ export type MSTeamsTeamsSdk = {
 /**
  * A Teams SDK App instance used for token management and proactive messaging.
  */
-export type MSTeamsApp = InstanceType<MSTeamsTeamsSdk["App"]>;
+type MSTeamsApp = InstanceType<MSTeamsTeamsSdk["App"]>;
 
 /**
  * Token provider compatible with the existing codebase, wrapping the Teams
  * SDK App's token methods.
  */
-export type MSTeamsTokenProvider = {
+type MSTeamsTokenProvider = {
   getAccessToken: (scope: string) => Promise<string>;
 };
 
@@ -76,7 +76,7 @@ async function loadAzureIdentity(): Promise<AzureIdentityModule> {
 
 let msTeamsSdkPromise: Promise<MSTeamsTeamsSdk> | null = null;
 
-export async function loadMSTeamsSdk(): Promise<MSTeamsTeamsSdk> {
+async function loadMSTeamsSdk(): Promise<MSTeamsTeamsSdk> {
   msTeamsSdkPromise ??= Promise.all([
     import("@microsoft/teams.apps"),
     import("@microsoft/teams.api"),

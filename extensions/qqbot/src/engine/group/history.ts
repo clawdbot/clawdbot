@@ -59,10 +59,10 @@ const MAX_HISTORY_KEYS = 1000;
  * attachments (group history cache, ref-index store, and the dynamic
  * context block on the current message) all share a single shape.
  */
-export type AttachmentSummary = RefAttachmentSummary;
+type AttachmentSummary = RefAttachmentSummary;
 
 /** Raw attachment fields carried in a QQ event (the union we actually read). */
-export interface RawAttachment {
+interface RawAttachment {
   content_type: string;
   filename?: string;
   /** Pre-computed ASR transcription text provided by QQ's gateway. */
@@ -83,7 +83,7 @@ export interface HistoryEntry {
 }
 
 /** Parameters for {@link formatMessageContent}. */
-export interface FormatMessageContentParams {
+interface FormatMessageContentParams {
   content: string;
   /** Message channel — `stripMentionText` only fires for `"group"`. */
   chatType?: string;

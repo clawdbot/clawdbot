@@ -47,7 +47,7 @@ export function requireReadySessionMeta(resolution: AcpSessionResolution): Sessi
   throw resolveAcpSessionResolutionError(resolution);
 }
 
-export function normalizeSessionKey(sessionKey: string): string {
+function normalizeSessionKey(sessionKey: string): string {
   return sessionKey.trim();
 }
 

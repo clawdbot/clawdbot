@@ -42,14 +42,14 @@ export interface PluginApprovalRequest {
   };
 }
 
-export type ApprovalDecision = "allow-once" | "allow-always" | "deny";
+type ApprovalDecision = "allow-once" | "allow-always" | "deny";
 
-export interface ApprovalTarget {
+interface ApprovalTarget {
   type: ChatScope;
   id: string;
 }
 
-export interface ParsedApprovalAction {
+interface ParsedApprovalAction {
   approvalId: string;
   decision: ApprovalDecision;
 }

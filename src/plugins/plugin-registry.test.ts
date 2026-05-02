@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -52,6 +53,10 @@ function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
     VITEST: "true",
     ...overrides,
   };
+}
+
+function hashFile(filePath: string): string {
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
 function createCandidate(rootDir: string): PluginCandidate {
@@ -414,6 +419,7 @@ describe("plugin registry facade", () => {
           {
             ...createIndex("persisted").plugins[0],
             manifestPath: path.join(persistedRootDir, "openclaw.plugin.json"),
+            manifestHash: hashFile(path.join(persistedRootDir, "openclaw.plugin.json")),
             source: path.join(persistedRootDir, "index.ts"),
             rootDir: persistedRootDir,
           },
@@ -462,6 +468,125 @@ describe("plugin registry facade", () => {
     expect(listPluginRecords({ index: result.snapshot }).map((plugin) => plugin.pluginId)).toEqual([
       "demo",
     ]);
+  });
+
+  it("falls back to the derived registry when persisted manifest metadata is stale", async () => {
+    const stateDir = makeTempDir();
+    const rootDir = makeTempDir();
+    const candidate = createCandidate(rootDir);
+    const config = {} as const;
+    const persisted = loadPluginRegistrySnapshot({
+      candidates: [candidate],
+      config,
+      env: hermeticEnv(),
+      preferPersisted: false,
+    });
+    await writePersistedInstalledPluginIndex(persisted, { stateDir });
+    fs.writeFileSync(
+      path.join(rootDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "demo",
+        name: "Demo",
+        configSchema: { type: "object" },
+        providers: ["demo", "demo-next"],
+      }),
+      "utf8",
+    );
+
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      stateDir,
+      candidates: [candidate],
+      config,
+      env: hermeticEnv(),
+    });
+
+    expect(result.source).toBe("derived");
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ code: "persisted-registry-stale-source" }),
+    ]);
+    expect(result.snapshot.plugins[0]?.manifestHash).not.toBe(persisted.plugins[0]?.manifestHash);
+  });
+
+  it("falls back to the derived registry when persisted package metadata is stale", async () => {
+    const stateDir = makeTempDir();
+    const rootDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(rootDir, "package.json"),
+      JSON.stringify({ name: "demo-plugin", version: "1.0.0" }),
+      "utf8",
+    );
+    const candidate = {
+      ...createCandidate(rootDir),
+      packageDir: rootDir,
+      packageName: "demo-plugin",
+      packageVersion: "1.0.0",
+    } satisfies PluginCandidate;
+    const config = {} as const;
+    const persisted = loadPluginRegistrySnapshot({
+      candidates: [candidate],
+      config,
+      env: hermeticEnv(),
+      preferPersisted: false,
+    });
+    await writePersistedInstalledPluginIndex(persisted, { stateDir });
+    fs.writeFileSync(
+      path.join(rootDir, "package.json"),
+      JSON.stringify({ name: "demo-plugin", version: "1.0.1" }),
+      "utf8",
+    );
+
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      stateDir,
+      candidates: [candidate],
+      config,
+      env: hermeticEnv(),
+    });
+
+    expect(result.source).toBe("derived");
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ code: "persisted-registry-stale-source" }),
+    ]);
+    expect(result.snapshot.plugins[0]?.packageJson?.hash).not.toBe(
+      persisted.plugins[0]?.packageJson?.hash,
+    );
+  });
+
+  it("falls back to the derived registry when persisted package metadata disappears", async () => {
+    const stateDir = makeTempDir();
+    const rootDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(rootDir, "package.json"),
+      JSON.stringify({ name: "demo-plugin", version: "1.0.0" }),
+      "utf8",
+    );
+    const candidate = {
+      ...createCandidate(rootDir),
+      packageDir: rootDir,
+      packageName: "demo-plugin",
+      packageVersion: "1.0.0",
+    } satisfies PluginCandidate;
+    const config = {} as const;
+    const persisted = loadPluginRegistrySnapshot({
+      candidates: [candidate],
+      config,
+      env: hermeticEnv(),
+      preferPersisted: false,
+    });
+    await writePersistedInstalledPluginIndex(persisted, { stateDir });
+    fs.rmSync(path.join(rootDir, "package.json"));
+
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      stateDir,
+      candidates: [candidate],
+      config,
+      env: hermeticEnv(),
+    });
+
+    expect(result.source).toBe("derived");
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ code: "persisted-registry-stale-source" }),
+    ]);
+    expect(result.snapshot.plugins[0]?.packageJson).toBeUndefined();
   });
 
   it("falls back to the derived registry when persisted bundled roots point at another checkout", async () => {

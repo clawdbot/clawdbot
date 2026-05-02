@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isImplicitSameChatApprovalAuthorization } from "../plugin-sdk/approval-auth-helpers.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 
-export type ApprovalCommandAuthorization = {
+type ApprovalCommandAuthorization = {
   authorized: boolean;
   reason?: string;
   explicit: boolean;

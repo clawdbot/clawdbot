@@ -691,6 +691,97 @@ describe("memory-core dreaming phases", () => {
     );
   });
 
+  it("keeps primary session transcripts out of configured subagent workspaces", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const subagentWorkspaceDir = await createDreamingWorkspace();
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
+
+    const mainSessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    const subagentSessionsDir = resolveSessionTranscriptsDirForAgent("agi-ceo");
+    await fs.mkdir(mainSessionsDir, { recursive: true });
+    await fs.mkdir(subagentSessionsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(mainSessionsDir, "main-session.jsonl"),
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            timestamp: "2026-04-05T18:01:00.000Z",
+            content: [{ type: "text", text: "Main workspace should stay in main dreams." }],
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(subagentSessionsDir, "subagent-session.jsonl"),
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            timestamp: "2026-04-05T18:02:00.000Z",
+            content: [{ type: "text", text: "CEO workspace should stay in CEO dreams." }],
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    const { beforeAgentReply } = createHarness(
+      {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+          list: [{ id: "agi-ceo", workspace: subagentWorkspaceDir }],
+        },
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 7,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    try {
+      await withDreamingTestClock(async () => {
+        await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    const mainCorpus = await fs.readFile(
+      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
+      "utf-8",
+    );
+    const subagentCorpus = await fs.readFile(
+      path.join(subagentWorkspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
+      "utf-8",
+    );
+    expect(mainCorpus).toContain("Main workspace should stay in main dreams.");
+    expect(mainCorpus).not.toContain("CEO workspace should stay in CEO dreams.");
+    expect(subagentCorpus).toContain("CEO workspace should stay in CEO dreams.");
+    expect(subagentCorpus).not.toContain("Main workspace should stay in main dreams.");
+  });
+
   it("redacts sensitive session content before writing session corpus", async () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");

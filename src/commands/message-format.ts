@@ -1,5 +1,5 @@
 import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
-import type { ChannelId, ChannelMessageActionName } from "../channels/plugins/types.public.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { formatGatewaySummary, formatOutboundDeliverySummary } from "../infra/outbound/format.js";
 import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
@@ -31,24 +31,6 @@ function extractMessageId(payload: unknown): string | null {
     }
   }
   return null;
-}
-
-export type MessageCliJsonEnvelope = {
-  action: ChannelMessageActionName;
-  channel: ChannelId;
-  dryRun: boolean;
-  handledBy: "plugin" | "core" | "dry-run";
-  payload: unknown;
-};
-
-export function buildMessageCliJson(result: MessageActionRunResult): MessageCliJsonEnvelope {
-  return {
-    action: result.action,
-    channel: result.channel,
-    dryRun: result.dryRun,
-    handledBy: result.handledBy,
-    payload: result.payload,
-  };
 }
 
 type FormatOpts = {

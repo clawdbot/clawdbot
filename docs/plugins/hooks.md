@@ -212,6 +212,11 @@ Cron-driven runs also expose `ctx.jobId` (the originating cron job id) so
 plugin hooks can scope metrics, side effects, or state to a specific scheduled
 job.
 
+For channel-originated runs, `ctx.messageProvider` is the provider surface such
+as `discord` or `telegram`, while `ctx.channelId` is the conversation target
+identifier when OpenClaw can derive one from the session key or delivery
+metadata.
+
 `agent_end` is an observation hook and runs fire-and-forget after the turn. The
 hook runner applies a 30 second timeout so a wedged plugin or embedding
 endpoint cannot leave the hook promise pending forever. A timeout is logged and

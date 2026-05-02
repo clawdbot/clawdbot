@@ -3,7 +3,7 @@ import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { resolveUserPath } from "../utils.js";
 import { getMediaDir, resolveMediaBufferPath } from "./store.js";
 
-export type MediaReferenceErrorCode = "invalid-path" | "path-not-allowed";
+type MediaReferenceErrorCode = "invalid-path" | "path-not-allowed";
 
 export class MediaReferenceError extends Error {
   code: MediaReferenceErrorCode;
@@ -15,7 +15,7 @@ export class MediaReferenceError extends Error {
   }
 }
 
-export type InboundMediaReference = {
+type InboundMediaReference = {
   id: string;
   normalizedSource: string;
   physicalPath: string;
@@ -30,7 +30,7 @@ export function normalizeMediaReferenceSource(source: string): string {
   return trimmed.replace(/^\s*MEDIA\s*:\s*/i, "").trim();
 }
 
-export type MediaReferenceSourceInfo = {
+type MediaReferenceSourceInfo = {
   hasScheme: boolean;
   hasUnsupportedScheme: boolean;
   isDataUrl: boolean;

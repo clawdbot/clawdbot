@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
-import { findBundledPluginMetadataById } from "./bundled-plugin-metadata.js";
+import { discoverOpenClawPlugins } from "./discovery.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginManifestConfigContracts } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
@@ -116,6 +117,32 @@ export function resolvePluginConfigContractsById(params: {
   const fallbackBundledPluginIds = new Set(
     (params.fallbackBundledPluginIds ?? []).map((pluginId) => pluginId.trim()).filter(Boolean),
   );
+  const bundledContractFallbacks = new Map<string, PluginManifestConfigContracts | undefined>();
+  const findBundledConfigContracts = (
+    pluginId: string,
+  ): PluginManifestConfigContracts | undefined => {
+    if (bundledContractFallbacks.has(pluginId)) {
+      return bundledContractFallbacks.get(pluginId);
+    }
+    const discovery = discoverOpenClawPlugins({
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    });
+    const registry = loadPluginManifestRegistry({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      candidates: discovery.candidates.filter((candidate) => candidate.origin === "bundled"),
+      diagnostics: discovery.diagnostics,
+    });
+    for (const plugin of registry.plugins) {
+      bundledContractFallbacks.set(plugin.id, plugin.configContracts);
+    }
+    if (!bundledContractFallbacks.has(pluginId)) {
+      bundledContractFallbacks.set(pluginId, undefined);
+    }
+    return bundledContractFallbacks.get(pluginId);
+  };
 
   const resolvedPluginOrigins = new Map<string, PluginOrigin>();
   const registry = loadPluginManifestRegistryForPluginRegistry({
@@ -146,15 +173,15 @@ export function resolvePluginConfigContractsById(params: {
         ((params.fallbackToBundledMetadataForResolvedBundled && existing.origin === "bundled") ||
           fallbackBundledPluginIds.has(pluginId));
       if (shouldHydrateBundledMatch) {
-        const bundled = findBundledPluginMetadataById(pluginId);
-        if (bundled?.manifest.configContracts) {
+        const bundledConfigContracts = findBundledConfigContracts(pluginId);
+        if (bundledConfigContracts) {
           matches.set(pluginId, {
             origin: fallbackBundledPluginIds.has(pluginId) ? "bundled" : existing.origin,
             configContracts: {
-              ...bundled.manifest.configContracts,
+              ...bundledConfigContracts,
               ...existing.configContracts,
-              ...(bundled.manifest.configContracts.secretInputs
-                ? { secretInputs: bundled.manifest.configContracts.secretInputs }
+              ...(bundledConfigContracts.secretInputs
+                ? { secretInputs: bundledConfigContracts.secretInputs }
                 : {}),
             },
           });
@@ -172,13 +199,13 @@ export function resolvePluginConfigContractsById(params: {
       ) {
         continue;
       }
-      const bundled = findBundledPluginMetadataById(pluginId);
-      if (!bundled?.manifest.configContracts) {
+      const bundledConfigContracts = findBundledConfigContracts(pluginId);
+      if (!bundledConfigContracts) {
         continue;
       }
       matches.set(pluginId, {
         origin: "bundled",
-        configContracts: bundled.manifest.configContracts,
+        configContracts: bundledConfigContracts,
       });
     }
   }

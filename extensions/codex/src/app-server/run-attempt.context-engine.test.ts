@@ -30,6 +30,7 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
     disableTools: true,
     timeoutMs: 5_000,
     authStorage: {} as never,
+    authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
   } as EmbeddedRunAttemptParams;
 }
@@ -212,6 +213,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     SessionManager.open(sessionFile).appendMessage(
       assistantMessage("existing context", Date.now()) as never,
     );
+    const openSpy = vi.spyOn(SessionManager, "open");
     const contextEngine = createContextEngine();
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
@@ -265,6 +267,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
     await harness.completeTurn();
     await run;
+    expect(openSpy).not.toHaveBeenCalled();
   });
 
   it("calls afterTurn with the mirrored transcript and runs turn maintenance", async () => {

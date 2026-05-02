@@ -11,6 +11,7 @@ type QueuedWizardPrompter = {
   intro: AsyncUnknownMock;
   outro: AsyncUnknownMock;
   note: AsyncUnknownMock;
+  plain: AsyncUnknownMock;
   select: AsyncUnknownMock;
   multiselect: AsyncUnknownMock;
   text: AsyncUnknownMock;
@@ -34,6 +35,7 @@ export function createTestWizardPrompter(overrides: Partial<WizardPrompter> = {}
     intro: vi.fn(async () => {}),
     outro: vi.fn(async () => {}),
     note: vi.fn(async () => {}),
+    plain: vi.fn(async () => {}),
     select: selectFirstWizardOption as WizardPrompter["select"],
     multiselect: vi.fn(async () => []),
     text: vi.fn(async () => "") as WizardPrompter["text"],
@@ -55,6 +57,7 @@ export function createQueuedWizardPrompter(params?: {
   const intro = vi.fn(async () => undefined);
   const outro = vi.fn(async () => undefined);
   const note = vi.fn(async () => undefined);
+  const plain = vi.fn(async () => undefined);
   const select = vi.fn(async () => selectValues.shift() ?? "");
   const multiselect = vi.fn(async () => [] as string[]);
   const text = vi.fn(async () => textValues.shift() ?? "");
@@ -68,6 +71,7 @@ export function createQueuedWizardPrompter(params?: {
     intro,
     outro,
     note,
+    plain,
     select,
     multiselect,
     text,
@@ -77,6 +81,7 @@ export function createQueuedWizardPrompter(params?: {
       intro,
       outro,
       note,
+      plain,
       select: select as WizardPrompter["select"],
       multiselect: multiselect as WizardPrompter["multiselect"],
       text: text as WizardPrompter["text"],

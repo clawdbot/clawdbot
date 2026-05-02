@@ -170,7 +170,33 @@ describe("voice-call outbound helpers", () => {
       inlineTwiml: "<Response />",
     });
     expect(ctx.providerCallIdMap.get("provider-1")).toBe(callId);
+    expect(ctx.activeCalls.get(callId)?.sessionKey).toBe("session-1");
     expect(persistCallRecordMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("assigns per-call session keys to outbound calls when configured", async () => {
+    const initiateProviderCall = vi.fn(async () => ({ providerCallId: "provider-1" }));
+    const ctx = {
+      activeCalls: new Map(),
+      providerCallIdMap: new Map(),
+      provider: { name: "twilio", initiateCall: initiateProviderCall },
+      config: {
+        maxConcurrentCalls: 3,
+        outbound: { defaultMode: "conversation" },
+        fromNumber: "+14155550100",
+        sessionScope: "per-call",
+      },
+      storePath: "/tmp/voice-call.json",
+      webhookUrl: "https://example.com/webhook",
+    };
+
+    const result = await initiateCall(ctx as never, "+14155550123");
+
+    expect(result).toEqual({
+      callId: expect.any(String),
+      success: true,
+    });
+    expect(ctx.activeCalls.get(result.callId)?.sessionKey).toBe(`voice:call:${result.callId}`);
   });
 
   it("initiates conversation calls with pre-connect DTMF TwiML", async () => {

@@ -82,7 +82,7 @@ function isKnownArchNameToken(token: string): boolean {
 
 type WrapperScanDirective = "continue" | "consume-next" | "stop" | "invalid";
 
-export function isEnvAssignment(token: string): boolean {
+function isEnvAssignment(token: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(token);
 }
 
@@ -531,12 +531,12 @@ const DISPATCH_WRAPPER_SPEC_BY_NAME = new Map(
   DISPATCH_WRAPPER_SPECS.map((spec) => [spec.name, spec] as const),
 );
 
-export type DispatchWrapperUnwrapResult =
+type DispatchWrapperUnwrapResult =
   | { kind: "not-wrapper" }
   | { kind: "blocked"; wrapper: string }
   | { kind: "unwrapped"; wrapper: string; argv: string[] };
 
-export type DispatchWrapperTrustPlan = {
+type DispatchWrapperTrustPlan = {
   argv: string[];
   wrappers: string[];
   policyBlocked: boolean;

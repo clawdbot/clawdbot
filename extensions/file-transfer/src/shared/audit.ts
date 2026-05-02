@@ -14,7 +14,7 @@ import path from "node:path";
 
 export type FileTransferAuditOp = "file.fetch" | "dir.list" | "dir.fetch" | "file.write";
 
-export type FileTransferAuditDecision =
+type FileTransferAuditDecision =
   | "allowed"
   | "allowed:once"
   | "allowed:always"
@@ -25,7 +25,7 @@ export type FileTransferAuditDecision =
   | "denied:symlink_escape"
   | "error";
 
-export type FileTransferAuditRecord = {
+type FileTransferAuditRecord = {
   timestamp: string;
   op: FileTransferAuditOp;
   nodeId: string;

@@ -7,6 +7,7 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { resolveSlackReplyToMode } from "../../account-reply-mode.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
+import { parseSlackTarget, type SlackTargetKind } from "../../targets.js";
 import { resolveSlackThreadContext } from "../../threading.js";
 import type { SlackMessageEvent } from "../../types.js";
 
@@ -17,7 +18,7 @@ export type SlackRoutingContextDeps = {
   threadHistoryScope: "thread" | "channel";
 };
 
-export type SlackRoutingContext = {
+type SlackRoutingContext = {
   route: ReturnType<typeof resolveAgentRoute>;
   runtimeBinding: RuntimeConversationBindingRouteResult["bindingRecord"];
   runtimeBoundSessionKey: string | undefined;
@@ -30,6 +31,89 @@ export type SlackRoutingContext = {
   sessionKey: string;
   historyKey: string;
 };
+
+type SlackRouteBinding = NonNullable<OpenClawConfig["bindings"]>[number];
+type SlackRouteBindingPeer = NonNullable<SlackRouteBinding["match"]["peer"]>;
+
+const slackRouteBindingConfigCache = new WeakMap<
+  OpenClawConfig,
+  { bindingsRef: OpenClawConfig["bindings"]; normalizedCfg: OpenClawConfig }
+>();
+
+function slackTargetDefaultKindForPeer(kind: SlackRouteBindingPeer["kind"]): SlackTargetKind {
+  return kind === "direct" ? "user" : "channel";
+}
+
+function slackTargetKindMatchesPeer(
+  peerKind: SlackRouteBindingPeer["kind"],
+  targetKind: SlackTargetKind,
+): boolean {
+  if (targetKind === "user") {
+    return peerKind === "direct";
+  }
+  return peerKind === "channel" || peerKind === "group";
+}
+
+function normalizeSlackRouteBindingPeer(peer: SlackRouteBindingPeer): SlackRouteBindingPeer {
+  const rawId = peer.id.trim();
+  if (!rawId || rawId === "*") {
+    return peer;
+  }
+
+  const target = (() => {
+    try {
+      return parseSlackTarget(rawId, {
+        defaultKind: slackTargetDefaultKindForPeer(peer.kind),
+      });
+    } catch {
+      return undefined;
+    }
+  })();
+  if (!target || !slackTargetKindMatchesPeer(peer.kind, target.kind) || target.id === peer.id) {
+    return peer;
+  }
+  return { ...peer, id: target.id };
+}
+
+function normalizeSlackRouteBindingConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const bindings = cfg.bindings;
+  const cached = slackRouteBindingConfigCache.get(cfg);
+  if (cached && cached.bindingsRef === bindings) {
+    return cached.normalizedCfg;
+  }
+  if (!Array.isArray(bindings)) {
+    return cfg;
+  }
+
+  let changed = false;
+  const normalizedBindings = bindings.map((binding) => {
+    if (binding.type === "acp" || binding.match.channel.trim().toLowerCase() !== "slack") {
+      return binding;
+    }
+    const peer = binding.match.peer;
+    if (!peer) {
+      return binding;
+    }
+    const normalizedPeer = normalizeSlackRouteBindingPeer(peer);
+    if (normalizedPeer === peer) {
+      return binding;
+    }
+    changed = true;
+    return {
+      ...binding,
+      match: {
+        ...binding.match,
+        peer: normalizedPeer,
+      },
+    };
+  });
+
+  const normalizedCfg = changed
+    ? ({ ...cfg, bindings: normalizedBindings } as OpenClawConfig)
+    : cfg;
+  slackRouteBindingConfigCache.set(cfg, { bindingsRef: bindings, normalizedCfg });
+  return normalizedCfg;
+}
 
 function resolveSlackBaseConversationId(params: {
   message: SlackMessageEvent;
@@ -48,7 +132,7 @@ function resolveSlackInitialAgentRoute(params: {
   isRoom: boolean;
 }) {
   return resolveAgentRoute({
-    cfg: params.ctx.cfg,
+    cfg: normalizeSlackRouteBindingConfig(params.ctx.cfg),
     channel: "slack",
     accountId: params.account.accountId,
     teamId: params.ctx.teamId || undefined,
@@ -92,9 +176,9 @@ export function resolveSlackRoutingContext(params: {
   const threadContext = resolveSlackThreadContext({ message, replyToMode });
   const threadTs = threadContext.incomingThreadTs;
   const isThreadReply = threadContext.isThreadReply;
-  // Keep true thread replies thread-scoped, but preserve channel-level sessions
-  // for top-level room turns when replyToMode is off.
-  // For DMs, preserve existing auto-thread behavior when replyToMode="all".
+  // Keep true thread replies thread-scoped, while top-level DMs keep their
+  // stable direct-message session even when reply delivery targets a Slack UI
+  // thread.
   const autoThreadId =
     !isThreadReply && replyToMode === "all" && threadContext.messageTs
       ? threadContext.messageTs
@@ -115,7 +199,15 @@ export function resolveSlackRoutingContext(params: {
       ? seedCandidateThreadId
       : undefined;
   const roomThreadId = isThreadReply && threadTs ? threadTs : undefined;
-  const canonicalThreadId = isRoomish ? roomThreadId : isThreadReply ? threadTs : autoThreadId;
+  const canonicalThreadId = isDirectMessage
+    ? isThreadReply
+      ? threadTs
+      : undefined
+    : isRoomish
+      ? roomThreadId
+      : isThreadReply
+        ? threadTs
+        : autoThreadId;
   const routedThreadId = canonicalThreadId ?? (isRoomish ? seededRoomThreadId : undefined);
   const baseConversationId = resolveSlackBaseConversationId({ message, isDirectMessage });
   const boundThreadRoute = routedThreadId

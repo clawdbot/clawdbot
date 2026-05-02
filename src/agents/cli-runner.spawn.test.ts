@@ -957,6 +957,106 @@ describe("runCliAgent spawn path", () => {
     expect(result.text).toBe(largeText);
   });
 
+  it("honors configured Claude live stream-json raw turn limits", async () => {
+    const largeText = "x".repeat(1500);
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const stdin = {
+      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+        stdoutListener?.(
+          JSON.stringify({
+            type: "result",
+            session_id: "live-session-tight-output-limit",
+            result: largeText,
+          }) + "\n",
+        );
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run-tight-output-limit",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    await expect(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-live-tight-output-limit",
+          backend: {
+            liveSession: "claude-stdio",
+            reliability: {
+              outputLimits: {
+                maxTurnRawChars: 1024,
+              },
+            },
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      message: "Claude CLI JSONL line exceeded output limit.",
+    });
+  });
+
+  it("accepts operator-raised Claude live stream-json raw turn limits", async () => {
+    const largeText = "x".repeat(1500);
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const stdin = {
+      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+        stdoutListener?.(
+          JSON.stringify({
+            type: "result",
+            session_id: "live-session-raised-output-limit",
+            result: largeText,
+          }) + "\n",
+        );
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run-raised-output-limit",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    const result = await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-live-raised-output-limit",
+        backend: {
+          liveSession: "claude-stdio",
+          reliability: {
+            outputLimits: {
+              maxTurnRawChars: 4096,
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result.text).toHaveLength(largeText.length);
+    expect(result.text).toBe(largeText);
+  });
+
   it("reports Claude live session reply backends as streaming until the turn finishes", async () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     let markWriteReady: (() => void) | undefined;

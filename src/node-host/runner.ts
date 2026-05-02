@@ -57,7 +57,7 @@ export function shouldExitNodeHostOnReconnectPaused(detailCode: string | null): 
   return detailCode !== null && NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES.has(detailCode);
 }
 
-export function formatNodeHostReconnectPausedMessage(
+function formatNodeHostReconnectPausedMessage(
   info: GatewayReconnectPausedInfo,
   params?: { exiting?: boolean },
 ): string {

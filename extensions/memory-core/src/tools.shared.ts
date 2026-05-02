@@ -49,7 +49,7 @@ export const MemoryGetSchema = Type.Object({
   ),
 });
 
-export function resolveMemoryToolContext(options: MemoryToolOptions) {
+function resolveMemoryToolContext(options: MemoryToolOptions) {
   const cfg = options.getConfig?.() ?? options.config;
   if (!cfg) {
     return null;

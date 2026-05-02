@@ -169,7 +169,9 @@ export function registerDirectoryCli(program: Command) {
       account: params.opts.account as string | undefined,
     });
     const fn =
-      params.action === "listPeers" ? plugin.directory?.listPeers : plugin.directory?.listGroups;
+      params.action === "listPeers"
+        ? (plugin.directory?.listPeersLive ?? plugin.directory?.listPeers)
+        : (plugin.directory?.listGroupsLive ?? plugin.directory?.listGroups);
     if (!fn) {
       throw new Error(`Channel ${channelId} does not support directory ${params.unsupported}`);
     }

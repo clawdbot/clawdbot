@@ -1,12 +1,12 @@
 /* ===== Shared types (unchanged from the bus protocol) ===== */
 
-export type Conversation = {
+type Conversation = {
   id: string;
   kind: "direct" | "channel";
   title?: string;
 };
 
-export type Attachment = {
+type Attachment = {
   id: string;
   kind: "image" | "video" | "audio" | "file";
   mimeType: string;
@@ -21,13 +21,13 @@ export type Attachment = {
   transcript?: string;
 };
 
-export type Thread = {
+type Thread = {
   id: string;
   conversationId: string;
   title: string;
 };
 
-export type Message = {
+type Message = {
   id: string;
   direction: "inbound" | "outbound";
   conversation: Conversation;
@@ -43,7 +43,7 @@ export type Message = {
   reactions: Array<{ emoji: string; senderId: string }>;
 };
 
-export type BusEvent =
+type BusEvent =
   | { cursor: number; kind: "thread-created"; thread: Thread }
   | { cursor: number; kind: string; message?: Message; emoji?: string };
 
@@ -62,7 +62,7 @@ export type ReportEnvelope = {
   };
 };
 
-export type SeedScenario = {
+type SeedScenario = {
   id: string;
   title: string;
   surface: string;
@@ -92,13 +92,13 @@ export type Bootstrap = {
   };
 };
 
-export type ScenarioStep = {
+type ScenarioStep = {
   name: string;
   status: "pass" | "fail" | "skip";
   details?: string;
 };
 
-export type ScenarioOutcome = {
+type ScenarioOutcome = {
   id: string;
   name: string;
   status: "pending" | "running" | "pass" | "fail" | "skip";
@@ -108,7 +108,7 @@ export type ScenarioOutcome = {
   finishedAt?: string;
 };
 
-export type ScenarioRun = {
+type ScenarioRun = {
   kind: "suite" | "self-check";
   status: "idle" | "running" | "completed";
   startedAt?: string;
@@ -132,7 +132,7 @@ export type RunnerSelection = {
   scenarioIds: string[];
 };
 
-export type RunnerSnapshot = {
+type RunnerSnapshot = {
   status: "idle" | "running" | "completed" | "failed";
   selection: RunnerSelection;
   startedAt?: string;
@@ -146,7 +146,7 @@ export type RunnerSnapshot = {
   error: string | null;
 };
 
-export type RunnerModelOption = {
+type RunnerModelOption = {
   key: string;
   name: string;
   provider: string;
@@ -158,7 +158,7 @@ export type OutcomesEnvelope = {
   run: ScenarioRun | null;
 };
 
-export type CaptureSessionSummary = {
+type CaptureSessionSummary = {
   id: string;
   startedAt: number;
   endedAt?: number;
@@ -168,7 +168,7 @@ export type CaptureSessionSummary = {
   eventCount: number;
 };
 
-export type CaptureEventView = {
+type CaptureEventView = {
   id?: number;
   ts: number;
   protocol: string;
@@ -192,7 +192,7 @@ export type CaptureEventView = {
   captureOrigin?: string;
 };
 
-export type CaptureQueryPreset =
+type CaptureQueryPreset =
   | "none"
   | "double-sends"
   | "retry-storms"
@@ -213,12 +213,12 @@ export type CaptureQueryEnvelope = {
   rows: Array<Record<string, string | number | null>>;
 };
 
-export type CaptureObservedDimension = {
+type CaptureObservedDimension = {
   value: string;
   count: number;
 };
 
-export type CaptureCoverageSummary = {
+type CaptureCoverageSummary = {
   sessionId: string;
   totalEvents: number;
   unlabeledEventCount: number;
@@ -233,14 +233,14 @@ export type CaptureCoverageEnvelope = {
   coverage: CaptureCoverageSummary;
 };
 
-export type CaptureStartupProbeStatus = {
+type CaptureStartupProbeStatus = {
   label: string;
   url: string;
   ok: boolean;
   error?: string;
 };
 
-export type CaptureStartupStatus = {
+type CaptureStartupStatus = {
   proxy: CaptureStartupProbeStatus;
   gateway: CaptureStartupProbeStatus;
   qaLab: CaptureStartupProbeStatus;
@@ -350,7 +350,7 @@ export type UiState = {
 
 /* ===== Helpers ===== */
 
-export function formatTime(timestamp: number) {
+function formatTime(timestamp: number) {
   return new Date(timestamp).toLocaleTimeString([], {
     hour: "2-digit",
     minute: "2-digit",
@@ -930,15 +930,15 @@ const MOCK_MODELS: RunnerModelOption[] = [
   },
 ];
 
-export function deriveSelectedConversation(state: UiState): string | null {
+function deriveSelectedConversation(state: UiState): string | null {
   return state.selectedConversationId ?? state.snapshot?.conversations[0]?.id ?? null;
 }
 
-export function deriveSelectedThread(state: UiState): string | null {
+function deriveSelectedThread(state: UiState): string | null {
   return state.selectedThreadId ?? null;
 }
 
-export function filteredMessages(state: UiState) {
+function filteredMessages(state: UiState) {
   const messages = state.snapshot?.messages ?? [];
   return messages.filter((message) => {
     if (state.selectedConversationId && message.conversation.id !== state.selectedConversationId) {

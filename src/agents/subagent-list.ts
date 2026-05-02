@@ -29,7 +29,7 @@ import {
   shouldKeepSubagentRunChildLink,
 } from "./subagent-run-liveness.js";
 
-export type SubagentListItem = {
+type SubagentListItem = {
   index: number;
   line: string;
   runId: string;
@@ -47,14 +47,14 @@ export type SubagentListItem = {
   endedAt?: number;
 };
 
-export type BuiltSubagentList = {
+type BuiltSubagentList = {
   total: number;
   active: SubagentListItem[];
   recent: SubagentListItem[];
   text: string;
 };
 
-export type SessionEntryResolution = {
+type SessionEntryResolution = {
   storePath: string;
   entry: SessionEntry | undefined;
 };

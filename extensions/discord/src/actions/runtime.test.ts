@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { clearPresences, setPresence } from "../monitor/presence-cache.js";
+import { DiscordThreadInitialMessageError } from "../send.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import { discordGuildActionRuntime, handleDiscordGuildAction } from "./runtime.guild.js";
 import { handleDiscordAction } from "./runtime.js";
@@ -92,6 +93,11 @@ function handleMessagingAction(
   isActionEnabled: (key: keyof DiscordActionConfig) => boolean,
   cfg: OpenClawConfig = DISCORD_TEST_CFG,
   options?: {
+    mediaAccess?: {
+      localRoots?: readonly string[];
+      readFile?: (filePath: string) => Promise<Buffer>;
+      workspaceDir?: string;
+    };
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
   },
@@ -462,6 +468,8 @@ describe("handleDiscordMessagingAction", () => {
 
   it("forwards trusted mediaLocalRoots into sendMessageDiscord", async () => {
     sendMessageDiscord.mockClear();
+    const mediaReadFile = vi.fn(async () => Buffer.from("image"));
+    const mediaAccess = { localRoots: ["/tmp/agent-root"], readFile: mediaReadFile };
     await handleMessagingAction(
       "sendMessage",
       {
@@ -471,11 +479,35 @@ describe("handleDiscordMessagingAction", () => {
       },
       enableAllActions,
       DISCORD_TEST_CFG,
-      { mediaLocalRoots: ["/tmp/agent-root"] },
+      { mediaAccess, mediaLocalRoots: ["/tmp/agent-root"], mediaReadFile },
     );
     expect(sendMessageDiscord).toHaveBeenCalledWith(
       "channel:123",
       "hello",
+      expect.objectContaining({
+        mediaAccess,
+        mediaUrl: "/tmp/image.png",
+        mediaLocalRoots: ["/tmp/agent-root"],
+        mediaReadFile,
+      }),
+    );
+  });
+
+  it("allows media-only message sends", async () => {
+    sendMessageDiscord.mockClear();
+    await handleMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:123",
+        mediaUrl: "/tmp/image.png",
+      },
+      enableAllActions,
+      DISCORD_TEST_CFG,
+      { mediaLocalRoots: ["/tmp/agent-root"] },
+    );
+    expect(sendMessageDiscord).toHaveBeenCalledWith(
+      "channel:123",
+      "",
       expect.objectContaining({
         mediaUrl: "/tmp/image.png",
         mediaLocalRoots: ["/tmp/agent-root"],
@@ -570,6 +602,34 @@ describe("handleDiscordMessagingAction", () => {
       },
       { cfg: DISCORD_TEST_CFG },
     );
+  });
+
+  it("returns partial success when Discord creates the thread but initial message send fails", async () => {
+    const thread = { id: "T1", name: "thread", type: 11 };
+    createThreadDiscord.mockRejectedValueOnce(
+      new DiscordThreadInitialMessageError(
+        thread as ConstructorParameters<typeof DiscordThreadInitialMessageError>[0],
+        new Error("missing access"),
+      ),
+    );
+
+    const result = await handleMessagingAction(
+      "threadCreate",
+      {
+        channelId: "C1",
+        name: "thread",
+        content: "Initial post",
+      },
+      enableAllActions,
+    );
+
+    expect(result.details).toEqual({
+      ok: true,
+      partial: true,
+      thread,
+      warning: "Discord thread was created, but sending the initial message failed.",
+      initialMessageError: "missing access",
+    });
   });
 });
 

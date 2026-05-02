@@ -76,7 +76,12 @@ const mockWebSearchProviders = [
   {
     id: "minimax",
     pluginId: "minimax",
-    envVars: ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY"],
+    envVars: [
+      "MINIMAX_CODE_PLAN_KEY",
+      "MINIMAX_CODING_API_KEY",
+      "MINIMAX_OAUTH_TOKEN",
+      "MINIMAX_API_KEY",
+    ],
     credentialPath: "plugins.entries.minimax.config.webSearch.apiKey",
     getCredentialValue: getScopedWebSearchCredential("minimax"),
     getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("minimax"),
@@ -180,32 +185,42 @@ vi.mock("../plugins/manifest-registry.js", () => {
           schemaCacheKey: "test:brave",
           configSchema: buildSchema(),
         },
-        ...[
-          "firecrawl",
-          "google",
-          "minimax",
-          "moonshot",
-          "perplexity",
-          "searxng",
-          "tavily",
-          "xai",
-        ].map((id) => ({
-          id,
-          origin: "bundled",
+        ...mockWebSearchProviders
+          .filter((provider) => provider.pluginId !== "brave")
+          .map((provider) => ({
+            id: provider.pluginId,
+            origin: "bundled",
+            channels: [],
+            providers: [],
+            contracts: {
+              webSearchProviders: [provider.id],
+            },
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            rootDir: `/tmp/plugins/${provider.pluginId}`,
+            source: "test",
+            manifestPath: `/tmp/plugins/${provider.pluginId}/openclaw.plugin.json`,
+            schemaCacheKey: `test:${provider.pluginId}`,
+            configSchema: buildSchema(),
+          })),
+        {
+          id: "acme-search",
+          origin: "installed",
           channels: [],
           providers: [],
           contracts: {
-            webSearchProviders: [id],
+            webSearchProviders: ["acme-search"],
           },
           cliBackends: [],
           skills: [],
           hooks: [],
-          rootDir: `/tmp/plugins/${id}`,
+          rootDir: "/tmp/plugins/acme-search",
           source: "test",
-          manifestPath: `/tmp/plugins/${id}/openclaw.plugin.json`,
-          schemaCacheKey: `test:${id}`,
+          manifestPath: "/tmp/plugins/acme-search/openclaw.plugin.json",
+          schemaCacheKey: "test:acme-search",
           configSchema: buildSchema(),
-        })),
+        },
       ],
       diagnostics: [],
     }),
@@ -408,6 +423,74 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts provider ids registered by installed plugin manifests", () => {
+    const res = validateConfigObjectWithPlugins(
+      buildWebSearchProviderConfig({
+        provider: "acme-search",
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects unknown provider ids without plugin evidence", () => {
+    const res = validateConfigObjectWithPlugins({
+      tools: {
+        web: {
+          search: {
+            provider: "brvae",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expect(res.issues).toContainEqual(
+      expect.objectContaining({
+        path: "tools.web.search.provider",
+        message: "unknown web_search provider: brvae",
+        allowedValues: expect.arrayContaining(["acme-search", "brave", "gemini"]),
+      }),
+    );
+  });
+
+  it("warns for unknown provider ids when stale plugin config is present", () => {
+    const res = validateConfigObjectWithPlugins({
+      tools: {
+        web: {
+          search: {
+            provider: "missing-third-party",
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          "missing-third-party": {
+            config: {
+              webSearch: {},
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "tools.web.search.provider",
+          message: expect.stringContaining("unknown web_search provider: missing-third-party"),
+        }),
+      ]),
+    );
+  });
 });
 
 describe("web search provider auto-detection", () => {
@@ -421,6 +504,7 @@ describe("web search provider auto-detection", () => {
     delete process.env.MINIMAX_API_KEY;
     delete process.env.MINIMAX_CODE_PLAN_KEY;
     delete process.env.MINIMAX_CODING_API_KEY;
+    delete process.env.MINIMAX_OAUTH_TOKEN;
     delete process.env.MOONSHOT_API_KEY;
     delete process.env.PERPLEXITY_API_KEY;
     delete process.env.OPENROUTER_API_KEY;
@@ -455,6 +539,11 @@ describe("web search provider auto-detection", () => {
     expect(resolveSearchProvider({})).toBe("tavily");
   });
 
+  it("auto-detects minimax when only MINIMAX_API_KEY is set", () => {
+    process.env.MINIMAX_API_KEY = "test-minimax-key"; // pragma: allowlist secret
+    expect(resolveSearchProvider({})).toBe("minimax");
+  });
+
   it("auto-detects firecrawl when only FIRECRAWL_API_KEY is set", () => {
     process.env.FIRECRAWL_API_KEY = "fc-test-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("firecrawl");
@@ -472,6 +561,11 @@ describe("web search provider auto-detection", () => {
 
   it("auto-detects minimax when only MINIMAX_CODE_PLAN_KEY is set", () => {
     process.env.MINIMAX_CODE_PLAN_KEY = "sk-cp-test";
+    expect(resolveSearchProvider({})).toBe("minimax");
+  });
+
+  it("auto-detects minimax when only MINIMAX_OAUTH_TOKEN is set", () => {
+    process.env.MINIMAX_OAUTH_TOKEN = "oauth-test-token"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("minimax");
   });
 

@@ -120,7 +120,7 @@ export interface WSPayload {
 }
 
 /** Attachment shape shared by all message event types. */
-export interface RawMessageAttachment {
+interface RawMessageAttachment {
   content_type: string;
   url: string;
   filename?: string;
@@ -129,7 +129,7 @@ export interface RawMessageAttachment {
 }
 
 /** Referenced message element (used for quote messages). */
-export interface RawMsgElement {
+interface RawMsgElement {
   msg_idx?: string;
   content?: string;
   attachments?: Array<
@@ -203,7 +203,7 @@ import type { EngineAdapters } from "../adapter/index.js";
  * future additions (admin lookup, proactive push, per-group toggles)
  * don't keep polluting the top-level context type.
  */
-export interface GatewayGroupOptions {
+interface GatewayGroupOptions {
   /**
    * Whether group-chat gating is enabled. Defaults to `true`; set to
    * `false` to disable all group processing (e.g. for a DM-only smoke

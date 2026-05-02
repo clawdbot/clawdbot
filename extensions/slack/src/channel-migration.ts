@@ -7,7 +7,7 @@ type SlackChannels = Record<string, SlackChannelConfig>;
 
 type MigrationScope = "account" | "global";
 
-export type SlackChannelMigrationResult = {
+type SlackChannelMigrationResult = {
   migrated: boolean;
   skippedExisting: boolean;
   scopes: MigrationScope[];

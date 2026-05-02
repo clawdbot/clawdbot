@@ -18,7 +18,7 @@ import type { ChannelCommandConversationContext } from "./plugins/types.adapters
 import type { ChannelPlugin } from "./plugins/types.plugin.js";
 import { normalizeAnyChannelId } from "./registry.js";
 
-export type ConversationResolutionSource =
+type ConversationResolutionSource =
   | "command-provider"
   | "focused-binding"
   | "command-fallback"
@@ -27,7 +27,7 @@ export type ConversationResolutionSource =
   | "inbound-bundled-plugin"
   | "inbound-fallback";
 
-export type ConversationResolution = {
+type ConversationResolution = {
   canonical: {
     channel: string;
     accountId: string;
@@ -57,7 +57,7 @@ export type ResolveCommandConversationResolutionInput = {
   includePlacementHint?: boolean;
 };
 
-export type ResolveInboundConversationResolutionInput = {
+type ResolveInboundConversationResolutionInput = {
   cfg: OpenClawConfig;
   channel?: string | null;
   accountId?: string | null;

@@ -5,12 +5,9 @@ import {
   DEFAULT_TEMPORAL_DECAY_CONFIG,
 } from "./temporal-decay.js";
 
-export type HybridSource = string;
+type HybridSource = string;
 
-export { type MMRConfig, DEFAULT_MMR_CONFIG };
-export { type TemporalDecayConfig, DEFAULT_TEMPORAL_DECAY_CONFIG };
-
-export type HybridVectorResult = {
+type HybridVectorResult = {
   id: string;
   path: string;
   startLine: number;
@@ -20,7 +17,7 @@ export type HybridVectorResult = {
   vectorScore: number;
 };
 
-export type HybridKeywordResult = {
+type HybridKeywordResult = {
   id: string;
   path: string;
   startLine: number;

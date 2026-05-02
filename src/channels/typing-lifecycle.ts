@@ -1,6 +1,6 @@
 type AsyncTick = () => Promise<void> | void;
 
-export type TypingKeepaliveLoop = {
+type TypingKeepaliveLoop = {
   tick: () => Promise<void>;
   start: () => void;
   stop: () => void;

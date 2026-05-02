@@ -80,6 +80,20 @@ export function resolveDefaultPluginExtensionsDir(
   return path.join(resolveConfigDir(env, homedir), "extensions");
 }
 
+export function resolveDefaultPluginNpmDir(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir?: () => string,
+): string {
+  return path.join(resolveConfigDir(env, homedir), "npm");
+}
+
+export function resolveDefaultPluginGitDir(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir?: () => string,
+): string {
+  return path.join(resolveConfigDir(env, homedir), "git");
+}
+
 export function resolvePluginInstallDir(pluginId: string, extensionsDir?: string): string {
   const extensionsBase = extensionsDir
     ? resolveUserPath(extensionsDir)

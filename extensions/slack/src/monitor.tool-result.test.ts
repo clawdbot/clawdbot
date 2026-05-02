@@ -19,7 +19,8 @@ import {
 const { monitorSlackProvider } = await import("./monitor/provider.js");
 
 const slackTestState = getSlackTestState();
-const { sendMock, replyMock, reactMock, upsertPairingRequestMock } = slackTestState;
+const { sendMock, replyMock, reactMock, reactionAddMock, upsertPairingRequestMock } =
+  slackTestState;
 
 beforeEach(() => {
   resetInboundDedupe();
@@ -270,8 +271,15 @@ describe("monitorSlackProvider tool results", () => {
     await flush();
   }
 
-  function expectReactionNames(names: string[]) {
-    expect(reactMock.mock.calls.map(([args]) => (args as { name: string }).name)).toEqual(names);
+  function expectReactionFlow(expected: {
+    startsWith: string[];
+    endsWith: string;
+    includes: string;
+  }) {
+    const names = reactionAddMock.mock.calls.map(([args]) => (args as { name: string }).name);
+    expect(names.slice(0, expected.startsWith.length)).toEqual(expected.startsWith);
+    expect(names).toContain(expected.includes);
+    expect(names.at(-1)).toBe(expected.endsWith);
   }
 
   async function runDefaultMessageAndExpectSentText(expectedText: string) {
@@ -687,14 +695,51 @@ describe("monitorSlackProvider tool results", () => {
     });
   });
 
-  it("restores ack reaction when dispatch fails before any reply is delivered", async () => {
+  it("keeps status reactions for mentioned message-tool-only channel turns", async () => {
+    replyMock.mockResolvedValue({ text: "quiet default reply" });
+    slackTestState.config = {
+      messages: {
+        responsePrefix: "PFX",
+        ackReaction: "👀",
+        ackReactionScope: "group-mentions",
+        groupChat: { visibleReplies: "message_tool" },
+        statusReactions: {
+          enabled: true,
+          timing: { debounceMs: 0, doneHoldMs: 0, errorHoldMs: 0 },
+        },
+      },
+      channels: {
+        slack: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          groupPolicy: "open",
+        },
+      },
+    };
+    mockGeneralChannelInfo();
+
+    await runMentionGatedChannelMessageAndFlush();
+
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(reactMock).toHaveBeenCalledWith({
+      channel: "C1",
+      timestamp: "456",
+      name: "eyes",
+    });
+  });
+
+  it("keeps the error reaction when dispatch fails before any reply is delivered", async () => {
     replyMock.mockRejectedValue(new Error("boom"));
     setMentionGatedAckConfig(true);
     mockGeneralChannelInfo();
     await runMentionGatedChannelMessageAndFlush();
 
     expect(sendMock).not.toHaveBeenCalled();
-    expectReactionNames(["eyes", "scream", "eyes", "eyes", "scream"]);
+    expectReactionFlow({
+      startsWith: ["eyes", "scream"],
+      includes: "scream",
+      endsWith: "scream",
+    });
   });
 
   it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {

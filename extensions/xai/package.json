@@ -6,7 +6,7 @@
   "type": "module",
   "dependencies": {
     "@mariozechner/pi-ai": "0.71.1",
-    "typebox": "1.1.36"
+    "typebox": "1.1.37"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

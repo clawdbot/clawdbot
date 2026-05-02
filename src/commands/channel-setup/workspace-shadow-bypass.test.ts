@@ -35,6 +35,7 @@ vi.mock("../../channels/plugins/catalog.js", () => ({
 }));
 vi.mock("../../channels/registry.js", () => ({
   listChatChannels: () => listChatChannels(),
+  normalizeAnyChannelId: (channelId?: string) => channelId?.trim().toLowerCase() ?? null,
 }));
 vi.mock("../../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry: (...a: unknown[]) => loadPluginManifestRegistry(...a),
@@ -43,6 +44,11 @@ vi.mock("../../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: (...args: unknown[]) =>
     loadPluginManifestRegistry(...args),
   loadPluginRegistrySnapshot: (...args: unknown[]) => loadPluginRegistrySnapshot(...args),
+  loadPluginRegistrySnapshotWithMetadata: (...args: unknown[]) => ({
+    source: "derived",
+    snapshot: loadPluginRegistrySnapshot(...args),
+    diagnostics: [],
+  }),
   listPluginContributionIds: (...args: unknown[]) => listPluginContributionIds(...args),
 }));
 vi.mock("../../config/plugin-auto-enable.js", () => ({

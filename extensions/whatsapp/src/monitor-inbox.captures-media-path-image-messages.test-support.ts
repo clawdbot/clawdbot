@@ -124,7 +124,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("detaches inbound listeners and closes the socket on close()", async () => {
+  it("detaches inbound listeners and ends the socket on close()", async () => {
     const listener = await openMonitor(vi.fn());
     const sock = getSock();
 
@@ -135,7 +135,9 @@ describe("web monitor inbox", () => {
 
     expect(sock.ev.listenerCount("messages.upsert")).toBe(0);
     expect(sock.ev.listenerCount("connection.update")).toBe(0);
-    expect(sock.ws.close).toHaveBeenCalledTimes(1);
+    expect(sock.end).toHaveBeenCalledTimes(1);
+    expect(sock.end).toHaveBeenCalledWith(expect.any(Error));
+    expect(sock.ws.close).not.toHaveBeenCalled();
   });
 
   it("logs inbound bodies through the inbound child logger", async () => {

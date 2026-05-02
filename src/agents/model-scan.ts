@@ -52,7 +52,7 @@ type OpenRouterModelPricing = {
   internalReasoning: number;
 };
 
-export type ProbeResult = {
+type ProbeResult = {
   ok: boolean;
   latencyMs: number | null;
   error?: string;
@@ -77,7 +77,7 @@ export type ModelScanResult = {
   image: ProbeResult;
 };
 
-export type OpenRouterScanOptions = {
+type OpenRouterScanOptions = {
   apiKey?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
@@ -507,6 +507,3 @@ export async function scanOpenRouterModels(
     },
   );
 }
-
-export { OPENROUTER_MODELS_URL };
-export type { OpenRouterModelMeta, OpenRouterModelPricing };

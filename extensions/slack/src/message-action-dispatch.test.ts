@@ -99,6 +99,50 @@ describe("handleSlackMessageAction", () => {
     ]);
   });
 
+  it("passes media and rendered interactive blocks through for split Slack delivery", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "send",
+        cfg: {},
+        params: {
+          to: "channel:C1",
+          message: "Approval required",
+          media: "https://example.com/report.md",
+          interactive: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Approve", value: "approve" }],
+              },
+            ],
+          },
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        to: "channel:C1",
+        content: "Approval required",
+        mediaUrl: "https://example.com/report.md",
+        blocks: [
+          expect.objectContaining({
+            type: "actions",
+            elements: [expect.objectContaining({ value: "approve" })],
+          }),
+        ],
+      }),
+      expect.any(Object),
+      undefined,
+    );
+  });
+
   it("maps upload-file to the internal uploadFile action", async () => {
     const invoke = createInvokeSpy();
 
@@ -191,6 +235,32 @@ describe("handleSlackMessageAction", () => {
       }),
       expect.any(Object),
       undefined,
+    );
+  });
+
+  it("forwards messageId for read actions", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "read",
+        cfg: {},
+        params: {
+          channelId: "C1",
+          messageId: "1712345678.654321",
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "readMessages",
+        channelId: "C1",
+        messageId: "1712345678.654321",
+      }),
+      {},
     );
   });
 

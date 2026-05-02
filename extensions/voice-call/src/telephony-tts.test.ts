@@ -117,6 +117,53 @@ describe("createTelephonyTtsProvider deepMerge hardening", () => {
     );
   });
 
+  it("strips telephony TTS directive tags before synthesis", async () => {
+    let requestText: string | undefined;
+    const provider = createTelephonyTtsProvider({
+      coreConfig: createCoreConfig(),
+      runtime: {
+        textToSpeechTelephony: async ({ text }) => {
+          requestText = text;
+          return {
+            success: true,
+            audioBuffer: Buffer.alloc(2),
+            sampleRate: 8000,
+          };
+        },
+      },
+    });
+
+    await provider.synthesizeForTelephony("[[tts]]Hello caller[[/tts]]");
+
+    expect(requestText).toBe("Hello caller");
+  });
+
+  it("uses hidden telephony TTS directive text for synthesis", async () => {
+    let requestText: string | undefined;
+    let requestOverrides: unknown;
+    const provider = createTelephonyTtsProvider({
+      coreConfig: createCoreConfig(),
+      runtime: {
+        textToSpeechTelephony: async ({ text, overrides }) => {
+          requestText = text;
+          requestOverrides = overrides;
+          return {
+            success: true,
+            audioBuffer: Buffer.alloc(2),
+            sampleRate: 8000,
+          };
+        },
+      },
+    });
+
+    await provider.synthesizeForTelephony(
+      "Visible text [[tts:text]]Speak this instead[[/tts:text]]",
+    );
+
+    expect(requestText).toBe("Speak this instead");
+    expect(requestOverrides).toMatchObject({ ttsText: "Speak this instead" });
+  });
+
   it("exposes configured timeoutMs as synthesisTimeoutMs", () => {
     const provider = createTelephonyTtsProvider({
       coreConfig: { messages: { tts: { provider: "openai", timeoutMs: 15000 } } },

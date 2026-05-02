@@ -1,9 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  isCommandEnabled,
-  maybeResolveTextAlias,
-  shouldHandleTextCommands,
-} from "../commands-registry.js";
+import { isCommandEnabled } from "../commands-registry-list.js";
+import { maybeResolveTextAlias } from "../commands-registry-normalize.js";
+import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import type { FinalizedMsgContext } from "../templating.js";
 
 function resolveFirstContextText(

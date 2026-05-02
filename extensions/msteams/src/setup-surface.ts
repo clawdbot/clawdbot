@@ -17,7 +17,7 @@ import {
   resolveMSTeamsChannelAllowlist,
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
-import { createMSTeamsSetupWizardBase, msteamsSetupAdapter } from "./setup-core.js";
+import { createMSTeamsSetupWizardBase } from "./setup-core.js";
 import { resolveMSTeamsCredentials, saveDelegatedTokens } from "./token.js";
 
 const channel = "msteams" as const;
@@ -243,8 +243,6 @@ const msteamsDmPolicy: ChannelSetupDmPolicy = createTopLevelChannelDmPolicy({
   getCurrent: (cfg) => cfg.channels?.msteams?.dmPolicy ?? "pairing",
   promptAllowFrom: promptMSTeamsAllowFrom,
 });
-
-export { msteamsSetupAdapter } from "./setup-core.js";
 
 const msteamsSetupWizardBase = createMSTeamsSetupWizardBase();
 

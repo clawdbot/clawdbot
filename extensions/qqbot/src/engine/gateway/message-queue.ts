@@ -53,7 +53,7 @@ export interface QueuedMention {
  * representative turn, the merge information lands here instead of
  * being scattered across `_` -prefixed fields on {@link QueuedMessage}.
  */
-export interface QueuedMergeInfo {
+interface QueuedMergeInfo {
   /** Number of original messages folded in. Always >= 2. */
   count: number;
   /** Original messages in insertion order — `messages.at(-1)` is "current". */
@@ -129,7 +129,7 @@ export function isMergedTurn(msg: QueuedMessage): msg is QueuedMessage & {
   return (msg.merge?.count ?? 0) > 1;
 }
 
-export interface MessageQueueContext {
+interface MessageQueueContext {
   accountId: string;
   log?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -149,14 +149,14 @@ export interface MessageQueueContext {
 }
 
 /** Snapshot of the queue state for diagnostics. */
-export interface QueueSnapshot {
+interface QueueSnapshot {
   totalPending: number;
   activeUsers: number;
   maxConcurrentUsers: number;
   senderPending: number;
 }
 
-export interface MessageQueue {
+interface MessageQueue {
   enqueue: (msg: QueuedMessage) => void;
   startProcessor: (handleMessageFn: (msg: QueuedMessage) => Promise<void>) => void;
   getSnapshot: (senderPeerId: string) => QueueSnapshot;

@@ -5,7 +5,21 @@ read_when:
 title: "Google Chat"
 ---
 
-Status: ready for DMs + spaces via Google Chat API webhooks (HTTP only).
+Status: downloadable plugin for DMs + spaces via Google Chat API webhooks (HTTP only).
+
+## Install
+
+Install Google Chat before configuring the channel:
+
+```bash
+openclaw plugins install @openclaw/googlechat
+```
+
+Local checkout (when running from a git repo):
+
+```bash
+openclaw plugins install ./path/to/local/googlechat-plugin
+```
 
 ## Quick setup (beginner)
 

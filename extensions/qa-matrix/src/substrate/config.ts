@@ -1,26 +1,26 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { MatrixQaProvisionedTopology } from "./topology.js";
 
-export type MatrixQaReplyToMode = "off" | "first" | "all" | "batched";
-export type MatrixQaThreadRepliesMode = "off" | "inbound" | "always";
-export type MatrixQaDmPolicy = "allowlist" | "disabled" | "open" | "pairing";
-export type MatrixQaGroupPolicy = "allowlist" | "disabled" | "open";
-export type MatrixQaAutoJoinMode = "allowlist" | "always" | "off";
-export type MatrixQaStreamingMode = "off" | "partial" | "quiet";
-export type MatrixQaActorRole = "driver" | "observer" | "sut";
-export type MatrixQaChunkMode = "length" | "newline";
-export type MatrixQaExecApprovalTarget = "both" | "channel" | "dm";
-export type MatrixQaExecApprovalsEnabled = boolean | "auto";
-export type MatrixQaAllowBotsMode = boolean | "mentions";
+type MatrixQaReplyToMode = "off" | "first" | "all" | "batched";
+type MatrixQaThreadRepliesMode = "off" | "inbound" | "always";
+type MatrixQaDmPolicy = "allowlist" | "disabled" | "open" | "pairing";
+type MatrixQaGroupPolicy = "allowlist" | "disabled" | "open";
+type MatrixQaAutoJoinMode = "allowlist" | "always" | "off";
+type MatrixQaStreamingMode = "off" | "partial" | "quiet";
+type MatrixQaActorRole = "driver" | "observer" | "sut";
+type MatrixQaChunkMode = "length" | "newline";
+type MatrixQaExecApprovalTarget = "both" | "channel" | "dm";
+type MatrixQaExecApprovalsEnabled = boolean | "auto";
+type MatrixQaAllowBotsMode = boolean | "mentions";
 
-export type MatrixQaStreamingConfig = {
+type MatrixQaStreamingConfig = {
   mode?: MatrixQaStreamingMode;
   preview?: {
     toolProgress?: boolean;
   };
 };
 
-export type MatrixQaAgentDefaultsOverrides = {
+type MatrixQaAgentDefaultsOverrides = {
   blockStreamingChunk?: {
     breakPreference?: "newline" | "paragraph" | "sentence";
     maxChars?: number;
@@ -33,19 +33,19 @@ export type MatrixQaAgentDefaultsOverrides = {
   };
 };
 
-export type MatrixQaToolConfigOverrides = {
+type MatrixQaToolConfigOverrides = {
   allow?: string[];
   deny?: string[];
 };
 
-export type MatrixQaGroupConfigOverrides = {
+type MatrixQaGroupConfigOverrides = {
   allowBots?: MatrixQaAllowBotsMode;
   enabled?: boolean;
   requireMention?: boolean;
   tools?: MatrixQaToolConfigOverrides;
 };
 
-export type MatrixQaDmConfigOverrides = {
+type MatrixQaDmConfigOverrides = {
   allowFrom?: string[];
   enabled?: boolean;
   policy?: MatrixQaDmPolicy;
@@ -53,15 +53,19 @@ export type MatrixQaDmConfigOverrides = {
   threadReplies?: MatrixQaThreadRepliesMode;
 };
 
-export type MatrixQaThreadBindingsConfigOverrides = {
+type MatrixQaThreadBindingsConfigOverrides = {
   enabled?: boolean;
   idleHours?: number;
   maxAgeHours?: number;
+  spawnSessions?: boolean;
+  defaultSpawnContext?: "isolated" | "fork";
+  /** @deprecated Use spawnSessions instead. */
   spawnAcpSessions?: boolean;
+  /** @deprecated Use spawnSessions instead. */
   spawnSubagentSessions?: boolean;
 };
 
-export type MatrixQaExecApprovalsConfigOverrides = {
+type MatrixQaExecApprovalsConfigOverrides = {
   agentFilter?: string[];
   approvers?: string[];
   enabled?: MatrixQaExecApprovalsEnabled;
@@ -544,7 +548,7 @@ export function summarizeMatrixQaConfigSnapshot(snapshot: MatrixQaConfigSnapshot
     `encryption=${formatMatrixQaBoolean(snapshot.encryption)}`,
     `startupVerification=${snapshot.startupVerification ?? "<default>"}`,
     `threadBindings.enabled=${snapshot.threadBindings.enabled ?? "<default>"}`,
-    `threadBindings.spawnSubagentSessions=${snapshot.threadBindings.spawnSubagentSessions ?? "<default>"}`,
+    `threadBindings.spawnSessions=${snapshot.threadBindings.spawnSessions ?? "<default>"}`,
     `approvals.exec.enabled=${formatMatrixQaBoolean(snapshot.approvalForwarding.exec)}`,
     `approvals.plugin.enabled=${formatMatrixQaBoolean(snapshot.approvalForwarding.plugin)}`,
   ].join(", ");

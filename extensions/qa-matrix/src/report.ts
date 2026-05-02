@@ -4,7 +4,7 @@ export type QaReportCheck = {
   details?: string;
 };
 
-export type QaReportScenario = {
+type QaReportScenario = {
   name: string;
   status: "pass" | "fail" | "skip";
   details?: string;

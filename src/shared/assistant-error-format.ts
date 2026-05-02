@@ -17,7 +17,7 @@ const STANDALONE_HTML_ERROR_HINT_RE =
 
 export const MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE =
   "OpenClaw transport error: malformed_streaming_fragment";
-export const MALFORMED_STREAMING_FRAGMENT_USER_MESSAGE =
+const MALFORMED_STREAMING_FRAGMENT_USER_MESSAGE =
   "LLM streaming response contained a malformed fragment. Please try again.";
 
 type ErrorPayload = Record<string, unknown>;

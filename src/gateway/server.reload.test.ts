@@ -51,14 +51,6 @@ const hoisted = vi.hoisted(() => {
   const stopGmailWatcher = vi.fn(async () => {});
   const resetModelCatalogCache = vi.fn();
   const disposeAllSessionMcpRuntimes = vi.fn(async () => {});
-  const pruneUnknownBundledRuntimeDepsRoots = vi.fn((_params: unknown) => ({
-    scanned: 0,
-    removed: 0,
-    skippedLocked: 0,
-  }));
-  const repairBundledRuntimeDepsPackagePlanAsync = vi.fn(async (_params: unknown) => ({
-    repairedSpecs: [] as string[],
-  }));
   const resolveOpenClawPackageRootSync = vi.fn((_params: unknown) => "/package");
 
   const providerManager = {
@@ -162,8 +154,6 @@ const hoisted = vi.hoisted(() => {
     stopGmailWatcher,
     resetModelCatalogCache,
     disposeAllSessionMcpRuntimes,
-    pruneUnknownBundledRuntimeDepsRoots,
-    repairBundledRuntimeDepsPackagePlanAsync,
     resolveOpenClawPackageRootSync,
     providerManager,
     createChannelManager,
@@ -219,22 +209,6 @@ vi.mock("../infra/openclaw-root.js", async (importOriginal) => {
   return {
     ...actual,
     resolveOpenClawPackageRootSync: hoisted.resolveOpenClawPackageRootSync,
-  };
-});
-
-vi.mock("../plugins/bundled-runtime-deps.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/bundled-runtime-deps.js")>();
-  return {
-    ...actual,
-    repairBundledRuntimeDepsPackagePlanAsync: hoisted.repairBundledRuntimeDepsPackagePlanAsync,
-  };
-});
-
-vi.mock("../plugins/bundled-runtime-deps-roots.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/bundled-runtime-deps-roots.js")>();
-  return {
-    ...actual,
-    pruneUnknownBundledRuntimeDepsRoots: hoisted.pruneUnknownBundledRuntimeDepsRoots,
   };
 });
 
@@ -342,9 +316,6 @@ describe("gateway hot reload", () => {
     hoisted.resetModelCatalogCache.mockReset();
     hoisted.disposeAllSessionMcpRuntimes.mockReset();
     hoisted.disposeAllSessionMcpRuntimes.mockResolvedValue(undefined);
-    hoisted.pruneUnknownBundledRuntimeDepsRoots.mockClear();
-    hoisted.repairBundledRuntimeDepsPackagePlanAsync.mockReset();
-    hoisted.repairBundledRuntimeDepsPackagePlanAsync.mockResolvedValue({ repairedSpecs: [] });
     hoisted.resolveOpenClawPackageRootSync.mockClear();
     hoisted.resolveOpenClawPackageRootSync.mockReturnValue("/package");
     hoisted.resetReloadCallbacks();
@@ -888,58 +859,6 @@ describe("gateway hot reload", () => {
       expect(hoisted.resetModelCatalogCache).toHaveBeenCalledTimes(1);
     });
   });
-
-  it("plans bundled runtime deps before hot channel reloads", async () => {
-    await withNonMinimalGatewayServer(async () => {
-      const onHotReload = hoisted.getOnHotReload();
-      expect(onHotReload).toBeTypeOf("function");
-      hoisted.repairBundledRuntimeDepsPackagePlanAsync.mockResolvedValueOnce({
-        repairedSpecs: ["grammy@1.37.0"],
-      });
-
-      const nextConfig = {
-        channels: {
-          telegram: {
-            enabled: true,
-            botToken: "token",
-          },
-        },
-      };
-
-      await onHotReload?.(
-        {
-          changedPaths: ["channels.telegram.enabled"],
-          restartGateway: false,
-          restartReasons: [],
-          hotReasons: ["channels.telegram.enabled"],
-          reloadHooks: false,
-          restartGmailWatcher: false,
-          restartCron: false,
-          restartHeartbeat: false,
-          restartHealthMonitor: false,
-          restartChannels: new Set(["telegram"]),
-          disposeMcpRuntimes: false,
-          planPluginRuntimeDeps: true,
-          noopPaths: [],
-        },
-        nextConfig,
-      );
-
-      expect(hoisted.repairBundledRuntimeDepsPackagePlanAsync).toHaveBeenCalledWith(
-        expect.objectContaining({
-          packageRoot: "/package",
-          config: nextConfig,
-          includeConfiguredChannels: true,
-        }),
-      );
-      expect(
-        hoisted.repairBundledRuntimeDepsPackagePlanAsync.mock.invocationCallOrder[0],
-      ).toBeLessThan(hoisted.providerManager.stopChannel.mock.invocationCallOrder[0] ?? Infinity);
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("telegram");
-      expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("telegram");
-    });
-  });
-
   it("disposes cached MCP runtimes on MCP config hot reloads", async () => {
     await withNonMinimalGatewayServer(async () => {
       const onHotReload = hoisted.getOnHotReload();

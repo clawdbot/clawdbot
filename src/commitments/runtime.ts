@@ -22,7 +22,7 @@ import type {
 type TimerHandle = ReturnType<typeof setTimeout>;
 type ModelRef = { provider: string; model: string };
 
-export type CommitmentExtractionEnqueueInput = CommitmentScope & {
+type CommitmentExtractionEnqueueInput = CommitmentScope & {
   cfg?: OpenClawConfig;
   nowMs?: number;
   userText: string;
@@ -31,7 +31,7 @@ export type CommitmentExtractionEnqueueInput = CommitmentScope & {
   sourceRunId?: string;
 };
 
-export type CommitmentExtractionRuntime = {
+type CommitmentExtractionRuntime = {
   extractBatch?: (params: {
     cfg?: OpenClawConfig;
     items: CommitmentExtractionItem[];

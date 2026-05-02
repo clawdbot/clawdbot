@@ -1,5 +1,4 @@
 import type { FeishuMessageEvent } from "./event-types.js";
-export type { MentionTarget } from "./mention-target.types.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { isFeishuGroupChatType } from "./types.js";
 
@@ -79,14 +78,14 @@ export function isMentionForwardRequest(event: FeishuMessageEvent, botOpenId?: s
 /**
  * Format @mention for text message
  */
-export function formatMentionForText(target: MentionTarget): string {
+function formatMentionForText(target: MentionTarget): string {
   return `<at user_id="${target.openId}">${target.name}</at>`;
 }
 
 /**
  * Format @mention for card message (lark_md)
  */
-export function formatMentionForCard(target: MentionTarget): string {
+function formatMentionForCard(target: MentionTarget): string {
   return `<at id=${target.openId}></at>`;
 }
 

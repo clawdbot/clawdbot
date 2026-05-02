@@ -285,7 +285,6 @@ class NpmUpdateSmoke {
       this.artifact = await packOpenClaw({
         destination: this.tgzDir,
         requireControlUi: true,
-        stageRuntimeDeps: true,
       });
       this.server = await startHostServer({
         artifactPath: this.artifact.path,

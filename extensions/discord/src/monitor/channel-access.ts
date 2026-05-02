@@ -28,7 +28,7 @@ function resolveDiscordChannelNumberPropertySafe(
   return typeof value === "number" ? value : undefined;
 }
 
-export type DiscordChannelInfoSafe = {
+type DiscordChannelInfoSafe = {
   name?: string;
   topic?: string;
   type?: number;

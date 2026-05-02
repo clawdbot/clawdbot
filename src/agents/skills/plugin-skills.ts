@@ -8,39 +8,11 @@ import {
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "../../plugins/config-policy.js";
-import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
+import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { hasKind } from "../../plugins/slots.js";
 import { isPathInsideWithRealpath } from "../../security/scan-paths.js";
 
 const log = createSubsystemLogger("skills");
-
-function buildRegistryPluginIdAliases(
-  registry: PluginManifestRegistry,
-): Readonly<Record<string, string>> {
-  return Object.fromEntries(
-    registry.plugins
-      .flatMap((record) => [
-        ...record.providers
-          .filter((providerId) => providerId !== record.id)
-          .map((providerId) => [providerId, record.id] as const),
-        ...(record.legacyPluginIds ?? []).map(
-          (legacyPluginId) => [legacyPluginId, record.id] as const,
-        ),
-      ])
-      .toSorted(([left], [right]) => left.localeCompare(right)),
-  );
-}
-
-function createRegistryPluginIdNormalizer(
-  registry: PluginManifestRegistry,
-): (id: string) => string {
-  const aliases = buildRegistryPluginIdAliases(registry);
-  return (id: string) => {
-    const trimmed = id.trim();
-    return aliases[trimmed] ?? trimmed;
-  };
-}
 
 export function resolvePluginSkillDirs(params: {
   workspaceDir: string | undefined;
@@ -50,17 +22,18 @@ export function resolvePluginSkillDirs(params: {
   if (!workspaceDir) {
     return [];
   }
-  const registry = loadPluginManifestRegistryForPluginRegistry({
+  const metadataSnapshot = loadPluginMetadataSnapshot({
     workspaceDir,
-    config: params.config,
-    includeDisabled: true,
+    config: params.config ?? {},
+    env: process.env,
   });
+  const registry = metadataSnapshot.manifestRegistry;
   if (registry.plugins.length === 0) {
     return [];
   }
   const normalizedPlugins = normalizePluginsConfigWithResolver(
     params.config?.plugins,
-    createRegistryPluginIdNormalizer(registry),
+    metadataSnapshot.normalizePluginId,
   );
   const acpRuntimeAvailable = isAcpRuntimeSpawnAvailable({ config: params.config });
   const memorySlot = normalizedPlugins.slots.memory;

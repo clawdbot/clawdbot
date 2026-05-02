@@ -112,9 +112,14 @@ function resolveWorkspaces(params: {
   cfg?: DreamingHostConfig;
   fallbackWorkspaceDir?: string;
 }): string[] {
+  const fallbackWorkspaceDir = normalizeTrimmedString(params.fallbackWorkspaceDir);
   const workspaceCandidates = params.cfg
     ? resolveMemoryDreamingWorkspaces(
         params.cfg as Parameters<typeof resolveMemoryDreamingWorkspaces>[0],
+        {
+          primaryWorkspaceDir: fallbackWorkspaceDir,
+          primaryAgentId: "main",
+        },
       ).map((entry) => entry.workspaceDir)
     : [];
   const seen = new Set<string>();
@@ -125,7 +130,6 @@ function resolveWorkspaces(params: {
     seen.add(workspaceDir);
     return true;
   });
-  const fallbackWorkspaceDir = normalizeTrimmedString(params.fallbackWorkspaceDir);
   if (workspaces.length === 0 && fallbackWorkspaceDir) {
     workspaces.push(fallbackWorkspaceDir);
   }
@@ -641,13 +645,22 @@ function buildSessionRenderedLine(params: {
   return `[${source}] ${params.snippet}`.slice(0, SESSION_INGESTION_MAX_SNIPPET_CHARS + 64);
 }
 
-function resolveSessionAgentsForWorkspace(cfg: DreamingHostConfig, workspaceDir: string): string[] {
+function resolveSessionAgentsForWorkspace(params: {
+  cfg: DreamingHostConfig;
+  workspaceDir: string;
+  primaryWorkspaceDir?: string;
+}): string[] {
+  const { cfg, workspaceDir, primaryWorkspaceDir } = params;
   if (!cfg) {
     return [];
   }
   const target = normalizeWorkspaceKey(workspaceDir);
   const workspaces = resolveMemoryDreamingWorkspaces(
     cfg as Parameters<typeof resolveMemoryDreamingWorkspaces>[0],
+    {
+      primaryWorkspaceDir,
+      primaryAgentId: "main",
+    },
   );
   const match = workspaces.find((entry) => normalizeWorkspaceKey(entry.workspaceDir) === target);
   if (!match) {
@@ -706,6 +719,7 @@ async function appendSessionCorpusLines(params: {
 async function collectSessionIngestionBatches(params: {
   workspaceDir: string;
   cfg?: DreamingHostConfig;
+  primaryWorkspaceDir?: string;
   lookbackDays: number;
   nowMs: number;
   timezone?: string;
@@ -720,7 +734,11 @@ async function collectSessionIngestionBatches(params: {
         Object.keys(params.state.seenMessages).length > 0,
     };
   }
-  const agentIds = resolveSessionAgentsForWorkspace(params.cfg, params.workspaceDir);
+  const agentIds = resolveSessionAgentsForWorkspace({
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
+    primaryWorkspaceDir: params.primaryWorkspaceDir,
+  });
   const cutoffMs = calculateLookbackCutoffMs(params.nowMs, params.lookbackDays);
   const batchByDay = new Map<string, SessionIngestionMessage[]>();
   const nextFiles: Record<string, SessionIngestionFileState> = {};
@@ -1003,6 +1021,7 @@ async function collectSessionIngestionBatches(params: {
 async function ingestSessionTranscriptSignals(params: {
   workspaceDir: string;
   cfg?: DreamingHostConfig;
+  primaryWorkspaceDir?: string;
   lookbackDays: number;
   nowMs: number;
   timezone?: string;
@@ -1011,6 +1030,7 @@ async function ingestSessionTranscriptSignals(params: {
   const collected = await collectSessionIngestionBatches({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
+    primaryWorkspaceDir: params.primaryWorkspaceDir,
     lookbackDays: params.lookbackDays,
     nowMs: params.nowMs,
     timezone: params.timezone,
@@ -1520,6 +1540,7 @@ export function previewRemDreaming(params: {
 async function runLightDreaming(params: {
   workspaceDir: string;
   cfg?: DreamingHostConfig;
+  primaryWorkspaceDir?: string;
   config: LightDreamingConfig;
   logger: Logger;
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
@@ -1537,6 +1558,7 @@ async function runLightDreaming(params: {
   await ingestSessionTranscriptSignals({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
+    primaryWorkspaceDir: params.primaryWorkspaceDir,
     lookbackDays: params.config.lookbackDays,
     nowMs,
     timezone: params.config.timezone,
@@ -1617,6 +1639,7 @@ async function runLightDreaming(params: {
 async function runRemDreaming(params: {
   workspaceDir: string;
   cfg?: DreamingHostConfig;
+  primaryWorkspaceDir?: string;
   config: RemDreamingConfig;
   logger: Logger;
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
@@ -1634,6 +1657,7 @@ async function runRemDreaming(params: {
   await ingestSessionTranscriptSignals({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
+    primaryWorkspaceDir: params.primaryWorkspaceDir,
     lookbackDays: params.config.lookbackDays,
     nowMs,
     timezone: params.config.timezone,
@@ -1766,9 +1790,10 @@ async function runPhaseIfTriggered(
   if (!params.config.enabled) {
     return { handled: true, reason: `memory-core: ${params.phase} dreaming disabled` };
   }
+  const primaryWorkspaceDir = normalizeTrimmedString(params.workspaceDir);
   const workspaces = resolveWorkspaces({
     cfg: params.cfg,
-    fallbackWorkspaceDir: params.workspaceDir,
+    fallbackWorkspaceDir: primaryWorkspaceDir,
   });
   if (workspaces.length === 0) {
     params.logger.warn(
@@ -1786,6 +1811,7 @@ async function runPhaseIfTriggered(
         await runLightDreaming({
           workspaceDir,
           cfg: params.cfg,
+          primaryWorkspaceDir,
           config: params.config,
           logger: params.logger,
           subagent: params.subagent,
@@ -1794,6 +1820,7 @@ async function runPhaseIfTriggered(
         await runRemDreaming({
           workspaceDir,
           cfg: params.cfg,
+          primaryWorkspaceDir,
           config: params.config,
           logger: params.logger,
           subagent: params.subagent,

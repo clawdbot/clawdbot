@@ -7,13 +7,13 @@ import { detectRespawnSupervisor } from "./supervisor-markers.js";
 
 type RespawnMode = "spawned" | "supervised" | "disabled" | "failed";
 
-export type GatewayRespawnResult = {
+type GatewayRespawnResult = {
   mode: RespawnMode;
   pid?: number;
   detail?: string;
 };
 
-export type GatewayUpdateRespawnResult = GatewayRespawnResult & {
+type GatewayUpdateRespawnResult = GatewayRespawnResult & {
   child?: ChildProcess;
 };
 

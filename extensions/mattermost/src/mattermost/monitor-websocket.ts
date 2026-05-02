@@ -110,12 +110,12 @@ type CreateMattermostConnectOnceOpts = {
   pongTimeoutMs?: number;
 };
 
-export const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (url) => {
+const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (url) => {
   const agent = createDebugProxyWebSocketAgent(resolveDebugProxySettings());
   return new WebSocket(url, agent ? { agent } : undefined) as MattermostWebSocketLike;
 };
 
-export function parsePostedPayload(
+function parsePostedPayload(
   payload: MattermostEventPayload,
 ): { payload: MattermostEventPayload; post: MattermostPost } | null {
   if (payload.event !== "posted") {

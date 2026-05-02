@@ -7,9 +7,8 @@ import { normalizeChannelId as normalizeChatChannelId } from "../../channels/reg
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ANNOUNCE_SKIP_TOKEN, REPLY_SKIP_TOKEN } from "./sessions-send-tokens.js";
 export {
-  ANNOUNCE_SKIP_TOKEN,
-  REPLY_SKIP_TOKEN,
   isAnnounceSkip,
+  isNonDeliverableSessionsReply,
   isReplySkip,
 } from "./sessions-send-tokens.js";
 

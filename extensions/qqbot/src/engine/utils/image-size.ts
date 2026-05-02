@@ -10,7 +10,7 @@ import type { SsrfPolicyConfig } from "../adapter/types.js";
 import { formatErrorMessage } from "./format.js";
 import { debugLog } from "./log.js";
 
-export interface ImageSize {
+interface ImageSize {
   width: number;
   height: number;
 }

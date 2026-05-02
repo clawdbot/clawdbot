@@ -72,7 +72,7 @@ export function resolveHeartbeatPrompt(raw?: string): string {
   return trimmed || HEARTBEAT_PROMPT;
 }
 
-export type StripHeartbeatMode = "heartbeat" | "message";
+type StripHeartbeatMode = "heartbeat" | "message";
 
 function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
   let text = raw.trim();

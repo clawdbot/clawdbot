@@ -4,7 +4,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS } from "../../dist/commitments/config.js";
 import {
   configureCommitmentExtractionRuntime,
   drainCommitmentExtractionQueue,
@@ -16,6 +15,8 @@ import {
   loadCommitmentStore,
   resolveCommitmentStorePath,
 } from "../../dist/commitments/store.js";
+
+const DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS = 64;
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {

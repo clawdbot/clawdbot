@@ -23,7 +23,7 @@ vi.mock("../plugins/runtime/metadata-registry-loader.js", () => ({
     loadPluginMetadataRegistrySnapshotMock(...args),
 }));
 
-const { collectPluginSecurityAuditFindings } = await import("./audit.js");
+const { collectPluginSecurityAuditFindings, runSecurityAudit } = await import("./audit.js");
 
 function createAuditContext(params: {
   sourceConfig: Parameters<typeof collectPluginSecurityAuditFindings>[0]["sourceConfig"];
@@ -148,6 +148,28 @@ describe("security audit read-only plugin scope", () => {
     });
 
     expect(findings).toEqual([]);
+    expect(getActivePluginRegistryMock).not.toHaveBeenCalled();
+    expect(applyPluginAutoEnableMock).not.toHaveBeenCalled();
+    expect(loadPluginMetadataRegistrySnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps plain security audit off plugin collector runtime discovery by default", async () => {
+    const sourceConfig = {
+      plugins: {
+        allow: ["audit-plugin"],
+      },
+    };
+
+    await runSecurityAudit({
+      config: sourceConfig,
+      sourceConfig,
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+      stateDir: "/tmp/openclaw-test-state",
+      configPath: "/tmp/openclaw-test-config.json",
+    });
+
     expect(getActivePluginRegistryMock).not.toHaveBeenCalled();
     expect(applyPluginAutoEnableMock).not.toHaveBeenCalled();
     expect(loadPluginMetadataRegistrySnapshotMock).not.toHaveBeenCalled();

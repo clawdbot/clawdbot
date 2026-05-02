@@ -29,7 +29,7 @@ import type { MSTeamsSsoDeps } from "./sso.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 import { applyMSTeamsWebhookTimeouts } from "./webhook-timeouts.js";
 
-export type MonitorMSTeamsOpts = {
+type MonitorMSTeamsOpts = {
   cfg: OpenClawConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
@@ -37,7 +37,7 @@ export type MonitorMSTeamsOpts = {
   pollStore?: MSTeamsPollStore;
 };
 
-export type MonitorMSTeamsResult = {
+type MonitorMSTeamsResult = {
   app: unknown;
   shutdown: () => Promise<void>;
 };

@@ -4,7 +4,7 @@ import {
 } from "openclaw/plugin-sdk/text-runtime";
 import { browserCloseTab } from "./client.js";
 
-export type TrackedSessionBrowserTab = {
+type TrackedSessionBrowserTab = {
   sessionKey: string;
   targetId: string;
   baseUrl?: string;

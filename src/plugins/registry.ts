@@ -127,6 +127,11 @@ import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.
 import type { PluginRuntime } from "./runtime/types.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
 import {
+  findUndeclaredPluginToolNames,
+  normalizePluginToolContractNames,
+  normalizePluginToolNames,
+} from "./tool-contracts.js";
+import {
   isConversationHookName,
   isPluginHookName,
   isPromptInjectionHookName,
@@ -277,10 +282,14 @@ function resolvePluginRegistrationCapabilities(
 
 export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registry = createEmptyPluginRegistry();
-  const coreGatewayMethods = new Set([
-    ...(registryParams.coreGatewayMethodNames ?? []),
-    ...Object.keys(registryParams.coreGatewayHandlers ?? {}),
-  ]);
+  const coreGatewayMethodNames = Array.from(
+    new Set([
+      ...(registryParams.coreGatewayMethodNames ?? []),
+      ...Object.keys(registryParams.coreGatewayHandlers ?? {}),
+    ]),
+  ).toSorted();
+  registry.coreGatewayMethodNames = coreGatewayMethodNames;
+  const coreGatewayMethods = new Set(coreGatewayMethodNames);
   const pluginHookRollback = new Map<string, HookRollbackEntry[]>();
   const pluginsWithChannelRegistrationConflict = new Set<string>();
 
@@ -444,7 +453,17 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     if (pluginsWithChannelRegistrationConflict.has(record.id)) {
       return;
     }
-    const names = opts?.names ?? (opts?.name ? [opts.name] : []);
+    const declaredNames = normalizePluginToolContractNames(record.contracts);
+    if (declaredNames.length === 0) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "plugin must declare contracts.tools before registering agent tools",
+      });
+      return;
+    }
+    const names = [...(opts?.names ?? []), ...(opts?.name ? [opts.name] : [])];
     const optional = opts?.optional === true;
     const factory: OpenClawPluginToolFactory =
       typeof tool === "function" ? tool : (_ctx: OpenClawPluginToolContext) => tool;
@@ -453,7 +472,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       names.push(tool.name);
     }
 
-    const normalized = names.map((name) => name.trim()).filter(Boolean);
+    const normalized = normalizePluginToolNames(names);
+    const undeclared = findUndeclaredPluginToolNames({
+      declaredNames,
+      toolNames: normalized,
+    });
+    if (undeclared.length > 0) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `plugin must declare contracts.tools for: ${undeclared.join(", ")}`,
+      });
+      return;
+    }
     if (normalized.length > 0) {
       record.toolNames.push(...normalized);
     }
@@ -462,6 +494,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginName: record.name,
       factory,
       names: normalized,
+      declaredNames,
       optional,
       source: record.source,
       rootDir: record.rootDir,
@@ -767,7 +800,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginsWithChannelRegistrationConflict.add(record.id);
       return;
     }
-    record.channelIds.push(id);
+    if (!record.channelIds.includes(id)) {
+      record.channelIds.push(id);
+    }
     registry.channelSetups.push({
       pluginId: record.id,
       pluginName: record.name,
@@ -809,7 +844,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    record.providerIds.push(id);
+    if (!record.providerIds.includes(id)) {
+      record.providerIds.push(id);
+    }
     registry.providers.push({
       pluginId: record.id,
       pluginName: record.name,
@@ -966,7 +1003,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    params.ownedIds.push(id);
+    if (!params.ownedIds.includes(id)) {
+      params.ownedIds.push(id);
+    }
     params.registrations.push({
       pluginId: record.id,
       pluginName: record.name,
@@ -1615,6 +1654,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         pluginId: record.id,
         source: record.source,
         message: "tool metadata registration missing toolName",
+      });
+      return;
+    }
+    const declaredNames = normalizePluginToolContractNames(record.contracts);
+    const undeclared = findUndeclaredPluginToolNames({
+      declaredNames,
+      toolNames: [toolName],
+    });
+    if (undeclared.length > 0) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `plugin must declare contracts.tools for tool metadata: ${undeclared.join(", ")}`,
       });
       return;
     }

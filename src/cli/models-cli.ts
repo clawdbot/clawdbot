@@ -8,6 +8,16 @@ function runModelsCommand(action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action);
 }
 
+function rejectAgentScopedModelWrite(command: Command, commandName: "set" | "set-image"): void {
+  const agent = resolveOptionFromCommand<string>(command, "agent");
+  if (!agent) {
+    return;
+  }
+  throw new Error(
+    `\`openclaw models ${commandName}\` does not support \`--agent\`; it only updates global model defaults. Remove \`--agent\` or use agent config to set a per-agent model override.`,
+  );
+}
+
 export function registerModelsCli(program: Command) {
   const models = program
     .command("models")
@@ -94,7 +104,8 @@ export function registerModelsCli(program: Command) {
     .command("set")
     .description("Set the default model")
     .argument("<model>", "Model id or alias")
-    .action(async (model: string) => {
+    .action(async (model: string, _opts: unknown, command: Command) => {
+      rejectAgentScopedModelWrite(command, "set");
       await runModelsCommand(async () => {
         const { modelsSetCommand } = await import("../commands/models/set.js");
         await modelsSetCommand(model, defaultRuntime);
@@ -105,7 +116,8 @@ export function registerModelsCli(program: Command) {
     .command("set-image")
     .description("Set the image model")
     .argument("<model>", "Model id or alias")
-    .action(async (model: string) => {
+    .action(async (model: string, _opts: unknown, command: Command) => {
+      rejectAgentScopedModelWrite(command, "set-image");
       await runModelsCommand(async () => {
         const { modelsSetImageCommand } = await import("../commands/models/set-image.js");
         await modelsSetImageCommand(model, defaultRuntime);

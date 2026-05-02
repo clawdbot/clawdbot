@@ -161,7 +161,7 @@ function isInsideCodeBlock(text: string, position: number): boolean {
 // ============ 媒体标签解析 ============
 
 /** findFirstClosedMediaTag 的返回值 */
-export interface FirstClosedMediaTag {
+interface FirstClosedMediaTag {
   /** 标签前的纯文本 */
   textBefore: string;
   /** 标签类型（小写，如 "qqvoice"） */

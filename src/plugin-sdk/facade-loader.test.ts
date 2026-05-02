@@ -1,18 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveBundledRuntimeDependencyInstallRoot } from "../plugins/bundled-runtime-deps-roots.js";
-import {
-  clearBundledRuntimeDependencyNodePaths,
-  ensureBundledPluginRuntimeDeps,
-} from "../plugins/bundled-runtime-deps.js";
 import {
   listImportedBundledPluginFacadeIds,
-  loadBundledPluginPublicSurfaceModule,
   loadBundledPluginPublicSurfaceModuleSync,
   resetFacadeLoaderStateForTest,
-  setFacadeLoaderJitiFactoryForTest,
+  setFacadeLoaderSourceTransformFactoryForTest,
 } from "./facade-loader.js";
 import { listImportedBundledPluginFacadeIds as listImportedFacadeRuntimeIds } from "./facade-runtime.js";
 import { createPluginSdkTestHarness } from "./test-helpers.js";
@@ -20,10 +14,10 @@ import { createPluginSdkTestHarness } from "./test-helpers.js";
 const { createTempDirSync } = createPluginSdkTestHarness();
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const originalDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
-const originalPluginStageDir = process.env.OPENCLAW_PLUGIN_STAGE_DIR;
 const FACADE_LOADER_GLOBAL = "__openclawTestLoadBundledPluginPublicSurfaceModuleSync";
-const STAGED_RUNTIME_DEP_NAME = "openclaw-facade-loader-runtime-dep";
-type FacadeLoaderJitiFactory = NonNullable<Parameters<typeof setFacadeLoaderJitiFactoryForTest>[0]>;
+type FacadeLoaderSourceTransformFactory = NonNullable<
+  Parameters<typeof setFacadeLoaderSourceTransformFactoryForTest>[0]
+>;
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const trustedBundledPluginFixtureRoots: string[] = [];
 let trustedPluginIdCounter = 0;
@@ -164,115 +158,10 @@ function writeJsonFile(filePath: string, value: unknown): void {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-function writeStagedRuntimeDepPackage(params: {
-  installRoot: string;
-  name: string;
-  version: string;
-  source?: string;
-}): void {
-  const depRoot = path.join(params.installRoot, "node_modules", params.name);
-  writeJsonFile(path.join(depRoot, "package.json"), {
-    name: params.name,
-    version: params.version,
-    type: "module",
-    exports: "./index.js",
-  });
-  fs.writeFileSync(path.join(depRoot, "index.js"), params.source ?? "export {};\n", "utf8");
-}
-
-function concreteRuntimeDepVersionForTest(version: string): string {
-  return version.startsWith("^") || version.startsWith("~") ? version.slice(1) : version;
-}
-
-function parseRuntimeDepSpecForTest(spec: string): { name: string; version: string } {
-  const atIndex = spec.lastIndexOf("@");
-  return {
-    name: spec.slice(0, atIndex),
-    version: spec.slice(atIndex + 1),
-  };
-}
-
-function createPackagedBundledPluginDirWithStagedRuntimeDep(params: {
-  marker: string;
-  prefix: string;
-}): {
-  bundledPluginsDir: string;
-  env: NodeJS.ProcessEnv;
-  installRoot: string;
-  modulePath: string;
-  pluginId: string;
-  pluginRoot: string;
-  stageRoot: string;
-} {
-  const bundledPluginsDir = createTrustedBundledPluginsRoot();
-  const pluginId = nextTrustedPluginId(params.prefix);
-  const pluginRoot = path.join(bundledPluginsDir, pluginId);
-  const stageRoot = createTempDirSync(`${params.prefix}stage-`);
-  const env = {
-    ...process.env,
-    OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
-    OPENCLAW_PLUGIN_STAGE_DIR: stageRoot,
-  };
-  fs.mkdirSync(pluginRoot, { recursive: true });
-  trustedBundledPluginFixtureRoots.push(pluginRoot);
-
-  writeJsonFile(path.join(pluginRoot, "package.json"), {
-    name: "@openclaw/plugin-demo",
-    version: "0.0.0",
-    type: "module",
-    dependencies: {
-      [STAGED_RUNTIME_DEP_NAME]: "1.0.0",
-    },
-  });
-  const modulePath = path.join(pluginRoot, "api.js");
-  fs.writeFileSync(
-    modulePath,
-    [
-      `import { marker as depMarker } from ${JSON.stringify(STAGED_RUNTIME_DEP_NAME)};`,
-      "export const marker = `facade:${depMarker}`;",
-      "export const moduleUrl = import.meta.url;",
-      "",
-    ].join("\n"),
-    "utf8",
-  );
-
-  const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, {
-    env,
-  });
-  ensureBundledPluginRuntimeDeps({
-    env,
-    pluginId,
-    pluginRoot,
-    installDeps: ({ installRoot: runtimeInstallRoot, installSpecs = [] }) => {
-      for (const spec of installSpecs) {
-        const dep = parseRuntimeDepSpecForTest(spec);
-        writeStagedRuntimeDepPackage({
-          installRoot: runtimeInstallRoot,
-          name: dep.name,
-          version: concreteRuntimeDepVersionForTest(dep.version),
-          ...(dep.name === STAGED_RUNTIME_DEP_NAME
-            ? { source: `export const marker = ${JSON.stringify(params.marker)};\n` }
-            : {}),
-        });
-      }
-    },
-  });
-
-  return {
-    bundledPluginsDir,
-    env,
-    installRoot,
-    modulePath,
-    pluginId,
-    pluginRoot,
-    stageRoot,
-  };
-}
 afterEach(() => {
   vi.restoreAllMocks();
   resetFacadeLoaderStateForTest();
-  setFacadeLoaderJitiFactoryForTest(undefined);
-  clearBundledRuntimeDependencyNodePaths();
+  setFacadeLoaderSourceTransformFactoryForTest(undefined);
   for (const dir of trustedBundledPluginFixtureRoots.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -286,11 +175,6 @@ afterEach(() => {
     delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
   } else {
     process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = originalDisableBundledPlugins;
-  }
-  if (originalPluginStageDir === undefined) {
-    delete process.env.OPENCLAW_PLUGIN_STAGE_DIR;
-  } else {
-    process.env.OPENCLAW_PLUGIN_STAGE_DIR = originalPluginStageDir;
   }
 });
 
@@ -376,20 +260,20 @@ describe("plugin-sdk facade loader", () => {
     expect(listImportedFacadeRuntimeIds()).toEqual([fixture.pluginId]);
   });
 
-  it("uses the runtime-supported native boundary for Windows dist facade loads", () => {
+  it("uses native require for Windows dist facade loads", () => {
     const fixture = createBundledPluginFixture({
       prefix: "openclaw-facade-loader-windows-",
       marker: "windows-dist-ok",
     });
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = fixture.bundledPluginsDir;
 
-    const createJitiCalls: Parameters<FacadeLoaderJitiFactory>[] = [];
-    setFacadeLoaderJitiFactoryForTest(((...args) => {
+    const createJitiCalls: Parameters<FacadeLoaderSourceTransformFactory>[] = [];
+    setFacadeLoaderSourceTransformFactoryForTest(((...args) => {
       createJitiCalls.push(args);
       return vi.fn(() => ({
         marker: "jiti-fallback",
-      })) as unknown as ReturnType<FacadeLoaderJitiFactory>;
-    }) as FacadeLoaderJitiFactory);
+      })) as unknown as ReturnType<FacadeLoaderSourceTransformFactory>;
+    }) as FacadeLoaderSourceTransformFactory);
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const restoreVersions = forceNodeRuntimeVersionsForTest();
 
@@ -405,58 +289,6 @@ describe("plugin-sdk facade loader", () => {
       restoreVersions();
       platformSpy.mockRestore();
     }
-  });
-
-  it("loads built bundled sync public surfaces through staged runtime deps", async () => {
-    const fixture = createPackagedBundledPluginDirWithStagedRuntimeDep({
-      marker: "staged",
-      prefix: "openclaw-facade-loader-runtime-deps-",
-    });
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = fixture.bundledPluginsDir;
-    process.env.OPENCLAW_PLUGIN_STAGE_DIR = fixture.stageRoot;
-
-    await expect(import(pathToFileURL(fixture.modulePath).href)).rejects.toMatchObject({
-      code: "ERR_MODULE_NOT_FOUND",
-    });
-
-    const loaded = loadBundledPluginPublicSurfaceModuleSync<{
-      marker: string;
-      moduleUrl: string;
-    }>({
-      dirName: fixture.pluginId,
-      artifactBasename: "api.js",
-    });
-
-    expect(loaded.marker).toBe("facade:staged");
-    expect(fs.existsSync(path.join(fixture.pluginRoot, "node_modules"))).toBe(false);
-    expect(fs.realpathSync(fileURLToPath(loaded.moduleUrl))).toBe(
-      fs.realpathSync(
-        path.join(fixture.installRoot, "dist", "extensions", fixture.pluginId, "api.js"),
-      ),
-    );
-  });
-
-  it("loads built bundled async public surfaces through staged runtime deps", async () => {
-    const fixture = createPackagedBundledPluginDirWithStagedRuntimeDep({
-      marker: "async-staged",
-      prefix: "openclaw-facade-loader-built-async-",
-    });
-
-    const loaded = await loadBundledPluginPublicSurfaceModule<{
-      marker: string;
-      moduleUrl: string;
-    }>({
-      dirName: fixture.pluginId,
-      artifactBasename: "api.js",
-      env: fixture.env,
-    });
-
-    expect(loaded.marker).toBe("facade:async-staged");
-    expect(fs.realpathSync(fileURLToPath(loaded.moduleUrl))).toBe(
-      fs.realpathSync(
-        path.join(fixture.installRoot, "dist", "extensions", fixture.pluginId, "api.js"),
-      ),
-    );
   });
 
   it("breaks circular facade re-entry during module evaluation", () => {

@@ -1,6 +1,9 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
-import { wrapToolWithBeforeToolCallHook } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  HEARTBEAT_RESPONSE_TOOL_NAME,
+  wrapToolWithBeforeToolCallHook,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -209,6 +212,38 @@ describe("createCodexDynamicToolBridge", () => {
       messagingToolSentTexts: [],
       messagingToolSentMediaUrls: [],
       messagingToolSentTargets: [],
+    });
+  });
+
+  it("records heartbeat response tool outcomes", async () => {
+    const bridge = createBridgeWithToolResult(
+      HEARTBEAT_RESPONSE_TOOL_NAME,
+      textToolResult("Recorded.", {
+        status: "recorded",
+        outcome: "needs_attention",
+        notify: true,
+        summary: "Build is blocked.",
+        notificationText: "Build is blocked on missing credentials.",
+        priority: "high",
+      }),
+    );
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: HEARTBEAT_RESPONSE_TOOL_NAME,
+      arguments: {},
+    });
+
+    expect(result).toEqual(expectInputText("Recorded."));
+    expect(bridge.telemetry.heartbeatToolResponse).toEqual({
+      outcome: "needs_attention",
+      notify: true,
+      summary: "Build is blocked.",
+      notificationText: "Build is blocked on missing credentials.",
+      priority: "high",
     });
   });
 

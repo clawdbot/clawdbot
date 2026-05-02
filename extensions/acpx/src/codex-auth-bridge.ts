@@ -7,7 +7,7 @@ const CODEX_ACP_PACKAGE = "@zed-industries/codex-acp";
 const CODEX_ACP_PACKAGE_RANGE = "^0.12.0";
 const CODEX_ACP_BIN = "codex-acp";
 const CLAUDE_ACP_PACKAGE = "@agentclientprotocol/claude-agent-acp";
-const CLAUDE_ACP_PACKAGE_VERSION = "0.31.1";
+const CLAUDE_ACP_PACKAGE_VERSION = "0.31.4";
 const CLAUDE_ACP_BIN = "claude-agent-acp";
 const RUN_CONFIGURED_COMMAND_SENTINEL = "--openclaw-run-configured";
 const requireFromHere = createRequire(import.meta.url);
@@ -113,7 +113,7 @@ async function resolveInstalledAcpPackageBinPath(
 
 async function resolveInstalledCodexAcpBinPath(): Promise<string | undefined> {
   // Keep OpenClaw's isolated CODEX_HOME wrapper, but launch the plugin-local
-  // Codex ACP adapter when runtime-deps staging made it available.
+  // Codex ACP adapter when the package dependency is available.
   return await resolveInstalledAcpPackageBinPath(CODEX_ACP_PACKAGE, CODEX_ACP_BIN);
 }
 

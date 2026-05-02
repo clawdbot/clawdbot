@@ -20,18 +20,6 @@ function loadAnthropicVertexStreamFacade(): AnthropicVertexStreamFacade {
   });
 }
 
-export function createAnthropicVertexStreamFn(
-  projectId: string | undefined,
-  region: string,
-  baseURL?: string,
-): StreamFn {
-  return loadAnthropicVertexStreamFacade().createAnthropicVertexStreamFn(
-    projectId,
-    region,
-    baseURL,
-  );
-}
-
 export function createAnthropicVertexStreamFnForModel(
   model: { baseUrl?: string },
   env: NodeJS.ProcessEnv = process.env,

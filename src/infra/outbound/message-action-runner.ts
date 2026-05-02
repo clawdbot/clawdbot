@@ -6,6 +6,7 @@ import {
   readStringParam,
 } from "../../agents/tools/common.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
+import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
@@ -25,8 +26,7 @@ import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
-import { buildChannelAccountBindings } from "../../routing/bindings.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -72,6 +72,7 @@ import {
 } from "./outbound-policy.js";
 import { executePollAction, executeSendAction } from "./outbound-send-service.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
+import { normalizeTargetForProvider } from "./target-normalization.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import { extractToolPayload } from "./tool-payload.js";
 
@@ -284,6 +285,80 @@ async function resolveChannel(
     params.channel = selection.channel;
   }
   return selection.channel;
+}
+
+function addCandidateAndUnprefixedAlias(candidates: Set<string>, value?: string | null) {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) {
+    return;
+  }
+  candidates.add(normalized);
+  const unprefixed = normalized.replace(/^(channel|group|user):/i, "").trim();
+  if (unprefixed && unprefixed !== normalized) {
+    candidates.add(unprefixed);
+  }
+}
+
+function normalizeTargetForAccountBinding(channel: ChannelId, target: string): string | undefined {
+  try {
+    return normalizeTargetForProvider(channel, target);
+  } catch {
+    return undefined;
+  }
+}
+
+function inferPeerKindForAccountBinding(channel: ChannelId, target: string): ChatType | undefined {
+  const inferred = normalizeChatType(
+    getChannelPlugin(channel)?.messaging?.inferTargetChatType?.({ to: target }),
+  );
+  if (inferred) {
+    return inferred;
+  }
+  const normalized = normalizeTargetForAccountBinding(channel, target);
+  const candidates = [target, normalized].filter((value): value is string => Boolean(value));
+  if (candidates.some((value) => /^user:/i.test(value))) {
+    return "direct";
+  }
+  if (candidates.some((value) => /^(channel|group):/i.test(value))) {
+    return "channel";
+  }
+  return undefined;
+}
+
+function resolveTargetBoundAccountId(params: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  args: Record<string, unknown>;
+  agentId?: string;
+}): string | undefined {
+  if (!params.agentId) {
+    return undefined;
+  }
+  const target =
+    normalizeOptionalString(params.args.to) ?? normalizeOptionalString(params.args.channelId) ?? "";
+  if (!target) {
+    return resolveFirstBoundAccountId({
+      cfg: params.cfg,
+      channelId: params.channel,
+      agentId: params.agentId,
+    });
+  }
+
+  const candidates = new Set<string>();
+  addCandidateAndUnprefixedAlias(candidates, target);
+  addCandidateAndUnprefixedAlias(
+    candidates,
+    normalizeTargetForAccountBinding(params.channel, target),
+  );
+  const [peerId, ...exactPeerIdAliases] = Array.from(candidates);
+  return resolveFirstBoundAccountId({
+    cfg: params.cfg,
+    channelId: params.channel,
+    agentId: params.agentId,
+    peerId,
+    exactPeerIdAliases,
+    peerKind: inferPeerKindForAccountBinding(params.channel, target),
+  });
 }
 
 async function resolveActionTarget(params: {
@@ -941,11 +1016,12 @@ export async function runMessageAction(
   const channel = await resolveChannel(cfg, params, input.toolContext);
   let accountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
   if (!accountId && resolvedAgentId) {
-    const byAgent = buildChannelAccountBindings(cfg).get(channel);
-    const boundAccountIds = byAgent?.get(normalizeAgentId(resolvedAgentId));
-    if (boundAccountIds && boundAccountIds.length > 0) {
-      accountId = boundAccountIds[0];
-    }
+    accountId = resolveTargetBoundAccountId({
+      cfg,
+      channel,
+      args: params,
+      agentId: resolvedAgentId,
+    });
   }
   if (accountId) {
     params.accountId = accountId;

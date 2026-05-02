@@ -178,6 +178,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     diagnosticMocks.logMessageQueued.mockReset();
     diagnosticMocks.logMessageProcessed.mockReset();
     diagnosticMocks.logSessionStateChange.mockReset();
+    diagnosticMocks.markDiagnosticSessionProgress.mockReset();
     agentEventMocks.emitAgentEvent.mockReset();
     agentEventMocks.onAgentEvent.mockReset().mockImplementation(() => () => {});
     setNoAbort();

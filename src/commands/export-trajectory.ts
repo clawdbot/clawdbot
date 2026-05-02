@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import {
   resolveDefaultSessionStorePath,
@@ -13,9 +13,10 @@ import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   exportTrajectoryForCommand,
   formatTrajectoryCommandExportSummary,
+  type TrajectoryCommandExportSummary,
 } from "../trajectory/command-export.js";
 
-export type ExportTrajectoryCommandOptions = {
+type ExportTrajectoryCommandOptions = {
   sessionKey?: string;
   output?: string;
   store?: string;
@@ -71,6 +72,15 @@ function resolveExportTrajectoryOptions(
   };
 }
 
+async function fileExists(pathName: string): Promise<boolean> {
+  try {
+    await fsp.access(pathName);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function exportTrajectoryCommand(
   opts: ExportTrajectoryCommandOptions,
   runtime: RuntimeEnv,
@@ -113,15 +123,15 @@ export async function exportTrajectoryCommand(
     runtime.exit(1);
     return;
   }
-  if (!fs.existsSync(sessionFile)) {
+  if (!(await fileExists(sessionFile))) {
     runtime.error("Session file not found.");
     runtime.exit(1);
     return;
   }
 
-  let summary: ReturnType<typeof exportTrajectoryForCommand>;
+  let summary: TrajectoryCommandExportSummary;
   try {
-    summary = exportTrajectoryForCommand({
+    summary = await exportTrajectoryForCommand({
       outputPath: resolvedOpts.output,
       sessionFile,
       sessionId: entry.sessionId,

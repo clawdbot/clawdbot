@@ -6,7 +6,7 @@ import {
 
 const MAX_WATCH_ERROR_MESSAGE_CHARS = 200;
 
-export type SanitizedIMessageWatchErrorPayload = {
+type SanitizedIMessageWatchErrorPayload = {
   code?: number;
   message?: string;
 };

@@ -43,7 +43,7 @@ const DREAMING_DIFF_PREFIX_RE = /@@\s*-\d+(?:,\d+)?\s+[-*+]\s+/iy;
 const inProcessShortTermLocks = new Map<string, Promise<void>>();
 const ensuredShortTermDirs = new Map<string, Promise<void>>();
 
-export type PromotionWeights = {
+type PromotionWeights = {
   frequency: number;
   relevance: number;
   diversity: number;
@@ -52,7 +52,7 @@ export type PromotionWeights = {
   conceptual: number;
 };
 
-export const DEFAULT_PROMOTION_WEIGHTS: PromotionWeights = {
+const DEFAULT_PROMOTION_WEIGHTS: PromotionWeights = {
   frequency: 0.24,
   relevance: 0.3,
   diversity: 0.15,
@@ -102,7 +102,7 @@ type ShortTermPhaseSignalStore = {
   entries: Record<string, ShortTermPhaseSignalEntry>;
 };
 
-export type PromotionComponents = {
+type PromotionComponents = {
   frequency: number;
   relevance: number;
   diversity: number;
@@ -136,7 +136,7 @@ export type PromotionCandidate = {
   components: PromotionComponents;
 };
 
-export type ShortTermAuditIssue = {
+type ShortTermAuditIssue = {
   severity: "warn" | "error";
   code:
     | "recall-store-unreadable"
@@ -179,7 +179,7 @@ export type RepairShortTermPromotionArtifactsResult = {
   removedStaleLock: boolean;
 };
 
-export type RankShortTermPromotionOptions = {
+type RankShortTermPromotionOptions = {
   workspaceDir: string;
   limit?: number;
   minScore?: number;
@@ -192,7 +192,7 @@ export type RankShortTermPromotionOptions = {
   nowMs?: number;
 };
 
-export type ApplyShortTermPromotionsOptions = {
+type ApplyShortTermPromotionsOptions = {
   workspaceDir: string;
   candidates: PromotionCandidate[];
   limit?: number;
@@ -204,7 +204,7 @@ export type ApplyShortTermPromotionsOptions = {
   timezone?: string;
 };
 
-export type ApplyShortTermPromotionsResult = {
+type ApplyShortTermPromotionsResult = {
   memoryPath: string;
   applied: number;
   appended: number;

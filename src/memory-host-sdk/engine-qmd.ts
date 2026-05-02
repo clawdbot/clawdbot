@@ -1,1 +1,1 @@
-export * from "../../packages/memory-host-sdk/src/engine-qmd.js";
+export { checkQmdBinaryAvailability } from "../../packages/memory-host-sdk/src/engine-qmd.js";

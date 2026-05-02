@@ -47,18 +47,16 @@ describe("plugin compatibility snapshot notices", () => {
     cleanupPluginLoaderFixturesForTest();
   });
 
-  it("reports implicit startup sidecar compatibility from a real legacy manifest", () => {
+  it("does not report startup compatibility warnings for legacy manifests", () => {
     const plugin = writePlugin({
       id: "legacy-sidecar",
       body: `module.exports = { id: "legacy-sidecar", register() {} };\n`,
     });
 
-    expect(buildSnapshotCompatibilityNoticeCodes(plugin)).toEqual([
-      "legacy-implicit-startup-sidecar",
-    ]);
+    expect(buildSnapshotCompatibilityNoticeCodes(plugin)).toEqual([]);
   });
 
-  it("does not report implicit startup compatibility for explicit startup-lazy manifests", () => {
+  it("does not report startup compatibility warnings for explicit startup-lazy manifests", () => {
     const plugin = writePlugin({
       id: "modern-startup-lazy",
       body: `module.exports = { id: "modern-startup-lazy", register() {} };\n`,

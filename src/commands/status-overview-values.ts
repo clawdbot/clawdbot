@@ -21,7 +21,7 @@ type SummarySessionsLike = {
   };
 };
 
-export function countActiveStatusAgents(params: {
+function countActiveStatusAgents(params: {
   agentStatus: AgentStatusLike;
   activeThresholdMs?: number;
 }) {

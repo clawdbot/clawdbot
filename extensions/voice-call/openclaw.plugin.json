@@ -5,6 +5,9 @@
     "onStartup": true,
     "onCommands": ["voicecall"]
   },
+  "contracts": {
+    "tools": ["voice_call"]
+  },
   "channelEnvVars": {
     "voice-call": [
       "TELNYX_API_KEY",
@@ -185,6 +188,10 @@
     "store": {
       "label": "Call Log Store Path",
       "advanced": true
+    },
+    "sessionScope": {
+      "label": "Session Scope",
+      "help": "Use per-phone to preserve caller memory across calls, or per-call to isolate every call into a fresh voice session."
     },
     "responseModel": {
       "label": "Response Model",
@@ -763,6 +770,10 @@
       },
       "store": {
         "type": "string"
+      },
+      "sessionScope": {
+        "type": "string",
+        "enum": ["per-phone", "per-call"]
       },
       "responseModel": {
         "type": "string"

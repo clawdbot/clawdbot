@@ -15,9 +15,14 @@ on:
         description: Comma-separated plugin package names to publish when publish_scope=selected
         required: false
         type: string
+      ref:
+        description: Commit SHA on main or a release branch to publish from; defaults to the workflow ref
+        required: false
+        default: ""
+        type: string
 
 concurrency:
-  group: plugin-clawhub-release-${{ github.sha }}
+  group: plugin-clawhub-release-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
   cancel-in-progress: false
 
 env:
@@ -27,7 +32,7 @@ env:
   CLAWHUB_REGISTRY: "https://clawhub.ai"
   CLAWHUB_REPOSITORY: "openclaw/clawhub"
   # Pinned to a reviewed ClawHub commit so release behavior stays reproducible.
-  CLAWHUB_REF: "4af2bd50a71465683dbf8aa269af764b9d39bdf5"
+  CLAWHUB_REF: "48e66714ac2352d52b193a90ae911cd92463c20a"
 
 jobs:
   preview_plugins_clawhub:
@@ -45,7 +50,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
-          ref: ${{ github.sha }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
           fetch-depth: 0
 
       - name: Setup Node environment
@@ -59,11 +64,22 @@ jobs:
         id: ref
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Validate ref is on main
+      - name: Validate ref is on main or a release branch
         run: |
           set -euo pipefail
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          git merge-base --is-ancestor HEAD origin/main
+          git fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main \
+            '+refs/heads/release/*:refs/remotes/origin/release/*'
+          if git merge-base --is-ancestor HEAD origin/main; then
+            exit 0
+          fi
+          while IFS= read -r release_ref; do
+            if git merge-base --is-ancestor HEAD "${release_ref}"; then
+              exit 0
+            fi
+          done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/release)
+          echo "Plugin ClawHub publishes must target a commit reachable from main or release/*." >&2
+          exit 1
 
       - name: Validate publishable plugin metadata
         env:
@@ -145,6 +161,7 @@ jobs:
       contents: read
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
     steps:
@@ -246,6 +263,36 @@ jobs:
           EOF
           chmod +x "$RUNNER_TEMP/clawhub"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Write ClawHub token config
+        env:
+          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+          CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${CLAWHUB_TOKEN}" ]]; then
+            echo "No CLAWHUB_TOKEN secret configured; publish will rely on GitHub OIDC trusted publishing."
+            exit 0
+          fi
+          node --input-type=module <<'EOF'
+          import { writeFileSync } from "node:fs";
+          import { join } from "node:path";
+
+          const path = join(process.env.RUNNER_TEMP, "clawhub-config.json");
+          writeFileSync(
+            path,
+            `${JSON.stringify(
+              {
+                registry: process.env.CLAWHUB_REGISTRY,
+                token: process.env.CLAWHUB_TOKEN,
+              },
+              null,
+              2,
+            )}\n`,
+          );
+          console.log(path);
+          EOF
+          echo "CLAWHUB_CONFIG_PATH=${RUNNER_TEMP}/clawhub-config.json" >> "$GITHUB_ENV"
 
       - name: Ensure version is not already published
         env:

@@ -117,7 +117,7 @@ function scenarioConfig(scenario, options = {}) {
       agents: {
         defaults: {
           model: {
-            primary: "openai/gpt-4.1-mini",
+            primary: "openai/gpt-5.5",
           },
           contextTokens: 64000,
           skills: ["memory"],
@@ -129,7 +129,7 @@ function scenarioConfig(scenario, options = {}) {
             name: "Main",
             workspace: "~/workspace",
             model: {
-              primary: "openai/gpt-4.1-mini",
+              primary: "openai/gpt-5.5",
             },
             thinkingDefault: "low",
             skills: ["memory"],
@@ -140,7 +140,7 @@ function scenarioConfig(scenario, options = {}) {
             name: "Ops",
             workspace: "~/workspace/ops",
             model: {
-              primary: "openai/gpt-4.1-mini",
+              primary: "openai/gpt-5.5",
             },
             fastModeDefault: true,
           },
@@ -433,7 +433,7 @@ OPENCLAW_TEST_STATE_JSON
   "agents": {
     "defaults": {
       "model": {
-        "primary": "openai/gpt-4.1-mini"
+        "primary": "openai/gpt-5.5"
       },
       "contextTokens": 64000,
       "skills": [
@@ -447,7 +447,7 @@ OPENCLAW_TEST_STATE_JSON
         "name": "Main",
         "workspace": "~/workspace",
         "model": {
-          "primary": "openai/gpt-4.1-mini"
+          "primary": "openai/gpt-5.5"
         },
         "thinkingDefault": "low",
         "skills": [
@@ -460,7 +460,7 @@ OPENCLAW_TEST_STATE_JSON
         "name": "Ops",
         "workspace": "~/workspace/ops",
         "model": {
-          "primary": "openai/gpt-4.1-mini"
+          "primary": "openai/gpt-5.5"
         },
         "fastModeDefault": true
       }

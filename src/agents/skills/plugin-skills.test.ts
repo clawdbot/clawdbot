@@ -11,9 +11,21 @@ import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 
 const hoisted = vi.hoisted(() => {
   const loadManifestRegistry = vi.fn();
+  const loadPluginMetadataSnapshot = vi.fn(() => {
+    const manifestRegistry = loadManifestRegistry();
+    return {
+      manifestRegistry,
+      plugins: manifestRegistry.plugins,
+      normalizePluginId: (pluginId: string) =>
+        manifestRegistry.plugins.find((plugin: { id: string; legacyPluginIds?: string[] }) =>
+          plugin.legacyPluginIds?.includes(pluginId),
+        )?.id ?? pluginId,
+    };
+  });
   return {
     loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
     loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
+    loadPluginMetadataSnapshot,
     loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
   };
 });
@@ -25,6 +37,10 @@ vi.mock("../../plugins/manifest-registry-installed.js", () => ({
 vi.mock("../../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: hoisted.loadPluginManifestRegistryForPluginRegistry,
   loadPluginRegistrySnapshot: hoisted.loadPluginRegistrySnapshot,
+}));
+
+vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: hoisted.loadPluginMetadataSnapshot,
 }));
 
 let resolvePluginSkillDirs: typeof import("./plugin-skills.js").resolvePluginSkillDirs;
@@ -135,6 +151,7 @@ function registerHealthyAcpBackend() {
 
 afterEach(async () => {
   hoisted.loadPluginManifestRegistryForInstalledIndex.mockReset();
+  hoisted.loadPluginMetadataSnapshot.mockClear();
   hoisted.loadPluginRegistrySnapshot.mockReset();
   acpRuntimeTesting.resetAcpRuntimeBackendsForTests();
   await tempDirs.cleanup();
@@ -151,6 +168,7 @@ describe("resolvePluginSkillDirs", () => {
       diagnostics: [],
       plugins: [],
     });
+    hoisted.loadPluginMetadataSnapshot.mockClear();
     hoisted.loadPluginRegistrySnapshot.mockReset();
     hoisted.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
   });

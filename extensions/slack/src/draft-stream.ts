@@ -7,7 +7,7 @@ import { sendMessageSlack } from "./send.js";
 
 const DEFAULT_THROTTLE_MS = 1000;
 
-export type SlackDraftStream = {
+type SlackDraftStream = {
   update: (text: string) => void;
   flush: () => Promise<void>;
   clear: () => Promise<void>;

@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../../infra/net/fetch-guard.js";
-import { withStrictWebToolsEndpoint, withTrustedWebToolsEndpoint } from "./web-guarded-fetch.js";
+import {
+  withSelfHostedWebToolsEndpoint,
+  withStrictWebToolsEndpoint,
+  withTrustedWebToolsEndpoint,
+} from "./web-guarded-fetch.js";
 
 vi.mock("../../infra/net/fetch-guard.js", () => {
   const GUARDED_FETCH_MODE = {
@@ -26,7 +30,7 @@ describe("web-guarded-fetch", () => {
     vi.clearAllMocks();
   });
 
-  it("uses trusted SSRF policy for trusted web tools endpoints", async () => {
+  it("uses strict SSRF policy for trusted web tools endpoints", async () => {
     vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
       response: new Response("ok", { status: 200 }),
       finalUrl: "https://example.com",
@@ -38,6 +42,24 @@ describe("web-guarded-fetch", () => {
     expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "https://example.com",
+        policy: {},
+        mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+      }),
+    );
+  });
+
+  it("uses private-network policy only for self-hosted web tools endpoints", async () => {
+    vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
+      response: new Response("ok", { status: 200 }),
+      finalUrl: "http://127.0.0.1:8080",
+      release: async () => {},
+    });
+
+    await withSelfHostedWebToolsEndpoint({ url: "http://127.0.0.1:8080" }, async () => undefined);
+
+    expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "http://127.0.0.1:8080",
         policy: expect.objectContaining({
           dangerouslyAllowPrivateNetwork: true,
           allowRfc2544BenchmarkRange: true,

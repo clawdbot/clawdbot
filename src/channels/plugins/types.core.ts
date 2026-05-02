@@ -475,6 +475,12 @@ export type ChannelThreadingToolContext = {
 
 /** Channel-owned messaging helpers for target parsing, routing, and payload shaping. */
 export type ChannelMessagingAdapter = {
+  /**
+   * Provider prefixes accepted in explicit targets, including aliases not used
+   * as channel-selection aliases. Core uses these to reject cross-channel
+   * targets before plugin-specific normalization.
+   */
+  targetPrefixes?: readonly string[];
   normalizeTarget?: (raw: string) => string | undefined;
   defaultMarkdownTableMode?: MarkdownTableMode;
   normalizeExplicitSessionKey?: (params: {

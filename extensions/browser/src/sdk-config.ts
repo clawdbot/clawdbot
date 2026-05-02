@@ -22,8 +22,6 @@ export {
   resolveUserPath,
   shortenHomePath,
 } from "openclaw/plugin-sdk/text-runtime";
-export { normalizeOptionalLowercaseString };
-
 type PortRange = { start: number; end: number };
 
 const DEFAULT_BROWSER_CDP_PORT_RANGE_START = 18800;

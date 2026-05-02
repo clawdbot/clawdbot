@@ -196,6 +196,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
       },
       actions: zaloMessageActions,
       messaging: {
+        targetPrefixes: ["zalo", "zl"],
         normalizeTarget: normalizeZaloMessagingTarget,
         resolveOutboundSessionRoute: (params) => resolveZaloOutboundSessionRoute(params),
         targetResolver: {

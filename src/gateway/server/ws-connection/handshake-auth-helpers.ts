@@ -336,7 +336,7 @@ export function resolveDeviceSignaturePayloadVersion(params: {
   return null;
 }
 
-export function resolveAuthProvidedKind(
+function resolveAuthProvidedKind(
   connectAuth: HandshakeConnectAuth | null | undefined,
 ): AuthProvidedKind {
   return connectAuth?.password

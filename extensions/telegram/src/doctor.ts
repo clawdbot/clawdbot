@@ -6,7 +6,11 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { inspectTelegramAccount } from "./account-inspect.js";
-import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
+import {
+  listTelegramAccountIds,
+  resolveDefaultTelegramAccountId,
+  resolveTelegramAccount,
+} from "./accounts.js";
 import { isNumericTelegramSenderUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
 import { hasTelegramBotEndpointApiRoot, normalizeTelegramApiRoot } from "./api-root.js";
@@ -222,6 +226,26 @@ export function maybeRepairTelegramApiRoots(cfg: OpenClawConfig): {
       (hit) => `- ${sanitizeForLog(hit.path)}: removed trailing /bot<TOKEN> from Telegram apiRoot.`,
     ),
   };
+}
+
+export function collectTelegramMissingEnvTokenWarnings(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): string[] {
+  if (resolveDefaultTelegramAccountId(params.cfg) !== "default") {
+    return [];
+  }
+  const account = inspectTelegramAccount({
+    cfg: params.cfg,
+    accountId: "default",
+    envToken: params.env?.TELEGRAM_BOT_TOKEN ?? "",
+  });
+  if (!account.enabled || account.tokenStatus !== "missing" || account.tokenSource !== "none") {
+    return [];
+  }
+  return [
+    "- channels.telegram: default account has no available bot token, and TELEGRAM_BOT_TOKEN is absent in this doctor environment. After migration, verify TELEGRAM_BOT_TOKEN is present in the state-dir .env or configure channels.telegram.botToken / channels.telegram.accounts.default.botToken as a SecretRef.",
+  ];
 }
 
 async function repairTelegramConfig(params: { cfg: OpenClawConfig }): Promise<{
@@ -472,7 +496,8 @@ export function collectTelegramEmptyAllowlistExtraWarnings(
 export const telegramDoctor: ChannelDoctorAdapter = {
   legacyConfigRules: TELEGRAM_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig: normalizeTelegramCompatibilityConfig,
-  collectPreviewWarnings: ({ cfg, doctorFixCommand }) => [
+  collectPreviewWarnings: ({ cfg, doctorFixCommand, env }) => [
+    ...collectTelegramMissingEnvTokenWarnings({ cfg, env }),
     ...collectTelegramInvalidAllowFromWarnings({
       hits: scanTelegramInvalidAllowFromEntries(cfg),
       doctorFixCommand,

@@ -6,10 +6,13 @@ import {
   resolveSessionFilePathOptions,
   resolveStorePath,
 } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
-import { readSessionTitleFieldsFromTranscript } from "../../gateway/session-utils.fs.js";
-import { deriveSessionTitle } from "../../gateway/session-utils.js";
+import {
+  deriveSessionTitle,
+  readSessionTitleFieldsFromTranscriptAsync,
+} from "../../gateway/session-utils.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
 import {
@@ -45,6 +48,8 @@ const SessionsListToolSchema = Type.Object({
 });
 
 type GatewayCaller = typeof callGateway;
+
+const SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS = 100;
 
 function readSessionRunStatus(value: unknown): SessionRunStatus | undefined {
   return value === "running" ||
@@ -110,6 +115,8 @@ export function createSessionsListTool(opts?: {
       const includeDerivedTitles = params.includeDerivedTitles === true;
       const includeLastMessage = params.includeLastMessage === true;
       const gatewayCall = opts?.callGateway ?? callGateway;
+      const a2aPolicy = createAgentToAgentPolicy(cfg);
+      const hydrateTranscriptFieldsAfterFiltering = includeDerivedTitles || includeLastMessage;
 
       const list = await gatewayCall<{ sessions: Array<SessionListRow>; path: string }>({
         method: "sessions.list",
@@ -119,6 +126,8 @@ export function createSessionsListTool(opts?: {
           label,
           agentId,
           search,
+          includeDerivedTitles: false,
+          includeLastMessage: false,
           includeGlobal: !restrictToSpawned,
           includeUnknown: !restrictToSpawned,
           spawnedBy: restrictToSpawned ? effectiveRequesterKey : undefined,
@@ -127,7 +136,6 @@ export function createSessionsListTool(opts?: {
 
       const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
       const storePath = typeof list?.path === "string" ? list.path : undefined;
-      const a2aPolicy = createAgentToAgentPolicy(cfg);
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "list",
         requesterSessionKey: effectiveRequesterKey,
@@ -136,6 +144,13 @@ export function createSessionsListTool(opts?: {
       });
       const rows: SessionListRow[] = [];
       const historyTargets: Array<{ row: SessionListRow; resolvedKey: string }> = [];
+      const titleTargets: Array<{
+        row: SessionListRow;
+        titleEntry: SessionEntry;
+        sessionId: string;
+        sessionFile?: string;
+        agentId: string;
+      }> = [];
 
       for (const entry of sessions) {
         if (!entry || typeof entry !== "object") {
@@ -309,31 +324,24 @@ export function createSessionsListTool(opts?: {
           lastAccountId,
           transcriptPath,
         };
-        if (sessionId && (includeDerivedTitles || includeLastMessage)) {
-          const fields = readSessionTitleFieldsFromTranscript(
+        if (
+          sessionId &&
+          hydrateTranscriptFieldsAfterFiltering &&
+          titleTargets.length < SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS
+        ) {
+          titleTargets.push({
+            row,
+            titleEntry: {
+              sessionId,
+              displayName: row.displayName,
+              label: row.label,
+              subject: readStringValue((entry as { subject?: unknown }).subject),
+              updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : 0,
+            },
             sessionId,
-            storePath,
-            sessionFile,
-            resolvedAgentId,
-          );
-          if (includeDerivedTitles && !row.derivedTitle) {
-            const derivedTitle = deriveSessionTitle(
-              {
-                sessionId,
-                displayName: row.displayName,
-                label: row.label,
-                subject: readStringValue((entry as { subject?: unknown }).subject),
-                updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : 0,
-              },
-              fields.firstUserMessage,
-            );
-            if (derivedTitle) {
-              row.derivedTitle = derivedTitle;
-            }
-          }
-          if (includeLastMessage && !row.lastMessagePreview && fields.lastMessagePreview) {
-            row.lastMessagePreview = fields.lastMessagePreview;
-          }
+            ...(sessionFile ? { sessionFile } : {}),
+            agentId: resolvedAgentId,
+          });
         }
         if (messageLimit > 0) {
           const resolvedKey = resolveInternalSessionKey({
@@ -344,6 +352,37 @@ export function createSessionsListTool(opts?: {
           historyTargets.push({ row, resolvedKey });
         }
         rows.push(row);
+      }
+
+      if (titleTargets.length > 0) {
+        const maxConcurrent = Math.min(4, titleTargets.length);
+        let index = 0;
+        const worker = async () => {
+          while (true) {
+            const next = index;
+            index += 1;
+            if (next >= titleTargets.length) {
+              return;
+            }
+            const target = titleTargets[next];
+            const fields = await readSessionTitleFieldsFromTranscriptAsync(
+              target.sessionId,
+              storePath,
+              target.sessionFile,
+              target.agentId,
+            );
+            if (includeDerivedTitles && !target.row.derivedTitle) {
+              target.row.derivedTitle = deriveSessionTitle(
+                target.titleEntry,
+                fields.firstUserMessage,
+              );
+            }
+            if (includeLastMessage && fields.lastMessagePreview) {
+              target.row.lastMessagePreview = fields.lastMessagePreview;
+            }
+          }
+        };
+        await Promise.all(Array.from({ length: maxConcurrent }, () => worker()));
       }
 
       if (messageLimit > 0 && historyTargets.length > 0) {

@@ -7,21 +7,15 @@
 
 import type {
   ChannelAccountSnapshot,
-  ChannelCapabilities,
-  ChannelGatewayContext,
   ChannelLogSink,
   ChannelMessageActionAdapter,
   ChannelMessageActionContext,
-  ChannelMeta,
   ChannelOutboundAdapter,
   ChannelOutboundContext,
   ChannelPlugin,
   ChannelResolveKind,
   ChannelResolveResult,
-  ChannelStatusAdapter,
-  OpenClawConfig,
   OutboundDeliveryResult,
-  RuntimeEnv,
 } from "../runtime-api.js";
 
 // ============================================================================
@@ -98,20 +92,13 @@ export interface TwitchChatMessage {
 // Re-export core types for convenience
 export type {
   ChannelAccountSnapshot,
-  ChannelGatewayContext,
   ChannelLogSink,
   ChannelMessageActionAdapter,
   ChannelMessageActionContext,
-  ChannelMeta,
   ChannelOutboundAdapter,
-  ChannelStatusAdapter,
-  ChannelCapabilities,
   ChannelResolveKind,
   ChannelResolveResult,
   ChannelPlugin,
   ChannelOutboundContext,
   OutboundDeliveryResult,
 };
-
-export type { OpenClawConfig };
-export type { RuntimeEnv };

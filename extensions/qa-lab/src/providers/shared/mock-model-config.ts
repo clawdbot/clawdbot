@@ -14,11 +14,11 @@ function cloneProvider(provider: ModelProviderConfig): ModelProviderConfig {
   };
 }
 
-export function trimTrailingApiV1(baseUrl: string) {
+function trimTrailingApiV1(baseUrl: string) {
   return baseUrl.replace(/\/v1\/?$/i, "");
 }
 
-export function createMockOpenAiResponsesProvider(baseUrl: string): ModelProviderConfig {
+function createMockOpenAiResponsesProvider(baseUrl: string): ModelProviderConfig {
   return {
     baseUrl,
     apiKey: "test",
@@ -61,7 +61,7 @@ export function createMockOpenAiResponsesProvider(baseUrl: string): ModelProvide
   };
 }
 
-export function createMockAnthropicMessagesProvider(baseUrl: string): ModelProviderConfig {
+function createMockAnthropicMessagesProvider(baseUrl: string): ModelProviderConfig {
   return {
     baseUrl: trimTrailingApiV1(baseUrl),
     apiKey: "test",

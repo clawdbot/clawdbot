@@ -19,6 +19,7 @@ export function makeIsolatedEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.Proce
   return {
     OPENCLAW_STATE_DIR: path.join(rootDir, "state"),
     OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "extensions"),
+    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
     VITEST: "true",
     ...overrides,
   };

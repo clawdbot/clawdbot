@@ -50,7 +50,6 @@ import {
 } from "./onboard-helpers.js";
 import { promptRemoteGatewayConfig } from "./onboard-remote.js";
 import { setupSkills } from "./onboard-skills.js";
-import { preparePostConfigBundledRuntimeDeps } from "./post-config-runtime-deps.js";
 
 type ConfigureSectionChoice = WizardSection | "__continue";
 type SetupPluginConfigModule = typeof import("../wizard/setup.plugin-config.js");
@@ -518,7 +517,6 @@ export async function runConfigureWizard(
           mergeBaseConfig = structuredClone(nextConfig);
 
           logConfigUpdated(runtime);
-          await preparePostConfigBundledRuntimeDeps({ config: nextConfig, runtime });
           return;
         } catch (err) {
           if (err instanceof ConfigMutationConflictError && attempt < maxRetries - 1) {

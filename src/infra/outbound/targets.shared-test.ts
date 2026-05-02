@@ -85,6 +85,18 @@ export function runResolveOutboundTargetCoreTests(): void {
       }
     });
 
+    it("rejects a target prefixed for a different channel before plugin normalization", () => {
+      const res = resolveOutboundTarget({
+        channel: "alpha",
+        to: "beta:room-one",
+        mode: "explicit",
+      });
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.error.message).toContain("belongs to beta, not alpha");
+      }
+    });
+
     it("uses the plugin hint when a channel has outbound support but no target resolver", () => {
       setActivePluginRegistry(
         createTargetsTestRegistry([

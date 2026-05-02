@@ -6,11 +6,7 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 
-export {
-  resolveThreadBindingIdleTimeoutMs,
-  resolveThreadBindingMaxAgeMs,
-  resolveThreadBindingsEnabled,
-};
+export { resolveThreadBindingsEnabled };
 
 export function resolveDiscordThreadBindingIdleTimeoutMs(params: {
   cfg: OpenClawConfig;

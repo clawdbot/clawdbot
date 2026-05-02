@@ -108,7 +108,7 @@ function json(data: unknown) {
  * Options provided by the caller when executing a channel API request.
  * 执行频道 API 请求时由调用方提供的选项。
  */
-export interface ChannelApiExecuteOptions {
+interface ChannelApiExecuteOptions {
   accessToken: string;
 }
 

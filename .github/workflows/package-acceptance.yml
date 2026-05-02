@@ -70,12 +70,12 @@ on:
         default: openclaw@latest
         type: string
       published_upgrade_survivor_baselines:
-        description: Optional baseline list for published-upgrade-survivor; use release-history for last 6 plus key legacy releases
+        description: Optional baseline list for published-upgrade-survivor/update-migration; use release-history or all-since-2026.4.23
         required: false
         default: ""
         type: string
       published_upgrade_survivor_scenarios:
-        description: Optional scenario list for published-upgrade-survivor; use reported-issues for known upgrade failure shapes
+        description: Optional scenario list for published-upgrade-survivor/update-migration; use reported-issues for known upgrade failure shapes
         required: false
         default: ""
         type: string
@@ -150,12 +150,12 @@ on:
         default: openclaw@latest
         type: string
       published_upgrade_survivor_baselines:
-        description: Optional baseline list for published-upgrade-survivor; use release-history for last 6 plus key legacy releases
+        description: Optional baseline list for published-upgrade-survivor/update-migration; use release-history or all-since-2026.4.23
         required: false
         default: ""
         type: string
       published_upgrade_survivor_scenarios:
-        description: Optional scenario list for published-upgrade-survivor; use reported-issues for known upgrade failure shapes
+        description: Optional scenario list for published-upgrade-survivor/update-migration; use reported-issues for known upgrade failure shapes
         required: false
         default: ""
         type: string
@@ -386,10 +386,10 @@ jobs:
               docker_lanes="npm-onboard-channel-agent gateway-network config-reload"
               ;;
             package)
-              docker_lanes="npm-onboard-channel-agent doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor bundled-channel-deps-compat plugins-offline plugin-update"
+              docker_lanes="npm-onboard-channel-agent doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor plugins-offline plugin-update"
               ;;
             product)
-              docker_lanes="npm-onboard-channel-agent doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor bundled-channel-deps-compat plugins plugin-update mcp-channels cron-mcp-cleanup openai-web-search-minimal openwebui"
+              docker_lanes="npm-onboard-channel-agent doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor plugins plugin-update mcp-channels cron-mcp-cleanup openai-web-search-minimal openwebui"
               include_openwebui=true
               ;;
             full)
@@ -442,7 +442,7 @@ jobs:
           fi
           releases_json=""
           npm_versions_json=""
-          if [[ "$REQUESTED_BASELINES" == *"release-history"* ]]; then
+          if [[ "$REQUESTED_BASELINES" == *"release-history"* || "$REQUESTED_BASELINES" == *"all-since-"* ]]; then
             releases_json=".artifacts/package-candidate-input/openclaw-releases.json"
             npm_versions_json=".artifacts/package-candidate-input/openclaw-npm-versions.json"
             mkdir -p "$(dirname "$releases_json")"
@@ -509,7 +509,7 @@ jobs:
     needs: resolve_package
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
-      ref: ${{ inputs.workflow_ref }}
+      ref: ${{ needs.resolve_package.outputs.package_source_sha || inputs.workflow_ref }}
       include_repo_e2e: false
       include_release_path_suites: ${{ needs.resolve_package.outputs.include_release_path_suites == 'true' }}
       include_openwebui: ${{ needs.resolve_package.outputs.include_openwebui == 'true' }}

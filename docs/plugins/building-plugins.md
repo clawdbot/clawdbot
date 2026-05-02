@@ -22,7 +22,9 @@ falls back to npm automatically for packages that still use npm distribution.
 
 - Node >= 22 and a package manager (npm or pnpm)
 - Familiarity with TypeScript (ESM)
-- For in-repo plugins: repository cloned and `pnpm install` done
+- For in-repo plugins: repository cloned and `pnpm install` done. Source
+  checkout plugin development is pnpm-only because OpenClaw loads bundled
+  plugins from the `extensions/*` workspace packages.
 
 ## What kind of plugin?
 
@@ -76,6 +78,9 @@ and provider plugins have dedicated guides linked above.
       "id": "my-plugin",
       "name": "My Plugin",
       "description": "Adds a custom tool to OpenClaw",
+      "contracts": {
+        "tools": ["my_tool"]
+      },
       "activation": {
         "onStartup": true
       },
@@ -87,9 +92,10 @@ and provider plugins have dedicated guides linked above.
     ```
     </CodeGroup>
 
-    Every plugin needs a manifest, even with no config, and every plugin should
-    declare `activation.onStartup` intentionally. Runtime-registered tools need
-    startup import, so this example sets it to `true`. See
+    Every plugin needs a manifest, even with no config. Runtime-registered tools
+    must be listed in `contracts.tools` so OpenClaw can discover the owning
+    plugin without loading every plugin runtime. Plugins should also declare
+    `activation.onStartup` intentionally. This example sets it to `true`. See
     [Manifest](/plugins/manifest) for the full schema. The canonical ClawHub
     publish snippets live in `docs/snippets/plugin-publish/`.
 
@@ -237,6 +243,17 @@ register(api) {
     },
     { optional: true },
   );
+}
+```
+
+Every tool registered with `api.registerTool(...)` must also be declared in the
+plugin manifest:
+
+```json
+{
+  "contracts": {
+    "tools": ["my_tool", "workflow_tool"]
+  }
 }
 ```
 

@@ -7,12 +7,12 @@ import {
 } from "../routing/session-key.js";
 import { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
 
-export type VoiceWakeRouteTarget =
+type VoiceWakeRouteTarget =
   | { mode: "current"; agentId?: undefined; sessionKey?: undefined }
   | { agentId: string; sessionKey?: undefined; mode?: undefined }
   | { sessionKey: string; agentId?: undefined; mode?: undefined };
 
-export type VoiceWakeRouteRule = {
+type VoiceWakeRouteRule = {
   trigger: string;
   target: VoiceWakeRouteTarget;
 };
@@ -288,12 +288,9 @@ export async function setVoiceWakeRoutingConfig(
   });
 }
 
-export type VoiceWakeResolvedRoute =
-  | { mode: "current" }
-  | { agentId: string }
-  | { sessionKey: string };
+type VoiceWakeResolvedRoute = { mode: "current" } | { agentId: string } | { sessionKey: string };
 
-export function resolveVoiceWakeRouteTarget(
+function resolveVoiceWakeRouteTarget(
   routeTarget: VoiceWakeRouteTarget | undefined,
 ): VoiceWakeResolvedRoute {
   if (!routeTarget || ("mode" in routeTarget && routeTarget.mode === "current")) {

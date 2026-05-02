@@ -1,6 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
-export type TargetIdResolution =
+type TargetIdResolution =
   | { ok: true; targetId: string }
   | { ok: false; reason: "not_found" | "ambiguous"; matches?: string[] };
 

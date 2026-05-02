@@ -11,7 +11,7 @@ export type ResolvedTheme =
   | "custom-light";
 
 export const VALID_THEME_NAMES = new Set<ThemeName>(["claw", "knot", "dash", "custom"]);
-export const VALID_THEME_MODES = new Set<ThemeMode>(["system", "light", "dark"]);
+const VALID_THEME_MODES = new Set<ThemeMode>(["system", "light", "dark"]);
 
 type ThemeSelection = { theme: ThemeName; mode: ThemeMode };
 
@@ -29,7 +29,7 @@ const LEGACY_MAP: Record<string, ThemeSelection> = {
   system: { theme: "claw", mode: "system" },
 };
 
-export function prefersLightScheme(): boolean {
+function prefersLightScheme(): boolean {
   if (typeof globalThis.matchMedia !== "function") {
     return false;
   }

@@ -4,7 +4,12 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 
 const MINIMAX_CREDENTIAL_PATH = "plugins.entries.minimax.config.webSearch.apiKey";
-const MINIMAX_CODING_PLAN_ENV_VARS = ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY"] as const;
+const MINIMAX_TOKEN_PLAN_ENV_VARS = [
+  "MINIMAX_CODE_PLAN_KEY",
+  "MINIMAX_CODING_API_KEY",
+  "MINIMAX_OAUTH_TOKEN",
+] as const;
+const MINIMAX_WEB_SEARCH_ENV_VARS = [...MINIMAX_TOKEN_PLAN_ENV_VARS, "MINIMAX_API_KEY"] as const;
 
 type MiniMaxWebSearchRuntime = typeof import("./minimax-web-search-provider.runtime.js");
 
@@ -32,9 +37,10 @@ export function createMiniMaxWebSearchProvider(): WebSearchProviderPlugin {
   return {
     id: "minimax",
     label: "MiniMax Search",
-    hint: "Structured results via MiniMax Coding Plan search API",
-    credentialLabel: "MiniMax Coding Plan key",
-    envVars: [...MINIMAX_CODING_PLAN_ENV_VARS],
+    hint: "Structured results via MiniMax Token Plan search API",
+    onboardingScopes: ["text-inference"],
+    credentialLabel: "MiniMax Token Plan key or OAuth token",
+    envVars: [...MINIMAX_WEB_SEARCH_ENV_VARS],
     placeholder: "sk-cp-...",
     signupUrl: "https://platform.minimax.io/user-center/basic-information/interface-key",
     docsUrl: "https://docs.openclaw.ai/tools/minimax-search",

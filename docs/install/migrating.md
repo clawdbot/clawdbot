@@ -82,6 +82,14 @@ Run `openclaw status` on the old machine to confirm your state directory path. C
   </Step>
 </Steps>
 
+If Telegram or Discord uses the default env fallback (`TELEGRAM_BOT_TOKEN` or `DISCORD_BOT_TOKEN`), verify the migrated state-dir `.env` contains those keys without printing the secret values:
+
+```bash
+awk -F= '/^(TELEGRAM_BOT_TOKEN|DISCORD_BOT_TOKEN)=/ { print $1 "=present" }' ~/.openclaw/.env
+```
+
+`openclaw doctor` also warns when an enabled default Telegram or Discord account has no configured token and the matching env variable is unavailable to the doctor process.
+
 ### Common pitfalls
 
 <AccordionGroup>

@@ -3,7 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 const MAX_ALLOWED_VALUES_HINT = 12;
 const MAX_ALLOWED_VALUE_CHARS = 160;
 
-export type AllowedValuesSummary = {
+type AllowedValuesSummary = {
   values: string[];
   hiddenCount: number;
   formatted: string;

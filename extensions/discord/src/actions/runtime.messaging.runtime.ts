@@ -51,7 +51,7 @@ export const discordMessagingActionRuntime = {
   unpinMessageDiscord,
 };
 
-export async function resolveDiscordReactionTargetChannelId(params: {
+async function resolveDiscordReactionTargetChannelId(params: {
   target: string;
   cfg: OpenClawConfig;
   accountId?: string;

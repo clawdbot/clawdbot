@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 
-export type TestDraftStream = {
+type TestDraftStream = {
   update: ReturnType<typeof vi.fn<(text: string) => void>>;
   flush: ReturnType<typeof vi.fn<() => Promise<void>>>;
   messageId: ReturnType<typeof vi.fn<() => number | undefined>>;

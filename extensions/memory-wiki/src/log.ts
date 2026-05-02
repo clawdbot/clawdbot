@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-export type MemoryWikiLogEntry = {
+type MemoryWikiLogEntry = {
   type: "init" | "ingest" | "compile" | "lint";
   timestamp: string;
   details?: Record<string, unknown>;

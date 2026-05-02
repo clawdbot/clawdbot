@@ -1,6 +1,6 @@
-export type ConfigSetMode = "value" | "json" | "ref_builder" | "provider_builder" | "batch";
+type ConfigSetMode = "value" | "json" | "ref_builder" | "provider_builder" | "batch";
 
-export type ConfigSetModeResolution =
+type ConfigSetModeResolution =
   | {
       ok: true;
       mode: ConfigSetMode;

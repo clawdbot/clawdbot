@@ -1,8 +1,8 @@
 import os from "node:os";
 
 export type NetworkInterfacesSnapshot = ReturnType<typeof os.networkInterfaces>;
-export type NetworkInterfaceFamily = "IPv4" | "IPv6";
-export type ExternalNetworkInterfaceAddress = {
+type NetworkInterfaceFamily = "IPv4" | "IPv6";
+type ExternalNetworkInterfaceAddress = {
   name: string;
   address: string;
   family: NetworkInterfaceFamily;

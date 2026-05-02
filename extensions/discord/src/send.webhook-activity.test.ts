@@ -75,4 +75,31 @@ describe("sendWebhookMessageDiscord activity", () => {
     });
     expect(loadConfigMock).not.toHaveBeenCalled();
   });
+
+  it("rewrites configured mention aliases for webhook sends", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "resolved-token",
+          mentionAliases: {
+            opslead: "123456789012345678",
+          },
+        },
+      },
+    };
+    await sendWebhookMessageDiscord("hello @OpsLead", {
+      cfg,
+      webhookId: "wh-1",
+      webhookToken: "tok-1",
+      accountId: "runtime",
+      threadId: "thread-1",
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        body: expect.stringContaining('"content":"hello <@123456789012345678>"'),
+      }),
+    );
+  });
 });

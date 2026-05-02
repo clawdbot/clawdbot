@@ -4,6 +4,9 @@
     "onStartup": false
   },
   "channels": ["tlon"],
+  "contracts": {
+    "tools": ["tlon"]
+  },
   "skills": ["node_modules/@tloncorp/tlon-skill"],
   "configSchema": {
     "type": "object",

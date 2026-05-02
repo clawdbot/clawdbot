@@ -4,7 +4,8 @@ import * as net from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 
-const CHILD_PROCESS_TIMEOUT_MS = process.env.CI ? 30_000 : 10_000;
+const CHILD_PROCESS_TIMEOUT_MS = process.env.CI ? 45_000 : 15_000;
+const PROBE_TIMEOUT_MS = process.env.CI ? 15_000 : 5_000;
 
 async function listenOnLoopback(server: Server): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -216,7 +217,7 @@ describe("SSRF external proxy routing", () => {
                 resolve({ status: response.statusCode, body });
               });
             });
-            req.setTimeout(5000, () => {
+            req.setTimeout(${PROBE_TIMEOUT_MS}, () => {
               req.destroy(new Error("node:http request timed out"));
             });
             req.on("error", reject);
@@ -238,7 +239,7 @@ describe("SSRF external proxy routing", () => {
               response.resume();
               response.on("end", resolve);
             });
-            req.setTimeout(5000, () => {
+            req.setTimeout(${PROBE_TIMEOUT_MS}, () => {
               req.destroy(new Error("node:https request timed out"));
             });
             req.on("error", reject);
@@ -247,7 +248,7 @@ describe("SSRF external proxy routing", () => {
 
         async function websocketProbe(url) {
           return new Promise((resolve, reject) => {
-            const ws = new WebSocket(url, { handshakeTimeout: 5000 });
+            const ws = new WebSocket(url, { handshakeTimeout: ${PROBE_TIMEOUT_MS} });
             ws.once("open", () => {
               ws.close();
               reject(new Error("proxied websocket unexpectedly opened"));
@@ -259,7 +260,7 @@ describe("SSRF external proxy routing", () => {
         async function gatewayLoopbackBypassProbe(url) {
           return new Promise((resolve, reject) => {
             const ws = dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane(url, () =>
-              new WebSocket(url, { handshakeTimeout: 5000 }),
+              new WebSocket(url, { handshakeTimeout: ${PROBE_TIMEOUT_MS} }),
             );
             ws.once("open", () => {
               ws.close();
@@ -275,7 +276,7 @@ describe("SSRF external proxy routing", () => {
         }
         try {
           const response = await undiciFetch(process.env.OPENCLAW_TEST_TARGET_URL, {
-            signal: AbortSignal.timeout(5000),
+            signal: AbortSignal.timeout(${PROBE_TIMEOUT_MS}),
           });
           const body = await response.text();
           const nodeHttp = await nodeHttpGet(process.env.OPENCLAW_TEST_NODE_HTTP_TARGET_URL);

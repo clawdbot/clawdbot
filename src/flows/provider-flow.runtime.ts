@@ -9,9 +9,9 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { FlowContribution } from "./types.js";
 import { sortFlowContributionsByLabel } from "./types.js";
 
-export type ProviderModelPickerFlowEntry = ProviderModelPickerEntry;
+type ProviderModelPickerFlowEntry = ProviderModelPickerEntry;
 
-export type ProviderModelPickerFlowContribution = FlowContribution & {
+type ProviderModelPickerFlowContribution = FlowContribution & {
   kind: "provider";
   surface: "model-picker";
   providerId: string;

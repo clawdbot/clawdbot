@@ -29,6 +29,7 @@ import type {
   VideoGenerationResolution,
   VideoGenerationSourceAsset,
 } from "../../video-generation/types.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
 import { withMediaGenerationTaskKeepalive } from "./media-generate-background-shared.js";
@@ -225,10 +226,12 @@ const VideoGenerateToolSchema = Type.Object({
 export function resolveVideoGenerationModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
+  authStore?: AuthProfileStore;
 }): ToolModelConfig | null {
   return resolveCapabilityModelConfigForTool({
     cfg: params.cfg,
     agentDir: params.agentDir,
+    authStore: params.authStore,
     modelConfig: params.cfg?.agents?.defaults?.videoGenerationModel,
     providers: listRuntimeVideoGenerationProviders({ config: params.cfg }),
   });
@@ -795,6 +798,7 @@ async function executeVideoGenerationJob(params: {
 export function createVideoGenerateTool(options?: {
   config?: OpenClawConfig;
   agentDir?: string;
+  authProfileStore?: AuthProfileStore;
   agentSessionKey?: string;
   requesterOrigin?: DeliveryContext;
   workspaceDir?: string;
@@ -807,8 +811,9 @@ export function createVideoGenerateTool(options?: {
     !hasGenerationToolAvailability({
       cfg,
       agentDir: options?.agentDir,
+      workspaceDir: options?.workspaceDir,
+      authStore: options?.authProfileStore,
       modelConfig: cfg.agents?.defaults?.videoGenerationModel,
-      providers: () => listRuntimeVideoGenerationProviders({ config: cfg }),
       providerKey: "videoGenerationProviders",
     })
   ) {
@@ -847,6 +852,7 @@ export function createVideoGenerateTool(options?: {
       const videoGenerationModelConfig = resolveVideoGenerationModelConfigForTool({
         cfg,
         agentDir: options?.agentDir,
+        authStore: options?.authProfileStore,
       });
       if (!videoGenerationModelConfig) {
         throw new ToolInputError("No video-generation model configured.");

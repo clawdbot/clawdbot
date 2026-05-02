@@ -4,7 +4,13 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { resolvePluginInstallDir } from "./install.js";
+import { createSafeNpmInstallEnv } from "../infra/safe-package-install.js";
+import { runCommandWithTimeout } from "../process/exec.js";
+import {
+  resolveDefaultPluginGitDir,
+  resolveDefaultPluginNpmDir,
+  resolvePluginInstallDir,
+} from "./install-paths.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
 export type UninstallActions = {
@@ -60,7 +66,7 @@ export function createEmptyUninstallActions(
   };
 }
 
-export function createEmptyConfigUninstallActions(): Omit<UninstallActions, "directory"> {
+function createEmptyConfigUninstallActions(): Omit<UninstallActions, "directory"> {
   const { directory: _directory, ...actions } = createEmptyUninstallActions();
   return actions;
 }
@@ -88,6 +94,11 @@ export type UninstallPluginResult =
 
 export type PluginUninstallDirectoryRemoval = {
   target: string;
+  cleanup?: {
+    kind: "npm";
+    npmRoot: string;
+    packageName: string;
+  };
 };
 
 export type PluginUninstallPlanResult =
@@ -112,6 +123,21 @@ export function resolveUninstallDirectoryTarget(params: {
 
   if (isLinkedPathInstallRecord(params.installRecord)) {
     return null;
+  }
+
+  const npmManagedInstall = resolveNpmManagedInstall({
+    installRecord: params.installRecord,
+    extensionsDir: params.extensionsDir,
+  });
+  if (npmManagedInstall) {
+    return npmManagedInstall.installPath;
+  }
+  const gitManagedPath = resolveGitManagedInstallPath({
+    installRecord: params.installRecord,
+    extensionsDir: params.extensionsDir,
+  });
+  if (gitManagedPath) {
+    return gitManagedPath;
   }
 
   let defaultPath: string;
@@ -145,6 +171,81 @@ export function resolveUninstallDirectoryTarget(params: {
   // Never trust configured installPath blindly for recursive deletes outside
   // the managed extensions directory.
   return defaultPath;
+}
+
+function resolveNpmManagedInstall(params: {
+  installRecord?: PluginInstallRecord;
+  extensionsDir?: string;
+}): { installPath: string; npmRoot: string; packageName: string } | null {
+  const installPath = params.installRecord?.installPath?.trim();
+  if (params.installRecord?.source !== "npm" || !installPath) {
+    return null;
+  }
+
+  const npmRoots = new Set<string>();
+  if (params.extensionsDir) {
+    npmRoots.add(path.join(path.dirname(path.resolve(params.extensionsDir)), "npm"));
+  }
+  npmRoots.add(resolveDefaultPluginNpmDir());
+
+  for (const npmRoot of npmRoots) {
+    const nodeModulesRoot = path.join(npmRoot, "node_modules");
+    if (
+      isPathInsideOrEqual(nodeModulesRoot, installPath) &&
+      resolveComparablePath(nodeModulesRoot) !== resolveComparablePath(installPath)
+    ) {
+      const packageName = resolveNpmPackageNameFromInstallPath({ installPath, nodeModulesRoot });
+      return packageName ? { installPath, npmRoot, packageName } : null;
+    }
+  }
+  return null;
+}
+
+function resolveNpmPackageNameFromInstallPath(params: {
+  installPath: string;
+  nodeModulesRoot: string;
+}): string | null {
+  const relativePath = path.relative(
+    path.resolve(params.nodeModulesRoot),
+    path.resolve(params.installPath),
+  );
+  if (!relativePath || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    return null;
+  }
+  const segments = relativePath.split(path.sep).filter(Boolean);
+  if (segments.length < 1) {
+    return null;
+  }
+  if (segments[0]?.startsWith("@")) {
+    return segments.length >= 2 ? `${segments[0]}/${segments[1]}` : null;
+  }
+  return segments[0] ?? null;
+}
+
+function resolveGitManagedInstallPath(params: {
+  installRecord?: PluginInstallRecord;
+  extensionsDir?: string;
+}): string | null {
+  const installPath = params.installRecord?.installPath?.trim();
+  if (params.installRecord?.source !== "git" || !installPath) {
+    return null;
+  }
+
+  const gitRoots = new Set<string>();
+  if (params.extensionsDir) {
+    gitRoots.add(path.join(path.dirname(path.resolve(params.extensionsDir)), "git"));
+  }
+  gitRoots.add(resolveDefaultPluginGitDir());
+
+  for (const gitRoot of gitRoots) {
+    if (
+      isPathInsideOrEqual(gitRoot, installPath) &&
+      resolveComparablePath(gitRoot) !== resolveComparablePath(installPath)
+    ) {
+      return installPath;
+    }
+  }
+  return null;
 }
 
 function resolveRecordedManagedInstallPath(params: {
@@ -409,6 +510,14 @@ export function planPluginUninstall(params: UninstallPluginParams): PluginUninst
     directory: false,
   };
 
+  const npmManagedInstall =
+    deleteFiles && !isLinked
+      ? resolveNpmManagedInstall({
+          installRecord,
+          extensionsDir,
+        })
+      : null;
+
   const deleteTarget =
     deleteFiles && !isLinked
       ? resolveUninstallDirectoryTarget({
@@ -424,7 +533,20 @@ export function planPluginUninstall(params: UninstallPluginParams): PluginUninst
     config: newConfig,
     pluginId,
     actions,
-    directoryRemoval: deleteTarget ? { target: deleteTarget } : null,
+    directoryRemoval: deleteTarget
+      ? {
+          target: deleteTarget,
+          ...(npmManagedInstall
+            ? {
+                cleanup: {
+                  kind: "npm",
+                  npmRoot: npmManagedInstall.npmRoot,
+                  packageName: npmManagedInstall.packageName,
+                },
+              }
+            : {}),
+        }
+      : null,
   };
 }
 
@@ -440,13 +562,43 @@ export async function applyPluginUninstallDirectoryRemoval(
       .access(removal.target)
       .then(() => true)
       .catch(() => false)) ?? false;
+  const warnings: string[] = [];
+  if (removal.cleanup?.kind === "npm") {
+    const uninstall = await runCommandWithTimeout(
+      [
+        "npm",
+        "uninstall",
+        "--loglevel=error",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+        "--prefix",
+        removal.cleanup.npmRoot,
+        removal.cleanup.packageName,
+      ],
+      {
+        timeoutMs: 300_000,
+        env: createSafeNpmInstallEnv(process.env, { packageLock: true, quiet: true }),
+      },
+    );
+    if (uninstall.code !== 0) {
+      warnings.push(
+        `Failed to prune npm dependencies for plugin package ${removal.cleanup.packageName}: ${
+          uninstall.stderr.trim() ||
+          uninstall.stdout.trim() ||
+          `npm exited with code ${uninstall.code}`
+        }`,
+      );
+    }
+  }
   try {
     await fs.rm(removal.target, { recursive: true, force: true });
-    return { directoryRemoved: existed, warnings: [] };
+    return { directoryRemoved: existed, warnings };
   } catch (error) {
     return {
       directoryRemoved: false,
       warnings: [
+        ...warnings,
         `Failed to remove plugin directory ${removal.target}: ${formatErrorMessage(error)}`,
       ],
     };

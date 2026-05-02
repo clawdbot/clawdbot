@@ -30,6 +30,150 @@
     "musicGenerationProviders": ["comfy"],
     "videoGenerationProviders": ["comfy"]
   },
+  "imageGenerationProviderMetadata": {
+    "comfy": {
+      "configSignals": [
+        {
+          "rootPath": "plugins.entries.comfy.config",
+          "overlayPath": "image",
+          "mode": {
+            "path": "mode",
+            "default": "local",
+            "allowed": ["local"]
+          },
+          "requiredAny": ["workflow", "workflowPath"],
+          "required": ["promptNodeId"]
+        },
+        {
+          "rootPath": "models.providers.comfy",
+          "overlayPath": "image",
+          "mode": {
+            "path": "mode",
+            "default": "local",
+            "allowed": ["local"]
+          },
+          "requiredAny": ["workflow", "workflowPath"],
+          "required": ["promptNodeId"]
+        },
+        {
+          "rootPath": "plugins.entries.comfy.config",
+          "overlayPath": "image",
+          "mode": {
+            "path": "mode",
+            "allowed": ["cloud"]
+          },
+          "requiredAny": ["workflow", "workflowPath"],
+          "required": ["promptNodeId", "apiKey"]
+        },
+        {
+          "rootPath": "models.providers.comfy",
+          "overlayPath": "image",
+          "mode": {
+            "path": "mode",
+            "allowed": ["cloud"]
+          },
+          "requiredAny": ["workflow", "workflowPath"],
+          "required": ["promptNodeId", "apiKey"]
+        }
+      ]
+    }
+  },
+  "musicGenerationProviderMetadata": {
+    "comfy": {
+      "configSignals": [
+        {
+          "rootPath": "plugins.entries.comfy.config",
+          "overlayPath": "music",
+          "mode": {
+            "path": "mode",
+            "default": "local",
+            "allowed": ["local"]
+          },
+          "requiredAny": ["workflow", "workflowPath"],
+          "required": ["promptNodeId"]
+        },
+        {
+          "rootPath": "models.providers.comfy",
+          "overlayPath": "music",
+          "mode": {
+            "path": "mode",
+            "default": "local",
+            "allowed": ["local"]
+          },
+          "requiredAny": ["workflow", "workflowPath"],
+          "required": ["promptNodeId"]
+        },
+        {
+          "rootPath": "plugins.entries.comfy.config",
+          "overlayPath": "music",
+          "mode": {
+            "path": "mode",
+            "allowed": ["cloud"]
+          },
+          "requiredAny": ["workflow", "workflowPath"],
+          "required": ["promptNodeId", "apiKey"]
+        },
+        {
+          "rootPath": "models.providers.comfy",
+          "overlayPath": "music",
+          "mode": {
+            "path": "mode",
+            "allowed": ["cloud"]
+          },
+          "requiredAny": ["workflow", "workflowPath"],
+          "required": ["promptNodeId", "apiKey"]
+        }
+      ]
+    }
+  },
+  "videoGenerationProviderMetadata": {
+    "comfy": {
+      "configSignals": [
+        {
+          "rootPath": "plugins.entries.comfy.config",
+          "overlayPath": "video",
+          "mode": {
+            "path": "mode",
+            "default": "local",
+            "allowed": ["local"]
+          },
+          "requiredAny": ["workflow", "workflowPath"],
+          "required": ["promptNodeId"]
+        },
+        {
+          "rootPath": "models.providers.comfy",
+          "overlayPath": "video",
+          "mode": {
+            "path": "mode",
+            "default": "local",
+            "allowed": ["local"]
+          },
+          "requiredAny": ["workflow", "workflowPath"],
+          "required": ["promptNodeId"]
+        },
+        {
+          "rootPath": "plugins.entries.comfy.config",
+          "overlayPath": "video",
+          "mode": {
+            "path": "mode",
+            "allowed": ["cloud"]
+          },
+          "requiredAny": ["workflow", "workflowPath"],
+          "required": ["promptNodeId", "apiKey"]
+        },
+        {
+          "rootPath": "models.providers.comfy",
+          "overlayPath": "video",
+          "mode": {
+            "path": "mode",
+            "allowed": ["cloud"]
+          },
+          "requiredAny": ["workflow", "workflowPath"],
+          "required": ["promptNodeId", "apiKey"]
+        }
+      ]
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

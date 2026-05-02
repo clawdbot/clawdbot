@@ -115,9 +115,6 @@ async function withPublishLock<T>(accountId: string, fn: () => Promise<T>): Prom
   }
 }
 
-// Export for use in import validation
-export { validateUrlSafety };
-
 // ============================================================================
 // Validation Schemas
 // ============================================================================

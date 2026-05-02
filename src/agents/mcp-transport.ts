@@ -10,7 +10,7 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 
-export type ResolvedMcpTransport = {
+type ResolvedMcpTransport = {
   transport: Transport;
   description: string;
   transportType: "stdio" | "sse" | "streamable-http";

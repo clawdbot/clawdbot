@@ -806,6 +806,16 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           exclusiveMinimum: 0,
           maximum: 120000,
         },
+        gatewayReadyTimeoutMs: {
+          type: "integer",
+          exclusiveMinimum: 0,
+          maximum: 120000,
+        },
+        gatewayRuntimeReadyTimeoutMs: {
+          type: "integer",
+          exclusiveMinimum: 0,
+          maximum: 120000,
+        },
         allowBots: {
           anyOf: [
             {
@@ -819,6 +829,16 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         },
         dangerouslyAllowNameMatching: {
           type: "boolean",
+        },
+        mentionAliases: {
+          type: "object",
+          propertyNames: {
+            type: "string",
+          },
+          additionalProperties: {
+            type: "string",
+            pattern: "^\\d+$",
+          },
         },
         groupPolicy: {
           default: "allowlist",
@@ -1440,6 +1460,13 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             maxAgeHours: {
               type: "number",
               minimum: 0,
+            },
+            spawnSessions: {
+              type: "boolean",
+            },
+            defaultSpawnContext: {
+              type: "string",
+              enum: ["isolated", "fork"],
             },
             spawnSubagentSessions: {
               type: "boolean",
@@ -2182,6 +2209,16 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 exclusiveMinimum: 0,
                 maximum: 120000,
               },
+              gatewayReadyTimeoutMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 120000,
+              },
+              gatewayRuntimeReadyTimeoutMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 120000,
+              },
               allowBots: {
                 anyOf: [
                   {
@@ -2195,6 +2232,16 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               },
               dangerouslyAllowNameMatching: {
                 type: "boolean",
+              },
+              mentionAliases: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "string",
+                  pattern: "^\\d+$",
+                },
               },
               groupPolicy: {
                 default: "allowlist",
@@ -2816,6 +2863,13 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   maxAgeHours: {
                     type: "number",
                     minimum: 0,
+                  },
+                  spawnSessions: {
+                    type: "boolean",
+                  },
+                  defaultSpawnContext: {
+                    type: "string",
+                    enum: ["isolated", "fork"],
                   },
                   spawnSubagentSessions: {
                     type: "boolean",
@@ -3545,13 +3599,13 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         label: "Discord Thread Binding Max Age (hours)",
         help: "Optional hard max age in hours for Discord thread-bound sessions. Set 0 to disable hard cap (default: 0). Overrides session.threadBindings.maxAgeHours when set.",
       },
-      "threadBindings.spawnSubagentSessions": {
-        label: "Discord Thread-Bound Subagent Spawn",
-        help: "Allow subagent spawns with thread=true to auto-create and bind Discord threads (default: false; opt-in). Set true to enable thread-bound subagent spawns for this account/channel.",
+      "threadBindings.spawnSessions": {
+        label: "Discord Thread-Bound Session Spawn",
+        help: "Allow sessions_spawn(thread=true) and ACP thread spawns to auto-create and bind Discord threads (default: true). Set false to disable for this account/channel.",
       },
-      "threadBindings.spawnAcpSessions": {
-        label: "Discord Thread-Bound ACP Spawn",
-        help: "Allow /acp spawn to auto-create and bind Discord threads for ACP sessions (default: false; opt-in). Set true to enable thread-bound ACP spawns for this account/channel.",
+      "threadBindings.defaultSpawnContext": {
+        label: "Discord Thread Spawn Context",
+        help: 'Default native subagent context for thread-bound spawns. "fork" starts from the requester transcript; "isolated" starts clean. Default: "fork".',
       },
       "ui.components.accentColor": {
         label: "Discord Component Accent Color",
@@ -3567,15 +3621,23 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       },
       "intents.voiceStates": {
         label: "Discord Voice States Intent",
-        help: "Enable the Guild Voice States intent. Defaults to the effective Discord voice setting; set false for text-only gateway sessions even when voice config is present.",
+        help: "Enable the Guild Voice States intent. Defaults to the effective Discord voice setting; set true only for Discord voice channel conversations.",
       },
       gatewayInfoTimeoutMs: {
         label: "Discord Gateway Metadata Timeout (ms)",
         help: "Timeout for Discord /gateway/bot metadata lookup before falling back to the default gateway URL. Default is 30000; OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS can override when config is unset.",
       },
+      gatewayReadyTimeoutMs: {
+        label: "Discord Gateway READY Timeout (ms)",
+        help: "Startup wait for the Discord gateway READY event before restarting the socket. Default is 15000; OPENCLAW_DISCORD_READY_TIMEOUT_MS can override when config is unset.",
+      },
+      gatewayRuntimeReadyTimeoutMs: {
+        label: "Discord Gateway Runtime READY Timeout (ms)",
+        help: "Runtime reconnect wait for the Discord gateway READY event before force-stopping the lifecycle. Default is 30000; OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS can override when config is unset.",
+      },
       "voice.enabled": {
         label: "Discord Voice Enabled",
-        help: "Enable Discord voice channel conversations (default: true). Set false for text-only gateway sessions.",
+        help: "Enable Discord voice channel conversations. Text-only Discord configs leave voice off by default; set true to enable /vc commands and the Guild Voice States intent.",
       },
       "voice.model": {
         label: "Discord Voice Model",
@@ -3656,6 +3718,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       allowBots: {
         label: "Discord Allow Bot Messages",
         help: 'Allow bot-authored messages to trigger Discord replies (default: false). Set "mentions" to only accept bot messages that mention the bot.',
+      },
+      mentionAliases: {
+        label: "Discord Mention Aliases",
+        help: "Map outbound @handle text to stable Discord user IDs before sending. Set per account via channels.discord.accounts.<id>.mentionAliases.",
       },
       token: {
         label: "Discord Bot Token",
@@ -7007,6 +7073,13 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             maxAgeHours: {
               type: "number",
             },
+            spawnSessions: {
+              type: "boolean",
+            },
+            defaultSpawnContext: {
+              type: "string",
+              enum: ["isolated", "fork"],
+            },
             spawnSubagentSessions: {
               type: "boolean",
             },
@@ -7098,6 +7171,13 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   },
                   maxAgeHours: {
                     type: "number",
+                  },
+                  spawnSessions: {
+                    type: "boolean",
+                  },
+                  defaultSpawnContext: {
+                    type: "string",
+                    enum: ["isolated", "fork"],
                   },
                   spawnSubagentSessions: {
                     type: "boolean",
@@ -7499,6 +7579,13 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               type: "number",
               minimum: 0,
             },
+            spawnSessions: {
+              type: "boolean",
+            },
+            defaultSpawnContext: {
+              type: "string",
+              enum: ["isolated", "fork"],
+            },
             spawnSubagentSessions: {
               type: "boolean",
             },
@@ -7811,624 +7898,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           additionalProperties: false,
         },
       },
-      additionalProperties: false,
-    },
-  },
-  {
-    pluginId: "mattermost",
-    channelId: "mattermost",
-    label: "Mattermost",
-    description: "self-hosted Slack-style chat; install the plugin to enable.",
-    schema: {
-      $schema: "http://json-schema.org/draft-07/schema#",
-      type: "object",
-      properties: {
-        name: {
-          type: "string",
-        },
-        capabilities: {
-          type: "array",
-          items: {
-            type: "string",
-          },
-        },
-        dangerouslyAllowNameMatching: {
-          type: "boolean",
-        },
-        markdown: {
-          type: "object",
-          properties: {
-            tables: {
-              type: "string",
-              enum: ["off", "bullets", "code", "block"],
-            },
-          },
-          additionalProperties: false,
-        },
-        enabled: {
-          type: "boolean",
-        },
-        configWrites: {
-          type: "boolean",
-        },
-        botToken: {
-          anyOf: [
-            {
-              type: "string",
-            },
-            {
-              oneOf: [
-                {
-                  type: "object",
-                  properties: {
-                    source: {
-                      type: "string",
-                      const: "env",
-                    },
-                    provider: {
-                      type: "string",
-                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                    },
-                    id: {
-                      type: "string",
-                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                    },
-                  },
-                  required: ["source", "provider", "id"],
-                  additionalProperties: false,
-                },
-                {
-                  type: "object",
-                  properties: {
-                    source: {
-                      type: "string",
-                      const: "file",
-                    },
-                    provider: {
-                      type: "string",
-                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                    },
-                    id: {
-                      type: "string",
-                    },
-                  },
-                  required: ["source", "provider", "id"],
-                  additionalProperties: false,
-                },
-                {
-                  type: "object",
-                  properties: {
-                    source: {
-                      type: "string",
-                      const: "exec",
-                    },
-                    provider: {
-                      type: "string",
-                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                    },
-                    id: {
-                      type: "string",
-                    },
-                  },
-                  required: ["source", "provider", "id"],
-                  additionalProperties: false,
-                },
-              ],
-            },
-          ],
-        },
-        baseUrl: {
-          type: "string",
-        },
-        chatmode: {
-          type: "string",
-          enum: ["oncall", "onmessage", "onchar"],
-        },
-        oncharPrefixes: {
-          type: "array",
-          items: {
-            type: "string",
-          },
-        },
-        requireMention: {
-          type: "boolean",
-        },
-        dmPolicy: {
-          default: "pairing",
-          type: "string",
-          enum: ["pairing", "allowlist", "open", "disabled"],
-        },
-        allowFrom: {
-          type: "array",
-          items: {
-            anyOf: [
-              {
-                type: "string",
-              },
-              {
-                type: "number",
-              },
-            ],
-          },
-        },
-        groupAllowFrom: {
-          type: "array",
-          items: {
-            anyOf: [
-              {
-                type: "string",
-              },
-              {
-                type: "number",
-              },
-            ],
-          },
-        },
-        groupPolicy: {
-          default: "allowlist",
-          type: "string",
-          enum: ["open", "disabled", "allowlist"],
-        },
-        textChunkLimit: {
-          type: "integer",
-          exclusiveMinimum: 0,
-          maximum: 9007199254740991,
-        },
-        chunkMode: {
-          type: "string",
-          enum: ["length", "newline"],
-        },
-        blockStreaming: {
-          type: "boolean",
-        },
-        blockStreamingCoalesce: {
-          type: "object",
-          properties: {
-            minChars: {
-              type: "integer",
-              exclusiveMinimum: 0,
-              maximum: 9007199254740991,
-            },
-            maxChars: {
-              type: "integer",
-              exclusiveMinimum: 0,
-              maximum: 9007199254740991,
-            },
-            idleMs: {
-              type: "integer",
-              minimum: 0,
-              maximum: 9007199254740991,
-            },
-          },
-          additionalProperties: false,
-        },
-        replyToMode: {
-          type: "string",
-          enum: ["off", "first", "all", "batched"],
-        },
-        responsePrefix: {
-          type: "string",
-        },
-        actions: {
-          type: "object",
-          properties: {
-            reactions: {
-              type: "boolean",
-            },
-          },
-          additionalProperties: false,
-        },
-        commands: {
-          type: "object",
-          properties: {
-            native: {
-              anyOf: [
-                {
-                  type: "boolean",
-                },
-                {
-                  type: "string",
-                  const: "auto",
-                },
-              ],
-            },
-            nativeSkills: {
-              anyOf: [
-                {
-                  type: "boolean",
-                },
-                {
-                  type: "string",
-                  const: "auto",
-                },
-              ],
-            },
-            callbackPath: {
-              type: "string",
-            },
-            callbackUrl: {
-              type: "string",
-            },
-          },
-          additionalProperties: false,
-        },
-        interactions: {
-          type: "object",
-          properties: {
-            callbackBaseUrl: {
-              type: "string",
-            },
-            allowedSourceIps: {
-              type: "array",
-              items: {
-                type: "string",
-              },
-            },
-          },
-          additionalProperties: false,
-        },
-        groups: {
-          type: "object",
-          propertyNames: {
-            type: "string",
-          },
-          additionalProperties: {
-            type: "object",
-            properties: {
-              requireMention: {
-                type: "boolean",
-              },
-            },
-            additionalProperties: false,
-          },
-        },
-        network: {
-          type: "object",
-          properties: {
-            dangerouslyAllowPrivateNetwork: {
-              type: "boolean",
-            },
-          },
-          additionalProperties: false,
-        },
-        dmChannelRetry: {
-          type: "object",
-          properties: {
-            maxRetries: {
-              type: "integer",
-              minimum: 0,
-              maximum: 10,
-            },
-            initialDelayMs: {
-              type: "integer",
-              minimum: 100,
-              maximum: 60000,
-            },
-            maxDelayMs: {
-              type: "integer",
-              minimum: 1000,
-              maximum: 60000,
-            },
-            timeoutMs: {
-              type: "integer",
-              minimum: 5000,
-              maximum: 120000,
-            },
-          },
-          additionalProperties: false,
-        },
-        accounts: {
-          type: "object",
-          propertyNames: {
-            type: "string",
-          },
-          additionalProperties: {
-            type: "object",
-            properties: {
-              name: {
-                type: "string",
-              },
-              capabilities: {
-                type: "array",
-                items: {
-                  type: "string",
-                },
-              },
-              dangerouslyAllowNameMatching: {
-                type: "boolean",
-              },
-              markdown: {
-                type: "object",
-                properties: {
-                  tables: {
-                    type: "string",
-                    enum: ["off", "bullets", "code", "block"],
-                  },
-                },
-                additionalProperties: false,
-              },
-              enabled: {
-                type: "boolean",
-              },
-              configWrites: {
-                type: "boolean",
-              },
-              botToken: {
-                anyOf: [
-                  {
-                    type: "string",
-                  },
-                  {
-                    oneOf: [
-                      {
-                        type: "object",
-                        properties: {
-                          source: {
-                            type: "string",
-                            const: "env",
-                          },
-                          provider: {
-                            type: "string",
-                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                          },
-                          id: {
-                            type: "string",
-                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                          },
-                        },
-                        required: ["source", "provider", "id"],
-                        additionalProperties: false,
-                      },
-                      {
-                        type: "object",
-                        properties: {
-                          source: {
-                            type: "string",
-                            const: "file",
-                          },
-                          provider: {
-                            type: "string",
-                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                          },
-                          id: {
-                            type: "string",
-                          },
-                        },
-                        required: ["source", "provider", "id"],
-                        additionalProperties: false,
-                      },
-                      {
-                        type: "object",
-                        properties: {
-                          source: {
-                            type: "string",
-                            const: "exec",
-                          },
-                          provider: {
-                            type: "string",
-                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                          },
-                          id: {
-                            type: "string",
-                          },
-                        },
-                        required: ["source", "provider", "id"],
-                        additionalProperties: false,
-                      },
-                    ],
-                  },
-                ],
-              },
-              baseUrl: {
-                type: "string",
-              },
-              chatmode: {
-                type: "string",
-                enum: ["oncall", "onmessage", "onchar"],
-              },
-              oncharPrefixes: {
-                type: "array",
-                items: {
-                  type: "string",
-                },
-              },
-              requireMention: {
-                type: "boolean",
-              },
-              dmPolicy: {
-                default: "pairing",
-                type: "string",
-                enum: ["pairing", "allowlist", "open", "disabled"],
-              },
-              allowFrom: {
-                type: "array",
-                items: {
-                  anyOf: [
-                    {
-                      type: "string",
-                    },
-                    {
-                      type: "number",
-                    },
-                  ],
-                },
-              },
-              groupAllowFrom: {
-                type: "array",
-                items: {
-                  anyOf: [
-                    {
-                      type: "string",
-                    },
-                    {
-                      type: "number",
-                    },
-                  ],
-                },
-              },
-              groupPolicy: {
-                default: "allowlist",
-                type: "string",
-                enum: ["open", "disabled", "allowlist"],
-              },
-              textChunkLimit: {
-                type: "integer",
-                exclusiveMinimum: 0,
-                maximum: 9007199254740991,
-              },
-              chunkMode: {
-                type: "string",
-                enum: ["length", "newline"],
-              },
-              blockStreaming: {
-                type: "boolean",
-              },
-              blockStreamingCoalesce: {
-                type: "object",
-                properties: {
-                  minChars: {
-                    type: "integer",
-                    exclusiveMinimum: 0,
-                    maximum: 9007199254740991,
-                  },
-                  maxChars: {
-                    type: "integer",
-                    exclusiveMinimum: 0,
-                    maximum: 9007199254740991,
-                  },
-                  idleMs: {
-                    type: "integer",
-                    minimum: 0,
-                    maximum: 9007199254740991,
-                  },
-                },
-                additionalProperties: false,
-              },
-              replyToMode: {
-                type: "string",
-                enum: ["off", "first", "all", "batched"],
-              },
-              responsePrefix: {
-                type: "string",
-              },
-              actions: {
-                type: "object",
-                properties: {
-                  reactions: {
-                    type: "boolean",
-                  },
-                },
-                additionalProperties: false,
-              },
-              commands: {
-                type: "object",
-                properties: {
-                  native: {
-                    anyOf: [
-                      {
-                        type: "boolean",
-                      },
-                      {
-                        type: "string",
-                        const: "auto",
-                      },
-                    ],
-                  },
-                  nativeSkills: {
-                    anyOf: [
-                      {
-                        type: "boolean",
-                      },
-                      {
-                        type: "string",
-                        const: "auto",
-                      },
-                    ],
-                  },
-                  callbackPath: {
-                    type: "string",
-                  },
-                  callbackUrl: {
-                    type: "string",
-                  },
-                },
-                additionalProperties: false,
-              },
-              interactions: {
-                type: "object",
-                properties: {
-                  callbackBaseUrl: {
-                    type: "string",
-                  },
-                  allowedSourceIps: {
-                    type: "array",
-                    items: {
-                      type: "string",
-                    },
-                  },
-                },
-                additionalProperties: false,
-              },
-              groups: {
-                type: "object",
-                propertyNames: {
-                  type: "string",
-                },
-                additionalProperties: {
-                  type: "object",
-                  properties: {
-                    requireMention: {
-                      type: "boolean",
-                    },
-                  },
-                  additionalProperties: false,
-                },
-              },
-              network: {
-                type: "object",
-                properties: {
-                  dangerouslyAllowPrivateNetwork: {
-                    type: "boolean",
-                  },
-                },
-                additionalProperties: false,
-              },
-              dmChannelRetry: {
-                type: "object",
-                properties: {
-                  maxRetries: {
-                    type: "integer",
-                    minimum: 0,
-                    maximum: 10,
-                  },
-                  initialDelayMs: {
-                    type: "integer",
-                    minimum: 100,
-                    maximum: 60000,
-                  },
-                  maxDelayMs: {
-                    type: "integer",
-                    minimum: 1000,
-                    maximum: 60000,
-                  },
-                  timeoutMs: {
-                    type: "integer",
-                    minimum: 5000,
-                    maximum: 120000,
-                  },
-                },
-                additionalProperties: false,
-              },
-            },
-            required: ["dmPolicy", "groupPolicy"],
-            additionalProperties: false,
-          },
-        },
-        defaultAccount: {
-          type: "string",
-        },
-      },
-      required: ["dmPolicy", "groupPolicy"],
       additionalProperties: false,
     },
   },
@@ -14218,6 +13687,13 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               type: "number",
               minimum: 0,
             },
+            spawnSessions: {
+              type: "boolean",
+            },
+            defaultSpawnContext: {
+              type: "string",
+              enum: ["isolated", "fork"],
+            },
             spawnSubagentSessions: {
               type: "boolean",
             },
@@ -15259,6 +14735,13 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     type: "number",
                     minimum: 0,
                   },
+                  spawnSessions: {
+                    type: "boolean",
+                  },
+                  defaultSpawnContext: {
+                    type: "string",
+                    enum: ["isolated", "fork"],
+                  },
                   spawnSubagentSessions: {
                     type: "boolean",
                   },
@@ -15525,13 +15008,13 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         label: "Telegram Thread Binding Max Age (hours)",
         help: "Optional hard max age in hours for Telegram bound sessions. Set 0 to disable hard cap (default: 0). Overrides session.threadBindings.maxAgeHours when set.",
       },
-      "threadBindings.spawnSubagentSessions": {
-        label: "Telegram Thread-Bound Subagent Spawn",
-        help: "Allow subagent spawns with thread=true to auto-bind Telegram current conversations when supported.",
+      "threadBindings.spawnSessions": {
+        label: "Telegram Thread-Bound Session Spawn",
+        help: "Allow sessions_spawn(thread=true) and ACP thread spawns to auto-bind Telegram current conversations when supported.",
       },
-      "threadBindings.spawnAcpSessions": {
-        label: "Telegram Thread-Bound ACP Spawn",
-        help: "Allow ACP spawns with thread=true to auto-bind Telegram current conversations when supported.",
+      "threadBindings.defaultSpawnContext": {
+        label: "Telegram Thread Spawn Context",
+        help: 'Default native subagent context for thread-bound spawns. "fork" starts from the requester transcript; "isolated" starts clean. Default: "fork".',
       },
     },
   },
@@ -15721,191 +15204,174 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       $schema: "http://json-schema.org/draft-07/schema#",
       anyOf: [
         {
-          allOf: [
-            {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+            },
+            enabled: {
+              type: "boolean",
+            },
+            markdown: {
               type: "object",
               properties: {
-                name: {
+                tables: {
                   type: "string",
-                },
-                enabled: {
-                  type: "boolean",
-                },
-                markdown: {
-                  type: "object",
-                  properties: {
-                    tables: {
-                      type: "string",
-                      enum: ["off", "bullets", "code", "block"],
-                    },
-                  },
-                  additionalProperties: false,
+                  enum: ["off", "bullets", "code", "block"],
                 },
               },
               additionalProperties: false,
             },
-            {
-              type: "object",
-              properties: {
-                username: {
-                  type: "string",
-                },
-                accessToken: {
-                  type: "string",
-                },
-                clientId: {
-                  type: "string",
-                },
-                channel: {
-                  type: "string",
-                  minLength: 1,
-                },
-                enabled: {
-                  type: "boolean",
-                },
-                allowFrom: {
-                  type: "array",
-                  items: {
-                    type: "string",
-                  },
-                },
-                allowedRoles: {
-                  type: "array",
-                  items: {
-                    type: "string",
-                    enum: ["moderator", "owner", "vip", "subscriber", "all"],
-                  },
-                },
-                requireMention: {
-                  type: "boolean",
-                },
-                responsePrefix: {
-                  type: "string",
-                },
-                clientSecret: {
-                  type: "string",
-                },
-                refreshToken: {
-                  type: "string",
-                },
-                expiresIn: {
-                  anyOf: [
-                    {
-                      type: "number",
-                    },
-                    {
-                      type: "null",
-                    },
-                  ],
-                },
-                obtainmentTimestamp: {
+            defaultAccount: {
+              type: "string",
+            },
+            username: {
+              type: "string",
+            },
+            accessToken: {
+              type: "string",
+            },
+            clientId: {
+              type: "string",
+            },
+            channel: {
+              type: "string",
+              minLength: 1,
+            },
+            allowFrom: {
+              type: "array",
+              items: {
+                type: "string",
+              },
+            },
+            allowedRoles: {
+              type: "array",
+              items: {
+                type: "string",
+                enum: ["moderator", "owner", "vip", "subscriber", "all"],
+              },
+            },
+            requireMention: {
+              type: "boolean",
+            },
+            responsePrefix: {
+              type: "string",
+            },
+            clientSecret: {
+              type: "string",
+            },
+            refreshToken: {
+              type: "string",
+            },
+            expiresIn: {
+              anyOf: [
+                {
                   type: "number",
                 },
-              },
-              required: ["username", "accessToken", "channel"],
-              additionalProperties: false,
+                {
+                  type: "null",
+                },
+              ],
             },
-          ],
+            obtainmentTimestamp: {
+              type: "number",
+            },
+          },
+          required: ["username", "accessToken", "channel"],
+          additionalProperties: false,
         },
         {
-          allOf: [
-            {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+            },
+            enabled: {
+              type: "boolean",
+            },
+            markdown: {
               type: "object",
               properties: {
-                name: {
+                tables: {
                   type: "string",
-                },
-                enabled: {
-                  type: "boolean",
-                },
-                markdown: {
-                  type: "object",
-                  properties: {
-                    tables: {
-                      type: "string",
-                      enum: ["off", "bullets", "code", "block"],
-                    },
-                  },
-                  additionalProperties: false,
+                  enum: ["off", "bullets", "code", "block"],
                 },
               },
               additionalProperties: false,
             },
-            {
+            defaultAccount: {
+              type: "string",
+            },
+            accounts: {
               type: "object",
-              properties: {
-                accounts: {
-                  type: "object",
-                  propertyNames: {
+              propertyNames: {
+                type: "string",
+              },
+              additionalProperties: {
+                type: "object",
+                properties: {
+                  username: {
                     type: "string",
                   },
-                  additionalProperties: {
-                    type: "object",
-                    properties: {
-                      username: {
-                        type: "string",
-                      },
-                      accessToken: {
-                        type: "string",
-                      },
-                      clientId: {
-                        type: "string",
-                      },
-                      channel: {
-                        type: "string",
-                        minLength: 1,
-                      },
-                      enabled: {
-                        type: "boolean",
-                      },
-                      allowFrom: {
-                        type: "array",
-                        items: {
-                          type: "string",
-                        },
-                      },
-                      allowedRoles: {
-                        type: "array",
-                        items: {
-                          type: "string",
-                          enum: ["moderator", "owner", "vip", "subscriber", "all"],
-                        },
-                      },
-                      requireMention: {
-                        type: "boolean",
-                      },
-                      responsePrefix: {
-                        type: "string",
-                      },
-                      clientSecret: {
-                        type: "string",
-                      },
-                      refreshToken: {
-                        type: "string",
-                      },
-                      expiresIn: {
-                        anyOf: [
-                          {
-                            type: "number",
-                          },
-                          {
-                            type: "null",
-                          },
-                        ],
-                      },
-                      obtainmentTimestamp: {
+                  accessToken: {
+                    type: "string",
+                  },
+                  clientId: {
+                    type: "string",
+                  },
+                  channel: {
+                    type: "string",
+                    minLength: 1,
+                  },
+                  enabled: {
+                    type: "boolean",
+                  },
+                  allowFrom: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                  allowedRoles: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                      enum: ["moderator", "owner", "vip", "subscriber", "all"],
+                    },
+                  },
+                  requireMention: {
+                    type: "boolean",
+                  },
+                  responsePrefix: {
+                    type: "string",
+                  },
+                  clientSecret: {
+                    type: "string",
+                  },
+                  refreshToken: {
+                    type: "string",
+                  },
+                  expiresIn: {
+                    anyOf: [
+                      {
                         type: "number",
                       },
-                    },
-                    required: ["username", "accessToken", "channel"],
-                    additionalProperties: false,
+                      {
+                        type: "null",
+                      },
+                    ],
+                  },
+                  obtainmentTimestamp: {
+                    type: "number",
                   },
                 },
+                required: ["username", "accessToken", "channel"],
+                additionalProperties: false,
               },
-              required: ["accounts"],
-              additionalProperties: false,
             },
-          ],
+          },
+          required: ["accounts"],
+          additionalProperties: false,
         },
       ],
     },

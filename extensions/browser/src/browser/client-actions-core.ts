@@ -11,9 +11,9 @@ import {
   DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS,
 } from "./constants.js";
 
-export type { BrowserActRequest, BrowserFormField } from "./client-actions.types.js";
+export type { BrowserFormField } from "./client-actions.types.js";
 
-export type BrowserActResponse = {
+type BrowserActResponse = {
   ok: true;
   targetId: string;
   url?: string;

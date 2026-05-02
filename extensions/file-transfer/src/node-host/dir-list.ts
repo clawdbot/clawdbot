@@ -5,14 +5,14 @@ import { mimeFromExtension } from "../shared/mime.js";
 export const DIR_LIST_DEFAULT_MAX_ENTRIES = 200;
 export const DIR_LIST_HARD_MAX_ENTRIES = 5000;
 
-export type DirListParams = {
+type DirListParams = {
   path?: unknown;
   pageToken?: unknown;
   maxEntries?: unknown;
   followSymlinks?: unknown;
 };
 
-export type DirListEntry = {
+type DirListEntry = {
   name: string;
   path: string;
   size: number;
@@ -21,7 +21,7 @@ export type DirListEntry = {
   mtime: number;
 };
 
-export type DirListOk = {
+type DirListOk = {
   ok: true;
   path: string;
   entries: DirListEntry[];
@@ -29,7 +29,7 @@ export type DirListOk = {
   truncated: boolean;
 };
 
-export type DirListErrCode =
+type DirListErrCode =
   | "INVALID_PATH"
   | "NOT_FOUND"
   | "PERMISSION_DENIED"
@@ -37,14 +37,14 @@ export type DirListErrCode =
   | "SYMLINK_REDIRECT"
   | "READ_ERROR";
 
-export type DirListErr = {
+type DirListErr = {
   ok: false;
   code: DirListErrCode;
   message: string;
   canonicalPath?: string;
 };
 
-export type DirListResult = DirListOk | DirListErr;
+type DirListResult = DirListOk | DirListErr;
 
 function clampMaxEntries(input: unknown): number {
   if (typeof input !== "number" || !Number.isFinite(input) || input <= 0) {

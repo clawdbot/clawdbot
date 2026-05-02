@@ -11,7 +11,7 @@ import {
 } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { resolveTelegramForumThreadId } from "./bot/helpers.js";
 
-export type TelegramSequentialKeyContext = {
+type TelegramSequentialKeyContext = {
   chat?: { id?: number };
   me?: UserFromGetMe;
   message?: Message;

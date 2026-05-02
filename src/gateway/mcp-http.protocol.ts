@@ -2,7 +2,7 @@ export const MCP_LOOPBACK_SERVER_NAME = "openclaw";
 export const MCP_LOOPBACK_SERVER_VERSION = "0.1.0";
 export const MCP_LOOPBACK_SUPPORTED_PROTOCOL_VERSIONS = ["2025-03-26", "2024-11-05"] as const;
 
-export type JsonRpcId = string | number | null | undefined;
+type JsonRpcId = string | number | null | undefined;
 
 export type JsonRpcRequest = {
   jsonrpc: "2.0";

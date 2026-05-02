@@ -261,7 +261,6 @@ function resolveRuntimeProviderPluginLoadState(
       pluginSdkResolution: params.pluginSdkResolution,
       cache: params.cache ?? true,
       activate: params.activate ?? false,
-      installBundledRuntimeDeps: params.installBundledRuntimeDeps ?? false,
     },
   );
   return { loadOptions };
@@ -294,7 +293,6 @@ export function resolvePluginProviders(params: {
   activate?: boolean;
   cache?: boolean;
   applyAutoEnable?: boolean;
-  installBundledRuntimeDeps?: boolean;
   pluginSdkResolution?: PluginLoadOptions["pluginSdkResolution"];
   mode?: "runtime" | "setup";
   includeUntrustedWorkspacePlugins?: boolean;

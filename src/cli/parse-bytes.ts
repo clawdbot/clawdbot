@@ -3,7 +3,7 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 
-export type BytesParseOptions = {
+type BytesParseOptions = {
   defaultUnit?: "b" | "kb" | "mb" | "gb" | "tb";
 };
 

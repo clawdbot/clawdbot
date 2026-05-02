@@ -263,8 +263,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     });
 
-    expect(seenPrompt).toBe("");
-    expect(result.finalPromptText).toBe("");
+    expect(seenPrompt).toBe("Continue the OpenClaw runtime event.");
+    expect(result.finalPromptText).toBe("Continue the OpenClaw runtime event.");
     expect(result.messagesSnapshot).not.toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -280,7 +280,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       .split("\n")
       .map((line) => JSON.parse(line) as TrajectoryEvent);
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
-    expect(contextCompiled?.data?.prompt).toBe("");
+    expect(contextCompiled?.data?.prompt).toBe("Continue the OpenClaw runtime event.");
     expect(contextCompiled?.data?.systemPrompt).toContain("internal heartbeat event");
   });
 

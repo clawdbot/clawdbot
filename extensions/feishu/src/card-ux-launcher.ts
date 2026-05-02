@@ -5,7 +5,7 @@ import { FEISHU_APPROVAL_REQUEST_ACTION } from "./card-ux-approval.js";
 import { buildFeishuCardButton, buildFeishuCardInteractionContext } from "./card-ux-shared.js";
 import { sendCardFeishu } from "./send.js";
 
-export const FEISHU_QUICK_ACTION_CARD_TTL_MS = 10 * 60_000;
+const FEISHU_QUICK_ACTION_CARD_TTL_MS = 10 * 60_000;
 
 const QUICK_ACTION_MENU_KEYS = new Set(["quick-actions", "quick_actions", "launcher"]);
 

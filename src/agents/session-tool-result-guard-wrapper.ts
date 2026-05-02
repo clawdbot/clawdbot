@@ -10,7 +10,7 @@ import {
 import { resolveLiveToolResultMaxChars } from "./pi-embedded-runner/tool-result-truncation.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 
-export type GuardedSessionManager = SessionManager & {
+type GuardedSessionManager = SessionManager & {
   /** Flush any synthetic tool results for pending tool calls. Idempotent. */
   flushPendingToolResults?: () => void;
   /** Clear pending tool calls without persisting synthetic tool results. Idempotent. */

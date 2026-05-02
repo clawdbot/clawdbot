@@ -47,7 +47,7 @@ runs:
       if: inputs.install-bun == 'true'
       uses: oven-sh/setup-bun@v2.2.0
       with:
-        bun-version: "1.3.9"
+        bun-version: "1.3.13"
 
     - name: Runtime versions
       shell: bash

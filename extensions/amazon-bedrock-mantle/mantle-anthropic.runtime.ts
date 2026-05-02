@@ -100,7 +100,7 @@ export function createMantleAnthropicStreamFn(deps?: {
       ),
     });
     const base = buildMantleAnthropicBaseOptions(model, options, apiKey);
-    // Staged plugin runtime deps can give this plugin a distinct physical SDK copy.
+    // Plugin package deps can give this plugin a distinct physical SDK copy.
     // The client API is the same, but the SDK class private field makes types nominal.
     const streamClient = client as unknown as AnthropicStreamClient;
     if (!options?.reasoning || requiresDefaultSampling(model.id)) {

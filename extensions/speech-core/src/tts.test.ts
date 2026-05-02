@@ -10,6 +10,7 @@ import type {
   SpeechProviderPlugin,
   SpeechProviderPrepareSynthesisContext,
   SpeechSynthesisRequest,
+  SpeechTelephonySynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -387,6 +388,69 @@ describe("speech-core native voice-note routing", () => {
     });
   });
 
+  it("synthesizes explicitly tagged short hidden TTS text", async () => {
+    const cfg = createTtsConfig("openclaw-speech-core-short-hidden-tts-test");
+    let mediaDir: string | undefined;
+    try {
+      const result = await maybeApplyTtsToPayload({
+        payload: {
+          text: "[[tts:text]]hello[[/tts:text]]",
+          audioAsVoice: true,
+        },
+        cfg,
+        channel: "telegram",
+        kind: "final",
+      });
+
+      expect(synthesizeMock).toHaveBeenCalledWith(expect.objectContaining({ text: "hello" }));
+      expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
+      expect(result.audioAsVoice).toBe(true);
+      expect(result.text).toBeUndefined();
+      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("keeps skipping untagged short TTS text", async () => {
+    const cfg = createTtsConfig("openclaw-speech-core-short-plain-tts-test");
+    const result = await maybeApplyTtsToPayload({
+      payload: {
+        text: "hello",
+        audioAsVoice: true,
+      },
+      cfg,
+      channel: "telegram",
+      kind: "final",
+    });
+
+    expect(synthesizeMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      text: "hello",
+      audioAsVoice: true,
+    });
+  });
+
+  it("keeps skipping explicit tagged TTS text that strips to empty markdown", async () => {
+    const cfg = createTtsConfig("openclaw-speech-core-empty-hidden-tts-test");
+    const result = await maybeApplyTtsToPayload({
+      payload: {
+        text: "[[tts:text]]***[[/tts:text]]",
+        audioAsVoice: true,
+      },
+      cfg,
+      channel: "telegram",
+      kind: "final",
+    });
+
+    expect(synthesizeMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      audioAsVoice: true,
+    });
+  });
+
   it("selects persona preferred provider before config fallback", () => {
     const cfg: OpenClawConfig = {
       messages: {
@@ -540,6 +604,47 @@ describe("speech-core native voice-note routing", () => {
       persona: "alfred",
     });
     expect(result.attempts?.[0]).not.toHaveProperty("personaBinding");
+  });
+
+  it("passes directive overrides to telephony synthesis providers", async () => {
+    const synthesizeTelephony = vi.fn(async (_request: SpeechTelephonySynthesisRequest) => ({
+      audioBuffer: Buffer.from("voice"),
+      outputFormat: "pcm",
+      sampleRate: 24000,
+    }));
+    installSpeechProviders([
+      createMockSpeechProvider("mock", {
+        synthesizeTelephony,
+      }),
+    ]);
+
+    const result = await textToSpeechTelephony({
+      text: "Use a directed telephony voice.",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+          },
+        },
+      },
+      overrides: {
+        providerOverrides: {
+          mock: {
+            voice: "directed-voice",
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(synthesizeTelephony).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerOverrides: {
+          voice: "directed-voice",
+        },
+      }),
+    );
   });
 
   it("uses provider defaults when fallback policy allows missing persona bindings", async () => {

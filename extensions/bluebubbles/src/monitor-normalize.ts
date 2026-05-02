@@ -59,6 +59,32 @@ export function extractAttachments(message: Record<string, unknown>): BlueBubble
   return out;
 }
 
+// Apple UTIs used by BlueBubbles for voice notes / audio attachments. Webhook
+// payloads sometimes carry only a UTI without a normalized `audio/*` MIME
+// (notably iMessage voice notes recorded on macOS 26 Tahoe), so audio
+// detection must consult both. Intentionally narrow: covers what BB emits for
+// iMessage voice notes today (m4a/MPEG-4 audio). Broader UTIs like
+// `public.aiff-audio`, `public.wav`, `public.mp3` are not iMessage voice-note
+// formats and pull in `audio/*` MIME paths anyway.
+const APPLE_AUDIO_UTIS = new Set<string>([
+  "public.audio",
+  "public.mpeg-4-audio",
+  "com.apple.m4a-audio",
+  "com.apple.coreaudio-format",
+]);
+
+export function isBlueBubblesAudioAttachment(attachment: BlueBubblesAttachment): boolean {
+  const mime = attachment.mimeType?.trim().toLowerCase();
+  if (mime && mime.startsWith("audio/")) {
+    return true;
+  }
+  const uti = attachment.uti?.trim().toLowerCase();
+  if (uti && APPLE_AUDIO_UTIS.has(uti)) {
+    return true;
+  }
+  return false;
+}
+
 function buildAttachmentPlaceholder(attachments: BlueBubblesAttachment[]): string {
   if (attachments.length === 0) {
     return "";
@@ -66,7 +92,7 @@ function buildAttachmentPlaceholder(attachments: BlueBubblesAttachment[]): strin
   const mimeTypes = attachments.map((entry) => entry.mimeType ?? "");
   const allImages = mimeTypes.every((entry) => entry.startsWith("image/"));
   const allVideos = mimeTypes.every((entry) => entry.startsWith("video/"));
-  const allAudio = mimeTypes.every((entry) => entry.startsWith("audio/"));
+  const allAudio = attachments.every(isBlueBubblesAudioAttachment);
   const tag = allImages
     ? "<media:image>"
     : allVideos

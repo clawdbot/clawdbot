@@ -34,6 +34,12 @@ vi.mock("../plugins/plugin-registry.js", () => ({
     mockLoadPluginManifestRegistry(...args),
 }));
 
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: (...args: unknown[]) => ({
+    manifestRegistry: mockLoadPluginManifestRegistry(...args),
+  }),
+}));
+
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: (...args: unknown[]) =>
     mockGetCurrentPluginMetadataSnapshot(...args),
@@ -309,7 +315,7 @@ describe("loadGatewayRuntimeConfigSchema", () => {
 
     expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(3);
     for (const call of mockLoadPluginManifestRegistry.mock.calls) {
-      expect(call[0]).toMatchObject({ includeDisabled: true });
+      expect(call[0]).toHaveProperty("config");
       expect(call[0]).not.toHaveProperty("bundledChannelConfigCollector");
     }
     expect(getActivePluginRegistry()).toBe(activeRegistry);

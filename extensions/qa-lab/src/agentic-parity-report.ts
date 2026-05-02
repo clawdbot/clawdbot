@@ -3,7 +3,7 @@ import {
   QA_AGENTIC_PARITY_TOOL_BACKED_SCENARIO_TITLES,
 } from "./agentic-parity.js";
 
-export type QaParityReportStep = {
+type QaParityReportStep = {
   name: string;
   status: "pass" | "fail" | "skip";
   details?: string;
@@ -23,7 +23,7 @@ export type QaParityReportScenario = {
  * skips the label-match verification for backwards compatibility
  * with legacy summaries that predate the run metadata block.
  */
-export type QaParityRunBlock = {
+type QaParityRunBlock = {
   primaryProvider?: string;
   primaryModel?: string;
   primaryModelName?: string;
@@ -42,7 +42,7 @@ export type QaParitySuiteSummary = {
   run?: QaParityRunBlock;
 };
 
-export type QaAgenticParityMetrics = {
+type QaAgenticParityMetrics = {
   totalScenarios: number;
   passedScenarios: number;
   failedScenarios: number;
@@ -54,7 +54,7 @@ export type QaAgenticParityMetrics = {
   fakeSuccessCount: number;
 };
 
-export type QaAgenticParityScenarioComparison = {
+type QaAgenticParityScenarioComparison = {
   name: string;
   candidateStatus: "pass" | "fail" | "skip" | "missing";
   baselineStatus: "pass" | "fail" | "skip" | "missing";
@@ -62,7 +62,7 @@ export type QaAgenticParityScenarioComparison = {
   baselineDetails?: string;
 };
 
-export type QaAgenticParityComparison = {
+type QaAgenticParityComparison = {
   candidateLabel: string;
   baselineLabel: string;
   comparedAt: string;

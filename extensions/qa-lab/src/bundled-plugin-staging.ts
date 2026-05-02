@@ -16,10 +16,6 @@ const QA_CLI_METADATA_ENTRY_BASENAMES = Object.freeze([
   "cli-metadata.mjs",
   "cli-metadata.cjs",
 ]);
-const QA_RUNTIME_DEPS_ARTIFACT_BASENAMES = new Set([
-  ".openclaw-runtime-deps.json",
-  ".openclaw-runtime-deps-stamp.json",
-]);
 
 function assertSafeQaBundledPluginId(pluginId: string) {
   if (!QA_BUNDLED_PLUGIN_ID_PATTERN.test(pluginId)) {
@@ -316,14 +312,6 @@ async function seedQaStagedBuiltTreeRoots(params: {
   }
 }
 
-function shouldStageQaBundledPluginPath(sourcePath: string) {
-  const basename = path.basename(sourcePath);
-  return (
-    !QA_RUNTIME_DEPS_ARTIFACT_BASENAMES.has(basename) &&
-    !basename.startsWith(".openclaw-runtime-deps-copy-")
-  );
-}
-
 export async function resolveQaRuntimeHostVersion(params: {
   repoRoot: string;
   allowedPluginIds: readonly string[];
@@ -426,10 +414,7 @@ export async function createQaBundledPluginsDir(params: {
     if (!sourceDir) {
       throw new Error(`qa bundled plugin not found: ${pluginId}`);
     }
-    await fs.cp(sourceDir, path.join(bundledPluginsDir, pluginId), {
-      recursive: true,
-      filter: shouldStageQaBundledPluginPath,
-    });
+    await fs.cp(sourceDir, path.join(bundledPluginsDir, pluginId), { recursive: true });
   }
   await symlinkQaStagedDirEntry({
     sourcePath: path.join(stagedRoot, "dist"),

@@ -216,10 +216,10 @@ to PI.
 
 In `auto` mode, set `fallback: "none"` when you need missing plugin harness
 selection to fail instead of using PI. Explicit plugin runtimes such as
-`runtime: "codex"` already fail closed by default, unless `fallback: "pi"` is
-set in the same config or environment override scope. Selected plugin harness
-failures always fail hard. This does not block an explicit `runtime: "pi"` or
-`OPENCLAW_AGENT_RUNTIME=pi`.
+`agentRuntime.id: "codex"` already fail closed by default, unless
+`fallback: "pi"` is set in the same config or environment override scope.
+Selected plugin harness failures always fail hard. This does not block an
+explicit `agentRuntime.id: "pi"` or `OPENCLAW_AGENT_RUNTIME=pi`.
 
 For Codex-only embedded runs:
 

@@ -88,7 +88,13 @@ describe("diagnostic stability bundles", () => {
       reason: "json_body_limit",
     });
 
-    const error = Object.assign(new Error("contains secret message"), { code: "ERR_TEST" });
+    const secret = "sk-1234567890abcdef";
+    const error = Object.assign(
+      new Error(
+        `Startup failed: OPENAI_API_KEY=${secret} while opening google/web-search-contract-api.js`,
+      ),
+      { code: "ERR_TEST" },
+    );
     const result = writeDiagnosticStabilityBundleSync({
       reason: "gateway.restart_startup_failed",
       error,
@@ -122,9 +128,11 @@ describe("diagnostic stability bundles", () => {
     });
     expect(bundle.snapshot.events[0]).not.toHaveProperty("chatId");
     expect(bundle.snapshot.events[0]).not.toHaveProperty("error");
+    expect(bundle.error?.message).toContain("google/web-search-contract-api.js");
+    expect(bundle.error?.message).not.toContain(secret);
     expect(raw).not.toContain("chat-secret");
     expect(raw).not.toContain("message body");
-    expect(raw).not.toContain("contains secret message");
+    expect(raw).not.toContain(secret);
     expect(raw).not.toContain(os.hostname());
   });
 
@@ -158,13 +166,14 @@ describe("diagnostic stability bundles", () => {
       error: {
         name: "Error",
         code: "ERR_CONFIG_PARSE",
+        message: "raw startup config payload",
       },
       snapshot: {
         count: 0,
         events: [],
       },
     });
-    expect(raw).not.toContain("raw startup config payload");
+    expect(raw).not.toContain("stack");
   });
 
   it("registers a fatal hook only while installed", () => {
@@ -242,7 +251,7 @@ describe("diagnostic stability bundles", () => {
       error: {
         name: "private error name",
         code: "ERR_TEST",
-        message: "error-message-secret",
+        message: "OPENAI_API_KEY=sk-1234567890abcdef",
       },
     });
     Object.assign(bundle.process as Record<string, unknown>, {
@@ -284,7 +293,9 @@ describe("diagnostic stability bundles", () => {
     }
     expect(result.bundle.reason).toBe("unknown");
     expect(result.bundle.host).toEqual({ hostname: "<redacted-hostname>" });
-    expect(result.bundle.error).toEqual({ code: "ERR_TEST" });
+    expect(result.bundle.error?.code).toBe("ERR_TEST");
+    expect(result.bundle.error?.message).toContain("OPENAI_API_KEY=");
+    expect(result.bundle.error?.message).not.toContain("sk-1234567890abcdef");
     expect(result.bundle.snapshot.events[0]).toEqual({
       seq: 1,
       ts: 1,
@@ -297,7 +308,7 @@ describe("diagnostic stability bundles", () => {
       "private reason",
       "top-level-secret",
       "private error name",
-      "error-message-secret",
+      "sk-1234567890abcdef",
       "process-command-secret",
       "private-hostname",
       "host-extra-secret",

@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDuckDuckGoWebSearchProvider as createDuckDuckGoWebSearchContractProvider } from "../web-search-contract-api.js";
 import { DEFAULT_DDG_SAFE_SEARCH, resolveDdgRegion, resolveDdgSafeSearch } from "./config.js";
 
 const { runDuckDuckGoSearch } = vi.hoisted(() => ({
@@ -34,6 +35,10 @@ describe("duckduckgo web search provider", () => {
 
     expect(provider.id).toBe("duckduckgo");
     expect(provider.label).toBe("DuckDuckGo Search (experimental)");
+    expect(provider.onboardingScopes).toEqual(["text-inference"]);
+    expect(createDuckDuckGoWebSearchContractProvider().onboardingScopes).toEqual([
+      "text-inference",
+    ]);
     expect(provider.requiresCredential).toBe(false);
     expect(provider.credentialPath).toBe("");
     expect(applied.plugins?.entries?.duckduckgo?.enabled).toBe(true);

@@ -68,6 +68,7 @@ Notes:
   - `per-sender` (default): each agent has many sessions.
   - `global`: the TUI always uses the `global` session (the picker may be empty).
 - The current agent + session are always visible in the footer.
+- When started without `--session`, gateway-mode TUI resumes the last selected session for the same gateway, agent, and session scope if that session still exists. Passing `--session`, `/session`, `/new`, or `/reset` remains explicit.
 
 ## Sending + delivery
 

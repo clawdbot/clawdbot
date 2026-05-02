@@ -40,6 +40,35 @@ describe("xai responses tool helpers", () => {
     });
   });
 
+  it("ignores malformed output, content, and annotation entries", () => {
+    expect(
+      __testing.extractXaiWebSearchContent({
+        output: [
+          null,
+          {
+            type: "message",
+            content: [
+              null,
+              {
+                type: "output_text",
+                text: "Found it",
+                annotations: [
+                  null,
+                  { type: "url_citation", url: "https://example.com/a" },
+                  { type: "url_citation", url: "https://example.com/a" },
+                  { type: "url_citation" },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      text: "Found it",
+      annotationCitations: ["https://example.com/a"],
+    });
+  });
+
   it("prefers explicit top-level citations when present", () => {
     expect(
       __testing.resolveXaiResponseTextAndCitations({

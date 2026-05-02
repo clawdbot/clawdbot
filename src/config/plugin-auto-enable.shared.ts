@@ -2,14 +2,14 @@ import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtime
 import { normalizeProviderId } from "../agents/provider-id.js";
 import {
   hasPotentialConfiguredChannels,
-  listPotentialConfiguredChannelIds,
+  listPotentialConfiguredChannelPresenceSignals,
 } from "../channels/config-presence.js";
 import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import {
   type PluginManifestRecord,
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resolveOwningPluginIdsForModelRef } from "../plugins/providers.js";
 import { resolvePluginSetupAutoEnableReasons } from "../plugins/setup-registry.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
@@ -220,16 +220,13 @@ function resolvePluginsWithOwnedToolConfig(
 
 function resolvePluginIdForConfiguredWebFetchProvider(
   providerId: string | undefined,
-  env: NodeJS.ProcessEnv,
+  registry: PluginManifestRegistry,
 ): string | undefined {
   const normalizedProviderId = normalizeOptionalLowercaseString(providerId);
   if (!normalizedProviderId) {
     return undefined;
   }
-  return loadPluginManifestRegistryForPluginRegistry({
-    env,
-    includeDisabled: true,
-  }).plugins.find(
+  return registry.plugins.find(
     (plugin) =>
       plugin.origin === "bundled" &&
       (plugin.contracts?.webFetchProviders ?? []).some(
@@ -294,10 +291,12 @@ function collectPluginIdsForConfiguredChannel(
   return [builtInId ?? claims[0]?.plugin.id ?? normalizedChannelId];
 }
 
-function collectCandidateChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
-  return listPotentialConfiguredChannelIds(cfg, env, { includePersistedAuthState: false }).map(
-    (channelId) => normalizeChatChannelId(channelId) ?? channelId,
-  );
+function collectConfiguredChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
+  return listPotentialConfiguredChannelPresenceSignals(cfg, env, {
+    includePersistedAuthState: false,
+  })
+    .map((signal) => normalizeChatChannelId(signal.channelId) ?? signal.channelId)
+    .filter((channelId) => isChannelConfigured(cfg, channelId, env));
 }
 
 function hasConfiguredWebSearchPluginEntry(cfg: OpenClawConfig): boolean {
@@ -574,11 +573,9 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
   registry: PluginManifestRegistry;
 }): PluginAutoEnableCandidate[] {
   const changes: PluginAutoEnableCandidate[] = [];
-  for (const channelId of collectCandidateChannelIds(params.config, params.env)) {
-    if (isChannelConfigured(params.config, channelId, params.env)) {
-      for (const pluginId of collectPluginIdsForConfiguredChannel(channelId, params.registry)) {
-        changes.push({ pluginId, kind: "channel-configured", channelId });
-      }
+  for (const channelId of collectConfiguredChannelIds(params.config, params.env)) {
+    for (const pluginId of collectPluginIdsForConfiguredChannel(channelId, params.registry)) {
+      changes.push({ pluginId, kind: "channel-configured", channelId });
     }
   }
 
@@ -623,7 +620,7 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
       : undefined;
   const webFetchPluginId = resolvePluginIdForConfiguredWebFetchProvider(
     webFetchProvider,
-    params.env,
+    params.registry,
   );
   if (webFetchPluginId) {
     changes.push({
@@ -869,11 +866,10 @@ export function resolvePluginAutoEnableManifestRegistry(params: {
   return (
     params.manifestRegistry ??
     (configMayNeedPluginManifestRegistry(params.config, params.env)
-      ? loadPluginManifestRegistryForPluginRegistry({
+      ? loadPluginMetadataSnapshot({
           config: params.config,
           env: params.env,
-          includeDisabled: true,
-        })
+        }).manifestRegistry
       : EMPTY_PLUGIN_MANIFEST_REGISTRY)
   );
 }

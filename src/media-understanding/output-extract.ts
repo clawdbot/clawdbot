@@ -1,4 +1,4 @@
-export function extractLastJsonObject(raw: string): unknown {
+function extractLastJsonObject(raw: string): unknown {
   const trimmed = raw.trim();
   const start = trimmed.lastIndexOf("{");
   if (start === -1) {

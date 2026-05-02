@@ -2,7 +2,7 @@ import * as path from "node:path";
 import { resolveCliName } from "./cli-name.js";
 import { asRecord, asString, resolveTempPathParts } from "./nodes-media-utils.js";
 
-export type CanvasSnapshotPayload = {
+type CanvasSnapshotPayload = {
   format: string;
   base64: string;
 };

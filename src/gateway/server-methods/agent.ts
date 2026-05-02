@@ -1373,6 +1373,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             acpTurnSource: request.acpTurnSource,
             internalEvents: request.internalEvents,
             inputProvenance,
+            cleanupBundleMcpOnRunEnd: request.cleanupBundleMcpOnRunEnd,
             abortSignal: activeRunAbort.controller.signal,
             // Internal-only: allow workspace override for spawned subagent runs.
             workspaceDir: resolveIngressWorkspaceOverrideForSpawnedRun({

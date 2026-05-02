@@ -905,9 +905,10 @@ export const doctorHandlers: GatewayRequestHandlers = {
       const nowMs = Date.now();
       const dreamingConfig = resolveDreamingConfig(cfg);
       const workspaceDir = normalizeTrimmedString((status as Record<string, unknown>).workspaceDir);
-      const configuredWorkspaces = resolveMemoryDreamingWorkspaces(cfg).map(
-        (entry) => entry.workspaceDir,
-      );
+      const configuredWorkspaces = resolveMemoryDreamingWorkspaces(cfg, {
+        primaryWorkspaceDir: workspaceDir,
+        primaryAgentId: resolveDefaultAgentId(cfg),
+      }).map((entry) => entry.workspaceDir);
       const allWorkspaces =
         configuredWorkspaces.length > 0 ? configuredWorkspaces : workspaceDir ? [workspaceDir] : [];
       const storeStats =

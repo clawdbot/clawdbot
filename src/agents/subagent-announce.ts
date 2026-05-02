@@ -43,6 +43,7 @@ import {
   waitForEmbeddedPiRunEnd,
 } from "./subagent-announce.runtime.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
@@ -588,19 +589,11 @@ export async function runSubagentAnnounceFlow(params: {
       }
     }
     if (shouldDeleteChildSession) {
-      try {
-        await subagentAnnounceDeps.callGateway({
-          method: "sessions.delete",
-          params: {
-            key: params.childSessionKey,
-            deleteTranscript: true,
-            emitLifecycleHooks: params.spawnMode === "session",
-          },
-          timeoutMs: 10_000,
-        });
-      } catch {
-        // ignore
-      }
+      await deleteSubagentSessionForCleanup({
+        callGateway: subagentAnnounceDeps.callGateway,
+        childSessionKey: params.childSessionKey,
+        spawnMode: params.spawnMode,
+      });
     }
   }
   return didAnnounce;

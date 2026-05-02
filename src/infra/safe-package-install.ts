@@ -1,14 +1,14 @@
 import type { NpmProjectInstallEnvOptions } from "./npm-install-env.js";
 import { createNpmProjectInstallEnv } from "./npm-install-env.js";
 
-export type SafeNpmInstallEnvOptions = NpmProjectInstallEnvOptions & {
+type SafeNpmInstallEnvOptions = NpmProjectInstallEnvOptions & {
   ignoreWorkspaces?: boolean;
   legacyPeerDeps?: boolean;
   packageLock?: boolean;
   quiet?: boolean;
 };
 
-export type SafeNpmInstallArgsOptions = {
+type SafeNpmInstallArgsOptions = {
   ignoreWorkspaces?: boolean;
   loglevel?: "error" | "silent";
   noAudit?: boolean;

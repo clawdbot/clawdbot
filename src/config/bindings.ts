@@ -9,7 +9,7 @@ export function isRouteBinding(binding: AgentBinding): binding is AgentRouteBind
   return normalizeBindingType(binding) === "route";
 }
 
-export function isAcpBinding(binding: AgentBinding): binding is AgentAcpBinding {
+function isAcpBinding(binding: AgentBinding): binding is AgentAcpBinding {
   return normalizeBindingType(binding) === "acp";
 }
 

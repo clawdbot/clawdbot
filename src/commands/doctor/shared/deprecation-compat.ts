@@ -56,7 +56,7 @@ function deprecatedCompatRecord<Code extends string>(
 // path they repair. Release removals must check this inventory before deleting
 // doctor fixes, and replacement notes should be revalidated against the current
 // architecture because ownership and config footprint can shift during rollout.
-export const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
+const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   deprecatedCompatRecord({
     code: "doctor-agent-llm-timeout",
     owner: "agent-runtime",

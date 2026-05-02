@@ -251,6 +251,8 @@ The tmux wrapper carries common non-secret runtime selectors such as
 `OPENCLAW_GATEWAY_PORT`, and `OPENCLAW_SKIP_CHANNELS` into the pane. Put
 provider credentials in your normal profile/config, or use raw foreground mode
 for one-off ephemeral secrets.
+The managed tmux pane also defaults to colored Gateway logs for readability;
+set `FORCE_COLOR=0` when starting `pnpm gateway:watch` to disable ANSI output.
 
 The watcher restarts on build-relevant files under `src/`, extension source files,
 extension `package.json` and `openclaw.plugin.json` metadata, `tsconfig.json`,

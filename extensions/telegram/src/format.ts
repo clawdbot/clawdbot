@@ -10,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/text-runtime";
 import { renderMarkdownWithMarkers } from "openclaw/plugin-sdk/text-runtime";
 
-export type TelegramFormattedChunk = {
+type TelegramFormattedChunk = {
   html: string;
   text: string;
 };

@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice";
 import type { VoiceCallConfig } from "./config.js";
 import {
+  resolveVoiceCallSessionKey,
   resolveTwilioAuthToken,
   resolveVoiceCallConfig,
   validateProviderConfig,
@@ -103,6 +104,7 @@ function loadRealtimeHandler(): Promise<RealtimeHandlerModule> {
 }
 
 function resolveVoiceCallConsultSessionKey(call: {
+  config: VoiceCallConfig;
   sessionKey?: string;
   from?: string;
   to?: string;
@@ -113,8 +115,11 @@ function resolveVoiceCallConsultSessionKey(call: {
     return call.sessionKey;
   }
   const phone = call.direction === "outbound" ? call.to : call.from;
-  const normalizedPhone = phone?.replace(/\D/g, "");
-  return normalizedPhone ? `voice:${normalizedPhone}` : `voice:${call.callId}`;
+  return resolveVoiceCallSessionKey({
+    config: call.config,
+    callId: call.callId,
+    phone,
+  });
 }
 
 function mapVoiceCallConsultTranscript(
@@ -307,6 +312,7 @@ export async function createVoiceCallRuntime(params: {
     coreConfig,
     fullConfig ?? (coreConfig as OpenClawConfig),
     agentRuntime,
+    log,
   );
   if (realtimeProvider) {
     const { RealtimeCallHandler } = await loadRealtimeHandler();
@@ -334,7 +340,7 @@ export async function createVoiceCallRuntime(params: {
             return { error: `Call "${callId}" not found` };
           }
           const agentId = config.agentId ?? "main";
-          const sessionKey = resolveVoiceCallConsultSessionKey(call);
+          const sessionKey = resolveVoiceCallConsultSessionKey({ ...call, config });
           const fastContext = await resolveRealtimeFastContextConsult({
             cfg,
             agentId,

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 
-export const BOUNDARY_CHECKS = [
+const BOUNDARY_CHECKS = [
   ["plugin-extension-boundary", "pnpm", ["run", "lint:plugins:no-extension-imports"]],
   ["lint:tmp:no-random-messaging", "pnpm", ["run", "lint:tmp:no-random-messaging"]],
   ["lint:tmp:channel-agnostic-boundaries", "pnpm", ["run", "lint:tmp:channel-agnostic-boundaries"]],

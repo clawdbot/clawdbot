@@ -62,12 +62,85 @@ describe("gateway config mutation guard coverage", () => {
       expect.arrayContaining([
         "agents.defaults.systemPromptOverride",
         "agents.defaults.model",
+        "agents.defaults.subagents.thinking",
         "agents.list[].id",
         "agents.list[].model",
+        "agents.list[].subagents.thinking",
         "channels.*.requireMention",
         "messages.visibleReplies",
         "messages.groupChat.visibleReplies",
       ]),
+    );
+  });
+
+  it("allows documented subagent thinking default edits via config.patch", () => {
+    expectAllowed(
+      {},
+      {
+        agents: {
+          defaults: {
+            subagents: { thinking: "medium" },
+          },
+        },
+      },
+    );
+    expectAllowed(
+      {
+        agents: {
+          defaults: {
+            subagents: { thinking: "low" },
+          },
+        },
+      },
+      {
+        agents: {
+          defaults: {
+            subagents: { thinking: "high" },
+          },
+        },
+      },
+    );
+  });
+
+  it("allows documented per-agent subagent thinking edits via config.patch", () => {
+    expectAllowed(
+      {
+        agents: {
+          list: [{ id: "worker", subagents: { thinking: "low" } }],
+        },
+      },
+      {
+        agents: {
+          list: [{ id: "worker", subagents: { thinking: "medium" } }],
+        },
+      },
+    );
+    expectAllowed(
+      { agents: { list: [] as Array<Record<string, unknown>> } },
+      {
+        agents: {
+          list: [{ id: "helper", subagents: { thinking: "medium" } }],
+        },
+      },
+    );
+  });
+
+  it("keeps neighboring subagent policy fields protected via config.patch", () => {
+    expectBlocked(
+      { agents: { defaults: { subagents: { allowAgents: ["worker"] } } } },
+      { agents: { defaults: { subagents: { allowAgents: ["*"] } } } },
+    );
+    expectBlocked(
+      {
+        agents: {
+          list: [{ id: "worker", subagents: { requireAgentId: true } }],
+        },
+      },
+      {
+        agents: {
+          list: [{ id: "worker", subagents: { requireAgentId: false } }],
+        },
+      },
     );
   });
 

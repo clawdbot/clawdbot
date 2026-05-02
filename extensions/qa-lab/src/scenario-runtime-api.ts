@@ -98,7 +98,7 @@ export type QaScenarioRuntimeConstants = {
   imageUnderstandingValidPngBase64: string;
 };
 
-export type QaScenarioRuntimeApi<
+type QaScenarioRuntimeApi<
   TEnv extends QaScenarioRuntimeEnv = QaScenarioRuntimeEnv,
   TDeps extends QaScenarioRuntimeDeps = QaScenarioRuntimeDeps,
 > = {

@@ -1,6 +1,6 @@
 import { getRuntimeConfig } from "../config/config.js";
 import { formatPluginSourceForTable, resolvePluginSourceRoots } from "../plugins/source-display.js";
-import { defaultRuntime } from "../runtime.js";
+import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { quietPluginJsonLogger } from "./plugins-command-helpers.js";
@@ -12,7 +12,10 @@ export type PluginsListOptions = {
   verbose?: boolean;
 };
 
-export async function runPluginsListCommand(opts: PluginsListOptions): Promise<void> {
+export async function runPluginsListCommand(
+  opts: PluginsListOptions,
+  runtime: RuntimeEnv = defaultRuntime,
+): Promise<void> {
   const { buildPluginRegistrySnapshotReport } = await import("../plugins/status.js");
   const cfg = getRuntimeConfig();
   const report = buildPluginRegistrySnapshotReport({
@@ -31,19 +34,17 @@ export async function runPluginsListCommand(opts: PluginsListOptions): Promise<v
       plugins: list,
       diagnostics: report.diagnostics,
     };
-    defaultRuntime.writeJson(payload);
+    writeRuntimeJson(runtime, payload);
     return;
   }
 
   if (list.length === 0) {
-    defaultRuntime.log(theme.muted("No plugins found."));
+    runtime.log(theme.muted("No plugins found."));
     return;
   }
 
   const enabled = list.filter((p) => p.enabled).length;
-  defaultRuntime.log(
-    `${theme.heading("Plugins")} ${theme.muted(`(${enabled}/${list.length} enabled)`)}`,
-  );
+  runtime.log(`${theme.heading("Plugins")} ${theme.muted(`(${enabled}/${list.length} enabled)`)}`);
 
   if (!opts.verbose) {
     const tableWidth = getTerminalTableWidth();
@@ -74,7 +75,7 @@ export async function runPluginsListCommand(opts: PluginsListOptions): Promise<v
     });
 
     if (usedRoots.size > 0) {
-      defaultRuntime.log(theme.muted("Source roots:"));
+      runtime.log(theme.muted("Source roots:"));
       for (const key of ["stock", "workspace", "global"] as const) {
         if (!usedRoots.has(key)) {
           continue;
@@ -83,12 +84,12 @@ export async function runPluginsListCommand(opts: PluginsListOptions): Promise<v
         if (!dir) {
           continue;
         }
-        defaultRuntime.log(`  ${theme.command(`${key}:`)} ${theme.muted(dir)}`);
+        runtime.log(`  ${theme.command(`${key}:`)} ${theme.muted(dir)}`);
       }
-      defaultRuntime.log("");
+      runtime.log("");
     }
 
-    defaultRuntime.log(
+    runtime.log(
       renderTable({
         width: tableWidth,
         columns: [
@@ -110,5 +111,5 @@ export async function runPluginsListCommand(opts: PluginsListOptions): Promise<v
     lines.push(formatPluginLine(plugin, true));
     lines.push("");
   }
-  defaultRuntime.log(lines.join("\n").trim());
+  runtime.log(lines.join("\n").trim());
 }

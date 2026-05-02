@@ -20,18 +20,24 @@ Reference for **LLM/model providers** (not chat channels like WhatsApp/Telegram)
     - Fallback rules, cooldown probes, and session-override persistence: [Model failover](/concepts/model-failover).
 
   </Accordion>
+  <Accordion title="Adding provider auth does not change your primary model">
+    `openclaw configure` preserves an existing `agents.defaults.model.primary` when you add or reauth a provider. Provider plugins may still return a recommended default model in their auth config patch, but configure treats that as "make this model available" when a primary model already exists, not "replace the current primary model."
+
+    To intentionally switch the default model, use `openclaw models set <provider/model>` or `openclaw models auth login --provider <id> --set-default`.
+
+  </Accordion>
   <Accordion title="OpenAI provider/runtime split">
     OpenAI-family routes are prefix-specific:
 
-    - `openai/<model>` uses the direct OpenAI API-key provider in PI.
+    - `openai/<model>` plus `agents.defaults.agentRuntime.id: "codex"` uses the native Codex app-server harness. This is the usual ChatGPT/Codex subscription setup.
     - `openai-codex/<model>` uses Codex OAuth in PI.
-    - `openai/<model>` plus `agents.defaults.agentRuntime.id: "codex"` uses the native Codex app-server harness.
+    - `openai/<model>` without a Codex runtime override uses the direct OpenAI API-key provider in PI.
 
     See [OpenAI](/providers/openai) and [Codex harness](/plugins/codex-harness). If the provider/runtime split is confusing, read [Agent runtimes](/concepts/agent-runtimes) first.
 
     Plugin auto-enable follows the same boundary: `openai-codex/<model>` belongs to the OpenAI plugin, while the Codex plugin is enabled by `agentRuntime.id: "codex"` or legacy `codex/<model>` refs.
 
-    GPT-5.5 is available through `openai/gpt-5.5` for direct API-key traffic, `openai-codex/gpt-5.5` in PI for Codex OAuth, and the native Codex app-server harness when `agentRuntime.id: "codex"` is set.
+    GPT-5.5 is available through the native Codex app-server harness when `agentRuntime.id: "codex"` is set, through `openai-codex/gpt-5.5` in PI for Codex OAuth, and through `openai/gpt-5.5` in PI for direct API-key traffic when your account exposes it.
 
   </Accordion>
   <Accordion title="CLI runtimes">
@@ -142,11 +148,18 @@ Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so Ope
 - Shares the same `/fast` toggle and `params.fastMode` config as direct `openai/*`; OpenClaw maps that to `service_tier=priority`
 - `openai-codex/gpt-5.5` uses the Codex catalog native `contextWindow = 400000` and default runtime `contextTokens = 272000`; override the runtime cap with `models.providers.openai-codex.models[].contextTokens`
 - Policy note: OpenAI Codex OAuth is explicitly supported for external tools/workflows like OpenClaw.
-- Use `openai-codex/gpt-5.5` when you want the Codex OAuth/subscription route; use `openai/gpt-5.5` when your API-key setup and local catalog expose the public API route.
+- For the common subscription plus native Codex runtime route, sign in with `openai-codex` auth but configure `openai/gpt-5.5` plus `agents.defaults.agentRuntime.id: "codex"`.
+- Use `openai-codex/gpt-5.5` only when you want the Codex OAuth/subscription route through PI; use `openai/gpt-5.5` without the Codex runtime override when your API-key setup and local catalog expose the public API route.
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "openai-codex/gpt-5.5" } } },
+  plugins: { entries: { codex: { enabled: true } } },
+  agents: {
+    defaults: {
+      model: { primary: "openai/gpt-5.5" },
+      agentRuntime: { id: "codex", fallback: "none" },
+    },
+  },
 }
 ```
 
@@ -302,7 +315,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 | Venice                  | `venice`                         | `VENICE_API_KEY`                                             | —                                             |
 | Vercel AI Gateway       | `vercel-ai-gateway`              | `AI_GATEWAY_API_KEY`                                         | `vercel-ai-gateway/anthropic/claude-opus-4.6` |
 | Volcano Engine (Doubao) | `volcengine` / `volcengine-plan` | `VOLCANO_ENGINE_API_KEY`                                     | `volcengine-plan/ark-code-latest`             |
-| xAI                     | `xai`                            | `XAI_API_KEY`                                                | `xai/grok-4`                                  |
+| xAI                     | `xai`                            | `XAI_API_KEY`                                                | `xai/grok-4.3`                                |
 | Xiaomi                  | `xiaomi`                         | `XIAOMI_API_KEY`                                             | `xiaomi/mimo-v2-flash`                        |
 
 #### Quirks worth knowing
@@ -321,7 +334,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
     Model ids use a `nvidia/<vendor>/<model>` namespace (for example `nvidia/nvidia/nemotron-...` alongside `nvidia/moonshotai/kimi-k2.5`); pickers preserve the literal `<provider>/<model-id>` composition while the canonical key sent to the API stays single-prefixed.
   </Accordion>
   <Accordion title="xAI">
-    Uses the xAI Responses path. `/fast` or `params.fastMode: true` rewrites `grok-3`, `grok-3-mini`, `grok-4`, and `grok-4-0709` to their `*-fast` variants. `tool_stream` defaults on; disable via `agents.defaults.models["xai/<model>"].params.tool_stream=false`.
+    Uses the xAI Responses path. `grok-4.3` is the bundled default chat model. `/fast` or `params.fastMode: true` rewrites `grok-3`, `grok-3-mini`, `grok-4`, and `grok-4-0709` to their `*-fast` variants. `tool_stream` defaults on; disable via `agents.defaults.models["xai/<model>"].params.tool_stream=false`.
   </Accordion>
   <Accordion title="Cerebras">
     Ships as the bundled `cerebras` provider plugin. GLM uses `zai-glm-4.7`; OpenAI-compatible base URL is `https://api.cerebras.ai/v1`.
@@ -542,7 +555,7 @@ Then set a model (replace with one of the IDs returned by `http://localhost:1234
 }
 ```
 
-OpenClaw uses LM Studio's native `/api/v1/models` and `/api/v1/models/load` for discovery + auto-load, with `/v1/chat/completions` for inference by default. See [/providers/lmstudio](/providers/lmstudio) for setup and troubleshooting.
+OpenClaw uses LM Studio's native `/api/v1/models` and `/api/v1/models/load` for discovery + auto-load, with `/v1/chat/completions` for inference by default. If you want LM Studio JIT loading, TTL, and auto-evict to own model lifecycle, set `models.providers.lmstudio.params.preload: false`. See [/providers/lmstudio](/providers/lmstudio) for setup and troubleshooting.
 
 ### Ollama
 

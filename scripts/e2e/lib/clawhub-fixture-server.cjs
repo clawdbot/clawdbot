@@ -79,6 +79,9 @@ export default definePluginEntry({
       name: "OpenClaw Kitchen Sink",
       channels: ["kitchen-sink-channel"],
       providers: ["kitchen-sink-provider"],
+      contracts: {
+        tools: ["kitchen-sink-tool"],
+      },
       configSchema: {
         type: "object",
         properties: {},
@@ -180,6 +183,9 @@ export default definePluginEntry({
 `,
     manifest: {
       id: pluginId,
+      contracts: {
+        tools: ["kitchen-sink-tool", "kitchen_sink_tool"],
+      },
       configSchema: {
         type: "object",
         properties: {},

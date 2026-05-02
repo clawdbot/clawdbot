@@ -51,7 +51,7 @@ type ConvexCredentialBrokerConfig = {
   role: QaCredentialRole;
 };
 
-export type QaCredentialLeaseHeartbeat = {
+type QaCredentialLeaseHeartbeat = {
   getFailure(): Error | null;
   stop(): Promise<void>;
   throwIfFailed(): void;
@@ -59,9 +59,9 @@ export type QaCredentialLeaseHeartbeat = {
 
 export type QaCredentialRole = "ci" | "maintainer";
 
-export type QaCredentialLeaseSource = "convex" | "env";
+type QaCredentialLeaseSource = "convex" | "env";
 
-export type QaCredentialLease<TPayload> = {
+type QaCredentialLease<TPayload> = {
   credentialId?: string;
   heartbeat(): Promise<void>;
   heartbeatIntervalMs: number;
@@ -75,7 +75,7 @@ export type QaCredentialLease<TPayload> = {
   source: QaCredentialLeaseSource;
 };
 
-export type AcquireQaCredentialLeaseOptions<TPayload> = {
+type AcquireQaCredentialLeaseOptions<TPayload> = {
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
   kind: string;

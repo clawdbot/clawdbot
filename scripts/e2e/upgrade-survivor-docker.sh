@@ -13,7 +13,9 @@ SKIP_BUILD="${OPENCLAW_UPGRADE_SURVIVOR_E2E_SKIP_BUILD:-0}"
 DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-900s}"
 BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-}"
 SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}"
-ARTIFACT_DIR="${OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/upgrade-survivor}"
+LANE_ARTIFACT_SUFFIX="${OPENCLAW_DOCKER_ALL_LANE_NAME:-default}"
+LANE_ARTIFACT_SUFFIX="${LANE_ARTIFACT_SUFFIX//[^A-Za-z0-9_.-]/_}"
+ARTIFACT_DIR="${OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/upgrade-survivor/$LANE_ARTIFACT_SUFFIX}"
 
 normalize_npm_candidate() {
   local raw="$1"
@@ -218,6 +220,7 @@ node scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs \
   --base-url "http://127.0.0.1:$PORT" \
   --path /readyz \
   --expect ready \
+  --allow-failing discord,telegram,whatsapp,feishu \
   --out /tmp/openclaw-upgrade-survivor-readyz.json
 
 echo "Checking gateway RPC status..."

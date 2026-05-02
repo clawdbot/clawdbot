@@ -425,7 +425,7 @@ describe("inspectGatewayRestart", () => {
               id: "telegram",
               origin: "bundled",
               activated: true,
-              error: "failed to install bundled runtime deps: ENOSPC",
+              error: "failed to load plugin dependency: ENOSPC",
             },
             {
               id: "optional",
@@ -458,7 +458,7 @@ describe("inspectGatewayRestart", () => {
           id: "telegram",
           origin: "bundled",
           activated: true,
-          error: "failed to install bundled runtime deps: ENOSPC",
+          error: "failed to load plugin dependency: ENOSPC",
         },
       ],
     });
@@ -467,7 +467,7 @@ describe("inspectGatewayRestart", () => {
 
     const { renderRestartDiagnostics } = await import("./restart-health.js");
     expect(renderRestartDiagnostics(snapshot).join("\n")).toContain(
-      "Activated plugin load errors:\n- telegram: failed to install bundled runtime deps: ENOSPC",
+      "Activated plugin load errors:\n- telegram: failed to load plugin dependency: ENOSPC",
     );
   });
 
@@ -484,7 +484,7 @@ describe("inspectGatewayRestart", () => {
               id: "telegram",
               origin: "bundled",
               activated: true,
-              error: "failed to install bundled runtime deps: ENOSPC",
+              error: "failed to load plugin dependency: ENOSPC",
             },
           ],
         },

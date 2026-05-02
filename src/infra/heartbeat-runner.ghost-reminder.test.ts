@@ -8,7 +8,7 @@ import {
   setupTelegramHeartbeatPluginRuntimeForTests,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
-import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
+import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
 
 beforeEach(() => {
   setupTelegramHeartbeatPluginRuntimeForTests();
@@ -143,6 +143,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       SessionKey?: string;
       ForceSenderIsOwnerFalse?: boolean;
     } | null;
+    sessionKey: string;
     replyCallCount: number;
   }> => {
     return withTempHeartbeatSandbox(
@@ -174,6 +175,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
           result,
           sendTelegram,
           calledCtx,
+          sessionKey,
           replyCallCount: getReplySpy.mock.calls.length,
         };
       },
@@ -373,6 +375,26 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
     expect(calledCtx?.Body).toContain("exec finished: deploy succeeded");
     expect(sendTelegram).toHaveBeenCalled();
+  });
+
+  it("consumes exec completion entries without dropping later generic events", async () => {
+    const { result, calledCtx, sessionKey } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-exec-preserve-generic-",
+      replyText: "Deploy succeeded",
+      reason: "exec-event",
+      enqueue: (key) => {
+        enqueueSystemEvent("Exec finished (gateway id=abc12345, code 0)\ndeploy succeeded", {
+          sessionKey: key,
+        });
+        enqueueSystemEvent("Node connected", { sessionKey: key });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expect(calledCtx?.Provider).toBe("exec-event");
+    expect(calledCtx?.Body).toContain("deploy succeeded");
+    expect(calledCtx?.Body).not.toContain("Node connected");
+    expect(peekSystemEvents(sessionKey)).toEqual(["Node connected"]);
   });
 
   it("classifies hook:wake exec completions as exec-event prompts", async () => {

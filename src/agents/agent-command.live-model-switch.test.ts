@@ -36,6 +36,7 @@ const state = vi.hoisted(() => ({
   clearSessionAuthProfileOverrideMock: vi.fn(),
   isThinkingLevelSupportedMock: vi.fn((_args: unknown) => true),
   resolveThinkingDefaultMock: vi.fn((_args: unknown) => "low"),
+  loadManifestModelCatalogMock: vi.fn(() => []),
   authProfileStoreMock: { profiles: {} } as { profiles: Record<string, unknown> },
   sessionEntryMock: undefined as unknown,
   sessionStoreMock: undefined as unknown,
@@ -290,20 +291,77 @@ vi.mock("./lanes.js", () => ({
 }));
 
 vi.mock("./model-catalog.js", () => ({
-  loadModelCatalog: async () => [],
+  loadManifestModelCatalog: state.loadManifestModelCatalogMock,
 }));
 
 vi.mock("./model-selection.js", () => ({
-  buildAllowedModelSet: () => ({
-    allowedKeys: new Set<string>([
-      "anthropic/claude",
-      "codex-cli/gpt-5.4",
-      "openai/claude",
-      "openai/gpt-5.4",
-    ]),
-    allowedCatalog: [],
-    allowAny: false,
-  }),
+  buildAllowedModelSet: ({
+    cfg,
+    catalog,
+    defaultProvider,
+    defaultModel,
+  }: {
+    cfg?: unknown;
+    catalog?: Array<{ provider: string; id: string }>;
+    defaultProvider: string;
+    defaultModel?: string;
+  }) => {
+    const modelMap =
+      (cfg as { agents?: { defaults?: { models?: Record<string, unknown> } } } | undefined)?.agents
+        ?.defaults?.models ?? {};
+    const configuredCatalog = (
+      (cfg as { models?: { providers?: Record<string, { models?: unknown[] }> } } | undefined)
+        ?.models?.providers
+        ? Object.entries(
+            (cfg as { models?: { providers?: Record<string, { models?: unknown[] }> } }).models!
+              .providers!,
+          ).flatMap(([provider, entry]) =>
+            Array.isArray(entry?.models)
+              ? entry.models
+                  .filter(
+                    (model): model is Record<string, unknown> =>
+                      !!model && typeof model === "object",
+                  )
+                  .map((model) => {
+                    const id = typeof model.id === "string" ? model.id : "";
+                    return {
+                      provider,
+                      id,
+                      name: typeof model.name === "string" ? model.name : id,
+                      reasoning: typeof model.reasoning === "boolean" ? model.reasoning : undefined,
+                      compat: model.compat,
+                    };
+                  })
+                  .filter((model) => model.id)
+              : [],
+          )
+        : []
+    ) as Array<{ provider: string; id: string }>;
+    const combinedCatalog = [...(catalog ?? []), ...configuredCatalog];
+    const allowedKeys = new Set<string>(
+      Object.keys(modelMap).map((ref) => {
+        const [provider, ...modelParts] = ref.split("/");
+        return `${provider}/${modelParts.join("/")}`;
+      }),
+    );
+    if (defaultModel) {
+      allowedKeys.add(`${defaultProvider}/${defaultModel}`);
+    }
+    if (Object.keys(modelMap).length === 0) {
+      return {
+        allowedKeys,
+        allowedCatalog: combinedCatalog,
+        allowAny: true,
+      };
+    }
+    return {
+      allowedKeys,
+      allowedCatalog: combinedCatalog.filter((entry) =>
+        allowedKeys.has(`${entry.provider}/${entry.id}`),
+      ),
+      allowAny: false,
+    };
+  },
   buildConfiguredModelCatalog: ({ cfg }: { cfg?: unknown }) => {
     const providers = (cfg as { models?: { providers?: Record<string, { models?: unknown[] }> } })
       ?.models?.providers;
@@ -480,6 +538,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.runtimeConfigMock = undefined;
     state.isThinkingLevelSupportedMock.mockReturnValue(true);
     state.resolveThinkingDefaultMock.mockReturnValue("low");
+    state.loadManifestModelCatalogMock.mockReturnValue([]);
     state.acpRunTurnMock.mockImplementation(async (params: unknown) => {
       const onEvent = (params as { onEvent?: (event: unknown) => void }).onEvent;
       onEvent?.({ type: "text_delta", stream: "output", text: "done" });
@@ -596,6 +655,67 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
   });
 
+  it("validates explicit thinking against allowlisted configured model compat when manifest catalog is empty", async () => {
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "gmn/gpt-5.4" },
+          models: {
+            "gmn/gpt-5.4": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          gmn: {
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "GPT 5.4 via GMN",
+                reasoning: true,
+                compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+              },
+            ],
+          },
+        },
+      },
+    };
+    state.loadManifestModelCatalogMock.mockReturnValue([]);
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("gmn", "gpt-5.4"));
+
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      senderIsOwner: true,
+      thinking: "xhigh",
+    });
+
+    expect(state.loadManifestModelCatalogMock).toHaveBeenCalled();
+    expect(state.isThinkingLevelSupportedMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "gmn",
+        model: "gpt-5.4",
+        level: "xhigh",
+        catalog: [
+          expect.objectContaining({
+            provider: "gmn",
+            id: "gpt-5.4",
+            compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+          }),
+        ],
+      }),
+    );
+  });
+
   it("records fallback steps to the session trajectory runtime", async () => {
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
       await params.onFallbackStep?.({
@@ -685,6 +805,15 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
     };
     state.sessionEntryMock = sessionEntry;
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          models: {
+            "codex-cli/gpt-5.4": {},
+          },
+        },
+      },
+    };
     state.authProfileStoreMock = {
       profiles: {
         "openai-codex:work": {
@@ -735,6 +864,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           {
             provider: params.provider,
             model: params.model,
+            error: "empty result",
             reason: "format",
             code: "empty_result",
           },
@@ -756,6 +886,21 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       providerOverride: "openai",
       modelOverride: "gpt-5.4",
       isFallbackRetry: true,
+    });
+    expect(state.deliverAgentCommandResultMock.mock.calls[0]?.[0]).toMatchObject({
+      result: {
+        meta: {
+          agentMeta: {
+            fallbackAttempts: [
+              expect.objectContaining({
+                provider: "anthropic",
+                model: "claude",
+                reason: "format",
+              }),
+            ],
+          },
+        },
+      },
     });
   });
 

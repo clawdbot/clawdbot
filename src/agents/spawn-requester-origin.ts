@@ -50,7 +50,7 @@ function inferPeerKindFromBareId(value: string): ChatType | undefined {
   return undefined;
 }
 
-export function extractRequesterPeer(
+function extractRequesterPeer(
   channelId: string | undefined,
   requesterTo: string | undefined,
 ): { peerId?: string; peerKind?: ChatType } {

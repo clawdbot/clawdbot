@@ -13,6 +13,7 @@ import {
   resolveCliCommandPathPolicy,
   resolveCliNetworkProxyPolicy,
 } from "./command-path-policy.js";
+import { isReservedNonPluginCommandRoot } from "./command-registration-policy.js";
 
 const ROOT_HELP_ALIASES = new Set(["tools"]);
 
@@ -150,6 +151,10 @@ export function resolveMissingPluginCommandMessage(
         `${cliHint}\`/${normalizedPluginId}\` in a chat session.`
       );
     }
+  }
+
+  if (isReservedNonPluginCommandRoot(normalizedPluginId)) {
+    return null;
   }
 
   if (allow.length > 0 && !allow.includes(normalizedPluginId)) {

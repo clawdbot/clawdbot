@@ -1,6 +1,6 @@
 import type { AssistantMessage, StopReason, Usage } from "@mariozechner/pi-ai";
 
-export type StreamModelDescriptor = {
+type StreamModelDescriptor = {
   api: string;
   provider: string;
   id: string;

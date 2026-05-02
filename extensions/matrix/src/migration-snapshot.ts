@@ -5,7 +5,6 @@ import {
   maybeCreateMatrixMigrationSnapshot,
   resolveMatrixMigrationSnapshotMarkerPath,
   resolveMatrixMigrationSnapshotOutputDir,
-  type MatrixMigrationSnapshotResult,
 } from "./migration-snapshot-backup.js";
 
 export type MatrixMigrationStatus = {
@@ -52,4 +51,3 @@ export {
   resolveMatrixMigrationSnapshotMarkerPath,
   resolveMatrixMigrationSnapshotOutputDir,
 };
-export type { MatrixMigrationSnapshotResult };

@@ -3,10 +3,7 @@ import { resolveMatrixDefaultOrOnlyAccountId } from "../account-selection.js";
 import type { CoreConfig } from "../types.js";
 import { resolveMatrixConfigFieldPath } from "./config-paths.js";
 
-export function resolveMatrixEncryptionConfigPath(
-  cfg: CoreConfig,
-  accountId?: string | null,
-): string {
+function resolveMatrixEncryptionConfigPath(cfg: CoreConfig, accountId?: string | null): string {
   const effectiveAccountId =
     normalizeOptionalAccountId(accountId) ?? resolveMatrixDefaultOrOnlyAccountId(cfg);
   return resolveMatrixConfigFieldPath(cfg, effectiveAccountId, "encryption");

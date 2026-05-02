@@ -59,9 +59,15 @@ vi.mock("./gateway-registry.js", () => ({
 
 describe("runDiscordGatewayLifecycle", () => {
   let runDiscordGatewayLifecycle: typeof import("./provider.lifecycle.js").runDiscordGatewayLifecycle;
+  let resolveDiscordGatewayReadyTimeoutMs: typeof import("./provider.lifecycle.js").resolveDiscordGatewayReadyTimeoutMs;
+  let resolveDiscordGatewayRuntimeReadyTimeoutMs: typeof import("./provider.lifecycle.js").resolveDiscordGatewayRuntimeReadyTimeoutMs;
 
   beforeAll(async () => {
-    ({ runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js"));
+    ({
+      runDiscordGatewayLifecycle,
+      resolveDiscordGatewayReadyTimeoutMs,
+      resolveDiscordGatewayRuntimeReadyTimeoutMs,
+    } = await import("./provider.lifecycle.js"));
   });
 
   beforeEach(() => {
@@ -143,24 +149,25 @@ describe("runDiscordGatewayLifecycle", () => {
       error: runtimeError,
       exit: vi.fn(),
     };
+    const lifecycleParams: LifecycleParams = {
+      accountId: "default",
+      gateway: gateway ? (gateway as unknown as MutableDiscordGateway) : undefined,
+      runtime,
+      isDisallowedIntentsError: params?.isDisallowedIntentsError ?? (() => false),
+      voiceManager: null,
+      voiceManagerRef: { current: null },
+      threadBindings: { stop: threadStop },
+      gatewaySupervisor,
+      statusSink,
+      abortSignal: undefined,
+    };
     return {
       threadStop,
       runtimeLog,
       runtimeError,
       gatewaySupervisor,
       statusSink,
-      lifecycleParams: {
-        accountId: "default",
-        gateway: gateway ? (gateway as unknown as MutableDiscordGateway) : undefined,
-        runtime,
-        isDisallowedIntentsError: params?.isDisallowedIntentsError ?? (() => false),
-        voiceManager: null,
-        voiceManagerRef: { current: null },
-        threadBindings: { stop: threadStop },
-        gatewaySupervisor,
-        statusSink,
-        abortSignal: undefined as AbortSignal | undefined,
-      } satisfies LifecycleParams,
+      lifecycleParams,
     };
   }
 
@@ -175,6 +182,26 @@ describe("runDiscordGatewayLifecycle", () => {
     expect(params.threadStop).toHaveBeenCalledTimes(1);
     expect(params.gatewaySupervisor.detachLifecycle).toHaveBeenCalledTimes(1);
   }
+
+  it("resolves gateway READY timeouts from config, env, then defaults", () => {
+    expect(resolveDiscordGatewayReadyTimeoutMs({ configuredTimeoutMs: 45_000 })).toBe(45_000);
+    expect(
+      resolveDiscordGatewayReadyTimeoutMs({
+        env: { OPENCLAW_DISCORD_READY_TIMEOUT_MS: "90000" },
+      }),
+    ).toBe(90_000);
+    expect(resolveDiscordGatewayReadyTimeoutMs({ env: {} })).toBe(15_000);
+
+    expect(resolveDiscordGatewayRuntimeReadyTimeoutMs({ configuredTimeoutMs: 60_000 })).toBe(
+      60_000,
+    );
+    expect(
+      resolveDiscordGatewayRuntimeReadyTimeoutMs({
+        env: { OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS: "120000" },
+      }),
+    ).toBe(120_000);
+    expect(resolveDiscordGatewayRuntimeReadyTimeoutMs({ env: {} })).toBe(30_000);
+  });
 
   it("cleans up thread bindings when gateway wait fails before READY", async () => {
     waitForDiscordGatewayStopMock.mockRejectedValueOnce(new Error("startup failed"));
@@ -228,14 +255,15 @@ describe("runDiscordGatewayLifecycle", () => {
           gateway: null,
         },
       );
+      lifecycleParams.gatewayReadyTimeoutMs = 5_000;
 
       const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
       lifecyclePromise.catch(() => {});
       await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(15_500);
+      await vi.advanceTimersByTimeAsync(5_500);
 
       await expect(lifecyclePromise).rejects.toThrow(
-        "discord gateway did not reach READY within 15000ms",
+        "discord gateway did not reach READY within 5000ms",
       );
       expect(statusSink).not.toHaveBeenCalledWith(
         expect.objectContaining({
@@ -606,15 +634,16 @@ describe("runDiscordGatewayLifecycle", () => {
       );
 
       const { lifecycleParams, runtimeError, statusSink } = createLifecycleHarness({ gateway });
+      lifecycleParams.gatewayRuntimeReadyTimeoutMs = 5_000;
       const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
       lifecyclePromise.catch(() => {});
 
-      await vi.advanceTimersByTimeAsync(30_500);
+      await vi.advanceTimersByTimeAsync(5_500);
       await expect(lifecyclePromise).rejects.toThrow(
-        "discord gateway opened but did not reach READY within 30000ms",
+        "discord gateway opened but did not reach READY within 5000ms",
       );
       expect(runtimeError).toHaveBeenCalledWith(
-        expect.stringContaining("did not reach READY within 30000ms"),
+        expect.stringContaining("did not reach READY within 5000ms"),
       );
       expect(statusSink).toHaveBeenCalledWith(
         expect.objectContaining({

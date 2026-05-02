@@ -7,7 +7,7 @@ import {
 import type { MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveHomePath } from "./helpers.js";
 
-export type CodexMigrationTargets = {
+type CodexMigrationTargets = {
   workspaceDir: string;
   agentDir: string;
 };

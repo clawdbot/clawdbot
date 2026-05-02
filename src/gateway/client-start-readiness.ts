@@ -11,7 +11,7 @@ export type GatewayClientStartReadinessOptions = {
   signal?: AbortSignal;
 };
 
-export function resolveGatewayClientStartReadinessTimeoutMs(
+function resolveGatewayClientStartReadinessTimeoutMs(
   options: GatewayClientStartReadinessOptions = {},
 ): number {
   if (typeof options.timeoutMs === "number" && Number.isFinite(options.timeoutMs)) {

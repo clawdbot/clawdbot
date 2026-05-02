@@ -1,4 +1,4 @@
-import type { APIMessage } from "discord-api-types/v10";
+import type { APIChannel, APIMessage } from "discord-api-types/v10";
 import { ChannelType } from "discord-api-types/v10";
 import {
   createChannelMessage,
@@ -24,6 +24,25 @@ import type {
   DiscordThreadCreate,
   DiscordThreadList,
 } from "./send.types.js";
+
+function formatDiscordThreadInitialMessageError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export class DiscordThreadInitialMessageError extends Error {
+  readonly initialMessageError: string;
+  readonly thread: APIChannel;
+
+  constructor(thread: APIChannel, error: unknown) {
+    const initialMessageError = formatDiscordThreadInitialMessageError(error);
+    super(
+      `Discord thread was created, but sending the initial message failed: ${initialMessageError}`,
+    );
+    this.name = "DiscordThreadInitialMessageError";
+    this.initialMessageError = initialMessageError;
+    this.thread = thread;
+  }
+}
 
 export async function readMessagesDiscord(
   channelId: string,
@@ -154,9 +173,13 @@ export async function createThreadDiscord(
   // For non-forum channels, send the initial message separately after thread creation.
   // Forum channels handle this via the `message` field in the request body.
   if (!isForumLike && payload.content?.trim() && "id" in thread) {
-    await createChannelMessage(rest, thread.id, {
-      body: { content: payload.content },
-    });
+    try {
+      await createChannelMessage(rest, thread.id, {
+        body: { content: payload.content },
+      });
+    } catch (error) {
+      throw new DiscordThreadInitialMessageError(thread, error);
+    }
   }
 
   return thread;

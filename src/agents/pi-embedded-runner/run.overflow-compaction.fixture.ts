@@ -37,6 +37,7 @@ export function makeAttemptResult(
   const didSendViaMessagingTool = overrides.didSendViaMessagingTool ?? false;
   const messagingToolSentTexts = overrides.messagingToolSentTexts ?? [];
   const messagingToolSentMediaUrls = overrides.messagingToolSentMediaUrls ?? [];
+  const messagingToolSentTargets = overrides.messagingToolSentTargets ?? [];
   const successfulCronAdds = overrides.successfulCronAdds;
   return {
     aborted: false,
@@ -58,6 +59,7 @@ export function makeAttemptResult(
         didSendViaMessagingTool,
         messagingToolSentTexts,
         messagingToolSentMediaUrls,
+        messagingToolSentTargets,
         successfulCronAdds,
       }),
     itemLifecycle: {
@@ -68,7 +70,7 @@ export function makeAttemptResult(
     didSendViaMessagingTool,
     messagingToolSentTexts,
     messagingToolSentMediaUrls,
-    messagingToolSentTargets: [],
+    messagingToolSentTargets,
     cloudCodeAssistFormatError: false,
     ...overrides,
   };

@@ -24,6 +24,7 @@ function createAttemptParams(): AgentHarnessAttemptParams {
     modelId: "gpt-5.4",
     model: { id: "gpt-5.4", provider: "codex" } as Model<Api>,
     authStorage: {} as never,
+    authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
     thinkLevel: "low",
     messageChannel: "qa",

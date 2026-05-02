@@ -1,3 +1,4 @@
+import * as dns from "node:dns";
 import process from "node:process";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-types";
 import { isTruthyEnvValue, isWSL2Sync } from "openclaw/plugin-sdk/runtime-env";
@@ -66,12 +67,14 @@ export function resolveTelegramAutoSelectFamilyDecision(params?: {
  * Priority:
  * 1. Environment variable OPENCLAW_TELEGRAM_DNS_RESULT_ORDER
  * 2. Config: channels.telegram.network.dnsResultOrder
- * 3. Default: "ipv4first" on Node 22+ (to work around common IPv6 issues)
+ * 3. Process default: dns.getDefaultResultOrder()
+ * 4. Default: "ipv4first" on Node 22+ (to work around common IPv6 issues)
  */
 export function resolveTelegramDnsResultOrderDecision(params?: {
   network?: TelegramNetworkConfig;
   env?: NodeJS.ProcessEnv;
   nodeMajor?: number;
+  defaultResultOrder?: string | null;
 }): TelegramDnsResultOrderDecision {
   const env = params?.env ?? process.env;
   const nodeMajor =
@@ -91,6 +94,15 @@ export function resolveTelegramDnsResultOrderDecision(params?: {
   );
   if (configValue === "ipv4first" || configValue === "verbatim") {
     return { value: configValue, source: "config" };
+  }
+
+  const processDefaultValue = normalizeOptionalLowercaseString(
+    params && "defaultResultOrder" in params
+      ? params.defaultResultOrder
+      : dns.getDefaultResultOrder?.(),
+  );
+  if (processDefaultValue === "ipv4first" || processDefaultValue === "verbatim") {
+    return { value: processDefaultValue, source: "process-default" };
   }
 
   // Default to ipv4first on Node 22+ to avoid IPv6 issues

@@ -168,7 +168,7 @@ function scopeValue(value: string | undefined): string {
   return value?.trim() ?? "";
 }
 
-export function buildCommitmentScopeKey(scope: CommitmentScope): string {
+function buildCommitmentScopeKey(scope: CommitmentScope): string {
   return [
     scopeValue(scope.agentId),
     scopeValue(scope.sessionKey),

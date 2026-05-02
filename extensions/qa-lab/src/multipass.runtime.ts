@@ -32,7 +32,7 @@ const MULTIPASS_REPO_SYNC_EXCLUDES = [
 const MULTIPASS_EXEC_MAX_BUFFER = 64 * 1024 * 1024;
 const MULTIPASS_GUEST_RUN_TIMEOUT_MS = 60 * 60 * 1000;
 
-export const qaMultipassDefaultResources = {
+const qaMultipassDefaultResources = {
   image: "lts",
   cpus: 2,
   memory: "4G",
@@ -52,7 +52,7 @@ type ExecFileOptions = {
   timeoutMs?: number;
 };
 
-export type QaMultipassPlan = {
+type QaMultipassPlan = {
   repoRoot: string;
   outputDir: string;
   reportPath: string;
@@ -86,7 +86,7 @@ export type QaMultipassPlan = {
   qaCommand: string[];
 };
 
-export type QaMultipassRunResult = {
+type QaMultipassRunResult = {
   outputDir: string;
   reportPath: string;
   summaryPath: string;

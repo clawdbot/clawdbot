@@ -5,7 +5,7 @@ import { createEmptyTaskAuditSummary } from "../tasks/task-registry.audit.shared
 import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
 import { buildTailscaleHttpsUrl, resolveGatewayProbeSnapshot } from "./status.scan.shared.js";
 
-export function buildColdStartUpdateResult(): UpdateCheckResult {
+function buildColdStartUpdateResult(): UpdateCheckResult {
   return {
     root: null,
     installKind: "unknown",
@@ -13,7 +13,7 @@ export function buildColdStartUpdateResult(): UpdateCheckResult {
   };
 }
 
-export function buildColdStartAgentLocalStatuses() {
+function buildColdStartAgentLocalStatuses() {
   return {
     defaultId: "main",
     agents: [],
@@ -43,7 +43,7 @@ export function buildColdStartStatusSummary() {
   };
 }
 
-export function shouldSkipStatusScanNetworkChecks(params: {
+function shouldSkipStatusScanNetworkChecks(params: {
   coldStart: boolean;
   hasConfiguredChannels: boolean;
   all?: boolean;

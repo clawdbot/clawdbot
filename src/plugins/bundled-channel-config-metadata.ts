@@ -7,13 +7,17 @@ import {
   normalizeBundledPluginStringList,
   trimBundledPluginString,
 } from "./bundled-plugin-scan.js";
-import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import type { PluginConfigUiHint } from "./manifest-types.js";
 import type {
   OpenClawPackageManifest,
   PluginManifest,
   PluginManifestChannelConfig,
 } from "./manifest.js";
+import {
+  createPluginModuleLoaderCache,
+  getCachedPluginModuleLoader,
+  type PluginModuleLoaderCache,
+} from "./plugin-module-loader-cache.js";
 import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./public-surface-runtime.js";
 
 const SOURCE_CONFIG_SCHEMA_CANDIDATES = [
@@ -32,7 +36,7 @@ type ChannelConfigSurface = {
   runtime?: ChannelConfigRuntimeSchema;
 };
 
-const jitiLoaders: PluginJitiLoaderCache = new Map();
+const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
 
 function isBuiltChannelConfigSchema(value: unknown): value is ChannelConfigSurface {
   if (!value || typeof value !== "object") {
@@ -70,13 +74,13 @@ function resolveConfigSchemaExport(imported: Record<string, unknown>): ChannelCo
   return null;
 }
 
-function getJiti(modulePath: string) {
-  return getCachedPluginJitiLoader({
-    cache: jitiLoaders,
+function getModuleLoader(modulePath: string) {
+  return getCachedPluginModuleLoader({
+    cache: moduleLoaders,
     modulePath,
     importerUrl: import.meta.url,
     preferBuiltDist: true,
-    jitiFilename: import.meta.url,
+    loaderFilename: import.meta.url,
   });
 }
 
@@ -100,7 +104,7 @@ function resolveChannelConfigSchemaModulePath(pluginDir: string): string | undef
 
 function loadChannelConfigSurfaceModuleSync(modulePath: string): ChannelConfigSurface | null {
   try {
-    const imported = getJiti(modulePath)(modulePath) as Record<string, unknown>;
+    const imported = getModuleLoader(modulePath)(modulePath) as Record<string, unknown>;
     return resolveConfigSchemaExport(imported);
   } catch {
     return null;

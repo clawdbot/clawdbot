@@ -8,6 +8,7 @@ import {
   resolveConfigPathCandidate,
   resolveConfigPath,
   resolveGatewayPort,
+  resolveIncludeRoots,
   resolveOAuthDir,
   resolveOAuthPath,
   resolveStateDir,
@@ -192,5 +193,35 @@ describe("state + config path candidates", () => {
       const resolved = resolveConfigPath(env, overrideDir, () => root);
       expect(resolved).toBe(path.join(overrideDir, "openclaw.json"));
     });
+  });
+});
+
+describe("resolveIncludeRoots", () => {
+  const HOME = path.parse(process.cwd()).root + "fakehome";
+
+  it("returns an empty list when OPENCLAW_INCLUDE_ROOTS is unset or blank", () => {
+    expect(resolveIncludeRoots(envWith({}), () => HOME)).toEqual([]);
+    expect(resolveIncludeRoots(envWith({ OPENCLAW_INCLUDE_ROOTS: "" }), () => HOME)).toEqual([]);
+    expect(resolveIncludeRoots(envWith({ OPENCLAW_INCLUDE_ROOTS: "   " }), () => HOME)).toEqual([]);
+  });
+
+  it("splits on the platform path delimiter and resolves each entry to an absolute path", () => {
+    const a = path.resolve(path.parse(process.cwd()).root, "shared", "a");
+    const b = path.resolve(path.parse(process.cwd()).root, "shared", "b");
+    const env = envWith({ OPENCLAW_INCLUDE_ROOTS: [a, b].join(path.delimiter) });
+    expect(resolveIncludeRoots(env, () => HOME)).toEqual([a, b]);
+  });
+
+  it("expands a leading tilde in each entry using the resolved home dir", () => {
+    const env = envWith({ OPENCLAW_INCLUDE_ROOTS: "~/share/openclaw" });
+    expect(resolveIncludeRoots(env, () => HOME)).toEqual([path.join(HOME, "share", "openclaw")]);
+  });
+
+  it("drops empty entries and preserves de-duplicated order for repeated roots", () => {
+    const a = path.resolve(path.parse(process.cwd()).root, "shared", "a");
+    const env = envWith({
+      OPENCLAW_INCLUDE_ROOTS: ["", a, "  ", a].join(path.delimiter),
+    });
+    expect(resolveIncludeRoots(env, () => HOME)).toEqual([a]);
   });
 });

@@ -16,6 +16,10 @@
     "webSearch.mode": {
       "label": "Brave Search Mode",
       "help": "Brave Search mode: web or llm-context."
+    },
+    "webSearch.baseUrl": {
+      "label": "Brave Search Base URL",
+      "help": "Optional Brave-compatible API base URL for trusted proxies. Defaults to https://api.search.brave.com."
     }
   },
   "contracts": {
@@ -38,6 +42,9 @@
           "mode": {
             "type": "string",
             "enum": ["web", "llm-context"]
+          },
+          "baseUrl": {
+            "type": ["string", "object"]
           }
         }
       }

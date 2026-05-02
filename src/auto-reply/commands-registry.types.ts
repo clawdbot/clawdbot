@@ -23,7 +23,7 @@ export type CommandCategory =
   | "tools"
   | "docks";
 
-export type CommandArgType = "string" | "number" | "boolean";
+type CommandArgType = "string" | "number" | "boolean";
 
 export type CommandArgChoiceContext = {
   cfg?: OpenClawConfig;
@@ -36,7 +36,7 @@ export type CommandArgChoiceContext = {
 
 export type CommandArgChoice = string | { value: string; label: string };
 
-export type CommandArgChoicesProvider = (context: CommandArgChoiceContext) => CommandArgChoice[];
+type CommandArgChoicesProvider = (context: CommandArgChoiceContext) => CommandArgChoice[];
 
 export type CommandArgDefinition = {
   name: string;
@@ -59,6 +59,8 @@ export type ChatCommandDefinition = {
   key: string;
   nativeName?: string;
   description: string;
+  /** Localized descriptions for native command surfaces that support them. */
+  descriptionLocalizations?: Record<string, string>;
   textAliases: string[];
   acceptsArgs?: boolean;
   args?: CommandArgDefinition[];
@@ -74,6 +76,7 @@ export type ChatCommandDefinition = {
 export type NativeCommandSpec = {
   name: string;
   description: string;
+  descriptionLocalizations?: Record<string, string>;
   acceptsArgs: boolean;
   args?: CommandArgDefinition[];
 };

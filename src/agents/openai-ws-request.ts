@@ -26,12 +26,12 @@ type WsOptions = Parameters<StreamFn>[2] & {
   reasoningSummary?: string;
 };
 
-export interface PlannedWsTurnInput {
+interface PlannedWsTurnInput {
   inputItems: InputItem[];
   previousResponseId?: string;
 }
 
-export type PlannedWsRequestPayload = {
+type PlannedWsRequestPayload = {
   mode: "full_context" | "incremental";
   payload: ResponseCreateEvent;
 };

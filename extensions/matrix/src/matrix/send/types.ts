@@ -51,7 +51,7 @@ export type MatrixThreadRelation = {
 
 export type MatrixRelation = MatrixReplyRelation | MatrixThreadRelation;
 
-export type MatrixReplyMeta = {
+type MatrixReplyMeta = {
   "m.relates_to"?: MatrixRelation;
 };
 

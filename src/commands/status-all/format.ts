@@ -10,7 +10,6 @@ import { formatGitInstallLabel, type UpdateCheckResult } from "../../infra/updat
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { formatUpdateOneLiner, resolveUpdateAvailability } from "../status.update.js";
 
-export { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
 export { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 
 export type StatusOverviewRow = {

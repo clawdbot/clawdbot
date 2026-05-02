@@ -780,6 +780,7 @@ describe("CodexAppServerEventProjector", () => {
 
   it("fires before_compaction and after_compaction hooks for codex compaction items", async () => {
     const { projector, beforeCompaction, afterCompaction } = await createProjectorWithHooks();
+    const openSpy = vi.spyOn(SessionManager, "open");
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
@@ -791,6 +792,7 @@ describe("CodexAppServerEventProjector", () => {
         item: { type: "contextCompaction", id: "compact-1" },
       }),
     );
+    expect(openSpy).not.toHaveBeenCalled();
 
     expect(beforeCompaction).toHaveBeenCalledWith(
       expect.objectContaining({

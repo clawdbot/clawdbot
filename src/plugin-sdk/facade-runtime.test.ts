@@ -6,7 +6,6 @@ import { setBundledPluginsDirOverrideForTest } from "../plugins/bundled-dir.js";
 import { createPluginActivationSource, normalizePluginsConfig } from "../plugins/config-state.js";
 import {
   evaluateBundledPluginPublicSurfaceAccess,
-  resetFacadeActivationCheckRuntimeStateForTest,
   resolveBundledPluginPublicSurfaceAccess as resolveActivationCheckBundledPluginPublicSurfaceAccess,
   throwForBundledPluginPublicSurfaceAccess,
 } from "./facade-activation-check.runtime.js";
@@ -89,7 +88,6 @@ afterEach(() => {
   }
   clearRuntimeConfigSnapshot();
   resetFacadeRuntimeStateForTest();
-  resetFacadeActivationCheckRuntimeStateForTest();
   setBundledPluginsDirOverrideForTest(undefined);
   vi.doUnmock("../plugins/manifest-registry.js");
   if (originalBundledPluginsDir === undefined) {

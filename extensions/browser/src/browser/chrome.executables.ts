@@ -538,7 +538,7 @@ export function findChromeExecutableMac(): BrowserExecutable | null {
   return findFirstExecutable(candidates);
 }
 
-export function findGoogleChromeExecutableMac(): BrowserExecutable | null {
+function findGoogleChromeExecutableMac(): BrowserExecutable | null {
   return findFirstChromeExecutable([
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     path.join(os.homedir(), "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
@@ -573,7 +573,7 @@ export function findChromeExecutableLinux(): BrowserExecutable | null {
   return findFirstExecutable(candidates);
 }
 
-export function findGoogleChromeExecutableLinux(): BrowserExecutable | null {
+function findGoogleChromeExecutableLinux(): BrowserExecutable | null {
   return findFirstChromeExecutable([
     "/usr/bin/google-chrome",
     "/usr/bin/google-chrome-stable",
@@ -654,7 +654,7 @@ export function findChromeExecutableWindows(): BrowserExecutable | null {
   return findFirstExecutable(candidates);
 }
 
-export function findGoogleChromeExecutableWindows(): BrowserExecutable | null {
+function findGoogleChromeExecutableWindows(): BrowserExecutable | null {
   const localAppData = process.env.LOCALAPPDATA ?? "";
   const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
   const programFilesX86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";

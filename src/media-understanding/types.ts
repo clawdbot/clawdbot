@@ -1,10 +1,7 @@
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-export type MediaUnderstandingKind =
-  | "audio.transcription"
-  | "video.description"
-  | "image.description";
+type MediaUnderstandingKind = "audio.transcription" | "video.description" | "image.description";
 
 export type MediaUnderstandingCapability = "image" | "audio" | "video";
 
@@ -31,7 +28,7 @@ export type MediaUnderstandingOutput = {
   model?: string;
 };
 
-export type MediaUnderstandingDecisionOutcome =
+type MediaUnderstandingDecisionOutcome =
   | "success"
   | "failed"
   | "skipped"
@@ -47,7 +44,7 @@ export type MediaUnderstandingModelDecision = {
   reason?: string;
 };
 
-export type MediaUnderstandingAttachmentDecision = {
+type MediaUnderstandingAttachmentDecision = {
   attachmentIndex: number;
   attempts: MediaUnderstandingModelDecision[];
   chosen?: MediaUnderstandingModelDecision;
@@ -59,12 +56,12 @@ export type MediaUnderstandingDecision = {
   attachments: MediaUnderstandingAttachmentDecision[];
 };
 
-export type MediaUnderstandingProviderRequestAuthOverride =
+type MediaUnderstandingProviderRequestAuthOverride =
   | { mode: "provider-default" }
   | { mode: "authorization-bearer"; token: string }
   | { mode: "header"; headerName: string; value: string; prefix?: string };
 
-export type MediaUnderstandingProviderRequestTlsOverride = {
+type MediaUnderstandingProviderRequestTlsOverride = {
   ca?: string;
   cert?: string;
   key?: string;
@@ -73,11 +70,11 @@ export type MediaUnderstandingProviderRequestTlsOverride = {
   insecureSkipVerify?: boolean;
 };
 
-export type MediaUnderstandingProviderRequestProxyOverride =
+type MediaUnderstandingProviderRequestProxyOverride =
   | { mode: "env-proxy"; tls?: MediaUnderstandingProviderRequestTlsOverride }
   | { mode: "explicit-proxy"; url: string; tls?: MediaUnderstandingProviderRequestTlsOverride };
 
-export type MediaUnderstandingProviderRequestTransportOverrides = {
+type MediaUnderstandingProviderRequestTransportOverrides = {
   headers?: Record<string, string>;
   auth?: MediaUnderstandingProviderRequestAuthOverride;
   proxy?: MediaUnderstandingProviderRequestProxyOverride;

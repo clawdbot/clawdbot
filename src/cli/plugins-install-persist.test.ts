@@ -180,11 +180,12 @@ describe("persistPluginInstall", () => {
       config: enabledConfig,
       onlyPluginIds: ["legacy-memory"],
     });
-    expect(loadPluginManifestRegistry).toHaveBeenCalledWith({
-      config: enabledConfig,
-      includeDisabled: true,
-      pluginIds: ["legacy-memory"],
-    });
+    expect(loadPluginManifestRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: enabledConfig,
+        installRecords: {},
+      }),
+    );
     expect(next.plugins?.entries?.["legacy-memory-a"]?.enabled).toBe(true);
     expect(next.plugins?.slots?.memory).toBe("legacy-memory");
   });
@@ -250,11 +251,12 @@ describe("persistPluginInstall", () => {
     });
 
     expect(buildPluginDiagnosticsReport).not.toHaveBeenCalled();
-    expect(loadPluginManifestRegistry).toHaveBeenCalledWith({
-      config: enabledConfig,
-      includeDisabled: true,
-      pluginIds: ["memory-b"],
-    });
+    expect(loadPluginManifestRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: enabledConfig,
+        installRecords: {},
+      }),
+    );
     expect(next.plugins?.entries?.["legacy-memory-a"]?.enabled).toBe(true);
     expect(next.plugins?.slots?.memory).toBe("memory-b");
   });
@@ -306,11 +308,12 @@ describe("persistPluginInstall", () => {
       config: enabledConfig,
       onlyPluginIds: ["plain"],
     });
-    expect(loadPluginManifestRegistry).toHaveBeenCalledWith({
-      config: enabledConfig,
-      includeDisabled: true,
-      pluginIds: ["plain"],
-    });
+    expect(loadPluginManifestRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: enabledConfig,
+        installRecords: {},
+      }),
+    );
     expect(next).toEqual(enabledConfig);
   });
 

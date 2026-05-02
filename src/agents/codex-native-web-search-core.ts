@@ -8,7 +8,7 @@ import {
   resolveCodexNativeWebSearchConfig,
 } from "./codex-native-web-search.shared.js";
 
-export type CodexNativeSearchActivation = {
+type CodexNativeSearchActivation = {
   globalWebSearchEnabled: boolean;
   codexNativeEnabled: boolean;
   codexMode: CodexNativeSearchMode;
@@ -22,7 +22,7 @@ export type CodexNativeSearchActivation = {
     | "codex_auth_missing";
 };
 
-export type CodexNativeSearchPayloadPatchResult = {
+type CodexNativeSearchPayloadPatchResult = {
   status: "payload_not_object" | "native_tool_already_present" | "injected";
 };
 
@@ -33,7 +33,7 @@ export function isCodexNativeSearchEligibleModel(params: {
   return params.modelProvider === "openai-codex" || params.modelApi === "openai-codex-responses";
 }
 
-export function hasCodexNativeWebSearchTool(tools: unknown): boolean {
+function hasCodexNativeWebSearchTool(tools: unknown): boolean {
   if (!Array.isArray(tools)) {
     return false;
   }

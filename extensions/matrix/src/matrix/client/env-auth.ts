@@ -1,7 +1,7 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { getMatrixScopedEnvVarNames } from "../../env-vars.js";
 
-export type MatrixEnvConfig = {
+type MatrixEnvConfig = {
   homeserver: string;
   userId: string;
   accessToken?: string;

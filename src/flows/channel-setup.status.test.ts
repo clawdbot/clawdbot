@@ -45,6 +45,7 @@ vi.mock("../channels/registry.js", () => ({
     meta: Parameters<FormatChannelSelectionLine>[0],
     docsLink: Parameters<FormatChannelSelectionLine>[1],
   ) => formatChannelSelectionLine(meta, docsLink),
+  normalizeAnyChannelId: (channelId?: string) => channelId?.trim().toLowerCase() ?? null,
 }));
 
 vi.mock("../commands/channel-setup/discovery.js", () => ({

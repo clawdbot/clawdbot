@@ -7,6 +7,7 @@ import type {
 } from "../plugins/types.js";
 export { jsonResult, readNumberParam, readStringParam } from "../agents/tools/common.js";
 export {
+  withSelfHostedWebToolsEndpoint,
   withStrictWebToolsEndpoint,
   withTrustedWebToolsEndpoint,
 } from "../agents/tools/web-guarded-fetch.js";

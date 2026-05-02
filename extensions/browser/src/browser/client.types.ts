@@ -1,5 +1,5 @@
 export type BrowserTransport = "cdp" | "chrome-mcp";
-export type BrowserHeadlessSource =
+type BrowserHeadlessSource =
   | "request"
   | "env"
   | "profile"

@@ -4,7 +4,7 @@ import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 
 let truncateToolResultText: typeof import("./tool-result-truncation.js").truncateToolResultText;
@@ -441,10 +441,14 @@ describe("truncateOversizedToolResultsInSession", () => {
       )
       .filter((length) => length > 0);
 
+    const openSpy = vi.spyOn(SessionManager, "open").mockImplementation(() => {
+      throw new Error("SessionManager.open should not be used for persisted truncation");
+    });
     const result = await truncateOversizedToolResultsInSession({
       sessionFile,
       contextWindowTokens: 100,
     });
+    openSpy.mockRestore();
 
     expect(result.truncated).toBe(true);
     expect(result.truncatedCount).toBeGreaterThan(0);

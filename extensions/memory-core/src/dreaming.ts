@@ -108,7 +108,7 @@ type CronServiceLike = {
   remove: (id: string) => Promise<{ removed?: boolean }>;
 };
 
-export type ShortTermPromotionDreamingConfig = {
+type ShortTermPromotionDreamingConfig = {
   enabled: boolean;
   cron: string;
   timezone?: string;
@@ -511,8 +511,12 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
 
   const recencyHalfLifeDays =
     params.config.recencyHalfLifeDays ?? DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS;
+  const fallbackWorkspaceDir = normalizeTrimmedString(params.workspaceDir);
   const workspaceCandidates = params.cfg
-    ? resolveMemoryDreamingWorkspaces(params.cfg).map((entry) => entry.workspaceDir)
+    ? resolveMemoryDreamingWorkspaces(params.cfg, {
+        primaryWorkspaceDir: fallbackWorkspaceDir,
+        primaryAgentId: "main",
+      }).map((entry) => entry.workspaceDir)
     : [];
   const seenWorkspaces = new Set<string>();
   const workspaces = workspaceCandidates.filter((workspaceDir) => {
@@ -522,7 +526,6 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
     seenWorkspaces.add(workspaceDir);
     return true;
   });
-  const fallbackWorkspaceDir = normalizeTrimmedString(params.workspaceDir);
   if (workspaces.length === 0 && fallbackWorkspaceDir) {
     workspaces.push(fallbackWorkspaceDir);
   }

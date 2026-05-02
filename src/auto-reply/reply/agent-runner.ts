@@ -1045,11 +1045,16 @@ export async function runReplyAgent(params: {
     );
     // Re-check liveness after enqueue so a stale active snapshot cannot leave
     // the followup queue idle if the original run already finished.
-    if (!isRunActive?.()) {
+    const queuedBehindActiveRun = isRunActive?.() === true;
+    if (!queuedBehindActiveRun) {
       finalizeWithFollowup(undefined, queueKey, queuedRunFollowupTurn);
     }
     await touchActiveSessionEntry();
-    typing.cleanup();
+    if (queuedBehindActiveRun) {
+      await typingSignals.signalToolStart();
+    } else {
+      typing.cleanup();
+    }
     return undefined;
   }
 

@@ -6,6 +6,7 @@ export {
   createPinnedDispatcher,
   SsrFBlockedError,
   isBlockedHostnameOrIp,
+  isPrivateIpAddress,
   resolvePinnedHostname,
   resolvePinnedHostnameWithPolicy,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,

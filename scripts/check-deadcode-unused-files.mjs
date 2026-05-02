@@ -28,6 +28,10 @@ function uniqueSorted(values) {
   );
 }
 
+function isLikelyRepoFilePath(value) {
+  return /^(apps|docs|extensions|packages|scripts|src|test|ui)\//u.test(normalizeRepoPath(value));
+}
+
 export function parseKnipCompactUnusedFiles(output) {
   const files = [];
   let inUnusedFilesSection = false;
@@ -50,7 +54,10 @@ export function parseKnipCompactUnusedFiles(output) {
     if (sawUnusedFilesSection && !inUnusedFilesSection) {
       continue;
     }
-    files.push(line.slice(separatorIndex + 2).trim());
+    const file = line.slice(separatorIndex + 2).trim();
+    if (isLikelyRepoFilePath(file)) {
+      files.push(file);
+    }
   }
 
   return uniqueSorted(files);

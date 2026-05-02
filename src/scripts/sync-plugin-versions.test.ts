@@ -73,4 +73,43 @@ describe("syncPluginVersions", () => {
     expect(updatedPackage.openclaw?.compat?.pluginApi).toBe(">=2026.4.1");
     expect(updatedPackage.openclaw?.build?.openclawVersion).toBe("2026.4.1");
   });
+
+  it("reports pending version sync without writing in check mode", () => {
+    const rootDir = makeTempDir(tempDirs, "openclaw-sync-plugin-versions-check-");
+
+    writeJson(path.join(rootDir, "package.json"), {
+      name: "openclaw",
+      version: "2026.4.2",
+    });
+    writeJson(path.join(rootDir, "extensions/discord/package.json"), {
+      name: "@openclaw/discord",
+      version: "2026.4.1",
+      peerDependencies: {
+        openclaw: ">=2026.4.1",
+      },
+      openclaw: {
+        compat: {
+          pluginApi: ">=2026.4.1",
+        },
+      },
+    });
+
+    const summary = syncPluginVersions(rootDir, { write: false });
+    const unchangedPackage = JSON.parse(
+      fs.readFileSync(path.join(rootDir, "extensions/discord/package.json"), "utf8"),
+    ) as {
+      version?: string;
+      peerDependencies?: Record<string, string>;
+      openclaw?: {
+        compat?: {
+          pluginApi?: string;
+        };
+      };
+    };
+
+    expect(summary.updated).toEqual(["@openclaw/discord"]);
+    expect(unchangedPackage.version).toBe("2026.4.1");
+    expect(unchangedPackage.peerDependencies?.openclaw).toBe(">=2026.4.1");
+    expect(unchangedPackage.openclaw?.compat?.pluginApi).toBe(">=2026.4.1");
+  });
 });

@@ -1,6 +1,6 @@
 import type { MatrixDeviceVerificationStatusLike } from "./types.js";
 
-export function isMatrixDeviceLocallyVerified(
+function isMatrixDeviceLocallyVerified(
   status: MatrixDeviceVerificationStatusLike | null | undefined,
 ): boolean {
   return status?.localVerified === true;

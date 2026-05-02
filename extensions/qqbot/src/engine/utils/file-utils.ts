@@ -11,7 +11,7 @@ import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./stri
 export const MAX_UPLOAD_SIZE = 20 * 1024 * 1024;
 
 /** Absolute upper bound enforced on the chunked upload path (matches server policy). */
-export const CHUNKED_UPLOAD_MAX_SIZE = 100 * 1024 * 1024;
+const CHUNKED_UPLOAD_MAX_SIZE = 100 * 1024 * 1024;
 
 /** Threshold used to treat an upload as a large file (dispatch to chunked path). */
 export const LARGE_FILE_THRESHOLD = 5 * 1024 * 1024;
@@ -24,7 +24,7 @@ export const LARGE_FILE_THRESHOLD = 5 * 1024 * 1024;
  * `MEDIA_FILE_TYPE_INFO[MediaFileType.IMAGE].maxSize`, and adding a new
  * type forces both fields to be supplied in a single place.
  */
-export const MEDIA_FILE_TYPE_INFO: Record<MediaFileType, { maxSize: number; name: string }> = {
+const MEDIA_FILE_TYPE_INFO: Record<MediaFileType, { maxSize: number; name: string }> = {
   [MediaFileType.IMAGE]: { maxSize: 30 * 1024 * 1024, name: "图片" },
   [MediaFileType.VIDEO]: { maxSize: 100 * 1024 * 1024, name: "视频" },
   [MediaFileType.VOICE]: { maxSize: 20 * 1024 * 1024, name: "语音" },
@@ -63,7 +63,7 @@ export const QQBOT_MEDIA_SSRF_POLICY: SsrfPolicyConfig = {
 };
 
 /** Result of local file-size validation. */
-export interface FileSizeCheckResult {
+interface FileSizeCheckResult {
   ok: boolean;
   size: number;
   error?: string;

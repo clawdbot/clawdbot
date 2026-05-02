@@ -161,12 +161,12 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Thread Binding Max Age (hours)",
     help: "Optional hard max age in hours for Telegram bound sessions. Set 0 to disable hard cap (default: 0). Overrides session.threadBindings.maxAgeHours when set.",
   },
-  "threadBindings.spawnSubagentSessions": {
-    label: "Telegram Thread-Bound Subagent Spawn",
-    help: "Allow subagent spawns with thread=true to auto-bind Telegram current conversations when supported.",
+  "threadBindings.spawnSessions": {
+    label: "Telegram Thread-Bound Session Spawn",
+    help: "Allow sessions_spawn(thread=true) and ACP thread spawns to auto-bind Telegram current conversations when supported.",
   },
-  "threadBindings.spawnAcpSessions": {
-    label: "Telegram Thread-Bound ACP Spawn",
-    help: "Allow ACP spawns with thread=true to auto-bind Telegram current conversations when supported.",
+  "threadBindings.defaultSpawnContext": {
+    label: "Telegram Thread Spawn Context",
+    help: 'Default native subagent context for thread-bound spawns. "fork" starts from the requester transcript; "isolated" starts clean. Default: "fork".',
   },
 } satisfies Record<string, ChannelConfigUiHint>;

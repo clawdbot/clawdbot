@@ -17,7 +17,7 @@ const CRC_TABLE = (() => {
 })();
 
 /** Compute CRC32 checksum for a buffer (used in PNG chunk encoding). */
-export function crc32(buf: Buffer): number {
+function crc32(buf: Buffer): number {
   let crc = 0xffffffff;
   for (let i = 0; i < buf.length; i += 1) {
     crc = CRC_TABLE[(crc ^ buf[i]) & 0xff] ^ (crc >>> 8);
@@ -26,7 +26,7 @@ export function crc32(buf: Buffer): number {
 }
 
 /** Create a PNG chunk with type, data, and CRC. */
-export function pngChunk(type: string, data: Buffer): Buffer {
+function pngChunk(type: string, data: Buffer): Buffer {
   const typeBuf = Buffer.from(type, "ascii");
   const len = Buffer.alloc(4);
   len.writeUInt32BE(data.length, 0);

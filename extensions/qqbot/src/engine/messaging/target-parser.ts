@@ -7,10 +7,10 @@
  */
 
 /** Supported target types. */
-export type TargetType = "c2c" | "group" | "channel";
+type TargetType = "c2c" | "group" | "channel";
 
 /** Parsed delivery target. */
-export interface ParsedTarget {
+interface ParsedTarget {
   type: TargetType;
   id: string;
 }

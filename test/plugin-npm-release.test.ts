@@ -1,11 +1,13 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
+import { collectClawHubPublishablePluginPackages } from "../scripts/lib/plugin-clawhub-release.ts";
 import {
   collectPublishablePluginPackages,
   collectChangedExtensionIdsFromPaths,
   collectPublishablePluginPackageErrors,
+  OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
   parsePluginReleaseArgs,
   parsePluginReleaseSelection,
   parsePluginReleaseSelectionMode,
@@ -90,8 +92,15 @@ describe("collectPublishablePluginPackageErrors", () => {
         packageJson: {
           name: "@openclaw/zalo",
           version: "2026.3.15",
+          repository: {
+            type: "git",
+            url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+          },
           openclaw: {
             extensions: ["./index.ts"],
+            install: {
+              npmSpec: "@openclaw/zalo",
+            },
             release: {
               publishToNpm: true,
             },
@@ -112,6 +121,9 @@ describe("collectPublishablePluginPackageErrors", () => {
           private: true,
           openclaw: {
             extensions: [""],
+            install: {
+              npmSpec: "   ",
+            },
             release: {
               publishToNpm: true,
             },
@@ -121,19 +133,88 @@ describe("collectPublishablePluginPackageErrors", () => {
     ).toEqual([
       'package name must start with "@openclaw/"; found "broken".',
       "package.json private must not be true.",
+      `package.json repository.url must be "${OPENCLAW_PLUGIN_NPM_REPOSITORY_URL}" so npm provenance can validate GitHub trusted publishing; found "<missing>".`,
       'package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "latest".',
       "openclaw.extensions must contain only non-empty strings.",
+      "openclaw.install.npmSpec must be a non-empty string for publishable plugins.",
     ]);
+  });
+
+  it("requires the GitHub repository URL npm provenance validates for trusted publishing", () => {
+    expect(
+      collectPublishablePluginPackageErrors({
+        extensionId: "twitch",
+        packageDir: bundledPluginRoot("twitch"),
+        packageJson: {
+          name: "@openclaw/twitch",
+          version: "2026.5.1-beta.1",
+          openclaw: {
+            extensions: ["./index.ts"],
+            install: {
+              npmSpec: "@openclaw/twitch",
+            },
+            release: {
+              publishToNpm: true,
+            },
+          },
+        },
+      }),
+    ).toEqual([
+      `package.json repository.url must be "${OPENCLAW_PLUGIN_NPM_REPOSITORY_URL}" so npm provenance can validate GitHub trusted publishing; found "<missing>".`,
+    ]);
+  });
+
+  it("requires npm install metadata for publishable plugins", () => {
+    expect(
+      collectPublishablePluginPackageErrors({
+        extensionId: "voice-call",
+        packageDir: bundledPluginRoot("voice-call"),
+        packageJson: {
+          name: "@openclaw/voice-call",
+          version: "2026.5.1-beta.1",
+          repository: {
+            type: "git",
+            url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+          },
+          openclaw: {
+            extensions: ["./index.ts"],
+            release: {
+              publishToNpm: true,
+            },
+          },
+        },
+      }),
+    ).toEqual(["openclaw.install.npmSpec must be a non-empty string for publishable plugins."]);
   });
 });
 
 describe("collectPublishablePluginPackages", () => {
+  it("keeps publishable plugin dist trees out of the core npm package files list", () => {
+    const rootPackage = JSON.parse(readFileSync("package.json", "utf8")) as {
+      files?: unknown;
+    };
+    const packageFiles = new Set(Array.isArray(rootPackage.files) ? rootPackage.files : []);
+    const publishablePlugins = [
+      ...collectPublishablePluginPackages(),
+      ...collectClawHubPublishablePluginPackages(),
+    ];
+    const missingExclusions = Array.from(
+      new Set(publishablePlugins.map((plugin) => `!dist/extensions/${plugin.extensionId}/**`)),
+    ).filter((entry) => !packageFiles.has(entry));
+
+    expect(missingExclusions).toEqual([]);
+  });
+
   it("collects publishable npm plugins from extension package manifests", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
     mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
     writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
       name: "@openclaw/demo-plugin",
       version: "2026.4.10",
+      repository: {
+        type: "git",
+        url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+      },
       openclaw: {
         extensions: ["./index.ts"],
         install: {
@@ -156,6 +237,77 @@ describe("collectPublishablePluginPackages", () => {
         installNpmSpec: "@openclaw/demo-plugin",
       },
     ]);
+  });
+
+  it("does not validate unselected publishable plugin manifests", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
+    writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
+      name: "@openclaw/demo-plugin",
+      version: "2026.4.10-beta.1",
+      repository: {
+        type: "git",
+        url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+      },
+      openclaw: {
+        extensions: ["./index.ts"],
+        install: {
+          npmSpec: "@openclaw/demo-plugin",
+        },
+        release: {
+          publishToNpm: true,
+        },
+      },
+    });
+    mkdirSync(join(repoDir, "extensions", "private-plugin"), { recursive: true });
+    writeJsonFile(join(repoDir, "extensions", "private-plugin", "package.json"), {
+      name: "@openclaw/private-plugin",
+      version: "2026.4.10-beta.1",
+      private: true,
+      openclaw: {
+        extensions: ["./index.ts"],
+        install: {
+          npmSpec: "@openclaw/private-plugin",
+        },
+        release: {
+          publishToNpm: true,
+        },
+      },
+    });
+
+    expect(
+      collectPublishablePluginPackages(repoDir, {
+        packageNames: ["@openclaw/demo-plugin"],
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        extensionId: "demo-plugin",
+        packageName: "@openclaw/demo-plugin",
+        publishTag: "beta",
+      }),
+    ]);
+  });
+
+  it("treats an explicit empty extension filter as no candidates", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    mkdirSync(join(repoDir, "extensions", "private-plugin"), { recursive: true });
+    writeJsonFile(join(repoDir, "extensions", "private-plugin", "package.json"), {
+      name: "@openclaw/private-plugin",
+      version: "2026.4.10-beta.1",
+      private: true,
+      openclaw: {
+        extensions: ["./index.ts"],
+        release: {
+          publishToNpm: true,
+        },
+      },
+    });
+
+    expect(
+      collectPublishablePluginPackages(repoDir, {
+        extensionIds: [],
+      }),
+    ).toEqual([]);
   });
 });
 

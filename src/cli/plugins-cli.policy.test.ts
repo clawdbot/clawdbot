@@ -26,6 +26,7 @@ describe("plugins cli policy mutations", () => {
     enablePluginInConfig.mockReturnValue({
       config: enabledConfig,
       enabled: true,
+      pluginId: "alpha",
     });
 
     await runPluginsCommand(["plugins", "enable", "alpha"]);
@@ -34,6 +35,7 @@ describe("plugins cli policy mutations", () => {
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
       config: enabledConfig,
       installRecords: {},
+      policyPluginIds: ["alpha"],
       reason: "policy-changed",
     });
   });
@@ -54,6 +56,7 @@ describe("plugins cli policy mutations", () => {
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
       config: nextConfig,
       installRecords: {},
+      policyPluginIds: ["alpha"],
       reason: "policy-changed",
     });
   });

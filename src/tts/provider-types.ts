@@ -61,6 +61,7 @@ export type SpeechTelephonySynthesisRequest = {
   text: string;
   cfg: OpenClawConfig;
   providerConfig: SpeechProviderConfig;
+  providerOverrides?: SpeechProviderOverrides;
   timeoutMs: number;
 };
 

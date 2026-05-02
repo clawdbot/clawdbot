@@ -8,7 +8,7 @@ const MODEL_CATALOG_SOURCE_AUTHORITY: Readonly<Record<ModelCatalogSource, number
   "provider-index": 3,
 };
 
-export function compareModelCatalogSourceAuthority(
+function compareModelCatalogSourceAuthority(
   left: ModelCatalogSource,
   right: ModelCatalogSource,
 ): number {

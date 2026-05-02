@@ -10,7 +10,7 @@ import type { RuntimeEnv } from "./runtime-api.js";
 import { getIrcRuntime } from "./runtime.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
 
-export type IrcMonitorOptions = {
+type IrcMonitorOptions = {
   accountId?: string;
   config?: CoreConfig;
   runtime?: RuntimeEnv;

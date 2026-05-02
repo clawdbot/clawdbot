@@ -16,7 +16,7 @@ import type {
   ImageGenerationSourceImage,
 } from "./types.js";
 
-export type ResolvedImageGenerationOverrides = {
+type ResolvedImageGenerationOverrides = {
   size?: string;
   aspectRatio?: string;
   resolution?: ImageGenerationResolution;

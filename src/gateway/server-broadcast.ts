@@ -9,7 +9,6 @@ import {
 import type {
   GatewayBroadcastFn,
   GatewayBroadcastOpts,
-  GatewayBroadcastStateVersion,
   GatewayBroadcastToConnIdsFn,
 } from "./server-broadcast-types.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
@@ -50,13 +49,6 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
 // scope would otherwise reject non-operator roles. Nodes act on these updates
 // (e.g. reconfiguring wake-word triggers).
 const NODE_ALLOWED_EVENTS = new Set<string>(["voicewake.changed", "voicewake.routing.changed"]);
-
-export type {
-  GatewayBroadcastFn,
-  GatewayBroadcastOpts,
-  GatewayBroadcastStateVersion,
-  GatewayBroadcastToConnIdsFn,
-} from "./server-broadcast-types.js";
 
 function hasEventScope(client: GatewayWsClient, event: string): boolean {
   const required = EVENT_SCOPE_GUARDS[event];

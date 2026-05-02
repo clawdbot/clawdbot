@@ -41,6 +41,35 @@ describe("readSlackMessages", () => {
     expect(result.messages.map((message) => message.ts)).toEqual(["171234.890", "171235.000"]);
   });
 
+  it("filters a specific thread reply by messageId", async () => {
+    const client = createClient();
+    client.conversations.replies.mockResolvedValueOnce({
+      messages: [{ ts: "171234.567" }, { ts: "171234.890", text: "reply" }],
+      has_more: true,
+    });
+
+    const result = await readSlackMessages("C1", {
+      client,
+      threadId: "171234.567",
+      messageId: "171234.890",
+      limit: 20,
+      token: "xoxb-test",
+    });
+
+    expect(client.conversations.replies).toHaveBeenCalledWith({
+      channel: "C1",
+      ts: "171234.567",
+      limit: 1,
+      inclusive: true,
+      latest: "171234.890",
+      oldest: undefined,
+    });
+    expect(result).toEqual({
+      messages: [{ ts: "171234.890", text: "reply" }],
+      hasMore: false,
+    });
+  });
+
   it("uses conversations.history when threadId is missing", async () => {
     const client = createClient();
     client.conversations.history.mockResolvedValueOnce({
@@ -62,5 +91,31 @@ describe("readSlackMessages", () => {
     });
     expect(client.conversations.replies).not.toHaveBeenCalled();
     expect(result.messages.map((message) => message.ts)).toEqual(["1"]);
+  });
+
+  it("filters a specific channel message by messageId", async () => {
+    const client = createClient();
+    client.conversations.history.mockResolvedValueOnce({
+      messages: [{ ts: "171234.890", text: "exact" }, { ts: "171234.891" }],
+      has_more: true,
+    });
+
+    const result = await readSlackMessages("C1", {
+      client,
+      messageId: "171234.890",
+      token: "xoxb-test",
+    });
+
+    expect(client.conversations.history).toHaveBeenCalledWith({
+      channel: "C1",
+      limit: 1,
+      inclusive: true,
+      latest: "171234.890",
+      oldest: undefined,
+    });
+    expect(result).toEqual({
+      messages: [{ ts: "171234.890", text: "exact" }],
+      hasMore: false,
+    });
   });
 });

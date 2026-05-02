@@ -15,6 +15,8 @@ type SlackTestState = {
   replyMock: Mock<(...args: unknown[]) => unknown>;
   updateLastRouteMock: Mock<(...args: unknown[]) => unknown>;
   reactMock: Mock<(...args: unknown[]) => unknown>;
+  reactionAddMock: Mock<(...args: unknown[]) => unknown>;
+  reactionRemoveMock: Mock<(...args: unknown[]) => unknown>;
   readAllowFromStoreMock: Mock<(...args: unknown[]) => Promise<unknown>>;
   upsertPairingRequestMock: Mock<(...args: unknown[]) => Promise<unknown>>;
 };
@@ -25,6 +27,8 @@ const slackTestState: SlackTestState = vi.hoisted(() => ({
   replyMock: vi.fn(),
   updateLastRouteMock: vi.fn(),
   reactMock: vi.fn(),
+  reactionAddMock: vi.fn(),
+  reactionRemoveMock: vi.fn(),
   readAllowFromStoreMock: vi.fn(),
   upsertPairingRequestMock: vi.fn(),
 }));
@@ -88,8 +92,14 @@ function ensureSlackTestRuntime(): {
         },
       },
       reactions: {
-        add: (...args: unknown[]) => slackTestState.reactMock(...args),
-        remove: (...args: unknown[]) => slackTestState.reactMock(...args),
+        add: (...args: unknown[]) => {
+          slackTestState.reactionAddMock(...args);
+          return slackTestState.reactMock(...args);
+        },
+        remove: (...args: unknown[]) => {
+          slackTestState.reactionRemoveMock(...args);
+          return slackTestState.reactMock(...args);
+        },
       },
     };
   }
@@ -101,7 +111,7 @@ function ensureSlackTestRuntime(): {
 
 export const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-export async function waitForSlackEvent(name: string) {
+async function waitForSlackEvent(name: string) {
   for (let i = 0; i < 10; i += 1) {
     if (getSlackHandlers()?.has(name)) {
       return;
@@ -142,7 +152,7 @@ export async function stopSlackMonitor(params: {
   await params.run;
 }
 
-export async function runSlackEventOnce(
+async function runSlackEventOnce(
   monitorSlackProvider: SlackProviderMonitor,
   name: string,
   args: unknown,
@@ -182,6 +192,8 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
   slackTestState.replyMock.mockReset();
   slackTestState.updateLastRouteMock.mockReset();
   slackTestState.reactMock.mockReset();
+  slackTestState.reactionAddMock.mockReset();
+  slackTestState.reactionRemoveMock.mockReset();
   slackTestState.readAllowFromStoreMock.mockReset().mockResolvedValue([]);
   slackTestState.upsertPairingRequestMock.mockReset().mockResolvedValue({
     code: "PAIRCODE",

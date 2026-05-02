@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { bundledDistPluginFile, bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
@@ -13,13 +13,8 @@ import { collectInstalledRootDependencyManifestErrors } from "../scripts/opencla
 import {
   collectAppcastSparkleVersionErrors,
   collectBundledExtensionManifestErrors,
-  collectBundledPluginRootRuntimeMirrorErrors,
   collectCriticalPluginSdkEntrypointSizeErrors,
-  collectDeclaredRootRuntimeDependencyMetadataErrors,
   collectForbiddenPackContentPaths,
-  collectInstalledBundledPluginRuntimeDepErrors,
-  bundledRuntimeDependencySentinelCandidates,
-  collectRootDistBundledRuntimeMirrors,
   collectForbiddenPackPaths,
   collectMissingPackPaths,
   collectPackUnpackedSizeErrors,
@@ -216,7 +211,7 @@ describe("collectBundledExtensionManifestErrors", () => {
         },
       ]),
     ).toEqual([
-      "bundled extension 'broken' manifest invalid | openclaw.install.minHostVersion must use a semver floor in the form \">=x.y.z\"",
+      "bundled extension 'broken' manifest invalid | openclaw.install.minHostVersion must use a semver floor in the form \">=x.y.z[-prerelease][+build]\"",
     ]);
   });
 
@@ -251,7 +246,7 @@ describe("collectBundledExtensionManifestErrors", () => {
   });
 });
 
-describe("bundled plugin root runtime mirrors", () => {
+describe("bundled plugin package dependency checks", () => {
   function makeBundledSpecs() {
     return new Map([
       ["@larksuiteoapi/node-sdk", { conflicts: [], pluginIds: ["feishu"], spec: "^1.60.0" }],
@@ -273,117 +268,6 @@ describe("bundled plugin root runtime mirrors", () => {
     expect(packageNameFromSpecifier("grammy/web")).toBe("grammy");
     expect(packageNameFromSpecifier("node:fs")).toBeNull();
     expect(packageNameFromSpecifier("./local")).toBeNull();
-  });
-
-  it("derives required root mirrors from built root dist imports", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-root-mirror-"));
-
-    try {
-      const distDir = join(tempRoot, "dist");
-      mkdirSync(join(distDir, "extensions", "feishu"), { recursive: true });
-      writeFileSync(
-        join(distDir, "probe-Cz2PiFtC.js"),
-        `import("@larksuiteoapi/node-sdk");\nrequire("grammy");\n`,
-        "utf8",
-      );
-      writeFileSync(
-        join(distDir, "extensions", "feishu", "index.js"),
-        `import("@larksuiteoapi/node-sdk");\n`,
-        "utf8",
-      );
-      mkdirSync(join(distDir, "extensions", "feishu", "node_modules", "@larksuiteoapi"), {
-        recursive: true,
-      });
-      writeFileSync(
-        join(distDir, "extensions", "feishu", "node_modules", "@larksuiteoapi", "node-sdk.js"),
-        `import("@larksuiteoapi/node-sdk");\n`,
-        "utf8",
-      );
-
-      const mirrors = collectRootDistBundledRuntimeMirrors({
-        bundledRuntimeDependencySpecs: makeBundledSpecs(),
-        distDir,
-      });
-
-      expect([...mirrors.keys()].toSorted((left, right) => left.localeCompare(right))).toEqual([
-        "@larksuiteoapi/node-sdk",
-      ]);
-      expect([...mirrors.get("@larksuiteoapi/node-sdk")!.importers]).toEqual(["probe-Cz2PiFtC.js"]);
-    } finally {
-      rmSync(tempRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("flags missing root mirrors for plugin deps imported by root dist", () => {
-    expect(
-      collectBundledPluginRootRuntimeMirrorErrors({
-        bundledRuntimeDependencySpecs: makeBundledSpecs(),
-        requiredRootMirrors: new Map([
-          [
-            "@larksuiteoapi/node-sdk",
-            {
-              importers: new Set(["probe-Cz2PiFtC.js"]),
-              pluginIds: ["feishu"],
-              spec: "^1.60.0",
-            },
-          ],
-        ]),
-        rootPackageJson: { dependencies: {} },
-      }),
-    ).toEqual([
-      "installed package root is missing mirrored bundled runtime dependency '@larksuiteoapi/node-sdk' for dist importers: probe-Cz2PiFtC.js. Add it to package.json dependencies/optionalDependencies or keep imports under dist/extensions/feishu/.",
-    ]);
-  });
-
-  it("flags mirrored root runtime metadata without root deps", () => {
-    expect(
-      collectDeclaredRootRuntimeDependencyMetadataErrors({
-        dependencies: { semver: "7.7.4" },
-        openclaw: {
-          bundle: {
-            mirroredRootRuntimeDependencies: ["json5", "semver"],
-          },
-        },
-      }),
-    ).toEqual([
-      "package.json openclaw.bundle.mirroredRootRuntimeDependencies declares 'json5' but package.json dependencies/optionalDependencies do not include it.",
-    ]);
-  });
-
-  it("accepts mirrored root runtime metadata backed by root deps", () => {
-    expect(
-      collectDeclaredRootRuntimeDependencyMetadataErrors({
-        dependencies: { json5: "^2.2.3", semver: "7.7.4" },
-        openclaw: {
-          bundle: {
-            mirroredRootRuntimeDependencies: ["json5", "semver"],
-          },
-        },
-      }),
-    ).toEqual([]);
-  });
-
-  it("does not derive root mirrors for root chunks sourced from the owning plugin", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-root-mirror-owned-"));
-
-    try {
-      const distDir = join(tempRoot, "dist");
-      mkdirSync(distDir, { recursive: true });
-      writeFileSync(
-        join(distDir, "probe-Cz2PiFtC.js"),
-        `//#region extensions/feishu/client.ts\nimport("@larksuiteoapi/node-sdk");\n`,
-        "utf8",
-      );
-
-      const mirrors = collectRootDistBundledRuntimeMirrors({
-        bundledRuntimeDependencySpecs: makeBundledSpecs(),
-        distDir,
-      });
-
-      expect([...mirrors.keys()]).toEqual([]);
-    } finally {
-      rmSync(tempRoot, { recursive: true, force: true });
-    }
   });
 
   it("does not require root deps for root chunks sourced from the owning installed plugin", () => {
@@ -440,100 +324,6 @@ describe("bundled plugin root runtime mirrors", () => {
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
-  });
-
-  it("does not compare root mirror versions for plugin manifest deps", () => {
-    expect(
-      collectBundledPluginRootRuntimeMirrorErrors({
-        bundledRuntimeDependencySpecs: makeBundledSpecs(),
-        requiredRootMirrors: new Map([
-          [
-            "@larksuiteoapi/node-sdk",
-            {
-              importers: new Set(["probe-Cz2PiFtC.js"]),
-              pluginIds: ["feishu"],
-              spec: "^1.60.0",
-            },
-          ],
-        ]),
-        rootPackageJson: {
-          dependencies: { "@larksuiteoapi/node-sdk": "^1.61.0" },
-          openclaw: {
-            bundle: {
-              mirroredRootRuntimeDependencies: ["@larksuiteoapi/node-sdk"],
-            },
-          },
-        },
-      }),
-    ).toEqual([]);
-  });
-
-  it("flags root mirrors omitted from mirrored root runtime metadata", () => {
-    expect(
-      collectBundledPluginRootRuntimeMirrorErrors({
-        bundledRuntimeDependencySpecs: makeBundledSpecs(),
-        requiredRootMirrors: new Map([
-          [
-            "@larksuiteoapi/node-sdk",
-            {
-              importers: new Set(["probe-Cz2PiFtC.js"]),
-              pluginIds: ["feishu"],
-              spec: "^1.60.0",
-            },
-          ],
-        ]),
-        rootPackageJson: { dependencies: { "@larksuiteoapi/node-sdk": "^1.60.0" } },
-      }),
-    ).toEqual([
-      "installed package root mirror '@larksuiteoapi/node-sdk' for dist importers: probe-Cz2PiFtC.js is missing from package.json openclaw.bundle.mirroredRootRuntimeDependencies. Add it there so packaged runtime installs the mirrored dependency, or keep imports under dist/extensions/feishu/.",
-    ]);
-  });
-
-  it("accepts matching root mirrors for plugin deps imported by root dist", () => {
-    expect(
-      collectBundledPluginRootRuntimeMirrorErrors({
-        bundledRuntimeDependencySpecs: makeBundledSpecs(),
-        requiredRootMirrors: new Map([
-          [
-            "@larksuiteoapi/node-sdk",
-            {
-              importers: new Set(["probe-Cz2PiFtC.js"]),
-              pluginIds: ["feishu"],
-              spec: "^1.60.0",
-            },
-          ],
-        ]),
-        rootPackageJson: {
-          dependencies: { "@larksuiteoapi/node-sdk": "^1.60.0" },
-          openclaw: {
-            bundle: {
-              mirroredRootRuntimeDependencies: ["@larksuiteoapi/node-sdk"],
-            },
-          },
-        },
-      }),
-    ).toEqual([]);
-  });
-
-  it("flags conflicting plugin dependency specs", () => {
-    expect(
-      collectBundledPluginRootRuntimeMirrorErrors({
-        bundledRuntimeDependencySpecs: new Map([
-          [
-            "@example/sdk",
-            {
-              conflicts: [{ pluginId: "right", spec: "2.0.0" }],
-              pluginIds: ["left"],
-              spec: "1.0.0",
-            },
-          ],
-        ]),
-        requiredRootMirrors: new Map(),
-        rootPackageJson: { dependencies: {} },
-      }),
-    ).toEqual([
-      "bundled runtime dependency '@example/sdk' has conflicting plugin specs: left use '1.0.0', right uses '2.0.0'.",
-    ]);
   });
 });
 
@@ -690,7 +480,6 @@ describe("collectMissingPackPaths", () => {
         "dist/control-ui/index.html",
         "scripts/npm-runner.mjs",
         "scripts/preinstall-package-manager-warning.mjs",
-        "scripts/lib/bundled-runtime-deps-install.mjs",
         "scripts/lib/package-dist-imports.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
         "dist/task-registry-control.runtime.js",
@@ -723,7 +512,6 @@ describe("collectMissingPackPaths", () => {
         ...WORKSPACE_TEMPLATE_PACK_PATHS,
         "scripts/npm-runner.mjs",
         "scripts/preinstall-package-manager-warning.mjs",
-        "scripts/lib/bundled-runtime-deps-install.mjs",
         "scripts/lib/package-dist-imports.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
         "dist/plugin-sdk/root-alias.cjs",
@@ -831,114 +619,5 @@ describe("createPackedBundledPluginPostinstallEnv", () => {
       PATH: "/usr/bin",
       OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
     });
-  });
-});
-
-describe("collectInstalledBundledPluginRuntimeDepErrors", () => {
-  function createPackageRoot(): string {
-    const packageRoot = mkdtempSync(join(tmpdir(), "release-check-installed-bundled-"));
-    mkdirSync(join(packageRoot, "dist", "extensions"), { recursive: true });
-    return packageRoot;
-  }
-
-  function writeBundledPluginPackageJson(
-    packageRoot: string,
-    pluginId: string,
-    packageJson: Record<string, unknown>,
-  ): void {
-    const pluginRoot = join(packageRoot, "dist", "extensions", pluginId);
-    mkdirSync(pluginRoot, { recursive: true });
-    writeFileSync(join(pluginRoot, "package.json"), JSON.stringify(packageJson, null, 2));
-  }
-
-  function installRuntimeDependencyAtPackageRoot(
-    packageRoot: string,
-    dependencyName: string,
-    version: string,
-  ): void {
-    const dependencyRoot = join(packageRoot, "node_modules", ...dependencyName.split("/"));
-    mkdirSync(dependencyRoot, { recursive: true });
-    writeFileSync(
-      join(dependencyRoot, "package.json"),
-      JSON.stringify({ name: dependencyName, version }, null, 2),
-    );
-  }
-
-  it("returns no errors when declared deps are installed at the openclaw package root", () => {
-    const packageRoot = createPackageRoot();
-    try {
-      writeBundledPluginPackageJson(packageRoot, "whatsapp", {
-        name: "@openclaw/whatsapp",
-        dependencies: { "@whiskeysockets/baileys": "7.0.0-rc.9" },
-        openclaw: { bundle: { stageRuntimeDependencies: true } },
-      });
-      installRuntimeDependencyAtPackageRoot(packageRoot, "@whiskeysockets/baileys", "7.0.0-rc.9");
-
-      expect(collectInstalledBundledPluginRuntimeDepErrors(packageRoot)).toEqual([]);
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("surfaces an error naming the owning plugin and missing dependency", () => {
-    const packageRoot = createPackageRoot();
-    try {
-      writeBundledPluginPackageJson(packageRoot, "whatsapp", {
-        name: "@openclaw/whatsapp",
-        dependencies: { "@whiskeysockets/baileys": "7.0.0-rc.9" },
-        openclaw: { bundle: { stageRuntimeDependencies: true } },
-      });
-
-      expect(collectInstalledBundledPluginRuntimeDepErrors(packageRoot)).toEqual([
-        "bundled plugin runtime dependency '@whiskeysockets/baileys@7.0.0-rc.9' (owners: whatsapp) is missing at node_modules/@whiskeysockets/baileys/package.json.",
-      ]);
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("bundledRuntimeDependencySentinelCandidates", () => {
-  it("checks canonical external runtime-deps roots for packed installs", () => {
-    const root = mkdtempSync(join(tmpdir(), "release-check-runtime-candidates-"));
-    const packageRoot = join(root, "package");
-    const aliasRoot = join(root, "package-alias");
-    const homeRoot = join(root, "home");
-    try {
-      mkdirSync(join(packageRoot, "dist", "extensions", "browser"), { recursive: true });
-      writeFileSync(
-        join(packageRoot, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.4.25-beta.1" }, null, 2),
-      );
-      symlinkSync(packageRoot, aliasRoot, "dir");
-
-      const candidates = bundledRuntimeDependencySentinelCandidates(
-        aliasRoot,
-        "browser",
-        "playwright-core",
-        { HOME: homeRoot } as NodeJS.ProcessEnv,
-      );
-      const realRootCandidates = bundledRuntimeDependencySentinelCandidates(
-        packageRoot,
-        "browser",
-        "playwright-core",
-        { HOME: homeRoot } as NodeJS.ProcessEnv,
-      );
-      const externalCandidates = candidates.filter(
-        (candidate) =>
-          candidate.startsWith(join(homeRoot, ".openclaw", "plugin-runtime-deps")) &&
-          candidate.endsWith(join("node_modules", "playwright-core", "package.json")),
-      );
-      const realRootExternalCandidates = realRootCandidates.filter(
-        (candidate) =>
-          candidate.startsWith(join(homeRoot, ".openclaw", "plugin-runtime-deps")) &&
-          candidate.endsWith(join("node_modules", "playwright-core", "package.json")),
-      );
-
-      expect(externalCandidates).toEqual(realRootExternalCandidates);
-      expect(externalCandidates).toHaveLength(1);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
   });
 });

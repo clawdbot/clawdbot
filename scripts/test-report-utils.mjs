@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-export const normalizeRepoPath = (value) => value.split(path.sep).join("/");
+const normalizeRepoPath = (value) => value.split(path.sep).join("/");
 const repoRoot = path.resolve(process.cwd());
 
 export function normalizeTrackedRepoPath(value) {
@@ -27,10 +27,6 @@ export function tryReadJsonFile(filePath, fallback) {
   } catch {
     return fallback;
   }
-}
-
-export function writeJsonFile(filePath, value) {
-  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 export function runVitestJsonReport({

@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { WebhookContext } from "../../types.js";
 
-export type TwimlRequestView = {
+type TwimlRequestView = {
   callStatus: string | null;
   direction: string | null;
   isStatusCallback: boolean;
@@ -9,14 +9,14 @@ export type TwimlRequestView = {
   callIdFromQuery?: string;
 };
 
-export type TwimlPolicyInput = TwimlRequestView & {
+type TwimlPolicyInput = TwimlRequestView & {
   hasStoredTwiml: boolean;
   isNotifyCall: boolean;
   hasActiveStreams: boolean;
   canStream: boolean;
 };
 
-export type TwimlDecision =
+type TwimlDecision =
   | {
       kind: "empty" | "pause" | "queue";
       consumeStoredTwimlCallId?: string;

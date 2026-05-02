@@ -71,6 +71,10 @@ agents
 create agent work workspace ~/Projects/work
 models
 set default model openai/gpt-5.5
+plugins list
+plugins search slack
+plugin install clawhub:openclaw-codex-app-server
+plugin uninstall openclaw-codex-app-server
 talk to work agent
 talk to agent for ~/Projects/work
 audit
@@ -99,6 +103,8 @@ Read-only operations can run immediately:
 
 - show overview
 - list agents
+- list installed plugins
+- search ClawHub plugins
 - show model/backend status
 - run status or health checks
 - check Gateway reachability
@@ -116,6 +122,8 @@ you pass `--yes` for a direct command:
 - change the default model
 - start, stop, or restart the Gateway
 - create agents
+- install plugins from ClawHub or npm
+- uninstall plugins
 - run doctor repairs that rewrite config or state
 
 Applied writes are recorded in:
@@ -240,6 +248,9 @@ Security contract for remote rescue:
 - Require an explicit owner identity. Rescue must not accept wildcard sender
   rules, open group policy, unauthenticated webhooks, or anonymous channels.
 - Owner DMs only by default. Group/channel rescue requires explicit opt-in.
+- Plugin search and list are read-only. Plugin install is local-only by default
+  because it downloads executable code. Plugin uninstall can be allowed as an
+  approved repair operation when rescue policy permits persistent writes.
 - Remote rescue cannot open the local TUI or switch into an interactive agent
   session. Use local `openclaw` for agent handoff.
 - Persistent writes still require approval, even in rescue mode.

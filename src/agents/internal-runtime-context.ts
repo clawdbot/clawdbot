@@ -221,7 +221,7 @@ export function hasInternalRuntimeContext(text: string): boolean {
   );
 }
 
-export function isOpenClawRuntimeContextCustomMessage(message: unknown): boolean {
+function isOpenClawRuntimeContextCustomMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
   }

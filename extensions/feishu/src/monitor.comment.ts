@@ -60,7 +60,7 @@ type ResolveDriveCommentEventParams = {
   waitMs?: (ms: number) => Promise<void>;
 };
 
-export type ResolvedDriveCommentEventTurn = {
+type ResolvedDriveCommentEventTurn = {
   eventId: string;
   messageId: string;
   commentId: string;

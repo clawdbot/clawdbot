@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-export type DreamingArtifactsAuditIssue = {
+type DreamingArtifactsAuditIssue = {
   severity: "warn" | "error";
   code:
     | "dreaming-session-corpus-unreadable"

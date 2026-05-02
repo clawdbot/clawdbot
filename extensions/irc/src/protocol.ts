@@ -3,7 +3,7 @@ import { hasIrcControlChars, stripIrcControlChars } from "./control-chars.js";
 
 const IRC_TARGET_PATTERN = /^[^\s:]+$/u;
 
-export type ParsedIrcLine = {
+type ParsedIrcLine = {
   raw: string;
   prefix?: string;
   command: string;
@@ -11,7 +11,7 @@ export type ParsedIrcLine = {
   trailing?: string;
 };
 
-export type ParsedIrcPrefix = {
+type ParsedIrcPrefix = {
   nick?: string;
   user?: string;
   host?: string;

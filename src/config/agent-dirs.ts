@@ -7,7 +7,7 @@ import { resolveUserPath } from "../utils.js";
 import { resolveStateDir } from "./paths.js";
 import type { OpenClawConfig } from "./types.js";
 
-export type DuplicateAgentDir = {
+type DuplicateAgentDir = {
   agentDir: string;
   agentIds: string[];
 };

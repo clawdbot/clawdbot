@@ -14,7 +14,7 @@ export type VoiceReceiveRecoveryState = {
   decryptRecoveryInFlight: boolean;
 };
 
-export type VoiceReceiveErrorAnalysis = {
+type VoiceReceiveErrorAnalysis = {
   message: string;
   isAbortLike: boolean;
   shouldAttemptPassthrough: boolean;
@@ -59,7 +59,7 @@ export function createVoiceReceiveRecoveryState(): VoiceReceiveRecoveryState {
   };
 }
 
-export function isAbortLikeReceiveError(err: unknown): boolean {
+function isAbortLikeReceiveError(err: unknown): boolean {
   if (!err || typeof err !== "object") {
     return false;
   }

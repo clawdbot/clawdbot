@@ -176,7 +176,22 @@ If setup reports HTTP 401, verify your API key:
 
 ### Just-in-time model loading
 
-LM Studio supports just-in-time (JIT) model loading, where models are loaded on first request. Make sure you have this enabled to avoid 'Model not loaded' errors.
+LM Studio supports just-in-time (JIT) model loading, where models are loaded on first request. OpenClaw preloads models through LM Studio's native load endpoint by default, which helps when JIT is disabled. To let LM Studio's JIT, idle TTL, and auto-evict behavior own model lifecycle, disable OpenClaw's preload step:
+
+```json5
+{
+  models: {
+    providers: {
+      lmstudio: {
+        baseUrl: "http://localhost:1234/v1",
+        api: "openai-completions",
+        params: { preload: false },
+        models: [{ id: "qwen/qwen3.5-9b" }],
+      },
+    },
+  },
+}
+```
 
 ### LAN or tailnet LM Studio host
 

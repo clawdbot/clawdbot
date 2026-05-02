@@ -25,11 +25,6 @@ const markGatewayDraining = vi.fn();
 const waitForActiveTasks = vi.fn(async (_timeoutMs?: number) => ({ drained: true }));
 const resetAllLanes = vi.fn();
 const reloadTaskRegistryFromStore = vi.fn();
-const getActiveBundledRuntimeDepsInstallCount = vi.fn(() => 0);
-const waitForBundledRuntimeDepsInstallIdle = vi.fn(async (_timeoutMs?: number) => ({
-  drained: true,
-  active: 0,
-}));
 const restartGatewayProcessWithFreshPid = vi.fn<
   () => { mode: "spawned" | "supervised" | "disabled" | "failed"; pid?: number; detail?: string }
 >(() => ({ mode: "disabled" }));
@@ -106,12 +101,6 @@ vi.mock("../../process/command-queue.js", () => ({
 
 vi.mock("../../tasks/runtime-internal.js", () => ({
   reloadTaskRegistryFromStore: () => reloadTaskRegistryFromStore(),
-}));
-
-vi.mock("../../plugins/bundled-runtime-deps-activity.js", () => ({
-  getActiveBundledRuntimeDepsInstallCount: () => getActiveBundledRuntimeDepsInstallCount(),
-  waitForBundledRuntimeDepsInstallIdle: (timeoutMs?: number) =>
-    waitForBundledRuntimeDepsInstallIdle(timeoutMs),
 }));
 
 vi.mock("../../agents/pi-embedded-runner/runs.js", () => ({
@@ -494,47 +483,6 @@ describe("runGatewayLoop", () => {
       expect(markGatewaySigusr1RestartHandled).not.toHaveBeenCalled();
     });
   });
-
-  it("waits for active runtime-deps installs before restart close", async () => {
-    vi.clearAllMocks();
-    loadConfig.mockReturnValue({
-      gateway: {
-        reload: {
-          deferralTimeoutMs: 90_000,
-        },
-      },
-    });
-    let releaseRuntimeDeps!: () => void;
-    getActiveBundledRuntimeDepsInstallCount.mockReturnValueOnce(1).mockReturnValue(0);
-    waitForBundledRuntimeDepsInstallIdle.mockReturnValueOnce(
-      new Promise((resolve) => {
-        releaseRuntimeDeps = () => resolve({ drained: true, active: 0 });
-      }),
-    );
-
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const { close, start } = await createSignaledLoopHarness();
-      const sigusr1 = captureSignal("SIGUSR1");
-
-      sigusr1();
-      await new Promise<void>((resolve) => setImmediate(resolve));
-
-      expect(markGatewayDraining).toHaveBeenCalledOnce();
-      expect(waitForBundledRuntimeDepsInstallIdle).toHaveBeenCalledWith(90_000);
-      expect(close).not.toHaveBeenCalled();
-
-      releaseRuntimeDeps();
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      await new Promise<void>((resolve) => setImmediate(resolve));
-
-      expect(close).toHaveBeenCalledWith({
-        reason: "gateway restarting",
-        restartExpectedMs: 1500,
-      });
-      expect(start).toHaveBeenCalledTimes(2);
-    });
-  });
-
   it("releases the lock before exiting on spawned restart", async () => {
     vi.clearAllMocks();
     peekGatewaySigusr1RestartReason.mockReturnValue(undefined);

@@ -1,7 +1,7 @@
 import { isRecord } from "../utils.js";
 
-export type ConfigMcpServers = Record<string, Record<string, unknown>>;
-export type OpenClawMcpHttpTransport = "sse" | "streamable-http";
+type ConfigMcpServers = Record<string, Record<string, unknown>>;
+type OpenClawMcpHttpTransport = "sse" | "streamable-http";
 
 const CLI_MCP_TYPE_TO_OPENCLAW_TRANSPORT: Record<string, OpenClawMcpHttpTransport | "stdio"> = {
   http: "streamable-http",

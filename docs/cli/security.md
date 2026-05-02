@@ -25,6 +25,8 @@ openclaw security audit --fix
 openclaw security audit --json
 ```
 
+Plain `security audit` stays on the cold config/filesystem/read-only path. It does not discover plugin runtime security collectors by default, so routine audits do not load every installed plugin runtime. Use `--deep` to include best-effort live Gateway probes and plugin-owned security audit collectors; explicit internal callers may also opt into those plugin-owned collectors when they already have an appropriate runtime scope.
+
 The audit warns when multiple DM senders share the main session and recommends **secure DM mode**: `session.dmScope="per-channel-peer"` (or `per-account-channel-peer` for multi-account channels) for shared inboxes.
 This is for cooperative/shared inbox hardening. A single Gateway shared by mutually untrusted/adversarial operators is not a recommended setup; split trust boundaries with separate gateways (or separate OS users/hosts).
 It also emits `security.trust_model.multi_user_heuristic` when config suggests likely shared-user ingress (for example open DM/group policy, configured group targets, or wildcard sender rules), and reminds you that OpenClaw is a personal-assistant trust model by default.

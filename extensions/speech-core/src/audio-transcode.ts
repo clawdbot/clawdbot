@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { join } from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 
-export type TranscodeOutcome =
+type TranscodeOutcome =
   | { ok: true; buffer: Buffer }
   | {
       ok: false;

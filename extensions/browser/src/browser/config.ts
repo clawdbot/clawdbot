@@ -33,7 +33,6 @@ import {
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
-import { resolveBrowserControlAuth, type BrowserControlAuth } from "./control-auth.js";
 import { DEFAULT_UPLOAD_DIR } from "./paths.js";
 
 export {
@@ -41,17 +40,13 @@ export {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
   DEFAULT_BROWSER_EVALUATE_ENABLED,
-  DEFAULT_BROWSER_LOCAL_CDP_READY_TIMEOUT_MS,
-  DEFAULT_BROWSER_LOCAL_LAUNCH_TIMEOUT_MS,
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
   DEFAULT_UPLOAD_DIR,
   parseBrowserHttpUrl,
   redactCdpUrl,
-  resolveBrowserControlAuth,
 };
-export type { BrowserControlAuth };
 export { parseBrowserHttpUrl as parseHttpUrl };
 
 type BrowserSsrFPolicyCompat = NonNullable<BrowserConfig["ssrfPolicy"]> & {
@@ -125,7 +120,7 @@ export type ManagedBrowserHeadlessSource =
   | "linux-display-fallback"
   | "default";
 
-export type ManagedBrowserHeadlessMode = {
+type ManagedBrowserHeadlessMode = {
   headless: boolean;
   source: ManagedBrowserHeadlessSource;
 };

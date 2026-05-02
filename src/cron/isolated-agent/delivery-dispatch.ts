@@ -13,6 +13,7 @@ import {
   resolveMainSessionKey,
 } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { TtsAutoMode } from "../../config/types.tts.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
@@ -24,6 +25,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 import { createCronExecutionId } from "../run-id.js";
 import { hasScheduledNextRunAtMs } from "../service/jobs.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
@@ -119,6 +121,7 @@ type DispatchCronDeliveryParams = {
   deliveryPayloadHasStructuredContent: boolean;
   deliveryPayloads: ReplyPayload[];
   synthesizedText?: string;
+  ttsAuto?: TtsAutoMode;
   summary?: string;
   outputText?: string;
   telemetry?: CronRunTelemetry;
@@ -183,6 +186,7 @@ let deliveryLoggerRuntimePromise:
 let subagentFollowupRuntimePromise:
   | Promise<typeof import("./subagent-followup.runtime.js")>
   | undefined;
+let ttsRuntimePromise: Promise<typeof import("../../tts/tts.runtime.js")> | undefined;
 
 const COMPLETED_DIRECT_CRON_DELIVERIES = new Map<string, CompletedDirectCronDelivery>();
 
@@ -215,6 +219,11 @@ async function loadSubagentFollowupRuntime(): Promise<
 > {
   subagentFollowupRuntimePromise ??= import("./subagent-followup.runtime.js");
   return await subagentFollowupRuntimePromise;
+}
+
+async function loadTtsRuntime(): Promise<typeof import("../../tts/tts.runtime.js")> {
+  ttsRuntimePromise ??= import("../../tts/tts.runtime.js");
+  return await ttsRuntimePromise;
 }
 
 async function logCronDeliveryWarn(message: string): Promise<void> {
@@ -303,6 +312,40 @@ function getCompletedDirectCronDelivery(
   return cloneDeliveryResults(cached.results);
 }
 
+async function maybeApplyTtsToCronPayloads(params: {
+  cfg: OpenClawConfig;
+  payloads: ReplyPayload[];
+  delivery: SuccessfulDeliveryTarget;
+  agentId: string;
+  ttsAuto?: TtsAutoMode;
+}): Promise<ReplyPayload[]> {
+  if (
+    !shouldAttemptTtsPayload({
+      cfg: params.cfg,
+      ttsAuto: params.ttsAuto,
+      agentId: params.agentId,
+      channelId: params.delivery.channel,
+      accountId: params.delivery.accountId,
+    })
+  ) {
+    return params.payloads;
+  }
+  const { maybeApplyTtsToPayload } = await loadTtsRuntime();
+  return await Promise.all(
+    params.payloads.map((payload) =>
+      maybeApplyTtsToPayload({
+        payload,
+        cfg: params.cfg,
+        channel: params.delivery.channel,
+        kind: "final",
+        ttsAuto: params.ttsAuto,
+        agentId: params.agentId,
+        accountId: params.delivery.accountId,
+      }),
+    ),
+  );
+}
+
 function buildDirectCronDeliveryIdempotencyKey(params: {
   jobId: string;
   runStartedAt: number;
@@ -318,10 +361,18 @@ function buildDirectCronDeliveryIdempotencyKey(params: {
   return `cron-direct-delivery:v1:${executionId}:${params.delivery.channel}:${accountId}:${normalizedTo}:${threadId}`;
 }
 
-function shouldQueueCronAwareness(job: CronJob, deliveryBestEffort: boolean): boolean {
-  // Keep issue #52136 scoped to isolated runs. Session-bound cron jobs keep
-  // their existing behavior, and best-effort sends may only partially deliver.
-  return job.sessionTarget === "isolated" && !deliveryBestEffort;
+function shouldQueueCronAwareness(params: {
+  job: CronJob;
+  delivery: SuccessfulDeliveryTarget;
+  deliveryBestEffort: boolean;
+}): boolean {
+  // Keep issue #52136 scoped to isolated runs with an explicit delivery target.
+  // Default isolated announce delivery must not mirror text into the main session.
+  return (
+    params.job.sessionTarget === "isolated" &&
+    !params.deliveryBestEffort &&
+    params.delivery.mode === "explicit"
+  );
 }
 
 function resolveCronAwarenessMainSessionKey(params: {
@@ -524,7 +575,7 @@ export async function dispatchCronDelivery(
           : synthesizedText
             ? [{ text: synthesizedText }]
             : [];
-      const payloadsForDelivery = rawPayloads
+      const normalizedPayloads = rawPayloads
         .map((p) => {
           if (!p.text) {
             return p;
@@ -535,7 +586,7 @@ export async function dispatchCronDelivery(
           });
         })
         .filter((p) => hasReplyPayloadContent(p, { trimText: true }));
-      if (payloadsForDelivery.length === 0) {
+      if (normalizedPayloads.length === 0) {
         return await finishSilentReplyDelivery();
       }
       if (params.isAborted()) {
@@ -574,6 +625,18 @@ export async function dispatchCronDelivery(
           delivered: false,
           ...params.telemetry,
         });
+      }
+      const payloadsForDelivery = (
+        await maybeApplyTtsToCronPayloads({
+          cfg: params.cfgWithAgentDefaults,
+          payloads: normalizedPayloads,
+          delivery,
+          agentId: params.agentId,
+          ttsAuto: params.ttsAuto,
+        })
+      ).filter((p) => hasReplyPayloadContent(p, { trimText: true }));
+      if (payloadsForDelivery.length === 0) {
+        return await finishSilentReplyDelivery();
       }
       deliveryAttempted = true;
       const cachedResults = getCompletedDirectCronDelivery(deliveryIdempotencyKey);
@@ -633,7 +696,14 @@ export async function dispatchCronDelivery(
       // Intentionally leave partial success uncached: replay may duplicate the
       // successful subset, but caching it here would permanently drop the
       // failed payloads by converting the replay into delivered=true.
-      if (delivered && shouldQueueCronAwareness(params.job, params.deliveryBestEffort)) {
+      if (
+        delivered &&
+        shouldQueueCronAwareness({
+          job: params.job,
+          delivery,
+          deliveryBestEffort: params.deliveryBestEffort,
+        })
+      ) {
         await queueCronAwarenessSystemEvent({
           cfg: params.cfgWithAgentDefaults,
           jobId: params.job.id,

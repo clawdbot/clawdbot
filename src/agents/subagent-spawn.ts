@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { isAcpRuntimeSpawnAvailable } from "../acp/runtime/availability.js";
+import { resolveThreadBindingSpawnPolicy } from "../channels/thread-bindings-policy.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
@@ -54,13 +55,14 @@ import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
   pruneLegacyStoreKeys,
+  ensureContextEnginesInitialized,
+  resolveParentForkDecision,
   resolveAgentConfig,
   resolveContextEngine,
   resolveDisplaySessionKey,
   resolveGatewaySessionStoreTarget,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
-  resolveParentForkMaxTokens,
   resolveSandboxRuntimeStatus,
   updateSessionStore,
   isAdminOnlyMethod,
@@ -92,8 +94,9 @@ type SubagentSpawnDeps = {
   forkSessionFromParent: typeof forkSessionFromParent;
   getGlobalHookRunner: () => SubagentLifecycleHookRunner | null;
   getRuntimeConfig: typeof getRuntimeConfig;
+  ensureContextEnginesInitialized: typeof ensureContextEnginesInitialized;
   resolveContextEngine: typeof resolveContextEngine;
-  resolveParentForkMaxTokens: typeof resolveParentForkMaxTokens;
+  resolveParentForkDecision: typeof resolveParentForkDecision;
   updateSessionStore: typeof updateSessionStore;
 };
 
@@ -102,8 +105,9 @@ const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
   forkSessionFromParent,
   getGlobalHookRunner,
   getRuntimeConfig,
+  ensureContextEnginesInitialized,
   resolveContextEngine,
-  resolveParentForkMaxTokens,
+  resolveParentForkDecision,
   updateSessionStore,
 };
 
@@ -302,13 +306,20 @@ function resolveStoreEntryByKeys(
 }
 
 type PreparedSpawnContext =
-  | { status: "ok"; mode: "isolated"; parentEntry?: SessionEntry; childEntry?: SessionEntry }
+  | {
+      status: "ok";
+      mode: "isolated";
+      parentEntry?: SessionEntry;
+      childEntry?: SessionEntry;
+      forkFallbackNote?: string;
+    }
   | {
       status: "ok";
       mode: "fork";
       parentEntry: SessionEntry;
       childEntry?: SessionEntry;
       forked: { sessionId: string; sessionFile: string };
+      forkFallbackNote?: never;
     }
   | { status: "error"; error: string };
 
@@ -334,7 +345,7 @@ async function prepareSubagentSessionContext(params: {
 
   let parentEntry: SessionEntry | undefined;
   let childEntry: SessionEntry | undefined;
-  const forkMaxTokens = subagentSpawnDeps.resolveParentForkMaxTokens(params.cfg);
+  let forkFallbackNote: string | undefined;
   const sessionsDir = path.dirname(parentTarget.storePath);
 
   try {
@@ -352,14 +363,13 @@ async function prepareSubagentSessionContext(params: {
           'context="fork" requested but the requester session transcript is not available.',
         );
       }
-      const parentTokens =
-        typeof parentEntry.totalTokens === "number" && Number.isFinite(parentEntry.totalTokens)
-          ? parentEntry.totalTokens
-          : 0;
-      if (forkMaxTokens > 0 && parentTokens > forkMaxTokens) {
-        throw new Error(
-          `context="fork" requested but requester context is too large to fork (${parentTokens}/${forkMaxTokens} tokens). Use context="isolated" or compact first.`,
-        );
+      const forkDecision = await subagentSpawnDeps.resolveParentForkDecision({
+        parentEntry,
+        storePath: parentTarget.storePath,
+      });
+      if (forkDecision.status === "skip") {
+        forkFallbackNote = forkDecision.message;
+        return null;
       }
 
       const fork = await subagentSpawnDeps.forkSessionFromParent({
@@ -388,6 +398,15 @@ async function prepareSubagentSessionContext(params: {
 
     if (params.contextMode === "fork") {
       if (!parentEntry || !forked) {
+        if (forkFallbackNote) {
+          return {
+            status: "ok",
+            mode: "isolated",
+            parentEntry,
+            childEntry,
+            forkFallbackNote,
+          };
+        }
         return {
           status: "error",
           error: 'context="fork" requested but OpenClaw could not prepare forked context.',
@@ -401,7 +420,13 @@ async function prepareSubagentSessionContext(params: {
         forked,
       };
     }
-    return { status: "ok", mode: "isolated", parentEntry, childEntry };
+    return {
+      status: "ok",
+      mode: "isolated",
+      parentEntry,
+      childEntry,
+      ...(forkFallbackNote ? { forkFallbackNote } : {}),
+    };
   } catch (err) {
     return { status: "error", error: summarizeError(err) };
   }
@@ -417,6 +442,7 @@ async function prepareContextEngineSubagentSpawn(params: {
   { status: "ok"; preparation?: SubagentSpawnPreparation } | { status: "error"; error: string }
 > {
   try {
+    subagentSpawnDeps.ensureContextEnginesInitialized();
     const engine = await subagentSpawnDeps.resolveContextEngine(params.cfg);
     const preparation = await engine.prepareSubagentSpawn?.({
       parentSessionKey: params.requesterInternalKey,
@@ -519,6 +545,29 @@ function resolveSpawnMode(params: {
   }
   // Thread-bound spawns should default to persistent sessions.
   return params.threadRequested ? "session" : "run";
+}
+
+function resolveSubagentContextMode(params: {
+  requestedContext?: SpawnSubagentContextMode;
+  threadRequested: boolean;
+  cfg: OpenClawConfig;
+  requester: {
+    channel?: string;
+    accountId?: string;
+  };
+}): SpawnSubagentContextMode {
+  if (params.requestedContext === "fork" || params.requestedContext === "isolated") {
+    return params.requestedContext;
+  }
+  if (!params.threadRequested || !params.requester.channel) {
+    return "isolated";
+  }
+  return resolveThreadBindingSpawnPolicy({
+    cfg: params.cfg,
+    channel: params.requester.channel,
+    accountId: params.requester.accountId,
+    kind: "subagent",
+  }).defaultSpawnContext;
 }
 
 function summarizeError(err: unknown): string {
@@ -645,7 +694,6 @@ export async function spawnSubagentDirect(
   const thinkingOverrideRaw = params.thinking;
   const requestThreadBinding = params.thread === true;
   const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
-  const contextMode: SpawnSubagentContextMode = params.context === "fork" ? "fork" : "isolated";
   const spawnMode = resolveSpawnMode({
     requestedMode: params.mode,
     threadRequested: requestThreadBinding,
@@ -678,6 +726,15 @@ export async function spawnSubagentDirect(
   let modelApplied = false;
   let threadBindingReady = false;
   let hasBoundThreadDeliveryOrigin = false;
+  const contextMode = resolveSubagentContextMode({
+    requestedContext: params.context,
+    threadRequested: requestThreadBinding,
+    cfg,
+    requester: {
+      channel: ctx.agentChannel,
+      accountId: ctx.agentAccountId,
+    },
+  });
   const { mainKey, alias } = resolveMainSessionAlias(cfg);
   const requesterSessionKey = ctx.agentSessionKey;
   const requesterInternalKey = requesterSessionKey
@@ -907,7 +964,7 @@ export async function spawnSubagentDirect(
       try {
         await callSubagentGateway({
           method: "sessions.delete",
-          params: { key: childSessionKey, emitLifecycleHooks: false },
+          params: { key: childSessionKey, deleteTranscript: true, emitLifecycleHooks: false },
           timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
         });
       } catch {
@@ -1240,15 +1297,18 @@ export async function spawnSubagentDirect(
     label: label || undefined,
   });
 
+  const acceptedNote = resolveSubagentSpawnAcceptedNote({
+    spawnMode,
+    agentSessionKey: ctx.agentSessionKey,
+  });
   return {
     status: "accepted",
     childSessionKey,
     runId: childRunId,
     mode: spawnMode,
-    note: resolveSubagentSpawnAcceptedNote({
-      spawnMode,
-      agentSessionKey: ctx.agentSessionKey,
-    }),
+    note: preparedSpawnContext.forkFallbackNote
+      ? `${acceptedNote} ${preparedSpawnContext.forkFallbackNote}`
+      : acceptedNote,
     modelApplied: resolvedModel ? modelApplied : undefined,
     attachments: attachmentsReceipt,
   };

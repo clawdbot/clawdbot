@@ -58,7 +58,6 @@ describe("channel contract api explicit fast path", () => {
     expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
       dirName: "bluebubbles",
       artifactBasename: "secret-contract-api.js",
-      installRuntimeDeps: false,
     });
     expect(api?.secretTargetRegistryEntries).toEqual(
       expect.arrayContaining([
@@ -80,7 +79,6 @@ describe("channel contract api explicit fast path", () => {
     expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
       dirName: "whatsapp",
       artifactBasename: "security-contract-api.js",
-      installRuntimeDeps: false,
     });
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
   });

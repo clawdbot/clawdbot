@@ -4,6 +4,68 @@
     "onStartup": false
   },
   "channels": ["feishu"],
+  "contracts": {
+    "tools": [
+      "feishu_app_scopes",
+      "feishu_bitable_create_app",
+      "feishu_bitable_create_field",
+      "feishu_bitable_create_record",
+      "feishu_bitable_get_meta",
+      "feishu_bitable_get_record",
+      "feishu_bitable_list_fields",
+      "feishu_bitable_list_records",
+      "feishu_bitable_update_record",
+      "feishu_chat",
+      "feishu_doc",
+      "feishu_drive",
+      "feishu_perm",
+      "feishu_wiki"
+    ]
+  },
+  "toolMetadata": {
+    "feishu_app_scopes": {
+      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+    },
+    "feishu_bitable_create_app": {
+      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+    },
+    "feishu_bitable_create_field": {
+      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+    },
+    "feishu_bitable_create_record": {
+      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+    },
+    "feishu_bitable_get_meta": {
+      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+    },
+    "feishu_bitable_get_record": {
+      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+    },
+    "feishu_bitable_list_fields": {
+      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+    },
+    "feishu_bitable_list_records": {
+      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+    },
+    "feishu_bitable_update_record": {
+      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+    },
+    "feishu_chat": {
+      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+    },
+    "feishu_doc": {
+      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+    },
+    "feishu_drive": {
+      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+    },
+    "feishu_perm": {
+      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+    },
+    "feishu_wiki": {
+      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+    }
+  },
   "channelEnvVars": {
     "feishu": [
       "FEISHU_APP_ID",

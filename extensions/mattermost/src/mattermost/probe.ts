@@ -6,7 +6,7 @@ import {
 import { normalizeMattermostBaseUrl, readMattermostError, type MattermostUser } from "./client.js";
 import type { BaseProbeResult } from "./runtime-api.js";
 
-export type MattermostProbe = BaseProbeResult & {
+type MattermostProbe = BaseProbeResult & {
   status?: number | null;
   elapsedMs?: number | null;
   bot?: MattermostUser;

@@ -33,6 +33,11 @@ describe("buildPluginRegistrySnapshotReport", () => {
         description: "Manifest-backed list metadata",
         version: "1.2.3",
         providers: ["indexed-provider"],
+        contracts: {
+          speechProviders: ["indexed-speech-provider"],
+          realtimeTranscriptionProviders: ["indexed-transcription-provider"],
+          realtimeVoiceProviders: ["indexed-voice-provider"],
+        },
         commandAliases: [{ name: "indexed-demo" }],
         configSchema: {
           type: "object",
@@ -58,6 +63,9 @@ describe("buildPluginRegistrySnapshotReport", () => {
       version: "9.8.7",
       format: "openclaw",
       providerIds: ["indexed-provider"],
+      speechProviderIds: ["indexed-speech-provider"],
+      realtimeTranscriptionProviderIds: ["indexed-transcription-provider"],
+      realtimeVoiceProviderIds: ["indexed-voice-provider"],
       commands: ["indexed-demo"],
       source: fs.realpathSync(fixture.runtimeSource),
       status: "loaded",

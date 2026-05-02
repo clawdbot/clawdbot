@@ -123,18 +123,17 @@ async function expectNoMessageWithin(params: {
   timeoutMs?: number;
 }): Promise<void> {
   const timeoutMs = params.timeoutMs ?? 300;
-  vi.useFakeTimers();
-  try {
-    const outcome = params
-      .watch()
-      .then(() => "received")
-      .catch(() => "timeout");
-    await params.action?.();
-    await vi.advanceTimersByTimeAsync(timeoutMs);
-    await expect(outcome).resolves.toBe("timeout");
-  } finally {
-    vi.useRealTimers();
-  }
+  let received = false;
+  const watch = params
+    .watch()
+    .then(() => {
+      received = true;
+    })
+    .catch(() => undefined);
+  await params.action?.();
+  await new Promise((resolve) => setTimeout(resolve, timeoutMs));
+  expect(received).toBe(false);
+  await watch;
 }
 
 describe("session.message websocket events", () => {

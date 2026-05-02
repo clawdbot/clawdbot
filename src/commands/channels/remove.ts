@@ -5,9 +5,12 @@ import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import { replaceConfigFile, type OpenClawConfig } from "../../config/config.js";
+import { callGateway } from "../../gateway/call.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { channelLabel } from "./runtime-label.js";
 import { type ChatChannel, requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
@@ -28,6 +31,35 @@ function listAccountIds(
     return [];
   }
   return plugin.config.listAccountIds(cfg);
+}
+
+async function stopGatewayRuntimeBeforeRemove(params: {
+  cfg: OpenClawConfig;
+  channel: ChatChannel;
+  accountId: string;
+  plugin: ChannelPlugin;
+  runtime: RuntimeEnv;
+}) {
+  if (!params.plugin.gateway?.startAccount && !params.plugin.gateway?.logoutAccount) {
+    return;
+  }
+  try {
+    await callGateway({
+      config: params.cfg,
+      method: "channels.stop",
+      params: {
+        channel: params.channel,
+        accountId: params.accountId,
+      },
+      mode: GATEWAY_CLIENT_MODES.BACKEND,
+      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      deviceIdentity: null,
+    });
+  } catch (error) {
+    params.runtime.log(
+      `Could not stop running ${channelLabel(params.channel)} account "${params.accountId}" before removing it: ${formatErrorMessage(error)}`,
+    );
+  }
 }
 
 export async function channelsRemoveCommand(
@@ -146,6 +178,14 @@ export async function channelsRemoveCommand(
   const resolvedAccountId =
     normalizeAccountId(accountId) ?? resolveChannelDefaultAccountId({ plugin, cfg });
   const accountKey = resolvedAccountId || DEFAULT_ACCOUNT_ID;
+
+  await stopGatewayRuntimeBeforeRemove({
+    cfg,
+    channel: resolvedChannelId,
+    accountId: accountKey,
+    plugin,
+    runtime,
+  });
 
   let next = { ...cfg };
   const prevCfg = cfg;

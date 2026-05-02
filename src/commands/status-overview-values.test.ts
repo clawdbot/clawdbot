@@ -6,7 +6,6 @@ import {
   buildStatusProbesValue,
   buildStatusSecretsValue,
   buildStatusSessionsOverviewValue,
-  countActiveStatusAgents,
 } from "./status-overview-values.ts";
 
 describe("status-overview-values", () => {
@@ -21,7 +20,6 @@ describe("status-overview-values", () => {
       ],
     };
 
-    expect(countActiveStatusAgents({ agentStatus })).toBe(1);
     expect(buildStatusAllAgentsValue({ agentStatus })).toBe(
       "3 total · 2 bootstrapping · 1 active · 3 sessions",
     );

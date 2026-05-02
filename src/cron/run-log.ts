@@ -34,10 +34,10 @@ export type CronRunLogEntry = {
   nextRunAtMs?: number;
 } & CronRunTelemetry;
 
-export type CronRunLogSortDir = "asc" | "desc";
-export type CronRunLogStatusFilter = "all" | "ok" | "error" | "skipped";
+type CronRunLogSortDir = "asc" | "desc";
+type CronRunLogStatusFilter = "all" | "ok" | "error" | "skipped";
 
-export type ReadCronRunLogPageOptions = {
+type ReadCronRunLogPageOptions = {
   limit?: number;
   offset?: number;
   jobId?: string;
@@ -49,7 +49,7 @@ export type ReadCronRunLogPageOptions = {
   sortDir?: CronRunLogSortDir;
 };
 
-export type CronRunLogPageResult = {
+type CronRunLogPageResult = {
   entries: CronRunLogEntry[];
   total: number;
   offset: number;

@@ -70,9 +70,7 @@ export function loadPersistedAuthProfileState(agentDir?: string): AuthProfileSta
   return coerceAuthProfileState(loadJsonFile(resolveAuthStatePath(agentDir)));
 }
 
-export function buildPersistedAuthProfileState(
-  store: AuthProfileState,
-): AuthProfileStateStore | null {
+function buildPersistedAuthProfileState(store: AuthProfileState): AuthProfileStateStore | null {
   const state = coerceAuthProfileState(store);
   if (!state.order && !state.lastGood && !state.usageStats) {
     return null;

@@ -20,7 +20,7 @@ import {
 } from "./media-contract.js";
 import { createIMessageSetupWizardProxy } from "./setup-core.js";
 
-export const IMESSAGE_CHANNEL = "imessage" as const;
+const IMESSAGE_CHANNEL = "imessage" as const;
 
 async function loadIMessageChannelRuntime() {
   return await import("./channel.runtime.js");
@@ -30,7 +30,7 @@ export const imessageSetupWizard = createIMessageSetupWizardProxy(
   async () => (await loadIMessageChannelRuntime()).imessageSetupWizard,
 );
 
-export const imessageConfigAdapter = createScopedChannelConfigAdapter<ResolvedIMessageAccount>({
+const imessageConfigAdapter = createScopedChannelConfigAdapter<ResolvedIMessageAccount>({
   sectionKey: IMESSAGE_CHANNEL,
   listAccountIds: listIMessageAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveIMessageAccount),

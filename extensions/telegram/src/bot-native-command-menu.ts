@@ -6,12 +6,12 @@ import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/te
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { normalizeTelegramCommandName, TELEGRAM_COMMAND_NAME_PATTERN } from "./command-config.js";
 
-export const TELEGRAM_MAX_COMMANDS = 100;
+const TELEGRAM_MAX_COMMANDS = 100;
 export const TELEGRAM_TOTAL_COMMAND_TEXT_BUDGET = 5700;
 const TELEGRAM_COMMAND_RETRY_RATIO = 0.8;
 const TELEGRAM_MIN_COMMAND_DESCRIPTION_LENGTH = 1;
 
-export type TelegramMenuCommand = {
+type TelegramMenuCommand = {
   command: string;
   description: string;
 };

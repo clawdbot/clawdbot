@@ -142,6 +142,11 @@
       "class": "default-runtime-initially",
       "risk": ["provider-sdk", "network"]
     },
+    "playwright-core": {
+      "owner": "core:browser",
+      "class": "core-runtime",
+      "risk": ["browser-automation", "cdp"]
+    },
     "pdfjs-dist": {
       "owner": "plugin:document-extract",
       "class": "plugin-runtime",
@@ -157,11 +162,6 @@
       "owner": "core:qr-setup",
       "class": "default-runtime-initially",
       "risk": ["terminal-rendering", "png-encoding"]
-    },
-    "semver": {
-      "owner": "core:package-versioning",
-      "class": "core-runtime",
-      "risk": ["version-parser"]
     },
     "sharp": {
       "owner": "plugin:media-understanding-core",

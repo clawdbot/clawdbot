@@ -1,6 +1,6 @@
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
-export type ParsedLogLine = {
+type ParsedLogLine = {
   time?: string;
   level?: string;
   subsystem?: string;

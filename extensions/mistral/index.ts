@@ -8,7 +8,7 @@ import { contributeMistralResolvedModelCompat } from "./provider-compat.js";
 import { buildMistralRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 
 const PROVIDER_ID = "mistral";
-export function buildMistralReplayPolicy() {
+function buildMistralReplayPolicy() {
   return {
     sanitizeToolCallIds: true,
     toolCallIdMode: "strict9" as const,

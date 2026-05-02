@@ -70,7 +70,7 @@ export async function safeCodexControlRequest(
   );
 }
 
-export async function safeCodexModelList(pluginConfig: unknown, limit: number) {
+async function safeCodexModelList(pluginConfig: unknown, limit: number) {
   return await safeValue(
     async () => await listCodexAppServerModels(requestOptions(pluginConfig, limit)),
   );

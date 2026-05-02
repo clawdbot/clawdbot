@@ -25,7 +25,7 @@ export type ModalInputSummary = {
   richTextPreview?: string;
 };
 
-export type SlackModalBody = {
+type SlackModalBody = {
   user?: { id?: string };
   team?: { id?: string };
   view?: {
@@ -65,8 +65,8 @@ type SlackModalEventBase = {
   };
 };
 
-export type SlackModalInteractionKind = "view_submission" | "view_closed";
-export type SlackModalEventHandlerArgs = { ack: () => Promise<void>; body: unknown };
+type SlackModalInteractionKind = "view_submission" | "view_closed";
+type SlackModalEventHandlerArgs = { ack: () => Promise<void>; body: unknown };
 export type RegisterSlackModalHandler = (
   matcher: RegExp,
   handler: (args: SlackModalEventHandlerArgs) => Promise<void>,
@@ -169,7 +169,7 @@ function resolveSlackModalEventBase(params: {
   };
 }
 
-export async function emitSlackModalLifecycleEvent(params: {
+async function emitSlackModalLifecycleEvent(params: {
   ctx: SlackMonitorContext;
   body: SlackModalBody;
   interactionType: SlackModalInteractionKind;

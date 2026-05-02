@@ -9,7 +9,7 @@ const QUEUE_DIRNAME = "session-delivery-queue";
 const FAILED_DIRNAME = "failed";
 const TMP_SWEEP_MAX_AGE_MS = 5_000;
 
-export type SessionDeliveryContext = {
+type SessionDeliveryContext = {
   channel?: string;
   to?: string;
   accountId?: string;

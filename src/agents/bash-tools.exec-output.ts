@@ -1,4 +1,4 @@
-export const EXEC_NO_OUTPUT_PLACEHOLDER = "(no output)";
+const EXEC_NO_OUTPUT_PLACEHOLDER = "(no output)";
 
 export function renderExecOutputText(value: string | undefined): string {
   return value || EXEC_NO_OUTPUT_PLACEHOLDER;

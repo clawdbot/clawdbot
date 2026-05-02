@@ -1,6 +1,6 @@
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
-export type QaCoverageScenarioSummary = {
+type QaCoverageScenarioSummary = {
   id: string;
   title: string;
   sourcePath: string;
@@ -9,18 +9,18 @@ export type QaCoverageScenarioSummary = {
   risk: string;
 };
 
-export type QaCoverageIntent = "primary" | "secondary";
+type QaCoverageIntent = "primary" | "secondary";
 
-export type QaCoverageScenarioReference = QaCoverageScenarioSummary & {
+type QaCoverageScenarioReference = QaCoverageScenarioSummary & {
   intent: QaCoverageIntent;
 };
 
-export type QaCoverageFeatureSummary = {
+type QaCoverageFeatureSummary = {
   id: string;
   scenarios: QaCoverageScenarioReference[];
 };
 
-export type QaCoverageInventory = {
+type QaCoverageInventory = {
   scenarioCount: number;
   coverageIdCount: number;
   primaryCoverageIdCount: number;

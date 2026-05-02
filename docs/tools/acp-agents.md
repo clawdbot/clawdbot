@@ -39,10 +39,15 @@ directly to existing OpenClaw channel conversations, use
 
 ## Does this work out of the box?
 
-Usually yes. Fresh installs ship the bundled `acpx` runtime plugin enabled
-by default with a plugin-local pinned `acpx` binary that OpenClaw probes
-and self-repairs immediately after the Gateway HTTP listener is live. Run
-`/acp doctor` for a readiness check.
+Yes, after installing the official ACP runtime plugin:
+
+```bash
+openclaw plugins install @openclaw/acpx
+openclaw config set plugins.entries.acpx.enabled true
+```
+
+Source checkouts can use the local `extensions/acpx` workspace plugin after
+`pnpm install`. Run `/acp doctor` for a readiness check.
 
 OpenClaw only teaches agents about ACP spawning when ACP is **truly
 usable**: ACP must be enabled, dispatch must not be disabled, the current
@@ -53,8 +58,8 @@ an unavailable backend.
 
 <AccordionGroup>
   <Accordion title="First-run gotchas">
-    - If `plugins.allow` is set, it is a restrictive plugin inventory and **must** include `acpx`; otherwise the bundled default is intentionally blocked and `/acp doctor` reports the missing allowlist entry.
-    - The bundled Codex ACP adapter is staged with the `acpx` plugin and launched locally when possible.
+    - If `plugins.allow` is set, it is a restrictive plugin inventory and **must** include `acpx`; otherwise the installed ACP backend is intentionally blocked and `/acp doctor` reports the missing allowlist entry.
+    - The Codex ACP adapter is staged with the `acpx` plugin and launched locally when possible.
     - Other target harness adapters may still be fetched on demand with `npx` the first time you use them.
     - Vendor auth still has to exist on the host for that harness.
     - If the host has no npm or network access, first-run adapter fetches fail until caches are pre-warmed or the adapter is installed another way.
@@ -86,7 +91,7 @@ should call those tools directly.
 
 ## Supported harness targets
 
-With the bundled `acpx` backend, use these harness ids as `/acp spawn <id>`
+With the `acpx` backend, use these harness ids as `/acp spawn <id>`
 or `sessions_spawn({ runtime: "acp", agentId: "<id>" })` targets:
 
 | Harness id | Typical backend                                | Notes                                                                               |
@@ -232,7 +237,7 @@ See also [Sub-agents](/tools/subagents).
 For Claude Code through ACP, the stack is:
 
 1. OpenClaw ACP session control plane.
-2. Bundled `acpx` runtime plugin.
+2. Official `@openclaw/acpx` runtime plugin.
 3. Claude ACP adapter.
 4. Claude-side runtime/session machinery.
 
@@ -279,7 +284,7 @@ Examples:
   <Accordion title="Binding rules and exclusivity">
     - `--bind here` and `--thread ...` are mutually exclusive.
     - `--bind here` only works on channels that advertise current-conversation binding; OpenClaw returns a clear unsupported message otherwise. Bindings persist across gateway restarts.
-    - On Discord, `spawnAcpSessions` is only required when OpenClaw needs to create a child thread for `--thread auto|here` — not for `--bind here`.
+    - On Discord, `spawnSessions` gates child thread creation for `--thread auto|here` — not `--bind here`.
     - If you spawn to a different ACP agent without `--cwd`, OpenClaw inherits the **target agent's** workspace by default. Missing inherited paths (`ENOENT`/`ENOTDIR`) fall back to the backend default; other access errors (e.g. `EACCES`) surface as spawn errors.
     - Gateway management commands stay local in bound conversations — `/acp ...` commands are handled by OpenClaw even when normal follow-up text routes to the bound ACP session; `/status` and `/unfocus` also stay local whenever command handling is enabled for that surface.
 
@@ -297,9 +302,9 @@ Examples:
 
     - `acp.enabled=true`
     - `acp.dispatch.enabled` is on by default (set `false` to pause automatic ACP thread dispatch; explicit `sessions_spawn({ runtime: "acp" })` calls still work).
-    - Channel-adapter ACP thread-spawn flag enabled (adapter-specific):
-      - Discord: `channels.discord.threadBindings.spawnAcpSessions=true`
-      - Telegram: `channels.telegram.threadBindings.spawnAcpSessions=true`
+    - Channel-adapter thread session spawns enabled (default: `true`):
+      - Discord: `channels.discord.threadBindings.spawnSessions=true`
+      - Telegram: `channels.telegram.threadBindings.spawnSessions=true`
 
     Thread binding support is adapter-specific. If the active channel
     adapter does not support thread bindings, OpenClaw returns a clear
@@ -592,8 +597,8 @@ Two ways to start an ACP session:
 
     - On non-thread binding surfaces, default behavior is effectively `off`.
     - Thread-bound spawn requires channel policy support:
-      - Discord: `channels.discord.threadBindings.spawnAcpSessions=true`
-      - Telegram: `channels.telegram.threadBindings.spawnAcpSessions=true`
+      - Discord: `channels.discord.threadBindings.spawnSessions=true`
+      - Telegram: `channels.telegram.threadBindings.spawnSessions=true`
     - Use `--bind here` when you want to pin the current conversation without creating a child thread.
 
   </Tab>
@@ -809,8 +814,8 @@ permission modes, see
 | `ACP is disabled by policy (acp.enabled=false)`                             | ACP globally disabled.                                                                                                 | Set `acp.enabled=true`.                                                                                                                                                  |
 | `ACP dispatch is disabled by policy (acp.dispatch.enabled=false)`           | Automatic dispatch from normal thread messages disabled.                                                               | Set `acp.dispatch.enabled=true` to resume automatic thread routing; explicit `sessions_spawn({ runtime: "acp" })` calls still work.                                      |
 | `ACP agent "<id>" is not allowed by policy`                                 | Agent not in allowlist.                                                                                                | Use allowed `agentId` or update `acp.allowedAgents`.                                                                                                                     |
-| `/acp doctor` reports backend not ready right after startup                 | Plugin dependency probe or self-repair is still running.                                                               | Wait briefly and rerun `/acp doctor`; if it stays unhealthy, inspect the backend install error and plugin allow/deny policy.                                             |
-| Harness command not found                                                   | Adapter CLI is not installed, staged plugin deps are missing, or first-run `npx` fetch failed for a non-Codex adapter. | Run `/acp doctor`, repair plugin dependencies, install/prewarm the adapter on the Gateway host, or configure the acpx agent command explicitly.                          |
+| `/acp doctor` reports backend not ready right after startup                 | Backend plugin is missing, disabled, blocked by allow/deny policy, or its configured executable is unavailable.        | Install/enable the backend plugin, rerun `/acp doctor`, and inspect the backend install or policy error if it stays unhealthy.                                           |
+| Harness command not found                                                   | Adapter CLI is not installed, the external plugin is missing, or first-run `npx` fetch failed for a non-Codex adapter. | Run `/acp doctor`, install/prewarm the adapter on the Gateway host, or configure the acpx agent command explicitly.                                                      |
 | Model-not-found from the harness                                            | Model id is valid for another provider/harness but not this ACP target.                                                | Use a model listed by that harness, configure the model in the harness, or omit the override.                                                                            |
 | Vendor auth error from the harness                                          | OpenClaw is healthy, but the target CLI/provider is not logged in.                                                     | Log in or provide the required provider key on the Gateway host environment.                                                                                             |
 | `Unable to resolve session target: ...`                                     | Bad key/id/label token.                                                                                                | Run `/acp sessions`, copy exact key/label, retry.                                                                                                                        |

@@ -28,6 +28,7 @@ const diagnosticMocks = vi.hoisted(() => ({
   logMessageQueued: vi.fn(),
   logMessageProcessed: vi.fn(),
   logSessionStateChange: vi.fn(),
+  markDiagnosticSessionProgress: vi.fn(),
 }));
 const hookMocks = vi.hoisted(() => ({
   registry: {
@@ -177,6 +178,7 @@ vi.mock("../../logging/diagnostic.js", () => ({
   logMessageQueued: diagnosticMocks.logMessageQueued,
   logMessageProcessed: diagnosticMocks.logMessageProcessed,
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
+  markDiagnosticSessionProgress: diagnosticMocks.markDiagnosticSessionProgress,
 }));
 vi.mock("../../config/sessions/thread-info.js", () => ({
   parseSessionThreadInfo: (sessionKey: string | undefined) =>

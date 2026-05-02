@@ -18,7 +18,7 @@ import {
   checkSilkWasmAvailable,
 } from "./platform.js";
 
-export interface DiagnosticReport {
+interface DiagnosticReport {
   platform: string;
   arch: string;
   nodeVersion: string;

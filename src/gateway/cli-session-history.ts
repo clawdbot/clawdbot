@@ -10,6 +10,8 @@ import {
 } from "./cli-session-history.claude.js";
 import { mergeImportedChatHistoryMessages } from "./cli-session-history.merge.js";
 
+const ANTHROPIC_PROVIDER = "anthropic";
+
 export {
   mergeImportedChatHistoryMessages,
   readClaudeCliFallbackSeed,
@@ -34,6 +36,7 @@ export function augmentChatHistoryWithCliSessionImports(params: {
   if (
     normalizedProvider &&
     normalizedProvider !== CLAUDE_CLI_PROVIDER &&
+    normalizedProvider !== ANTHROPIC_PROVIDER &&
     params.localMessages.length > 0
   ) {
     return params.localMessages;

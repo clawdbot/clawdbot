@@ -8,7 +8,7 @@ import {
   type FixedWindowRateLimiter,
 } from "openclaw/plugin-sdk/webhook-ingress";
 
-export type DmAuthorizationResult =
+type DmAuthorizationResult =
   | { allowed: true }
   | { allowed: false; reason: "disabled" | "allowlist-empty" | "not-allowlisted" };
 

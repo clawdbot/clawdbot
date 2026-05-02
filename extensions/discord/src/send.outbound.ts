@@ -2,7 +2,7 @@ import { ChannelType } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import type { PollInput } from "openclaw/plugin-sdk/media-runtime";
+import type { OutboundMediaAccess, PollInput } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { resolveChunkMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
@@ -35,10 +35,7 @@ type DiscordSendOpts = {
   accountId?: string;
   mediaUrl?: string;
   filename?: string;
-  mediaAccess?: {
-    localRoots?: readonly string[];
-    readFile?: (filePath: string) => Promise<Buffer>;
-  };
+  mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   verbose?: boolean;
@@ -155,6 +152,7 @@ export async function sendMessageDiscord(
   const textWithTables = convertMarkdownTables(text ?? "", effectiveTableMode);
   const textWithMentions = rewriteDiscordKnownMentions(textWithTables, {
     accountId: accountInfo.accountId,
+    mentionAliases: accountInfo.config.mentionAliases,
   });
   const { token, rest, request } = createDiscordClient({ ...opts, cfg });
   const recipient = await parseAndResolveRecipient(to, cfg, opts.accountId);
@@ -224,6 +222,7 @@ export async function sendMessageDiscord(
           mediaCaption ?? "",
           opts.mediaUrl,
           opts.filename,
+          opts.mediaAccess,
           opts.mediaLocalRoots,
           opts.mediaReadFile,
           mediaMaxBytes,
@@ -291,6 +290,7 @@ export async function sendMessageDiscord(
         textWithMentions,
         opts.mediaUrl,
         opts.filename,
+        opts.mediaAccess,
         opts.mediaLocalRoots,
         opts.mediaReadFile,
         mediaMaxBytes,
@@ -406,6 +406,7 @@ async function resolveDiscordStructuredSendContext(
   const rewrittenContent = content
     ? rewriteDiscordKnownMentions(content, {
         accountId: accountInfo.accountId,
+        mentionAliases: accountInfo.config.mentionAliases,
       })
     : undefined;
   return { rest, request, channelId, rewrittenContent };

@@ -84,7 +84,10 @@ export async function runMediaUnderstandingFile(
   const ctx = buildFileContext(params);
   const attachments = normalizeMediaAttachments(ctx);
   if (attachments.length === 0) {
-    return { text: undefined };
+    return {
+      text: undefined,
+      decision: { capability: params.capability, outcome: "no-attachment", attachments: [] },
+    };
   }
   const config = cfg.tools?.media?.[params.capability];
   if (config?.enabled === false) {
@@ -93,6 +96,7 @@ export async function runMediaUnderstandingFile(
       provider: undefined,
       model: undefined,
       output: undefined,
+      decision: { capability: params.capability, outcome: "disabled", attachments: [] },
     };
   }
 
@@ -124,12 +128,16 @@ export async function runMediaUnderstandingFile(
       (entry) => entry.kind === KIND_BY_CAPABILITY[params.capability],
     );
     const text = output?.text?.trim();
-    return {
+    const fileResult: RunMediaUnderstandingFileResult = {
       text: text || undefined,
       provider: output?.provider,
       model: output?.model,
       output,
     };
+    if (result.decision) {
+      fileResult.decision = result.decision;
+    }
+    return fileResult;
   } finally {
     await cache.cleanup();
   }
@@ -171,7 +179,7 @@ export async function describeVideoFile(
 
 export async function transcribeAudioFile(
   params: TranscribeAudioFileParams,
-): Promise<{ text: string | undefined }> {
+): Promise<RunMediaUnderstandingFileResult> {
   const cfg =
     params.language || params.prompt
       ? {
@@ -192,5 +200,5 @@ export async function transcribeAudioFile(
         }
       : params.cfg;
   const result = await runMediaUnderstandingFile({ ...params, cfg, capability: "audio" });
-  return { text: result.text };
+  return result;
 }

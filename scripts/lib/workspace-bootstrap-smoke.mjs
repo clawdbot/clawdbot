@@ -23,7 +23,7 @@ const REQUIRED_BOOTSTRAP_WORKSPACE_FILES = [
   "BOOTSTRAP.md",
 ];
 
-export const WORKSPACE_BOOTSTRAP_SMOKE_TIMEOUT_MS = 15_000;
+const WORKSPACE_BOOTSTRAP_SMOKE_TIMEOUT_MS = 15_000;
 const SAFE_UNIX_SMOKE_PATH = "/usr/bin:/bin";
 
 export function createWorkspaceBootstrapSmokeEnv(env, homeDir, overrides = {}) {

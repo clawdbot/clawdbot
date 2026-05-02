@@ -5,11 +5,10 @@ import type {
   OpenClawConfig,
   SecretInput,
 } from "./runtime-api.js";
-export type { ContextVisibilityMode, DmPolicy, GroupPolicy };
 
 export type ReplyToMode = "off" | "first" | "all" | "batched";
 
-export type MatrixDmConfig = {
+type MatrixDmConfig = {
   /** If false, ignore all incoming Matrix DMs. Default: true. */
   enabled?: boolean;
   /** Direct message access policy (default: pairing). */
@@ -50,7 +49,7 @@ export type MatrixRoomConfig = {
   systemPrompt?: string;
 };
 
-export type MatrixActionConfig = {
+type MatrixActionConfig = {
   reactions?: boolean;
   messages?: boolean;
   pins?: boolean;
@@ -60,15 +59,19 @@ export type MatrixActionConfig = {
   verification?: boolean;
 };
 
-export type MatrixThreadBindingsConfig = {
+type MatrixThreadBindingsConfig = {
   enabled?: boolean;
   idleHours?: number;
   maxAgeHours?: number;
+  spawnSessions?: boolean;
+  defaultSpawnContext?: "isolated" | "fork";
+  /** @deprecated Use spawnSessions instead. */
   spawnSubagentSessions?: boolean;
+  /** @deprecated Use spawnSessions instead. */
   spawnAcpSessions?: boolean;
 };
 
-export type MatrixExecApprovalTarget = "dm" | "channel" | "both";
+type MatrixExecApprovalTarget = "dm" | "channel" | "both";
 
 export type MatrixExecApprovalConfig = {
   /** If true, deliver exec approvals through Matrix-native prompts. */
@@ -94,7 +97,7 @@ export type MatrixStreamingConfig = {
   };
 };
 
-export type MatrixNetworkConfig = {
+type MatrixNetworkConfig = {
   /** Dangerous opt-in for trusted private/internal Matrix homeservers. */
   dangerouslyAllowPrivateNetwork?: boolean;
 };

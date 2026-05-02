@@ -89,8 +89,8 @@ jobs:
           WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
-          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]]; then
-            echo "Release checks must be dispatched from main or release/YYYY.M.D so workflow logic and secrets stay controlled." >&2
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release-ci/[0-9a-f]{12}-[0-9]+$ ]]; then
+            echo "Release checks must be dispatched from main, release/YYYY.M.D, or a Full Release Validation release-ci/<sha>-<timestamp> ref so workflow logic and secrets stay controlled." >&2
             exit 1
           fi
 
@@ -303,7 +303,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: release-package-under-test
-          path: .artifacts/docker-e2e-package/openclaw-current.tgz
+          path: |
+            .artifacts/docker-e2e-package/openclaw-current.tgz
+            .artifacts/docker-e2e-package/package-candidate.json
           retention-days: 14
           if-no-files-found: error
 
@@ -331,6 +333,7 @@ jobs:
       candidate_file_name: openclaw-current.tgz
       candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
       candidate_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
+      openai_model: openai/gpt-5.5
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -440,7 +443,9 @@ jobs:
       artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
       package_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}
       suite_profile: custom
-      docker_lanes: bundled-channel-deps-compat plugins-offline
+      docker_lanes: doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor plugins-offline plugin-update
+      published_upgrade_survivor_baselines: release-history
+      published_upgrade_survivor_scenarios: reported-issues
       telegram_mode: mock-openai
       telegram_scenarios: telegram-help-command,telegram-commands-command,telegram-tools-compact-command,telegram-whoami-command,telegram-context-command,telegram-mention-gating
     secrets:

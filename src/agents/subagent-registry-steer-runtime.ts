@@ -1,6 +1,6 @@
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-export type ReplaceSubagentRunAfterSteerParams = {
+type ReplaceSubagentRunAfterSteerParams = {
   previousRunId: string;
   nextRunId: string;
   fallback?: SubagentRunRecord;

@@ -217,6 +217,74 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("A\n[tool calls omitted]\n[tool calls omitted]\nB")).toBe("A\nB");
   });
 
+  it("strips legacy uppercase TOOL_CALL blocks before user-facing delivery", () => {
+    const input = [
+      "Before",
+      '[TOOL_CALL]{tool => "web_search", args => {"query":"NET stock price"}}[/TOOL_CALL]',
+      "After",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Before\n\nAfter");
+  });
+
+  it("strips legacy uppercase TOOL_RESULT blocks before user-facing delivery", () => {
+    const input = ["Before", '[TOOL_RESULT]{"output":"secret result"}[/TOOL_RESULT]', "After"].join(
+      "\n",
+    );
+
+    expect(sanitizeUserFacingText(input)).toBe("Before\n\nAfter");
+  });
+
+  it("strips MiniMax plain-text tool calls before user-facing delivery", () => {
+    const input = [
+      "Let me check that.",
+      '<minimax:tool_call><invoke name="exec">',
+      '<parameter name="cmd">ls</parameter>',
+      "</invoke></minimax:tool_call>",
+      "Done.",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Let me check that.\n\nDone.");
+  });
+
+  it("preserves MiniMax tool-call XML examples in user-facing code spans", () => {
+    const inline = 'Use `<minimax:tool_call><invoke name="exec">x</invoke></minimax:tool_call>`.';
+    const fenced = [
+      "Example:",
+      "```xml",
+      '<minimax:tool_call><invoke name="exec">x</invoke></minimax:tool_call>',
+      "```",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(inline)).toBe(inline);
+    expect(sanitizeUserFacingText(fenced)).toBe(fenced);
+  });
+
+  it("strips raw XML tool-call blocks before user-facing delivery", () => {
+    const input = [
+      "Before",
+      '<tool_call>{"name":"read","arguments":{"file_path":"secret.md"}}</tool_call>',
+      "After",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Before\n\nAfter");
+  });
+
+  it("strips plural XML function-call wrappers before user-facing delivery", () => {
+    const input = [
+      "Before",
+      '<function_calls><invoke name="find"><parameter name="query">secret</parameter></invoke></function_calls>',
+      "After",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Before\n\nAfter");
+  });
+
+  it("preserves literal tool-call tag examples in user-facing prose", () => {
+    const input = "Use `<tool_call>` to describe the XML tag in docs.";
+    expect(sanitizeUserFacingText(input)).toBe(input);
+  });
+
   it("keeps ordinary inline mentions of the replay placeholder", () => {
     expect(sanitizeUserFacingText("What does [tool calls omitted] mean?")).toBe(
       "What does [tool calls omitted] mean?",

@@ -9,7 +9,7 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function decodeJsonPointerToken(token: string): string {
+function decodeJsonPointerToken(token: string): string {
   return token.replace(/~1/g, "/").replace(/~0/g, "~");
 }
 

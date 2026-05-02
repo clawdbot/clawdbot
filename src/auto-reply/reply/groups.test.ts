@@ -87,6 +87,19 @@ describe("group runtime loading", () => {
         silentToken: "NO_REPLY",
       }),
     ).toContain('reply with exactly "NO_REPLY"');
+
+    const toolOnlyContext = groups.buildDirectChatContext({
+      sessionCtx: { ChatType: "direct", Provider: "telegram" },
+      sourceReplyDeliveryMode: "message_tool_only",
+      silentReplyPolicy: "allow",
+      silentReplyRewrite: true,
+      silentToken: "NO_REPLY",
+    });
+    expect(toolOnlyContext).toContain("Normal final replies are private");
+    expect(toolOnlyContext).toContain("message tool with action=send");
+    expect(toolOnlyContext).toContain("do not call message(action=send)");
+    expect(toolOnlyContext).not.toContain("NO_REPLY");
+    expect(toolOnlyContext).not.toContain("Your replies are automatically sent");
   });
 
   it("gates group silent-token instructions on the resolved silent reply policy", async () => {

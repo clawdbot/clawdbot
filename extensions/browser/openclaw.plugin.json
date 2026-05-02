@@ -5,6 +5,9 @@
     "onStartup": true,
     "onConfigPaths": ["browser"]
   },
+  "contracts": {
+    "tools": ["browser"]
+  },
   "commandAliases": [{ "name": "browser" }],
   "skills": ["./skills"],
   "configSchema": {

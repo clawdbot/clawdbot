@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
-export type OsSummary = {
+type OsSummary = {
   platform: NodeJS.Platform;
   arch: string;
   release: string;

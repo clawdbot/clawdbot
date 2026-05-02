@@ -4,13 +4,13 @@ export type UsageQueryTerm = {
   raw: string;
 };
 
-export type UsageQueryResult<TSession> = {
+type UsageQueryResult<TSession> = {
   sessions: TSession[];
   warnings: string[];
 };
 
 // Minimal shape required for query filtering. The usage view's real session type contains more fields.
-export type UsageSessionQueryTarget = {
+type UsageSessionQueryTarget = {
   key: string;
   label?: string;
   sessionId?: string;

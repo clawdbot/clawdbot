@@ -28,7 +28,7 @@ type MatrixQaHarnessManifest = {
   dataDir: string;
 };
 
-export type MatrixQaHarnessFiles = {
+type MatrixQaHarnessFiles = {
   outputDir: string;
   composeFile: string;
   manifestPath: string;
@@ -38,7 +38,7 @@ export type MatrixQaHarnessFiles = {
   registrationToken: string;
 };
 
-export type MatrixQaHarness = MatrixQaHarnessFiles & {
+type MatrixQaHarness = MatrixQaHarnessFiles & {
   baseUrl: string;
   restartService(): Promise<void>;
   stopCommand: string;

@@ -4,7 +4,7 @@ import { formatDiscordUserTag } from "../monitor/format.js";
 
 const SPEAKER_CONTEXT_CACHE_TTL_MS = 60_000;
 
-export type VoiceSpeakerIdentity = {
+type VoiceSpeakerIdentity = {
   id: string;
   label: string;
   name?: string;
@@ -12,7 +12,7 @@ export type VoiceSpeakerIdentity = {
   memberRoleIds: string[];
 };
 
-export type VoiceSpeakerContext = Omit<VoiceSpeakerIdentity, "memberRoleIds"> & {
+type VoiceSpeakerContext = Omit<VoiceSpeakerIdentity, "memberRoleIds"> & {
   senderIsOwner: boolean;
 };
 

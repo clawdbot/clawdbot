@@ -36,7 +36,7 @@ describe("command-path-policy", () => {
     expectResolvedPolicy(["status"], {
       routeConfigGuard: "when-suppressed",
       loadPlugins: "never",
-      pluginRegistry: { scope: "channels", installBundledRuntimeDeps: false },
+      pluginRegistry: { scope: "channels" },
       ensureCliPath: false,
       networkProxy: "bypass",
     });
@@ -77,12 +77,12 @@ describe("command-path-policy", () => {
     });
     expectResolvedPolicy(["channels", "remove"], {
       loadPlugins: "always",
-      pluginRegistry: { scope: "configured-channels", installBundledRuntimeDeps: false },
+      pluginRegistry: { scope: "configured-channels" },
       networkProxy: "bypass",
     });
     expectResolvedPolicy(["channels", "resolve"], {
       loadPlugins: "always",
-      pluginRegistry: { scope: "configured-channels", installBundledRuntimeDeps: false },
+      pluginRegistry: { scope: "configured-channels" },
       networkProxy: "bypass",
     });
   });
@@ -90,7 +90,7 @@ describe("command-path-policy", () => {
   it("keeps config-only agent commands on config-only startup", () => {
     expectResolvedPolicy(["agent"], {
       loadPlugins: expect.any(Function),
-      pluginRegistry: { scope: "all", installBundledRuntimeDeps: true },
+      pluginRegistry: { scope: "all" },
       networkProxy: expect.any(Function),
     });
 
@@ -150,6 +150,9 @@ describe("command-path-policy", () => {
   it("defaults unknown command paths to network proxy routing", () => {
     expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "googlemeet", "login"])).toBe(
       "default",
+    );
+    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "tool", "image_generate"])).toBe(
+      "bypass",
     );
     expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "tools", "effective"])).toBe("bypass");
   });

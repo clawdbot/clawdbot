@@ -74,7 +74,7 @@ function touchMediaGenerationTaskRunContext(handle: MediaGenerationTaskHandle) {
   });
 }
 
-export function createMediaGenerationTaskRun(params: {
+function createMediaGenerationTaskRun(params: {
   sessionKey?: string;
   requesterOrigin?: DeliveryContext;
   prompt: string;
@@ -128,7 +128,7 @@ export function createMediaGenerationTaskRun(params: {
   }
 }
 
-export function recordMediaGenerationTaskProgress(params: {
+function recordMediaGenerationTaskProgress(params: {
   handle: MediaGenerationTaskHandle | null;
   progressSummary: string;
   eventSummary?: string;
@@ -171,7 +171,7 @@ export async function withMediaGenerationTaskKeepalive<T>(params: {
   }
 }
 
-export function completeMediaGenerationTaskRun(params: {
+function completeMediaGenerationTaskRun(params: {
   handle: MediaGenerationTaskHandle | null;
   provider: string;
   model: string;
@@ -199,7 +199,7 @@ export function completeMediaGenerationTaskRun(params: {
   }
 }
 
-export function failMediaGenerationTaskRun(params: {
+function failMediaGenerationTaskRun(params: {
   handle: MediaGenerationTaskHandle | null;
   error: unknown;
   progressSummary: string;
@@ -292,7 +292,7 @@ async function maybeDeliverMediaGenerationResultDirectly(params: {
   return true;
 }
 
-export async function wakeMediaGenerationTaskCompletion(params: {
+async function wakeMediaGenerationTaskCompletion(params: {
   config?: OpenClawConfig;
   handle: MediaGenerationTaskHandle | null;
   status: "ok" | "error";

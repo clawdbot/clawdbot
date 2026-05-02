@@ -4,22 +4,22 @@ import {
   buildXaiResponsesToolBody,
   extractXaiWebSearchContent,
   resolveXaiResponseTextCitationsAndInline,
-  XAI_RESPONSES_ENDPOINT,
+  resolveXaiResponsesEndpoint,
 } from "./responses-tool-shared.js";
 import { isRecord } from "./tool-config-shared.js";
 import type { XaiWebSearchResponse } from "./web-search-response.types.js";
 export { extractXaiWebSearchContent } from "./responses-tool-shared.js";
 export type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
-export const XAI_WEB_SEARCH_ENDPOINT = XAI_RESPONSES_ENDPOINT;
-export const XAI_DEFAULT_WEB_SEARCH_MODEL = "grok-4-1-fast";
+const XAI_DEFAULT_WEB_SEARCH_MODEL = "grok-4-1-fast";
 
 type XaiWebSearchConfig = Record<string, unknown> & {
+  baseUrl?: unknown;
   model?: unknown;
   inlineCitations?: unknown;
 };
 
-export type XaiWebSearchResult = {
+type XaiWebSearchResult = {
   content: string;
   citations: string[];
   inlineCitations?: XaiWebSearchResponse["inline_citations"];
@@ -51,7 +51,7 @@ export function buildXaiWebSearchPayload(params: {
   };
 }
 
-export function resolveXaiSearchConfig(searchConfig?: Record<string, unknown>): XaiWebSearchConfig {
+function resolveXaiSearchConfig(searchConfig?: Record<string, unknown>): XaiWebSearchConfig {
   return (
     (isRecord(searchConfig?.grok) ? (searchConfig.grok as XaiWebSearchConfig) : undefined) ?? {}
   );
@@ -64,20 +64,42 @@ export function resolveXaiWebSearchModel(searchConfig?: Record<string, unknown>)
     : XAI_DEFAULT_WEB_SEARCH_MODEL;
 }
 
+export function resolveXaiWebSearchEndpoint(searchConfig?: Record<string, unknown>): string {
+  return resolveXaiResponsesEndpoint(resolveXaiSearchConfig(searchConfig).baseUrl);
+}
+
 export function resolveXaiInlineCitations(searchConfig?: Record<string, unknown>): boolean {
   return resolveXaiSearchConfig(searchConfig).inlineCitations === true;
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === "AbortError" || error.message === "This operation was aborted")
+  );
+}
+
+export function wrapXaiWebSearchError(error: unknown, timeoutSeconds: number): never {
+  if (isAbortError(error)) {
+    throw new Error(
+      `xAI web search timed out after ${timeoutSeconds}s. Increase tools.web.search.timeoutSeconds if queries are complex.`,
+      { cause: error },
+    );
+  }
+  throw error;
 }
 
 export async function requestXaiWebSearch(params: {
   query: string;
   model: string;
   apiKey: string;
+  endpoint: string;
   timeoutSeconds: number;
   inlineCitations: boolean;
 }): Promise<XaiWebSearchResult> {
   return await postTrustedWebToolsJson(
     {
-      url: XAI_WEB_SEARCH_ENDPOINT,
+      url: params.endpoint,
       timeoutSeconds: params.timeoutSeconds,
       apiKey: params.apiKey,
       body: buildXaiResponsesToolBody({
@@ -91,5 +113,5 @@ export async function requestXaiWebSearch(params: {
       const data = (await response.json()) as XaiWebSearchResponse;
       return resolveXaiResponseTextCitationsAndInline(data, params.inlineCitations);
     },
-  );
+  ).catch((error: unknown) => wrapXaiWebSearchError(error, params.timeoutSeconds));
 }

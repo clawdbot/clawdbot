@@ -24,6 +24,42 @@ async function expectMinimaxUsageResult(params: {
 describe("fetchMinimaxUsage", () => {
   it.each([
     {
+      name: "uses the CN usage endpoint by default",
+      baseUrl: undefined,
+      expectedUrl: "https://api.minimaxi.com/v1/token_plan/remains",
+    },
+    {
+      name: "derives the global usage endpoint from an Anthropic-compatible base URL",
+      baseUrl: "https://api.minimax.io/anthropic",
+      expectedUrl: "https://api.minimax.io/v1/token_plan/remains",
+    },
+    {
+      name: "derives the usage endpoint from a configured origin",
+      baseUrl: "https://api.minimaxi.com",
+      expectedUrl: "https://api.minimaxi.com/v1/token_plan/remains",
+    },
+    {
+      name: "falls back to CN when the configured base URL is malformed",
+      baseUrl: "not a url",
+      expectedUrl: "https://api.minimaxi.com/v1/token_plan/remains",
+    },
+  ])("$name", async ({ baseUrl, expectedUrl }) => {
+    const mockFetch = createProviderUsageFetch(async (url) => {
+      expect(url).toBe(expectedUrl);
+      return makeResponse(200, {
+        data: {
+          current_interval_total_count: 100,
+          current_interval_usage_count: 98,
+        },
+      });
+    });
+
+    const result = await fetchMinimaxUsage("key", 5000, mockFetch, { baseUrl });
+    expect(result.windows).toEqual([{ label: "5h", usedPercent: 2, resetAt: undefined }]);
+  });
+
+  it.each([
+    {
       name: "returns HTTP errors for failed requests",
       response: () => makeResponse(502, "bad gateway"),
       expectedError: "HTTP 502",

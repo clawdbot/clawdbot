@@ -9,7 +9,7 @@ import {
 const MATTERMOST_STREAM_MAX_CHARS = 4000;
 const DEFAULT_THROTTLE_MS = 1000;
 
-export type MattermostDraftStream = {
+type MattermostDraftStream = {
   update: (text: string) => void;
   flush: () => Promise<void>;
   postId: () => string | undefined;
@@ -20,7 +20,7 @@ export type MattermostDraftStream = {
   forceNewMessage: () => void;
 };
 
-export function normalizeMattermostDraftText(text: string, maxChars: number): string {
+function normalizeMattermostDraftText(text: string, maxChars: number): string {
   const trimmed = text.trim();
   if (!trimmed) {
     return "";

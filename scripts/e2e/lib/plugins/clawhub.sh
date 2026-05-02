@@ -49,6 +49,12 @@ run_plugins_clawhub_scenario() {
 
     node scripts/e2e/lib/plugins/assertions.mjs clawhub-installed
 
+    node "$OPENCLAW_ENTRY" plugins update "$CLAWHUB_PLUGIN_ID" >/tmp/plugins-clawhub-update.log 2>&1
+    node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins-clawhub-updated.json
+    node "$OPENCLAW_ENTRY" plugins inspect "$CLAWHUB_PLUGIN_ID" --json >/tmp/plugins-clawhub-updated-inspect.json
+
+    node scripts/e2e/lib/plugins/assertions.mjs clawhub-updated
+
     run_logged uninstall-clawhub node "$OPENCLAW_ENTRY" plugins uninstall "$CLAWHUB_PLUGIN_SPEC" --force
     node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins-clawhub-uninstalled.json
 

@@ -20,6 +20,7 @@ for (const providerId of [
   "exa",
   "firecrawl",
   "google",
+  "minimax",
   "moonshot",
   "perplexity",
   "tavily",

@@ -4,7 +4,7 @@ import type { PairingChannel } from "../pairing/pairing-store.types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 
-export function resolveConfiguredCommandOwners(cfg: OpenClawConfig): string[] {
+function resolveConfiguredCommandOwners(cfg: OpenClawConfig): string[] {
   const owners = cfg.commands?.ownerAllowFrom;
   if (!Array.isArray(owners)) {
     return [];

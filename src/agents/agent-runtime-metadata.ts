@@ -11,7 +11,7 @@ import {
   type EmbeddedAgentRuntime,
 } from "./pi-embedded-runner/runtime.js";
 
-export type AgentRuntimeMetadata = {
+type AgentRuntimeMetadata = {
   id: string;
   fallback?: "pi" | "none";
   source: "env" | "agent" | "defaults" | "implicit";

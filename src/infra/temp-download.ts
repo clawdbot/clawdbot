@@ -8,7 +8,7 @@ const logger = createSubsystemLogger("infra:temp-download");
 
 export { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
-export type TempDownloadTarget = {
+type TempDownloadTarget = {
   dir: string;
   path: string;
   cleanup: () => Promise<void>;

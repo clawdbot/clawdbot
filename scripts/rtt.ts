@@ -10,6 +10,7 @@ import {
   buildRunId,
   createHarnessEnv,
   readTelegramSummary,
+  resolveMainVersion,
   resolvePublishedVersion,
   runHarness,
   validateOpenClawPackageSpec,
@@ -20,12 +21,15 @@ import {
 const DEFAULT_SCENARIOS = ["telegram-mentioned-message-reply"];
 const DEFAULT_PROVIDER_MODE = "mock-openai" satisfies RttProviderMode;
 const DEFAULT_TIMEOUT_MS = 180_000;
+const DEFAULT_SAMPLES = 20;
+const DEFAULT_SAMPLE_TIMEOUT_MS = 30_000;
 
 function usage() {
   return [
-    "Usage: pnpm rtt <openclaw@spec> [--provider mock-openai|live-frontier] [--runs N] [--timeout-ms N] [--harness-root PATH] [--output PATH]",
+    "Usage: pnpm rtt <openclaw@spec> [--package-tgz PATH] [--provider mock-openai|live-frontier] [--runs N] [--samples N] [--sample-timeout-ms N] [--timeout-ms N] [--harness-root PATH] [--output PATH]",
     "",
     "Examples:",
+    "  pnpm rtt openclaw@main --package-tgz .artifacts/package/openclaw.tgz",
     "  pnpm rtt openclaw@beta",
     "  pnpm rtt openclaw@2026.4.30",
     "  pnpm rtt openclaw@latest --provider live-frontier",
@@ -59,8 +63,11 @@ function resolveHome(input: string) {
 
 function parseArgs(argv: string[]) {
   let spec: string | undefined;
+  let packageTgz: string | undefined;
   let providerMode = DEFAULT_PROVIDER_MODE;
   let runs = 1;
+  let samples = DEFAULT_SAMPLES;
+  let sampleTimeoutMs = DEFAULT_SAMPLE_TIMEOUT_MS;
   let harnessRoot = "~/Developer/clawdbot";
   let output = "runs";
   let timeoutMs = DEFAULT_TIMEOUT_MS;
@@ -75,8 +82,24 @@ function parseArgs(argv: string[]) {
       providerMode = parseProviderMode(argv[++index] ?? "");
       continue;
     }
+    if (arg === "--package-tgz") {
+      const value = argv[++index] ?? "";
+      if (!value.trim()) {
+        throw new Error("--package-tgz requires a path.");
+      }
+      packageTgz = path.resolve(resolveHome(value));
+      continue;
+    }
     if (arg === "--runs") {
       runs = parsePositiveInt("--runs", argv[++index] ?? "");
+      continue;
+    }
+    if (arg === "--samples") {
+      samples = parsePositiveInt("--samples", argv[++index] ?? "");
+      continue;
+    }
+    if (arg === "--sample-timeout-ms") {
+      sampleTimeoutMs = parsePositiveInt("--sample-timeout-ms", argv[++index] ?? "");
       continue;
     }
     if (arg === "--harness-root") {
@@ -113,8 +136,11 @@ function parseArgs(argv: string[]) {
   return {
     spec: validateOpenClawPackageSpec(spec),
     options: {
+      packageTgz,
       providerMode,
       runs,
+      samples,
+      sampleTimeoutMs,
       harnessRoot: path.resolve(resolveHome(harnessRoot)),
       output: path.resolve(resolveHome(output)),
       scenarios: DEFAULT_SCENARIOS,
@@ -138,8 +164,11 @@ async function runOne(params: {
   const startedAt = new Date();
   const env = createHarnessEnv({
     baseEnv: process.env,
+    packageTgz: params.options.packageTgz,
     providerMode: params.options.providerMode,
     rawOutputDir,
+    samples: params.options.samples,
+    sampleTimeoutMs: params.options.sampleTimeoutMs,
     scenarios: params.options.scenarios,
     spec: params.spec,
     timeoutMs: params.options.timeoutMs,
@@ -189,7 +218,13 @@ async function main() {
   assertRequiredEnv(process.env);
   await assertHarnessRoot(options.harnessRoot);
   await assertDockerAvailable();
-  const version = await resolvePublishedVersion(spec);
+  if (spec === "openclaw@main" && !options.packageTgz) {
+    throw new Error("openclaw@main requires --package-tgz.");
+  }
+  const version =
+    spec === "openclaw@main"
+      ? await resolveMainVersion(options.harnessRoot)
+      : await resolvePublishedVersion(spec);
   let failed = false;
   for (let index = 0; index < options.runs; index += 1) {
     const run = await runOne({ index, options, spec, version });

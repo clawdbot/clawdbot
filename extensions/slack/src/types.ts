@@ -41,6 +41,7 @@ export type SlackMessageEvent = {
   parent_user_id?: string;
   channel: string;
   channel_type?: "im" | "mpim" | "channel" | "group";
+  blocks?: unknown[];
   files?: SlackFile[];
   attachments?: SlackAttachment[];
 };

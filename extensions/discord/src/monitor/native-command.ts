@@ -72,6 +72,7 @@ import {
 import { createNativeCommandDefinition, readDiscordCommandArgs } from "./native-command.args.js";
 import {
   buildDiscordCommandOptions,
+  truncateDiscordCommandDescriptionLocalizations,
   truncateDiscordCommandDescription,
 } from "./native-command.options.js";
 import { nativeCommandRuntime } from "./native-command.runtime.js";
@@ -144,6 +145,10 @@ export function createDiscordNativeCommand(params: {
     name = command.name;
     description = truncateDiscordCommandDescription({
       value: command.description,
+      label: `command:${command.name}`,
+    });
+    descriptionLocalizations = truncateDiscordCommandDescriptionLocalizations({
+      value: command.descriptionLocalizations,
       label: `command:${command.name}`,
     });
     defer = false;
@@ -384,6 +389,8 @@ async function dispatchDiscordCommandInteraction(params: {
       },
       allowNameMatching,
       useAccessGroups,
+      cfg,
+      rest: interaction.client.rest,
     });
     commandAuthorized = dmAccess.commandAuthorized;
     if (dmAccess.decision !== "allow") {

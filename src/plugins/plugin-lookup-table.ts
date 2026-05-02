@@ -1,8 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  resolveChannelPluginIdsFromRegistry,
-  resolveConfiguredDeferredChannelPluginIdsFromRegistry,
-  resolveGatewayStartupPluginIdsFromRegistry,
+  resolveGatewayStartupPluginPlanFromRegistry,
+  type GatewayStartupPluginPlan,
 } from "./channel-plugin-ids.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import {
@@ -15,11 +14,7 @@ import type { PluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
 
 export type PluginLookUpTableOwnerMaps = PluginMetadataSnapshotOwnerMaps;
 
-export type PluginLookUpTableStartupPlan = {
-  channelPluginIds: readonly string[];
-  configuredDeferredChannelPluginIds: readonly string[];
-  pluginIds: readonly string[];
-};
+export type PluginLookUpTableStartupPlan = GatewayStartupPluginPlan;
 
 export type PluginLookUpTableMetrics = {
   registrySnapshotMs: number;
@@ -59,6 +54,7 @@ export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): Plug
     isPluginMetadataSnapshotCompatible({
       snapshot: params.metadataSnapshot,
       config: requestedSnapshotConfig,
+      env: params.env,
       workspaceDir: params.workspaceDir,
       index: params.index,
     })
@@ -71,14 +67,7 @@ export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): Plug
         });
   const { index, manifestRegistry } = metadataSnapshot;
   const startupPlanStartedAt = performance.now();
-  const channelPluginIds = resolveChannelPluginIdsFromRegistry({ manifestRegistry });
-  const configuredDeferredChannelPluginIds = resolveConfiguredDeferredChannelPluginIdsFromRegistry({
-    config: params.config,
-    env: params.env,
-    index,
-    manifestRegistry,
-  });
-  const pluginIds = resolveGatewayStartupPluginIdsFromRegistry({
+  const startup = resolveGatewayStartupPluginPlanFromRegistry({
     config: params.config,
     ...(params.activationSourceConfig !== undefined
       ? { activationSourceConfig: params.activationSourceConfig }
@@ -88,11 +77,6 @@ export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): Plug
     manifestRegistry,
   });
   const startupPlanMs = performance.now() - startupPlanStartedAt;
-  const startup = {
-    channelPluginIds,
-    configuredDeferredChannelPluginIds,
-    pluginIds,
-  };
 
   return {
     ...metadataSnapshot,
@@ -111,8 +95,8 @@ export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): Plug
       ...metadataSnapshot.metrics,
       startupPlanMs,
       totalMs: metadataSnapshot.metrics.totalMs + startupPlanMs,
-      startupPluginCount: pluginIds.length,
-      deferredChannelPluginCount: configuredDeferredChannelPluginIds.length,
+      startupPluginCount: startup.pluginIds.length,
+      deferredChannelPluginCount: startup.configuredDeferredChannelPluginIds.length,
     },
   };
 }

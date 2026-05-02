@@ -134,6 +134,8 @@ vi.mock("../channels/plugins/setup-registry.js", () => ({
 vi.mock("../channels/registry.js", () => ({
   getChatChannelMeta: (channelId: string) => ({ id: channelId, label: channelId }),
   listChatChannels: () => [],
+  normalizeAnyChannelId: (channelId?: unknown) =>
+    typeof channelId === "string" ? channelId.trim().toLowerCase() || null : null,
   normalizeChatChannelId: (channelId?: unknown) =>
     typeof channelId === "string" ? channelId.trim().toLowerCase() || null : null,
 }));
@@ -471,7 +473,7 @@ describe("setupChannels workspace shadow exclusion", () => {
         channel: "external-chat",
         pluginId: "external-chat",
         workspaceDir: "/tmp/openclaw-workspace",
-        installRuntimeDeps: false,
+        forceSetupOnlyChannelPlugins: true,
       }),
     );
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenNthCalledWith(
@@ -480,7 +482,6 @@ describe("setupChannels workspace shadow exclusion", () => {
         channel: "external-chat",
         workspaceDir: "/tmp/openclaw-workspace",
         forceSetupOnlyChannelPlugins: true,
-        installRuntimeDeps: true,
       }),
     );
     expect(getChannelSetupPlugin).not.toHaveBeenCalled();

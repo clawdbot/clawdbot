@@ -1,4 +1,4 @@
-export const TELEGRAM_CALLBACK_DATA_MAX_BYTES = 64;
+const TELEGRAM_CALLBACK_DATA_MAX_BYTES = 64;
 
 const TELEGRAM_APPROVE_ALLOW_ALWAYS_PATTERN =
   /^\/approve(?:@[^\s]+)?\s+[A-Za-z0-9][A-Za-z0-9._:-]*\s+allow-always$/i;

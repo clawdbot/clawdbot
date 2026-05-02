@@ -1,17 +1,17 @@
 import type { OpenClawConfig } from "./config.js";
 
-export type DangerousNameMatchingConfig = {
+type DangerousNameMatchingConfig = {
   dangerouslyAllowNameMatching?: boolean;
 };
 
-export type ProviderDangerousNameMatchingScope = {
+type ProviderDangerousNameMatchingScope = {
   prefix: string;
   account: Record<string, unknown>;
   dangerousNameMatchingEnabled: boolean;
   dangerousFlagPath: string;
 };
 
-export type DangerousNameMatchingResolverInput = {
+type DangerousNameMatchingResolverInput = {
   providerConfig?: DangerousNameMatchingConfig | null | undefined;
   accountConfig?: DangerousNameMatchingConfig | null | undefined;
 };

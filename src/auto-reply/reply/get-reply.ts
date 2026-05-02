@@ -12,6 +12,7 @@ import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
@@ -604,9 +605,13 @@ export async function getReplyFromConfig(
           sessionKey: agentSessionKey,
           sessionId,
           workspaceDir,
-          messageProvider: hookMessageProvider,
           trigger: opts?.isHeartbeat ? "heartbeat" : "user",
-          channelId: hookMessageProvider,
+          ...buildAgentHookContextChannelFields({
+            sessionKey: agentSessionKey,
+            messageProvider: hookMessageProvider,
+            currentChannelId: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
+            messageTo: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
+          }),
         },
       );
       if (hookResult?.handled) {

@@ -34,17 +34,17 @@ on:
         default: 1
         type: number
       published_upgrade_survivor_baseline:
-        description: Published OpenClaw package baseline for the published-upgrade-survivor Docker lane
+        description: Published OpenClaw package baseline for the published-upgrade-survivor/update-migration Docker lane
         required: false
         default: openclaw@latest
         type: string
       published_upgrade_survivor_baselines:
-        description: Optional exact baseline list for published-upgrade-survivor lane expansion
+        description: Optional exact baseline list for published-upgrade-survivor/update-migration lane expansion
         required: false
         default: ""
         type: string
       published_upgrade_survivor_scenarios:
-        description: Optional scenario list for published-upgrade-survivor lane expansion
+        description: Optional scenario list for published-upgrade-survivor/update-migration lane expansion
         required: false
         default: ""
         type: string
@@ -129,17 +129,17 @@ on:
         default: 1
         type: number
       published_upgrade_survivor_baseline:
-        description: Published OpenClaw package baseline for the published-upgrade-survivor Docker lane
+        description: Published OpenClaw package baseline for the published-upgrade-survivor/update-migration Docker lane
         required: false
         default: openclaw@latest
         type: string
       published_upgrade_survivor_baselines:
-        description: Optional exact baseline list for published-upgrade-survivor lane expansion
+        description: Optional exact baseline list for published-upgrade-survivor/update-migration lane expansion
         required: false
         default: ""
         type: string
       published_upgrade_survivor_scenarios:
-        description: Optional scenario list for published-upgrade-survivor lane expansion
+        description: Optional scenario list for published-upgrade-survivor/update-migration lane expansion
         required: false
         default: ""
         type: string
@@ -646,21 +646,6 @@ jobs:
           - chunk_id: plugins-runtime-install-h
             label: plugins/runtime install H
             timeout_minutes: 120
-          - chunk_id: bundled-channels-core
-            label: bundled channels core
-            timeout_minutes: 90
-          - chunk_id: bundled-channels-update-a
-            label: bundled channels update A
-            timeout_minutes: 45
-          - chunk_id: bundled-channels-update-discord
-            label: bundled channels update Discord
-            timeout_minutes: 30
-          - chunk_id: bundled-channels-update-b
-            label: bundled channels update B
-            timeout_minutes: 45
-          - chunk_id: bundled-channels-contracts
-            label: bundled channels contracts
-            timeout_minutes: 90
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}

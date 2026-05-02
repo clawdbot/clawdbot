@@ -3,7 +3,7 @@
  * Prevents unbounded memory growth under high load or abuse.
  */
 
-export interface SeenTrackerOptions {
+interface SeenTrackerOptions {
   /** Maximum number of entries to track (default: 100,000) */
   maxEntries?: number;
   /** TTL in milliseconds (default: 1 hour) */

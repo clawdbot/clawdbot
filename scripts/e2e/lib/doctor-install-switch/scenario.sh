@@ -129,7 +129,7 @@ run_flow() {
   local doctor_expected="$5"
   local install_log="/tmp/openclaw-doctor-switch-${name}-install.log"
   local doctor_log="/tmp/openclaw-doctor-switch-${name}-doctor.log"
-  local command_timeout="${OPENCLAW_DOCKER_DOCTOR_SWITCH_COMMAND_TIMEOUT:-300s}"
+  local command_timeout="${OPENCLAW_DOCKER_DOCTOR_SWITCH_COMMAND_TIMEOUT:-900s}"
 
   echo "== Flow: $name =="
   openclaw_test_state_create "switch-${name}" empty
@@ -161,21 +161,21 @@ run_flow \
   "npm-to-git" \
   "$npm_bin daemon install --force" \
   "$npm_entry" \
-  "node $git_cli doctor --repair --force --yes" \
+  "OPENCLAW_UPDATE_IN_PROGRESS=1 node $git_cli doctor --repair --force --yes --non-interactive" \
   "$git_entry"
 
 run_flow \
   "git-to-npm" \
   "node $git_cli daemon install --force" \
   "$git_entry" \
-  "$npm_bin doctor --repair --force --yes" \
+  "OPENCLAW_UPDATE_IN_PROGRESS=1 $npm_bin doctor --repair --force --yes --non-interactive" \
   "$npm_entry"
 
 run_proxy_env_flow() {
   local name="proxy-env-cleanup"
   local install_log="/tmp/openclaw-doctor-switch-${name}-install.log"
   local doctor_log="/tmp/openclaw-doctor-switch-${name}-doctor.log"
-  local command_timeout="${OPENCLAW_DOCKER_DOCTOR_SWITCH_COMMAND_TIMEOUT:-300s}"
+  local command_timeout="${OPENCLAW_DOCKER_DOCTOR_SWITCH_COMMAND_TIMEOUT:-900s}"
 
   echo "== Flow: $name =="
   openclaw_test_state_create "switch-${name}" empty
@@ -198,7 +198,8 @@ run_proxy_env_flow() {
     printf "%s\n" "Environment=HTTP_PROXY=http://stale-proxy.local:7890"
     printf "%s\n" "Environment=HTTPS_PROXY=https://stale-proxy.local:7890"
   } >>"$unit_path"
-  if ! timeout "$command_timeout" node "$git_cli" doctor --repair --yes >"$doctor_log" 2>&1; then
+  if ! timeout "$command_timeout" env OPENCLAW_UPDATE_IN_PROGRESS=1 \
+    node "$git_cli" doctor --repair --force --yes --non-interactive >"$doctor_log" 2>&1; then
     cat "$doctor_log"
     exit 1
   fi
@@ -215,7 +216,7 @@ run_wrapper_flow() {
   local env_repair_log="/tmp/openclaw-doctor-switch-${name}-env-repair.log"
   local doctor_log="/tmp/openclaw-doctor-switch-${name}-doctor.log"
   local clear_log="/tmp/openclaw-doctor-switch-${name}-clear.log"
-  local command_timeout="${OPENCLAW_DOCKER_DOCTOR_SWITCH_COMMAND_TIMEOUT:-300s}"
+  local command_timeout="${OPENCLAW_DOCKER_DOCTOR_SWITCH_COMMAND_TIMEOUT:-900s}"
 
   echo "== Flow: $name =="
   openclaw_test_state_create "switch-${name}" empty

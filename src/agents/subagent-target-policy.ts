@@ -1,8 +1,6 @@
 import { normalizeAgentId } from "../routing/session-key.js";
 
-export type SubagentTargetPolicyResult =
-  | { ok: true }
-  | { ok: false; allowedText: string; error: string };
+type SubagentTargetPolicyResult = { ok: true } | { ok: false; allowedText: string; error: string };
 
 function normalizeAllowAgents(allowAgents: readonly string[] | undefined): {
   configured: boolean;

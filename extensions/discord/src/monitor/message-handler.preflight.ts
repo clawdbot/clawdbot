@@ -70,6 +70,17 @@ export {
   shouldIgnoreBoundThreadWebhookMessage,
 } from "./message-handler.preflight-helpers.js";
 
+function resolveDiscordPreflightConversationKind(params: {
+  isGuildMessage: boolean;
+  channelType?: ChannelType;
+}) {
+  const isGroupDm = params.channelType === ChannelType.GroupDM;
+  const isDirectMessage =
+    params.channelType === ChannelType.DM ||
+    (!params.isGuildMessage && !isGroupDm && params.channelType == null);
+  return { isDirectMessage, isGroupDm };
+}
+
 export async function preflightDiscordMessage(
   params: DiscordMessagePreflightParams,
 ): Promise<DiscordMessagePreflightContext | null> {
@@ -137,8 +148,10 @@ export async function preflightDiscordMessage(
   if (isPreflightAborted(params.abortSignal)) {
     return null;
   }
-  const isDirectMessage = channelInfo?.type === ChannelType.DM;
-  const isGroupDm = channelInfo?.type === ChannelType.GroupDM;
+  const { isDirectMessage, isGroupDm } = resolveDiscordPreflightConversationKind({
+    isGuildMessage,
+    channelType: channelInfo?.type,
+  });
   const messageText = resolveDiscordMessageText(message, {
     includeForwarded: true,
   });

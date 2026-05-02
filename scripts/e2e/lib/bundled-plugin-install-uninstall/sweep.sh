@@ -15,8 +15,6 @@ fi
 export OPENCLAW_ENTRY
 
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
-OPENCLAW_PLUGIN_STAGE_BASE_DIR="${OPENCLAW_PLUGIN_STAGE_DIR:-$HOME/.openclaw/plugin-runtime-deps}"
-mkdir -p "$OPENCLAW_PLUGIN_STAGE_BASE_DIR"
 
 probe="scripts/e2e/lib/bundled-plugin-install-uninstall/probe.mjs"
 runtime_smoke="scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs"
@@ -33,8 +31,6 @@ echo "Selected ${#plugin_entries[@]} bundled plugins for shard ${OPENCLAW_BUNDLE
 plugin_index=0
 for plugin_entry in "${plugin_entries[@]}"; do
   IFS=$'\t' read -r plugin_id plugin_dir requires_config <<<"$plugin_entry"
-  export OPENCLAW_PLUGIN_STAGE_DIR="$OPENCLAW_PLUGIN_STAGE_BASE_DIR/$plugin_index-$plugin_id"
-  mkdir -p "$OPENCLAW_PLUGIN_STAGE_DIR"
   install_log="/tmp/openclaw-install-${plugin_index}.log"
   uninstall_log="/tmp/openclaw-uninstall-${plugin_index}.log"
   plugin_started_at="$(date +%s)"

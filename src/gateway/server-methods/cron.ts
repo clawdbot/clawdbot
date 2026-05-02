@@ -11,6 +11,10 @@ import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js"
 import type { CronDelivery, CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  resolveTargetPrefixedChannel,
+  validateTargetProviderPrefix,
+} from "../../infra/outbound/channel-target-prefix.js";
 import { listConfiguredAnnounceChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
@@ -66,20 +70,63 @@ function assertConfiguredAnnounceChannel(params: {
   throw new Error(`${params.field} must be one of: ${configuredChannels.join(", ")}`);
 }
 
+function resolveAnnounceValidationChannel(params: {
+  channel?: string;
+  to?: string;
+}): string | undefined {
+  if (params.channel && params.channel !== "last") {
+    return params.channel;
+  }
+  return resolveTargetPrefixedChannel(params.to) ?? params.channel;
+}
+
+function assertCompatibleAnnounceTarget(params: {
+  channel?: string;
+  to?: string;
+  field: "delivery.channel" | "delivery.failureDestination.channel";
+}) {
+  if (!params.channel || params.channel === "last") {
+    return;
+  }
+  const error = validateTargetProviderPrefix({
+    channel: params.channel,
+    to: params.to,
+  });
+  if (error) {
+    throw new Error(`${params.field}: ${error.message}`);
+  }
+}
+
 function assertValidCronAnnounceDelivery(params: { cfg: OpenClawConfig; delivery?: CronDelivery }) {
-  if (params.delivery?.mode === "announce") {
+  if (params.delivery && (params.delivery.mode ?? "announce") === "announce") {
+    assertCompatibleAnnounceTarget({
+      channel: params.delivery.channel,
+      to: params.delivery.to,
+      field: "delivery.channel",
+    });
     assertConfiguredAnnounceChannel({
       cfg: params.cfg,
-      channel: params.delivery.channel,
+      channel: resolveAnnounceValidationChannel({
+        channel: params.delivery.channel,
+        to: params.delivery.to,
+      }),
       field: "delivery.channel",
     });
   }
 
   const failureDestination = params.delivery?.failureDestination;
   if (failureDestination && (failureDestination.mode ?? "announce") === "announce") {
+    assertCompatibleAnnounceTarget({
+      channel: failureDestination.channel,
+      to: failureDestination.to,
+      field: "delivery.failureDestination.channel",
+    });
     assertConfiguredAnnounceChannel({
       cfg: params.cfg,
-      channel: failureDestination.channel,
+      channel: resolveAnnounceValidationChannel({
+        channel: failureDestination.channel,
+        to: failureDestination.to,
+      }),
       field: "delivery.failureDestination.channel",
     });
   }

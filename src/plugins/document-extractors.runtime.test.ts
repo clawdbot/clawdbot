@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { resolvePluginDocumentExtractors } from "./document-extractors.runtime.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
+import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 
 vi.mock("./document-extractor-public-artifacts.js", () => ({
   loadBundledDocumentExtractorEntriesFromDir: vi.fn(
@@ -19,36 +19,8 @@ vi.mock("./document-extractor-public-artifacts.js", () => ({
   ),
 }));
 
-vi.mock("./manifest-registry-installed.js", () => ({
-  loadPluginManifestRegistryForInstalledIndex: vi.fn(() => ({
-    plugins: [
-      {
-        id: "document-extract",
-        origin: "bundled",
-        enabledByDefault: true,
-        channels: [],
-        cliBackends: [],
-        providers: [],
-        legacyPluginIds: [],
-        contracts: { documentExtractors: ["pdf"] },
-      },
-      {
-        id: "openai",
-        origin: "bundled",
-        enabledByDefault: true,
-        channels: [],
-        cliBackends: [],
-        providers: ["openai", "openai-codex"],
-        legacyPluginIds: [],
-        contracts: {},
-      },
-    ],
-  })),
-}));
-
-vi.mock("./plugin-registry.js", () => ({
-  loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
-  loadPluginManifestRegistryForPluginRegistry: vi.fn(() => ({
+vi.mock("./plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: vi.fn(() => ({
     plugins: [
       {
         id: "document-extract",
@@ -80,10 +52,10 @@ vi.mock("./manifest-registry.js", () => ({
 
 describe("resolvePluginDocumentExtractors", () => {
   it("reuses one manifest registry pass for compat and enabled bundled extractors", () => {
-    vi.mocked(loadPluginManifestRegistryForPluginRegistry).mockClear();
+    vi.mocked(loadPluginMetadataSnapshot).mockClear();
 
     expect(resolvePluginDocumentExtractors().map((extractor) => extractor.id)).toEqual(["pdf"]);
-    expect(loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledOnce();
+    expect(loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
   });
 
   it("respects global plugin disablement", () => {

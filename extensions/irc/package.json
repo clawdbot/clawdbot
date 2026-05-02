@@ -27,6 +27,12 @@
       ],
       "systemImage": "network",
       "configuredState": {
+        "env": {
+          "allOf": [
+            "IRC_HOST",
+            "IRC_NICK"
+          ]
+        },
         "specifier": "./configured-state",
         "exportName": "hasIrcConfiguredState"
       }

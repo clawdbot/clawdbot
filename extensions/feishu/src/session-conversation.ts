@@ -1,6 +1,6 @@
 import { buildFeishuConversationId, parseFeishuConversationId } from "./conversation-id.js";
 
-export function resolveFeishuParentConversationCandidates(rawId: string): string[] {
+function resolveFeishuParentConversationCandidates(rawId: string): string[] {
   const parsed = parseFeishuConversationId({ conversationId: rawId });
   if (!parsed) {
     return [];

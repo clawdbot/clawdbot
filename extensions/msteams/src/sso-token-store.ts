@@ -14,7 +14,7 @@
 import { resolveMSTeamsStorePath } from "./storage.js";
 import { readJsonFile, withFileLock, writeJsonFile } from "./store-fs.js";
 
-export type MSTeamsSsoStoredToken = {
+type MSTeamsSsoStoredToken = {
   /** Connection name from the Bot Framework OAuth connection setting. */
   connectionName: string;
   /** Stable user identifier (AAD object ID preferred). */

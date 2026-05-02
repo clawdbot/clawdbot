@@ -32,6 +32,7 @@ export function getPluginCommandSpecs(
 ): Array<{
   name: string;
   description: string;
+  descriptionLocalizations?: Record<string, string>;
   acceptsArgs: boolean;
 }> {
   const providerName = normalizeOptionalLowercaseString(provider);
@@ -56,11 +57,23 @@ export function getPluginCommandSpecs(
 export function listProviderPluginCommandSpecs(provider?: string): Array<{
   name: string;
   description: string;
+  descriptionLocalizations?: Record<string, string>;
   acceptsArgs: boolean;
 }> {
-  return Array.from(pluginCommands.values()).map((cmd) => ({
-    name: resolvePluginNativeName(cmd, provider),
-    description: cmd.description,
-    acceptsArgs: cmd.acceptsArgs ?? false,
-  }));
+  return Array.from(pluginCommands.values()).map((cmd) => {
+    const spec: {
+      name: string;
+      description: string;
+      descriptionLocalizations?: Record<string, string>;
+      acceptsArgs: boolean;
+    } = {
+      name: resolvePluginNativeName(cmd, provider),
+      description: cmd.description,
+      acceptsArgs: cmd.acceptsArgs ?? false,
+    };
+    if (cmd.descriptionLocalizations) {
+      spec.descriptionLocalizations = cmd.descriptionLocalizations;
+    }
+    return spec;
+  });
 }

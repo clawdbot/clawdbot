@@ -1116,6 +1116,7 @@ describe("plugin-sdk subpath exports", () => {
       "createPinnedDispatcher",
       "resolvePinnedHostnameWithPolicy",
       "formatErrorMessage",
+      "isPrivateIpAddress",
       "assertHttpUrlTargetsPrivateNetwork",
       "ssrfPolicyFromDangerouslyAllowPrivateNetwork",
       "ssrfPolicyFromAllowPrivateNetwork",

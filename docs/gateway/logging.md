@@ -41,6 +41,9 @@ openclaw logs --follow
   raise the file log level.
 - To capture verbose-only details in file logs, set `logging.level` to `debug` or
   `trace`.
+- Trace logging also includes diagnostic timing summaries for selected hot paths,
+  such as plugin tool factory preparation. See
+  [/tools/plugin#slow-plugin-tool-setup](/tools/plugin#slow-plugin-tool-setup).
 
 ## Console capture
 

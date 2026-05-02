@@ -13,7 +13,7 @@ struct TalkModeRuntimeSpeechTests {
         #expect(request.taskHint == .dictation)
     }
 
-    @Test func `playback plan falls back only from elevenlabs`() {
+    @Test func `playback plan routes unsupported local providers through gateway speak`() {
         let elevenLabsPlan = TalkModeRuntime.playbackPlan(
             provider: "elevenlabs",
             apiKey: "key",
@@ -30,6 +30,8 @@ struct TalkModeRuntimeSpeechTests {
             provider: "elevenlabs",
             apiKey: "",
             voiceId: "voice")
+        let openAIPlan = TalkModeRuntime.playbackPlan(provider: "openai", apiKey: nil, voiceId: "onyx")
+        let customPlan = TalkModeRuntime.playbackPlan(provider: "acme-speech", apiKey: nil, voiceId: nil)
         let mlxPlan = TalkModeRuntime.playbackPlan(provider: "mlx", apiKey: nil, voiceId: nil)
         let systemPlan = TalkModeRuntime.playbackPlan(provider: "system", apiKey: nil, voiceId: nil)
 
@@ -37,6 +39,8 @@ struct TalkModeRuntimeSpeechTests {
         #expect(missingKeyPlan == .systemVoiceOnly)
         #expect(missingVoicePlan == .systemVoiceOnly)
         #expect(blankKeyPlan == .systemVoiceOnly)
+        #expect(openAIPlan == .gatewayTalkSpeakThenSystemVoice)
+        #expect(customPlan == .gatewayTalkSpeakThenSystemVoice)
         #expect(mlxPlan == .mlxThenSystemVoice)
         #expect(systemPlan == .systemVoiceOnly)
     }

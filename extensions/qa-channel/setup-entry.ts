@@ -3,8 +3,8 @@ import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entr
 export default defineBundledChannelSetupEntry({
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./channel-plugin-api.js",
-    exportName: "qaChannelPlugin",
+    specifier: "./setup-plugin-api.js",
+    exportName: "qaChannelSetupPlugin",
   },
   runtime: {
     specifier: "./api.js",

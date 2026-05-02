@@ -1,9 +1,9 @@
 import type { SessionEntry } from "../config/sessions.js";
 
-export const SUBAGENT_RECOVERY_MAX_AUTOMATIC_ATTEMPTS = 2;
-export const SUBAGENT_RECOVERY_REWEDGE_WINDOW_MS = 2 * 60_000;
+const SUBAGENT_RECOVERY_MAX_AUTOMATIC_ATTEMPTS = 2;
+const SUBAGENT_RECOVERY_REWEDGE_WINDOW_MS = 2 * 60_000;
 
-export type SubagentRecoveryGate =
+type SubagentRecoveryGate =
   | {
       allowed: true;
       nextAttempt: number;

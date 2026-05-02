@@ -303,6 +303,163 @@ describe("loadPluginLookUpTable", () => {
     );
   });
 
+  it("rebuilds when a provided metadata snapshot has stale plugin load paths", async () => {
+    const plugins = [
+      createManifestRecord({
+        id: "telegram",
+        origin: "bundled",
+        channels: ["telegram"],
+      }),
+    ];
+    const snapshotConfig = {
+      plugins: {
+        load: { paths: ["/plugins/one"] },
+      },
+    } as OpenClawConfig;
+    const requestedConfig = {
+      plugins: {
+        load: { paths: ["/plugins/two"] },
+      },
+    } as OpenClawConfig;
+    const policyHash = resolveInstalledPluginIndexPolicyHash(snapshotConfig);
+    const index = createIndex(plugins, { policyHash });
+    const manifestRegistry: PluginManifestRegistry = {
+      plugins,
+      diagnostics: [],
+    };
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(manifestRegistry);
+    const { loadPluginMetadataSnapshot } = await import("./plugin-metadata-snapshot.js");
+    const { loadPluginLookUpTable } = await import("./plugin-lookup-table.js");
+
+    const metadataSnapshot = loadPluginMetadataSnapshot({
+      config: snapshotConfig,
+      env: {},
+      index,
+    });
+    loadPluginManifestRegistryForInstalledIndex.mockClear();
+
+    loadPluginLookUpTable({
+      config: requestedConfig,
+      env: {},
+      index,
+      metadataSnapshot,
+    });
+
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledWith(
+      expect.objectContaining({
+        index,
+        config: requestedConfig,
+      }),
+    );
+  });
+
+  it("rebuilds when a provided metadata snapshot has stale env-resolved plugin load paths", async () => {
+    const plugins = [
+      createManifestRecord({
+        id: "telegram",
+        origin: "bundled",
+        channels: ["telegram"],
+      }),
+    ];
+    const config = {
+      plugins: {
+        load: { paths: ["~/plugins"] },
+      },
+    } as OpenClawConfig;
+    const snapshotEnv = {
+      HOME: "/home/snapshot",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    const requestedEnv = {
+      HOME: "/home/requested",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    const policyHash = resolveInstalledPluginIndexPolicyHash(config);
+    const index = createIndex(plugins, { policyHash });
+    const manifestRegistry: PluginManifestRegistry = {
+      plugins,
+      diagnostics: [],
+    };
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(manifestRegistry);
+    const { loadPluginMetadataSnapshot } = await import("./plugin-metadata-snapshot.js");
+    const { loadPluginLookUpTable } = await import("./plugin-lookup-table.js");
+
+    const metadataSnapshot = loadPluginMetadataSnapshot({
+      config,
+      env: snapshotEnv,
+      index,
+    });
+    loadPluginManifestRegistryForInstalledIndex.mockClear();
+
+    loadPluginLookUpTable({
+      config,
+      env: requestedEnv,
+      index,
+      metadataSnapshot,
+    });
+
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledWith(
+      expect.objectContaining({
+        index,
+        config,
+        env: requestedEnv,
+      }),
+    );
+  });
+
+  it("rebuilds when a provided metadata snapshot has stale env-resolved plugin roots", async () => {
+    const plugins = [
+      createManifestRecord({
+        id: "telegram",
+        origin: "bundled",
+        channels: ["telegram"],
+      }),
+    ];
+    const config = {} as OpenClawConfig;
+    const snapshotEnv = {
+      HOME: "/home/snapshot",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    const requestedEnv = {
+      HOME: "/home/requested",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    const policyHash = resolveInstalledPluginIndexPolicyHash(config);
+    const index = createIndex(plugins, { policyHash });
+    const manifestRegistry: PluginManifestRegistry = {
+      plugins,
+      diagnostics: [],
+    };
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(manifestRegistry);
+    const { loadPluginMetadataSnapshot } = await import("./plugin-metadata-snapshot.js");
+    const { loadPluginLookUpTable } = await import("./plugin-lookup-table.js");
+
+    const metadataSnapshot = loadPluginMetadataSnapshot({
+      config,
+      env: snapshotEnv,
+      index,
+    });
+    loadPluginManifestRegistryForInstalledIndex.mockClear();
+
+    loadPluginLookUpTable({
+      config,
+      env: requestedEnv,
+      index,
+      metadataSnapshot,
+    });
+
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledWith(
+      expect.objectContaining({
+        index,
+        config,
+        env: requestedEnv,
+      }),
+    );
+  });
+
   it("rebuilds when a provided metadata snapshot has stale plugin inventory", async () => {
     const snapshotPlugins = [
       createManifestRecord({

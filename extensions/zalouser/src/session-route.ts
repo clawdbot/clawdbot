@@ -7,7 +7,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/text-runtime";
 
-export function stripZalouserTargetPrefix(raw: string): string {
+function stripZalouserTargetPrefix(raw: string): string {
   return raw
     .trim()
     .replace(/^(zalouser|zlu):/i, "")

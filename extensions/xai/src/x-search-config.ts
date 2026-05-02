@@ -10,13 +10,13 @@ function cloneRecord<T extends JsonRecord | undefined>(value: T): T {
   return { ...value } as T;
 }
 
-export function resolveLegacyXSearchConfig(config?: OpenClawConfig): JsonRecord | undefined {
+function resolveLegacyXSearchConfig(config?: OpenClawConfig): JsonRecord | undefined {
   const web = config?.tools?.web as Record<string, unknown> | undefined;
   const xSearch = web?.x_search;
   return isRecord(xSearch) ? cloneRecord(xSearch) : undefined;
 }
 
-export function resolvePluginXSearchConfig(config?: OpenClawConfig): JsonRecord | undefined {
+function resolvePluginXSearchConfig(config?: OpenClawConfig): JsonRecord | undefined {
   const pluginConfig = config?.plugins?.entries?.xai?.config;
   if (!isRecord(pluginConfig?.xSearch)) {
     return undefined;
@@ -24,19 +24,44 @@ export function resolvePluginXSearchConfig(config?: OpenClawConfig): JsonRecord 
   return cloneRecord(pluginConfig.xSearch);
 }
 
+function resolveLegacyGrokWebSearchConfig(config?: OpenClawConfig): JsonRecord | undefined {
+  const web = config?.tools?.web as Record<string, unknown> | undefined;
+  const search = web?.search;
+  if (!isRecord(search) || !isRecord(search.grok)) {
+    return undefined;
+  }
+  return cloneRecord(search.grok);
+}
+
+function resolvePluginWebSearchConfig(config?: OpenClawConfig): JsonRecord | undefined {
+  const pluginConfig = config?.plugins?.entries?.xai?.config;
+  if (!isRecord(pluginConfig?.webSearch)) {
+    return undefined;
+  }
+  return cloneRecord(pluginConfig.webSearch);
+}
+
+function baseUrlFallback(config?: JsonRecord): JsonRecord | undefined {
+  return typeof config?.baseUrl === "string" && config.baseUrl.trim()
+    ? { baseUrl: config.baseUrl }
+    : undefined;
+}
+
 export function resolveEffectiveXSearchConfig(config?: OpenClawConfig): JsonRecord | undefined {
+  const legacyGrokBaseUrl = baseUrlFallback(resolveLegacyGrokWebSearchConfig(config));
+  const pluginWebSearchBaseUrl = baseUrlFallback(resolvePluginWebSearchConfig(config));
   const legacy = resolveLegacyXSearchConfig(config);
   const pluginOwned = resolvePluginXSearchConfig(config);
-  if (!legacy) {
-    return pluginOwned;
-  }
-  if (!pluginOwned) {
-    return legacy;
-  }
-  return {
+  const merged = {
+    ...legacyGrokBaseUrl,
+    ...pluginWebSearchBaseUrl,
     ...legacy,
     ...pluginOwned,
   };
+  if (Object.keys(merged).length === 0) {
+    return undefined;
+  }
+  return merged;
 }
 
 export function setPluginXSearchConfigValue(

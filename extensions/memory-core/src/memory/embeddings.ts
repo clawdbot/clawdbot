@@ -1,5 +1,4 @@
 import {
-  DEFAULT_LOCAL_MODEL,
   getMemoryEmbeddingProvider,
   listMemoryEmbeddingProviders,
   type MemoryEmbeddingProvider,
@@ -10,12 +9,10 @@ import {
 import { formatErrorMessage } from "../dreaming-shared.js";
 import { canAutoSelectLocal } from "./provider-adapters.js";
 
-export { DEFAULT_LOCAL_MODEL } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-
 export type EmbeddingProvider = MemoryEmbeddingProvider;
 export type EmbeddingProviderId = string;
 export type EmbeddingProviderRequest = string;
-export type EmbeddingProviderFallback = string;
+type EmbeddingProviderFallback = string;
 export type EmbeddingProviderRuntime = MemoryEmbeddingProviderRuntime;
 
 export type EmbeddingProviderResult = {

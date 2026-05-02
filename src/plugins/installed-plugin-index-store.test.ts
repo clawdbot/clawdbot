@@ -54,7 +54,8 @@ function createIndex(overrides: Partial<InstalledPluginIndex> = {}): InstalledPl
   };
 }
 
-function createCandidate(rootDir: string): PluginCandidate {
+function createCandidate(rootDir: string, options: { id?: string } = {}): PluginCandidate {
+  const id = options.id ?? "demo";
   fs.writeFileSync(
     path.join(rootDir, "index.ts"),
     "throw new Error('runtime entry should not load while persisting installed plugin index');\n",
@@ -63,15 +64,15 @@ function createCandidate(rootDir: string): PluginCandidate {
   fs.writeFileSync(
     path.join(rootDir, "openclaw.plugin.json"),
     JSON.stringify({
-      id: "demo",
-      name: "Demo",
+      id,
+      name: id === "demo" ? "Demo" : "Next Demo",
       configSchema: { type: "object" },
-      providers: ["demo"],
+      providers: [id],
     }),
     "utf8",
   );
   return {
-    idHint: "demo",
+    idHint: id,
     source: path.join(rootDir, "index.ts"),
     rootDir,
     origin: "global",
@@ -278,6 +279,99 @@ describe("installed plugin index persistence", () => {
     });
   });
 
+  it("refreshes policy state from the persisted registry without rebuilding source records", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "plugins", "demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const candidate = createCandidate(pluginDir);
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    const initial = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [candidate],
+      env,
+    });
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "demo",
+        name: "Demo",
+        configSchema: { type: "object" },
+        providers: ["demo", "changed"],
+      }),
+      "utf8",
+    );
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      candidates: [candidate],
+      env,
+      config: {
+        plugins: {
+          entries: {
+            demo: {
+              enabled: false,
+            },
+          },
+        },
+      },
+      policyPluginIds: ["demo"],
+    });
+
+    expect(refreshed.plugins).toHaveLength(initial.plugins.length);
+    expect(refreshed.plugins[0]).toMatchObject({
+      pluginId: "demo",
+      enabled: false,
+      manifestHash: initial.plugins[0]?.manifestHash,
+    });
+    expect(refreshed.policyHash).not.toBe(initial.policyHash);
+  });
+
+  it("falls back to a source rebuild when a policy refresh target is missing", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "plugins", "demo");
+    const nextPluginDir = path.join(stateDir, "plugins", "next-demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.mkdirSync(nextPluginDir, { recursive: true });
+    const candidate = createCandidate(pluginDir);
+    const nextCandidate = createCandidate(nextPluginDir, { id: "next-demo" });
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [candidate],
+      env,
+    });
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      candidates: [candidate, nextCandidate],
+      env,
+      config: {
+        plugins: {
+          entries: {
+            "next-demo": {
+              enabled: false,
+            },
+          },
+        },
+      },
+      policyPluginIds: ["next-demo"],
+    });
+
+    expect(refreshed.plugins.map((plugin) => plugin.pluginId)).toContain("next-demo");
+  });
+
   it("preserves existing install records when refreshing the manifest cache", async () => {
     const stateDir = makeTempDir();
     await writePersistedInstalledPluginIndex(
@@ -325,5 +419,71 @@ describe("installed plugin index persistence", () => {
       },
       plugins: [],
     });
+  });
+
+  it("preserves ClawHub ClawPack source facts when refreshing the manifest cache", async () => {
+    const stateDir = makeTempDir();
+    const installPath = path.join(stateDir, "plugins", "clawpack-demo");
+    await writePersistedInstalledPluginIndex(
+      createIndex({
+        installRecords: {
+          "clawpack-demo": {
+            source: "clawhub",
+            spec: "clawhub:clawpack-demo@2026.5.1-beta.2",
+            installPath,
+            version: "2026.5.1-beta.2",
+            integrity: "sha256-archive",
+            resolvedAt: "2026-05-01T00:00:00.000Z",
+            clawhubUrl: "https://clawhub.ai",
+            clawhubPackage: "clawpack-demo",
+            clawhubFamily: "code-plugin",
+            clawhubChannel: "official",
+            clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            clawpackSpecVersion: 1,
+            clawpackManifestSha256:
+              "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            clawpackSize: 4096,
+          },
+        },
+        plugins: [],
+      }),
+      { stateDir },
+    );
+
+    const index = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [],
+      env: {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+    });
+
+    const expected = {
+      installRecords: {
+        "clawpack-demo": {
+          source: "clawhub",
+          spec: "clawhub:clawpack-demo@2026.5.1-beta.2",
+          installPath,
+          version: "2026.5.1-beta.2",
+          integrity: "sha256-archive",
+          resolvedAt: "2026-05-01T00:00:00.000Z",
+          clawhubUrl: "https://clawhub.ai",
+          clawhubPackage: "clawpack-demo",
+          clawhubFamily: "code-plugin",
+          clawhubChannel: "official",
+          clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          clawpackSpecVersion: 1,
+          clawpackManifestSha256:
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          clawpackSize: 4096,
+        },
+      },
+      plugins: [],
+    };
+    expect(index).toMatchObject(expected);
+    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject(expected);
   });
 });

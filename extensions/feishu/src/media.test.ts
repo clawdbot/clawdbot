@@ -384,6 +384,34 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
   });
 
+  it("preserves Feishu diagnostics when media sends reject before response checks", async () => {
+    messageCreateMock.mockRejectedValueOnce(
+      Object.assign(new Error("Request failed with status code 400"), {
+        response: {
+          status: 400,
+          data: {
+            code: 9499,
+            msg: "Bad Request",
+            error: {
+              log_id: "20260429124731MEDIA",
+              troubleshooter: "https://open.feishu.cn/search?log_id=20260429124731MEDIA",
+            },
+          },
+        },
+      }),
+    );
+
+    const send = sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("image"),
+      fileName: "photo.png",
+    });
+
+    await expect(send).rejects.toThrow(/Feishu image send failed: .*"feishu_code":9499/);
+    await expect(send).rejects.toThrow(/"feishu_log_id":"20260429124731MEDIA"/);
+  });
+
   it("uses msg_type=media when replying with mp4", async () => {
     await sendMediaFeishu({
       cfg: emptyConfig,

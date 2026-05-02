@@ -2,7 +2,7 @@ import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
-const { FakeWebSocket, fetchWithSsrFGuardMock } = vi.hoisted(() => {
+const { FakeWebSocket, execFileSyncMock, fetchWithSsrFGuardMock } = vi.hoisted(() => {
   type Listener = (...args: unknown[]) => void;
 
   class MockWebSocket {
@@ -51,7 +51,19 @@ const { FakeWebSocket, fetchWithSsrFGuardMock } = vi.hoisted(() => {
     }
   }
 
-  return { FakeWebSocket: MockWebSocket, fetchWithSsrFGuardMock: vi.fn() };
+  return {
+    FakeWebSocket: MockWebSocket,
+    execFileSyncMock: vi.fn(),
+    fetchWithSsrFGuardMock: vi.fn(),
+  };
+});
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFileSync: execFileSyncMock,
+  };
 });
 
 vi.mock("ws", () => ({
@@ -91,6 +103,7 @@ function createJsonResponse(body: unknown, init?: { status?: number }): Response
 describe("buildOpenAIRealtimeVoiceProvider", () => {
   beforeEach(() => {
     FakeWebSocket.instances = [];
+    execFileSyncMock.mockReset();
     fetchWithSsrFGuardMock.mockReset();
   });
 
@@ -153,6 +166,27 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
         }),
       }),
     );
+    const request = fetchWithSsrFGuardMock.mock.calls[0]?.[0] as
+      | { init?: { body?: string } }
+      | undefined;
+    const body = JSON.parse(request?.init?.body ?? "{}") as {
+      session?: {
+        audio?: {
+          input?: {
+            turn_detection?: Record<string, unknown>;
+            transcription?: Record<string, unknown>;
+          };
+        };
+      };
+    };
+    expect(body.session?.audio?.input).toEqual({
+      turn_detection: {
+        type: "server_vad",
+        create_response: true,
+        interrupt_response: true,
+      },
+      transcription: { model: "whisper-1" },
+    });
     expect(session).toMatchObject({
       provider: "openai",
       transport: "webrtc-sdp",
@@ -166,6 +200,97 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect((session as { offerHeaders?: Record<string, string> }).offerHeaders).not.toHaveProperty(
       "User-Agent",
     );
+  });
+
+  it("resolves keychain OPENAI_API_KEY refs before creating browser sessions", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "keychain:openclaw:OPENAI_REALTIME_BROWSER_TEST");
+    execFileSyncMock.mockReturnValueOnce("sk-browser-env\n"); // pragma: allowlist secret
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: createJsonResponse({
+        client_secret: { value: "client-secret-123" },
+      }),
+      release: vi.fn(async () => undefined),
+    });
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    if (!provider.createBrowserSession) {
+      throw new Error("expected OpenAI realtime provider to support browser sessions");
+    }
+
+    await provider.createBrowserSession({
+      providerConfig: {},
+      instructions: "Be concise.",
+    });
+
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      "/usr/bin/security",
+      ["find-generic-password", "-s", "openclaw", "-a", "OPENAI_REALTIME_BROWSER_TEST", "-w"],
+      expect.objectContaining({
+        encoding: "utf8",
+        timeout: 5000,
+      }),
+    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        init: expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: "Bearer sk-browser-env", // pragma: allowlist secret
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("resolves and caches keychain OPENAI_API_KEY refs before creating bridges", () => {
+    vi.stubEnv("OPENAI_API_KEY", "keychain:openclaw:OPENAI_REALTIME_BRIDGE_TEST");
+    execFileSyncMock.mockReturnValue("sk-bridge-env\n"); // pragma: allowlist secret
+    const provider = buildOpenAIRealtimeVoiceProvider();
+
+    const first = provider.createBridge({
+      providerConfig: {},
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const second = provider.createBridge({
+      providerConfig: {},
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    void first.connect();
+    void second.connect();
+    first.close();
+    second.close();
+
+    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
+    for (const socket of FakeWebSocket.instances) {
+      const options = socket.args[1] as { headers?: Record<string, string> } | undefined;
+      expect(options?.headers).toMatchObject({
+        Authorization: "Bearer sk-bridge-env", // pragma: allowlist secret
+      });
+    }
+  });
+
+  it("does not resolve keychain refs during configured checks", () => {
+    vi.stubEnv("OPENAI_API_KEY", "keychain:openclaw:OPENAI_REALTIME_CONFIGURED_TEST");
+    const provider = buildOpenAIRealtimeVoiceProvider();
+
+    expect(provider.isConfigured({ providerConfig: {} })).toBe(true);
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when keychain refs cannot be resolved", () => {
+    vi.stubEnv("OPENAI_API_KEY", "keychain:openclaw:OPENAI_REALTIME_MISSING_TEST");
+    execFileSyncMock.mockImplementationOnce(() => {
+      throw new Error("keychain unavailable");
+    });
+    const provider = buildOpenAIRealtimeVoiceProvider();
+
+    expect(() =>
+      provider.createBridge({
+        providerConfig: {},
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+      }),
+    ).toThrow("OpenAI API key missing");
   });
 
   it("normalizes provider-owned voice settings from raw provider config", () => {

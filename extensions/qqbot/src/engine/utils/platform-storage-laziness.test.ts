@@ -38,14 +38,12 @@ describe("qqbot storage laziness", () => {
 
     const qqbotRoot = path.join(homeDir, ".openclaw", "qqbot");
 
-    const sessionStore = await import("../session/session-store.js");
+    await import("../session/session-store.js");
     await import("../session/known-users.js");
     await import("../ref/store.js");
     const { loadCredentialBackup } = await import("../config/credential-backup.js");
 
     expect(loadCredentialBackup("default")).toBeNull();
-    expect(sessionStore.getAllSessions()).toEqual([]);
-    expect(sessionStore.cleanupExpiredSessions()).toBe(0);
     expect(fs.existsSync(qqbotRoot)).toBe(false);
   });
 

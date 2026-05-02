@@ -74,9 +74,8 @@ export async function startPluginServices(params: {
       });
     } catch (err) {
       const error = err as Error;
-      const stack = error?.stack?.trim();
       log.error(
-        `plugin service failed (${service.id}, plugin=${entry.pluginId}, root=${entry.rootDir ?? "unknown"}): ${error?.message ?? String(err)}${stack ? `\n${stack}` : ""}`,
+        `plugin service failed (${service.id}, plugin=${entry.pluginId}, root=${entry.rootDir ?? "unknown"}): ${error?.message ?? String(err)}`,
       );
     }
   }

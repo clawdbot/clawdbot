@@ -21,7 +21,7 @@ const DEFAULT_MIN_UPDATE_INTERVAL_MS = 15_000;
 const MIN_INTERVAL_MS = 5_000;
 const MIN_UPDATE_INTERVAL_MS = 1_000;
 
-export type DiscordAutoPresenceState = "healthy" | "degraded" | "exhausted";
+type DiscordAutoPresenceState = "healthy" | "degraded" | "exhausted";
 
 type ResolvedDiscordAutoPresenceConfig = {
   enabled: boolean;
@@ -32,7 +32,7 @@ type ResolvedDiscordAutoPresenceConfig = {
   exhaustedText?: string;
 };
 
-export type DiscordAutoPresenceDecision = {
+type DiscordAutoPresenceDecision = {
   state: DiscordAutoPresenceState;
   unavailableReason?: AuthProfileFailureReason | null;
   presence: UpdatePresenceData;
@@ -256,7 +256,7 @@ function stablePresenceSignature(payload: UpdatePresenceData): string {
   });
 }
 
-export type DiscordAutoPresenceController = {
+type DiscordAutoPresenceController = {
   start: () => void;
   stop: () => void;
   refresh: () => void;

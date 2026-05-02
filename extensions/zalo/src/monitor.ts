@@ -469,6 +469,8 @@ async function authorizeZaloMessage(
       configuredGroupAllowFrom: groupAllowFrom,
       senderId,
       isSenderAllowed: isZaloSenderAllowed,
+      channel: "zalo",
+      accountId: account.accountId,
       readAllowFromStore: pairing.readAllowFromStore,
       runtime: core.channel.commands,
     });

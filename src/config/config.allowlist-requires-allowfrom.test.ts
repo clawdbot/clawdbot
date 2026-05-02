@@ -137,3 +137,31 @@ describe('account dmPolicy="allowlist" uses inherited allowFrom', () => {
     );
   });
 });
+
+describe("Discord mentionAliases schema", () => {
+  it("accepts stable outbound mention aliases on top-level and account config", () => {
+    expect(
+      DiscordConfigSchema.safeParse({
+        mentionAliases: {
+          opslead: "123456789012345678",
+        },
+        accounts: {
+          work: {
+            mentionAliases: {
+              vladislava: "234567890123456789",
+            },
+          },
+        },
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects non-snowflake mention alias targets", () => {
+    const result = DiscordConfigSchema.safeParse({
+      mentionAliases: {
+        opslead: "not-a-user-id",
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});

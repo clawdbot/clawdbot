@@ -352,7 +352,7 @@ function getMatrixQaScenarioRestartReadyTimeoutMs(scenario: { timeoutMs: number 
   return scenario.timeoutMs;
 }
 
-export type MatrixQaRunResult = {
+type MatrixQaRunResult = {
   observedEventsPath: string;
   outputDir: string;
   reportPath: string;

@@ -131,18 +131,18 @@ generic contracts; Plan Mode can use them, but so can approval workflows,
 workspace policy gates, background monitors, setup wizards, and UI companion
 plugins.
 
-| Method                                                                   | Contract it owns                                                                  |
-| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
-| `api.registerSessionExtension(...)`                                      | Plugin-owned, JSON-compatible session state projected through Gateway sessions    |
-| `api.enqueueNextTurnInjection(...)`                                      | Durable exactly-once context injected into the next agent turn for one session    |
-| `api.registerTrustedToolPolicy(...)`                                     | Bundled/trusted pre-plugin tool policy that can block or rewrite tool params      |
-| `api.registerToolMetadata(...)`                                          | Tool catalog display metadata without changing the tool implementation            |
-| `api.registerCommand(...)`                                               | Scoped plugin commands; command results can set `continueAgent: true`             |
-| `api.registerControlUiDescriptor(...)`                                   | Control UI contribution descriptors for session, tool, run, or settings surfaces  |
-| `api.registerRuntimeLifecycle(...)`                                      | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths |
-| `api.registerAgentEventSubscription(...)`                                | Sanitized event subscriptions for workflow state and monitors                     |
-| `api.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)` | Per-run plugin scratch state cleared on terminal run lifecycle                    |
-| `api.registerSessionSchedulerJob(...)`                                   | Plugin-owned session scheduler job records with deterministic cleanup             |
+| Method                                                                   | Contract it owns                                                                                                                  |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerSessionExtension(...)`                                      | Plugin-owned, JSON-compatible session state projected through Gateway sessions                                                    |
+| `api.enqueueNextTurnInjection(...)`                                      | Durable exactly-once context injected into the next agent turn for one session                                                    |
+| `api.registerTrustedToolPolicy(...)`                                     | Bundled/trusted pre-plugin tool policy that can block or rewrite tool params                                                      |
+| `api.registerToolMetadata(...)`                                          | Tool catalog display metadata without changing the tool implementation                                                            |
+| `api.registerCommand(...)`                                               | Scoped plugin commands; command results can set `continueAgent: true`; Discord native commands support `descriptionLocalizations` |
+| `api.registerControlUiDescriptor(...)`                                   | Control UI contribution descriptors for session, tool, run, or settings surfaces                                                  |
+| `api.registerRuntimeLifecycle(...)`                                      | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths                                                 |
+| `api.registerAgentEventSubscription(...)`                                | Sanitized event subscriptions for workflow state and monitors                                                                     |
+| `api.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)` | Per-run plugin scratch state cleared on terminal run lifecycle                                                                    |
+| `api.registerSessionSchedulerJob(...)`                                   | Plugin-owned session scheduler job records with deterministic cleanup                                                             |
 
 The contracts intentionally split authority:
 
@@ -355,8 +355,8 @@ Facade-loaded bundled plugin public surfaces (`api.ts`, `runtime-api.ts`,
 active runtime config snapshot when OpenClaw is already running. If no runtime
 snapshot exists yet, they fall back to the resolved config file on disk.
 Packaged bundled plugin facades should be loaded through OpenClaw's plugin
-facade loaders; direct imports from `dist/extensions/...` bypass staged runtime
-dependency mirrors that packaged installs use for plugin-owned dependencies.
+facade loaders; direct imports from `dist/extensions/...` bypass the manifest
+and runtime sidecar checks that packaged installs use for plugin-owned code.
 
 Provider plugins can expose a narrow plugin-local contract barrel when a
 helper is intentionally provider-specific and does not belong in a generic SDK

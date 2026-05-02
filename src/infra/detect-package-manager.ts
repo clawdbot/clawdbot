@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-export type DetectedPackageManager = "pnpm" | "bun" | "npm";
+type DetectedPackageManager = "pnpm" | "bun" | "npm";
 
 export async function detectPackageManager(root: string): Promise<DetectedPackageManager | null> {
   try {

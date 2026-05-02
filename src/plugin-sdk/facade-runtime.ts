@@ -3,9 +3,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import {
-  getCachedPluginJitiLoader,
-  type PluginJitiLoaderCache,
-} from "../plugins/jiti-loader-cache.js";
+  getCachedPluginSourceModuleLoader,
+  type PluginModuleLoaderCache,
+} from "../plugins/plugin-module-loader-cache.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import {
   loadBundledPluginPublicSurfaceModuleSync as loadBundledPluginPublicSurfaceModuleSyncLight,
@@ -110,16 +110,15 @@ const FACADE_ACTIVATION_CHECK_RUNTIME_CANDIDATES = [
 ] as const;
 
 let facadeActivationCheckRuntimeModule: FacadeActivationCheckRuntimeModule | undefined;
-const facadeActivationCheckRuntimeJitiLoaders: PluginJitiLoaderCache = new Map();
+const facadeActivationCheckRuntimeLoaders: PluginModuleLoaderCache = new Map();
 
-function getFacadeActivationCheckRuntimeJiti(modulePath: string) {
-  return getCachedPluginJitiLoader({
-    cache: facadeActivationCheckRuntimeJitiLoaders,
+function getFacadeActivationCheckRuntimeSourceLoader(modulePath: string) {
+  return getCachedPluginSourceModuleLoader({
+    cache: facadeActivationCheckRuntimeLoaders,
     modulePath,
     importerUrl: import.meta.url,
-    jitiFilename: import.meta.url,
+    loaderFilename: import.meta.url,
     aliasMap: {},
-    tryNative: false,
   });
 }
 
@@ -149,7 +148,7 @@ function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule 
     return facadeActivationCheckRuntimeModule;
   }
   facadeActivationCheckRuntimeModule = loadFacadeActivationCheckRuntimeFromCandidates((candidate) =>
-    getFacadeActivationCheckRuntimeJiti(candidate)(candidate),
+    getFacadeActivationCheckRuntimeSourceLoader(candidate)(candidate),
   );
   if (facadeActivationCheckRuntimeModule) {
     return facadeActivationCheckRuntimeModule;
@@ -245,9 +244,8 @@ export function tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T extends o
 
 export function resetFacadeRuntimeStateForTest(): void {
   resetFacadeLoaderStateForTest();
-  facadeActivationCheckRuntimeModule?.resetFacadeActivationCheckRuntimeStateForTest();
   facadeActivationCheckRuntimeModule = undefined;
-  facadeActivationCheckRuntimeJitiLoaders.clear();
+  facadeActivationCheckRuntimeLoaders.clear();
 }
 
 export const __testing = {

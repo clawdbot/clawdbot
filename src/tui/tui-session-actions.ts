@@ -32,6 +32,7 @@ type SessionActionContext = {
   updateAutocompleteProvider: () => void;
   setActivityStatus: (text: string) => void;
   clearLocalRunIds?: () => void;
+  rememberSessionKey?: (sessionKey: string) => void | Promise<void>;
 };
 
 type SessionInfoDefaults = {
@@ -63,6 +64,7 @@ export function createSessionActions(context: SessionActionContext) {
     updateAutocompleteProvider,
     setActivityStatus,
     clearLocalRunIds,
+    rememberSessionKey,
   } = context;
   let refreshSessionInfoPromise: Promise<void> = Promise.resolve();
   let lastSessionDefaults: SessionInfoDefaults | null = null;
@@ -362,6 +364,7 @@ export function createSessionActions(context: SessionActionContext) {
         }
       }
       state.historyLoaded = true;
+      void rememberSessionKey?.(state.currentSessionKey);
     } catch (err) {
       chatLog.addSystem(`history failed: ${String(err)}`);
     }

@@ -1,6 +1,6 @@
 import YAML from "yaml";
 
-export type ParsedFrontmatter = Record<string, string>;
+type ParsedFrontmatter = Record<string, string>;
 
 type ParsedFrontmatterLineEntry = {
   value: string;

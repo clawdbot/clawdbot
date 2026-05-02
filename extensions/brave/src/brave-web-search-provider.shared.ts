@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/text-runtime";
 
 type BraveConfig = {
+  baseUrl?: unknown;
   mode?: string;
 };
 

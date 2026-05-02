@@ -5,7 +5,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
 import type { MigrateApplyOptions } from "./types.js";
 
-export function formatCount(value: number, label: string): string {
+function formatCount(value: number, label: string): string {
   return `${value} ${label}${value === 1 ? "" : "s"}`;
 }
 
@@ -52,7 +52,7 @@ export function formatMigrationPlan(plan: MigrationPlan): string[] {
   return lines;
 }
 
-export function formatMigrationItem(item: MigrationItem): string {
+function formatMigrationItem(item: MigrationItem): string {
   const target = item.target ? ` -> ${item.target}` : "";
   const message = item.message ? ` (${item.message})` : item.reason ? ` (${item.reason})` : "";
   const sensitive = item.sensitive ? " [sensitive]" : "";

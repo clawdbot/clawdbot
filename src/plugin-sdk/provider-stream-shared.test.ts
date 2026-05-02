@@ -10,6 +10,7 @@ import {
   decodeHtmlEntitiesInObject,
   hasCopilotVisionInput,
   isOpenAICompatibleThinkingEnabled,
+  stripTrailingAssistantPrefillMessages,
   stripTrailingAnthropicAssistantPrefillWhenThinking,
 } from "./provider-stream-shared.js";
 
@@ -301,6 +302,18 @@ describe("createPayloadPatchStreamWrapper", () => {
 });
 
 describe("stripTrailingAnthropicAssistantPrefillWhenThinking", () => {
+  it("exposes unconditional assistant prefill stripping for proxy reasoning wrappers", () => {
+    const payload = {
+      messages: [
+        { role: "user", content: "Return JSON." },
+        { role: "assistant", content: "{" },
+      ],
+    };
+
+    expect(stripTrailingAssistantPrefillMessages(payload)).toBe(1);
+    expect(payload.messages).toEqual([{ role: "user", content: "Return JSON." }]);
+  });
+
   it("removes trailing assistant text turns when Anthropic thinking is enabled", () => {
     const payload = {
       thinking: { type: "enabled", budget_tokens: 1024 },

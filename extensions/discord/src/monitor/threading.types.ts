@@ -28,12 +28,12 @@ export type DiscordThreadParentInfo = {
   type?: ChannelType;
 };
 
-export type DiscordThreadStarterRestEmbed = {
+type DiscordThreadStarterRestEmbed = {
   title?: string | null;
   description?: string | null;
 };
 
-export type DiscordThreadStarterRestSnapshotMessage = {
+type DiscordThreadStarterRestSnapshotMessage = {
   content?: string | null;
   attachments?: APIAttachment[] | null;
   embeds?: DiscordThreadStarterRestEmbed[] | null;

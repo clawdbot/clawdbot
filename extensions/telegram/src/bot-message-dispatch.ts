@@ -396,11 +396,10 @@ export const dispatchTelegramMessage = async ({
       );
     }
   }
-  const hasNativeQuoteReply =
-    replyToMode !== "off" && Object.keys(replyQuoteByMessageId).length > 0;
+  const hasTelegramQuoteReply = replyToMode !== "off" && replyQuoteText != null;
   const canStreamAnswerDraft =
     previewStreamingEnabled &&
-    !hasNativeQuoteReply &&
+    !hasTelegramQuoteReply &&
     !accountBlockStreamingEnabled &&
     !forceBlockStreamingForReasoning;
   const canStreamReasoningDraft = streamReasoningDraft;

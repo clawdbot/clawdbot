@@ -65,6 +65,42 @@ vi.mock("../../agents/auth-profiles/store.js", () => {
   };
 });
 
+vi.mock("../../agents/model-auth.js", () => {
+  const store = () => ({
+    version: 1,
+    profiles: authProfilesStoreMock.profiles,
+  });
+  const hasWorkspaceCredential = (env: NodeJS.ProcessEnv = process.env) =>
+    Boolean(env.WORKSPACE_MODEL_LIST_CREDENTIALS || env.WORKSPACE_MODEL_CREDENTIALS);
+  return {
+    ensureAuthProfileStore: store,
+    hasRuntimeAvailableProviderAuth: ({
+      provider,
+      env,
+    }: {
+      provider: string;
+      env?: NodeJS.ProcessEnv;
+    }) => provider === "anthropic" && hasWorkspaceCredential(env),
+    resolveAuthProfileOrder: ({ provider }: { provider: string }) =>
+      Object.entries(authProfilesStoreMock.profiles)
+        .filter(([, profile]) => profile.provider === provider)
+        .map(([profileId]) => profileId),
+    resolveEnvApiKey: (provider: string, env: NodeJS.ProcessEnv = process.env) => {
+      if (provider !== "anthropic") {
+        return null;
+      }
+      if (env.WORKSPACE_MODEL_CREDENTIALS) {
+        return { apiKey: "sk-workspace", source: "workspace model credentials" };
+      }
+      if (env.WORKSPACE_MODEL_LIST_CREDENTIALS) {
+        return { apiKey: "sk-workspace", source: "workspace model list credentials" };
+      }
+      return null;
+    },
+    resolveUsableCustomProviderApiKey: () => null,
+  };
+});
+
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,

@@ -113,6 +113,27 @@ describe("createVideoGenerateTool", () => {
     ).not.toBeNull();
   });
 
+  it("does not load runtime providers while registering an explicitly configured tool", () => {
+    const listProviders = vi
+      .spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders")
+      .mockImplementation(() => {
+        throw new Error("runtime provider list should not run during tool registration");
+      });
+
+    expect(
+      createVideoGenerateTool({
+        config: asConfig({
+          agents: {
+            defaults: {
+              videoGenerationModel: { primary: "qwen/wan2.6-t2v" },
+            },
+          },
+        }),
+      }),
+    ).not.toBeNull();
+    expect(listProviders).not.toHaveBeenCalled();
+  });
+
   it("orders auto-detected provider defaults by canonical aliases", () => {
     vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
       {

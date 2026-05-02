@@ -12,14 +12,14 @@ type RawInteractionOverrides = Omit<Partial<RawInteraction>, "data" | "type"> &
     data?: Record<string, unknown>;
   };
 
-export type FakeRestCall = {
+type FakeRestCall = {
   method: RestMethod;
   path: string;
   data?: RequestData;
   query?: QueuedRequest["query"];
 };
 
-export type FakeRestClient = RequestClient & {
+type FakeRestClient = RequestClient & {
   calls: FakeRestCall[];
   enqueueResponse: (value: unknown) => void;
 };
@@ -70,7 +70,7 @@ export function createInternalTestClient(commands: BaseCommand[] = []): Client {
   );
 }
 
-export function createRestMock(overrides: RestMock = {}): RestMock & RequestClient {
+function createRestMock(overrides: RestMock = {}): RestMock & RequestClient {
   return {
     get: vi.fn(async () => undefined),
     post: vi.fn(async () => undefined),

@@ -12,7 +12,7 @@ import {
   type MatrixQaTopologySpec,
 } from "../../substrate/topology.js";
 
-export type MatrixQaScenarioId =
+type MatrixQaScenarioId =
   | "matrix-thread-follow-up"
   | "matrix-thread-root-preservation"
   | "matrix-thread-nested-reply-shape"
@@ -115,7 +115,7 @@ export type MatrixQaScenarioDefinition = LiveTransportScenarioDefinition<MatrixQ
   topology?: MatrixQaTopologySpec;
 };
 
-export type MatrixQaProfile =
+type MatrixQaProfile =
   | "all"
   | "e2ee-cli"
   | "e2ee-deep"
@@ -131,7 +131,7 @@ export const MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY = "driver-dm-shared";
 export const MATRIX_QA_E2EE_ROOM_KEY = "e2ee";
 export const MATRIX_QA_E2EE_VERIFICATION_DM_ROOM_KEY = "e2ee-verification-dm";
 export const MATRIX_QA_HOMESERVER_ROOM_KEY = "homeserver";
-export const MATRIX_QA_MAIN_ROOM_KEY = "main";
+const MATRIX_QA_MAIN_ROOM_KEY = "main";
 export const MATRIX_QA_MEDIA_ROOM_KEY = "media";
 export const MATRIX_QA_MEMBERSHIP_ROOM_KEY = "membership";
 export const MATRIX_QA_RESTART_ROOM_KEY = "restart";
@@ -372,7 +372,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
       },
       threadBindings: {
         enabled: true,
-        spawnSubagentSessions: true,
+        spawnSessions: true,
       },
       toolProfile: "coding",
     },

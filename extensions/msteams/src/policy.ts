@@ -19,7 +19,7 @@ import {
   isDangerousNameMatchingEnabled,
 } from "../runtime-api.js";
 
-export type MSTeamsResolvedRouteConfig = {
+type MSTeamsResolvedRouteConfig = {
   teamConfig?: MSTeamsTeamConfig;
   channelConfig?: MSTeamsChannelConfig;
   allowlistConfigured: boolean;
@@ -203,12 +203,12 @@ export function resolveMSTeamsGroupToolPolicy(
   return undefined;
 }
 
-export type MSTeamsReplyPolicy = {
+type MSTeamsReplyPolicy = {
   requireMention: boolean;
   replyStyle: MSTeamsReplyStyle;
 };
 
-export type MSTeamsAllowlistMatch = AllowlistMatch<"wildcard" | "id" | "name">;
+type MSTeamsAllowlistMatch = AllowlistMatch<"wildcard" | "id" | "name">;
 
 export function resolveMSTeamsAllowlistMatch(params: {
   allowFrom: Array<string | number>;

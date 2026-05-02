@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
-export type CrestodianRescueDecision =
+type CrestodianRescueDecision =
   | {
       allowed: true;
       enabled: true;
@@ -21,7 +21,7 @@ export type CrestodianRescueDecision =
       message: string;
     };
 
-export type CrestodianRescuePolicyInput = {
+type CrestodianRescuePolicyInput = {
   cfg: OpenClawConfig;
   agentId?: string;
   senderIsOwner: boolean;

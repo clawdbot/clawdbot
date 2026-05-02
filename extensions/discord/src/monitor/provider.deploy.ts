@@ -1,4 +1,4 @@
-import { formatDurationSeconds, warn, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { warn, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { Client, overwriteApplicationCommands, type RequestClient } from "../internal/discord.js";
 import {
@@ -9,7 +9,6 @@ import {
   formatDiscordDeployRateLimitDetails,
   formatDiscordDeployRateLimitWarning,
   isDiscordDeployDailyCreateLimit,
-  resolveDiscordDeployRateLimitDetails,
 } from "./provider.deploy-errors.js";
 import { logDiscordStartupPhase } from "./provider.startup-log.js";
 
@@ -117,7 +116,7 @@ function installDeployRestLogging(params: {
   };
 }
 
-export async function deployDiscordCommands(params: {
+async function deployDiscordCommands(params: {
   client: Client;
   runtime: RuntimeEnv;
   enabled: boolean;
@@ -130,9 +129,6 @@ export async function deployDiscordCommands(params: {
   }
   const startupStartedAt = params.startupStartedAt ?? Date.now();
   const accountId = params.accountId ?? "default";
-  const maxAttempts = 3;
-  const maxRetryDelayMs = 15_000;
-  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
   const restoreDeployRestLogging = installDeployRestLogging({
     rest: params.client.rest,
     runtime: params.runtime,
@@ -141,46 +137,29 @@ export async function deployDiscordCommands(params: {
     shouldLogVerbose: params.shouldLogVerbose,
   });
   try {
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      try {
-        await params.client.deployCommands({ mode: "reconcile" });
+    try {
+      await params.client.deployCommands({ mode: "reconcile" });
+      return;
+    } catch (err) {
+      if (isDiscordDeployDailyCreateLimit(err)) {
+        params.runtime.log?.(
+          warn(
+            `discord: native slash command deploy skipped for ${accountId}; daily application command create limit reached. Existing slash commands stay active until Discord resets the quota. Message send/receive is unaffected.`,
+          ),
+        );
         return;
-      } catch (err) {
-        if (isDiscordDeployDailyCreateLimit(err)) {
-          params.runtime.log?.(
-            warn(
-              `discord: native slash command deploy skipped for ${accountId}; daily application command create limit reached. Existing slash commands stay active until Discord resets the quota. Message send/receive is unaffected.`,
-            ),
-          );
-          return;
-        }
-        const rateLimitDetails = resolveDiscordDeployRateLimitDetails(err);
-        if (!rateLimitDetails || attempt >= maxAttempts) {
-          throw err;
-        }
-        const retryAfterMs = Math.max(0, Math.ceil(rateLimitDetails.retryAfterMs ?? 0));
-        if (retryAfterMs > maxRetryDelayMs) {
-          params.runtime.log?.(
-            warn(
-              `discord: native slash command deploy skipped for ${accountId}; retry after ${formatDurationSeconds(retryAfterMs, { decimals: 1 })} exceeds startup budget. Existing slash commands stay active. Message send/receive is unaffected.`,
-            ),
-          );
-          return;
-        }
-        if (params.shouldLogVerbose()) {
-          params.runtime.log?.(
-            `discord startup [${accountId}] deploy-retry ${Math.max(0, Date.now() - startupStartedAt)}ms attempt=${attempt}/${maxAttempts - 1} retryAfterMs=${retryAfterMs} scope=${rateLimitDetails.scope ?? "unknown"} code=${rateLimitDetails.discordCode ?? "unknown"}`,
-          );
-        }
-        await sleep(retryAfterMs);
       }
+      const rateLimitWarning = formatDiscordDeployRateLimitWarning(err, accountId);
+      if (rateLimitWarning) {
+        params.runtime.log?.(warn(rateLimitWarning));
+        return;
+      }
+      throw err;
     }
   } catch (err) {
-    const rateLimitWarning = formatDiscordDeployRateLimitWarning(err, accountId);
     params.runtime.log?.(
       warn(
-        rateLimitWarning ??
-          `discord: native slash command deploy warning (not message send): ${formatDiscordDeployErrorMessage(err)}${formatDiscordDeployErrorDetails(err)}`,
+        `discord: native slash command deploy warning (not message send): ${formatDiscordDeployErrorMessage(err)}${formatDiscordDeployErrorDetails(err)}`,
       ),
     );
   } finally {

@@ -9,7 +9,7 @@ import type {
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
-export const APPROVAL_NOT_FOUND_DETAILS = {
+const APPROVAL_NOT_FOUND_DETAILS = {
   reason: ErrorCodes.APPROVAL_NOT_FOUND,
   remediation: "Re-request the action; pending approvals are cleared after expiry or restart.",
 } as const;
@@ -51,7 +51,7 @@ export function isApprovalDecision(value: string): value is ExecApprovalDecision
   return value === "allow-once" || value === "allow-always" || value === "deny";
 }
 
-export function respondUnknownOrExpiredApproval(respond: RespondFn): void {
+function respondUnknownOrExpiredApproval(respond: RespondFn): void {
   respond(
     false,
     undefined,

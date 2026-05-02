@@ -1320,13 +1320,45 @@ describe("runMessageAction plugin dispatch", () => {
         },
         expectedAccountId: "account-b",
       },
+      {
+        name: "prefers the account bound to the target peer",
+        args: {
+          cfg: {
+            bindings: [
+              {
+                agentId: "agent-b",
+                match: {
+                  channel: "accountchat",
+                  accountId: "wrong-peer",
+                  peer: { kind: "channel", id: "C_OTHER" },
+                },
+              },
+              {
+                agentId: "agent-b",
+                match: {
+                  channel: "accountchat",
+                  accountId: "account-peer",
+                  peer: { kind: "channel", id: "C_TARGET" },
+                },
+              },
+              {
+                agentId: "agent-b",
+                match: { channel: "accountchat", accountId: "agent-fallback" },
+              },
+            ],
+          } as OpenClawConfig,
+          agentId: "agent-b",
+          target: "channel:C_TARGET",
+        },
+        expectedAccountId: "account-peer",
+      },
     ])("$name", async ({ args, expectedAccountId }) => {
       await runMessageAction({
         ...args,
         action: "send",
         params: {
           channel: "accountchat",
-          target: "channel:123",
+          target: "target" in args ? args.target : "channel:123",
           message: "hi",
         },
       });

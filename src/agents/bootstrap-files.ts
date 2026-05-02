@@ -22,7 +22,7 @@ import {
 } from "./workspace.js";
 
 export type BootstrapContextMode = "full" | "lightweight";
-export type BootstrapContextRunKind = "default" | "heartbeat" | "cron";
+type BootstrapContextRunKind = "default" | "heartbeat" | "cron";
 
 const CONTINUATION_SCAN_MAX_TAIL_BYTES = 256 * 1024;
 const CONTINUATION_SCAN_MAX_RECORDS = 500;

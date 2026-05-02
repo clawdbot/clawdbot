@@ -55,6 +55,12 @@ export function buildEmbeddedRunBaseParams(params: {
   isReasoningTagProvider?: ReasoningTagProviderResolver;
 }) {
   const config = params.run.config;
+  const modelFallbacksOverride = resolveEffectiveModelFallbacks({
+    cfg: config,
+    agentId: params.run.agentId,
+    hasSessionModelOverride: params.run.hasSessionModelOverride === true,
+    modelOverrideSource: params.run.modelOverrideSource,
+  });
   return {
     sessionFile: params.run.sessionFile,
     workspaceDir: params.run.workspaceDir,
@@ -76,6 +82,7 @@ export function buildEmbeddedRunBaseParams(params: {
     sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
     provider: params.provider,
     model: params.model,
+    modelFallbacksOverride,
     ...params.authProfile,
     thinkLevel: params.run.thinkLevel,
     verboseLevel: params.run.verboseLevel,

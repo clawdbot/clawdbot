@@ -4,10 +4,10 @@ import { findNormalizedProviderValue } from "./provider-id.js";
 
 export const CONTEXT_WINDOW_HARD_MIN_TOKENS = 4_000;
 export const CONTEXT_WINDOW_WARN_BELOW_TOKENS = 8_000;
-export const CONTEXT_WINDOW_HARD_MIN_RATIO = 0.1;
-export const CONTEXT_WINDOW_WARN_BELOW_RATIO = 0.2;
+const CONTEXT_WINDOW_HARD_MIN_RATIO = 0.1;
+const CONTEXT_WINDOW_WARN_BELOW_RATIO = 0.2;
 
-export type ContextWindowSource = "model" | "modelsConfig" | "agentContextTokens" | "default";
+type ContextWindowSource = "model" | "modelsConfig" | "agentContextTokens" | "default";
 
 export type ContextWindowInfo = {
   tokens: number;
@@ -62,24 +62,24 @@ export function resolveContextWindowInfo(params: {
   return baseInfo;
 }
 
-export type ContextWindowGuardResult = ContextWindowInfo & {
+type ContextWindowGuardResult = ContextWindowInfo & {
   hardMinTokens: number;
   warnBelowTokens: number;
   shouldWarn: boolean;
   shouldBlock: boolean;
 };
 
-export type ContextWindowGuardThresholds = {
+type ContextWindowGuardThresholds = {
   hardMinTokens: number;
   warnBelowTokens: number;
 };
 
-export type ContextWindowGuardHint = {
+type ContextWindowGuardHint = {
   endpointClass: ReturnType<typeof resolveProviderEndpoint>["endpointClass"];
   likelySelfHosted: boolean;
 };
 
-export function resolveContextWindowGuardHint(params: {
+function resolveContextWindowGuardHint(params: {
   runtimeBaseUrl?: string | null;
 }): ContextWindowGuardHint {
   const endpoint = resolveProviderEndpoint(params.runtimeBaseUrl ?? undefined);

@@ -1,4 +1,4 @@
-export type ComparableSemver = {
+type ComparableSemver = {
   major: number;
   minor: number;
   patch: number;

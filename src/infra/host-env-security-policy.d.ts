@@ -1,4 +1,4 @@
-export type HostEnvSecurityPolicy = Readonly<{
+type HostEnvSecurityPolicy = Readonly<{
   blockedEverywhereKeys: readonly string[];
   blockedOverrideOnlyKeys: readonly string[];
   allowedInheritedOverrideOnlyKeys: readonly string[];

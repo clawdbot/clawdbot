@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
-import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
+import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import { isGatewayModelPricingEnabled } from "./model-pricing-config.js";
@@ -91,7 +91,7 @@ function recoverPendingSessionDeliveries(params: {
 
 function startGatewayModelPricingRefreshOnDemand(params: {
   config: OpenClawConfig;
-  pluginLookUpTable?: Pick<PluginLookUpTable, "index" | "manifestRegistry">;
+  pluginLookUpTable?: PluginMetadataRegistryView;
   log: GatewayRuntimeServiceLogger;
 }): () => void {
   if (!isGatewayModelPricingEnabled(params.config)) {
@@ -125,7 +125,7 @@ export function startGatewayRuntimeServices(params: {
   cfgAtStart: OpenClawConfig;
   channelManager: GatewayChannelManager;
   log: GatewayRuntimeServiceLogger;
-  pluginLookUpTable?: Pick<PluginLookUpTable, "index" | "manifestRegistry">;
+  pluginLookUpTable?: PluginMetadataRegistryView;
 }): {
   heartbeatRunner: HeartbeatRunner;
   channelHealthMonitor: ChannelHealthMonitor | null;

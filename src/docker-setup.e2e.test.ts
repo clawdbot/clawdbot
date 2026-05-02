@@ -614,15 +614,4 @@ describe("scripts/docker/setup.sh", () => {
     const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
     expect(compose.match(/TZ: \$\{OPENCLAW_TZ:-UTC\}/g)).toHaveLength(2);
   });
-
-  it("keeps bundled plugin runtime deps on a Docker-managed volume", async () => {
-    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
-    expect(
-      compose.match(/OPENCLAW_PLUGIN_STAGE_DIR: \/var\/lib\/openclaw\/plugin-runtime-deps/g),
-    ).toHaveLength(2);
-    expect(
-      compose.match(/- openclaw-plugin-runtime-deps:\/var\/lib\/openclaw\/plugin-runtime-deps/g),
-    ).toHaveLength(2);
-    expect(compose).toContain("\nvolumes:\n  openclaw-plugin-runtime-deps:\n");
-  });
 });

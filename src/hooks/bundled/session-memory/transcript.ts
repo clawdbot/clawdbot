@@ -88,7 +88,7 @@ export async function getRecentSessionContentWithResetFallback(
   }
 }
 
-export function stripResetSuffix(fileName: string): string {
+function stripResetSuffix(fileName: string): string {
   const resetIndex = fileName.indexOf(".reset.");
   return resetIndex === -1 ? fileName : fileName.slice(0, resetIndex);
 }

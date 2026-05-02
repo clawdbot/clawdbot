@@ -22,7 +22,7 @@ export type InteractiveReplyTextBlock = {
   text: string;
 };
 
-export type InteractiveReplyButtonsBlock = {
+type InteractiveReplyButtonsBlock = {
   type: "buttons";
   buttons: InteractiveReplyButton[];
 };

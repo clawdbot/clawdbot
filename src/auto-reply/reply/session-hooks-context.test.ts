@@ -12,6 +12,11 @@ const hookRunnerMocks = vi.hoisted(() => ({
   runSessionStart: vi.fn<HookRunner["runSessionStart"]>(),
   runSessionEnd: vi.fn<HookRunner["runSessionEnd"]>(),
 }));
+const sessionCleanupMocks = vi.hoisted(() => ({
+  closeTrackedBrowserTabsForSessions: vi.fn(async () => 0),
+  resetRegisteredAgentHarnessSessions: vi.fn(async () => undefined),
+  retireSessionMcpRuntime: vi.fn(async () => false),
+}));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () =>
@@ -21,6 +26,39 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
       runSessionEnd: hookRunnerMocks.runSessionEnd,
     }) as unknown as HookRunner,
 }));
+
+vi.mock("../../agents/harness/registry.js", () => ({
+  resetRegisteredAgentHarnessSessions: sessionCleanupMocks.resetRegisteredAgentHarnessSessions,
+}));
+
+vi.mock("../../agents/pi-bundle-mcp-tools.js", () => ({
+  retireSessionMcpRuntime: sessionCleanupMocks.retireSessionMcpRuntime,
+}));
+
+vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
+  closeTrackedBrowserTabsForSessions: sessionCleanupMocks.closeTrackedBrowserTabsForSessions,
+}));
+
+vi.mock("../../agents/session-write-lock.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/session-write-lock.js")>(
+    "../../agents/session-write-lock.js",
+  );
+  return {
+    ...actual,
+    acquireSessionWriteLock: vi.fn(async () => ({ release: async () => {} })),
+    resolveSessionLockMaxHoldFromTimeout: vi.fn(
+      ({
+        timeoutMs,
+        graceMs = 2 * 60 * 1000,
+        minMs = 5 * 60 * 1000,
+      }: {
+        timeoutMs: number;
+        graceMs?: number;
+        minMs?: number;
+      }) => Math.max(minMs, timeoutMs + graceMs),
+    ),
+  };
+});
 
 async function createStorePath(prefix: string): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), `${prefix}-`));
@@ -102,6 +140,9 @@ describe("session hook context wiring", () => {
     hookRunnerMocks.hasHooks.mockReset();
     hookRunnerMocks.runSessionStart.mockReset();
     hookRunnerMocks.runSessionEnd.mockReset();
+    sessionCleanupMocks.closeTrackedBrowserTabsForSessions.mockClear();
+    sessionCleanupMocks.resetRegisteredAgentHarnessSessions.mockClear();
+    sessionCleanupMocks.retireSessionMcpRuntime.mockClear();
     hookRunnerMocks.runSessionStart.mockResolvedValue(undefined);
     hookRunnerMocks.runSessionEnd.mockResolvedValue(undefined);
     hookRunnerMocks.hasHooks.mockImplementation(

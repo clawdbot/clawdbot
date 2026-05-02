@@ -5,7 +5,7 @@ import { type GraphResponse, fetchGraphJson, resolveGraphToken } from "./graph.j
 // Types
 // ---------------------------------------------------------------------------
 
-export type GraphTeamsChannel = {
+type GraphTeamsChannel = {
   id?: string;
   displayName?: string;
   description?: string;
@@ -14,12 +14,12 @@ export type GraphTeamsChannel = {
   createdDateTime?: string;
 };
 
-export type ListChannelsMSTeamsParams = {
+type ListChannelsMSTeamsParams = {
   cfg: OpenClawConfig;
   teamId: string;
 };
 
-export type ListChannelsMSTeamsResult = {
+type ListChannelsMSTeamsResult = {
   channels: Array<{
     id: string | undefined;
     displayName: string | undefined;
@@ -29,13 +29,13 @@ export type ListChannelsMSTeamsResult = {
   truncated?: boolean;
 };
 
-export type GetChannelInfoMSTeamsParams = {
+type GetChannelInfoMSTeamsParams = {
   cfg: OpenClawConfig;
   teamId: string;
   channelId: string;
 };
 
-export type GetChannelInfoMSTeamsResult = {
+type GetChannelInfoMSTeamsResult = {
   channel: {
     id: string | undefined;
     displayName: string | undefined;

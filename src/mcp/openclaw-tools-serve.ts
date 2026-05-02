@@ -15,7 +15,7 @@ export function resolveOpenClawToolsForMcp(): AnyAgentTool[] {
   return [createCronTool()];
 }
 
-export function createOpenClawToolsMcpServer(
+function createOpenClawToolsMcpServer(
   params: {
     tools?: AnyAgentTool[];
   } = {},
@@ -24,7 +24,7 @@ export function createOpenClawToolsMcpServer(
   return createToolsMcpServer({ name: "openclaw-tools", tools });
 }
 
-export async function serveOpenClawToolsMcp(): Promise<void> {
+async function serveOpenClawToolsMcp(): Promise<void> {
   const server = createOpenClawToolsMcpServer();
   await connectToolsMcpServerToStdio(server);
 }

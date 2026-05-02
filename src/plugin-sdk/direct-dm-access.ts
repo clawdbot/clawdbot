@@ -5,6 +5,11 @@ import {
   resolveDmGroupAccessWithLists,
   type DmGroupAccessReasonCode,
 } from "../security/dm-policy-shared.js";
+import {
+  expandAllowFromWithAccessGroups,
+  type AccessGroupMembershipResolver,
+} from "./access-groups.js";
+export type { AccessGroupMembershipResolver } from "./access-groups.js";
 
 export type DirectDmCommandAuthorizationRuntime = {
   shouldComputeCommandAuthorized: (rawBody: string, cfg: OpenClawConfig) => boolean;
@@ -37,6 +42,7 @@ export async function resolveInboundDirectDmAccessWithRuntime(params: {
   senderId: string;
   rawBody: string;
   isSenderAllowed: (senderId: string, allowFrom: string[]) => boolean;
+  resolveAccessGroupMembership?: AccessGroupMembershipResolver;
   runtime: DirectDmCommandAuthorizationRuntime;
   modeWhenAccessGroupsOff?: "allow" | "deny" | "configured";
   readStoreAllowFrom?: (provider: ChannelId, accountId: string) => Promise<string[]>;
@@ -51,12 +57,32 @@ export async function resolveInboundDirectDmAccessWithRuntime(params: {
           readStore: params.readStoreAllowFrom,
         })
       : [];
+  const [allowFrom, effectiveStoreAllowFrom] = await Promise.all([
+    expandAllowFromWithAccessGroups({
+      cfg: params.cfg,
+      allowFrom: params.allowFrom,
+      channel: params.channel,
+      accountId: params.accountId,
+      senderId: params.senderId,
+      isSenderAllowed: params.isSenderAllowed,
+      resolveMembership: params.resolveAccessGroupMembership,
+    }),
+    expandAllowFromWithAccessGroups({
+      cfg: params.cfg,
+      allowFrom: storeAllowFrom,
+      channel: params.channel,
+      accountId: params.accountId,
+      senderId: params.senderId,
+      isSenderAllowed: params.isSenderAllowed,
+      resolveMembership: params.resolveAccessGroupMembership,
+    }),
+  ]);
 
   const access = resolveDmGroupAccessWithLists({
     isGroup: false,
     dmPolicy,
-    allowFrom: params.allowFrom,
-    storeAllowFrom,
+    allowFrom,
+    storeAllowFrom: effectiveStoreAllowFrom,
     groupAllowFromFallbackToAllowFrom: false,
     isSenderAllowed: (allowEntries) => params.isSenderAllowed(params.senderId, allowEntries),
   });

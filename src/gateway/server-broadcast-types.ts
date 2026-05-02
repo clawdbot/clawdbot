@@ -1,4 +1,4 @@
-export type GatewayBroadcastStateVersion = {
+type GatewayBroadcastStateVersion = {
   presence?: number;
   health?: number;
 };

@@ -494,11 +494,14 @@ export async function handleTelegramAction(
         "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
     }
-    await telegramActionRuntime.deleteMessageTelegram(chatId ?? "", messageId ?? 0, {
+    const result = await telegramActionRuntime.deleteMessageTelegram(chatId ?? "", messageId ?? 0, {
       cfg,
       token,
       accountId: accountId ?? undefined,
     });
+    if (!result.ok) {
+      return jsonResult({ ok: false, deleted: false, warning: result.warning });
+    }
     return jsonResult({ ok: true, deleted: true });
   }
 

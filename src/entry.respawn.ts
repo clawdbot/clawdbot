@@ -7,7 +7,7 @@ export const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning"
 export const OPENCLAW_NODE_OPTIONS_READY = "OPENCLAW_NODE_OPTIONS_READY";
 export const OPENCLAW_NODE_EXTRA_CA_CERTS_READY = "OPENCLAW_NODE_EXTRA_CA_CERTS_READY";
 
-export type CliRespawnPlan = {
+type CliRespawnPlan = {
   command: string;
   argv: string[];
   env: NodeJS.ProcessEnv;
@@ -29,7 +29,7 @@ export function resolveCliRespawnCommand(params: {
   return params.execPath;
 }
 
-export function hasExperimentalWarningSuppressed(
+function hasExperimentalWarningSuppressed(
   params: {
     env?: NodeJS.ProcessEnv;
     execArgv?: string[];

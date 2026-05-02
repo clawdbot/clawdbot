@@ -20,7 +20,7 @@ import type {
 
 // ============ Dispatch result ============
 
-export type DispatchResult =
+type DispatchResult =
   | { action: "ready"; data: unknown; sessionId: string }
   | { action: "resumed"; data: unknown }
   | { action: "message"; msg: QueuedMessage }

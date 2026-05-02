@@ -242,7 +242,7 @@ export function resolveConfiguredOpenRouterCompatAlias(params: {
   });
 }
 
-export function parseModelRefWithCompatAlias(params: {
+function parseModelRefWithCompatAlias(params: {
   cfg?: OpenClawConfig;
   raw: string;
   defaultProvider: string;
@@ -710,7 +710,7 @@ export type ResolveAllowedModelRefResult =
       error: string;
     };
 
-export function getModelRefStatusFromAllowedSet(params: {
+function getModelRefStatusFromAllowedSet(params: {
   catalog: ModelCatalogEntry[];
   ref: ModelRef;
   allowed: {

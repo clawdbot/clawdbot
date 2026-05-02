@@ -1,6 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
-export type SafeBinSemanticValidationParams = {
+type SafeBinSemanticValidationParams = {
   binName?: string;
   positional: readonly string[];
 };
@@ -64,7 +64,7 @@ export function normalizeSafeBinName(raw: string): string {
   return normalized.replace(/\.(?:exe|cmd|bat|com)$/i, "");
 }
 
-export function getSafeBinSemanticRule(binName?: string): SafeBinSemanticRule | undefined {
+function getSafeBinSemanticRule(binName?: string): SafeBinSemanticRule | undefined {
   const normalized = typeof binName === "string" ? normalizeSafeBinName(binName) : "";
   return normalized ? SAFE_BIN_SEMANTIC_RULES[normalized] : undefined;
 }

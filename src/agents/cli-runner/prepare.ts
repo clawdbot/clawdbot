@@ -8,6 +8,7 @@ import type {
   CliBackendAuthEpochMode,
   CliBackendPreparedExecution,
 } from "../../plugins/cli-backend.types.js";
+import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
@@ -274,8 +275,8 @@ export async function prepareCliRunContext(
     );
   }
   let openClawHistoryMessages: unknown[] | undefined;
-  const loadOpenClawHistoryMessages = () => {
-    openClawHistoryMessages ??= loadCliSessionHistoryMessages({
+  const loadOpenClawHistoryMessages = async () => {
+    openClawHistoryMessages ??= await loadCliSessionHistoryMessages({
       sessionId: params.sessionId,
       sessionFile: params.sessionFile,
       sessionKey: params.sessionKey,
@@ -340,7 +341,7 @@ export async function prepareCliRunContext(
     const hookResult = await resolvePromptBuildHookResult({
       config: params.config ?? getRuntimeConfig(),
       prompt: params.prompt,
-      messages: loadOpenClawHistoryMessages(),
+      messages: await loadOpenClawHistoryMessages(),
       hookCtx: {
         runId: params.runId,
         agentId: sessionAgentId,
@@ -349,9 +350,8 @@ export async function prepareCliRunContext(
         workspaceDir,
         modelProviderId: params.provider,
         modelId,
-        messageProvider: params.messageProvider,
         trigger: params.trigger,
-        channelId: params.messageChannel ?? params.messageProvider,
+        ...buildAgentHookContextChannelFields(params),
       },
       hookRunner,
     });
@@ -382,7 +382,7 @@ export async function prepareCliRunContext(
   const openClawHistoryPrompt = reusableCliSession.sessionId
     ? undefined
     : buildCliSessionHistoryPrompt({
-        messages: loadCliSessionReseedMessages({
+        messages: await loadCliSessionReseedMessages({
           sessionId: params.sessionId,
           sessionFile: params.sessionFile,
           sessionKey: params.sessionKey,

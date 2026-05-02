@@ -78,7 +78,7 @@ function formatVisibleTask(task: TaskRecord, index: number): string {
   return lines.join("\n");
 }
 
-export function buildTasksText(params: { sessionKey: string; agentId: string }): string {
+function buildTasksText(params: { sessionKey: string; agentId: string }): string {
   const sessionSnapshot = buildTaskStatusSnapshot(
     listTasksForSessionKeyForStatus(params.sessionKey),
   );

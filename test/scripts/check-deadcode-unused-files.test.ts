@@ -29,6 +29,17 @@ left-pad: package.json
     ]);
   });
 
+  it("ignores pnpm dlx progress lines in files-only compact output", () => {
+    expect(
+      parseKnipCompactUnusedFiles(`
+Progress: resolved 21, reused 0, downloaded 0, added 0
+src/b.ts: src/b.ts
+Progress: resolved 65, reused 20, downloaded 1, added 21, done
+src/a.ts: src/a.ts
+`),
+    ).toEqual(["src/a.ts", "src/b.ts"]);
+  });
+
   it("reports unexpected and stale allowlist entries", () => {
     expect(
       compareUnusedFilesToAllowlist(["src/a.ts", "src/new.ts"], ["src/a.ts", "src/old.ts"]),

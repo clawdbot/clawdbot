@@ -14,19 +14,6 @@ describe("SessionSchema maintenance extensions", () => {
     ).not.toThrow();
   });
 
-  it("accepts parentForkMaxTokens including 0 to disable the guard", () => {
-    expect(() => SessionSchema.parse({ parentForkMaxTokens: 100_000 })).not.toThrow();
-    expect(() => SessionSchema.parse({ parentForkMaxTokens: 0 })).not.toThrow();
-  });
-
-  it("rejects negative parentForkMaxTokens", () => {
-    expect(() =>
-      SessionSchema.parse({
-        parentForkMaxTokens: -1,
-      }),
-    ).toThrow(/parentForkMaxTokens/i);
-  });
-
   it("accepts disabling reset archive cleanup", () => {
     expect(() =>
       SessionSchema.parse({

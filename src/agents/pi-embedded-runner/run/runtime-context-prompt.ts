@@ -6,6 +6,8 @@ import {
 } from "../../internal-runtime-context.js";
 export { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE };
 
+const OPENCLAW_RUNTIME_EVENT_USER_PROMPT = "Continue the OpenClaw runtime event.";
+
 type RuntimeContextSession = {
   sendCustomMessage: (
     message: {
@@ -54,7 +56,7 @@ export function resolveRuntimeContextPromptParts(params: {
   if (!prompt) {
     return runtimeContext
       ? {
-          prompt: "",
+          prompt: OPENCLAW_RUNTIME_EVENT_USER_PROMPT,
           runtimeContext,
           runtimeOnly: true,
           runtimeSystemContext: buildRuntimeEventSystemContext(runtimeContext),

@@ -18,7 +18,7 @@ export type EnvApiKeyResult = {
   source: string;
 };
 
-export type EnvApiKeyLookupOptions = {
+type EnvApiKeyLookupOptions = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   aliasMap?: Readonly<Record<string, string>>;

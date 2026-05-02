@@ -29,10 +29,10 @@ import type { MSTeamsSsoTokenStore } from "./sso-token-store.js";
 import { buildUserAgent } from "./user-agent.js";
 
 /** Scope used to obtain a Bot Framework service token. */
-export const BOT_FRAMEWORK_TOKEN_SCOPE = "https://api.botframework.com/.default";
+const BOT_FRAMEWORK_TOKEN_SCOPE = "https://api.botframework.com/.default";
 
 /** Bot Framework User Token service base URL. */
-export const BOT_FRAMEWORK_USER_TOKEN_BASE_URL = "https://token.botframework.com";
+const BOT_FRAMEWORK_USER_TOKEN_BASE_URL = "https://token.botframework.com";
 
 /**
  * Response shape returned by the Bot Framework User Token service for
@@ -40,7 +40,7 @@ export const BOT_FRAMEWORK_USER_TOKEN_BASE_URL = "https://token.botframework.com
  *
  * @see https://learn.microsoft.com/azure/bot-service/rest-api/bot-framework-rest-connector-user-token-service
  */
-export type BotFrameworkUserTokenResponse = {
+type BotFrameworkUserTokenResponse = {
   channelId?: string;
   connectionName: string;
   token: string;
@@ -71,14 +71,14 @@ export type MSTeamsSsoDeps = {
   userTokenBaseUrl?: string;
 };
 
-export type MSTeamsSsoUser = {
+type MSTeamsSsoUser = {
   /** Stable user identifier — AAD object ID when available. */
   userId: string;
   /** Bot Framework channel ID (default: "msteams"). */
   channelId?: string;
 };
 
-export type MSTeamsSsoResult =
+type MSTeamsSsoResult =
   | {
       ok: true;
       token: string;
@@ -97,13 +97,13 @@ export type MSTeamsSsoResult =
       status?: number;
     };
 
-export type SigninTokenExchangeValue = {
+type SigninTokenExchangeValue = {
   id?: string;
   connectionName?: string;
   token?: string;
 };
 
-export type SigninVerifyStateValue = {
+type SigninVerifyStateValue = {
   state?: string;
 };
 

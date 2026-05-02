@@ -10,9 +10,5 @@
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },
-  "openclaw": {
-    "bundle": {
-      "stageRuntimeDependencies": true
-    }
-  }
+  "openclaw": {}
 }

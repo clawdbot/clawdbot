@@ -53,6 +53,8 @@ describe("gateway-watch tmux wrapper", () => {
     expect(command).toContain("/repo with spaces/openclaw");
     expect(command).toContain("'OPENCLAW_GATEWAY_WATCH_TMUX_CHILD=1'");
     expect(command).toContain("'OPENCLAW_GATEWAY_WATCH_SESSION=openclaw-gateway-watch-main'");
+    expect(command).toContain("'\\''-u'\\'' '\\''NO_COLOR'\\''");
+    expect(command).toContain("'FORCE_COLOR=1'");
     expect(command).toContain("'OPENCLAW_GATEWAY_PORT=19001'");
     expect(command).toContain("'OPENCLAW_PROFILE=Dev Profile'");
     expect(command).toContain("/opt/node");
@@ -60,6 +62,24 @@ describe("gateway-watch tmux wrapper", () => {
     expect(command).toContain("gateway");
     expect(command).toContain("--force");
     expect(command).toContain("'a b.jsonl'");
+  });
+
+  it("preserves an explicit color override for the tmux child", () => {
+    const command = buildGatewayWatchTmuxCommand({
+      args: ["gateway", "--force"],
+      cwd: "/repo",
+      env: {
+        FORCE_COLOR: "0",
+        NO_COLOR: "1",
+        SHELL: "/bin/zsh",
+      },
+      nodePath: "/opt/node",
+      sessionName: "openclaw-gateway-watch-main",
+    });
+
+    expect(command).toContain("'FORCE_COLOR=0'");
+    expect(command).not.toContain("'\\''-u'\\'' '\\''NO_COLOR'\\''");
+    expect(command).not.toContain("'FORCE_COLOR=1'");
   });
 
   it("creates a detached tmux session when none exists", () => {

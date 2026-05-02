@@ -4,6 +4,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtim
 const WHATSAPP_USER_JID_RE = /^(\d+)(?::\d+)?@s\.whatsapp\.net$/i;
 const WHATSAPP_LEGACY_USER_JID_RE = /^(\d+)@c\.us$/i;
 const WHATSAPP_LID_RE = /^(\d+)@lid$/i;
+const NON_WHATSAPP_PROVIDER_PREFIX_RE = /^[a-z][a-z0-9-]*:/i;
 
 function stripWhatsAppTargetPrefixes(value: string): string {
   let candidate = value.trim();
@@ -72,6 +73,9 @@ export function normalizeWhatsAppTarget(value: string): string | null {
     return normalized.length > 1 ? normalized : null;
   }
   if (candidate.includes("@")) {
+    return null;
+  }
+  if (NON_WHATSAPP_PROVIDER_PREFIX_RE.test(candidate)) {
     return null;
   }
   const normalized = normalizeE164(candidate);

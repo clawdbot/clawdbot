@@ -127,6 +127,8 @@ function createConfigObserveAuditRecord(params: {
   clobberedPath: string | null;
   restoredFromBackup: boolean;
   restoredBackupPath: string | null;
+  restoreErrorCode?: string | null;
+  restoreErrorMessage?: string | null;
 }): ConfigObserveAuditRecord {
   return {
     ts: params.ts,
@@ -175,6 +177,8 @@ function createConfigObserveAuditRecord(params: {
     clobberedPath: params.clobberedPath,
     restoredFromBackup: params.restoredFromBackup,
     restoredBackupPath: params.restoredBackupPath,
+    restoreErrorCode: params.restoreErrorCode ?? null,
+    restoreErrorMessage: params.restoreErrorMessage ?? null,
   };
 }
 
@@ -190,6 +194,24 @@ function createConfigObserveAuditAppendParams(
     homedir: deps.homedir,
     record: createConfigObserveAuditRecord(params),
   };
+}
+
+function extractRestoreErrorDetails(error: unknown): {
+  code: string | null;
+  message: string | null;
+} {
+  if (!error || typeof error !== "object") {
+    return { code: null, message: typeof error === "string" ? error : null };
+  }
+  const code =
+    "code" in error && typeof (error as { code?: unknown }).code === "string"
+      ? (error as { code: string }).code
+      : null;
+  const message =
+    "message" in error && typeof (error as { message?: unknown }).message === "string"
+      ? (error as { message: string }).message
+      : null;
+  return { code, message };
 }
 
 function hashConfigRaw(raw: string | null): string {
@@ -291,6 +313,10 @@ function resolveConfigHealthStatePath(env: NodeJS.ProcessEnv, homedir: () => str
   return path.join(resolveStateDir(env, homedir), "logs", "config-health.json");
 }
 
+function formatObserveRecoveryError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function readConfigHealthState(deps: ObserveRecoveryDeps): Promise<ConfigHealthState> {
   try {
     const raw = await deps.fs.promises.readFile(
@@ -318,25 +344,33 @@ async function writeConfigHealthState(
   deps: ObserveRecoveryDeps,
   state: ConfigHealthState,
 ): Promise<void> {
+  const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
   try {
-    const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
     await deps.fs.promises.mkdir(path.dirname(healthPath), { recursive: true, mode: 0o700 });
     await deps.fs.promises.writeFile(healthPath, `${JSON.stringify(state, null, 2)}\n`, {
       encoding: "utf-8",
       mode: 0o600,
     });
-  } catch {}
+  } catch (err) {
+    deps.logger.warn(
+      `Config health-state write failed: ${healthPath}: ${formatObserveRecoveryError(err)}`,
+    );
+  }
 }
 
 function writeConfigHealthStateSync(deps: ObserveRecoveryDeps, state: ConfigHealthState): void {
+  const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
   try {
-    const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
     deps.fs.mkdirSync(path.dirname(healthPath), { recursive: true, mode: 0o700 });
     deps.fs.writeFileSync(healthPath, `${JSON.stringify(state, null, 2)}\n`, {
       encoding: "utf-8",
       mode: 0o600,
     });
-  } catch {}
+  } catch (err) {
+    deps.logger.warn(
+      `Config health-state write failed: ${healthPath}: ${formatObserveRecoveryError(err)}`,
+    );
+  }
 }
 
 function getConfigHealthEntry(state: ConfigHealthState, configPath: string): ConfigHealthEntry {
@@ -637,19 +671,34 @@ export async function maybeRecoverSuspiciousConfigRead(params: {
   });
 
   let restoredFromBackup = false;
+  let restoreError: unknown;
   try {
     await params.deps.fs.promises.copyFile(backupPath, params.configPath);
     restoredFromBackup = true;
-  } catch {}
+  } catch (error) {
+    restoreError = error;
+  }
 
-  params.deps.logger.warn(
-    `Config auto-restored from backup: ${params.configPath} (${suspicious.join(", ")})`,
-  );
+  const restoreErrorDetails = restoredFromBackup
+    ? { code: null, message: null }
+    : extractRestoreErrorDetails(restoreError);
+
+  if (restoredFromBackup) {
+    params.deps.logger.warn(
+      `Config auto-restored from backup: ${params.configPath} (${suspicious.join(", ")})`,
+    );
+  } else {
+    params.deps.logger.warn(
+      `Config auto-restore from backup failed: ${params.configPath} (${suspicious.join(", ")}${
+        restoreErrorDetails.message ? `; ${restoreErrorDetails.message}` : ""
+      })`,
+    );
+  }
   await appendConfigAuditRecord(
     createConfigObserveAuditAppendParams(params.deps, {
       ts: now,
       configPath: params.configPath,
-      valid: true,
+      valid: restoredFromBackup,
       current,
       suspicious,
       lastKnownGood: entry.lastKnownGood,
@@ -657,6 +706,8 @@ export async function maybeRecoverSuspiciousConfigRead(params: {
       clobberedPath,
       restoredFromBackup,
       restoredBackupPath: backupPath,
+      restoreErrorCode: restoreErrorDetails.code,
+      restoreErrorMessage: restoreErrorDetails.message,
     }),
   );
 
@@ -727,19 +778,34 @@ export function maybeRecoverSuspiciousConfigReadSync(params: {
   });
 
   let restoredFromBackup = false;
+  let restoreError: unknown;
   try {
     params.deps.fs.copyFileSync(backupPath, params.configPath);
     restoredFromBackup = true;
-  } catch {}
+  } catch (error) {
+    restoreError = error;
+  }
 
-  params.deps.logger.warn(
-    `Config auto-restored from backup: ${params.configPath} (${suspicious.join(", ")})`,
-  );
+  const restoreErrorDetails = restoredFromBackup
+    ? { code: null, message: null }
+    : extractRestoreErrorDetails(restoreError);
+
+  if (restoredFromBackup) {
+    params.deps.logger.warn(
+      `Config auto-restored from backup: ${params.configPath} (${suspicious.join(", ")})`,
+    );
+  } else {
+    params.deps.logger.warn(
+      `Config auto-restore from backup failed: ${params.configPath} (${suspicious.join(", ")}${
+        restoreErrorDetails.message ? `; ${restoreErrorDetails.message}` : ""
+      })`,
+    );
+  }
   appendConfigAuditRecordSync(
     createConfigObserveAuditAppendParams(params.deps, {
       ts: now,
       configPath: params.configPath,
-      valid: true,
+      valid: restoredFromBackup,
       current,
       suspicious,
       lastKnownGood: entry.lastKnownGood,
@@ -747,6 +813,8 @@ export function maybeRecoverSuspiciousConfigReadSync(params: {
       clobberedPath,
       restoredFromBackup,
       restoredBackupPath: backupPath,
+      restoreErrorCode: restoreErrorDetails.code,
+      restoreErrorMessage: restoreErrorDetails.message,
     }),
   );
 

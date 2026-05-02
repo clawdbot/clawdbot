@@ -13,7 +13,7 @@ const DEFAULT_CLUSTER = "volcano_tts";
 const DEFAULT_RESOURCE_ID = "seed-tts-1.0";
 const DEFAULT_APP_KEY = "aGjiRDfUWi";
 
-export const VOLCENGINE_VOICES: readonly string[] = [
+const VOLCENGINE_VOICES: readonly string[] = [
   "en_female_anna_mars_bigtts",
   "en_male_adam_mars_bigtts",
   "en_female_sarah_mars_bigtts",

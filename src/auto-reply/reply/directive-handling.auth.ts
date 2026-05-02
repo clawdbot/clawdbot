@@ -218,5 +218,3 @@ export const formatAuthLabel = (auth: { label: string; source: string }) => {
   }
   return `${auth.label} (${auth.source})`;
 };
-
-export { resolveProfileOverride } from "./directive-handling.auth-profile.js";

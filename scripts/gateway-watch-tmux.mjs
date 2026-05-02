@@ -66,6 +66,17 @@ export const resolveGatewayWatchTmuxSessionName = ({ args = [], env = process.en
 
 const resolveShell = (env) => env.SHELL || "/bin/sh";
 
+const resolveColorEnv = (env) => {
+  const forceColor = env.FORCE_COLOR;
+  if (forceColor == null || forceColor === "") {
+    return { assignments: ["FORCE_COLOR=1"], options: ["-u", "NO_COLOR"] };
+  }
+  if (String(forceColor).trim() !== "0") {
+    return { assignments: [`FORCE_COLOR=${forceColor}`], options: ["-u", "NO_COLOR"] };
+  }
+  return { assignments: [`FORCE_COLOR=${forceColor}`], options: [] };
+};
+
 export const buildGatewayWatchTmuxCommand = ({
   args = [],
   cwd = process.cwd(),
@@ -74,10 +85,13 @@ export const buildGatewayWatchTmuxCommand = ({
   sessionName,
 } = {}) => {
   const shell = resolveShell(env);
+  const colorEnv = resolveColorEnv(env);
   const childEnv = [
     "env",
+    ...colorEnv.options,
     `OPENCLAW_GATEWAY_WATCH_TMUX_CHILD=1`,
     `OPENCLAW_GATEWAY_WATCH_SESSION=${sessionName}`,
+    ...colorEnv.assignments,
     ...TMUX_CHILD_ENV_KEYS.flatMap((key) =>
       env[key] == null || env[key] === "" ? [] : [`${key}=${env[key]}`],
     ),

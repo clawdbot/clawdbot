@@ -51,11 +51,8 @@ const lifecycleMocks = vi.hoisted(
   }),
 );
 
-export const setWebhookMock = lifecycleMocks.setWebhookMock;
-export const deleteWebhookMock = lifecycleMocks.deleteWebhookMock;
-export const getWebhookInfoMock = lifecycleMocks.getWebhookInfoMock;
+const setWebhookMock = lifecycleMocks.setWebhookMock;
 export const getUpdatesMock = lifecycleMocks.getUpdatesMock;
-export const sendChatActionMock = lifecycleMocks.sendChatActionMock;
 export const sendMessageMock = lifecycleMocks.sendMessageMock;
 export const sendPhotoMock = lifecycleMocks.sendPhotoMock;
 export const getZaloRuntimeMock: UnknownMock = lifecycleMocks.getZaloRuntimeMock;
@@ -128,7 +125,7 @@ export function setLifecycleRuntimeCore(
   );
 }
 
-export async function loadLifecycleMonitorModule(): Promise<MonitorModule> {
+async function loadLifecycleMonitorModule(): Promise<MonitorModule> {
   return await importMonitorModule({ cacheBust: "monitor", mocked: true });
 }
 

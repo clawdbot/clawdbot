@@ -210,7 +210,10 @@ Runbook: [iOS connect](https://docs.openclaw.ai/platforms/ios).
 
 ## From source (development)
 
-Prefer `pnpm` for builds from source. Bun is optional for running TypeScript directly.
+Use `pnpm` for source checkouts. The repository is a pnpm workspace, and bundled
+plugins load from `extensions/*` during development so their package-local
+dependencies and your edits are used directly. Plain `npm install` at the repo
+root is not a supported source setup.
 
 For the dev loop:
 

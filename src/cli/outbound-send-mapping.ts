@@ -12,7 +12,7 @@ export const CLI_OUTBOUND_SEND_FACTORY: unique symbol = Symbol.for(
   "openclaw.cliOutboundSendFactory",
 ) as never;
 
-export type CliOutboundSendFactory = (channelId: string) => unknown;
+type CliOutboundSendFactory = (channelId: string) => unknown;
 export type CliOutboundSendSource = {
   [channelId: string]: unknown;
   [CLI_OUTBOUND_SEND_FACTORY]?: CliOutboundSendFactory;

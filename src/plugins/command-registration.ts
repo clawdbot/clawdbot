@@ -169,6 +169,14 @@ export function validatePluginCommandDefinition(
       return `Native progress message "${label}" cannot be empty`;
     }
   }
+  for (const [locale, description] of Object.entries(command.descriptionLocalizations ?? {})) {
+    if (typeof description !== "string") {
+      return `Description localization "${locale}" must be a string`;
+    }
+    if (!description.trim()) {
+      return `Description localization "${locale}" cannot be empty`;
+    }
+  }
   return null;
 }
 

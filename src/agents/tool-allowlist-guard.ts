@@ -1,6 +1,6 @@
 import { normalizeToolName } from "./tool-policy.js";
 
-export type ExplicitToolAllowlistSource = {
+type ExplicitToolAllowlistSource = {
   label: string;
   entries: string[];
 };

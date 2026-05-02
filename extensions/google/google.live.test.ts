@@ -9,9 +9,25 @@ import plugin from "./index.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
 const GOOGLE_API_KEY =
-  process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim() || "";
+  process.env.GEMINI_API_KEY?.trim() ||
+  process.env.GOOGLE_API_KEY?.trim() ||
+  process.env.GEMINI_PROVIDER_API_KEY?.trim() ||
+  "";
 const LIVE = isLiveTestEnabled() && GOOGLE_API_KEY.length > 0;
 const describeLive = LIVE ? describe : describe.skip;
+
+async function withGoogleApiEnvUnset<T>(fn: () => Promise<T>): Promise<T> {
+  const geminiApiKey = process.env.GEMINI_API_KEY;
+  const googleApiKey = process.env.GOOGLE_API_KEY;
+  delete process.env.GEMINI_API_KEY;
+  delete process.env.GOOGLE_API_KEY;
+  try {
+    return await fn();
+  } finally {
+    process.env.GEMINI_API_KEY = geminiApiKey;
+    process.env.GOOGLE_API_KEY = googleApiKey;
+  }
+}
 
 function isTransientGeminiSearchError(error: unknown): boolean {
   if (!(error instanceof Error)) {
@@ -123,5 +139,33 @@ describeLive("google plugin live", () => {
     expect(typeof result?.content).toBe("string");
     expect((result?.content as string).length).toBeGreaterThan(20);
     expect(Array.isArray(result?.citations)).toBe(true);
+  }, 120_000);
+
+  it("runs Gemini web search through the Google model provider config fallback", async () => {
+    await withGoogleApiEnvUnset(async () => {
+      const provider = createGeminiWebSearchProvider();
+      const tool = provider.createTool?.({
+        config: {
+          models: {
+            providers: {
+              google: {
+                apiKey: GOOGLE_API_KEY,
+              },
+            },
+          },
+        },
+        searchConfig: { provider: "gemini", cacheTtlMinutes: 0, timeoutSeconds: 90 },
+      } as never);
+
+      const result = await tool?.execute({ query: "OpenClaw GitHub", count: 1 });
+
+      expect(process.env.GEMINI_API_KEY).toBeUndefined();
+      expect(process.env.GOOGLE_API_KEY).toBeUndefined();
+      expect(result?.provider).toBe("gemini");
+      expect(typeof result?.content).toBe("string");
+      expect((result?.content as string).length).toBeGreaterThan(20);
+      expect(Array.isArray(result?.citations)).toBe(true);
+      expect((result?.citations as unknown[]).length).toBeGreaterThan(0);
+    });
   }, 120_000);
 });

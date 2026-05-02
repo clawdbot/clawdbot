@@ -12,7 +12,7 @@ import type { CommentFileType } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
 import { getFeishuRuntime } from "./runtime.js";
 
-export type CreateFeishuCommentReplyDispatcherParams = {
+type CreateFeishuCommentReplyDispatcherParams = {
   cfg: ClawdbotConfig;
   agentId: string;
   runtime: RuntimeEnv;

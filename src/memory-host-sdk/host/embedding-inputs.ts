@@ -20,7 +20,7 @@ export function buildTextEmbeddingInput(text: string): EmbeddingInput {
   return { text };
 }
 
-export function isInlineDataEmbeddingInputPart(
+function isInlineDataEmbeddingInputPart(
   part: EmbeddingInputPart,
 ): part is EmbeddingInputInlineDataPart {
   return part.type === "inline-data";

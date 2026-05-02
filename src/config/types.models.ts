@@ -124,6 +124,8 @@ export type ModelProviderConfig = {
   maxTokens?: number;
   timeoutSeconds?: number;
   injectNumCtxForOpenAICompat?: boolean;
+  /** Provider-specific runtime parameters interpreted by provider plugins. */
+  params?: Record<string, unknown>;
   headers?: Record<string, SecretInput>;
   authHeader?: boolean;
   request?: ConfiguredModelProviderRequest;

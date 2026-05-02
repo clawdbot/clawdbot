@@ -45,6 +45,12 @@ gitcrawl cluster-detail openclaw/openclaw --id <cluster-id> --member-limit 20 --
 
 When asked for `X` issues or PRs to triage, `X` means qualified candidates, not sampled threads.
 
+Triage is read/prove/patch-local by default. Do not commit unless Peter writes
+`commit` in the current instruction for the exact diff being handled. Do not
+treat earlier messages, inferred intent, "next", sweep momentum, or bundled
+publish language as commit permission. If Peter asks for follow-up work without
+saying `commit`, keep the files dirty after local fixes and proof.
+
 Only list candidates that pass all gates:
 
 - small owner/surface, with a likely narrow fix and focused regression test

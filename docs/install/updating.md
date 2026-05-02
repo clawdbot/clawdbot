@@ -107,37 +107,21 @@ bun add -g openclaw@latest
 
 <AccordionGroup>
   <Accordion title="Read-only package tree">
-    OpenClaw treats packaged global installs as read-only at runtime, even when the global package directory is writable by the current user. Bundled plugin runtime dependencies are staged into a writable runtime directory instead of mutating the package tree. This keeps `openclaw update` from racing with a running gateway or local agent that is repairing plugin dependencies during the same install.
+    OpenClaw treats packaged global installs as read-only at runtime, even when the global package directory is writable by the current user. Plugin package installs live in OpenClaw-owned npm/git roots under the user config directory, and Gateway startup does not mutate the OpenClaw package tree.
 
-    Some Linux npm setups install global packages under root-owned directories such as `/usr/lib/node_modules/openclaw`. OpenClaw supports that layout through the same external staging path.
+    Some Linux npm setups install global packages under root-owned directories such as `/usr/lib/node_modules/openclaw`. OpenClaw supports that layout because plugin install/update commands write outside that global package directory.
 
   </Accordion>
   <Accordion title="Hardened systemd units">
-    Set a writable stage directory that is included in `ReadWritePaths`:
+    Give OpenClaw write access to its config/state roots so explicit plugin installs, plugin updates, and doctor cleanup can persist their changes:
 
     ```ini
-    Environment=OPENCLAW_PLUGIN_STAGE_DIR=/var/lib/openclaw/plugin-runtime-deps
     ReadWritePaths=/var/lib/openclaw /home/openclaw/.openclaw /tmp
     ```
-
-    `OPENCLAW_PLUGIN_STAGE_DIR` also accepts a path list. OpenClaw resolves bundled plugin runtime dependencies left-to-right across the listed roots, treats earlier roots as read-only preinstalled layers, and installs or repairs only into the final writable root:
-
-    ```ini
-    Environment=OPENCLAW_PLUGIN_STAGE_DIR=/opt/openclaw/plugin-runtime-deps:/var/lib/openclaw/plugin-runtime-deps
-    ReadWritePaths=/var/lib/openclaw /home/openclaw/.openclaw /tmp
-    ```
-
-    If `OPENCLAW_PLUGIN_STAGE_DIR` is not set, OpenClaw uses `$STATE_DIRECTORY` when systemd provides it, then falls back to `~/.openclaw/plugin-runtime-deps`. The repair step treats that stage as an OpenClaw-owned local package root and ignores user npm prefix and global settings, so global-install npm config does not redirect bundled plugin dependencies into `~/node_modules` or the global package tree.
 
   </Accordion>
   <Accordion title="Disk-space preflight">
-    Before package updates and bundled runtime-dependency repairs, OpenClaw tries a best-effort disk-space check for the target volume. Low space produces a warning with the checked path, but does not block the update because filesystem quotas, snapshots, and network volumes can change after the check. The actual npm install, copy, and post-install verification remain authoritative.
-  </Accordion>
-  <Accordion title="Bundled plugin runtime dependencies">
-    Packaged installs keep bundled plugin runtime dependencies out of the read-only package tree. On startup and during `openclaw doctor --fix`, OpenClaw repairs runtime dependencies only for bundled plugins that are active in config, active through legacy channel config, or enabled by their bundled manifest default. Persisted channel auth state alone does not trigger Gateway startup runtime-dependency repair.
-
-    Explicit disablement wins. A disabled plugin or channel does not get its runtime dependencies repaired just because it exists in the package. External plugins and custom load paths still use `openclaw plugins install` or `openclaw plugins update`.
-
+    Before package updates and explicit plugin installs, OpenClaw tries a best-effort disk-space check for the target volume. Low space produces a warning with the checked path, but does not block the update because filesystem quotas, snapshots, and network volumes can change after the check. The actual package-manager install and post-install verification remain authoritative.
   </Accordion>
 </AccordionGroup>
 

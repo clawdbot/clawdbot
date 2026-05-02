@@ -19,7 +19,7 @@ export type DiscordAllowList = {
   names: Set<string>;
 };
 
-export type DiscordAllowListMatch = AllowlistMatch<"wildcard" | "id" | "name" | "tag">;
+type DiscordAllowListMatch = AllowlistMatch<"wildcard" | "id" | "name" | "tag">;
 
 const DISCORD_OWNER_ALLOWLIST_PREFIXES = ["discord:", "user:", "pk:"];
 
@@ -149,7 +149,7 @@ export function resolveDiscordAllowListMatch(params: {
   return { allowed: false };
 }
 
-export function resolveDiscordUserAllowed(params: {
+function resolveDiscordUserAllowed(params: {
   allowList?: string[];
   userId: string;
   userName?: string;
@@ -500,7 +500,7 @@ export function resolveDiscordShouldRequireMention(params: {
   return params.channelConfig?.requireMention ?? params.guildInfo?.requireMention ?? true;
 }
 
-export function isDiscordAutoThreadOwnedByBot(params: {
+function isDiscordAutoThreadOwnedByBot(params: {
   isThread: boolean;
   channelConfig?: DiscordChannelConfigResolved | null;
   botId?: string | null;

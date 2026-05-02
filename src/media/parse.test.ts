@@ -54,6 +54,15 @@ describe("splitMediaFromOutput", () => {
     ["C:\\Users\\pete\\Pictures\\snap.png", "MEDIA:C:\\Users\\pete\\Pictures\\snap.png"],
     ["/tmp/tts-fAJy8C/voice-1770246885083.opus", "MEDIA:/tmp/tts-fAJy8C/voice-1770246885083.opus"],
     ["image.png", "MEDIA:image.png"],
+    [
+      "/path/to/image.png",
+      'MEDIA:/path/to/image.png"}],"details":{"provider":"openai","model":"gpt-image-2"}',
+    ],
+    [
+      "/path/to/image.png",
+      String.raw`MEDIA:/path/to/image.png\"}],\"details\":{\"provider\":\"openai\"}`,
+    ],
+    ["/tmp/render,final.png", "MEDIA:/tmp/render,final.png"],
   ] as const)("accepts supported media path variant: %s", (expectedPath, input) => {
     expectAcceptedMediaPathCase(expectedPath, input);
   });

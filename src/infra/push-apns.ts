@@ -12,17 +12,16 @@ import { formatErrorMessage } from "./errors.js";
 import { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
 import {
   type ApnsRelayConfig,
-  type ApnsRelayConfigResolution,
   type ApnsRelayPushResponse,
   type ApnsRelayRequestSender,
   resolveApnsRelayConfigFromEnv,
   sendApnsRelayPush,
 } from "./push-apns.relay.js";
 
-export type ApnsEnvironment = "sandbox" | "production";
-export type ApnsTransport = "direct" | "relay";
+type ApnsEnvironment = "sandbox" | "production";
+type ApnsTransport = "direct" | "relay";
 
-export type DirectApnsRegistration = {
+type DirectApnsRegistration = {
   nodeId: string;
   transport: "direct";
   token: string;
@@ -31,7 +30,7 @@ export type DirectApnsRegistration = {
   updatedAtMs: number;
 };
 
-export type RelayApnsRegistration = {
+type RelayApnsRegistration = {
   nodeId: string;
   transport: "relay";
   relayHandle: string;
@@ -52,9 +51,7 @@ export type ApnsAuthConfig = {
   privateKey: string;
 };
 
-export type ApnsAuthConfigResolution =
-  | { ok: true; value: ApnsAuthConfig }
-  | { ok: false; error: string };
+type ApnsAuthConfigResolution = { ok: true; value: ApnsAuthConfig } | { ok: false; error: string };
 
 export type ApnsPushResult = {
   ok: boolean;
@@ -67,8 +64,8 @@ export type ApnsPushResult = {
   transport: ApnsTransport;
 };
 
-export type ApnsPushAlertResult = ApnsPushResult;
-export type ApnsPushWakeResult = ApnsPushResult;
+type ApnsPushAlertResult = ApnsPushResult;
+type ApnsPushWakeResult = ApnsPushResult;
 
 const EXEC_APPROVAL_GENERIC_ALERT_BODY = "Open OpenClaw to review this request.";
 const EXEC_APPROVAL_NOTIFICATION_CATEGORY = "openclaw.exec-approval";
@@ -1155,4 +1152,4 @@ export async function sendApnsExecApprovalResolvedWake(
   });
 }
 
-export { type ApnsRelayConfig, type ApnsRelayConfigResolution, resolveApnsRelayConfigFromEnv };
+export { type ApnsRelayConfig, resolveApnsRelayConfigFromEnv };

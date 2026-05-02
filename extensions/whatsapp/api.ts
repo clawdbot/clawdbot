@@ -79,7 +79,6 @@ export {
   logMessageQueued,
   logRunAttempt,
   logSessionStateChange,
-  logSessionStuck,
   logSuccess,
   logToolLoopAction,
   logWarn,

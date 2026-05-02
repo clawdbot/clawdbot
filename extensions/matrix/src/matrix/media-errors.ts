@@ -1,4 +1,4 @@
-export const MATRIX_MEDIA_SIZE_LIMIT_ERROR_MESSAGE = "Matrix media exceeds configured size limit";
+const MATRIX_MEDIA_SIZE_LIMIT_ERROR_MESSAGE = "Matrix media exceeds configured size limit";
 
 export class MatrixMediaSizeLimitError extends Error {
   readonly code = "MATRIX_MEDIA_SIZE_LIMIT" as const;

@@ -8,12 +8,7 @@ import type {
 } from "./client.types.js";
 import type { BrowserDoctorReport } from "./doctor.js";
 
-export type {
-  BrowserStatus,
-  BrowserTab,
-  BrowserTransport,
-  SnapshotAriaNode,
-} from "./client.types.js";
+export type { BrowserStatus, BrowserTab, BrowserTransport } from "./client.types.js";
 export type { BrowserDoctorCheck, BrowserDoctorReport } from "./doctor.js";
 
 export type ProfileStatus = {

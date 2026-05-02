@@ -10,14 +10,14 @@ import { normalizeMessageChannel } from "../utils/message-channel.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
-export type ApprovalRequestLike = ExecApprovalRequest | PluginApprovalRequest;
+type ApprovalRequestLike = ExecApprovalRequest | PluginApprovalRequest;
 
 type ApprovalRequestSessionBinding = {
   channel?: string;
   accountId?: string;
 };
 
-export type PersistedApprovalRequestSessionEntry = {
+type PersistedApprovalRequestSessionEntry = {
   sessionKey: string;
   entry: SessionEntry;
 };

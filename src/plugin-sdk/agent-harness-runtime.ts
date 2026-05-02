@@ -16,6 +16,7 @@ export type {
   AgentHarnessAttemptResult,
   AgentHarnessCompactParams,
   AgentHarnessCompactResult,
+  AgentHarnessDeliveryDefaults,
   AgentHarnessResultClassification,
   AgentHarnessResetParams,
   AgentHarnessSupport,
@@ -30,6 +31,7 @@ export type { CompactEmbeddedPiSessionParams } from "../agents/pi-embedded-runne
 export type { EmbeddedPiCompactResult } from "../agents/pi-embedded-runner/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 export type { MessagingToolSend } from "../agents/pi-embedded-messaging.types.js";
+export type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 export type { AgentApprovalEventData, AgentEventPayload } from "../infra/agent-events.js";
 export type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 export type { NormalizedUsage } from "../agents/usage.js";
@@ -74,6 +76,10 @@ export {
   selectDefaultNodeFromList,
 } from "../agents/tools/nodes-utils.js";
 export { formatToolAggregate } from "../auto-reply/tool-meta.js";
+export {
+  HEARTBEAT_RESPONSE_TOOL_NAME,
+  normalizeHeartbeatToolResponse,
+} from "../auto-reply/heartbeat-tool-response.js";
 export { isMessagingTool, isMessagingToolSendAction } from "../agents/pi-embedded-messaging.js";
 export {
   extractToolResultMediaArtifact,

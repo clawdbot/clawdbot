@@ -5,11 +5,7 @@ import {
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import type { AgentIdentityFile } from "../agents/identity-file.js";
-import {
-  identityHasValues,
-  loadAgentIdentityFromWorkspace,
-  parseIdentityMarkdown as parseIdentityMarkdownFile,
-} from "../agents/identity-file.js";
+import { identityHasValues, loadAgentIdentityFromWorkspace } from "../agents/identity-file.js";
 import { listRouteBindings } from "../config/bindings.js";
 import type { IdentityConfig } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -51,10 +47,6 @@ function resolveAgentModel(cfg: OpenClawConfig, agentId: string) {
     return entryPrimary;
   }
   return resolvePrimaryStringValue(cfg.agents?.defaults?.model);
-}
-
-export function parseIdentityMarkdown(content: string): AgentIdentity {
-  return parseIdentityMarkdownFile(content);
 }
 
 export function loadAgentIdentity(workspace: string): AgentIdentity | null {

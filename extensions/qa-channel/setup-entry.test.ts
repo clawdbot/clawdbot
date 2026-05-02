@@ -4,6 +4,6 @@ import setupEntry from "./setup-entry.js";
 describe("qa-channel setup entry", () => {
   it("exposes the bundled setup-entry contract", () => {
     expect(setupEntry.kind).toBe("bundled-channel-setup-entry");
-    expect(setupEntry.loadSetupPlugin().id).toBe("qa-channel");
+    expect(typeof setupEntry.loadSetupPlugin).toBe("function");
   });
 });

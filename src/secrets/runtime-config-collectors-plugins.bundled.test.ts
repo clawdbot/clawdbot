@@ -13,7 +13,10 @@ function envRef(id: string) {
 describe("collectPluginConfigAssignments bundled plugin manifests", () => {
   it("collects voice-call SecretRef assignments from bundled manifest contracts", () => {
     expect(
-      findBundledPluginMetadataById("voice-call")?.manifest.configContracts?.secretInputs?.paths,
+      findBundledPluginMetadataById("voice-call", {
+        includeChannelConfigs: false,
+        includeSyntheticChannelConfigs: false,
+      })?.manifest.configContracts?.secretInputs?.paths,
     ).toEqual([
       { path: "twilio.authToken", expected: "string" },
       { path: "realtime.providers.*.apiKey", expected: "string" },

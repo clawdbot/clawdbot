@@ -6,7 +6,7 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const tempRoots = new Set<string>();
 
-export const logger = {
+const logger = {
   info() {},
   warn() {},
   error() {},

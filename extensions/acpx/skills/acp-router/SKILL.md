@@ -105,7 +105,7 @@ Required behavior when ACP backend is unavailable:
 
 1. Do not immediately ask the user to pick an alternate path.
 2. First attempt automatic local repair:
-   - ensure plugin-local pinned acpx is installed in the bundled ACPX plugin package
+   - ensure plugin-local pinned acpx is installed in the ACPX plugin package
    - verify `${ACPX_CMD} --version`
 3. After reinstall/repair, restart the gateway and explicitly offer to run that restart for the user.
 4. Retry ACP thread spawn once after repair.
@@ -231,7 +231,7 @@ If your local Cursor install still exposes ACP as `agent acp`, set that as the `
 ### Failure handling
 
 - `acpx: command not found`:
-  - for thread-spawn ACP requests, install plugin-local pinned acpx in the bundled ACPX plugin package immediately
+  - for thread-spawn ACP requests, install plugin-local pinned acpx in the ACPX plugin package immediately
   - restart gateway after install and offer to run the restart automatically
   - then retry once
   - do not ask for install permission first unless policy explicitly requires it

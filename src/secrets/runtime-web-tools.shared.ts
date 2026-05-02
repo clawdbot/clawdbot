@@ -64,6 +64,11 @@ export type RuntimeWebProviderSelectionParams<
     config: OpenClawConfig;
     toolConfig: TToolConfig;
   }) => unknown;
+  readConfiguredCredentialFallback?: (params: {
+    provider: TProvider;
+    config: OpenClawConfig;
+    toolConfig: TToolConfig;
+  }) => { path: string; value: unknown } | undefined;
   resolveSecretInput: (params: {
     value: unknown;
     path: string;
@@ -129,7 +134,7 @@ export function ensureObject(
   return next;
 }
 
-export function normalizeKnownProvider(
+function normalizeKnownProvider(
   value: unknown,
   providers: Array<{ id: string }>,
 ): string | undefined {
@@ -186,6 +191,11 @@ export type ResolveRuntimeWebProviderSurfaceParams<
     config: OpenClawConfig;
     toolConfig: TToolConfig;
   }) => unknown;
+  readConfiguredCredentialFallback?: (params: {
+    provider: TProvider;
+    config: OpenClawConfig;
+    toolConfig: TToolConfig;
+  }) => { path: string; value: unknown } | undefined;
   ignoreKeylessProvidersForConfiguredSurface?: boolean;
   emptyProvidersWhenSurfaceMissing?: boolean;
   normalizeConfiguredProviderAgainstActiveProviders?: boolean;
@@ -253,7 +263,12 @@ export async function resolveRuntimeWebProviderSurface<
           provider,
           config: params.sourceConfig,
           toolConfig: params.toolConfig,
-        }) !== undefined
+        }) !== undefined ||
+        params.readConfiguredCredentialFallback?.({
+          provider,
+          config: params.sourceConfig,
+          toolConfig: params.toolConfig,
+        })?.value !== undefined
       );
     });
   const providers =
@@ -339,52 +354,77 @@ export async function resolveRuntimeWebProviderSelection<
         path,
         envVars: "envVars" in provider && Array.isArray(provider.envVars) ? provider.envVars : [],
       });
+      let selectedCandidatePath = path;
+      let selectedCandidateResolution = resolution;
 
-      if (resolution.secretRefConfigured && resolution.fallbackUsedAfterRefFailure) {
+      if (!resolution.value && !resolution.secretRefConfigured) {
+        const fallback = params.readConfiguredCredentialFallback?.({
+          provider,
+          config: params.sourceConfig,
+          toolConfig: params.toolConfig,
+        });
+        if (fallback?.value !== undefined) {
+          selectedCandidatePath = fallback.path;
+          selectedCandidateResolution = await params.resolveSecretInput({
+            value: fallback.value,
+            path: fallback.path,
+            envVars: [],
+          });
+        }
+      }
+
+      if (
+        selectedCandidateResolution.secretRefConfigured &&
+        selectedCandidateResolution.fallbackUsedAfterRefFailure
+      ) {
         const diagnostic: RuntimeWebDiagnostic = {
           code: params.fallbackUsedCode,
           message:
-            `${path} SecretRef could not be resolved; using ${resolution.fallbackEnvVar ?? "env fallback"}. ` +
-            (resolution.unresolvedRefReason ?? "").trim(),
-          path,
+            `${selectedCandidatePath} SecretRef could not be resolved; using ${selectedCandidateResolution.fallbackEnvVar ?? "env fallback"}. ` +
+            (selectedCandidateResolution.unresolvedRefReason ?? "").trim(),
+          path: selectedCandidatePath,
         };
         params.diagnostics.push(diagnostic);
         params.metadata.diagnostics.push(diagnostic);
         pushWarning(params.context, {
           code: params.fallbackUsedCode,
-          path,
+          path: selectedCandidatePath,
           message: diagnostic.message,
         });
       }
 
-      if (resolution.secretRefConfigured && !resolution.value && resolution.unresolvedRefReason) {
+      if (
+        selectedCandidateResolution.secretRefConfigured &&
+        !selectedCandidateResolution.value &&
+        selectedCandidateResolution.unresolvedRefReason
+      ) {
         unresolvedWithoutFallback.push({
           provider: provider.id,
-          path,
-          reason: resolution.unresolvedRefReason,
+          path: selectedCandidatePath,
+          reason: selectedCandidateResolution.unresolvedRefReason,
         });
       }
 
       if (params.configuredProvider) {
         selectedProvider = provider.id;
-        selectedResolution = resolution;
-        if (resolution.value) {
+        selectedResolution = selectedCandidateResolution;
+        if (selectedCandidateResolution.value) {
           params.setResolvedCredential({
             resolvedConfig: params.resolvedConfig,
             provider,
-            value: resolution.value,
+            value: selectedCandidateResolution.value,
           });
         }
         break;
       }
 
-      if (resolution.value) {
+      if (selectedCandidateResolution.value) {
         selectedProvider = provider.id;
-        selectedResolution = resolution;
+        selectedResolution = selectedCandidateResolution;
         params.setResolvedCredential({
           resolvedConfig: params.resolvedConfig,
           provider,
-          value: resolution.value,
+          value: selectedCandidateResolution.value,
         });
         break;
       }

@@ -5,7 +5,7 @@ import type { CallMode } from "./config.js";
 // Provider Identifiers
 // -----------------------------------------------------------------------------
 
-export const ProviderNameSchema = z.enum(["telnyx", "twilio", "plivo", "mock"]);
+const ProviderNameSchema = z.enum(["telnyx", "twilio", "plivo", "mock"]);
 export type ProviderName = z.infer<typeof ProviderNameSchema>;
 
 // -----------------------------------------------------------------------------
@@ -16,13 +16,13 @@ export type ProviderName = z.infer<typeof ProviderNameSchema>;
 export type CallId = string;
 
 /** Provider-specific call identifier */
-export type ProviderCallId = string;
+type ProviderCallId = string;
 
 // -----------------------------------------------------------------------------
 // Call Lifecycle States
 // -----------------------------------------------------------------------------
 
-export const CallStateSchema = z.enum([
+const CallStateSchema = z.enum([
   // Non-terminal states
   "initiated",
   "ringing",
@@ -55,7 +55,7 @@ export const TerminalStates = new Set<CallState>([
   "voicemail",
 ]);
 
-export const EndReasonSchema = z.enum([
+const EndReasonSchema = z.enum([
   "completed",
   "hangup-user",
   "hangup-bot",
@@ -87,7 +87,7 @@ const BaseEventSchema = z.object({
   to: z.string().optional(),
 });
 
-export const NormalizedEventSchema = z.discriminatedUnion("type", [
+const NormalizedEventSchema = z.discriminatedUnion("type", [
   BaseEventSchema.extend({
     type: z.literal("call.initiated"),
   }),
@@ -134,13 +134,13 @@ export type NormalizedEvent = z.infer<typeof NormalizedEventSchema>;
 // Call Direction
 // -----------------------------------------------------------------------------
 
-export const CallDirectionSchema = z.enum(["outbound", "inbound"]);
+const CallDirectionSchema = z.enum(["outbound", "inbound"]);
 
 // -----------------------------------------------------------------------------
 // Call Record
 // -----------------------------------------------------------------------------
 
-export const TranscriptEntrySchema = z.object({
+const TranscriptEntrySchema = z.object({
   timestamp: z.number(),
   speaker: z.enum(["bot", "user"]),
   text: z.string(),

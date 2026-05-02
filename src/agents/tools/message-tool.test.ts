@@ -778,6 +778,32 @@ describe("message tool schema scoping", () => {
     expect(getActionEnum(properties)).toContain("download-file");
     expect(properties.fileId).toMatchObject({ type: "string" });
   });
+
+  it("advertises messageId for read actions", () => {
+    const slackReadPlugin = createChannelPlugin({
+      id: "slack",
+      label: "Slack",
+      docsPath: "/channels/slack",
+      blurb: "Slack test plugin.",
+      actions: ["read"],
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "slack", source: "test", plugin: slackReadPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "slack",
+    });
+    const properties = getToolProperties(tool);
+
+    expect(getActionEnum(properties)).toContain("read");
+    expect(properties.messageId).toMatchObject({
+      type: "string",
+      description: expect.stringContaining("read"),
+    });
+  });
 });
 
 describe("message tool description", () => {

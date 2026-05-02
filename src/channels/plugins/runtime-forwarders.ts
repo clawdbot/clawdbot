@@ -2,9 +2,10 @@ import type { ChannelDirectoryAdapter, ChannelOutboundAdapter } from "./types.ad
 
 type MaybePromise<T> = T | Promise<T>;
 
-type DirectoryListMethod = "listPeersLive" | "listGroupsLive" | "listGroupMembers";
+type DirectoryMethod = "self" | "listPeersLive" | "listGroupsLive" | "listGroupMembers";
 type OutboundMethod = "sendText" | "sendMedia" | "sendPoll";
 
+type DirectorySelfParams = Parameters<NonNullable<ChannelDirectoryAdapter["self"]>>[0];
 type DirectoryListParams = Parameters<NonNullable<ChannelDirectoryAdapter["listPeersLive"]>>[0];
 type DirectoryGroupMembersParams = Parameters<
   NonNullable<ChannelDirectoryAdapter["listGroupMembers"]>
@@ -28,6 +29,7 @@ async function resolveForwardedMethod<Runtime, Fn>(params: {
 
 export function createRuntimeDirectoryLiveAdapter<Runtime>(params: {
   getRuntime: () => MaybePromise<Runtime>;
+  self?: (runtime: Runtime) => ChannelDirectoryAdapter["self"] | null | undefined;
   listPeersLive?: (runtime: Runtime) => ChannelDirectoryAdapter["listPeersLive"] | null | undefined;
   listGroupsLive?: (
     runtime: Runtime,
@@ -35,36 +37,45 @@ export function createRuntimeDirectoryLiveAdapter<Runtime>(params: {
   listGroupMembers?: (
     runtime: Runtime,
   ) => ChannelDirectoryAdapter["listGroupMembers"] | null | undefined;
-}): Pick<ChannelDirectoryAdapter, DirectoryListMethod> {
-  return {
-    listPeersLive: params.listPeersLive
-      ? async (ctx: DirectoryListParams) =>
-          await (
-            await resolveForwardedMethod({
-              getRuntime: params.getRuntime,
-              resolve: params.listPeersLive!,
-            })
-          )(ctx)
-      : undefined,
-    listGroupsLive: params.listGroupsLive
-      ? async (ctx: DirectoryListParams) =>
-          await (
-            await resolveForwardedMethod({
-              getRuntime: params.getRuntime,
-              resolve: params.listGroupsLive!,
-            })
-          )(ctx)
-      : undefined,
-    listGroupMembers: params.listGroupMembers
-      ? async (ctx: DirectoryGroupMembersParams) =>
-          await (
-            await resolveForwardedMethod({
-              getRuntime: params.getRuntime,
-              resolve: params.listGroupMembers!,
-            })
-          )(ctx)
-      : undefined,
-  };
+}): Pick<ChannelDirectoryAdapter, DirectoryMethod> {
+  const adapter: Pick<ChannelDirectoryAdapter, DirectoryMethod> = {};
+  if (params.self) {
+    adapter.self = async (ctx: DirectorySelfParams) =>
+      await (
+        await resolveForwardedMethod({
+          getRuntime: params.getRuntime,
+          resolve: params.self!,
+        })
+      )(ctx);
+  }
+  if (params.listPeersLive) {
+    adapter.listPeersLive = async (ctx: DirectoryListParams) =>
+      await (
+        await resolveForwardedMethod({
+          getRuntime: params.getRuntime,
+          resolve: params.listPeersLive!,
+        })
+      )(ctx);
+  }
+  if (params.listGroupsLive) {
+    adapter.listGroupsLive = async (ctx: DirectoryListParams) =>
+      await (
+        await resolveForwardedMethod({
+          getRuntime: params.getRuntime,
+          resolve: params.listGroupsLive!,
+        })
+      )(ctx);
+  }
+  if (params.listGroupMembers) {
+    adapter.listGroupMembers = async (ctx: DirectoryGroupMembersParams) =>
+      await (
+        await resolveForwardedMethod({
+          getRuntime: params.getRuntime,
+          resolve: params.listGroupMembers!,
+        })
+      )(ctx);
+  }
+  return adapter;
 }
 
 export function createRuntimeOutboundDelegates<Runtime>(params: {

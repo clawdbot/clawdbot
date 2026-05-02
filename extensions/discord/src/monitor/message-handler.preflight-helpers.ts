@@ -25,7 +25,7 @@ export function isBoundThreadBotSystemMessage(params: {
   return DISCORD_BOUND_THREAD_SYSTEM_PREFIXES.some((prefix) => text.startsWith(prefix));
 }
 
-export type BoundThreadLookupRecordLike = {
+type BoundThreadLookupRecordLike = {
   webhookId?: string | null;
   metadata?: {
     webhookId?: string | null;
@@ -146,16 +146,19 @@ export function shouldIgnoreBoundThreadWebhookMessage(params: {
     normalizeOptionalString(params.threadBinding?.webhookId) ??
     normalizeOptionalString(params.threadBinding?.metadata?.webhookId) ??
     "";
-  if (!boundWebhookId) {
-    const threadId = normalizeOptionalString(params.threadId) ?? "";
-    if (!threadId) {
-      return false;
-    }
-    return isRecentlyUnboundThreadWebhookMessage({
-      accountId: params.accountId,
-      threadId,
-      webhookId,
-    });
+  if (boundWebhookId && webhookId === boundWebhookId) {
+    return true;
   }
-  return webhookId === boundWebhookId;
+  const threadId = normalizeOptionalString(params.threadId) ?? "";
+  if (!threadId) {
+    return false;
+  }
+  if (params.threadBinding) {
+    return true;
+  }
+  return isRecentlyUnboundThreadWebhookMessage({
+    accountId: params.accountId,
+    threadId,
+    webhookId,
+  });
 }

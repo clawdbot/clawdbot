@@ -3,7 +3,7 @@ import path from "node:path";
 
 export const CANONICAL_ROOT_MEMORY_FILENAME = "MEMORY.md";
 export const LEGACY_ROOT_MEMORY_FILENAME = "memory.md";
-export const ROOT_MEMORY_REPAIR_RELATIVE_DIR = ".openclaw-repair/root-memory";
+const ROOT_MEMORY_REPAIR_RELATIVE_DIR = ".openclaw-repair/root-memory";
 
 export function resolveCanonicalRootMemoryPath(workspaceDir: string): string {
   return path.join(workspaceDir, CANONICAL_ROOT_MEMORY_FILENAME);
@@ -17,7 +17,7 @@ export function resolveRootMemoryRepairDir(workspaceDir: string): string {
   return path.join(workspaceDir, ".openclaw-repair", "root-memory");
 }
 
-export function normalizeWorkspaceRelativePath(value: string): string {
+function normalizeWorkspaceRelativePath(value: string): string {
   return value.trim().replace(/\\/g, "/").replace(/^\.\//, "");
 }
 

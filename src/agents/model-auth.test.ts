@@ -9,6 +9,11 @@ import {
 } from "./model-auth-markers.js";
 
 vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginRegistrySnapshotWithMetadata: () => ({
+    source: "derived",
+    snapshot: { plugins: [] },
+    diagnostics: [],
+  }),
   loadPluginManifestRegistryForPluginRegistry: () => ({
     diagnostics: [],
     plugins: [

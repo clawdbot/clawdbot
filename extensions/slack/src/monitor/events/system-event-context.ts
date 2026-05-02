@@ -3,7 +3,7 @@ import { authorizeSlackSystemEventSender } from "../auth.js";
 import { resolveSlackChannelLabel } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
 
-export type SlackAuthorizedSystemEventContext = {
+type SlackAuthorizedSystemEventContext = {
   channelLabel: string;
   sessionKey: string;
 };

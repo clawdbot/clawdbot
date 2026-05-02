@@ -9,7 +9,7 @@ import {
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
 
-export type MemoryResolvedProviderState = {
+type MemoryResolvedProviderState = {
   provider: EmbeddingProvider | null;
   fallbackFrom?: string;
   fallbackReason?: string;

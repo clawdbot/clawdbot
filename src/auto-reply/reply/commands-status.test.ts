@@ -564,6 +564,8 @@ describe("buildStatusReply subagent summary", () => {
         {
           OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
           OPENCLAW_STATE_DIR: stateDir,
+          ANTHROPIC_API_KEY: undefined,
+          ANTHROPIC_OAUTH_TOKEN: undefined,
           WORKSPACE_STATUS_CREDENTIALS: credentialPath,
         },
         async () => {

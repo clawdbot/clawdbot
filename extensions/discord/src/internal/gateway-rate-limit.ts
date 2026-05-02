@@ -1,5 +1,5 @@
-export const GATEWAY_SEND_LIMIT = 120;
-export const GATEWAY_SEND_WINDOW_MS = 60_000;
+const GATEWAY_SEND_LIMIT = 120;
+const GATEWAY_SEND_WINDOW_MS = 60_000;
 
 type QueuedGatewaySend = {
   payload: string;

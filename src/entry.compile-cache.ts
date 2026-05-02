@@ -84,7 +84,7 @@ export function resolveOpenClawCompileCacheDirectory(params: {
   );
 }
 
-export type OpenClawCompileCacheRespawnPlan = {
+type OpenClawCompileCacheRespawnPlan = {
   command: string;
   args: string[];
   env: NodeJS.ProcessEnv;

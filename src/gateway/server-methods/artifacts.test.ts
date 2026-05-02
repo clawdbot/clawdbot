@@ -4,7 +4,7 @@ import { artifactsHandlers, collectArtifactsFromMessages } from "./artifacts.js"
 const hoisted = vi.hoisted(() => ({
   getTaskSessionLookupByIdForStatus: vi.fn(),
   loadSessionEntry: vi.fn(),
-  readSessionMessages: vi.fn(),
+  visitSessionMessagesAsync: vi.fn(),
   resolveSessionKeyForRun: vi.fn(),
 }));
 
@@ -17,7 +17,7 @@ vi.mock("../session-utils.js", async () => {
   return {
     ...actual,
     loadSessionEntry: hoisted.loadSessionEntry,
-    readSessionMessages: hoisted.readSessionMessages,
+    visitSessionMessagesAsync: hoisted.visitSessionMessagesAsync,
   };
 });
 
@@ -49,7 +49,7 @@ describe("artifacts RPC handlers", () => {
       storePath: "/tmp/sessions.json",
       entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
     });
-    hoisted.readSessionMessages.mockReturnValue([
+    mockedMessages([
       {
         role: "assistant",
         content: [
@@ -65,6 +65,15 @@ describe("artifacts RPC handlers", () => {
       },
     ]);
   });
+
+  function mockedMessages(messages: unknown[]) {
+    hoisted.visitSessionMessagesAsync.mockImplementation(
+      async (_sessionId, _storePath, _sessionFile, visit) => {
+        messages.forEach((message, index) => visit(message, index + 1));
+        return messages.length;
+      },
+    );
+  }
 
   it("lists stable transcript artifact summaries by sessionKey", async () => {
     const { calls, respond } = createResponder();
@@ -99,7 +108,21 @@ describe("artifacts RPC handlers", () => {
   it("gets and downloads an inline artifact", async () => {
     const listed = collectArtifactsFromMessages({
       sessionKey: "agent:main:main",
-      messages: hoisted.readSessionMessages(),
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "see attached" },
+            {
+              type: "image",
+              data: "aGVsbG8=",
+              mimeType: "image/png",
+              alt: "result.png",
+            },
+          ],
+          __openclaw: { seq: 2 },
+        },
+      ],
     });
     const artifactId = listed[0]?.id;
     expect(artifactId).toBeTruthy();
@@ -137,7 +160,7 @@ describe("artifacts RPC handlers", () => {
 
   it("resolves runId queries through the gateway run-to-session lookup", async () => {
     hoisted.resolveSessionKeyForRun.mockReturnValue("agent:main:main");
-    hoisted.readSessionMessages.mockReturnValue([
+    mockedMessages([
       {
         role: "assistant",
         content: [{ type: "image", data: "aGVsbG8=", alt: "run-result.png" }],
@@ -166,7 +189,7 @@ describe("artifacts RPC handlers", () => {
       requesterSessionKey: "agent:main:main",
       runId: "run-for-task-1",
     });
-    hoisted.readSessionMessages.mockReturnValue([
+    mockedMessages([
       {
         role: "assistant",
         content: [{ type: "image", data: "dGFyZ2V0", alt: "task-result.png" }],
@@ -257,7 +280,7 @@ describe("artifacts RPC handlers", () => {
   });
 
   it("discovers transcript image_url data blocks", async () => {
-    hoisted.readSessionMessages.mockReturnValue([
+    mockedMessages([
       {
         role: "user",
         content: [

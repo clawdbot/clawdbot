@@ -147,7 +147,7 @@ type SelectedConnectAuth = {
   canFallbackToShared: boolean;
 };
 
-export const CONTROL_UI_OPERATOR_ROLE = "operator";
+const CONTROL_UI_OPERATOR_ROLE = "operator";
 
 export const CONTROL_UI_OPERATOR_SCOPES = [
   "operator.admin",

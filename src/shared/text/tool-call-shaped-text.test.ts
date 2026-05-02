@@ -29,6 +29,14 @@ describe("detectToolCallShapedText", () => {
     });
   });
 
+  it("detects legacy uppercase TOOL_CALL assistant text", () => {
+    expect(
+      detectToolCallShapedText(
+        '[TOOL_CALL]{tool => "web_search", args => {"query":"NET stock price"}}[/TOOL_CALL]',
+      ),
+    ).toEqual({ kind: "bracketed_tool_call", toolName: "web_search" });
+  });
+
   it("ignores normal JSON and prose mentions", () => {
     expect(detectToolCallShapedText('{"status":"ok","message":"done"}')).toBeNull();
     expect(detectToolCallShapedText("Use tool_call tags only in examples.")).toBeNull();

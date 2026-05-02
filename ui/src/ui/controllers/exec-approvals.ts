@@ -106,10 +106,7 @@ export async function loadExecApprovals(
   }
 }
 
-export function applyExecApprovalsSnapshot(
-  state: ExecApprovalsState,
-  snapshot: ExecApprovalsSnapshot,
-) {
+function applyExecApprovalsSnapshot(state: ExecApprovalsState, snapshot: ExecApprovalsSnapshot) {
   state.execApprovalsSnapshot = snapshot;
   if (!state.execApprovalsDirty) {
     state.execApprovalsForm = cloneConfigObject(snapshot.file ?? {});

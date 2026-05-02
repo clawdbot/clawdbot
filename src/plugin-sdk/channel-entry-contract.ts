@@ -9,25 +9,31 @@ import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
-  isBuiltBundledPluginRuntimeRoot,
-  prepareBundledPluginRuntimeRoot,
-} from "../plugins/bundled-runtime-root.js";
-import {
-  getCachedPluginJitiLoader,
-  type PluginJitiLoaderCache,
-} from "../plugins/jiti-loader-cache.js";
-import {
   createProfiler,
   formatPluginLoadProfileLine,
   shouldProfilePluginLoader,
 } from "../plugins/plugin-load-profile.js";
+import {
+  getCachedPluginSourceModuleLoader,
+  type PluginModuleLoaderCache,
+} from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
-import type { AnyAgentTool, OpenClawPluginApi, PluginCommandContext } from "../plugins/types.js";
+import type {
+  AnyAgentTool,
+  OpenClawPluginApi,
+  OpenClawPluginCommandDefinition,
+  PluginCommandContext,
+} from "../plugins/types.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
-export type { AnyAgentTool, OpenClawPluginApi, PluginCommandContext };
+export type {
+  AnyAgentTool,
+  OpenClawPluginApi,
+  OpenClawPluginCommandDefinition,
+  PluginCommandContext,
+};
 
 type ChannelEntryConfigSchema<TPlugin> =
   TPlugin extends ChannelPlugin<unknown>
@@ -126,12 +132,10 @@ export type BundledChannelSetupEntryContract<TPlugin = ChannelPlugin> = {
   features?: BundledChannelSetupEntryFeatures;
 };
 
-export type BundledEntryModuleLoadOptions = {
-  installRuntimeDeps?: boolean;
-};
+export type BundledEntryModuleLoadOptions = Record<string, never>;
 
 const nodeRequire = createRequire(import.meta.url);
-const jitiLoaders: PluginJitiLoaderCache = new Map();
+const moduleLoaders: PluginModuleLoaderCache = new Map();
 const loadedModuleExports = new Map<string, unknown>();
 const disableBundledEntrySourceFallbackEnv = "OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK";
 
@@ -325,13 +329,13 @@ function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string)
   );
 }
 
-function getJiti(modulePath: string) {
-  return getCachedPluginJitiLoader({
-    cache: jitiLoaders,
+function getSourceModuleLoader(modulePath: string) {
+  return getCachedPluginSourceModuleLoader({
+    cache: moduleLoaders,
     modulePath,
     importerUrl: import.meta.url,
     preferBuiltDist: true,
-    jitiFilename: import.meta.url,
+    loaderFilename: import.meta.url,
   });
 }
 
@@ -348,19 +352,9 @@ function canTryNodeRequireBuiltModule(modulePath: string): boolean {
 function loadBundledEntryModuleSync(
   importMetaUrl: string,
   specifier: string,
-  options: BundledEntryModuleLoadOptions = {},
+  _options: BundledEntryModuleLoadOptions = {},
 ): unknown {
-  let modulePath = resolveBundledEntryModulePath(importMetaUrl, specifier);
-  const boundaryRoot = resolveEntryBoundaryRoot(importMetaUrl);
-  if (options.installRuntimeDeps !== false && isBuiltBundledPluginRuntimeRoot(boundaryRoot)) {
-    const prepared = prepareBundledPluginRuntimeRoot({
-      pluginId: path.basename(boundaryRoot),
-      pluginRoot: boundaryRoot,
-      modulePath,
-      env: process.env,
-    });
-    modulePath = prepared.modulePath;
-  }
+  const modulePath = resolveBundledEntryModulePath(importMetaUrl, specifier);
   const cached = loadedModuleExports.get(modulePath);
   if (cached !== undefined) {
     return cached;
@@ -368,25 +362,25 @@ function loadBundledEntryModuleSync(
   let loaded: unknown;
   const profile = shouldProfilePluginLoader();
   const loadStartMs = profile ? performance.now() : 0;
-  let getJitiEndMs = 0;
+  let sourceLoaderReadyMs = 0;
   if (canTryNodeRequireBuiltModule(modulePath)) {
     try {
       loaded = nodeRequire(modulePath);
     } catch {
-      const jiti = getJiti(modulePath);
-      getJitiEndMs = profile ? performance.now() : 0;
-      loaded = jiti(toSafeImportPath(modulePath));
+      const moduleLoader = getSourceModuleLoader(modulePath);
+      sourceLoaderReadyMs = profile ? performance.now() : 0;
+      loaded = moduleLoader(toSafeImportPath(modulePath));
     }
   } else {
-    const jiti = getJiti(modulePath);
-    getJitiEndMs = profile ? performance.now() : 0;
-    loaded = jiti(toSafeImportPath(modulePath));
+    const moduleLoader = getSourceModuleLoader(modulePath);
+    sourceLoaderReadyMs = profile ? performance.now() : 0;
+    loaded = moduleLoader(toSafeImportPath(modulePath));
   }
   if (profile) {
     const endMs = performance.now();
     // Use shared formatter — but split timing fields ourselves so we can
-    // attribute time spent in `getJiti(...)` factory creation vs the actual
-    // graph-walking `__j(modulePath)` call. Both are emitted as extras
+    // attribute time spent in source-loader creation vs the actual graph load.
+    // Both are emitted as extras
     // alongside the canonical `elapsedMs=<total>` field.
     console.error(
       formatPluginLoadProfileLine({
@@ -394,15 +388,12 @@ function loadBundledEntryModuleSync(
         pluginId: "(bundled-entry)",
         source: modulePath,
         elapsedMs: endMs - loadStartMs,
-        // When the built-artifact fast-path resolves the module via `nodeRequire`,
-        // `getJitiEndMs` stays `0` because the `catch` block (the only place
-        // it gets stamped) never runs. Reporting `getJitiMs` /
-        // `jitiCallMs` as `0` for that path keeps the breakdown honest:
-        // `elapsedMs=` already captures the nodeRequire time, and we don't
-        // want to mis-attribute it to jiti sub-steps.
+        // When the built-artifact fast path resolves via `nodeRequire`, the
+        // source-loader timestamp stays `0`; keep its breakdown at zero so
+        // `elapsedMs=` owns the native load time.
         extras: [
-          ["getJitiMs", getJitiEndMs ? getJitiEndMs - loadStartMs : 0],
-          ["jitiCallMs", getJitiEndMs ? endMs - getJitiEndMs : 0],
+          ["sourceLoaderCreateMs", sourceLoaderReadyMs ? sourceLoaderReadyMs - loadStartMs : 0],
+          ["sourceLoaderCallMs", sourceLoaderReadyMs ? endMs - sourceLoaderReadyMs : 0],
         ],
       }),
     );

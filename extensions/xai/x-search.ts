@@ -13,6 +13,7 @@ import { resolveEffectiveXSearchConfig } from "./src/x-search-config.js";
 import {
   buildXaiXSearchPayload,
   requestXaiXSearch,
+  resolveXaiXSearchEndpoint,
   resolveXaiXSearchInlineCitations,
   resolveXaiXSearchMaxTurns,
   resolveXaiXSearchModel,
@@ -100,6 +101,7 @@ function normalizeOptionalIsoDate(value: string | undefined, label: string): str
 function buildXSearchCacheKey(params: {
   query: string;
   model: string;
+  endpoint: string;
   inlineCitations: boolean;
   maxTurns?: number;
   options: Omit<XaiXSearchOptions, "query">;
@@ -107,6 +109,7 @@ function buildXSearchCacheKey(params: {
   return JSON.stringify([
     "x_search",
     params.model,
+    params.endpoint,
     params.query,
     params.inlineCitations,
     params.maxTurns ?? null,
@@ -164,11 +167,13 @@ export function createXSearchTool(options?: {
     };
     const xSearchConfigRecord = xSearchConfig;
     const model = resolveXaiXSearchModel(xSearchConfigRecord);
+    const endpoint = resolveXaiXSearchEndpoint(xSearchConfigRecord);
     const inlineCitations = resolveXaiXSearchInlineCitations(xSearchConfigRecord);
     const maxTurns = resolveXaiXSearchMaxTurns(xSearchConfigRecord);
     const cacheKey = buildXSearchCacheKey({
       query,
       model,
+      endpoint,
       inlineCitations,
       maxTurns,
       options: {
@@ -188,6 +193,7 @@ export function createXSearchTool(options?: {
     const startedAt = Date.now();
     const result = await requestXaiXSearch({
       apiKey,
+      endpoint,
       model,
       timeoutSeconds: resolveTimeoutSeconds(xSearchConfig?.timeoutSeconds, 30),
       inlineCitations,

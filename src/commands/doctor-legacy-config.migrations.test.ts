@@ -497,7 +497,9 @@ describe("normalizeCompatibilityConfigValues", () => {
       fallback: "pi",
     });
     expect(res.config.agents?.defaults?.models).toEqual({
+      "codex/gpt-5.5": { alias: "legacy-codex" },
       "openai/gpt-5.5": { alias: "gpt", params: { temperature: 0.2 } },
+      "codex/gpt-5.4-mini": {},
       "openai/gpt-5.4-mini": {},
     });
     expect(res.config.agents?.list?.[0]).toMatchObject({
@@ -557,6 +559,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
     expect(res.config.agents?.defaults?.agentRuntime).toEqual({ id: "claude-cli" });
     expect(res.config.agents?.defaults?.models).toEqual({
+      "claude-cli/claude-opus-4-7": { alias: "Opus" },
       "anthropic/claude-opus-4-7": { alias: "Anthropic Opus" },
     });
   });
@@ -583,6 +586,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
     expect(res.config.agents?.defaults?.agentRuntime).toEqual({ id: "codex-cli" });
     expect(res.config.agents?.defaults?.models).toEqual({
+      "codex-cli/gpt-5.5": { alias: "Codex CLI" },
       "openai/gpt-5.5": { alias: "OpenAI GPT" },
     });
   });
@@ -611,6 +615,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       id: "google-gemini-cli",
     });
     expect(res.config.agents?.defaults?.models).toEqual({
+      "google-gemini-cli/gemini-3.1-pro-preview": { alias: "Gemini CLI" },
       "google/gemini-3.1-pro-preview": { alias: "Gemini API" },
     });
   });

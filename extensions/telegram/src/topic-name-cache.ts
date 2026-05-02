@@ -6,7 +6,7 @@ const MAX_ENTRIES = 2_048;
 const TOPIC_NAME_CACHE_STATE_KEY = Symbol.for("openclaw.telegramTopicNameCacheState");
 const DEFAULT_TOPIC_NAME_CACHE_KEY = "__default__";
 
-export type TopicEntry = {
+type TopicEntry = {
   name: string;
   iconColor?: number;
   iconCustomEmojiId?: string;

@@ -5,7 +5,7 @@ export const PLUGIN_PRERELEASE_REQUIRED_SURFACES = Object.freeze([
   "bundled-lifecycle",
   "external-plugins",
   "update-no-op",
-  "channel-runtime-deps",
+  "installed-plugin-deps",
   "doctor-fix",
   "config-round-trip",
   "gateway-bootstrap",
@@ -29,11 +29,7 @@ const pluginPrereleaseDockerLanes = Object.freeze([
   },
   {
     lane: "update-channel-switch",
-    surfaces: ["package-artifact", "channel-runtime-deps", "update-no-op"],
-  },
-  {
-    lane: "bundled-channel-deps-compat",
-    surfaces: ["package-artifact", "channel-runtime-deps", "gateway-bootstrap"],
+    surfaces: ["package-artifact", "installed-plugin-deps", "update-no-op"],
   },
   {
     lane: "plugins-offline",

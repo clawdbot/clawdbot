@@ -950,6 +950,8 @@ public final class OpenClawChatViewModel {
             Task { await self.pollHealthIfNeeded(force: false) }
         case let .chat(chat):
             self.handleChatEvent(chat)
+        case let .sessionMessage(message):
+            self.handleSessionMessageEvent(message)
         case let .agent(agent):
             self.handleAgentEvent(agent)
         case .seqGap:
@@ -960,6 +962,26 @@ public final class OpenClawChatViewModel {
                 await self.pollHealthIfNeeded(force: true)
             }
         }
+    }
+
+    private func handleSessionMessageEvent(_ payload: OpenClawSessionMessageEventPayload) {
+        if let sessionKey = payload.sessionKey,
+           !Self.matchesCurrentSessionKey(incoming: sessionKey, current: self.sessionKey)
+        {
+            return
+        }
+
+        guard let message = payload.message else { return }
+        guard message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user" else {
+            return
+        }
+        if self.pendingRunCount > 0 {
+            return
+        }
+
+        let sanitized = Self.stripInboundMetadata(from: message)
+        let reconciled = Self.reconcileMessageIDs(previous: self.messages, incoming: self.messages + [sanitized])
+        self.messages = Self.dedupeMessages(reconciled)
     }
 
     private func handleChatEvent(_ chat: OpenClawChatEventPayload) {

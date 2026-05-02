@@ -1,7 +1,7 @@
 import { isIpInCidr } from "../shared/net/ip.js";
 import { listExternalInterfaceAddresses, readNetworkInterfaces } from "./network-interfaces.js";
 
-export type TailnetAddresses = {
+type TailnetAddresses = {
   ipv4: string[];
   ipv6: string[];
 };

@@ -96,7 +96,7 @@ function cloneRestartSentinelPayload(payload: RestartSentinelPayload): RestartSe
   return JSON.parse(JSON.stringify(payload)) as RestartSentinelPayload;
 }
 
-export async function rewriteRestartSentinel(
+async function rewriteRestartSentinel(
   rewrite: (payload: RestartSentinelPayload) => RestartSentinelPayload | null,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<RestartSentinel | null> {

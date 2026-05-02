@@ -14,7 +14,7 @@ export const DEFAULT_TEMPORAL_DECAY_CONFIG: TemporalDecayConfig = {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DATED_MEMORY_PATH_RE = /(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/;
 
-export function toDecayLambda(halfLifeDays: number): number {
+function toDecayLambda(halfLifeDays: number): number {
   if (!Number.isFinite(halfLifeDays) || halfLifeDays <= 0) {
     return 0;
   }

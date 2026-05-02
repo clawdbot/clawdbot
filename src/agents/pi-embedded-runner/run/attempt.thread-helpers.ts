@@ -55,7 +55,7 @@ export function shouldUseOpenAIWebSocketTransport(params: {
   return endpointClass === "default" || endpointClass === "openai-public";
 }
 
-export function shouldAppendAttemptCacheTtl(params: {
+function shouldAppendAttemptCacheTtl(params: {
   timedOutDuringCompaction: boolean;
   compactionOccurredThisAttempt: boolean;
   config?: OpenClawConfig;

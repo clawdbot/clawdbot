@@ -13,9 +13,7 @@ import type {
 } from "./service/state.js";
 import type { CronJob } from "./types.js";
 
-export type { CronListPageOptions, CronListPageResult } from "./service/list-page-types.js";
-
-export type CronWakeResult = { ok: true } | { ok: false };
+type CronWakeResult = { ok: true } | { ok: false };
 
 export type CronServiceRunResult = CronRunResult | { ok: true; ran: false; reason: "invalid-spec" };
 

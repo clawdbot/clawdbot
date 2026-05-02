@@ -99,6 +99,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
   },
   approvalCapability: getQQBotApprovalCapability(),
   messaging: {
+    targetPrefixes: ["qqbot"],
     /** Normalize common QQ Bot target formats into the canonical qqbot:... form. */
     normalizeTarget: coreNormalizeTarget,
     targetResolver: {

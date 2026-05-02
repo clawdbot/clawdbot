@@ -63,6 +63,9 @@ export function createClackPrompter(): WizardPrompter {
     note: async (message, title) => {
       emitNote(message, title);
     },
+    plain: async (message) => {
+      process.stdout.write(message.endsWith("\n") ? message : `${message}\n`);
+    },
     select: async (params) => {
       const options = params.options.map((opt) => {
         const base = { value: opt.value, label: opt.label };

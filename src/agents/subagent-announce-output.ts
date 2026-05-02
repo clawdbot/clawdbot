@@ -50,7 +50,7 @@ type SubagentOutputSnapshot = {
   waitingForContinuation?: boolean;
 };
 
-export type AgentWaitResult = {
+type AgentWaitResult = {
   status?: string;
   startedAt?: number;
   endedAt?: number;

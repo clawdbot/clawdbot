@@ -82,19 +82,26 @@ async function waitForProbeExit(params: {
   throw new Error(`${label} MCP probe process still alive after run: pid=${pid} args=${args}`);
 }
 
-async function waitForAnyProbeExit(params: {
+async function waitForAllProbeExits(params: {
   pidsPath: string;
   label: string;
   timeoutMs: number;
-}): Promise<number> {
+}): Promise<number[]> {
   const startedAt = Date.now();
   let observed: number[] = [];
   while (Date.now() - startedAt < params.timeoutMs) {
     observed = await readProbePids(params.pidsPath);
-    for (const pid of observed) {
-      const args = await describeProbePid(pid);
-      if (!args || !args.includes("openclaw-cron-mcp-cleanup-probe")) {
-        return pid;
+    if (observed.length > 0) {
+      let allExited = true;
+      for (const pid of observed) {
+        const args = await describeProbePid(pid);
+        if (args?.includes("openclaw-cron-mcp-cleanup-probe")) {
+          allExited = false;
+          break;
+        }
+      }
+      if (allExited) {
+        return observed;
       }
     }
     await delay(100);
@@ -201,7 +208,7 @@ async function runSubagentCleanupScenario(params: {
   pidPath: string;
   pidsPath: string;
   exitPath: string;
-}): Promise<{ runId: string; exitedPid: number; pids: number[] }> {
+}): Promise<{ runId: string; exitedPids: number[]; pids: number[] }> {
   const { gateway, pidPath, pidsPath, exitPath } = params;
   await resetProbeFiles({ pidPath, pidsPath, exitPath });
 
@@ -225,14 +232,27 @@ async function runSubagentCleanupScenario(params: {
     `agent did not accept subagent cleanup run: ${JSON.stringify(run)}`,
   );
 
-  const exitedPid = await waitForAnyProbeExit({
+  const finished = await gateway.request<{ status?: string }>(
+    "agent.wait",
+    {
+      runId: run.runId,
+      timeoutMs: 240_000,
+    },
+    { timeoutMs: 250_000 },
+  );
+  assert(
+    finished.status === "ok",
+    `subagent cleanup run did not finish ok: ${JSON.stringify(finished)}`,
+  );
+
+  const exitedPids = await waitForAllProbeExits({
     pidsPath,
     label: "subagent",
     timeoutMs: 240_000,
   });
   return {
     runId: run.runId,
-    exitedPid,
+    exitedPids,
     pids: await readProbePids(pidsPath),
   };
 }

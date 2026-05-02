@@ -1,7 +1,7 @@
 import { isVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { GatewayPlugin } from "../internal/gateway.js";
 
-export function formatDiscordStartupGatewayState(gateway?: GatewayPlugin): string {
+function formatDiscordStartupGatewayState(gateway?: GatewayPlugin): string {
   if (!gateway) {
     return "gateway=missing";
   }

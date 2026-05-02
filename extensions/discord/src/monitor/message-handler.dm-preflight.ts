@@ -62,6 +62,9 @@ export async function resolveDiscordDmPreflightAccess(params: {
     },
     allowNameMatching: params.allowNameMatching,
     useAccessGroups: params.useAccessGroups,
+    cfg: params.preflight.cfg,
+    token: params.preflight.token,
+    rest: params.preflight.client.rest,
   });
   const commandAuthorized = dmAccess.commandAuthorized || directBindingRecord != null;
   if (dmAccess.decision === "allow") {

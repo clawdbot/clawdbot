@@ -63,24 +63,10 @@ describe("collectModuleSpecifiers", () => {
 });
 
 describe("classifyRootDependencyOwnership", () => {
-  it("treats root-dist bundled runtime imports as localizable extension deps", () => {
-    expect(
-      classifyRootDependencyOwnership({
-        sections: ["extensions"],
-        rootMirrorImporters: ["discovery-DZDwKJdJ.js"],
-      }),
-    ).toEqual({
-      category: "extension_only_localizable",
-      recommendation:
-        "remove from root package.json and rely on owning extension manifests plus doctor --fix",
-    });
-  });
-
   it("treats scripts and tests as dev-only candidates", () => {
     expect(
       classifyRootDependencyOwnership({
         sections: ["scripts", "test"],
-        rootMirrorImporters: [],
       }),
     ).toEqual({
       category: "script_or_test_only",
@@ -88,11 +74,11 @@ describe("classifyRootDependencyOwnership", () => {
     });
   });
 
-  it("treats extension-only deps as localizable when no root mirror exists", () => {
+  it("treats extension-only deps as localizable", () => {
     expect(
       classifyRootDependencyOwnership({
+        depName: "vendor-sdk",
         sections: ["extensions", "test"],
-        rootMirrorImporters: [],
       }),
     ).toEqual({
       category: "extension_only_localizable",
@@ -101,11 +87,23 @@ describe("classifyRootDependencyOwnership", () => {
     });
   });
 
+  it("allows explicit root-owned internal extension runtime dependencies", () => {
+    expect(
+      classifyRootDependencyOwnership({
+        depName: "playwright-core",
+        sections: ["extensions", "test"],
+      }),
+    ).toEqual({
+      category: "root_owned_extension_runtime",
+      recommendation:
+        "keep at root; the internal browser runtime is shipped with core even though downloadable browser-adjacent plugins also declare it",
+    });
+  });
+
   it("treats src-owned deps as core runtime", () => {
     expect(
       classifyRootDependencyOwnership({
         sections: ["src"],
-        rootMirrorImporters: [],
       }),
     ).toEqual({
       category: "core_runtime",
@@ -117,7 +115,6 @@ describe("classifyRootDependencyOwnership", () => {
     expect(
       classifyRootDependencyOwnership({
         sections: [],
-        rootMirrorImporters: [],
       }),
     ).toEqual({
       category: "unreferenced",
@@ -223,5 +220,35 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
     ).toEqual([
       "root dependency '@tencent-connect/qqbot-connector' is extension-owned (remove from root package.json and rely on owning extension manifests plus doctor --fix); extension declarations: qqbot:dependencies; sample imports: extensions/qqbot/src/bridge/setup/finalize.ts",
     ]);
+  });
+
+  it("does not fail explicitly root-owned internal extension runtime dependencies", () => {
+    const repoRoot = makeTempRepo();
+    writeRepoFile(
+      repoRoot,
+      "package.json",
+      JSON.stringify({ dependencies: { "playwright-core": "1.59.1" } }),
+    );
+    writeRepoFile(
+      repoRoot,
+      "extensions/browser/package.json",
+      JSON.stringify({ dependencies: { "playwright-core": "1.59.1" } }),
+    );
+    writeRepoFile(
+      repoRoot,
+      "extensions/browser/src/browser/playwright-core.runtime.ts",
+      'const runtime = require("playwright-core");\n',
+    );
+
+    const records = collectRootDependencyOwnershipAudit({ repoRoot, scanRoots: ["extensions"] });
+
+    expect(records).toMatchObject([
+      {
+        category: "root_owned_extension_runtime",
+        depName: "playwright-core",
+        sections: ["extensions"],
+      },
+    ]);
+    expect(collectRootDependencyOwnershipCheckErrors(records)).toEqual([]);
   });
 });

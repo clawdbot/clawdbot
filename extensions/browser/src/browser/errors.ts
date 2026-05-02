@@ -29,12 +29,6 @@ export class BrowserValidationError extends BrowserError {
   }
 }
 
-export class BrowserConfigurationError extends BrowserError {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, 400, options);
-  }
-}
-
 export class BrowserTargetAmbiguousError extends BrowserError {
   constructor(message = "ambiguous target id prefix", options?: ErrorOptions) {
     super(message, 409, options);

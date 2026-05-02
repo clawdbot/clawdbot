@@ -7,7 +7,7 @@ import {
   type PluginInteractiveRegistration,
 } from "openclaw/plugin-sdk/plugin-runtime";
 
-export type TelegramInteractiveButtons = Array<
+type TelegramInteractiveButtons = Array<
   Array<{ text: string; callback_data: string; style?: "danger" | "success" | "primary" }>
 >;
 
@@ -52,7 +52,7 @@ export type TelegramInteractiveHandlerRegistration = PluginInteractiveRegistrati
   "telegram"
 >;
 
-export type TelegramInteractiveDispatchContext = Omit<
+type TelegramInteractiveDispatchContext = Omit<
   TelegramInteractiveHandlerContext,
   | "callback"
   | "respond"

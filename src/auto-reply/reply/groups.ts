@@ -283,13 +283,24 @@ export function buildGroupChatContext(params: {
 
 export function buildDirectChatContext(params: {
   sessionCtx: TemplateContext;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   silentReplyPolicy?: SilentReplyPolicy;
   silentReplyRewrite?: boolean;
   silentToken: string;
 }): string {
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
+  const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const lines: string[] = [];
   lines.push(`You are in a ${providerLabel} direct conversation.`);
+  if (messageToolOnly) {
+    lines.push(
+      "Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation.",
+    );
+    lines.push(
+      "If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation.",
+    );
+    return lines.join(" ");
+  }
   lines.push("Your replies are automatically sent to this conversation.");
   if (params.silentReplyPolicy === "allow") {
     lines.push(

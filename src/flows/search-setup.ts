@@ -23,11 +23,11 @@ export type SearchProvider = NonNullable<
 type SearchConfig = NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]>;
 type MutableSearchConfig = SearchConfig & Record<string, unknown>;
 
-export type SearchProviderSetupOption = FlowOption & {
+type SearchProviderSetupOption = FlowOption & {
   value: SearchProvider;
 };
 
-export type SearchProviderSetupContribution = FlowContribution & {
+type SearchProviderSetupContribution = FlowContribution & {
   kind: "search";
   surface: "setup";
   provider: PluginWebSearchProviderEntry;
@@ -83,7 +83,7 @@ function buildSearchProviderSetupContribution(params: {
   };
 }
 
-export function resolveSearchProviderSetupContributions(
+function resolveSearchProviderSetupContributions(
   config?: OpenClawConfig,
 ): SearchProviderSetupContribution[] {
   const providers = sortWebSearchProviders(
@@ -432,6 +432,10 @@ export async function runSearchSetupFlow(
       prompter,
       opts,
     });
+  }
+
+  if (entry.credentialNote) {
+    await prompter.note(entry.credentialNote, entry.label);
   }
 
   const useSecretRefMode = opts?.secretInputMode === "ref"; // pragma: allowlist secret

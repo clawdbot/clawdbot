@@ -1,6 +1,6 @@
 import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
 
-export type ServiceRuntimeLike = {
+type ServiceRuntimeLike = {
   status?: string;
   state?: string;
   subState?: string;

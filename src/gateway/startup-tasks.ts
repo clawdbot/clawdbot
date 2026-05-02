@@ -1,6 +1,6 @@
 import { formatErrorMessage } from "../infra/errors.js";
 
-export type StartupTaskResult =
+type StartupTaskResult =
   | { status: "skipped"; reason: string }
   | { status: "ran" }
   | { status: "failed"; reason: string };
@@ -13,7 +13,7 @@ export type StartupTask = {
   run: () => Promise<StartupTaskResult>;
 };
 
-export type StartupTaskLogger = {
+type StartupTaskLogger = {
   debug: (message: string, meta?: Record<string, unknown>) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 };

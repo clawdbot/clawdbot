@@ -223,7 +223,7 @@ export function loadHookEntriesFromDir(params: {
   });
 }
 
-export function discoverWorkspaceHookEntries(
+function discoverWorkspaceHookEntries(
   workspaceDir: string,
   opts?: {
     config?: OpenClawConfig;

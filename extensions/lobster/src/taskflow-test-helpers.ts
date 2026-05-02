@@ -1,7 +1,7 @@
 import { vi } from "vitest";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 
-export type BoundTaskFlow = ReturnType<
+type BoundTaskFlow = ReturnType<
   NonNullable<OpenClawPluginApi["runtime"]>["tasks"]["managedFlows"]["bindSession"]
 >;
 

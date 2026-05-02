@@ -244,7 +244,7 @@ async function startNarrativeRunOrFallback(params: {
 /**
  * Build the deterministic subagent session key used for dream narratives.
  */
-export function buildNarrativeSessionKey(params: {
+function buildNarrativeSessionKey(params: {
   workspaceDir: string;
   phase: NarrativePhaseData["phase"];
   nowMs: number;

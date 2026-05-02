@@ -46,7 +46,7 @@ export async function createDockerSandboxBackend(
   });
 }
 
-export function createDockerSandboxBackendHandle(params: {
+function createDockerSandboxBackendHandle(params: {
   containerName: string;
   workdir: string;
   env?: Record<string, string>;

@@ -17,7 +17,7 @@ export type ConversationDescriptor = {
   updatedAt?: number | null;
 };
 
-export type SessionRow = {
+type SessionRow = {
   key: string;
   channel?: string;
   lastChannel?: string;
@@ -145,7 +145,7 @@ export function summarizeResult(
   };
 }
 
-export function resolveConversationChannel(row: SessionRow): string | undefined {
+function resolveConversationChannel(row: SessionRow): string | undefined {
   return normalizeMessageChannel(
     toText(row.deliveryContext?.channel) ??
       toText(row.lastChannel) ??

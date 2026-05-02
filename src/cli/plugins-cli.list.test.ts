@@ -11,6 +11,7 @@ import {
   runPluginsCommand,
   runtimeErrors,
   runtimeLogs,
+  setInstalledPluginIndexInstallRecords,
 } from "./plugins-cli-test-helpers.js";
 
 describe("plugins cli list", () => {
@@ -121,6 +122,20 @@ describe("plugins cli list", () => {
   });
 
   it("keeps inspect on the static snapshot by default", async () => {
+    setInstalledPluginIndexInstallRecords({
+      "openclaw-mem0": {
+        source: "clawhub",
+        spec: "clawhub:openclaw-mem0",
+        installPath: "/plugins/openclaw-mem0",
+        version: "2026.5.1",
+        clawhubPackage: "openclaw-mem0",
+        clawhubChannel: "official",
+        clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        clawpackSpecVersion: 1,
+        clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        clawpackSize: 4096,
+      },
+    });
     buildPluginSnapshotReport.mockReturnValue({
       plugins: [createPluginRecord({ id: "openclaw-mem0", name: "Mem0" })],
       diagnostics: [],
@@ -159,6 +174,12 @@ describe("plugins cli list", () => {
     expect(buildPluginDiagnosticsReport).not.toHaveBeenCalled();
     expect(runtimeLogs.join("\n")).toContain("Policy");
     expect(runtimeLogs.join("\n")).toContain("allowConversationAccess: true");
+    expect(runtimeLogs.join("\n")).toContain("ClawHub package: openclaw-mem0");
+    expect(runtimeLogs.join("\n")).toContain(
+      "ClawPack sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+    expect(runtimeLogs.join("\n")).toContain("ClawPack spec: 1");
+    expect(runtimeLogs.join("\n")).toContain("ClawPack size: 4096 bytes");
   });
 
   it("runtime-inspects without repairing deps", async () => {

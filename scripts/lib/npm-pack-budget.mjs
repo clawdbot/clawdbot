@@ -3,9 +3,9 @@
 // dependencies, including crypto wasm, so packaged installs do not miss Docker
 // and gateway runtime dependencies. Keep the budget below the 2026.3.12 bloat
 // level while allowing that mirrored runtime surface.
-export const NPM_PACK_UNPACKED_SIZE_BUDGET_BYTES = 202 * 1024 * 1024;
+const NPM_PACK_UNPACKED_SIZE_BUDGET_BYTES = 202 * 1024 * 1024;
 
-export function formatMiB(bytes) {
+function formatMiB(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
@@ -13,7 +13,7 @@ function resolvePackResultLabel(entry, index) {
   return entry.filename?.trim() || `pack result #${index + 1}`;
 }
 
-export function formatPackUnpackedSizeBudgetError(params) {
+function formatPackUnpackedSizeBudgetError(params) {
   const budgetBytes = params.budgetBytes ?? NPM_PACK_UNPACKED_SIZE_BUDGET_BYTES;
   return [
     `${params.label} unpackedSize ${params.unpackedSize} bytes (${formatMiB(params.unpackedSize)}) exceeds budget ${budgetBytes} bytes (${formatMiB(budgetBytes)}).`,

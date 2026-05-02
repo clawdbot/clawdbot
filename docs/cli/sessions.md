@@ -9,6 +9,13 @@ title: "Sessions"
 
 List stored conversation sessions.
 
+Session lists are not channel/provider liveness checks. They show persisted
+conversation rows from session stores. A quiet Discord, Slack, Telegram, or
+other channel can reconnect successfully without creating a new session row
+until a message is processed. Use `openclaw channels status --probe`,
+`openclaw status --deep`, or `openclaw health --verbose` when you need live
+channel connectivity.
+
 ```bash
 openclaw sessions
 openclaw sessions --agent work
@@ -85,7 +92,7 @@ openclaw sessions cleanup --json
   - In text mode, dry-run prints a per-session action table (`Action`, `Key`, `Age`, `Model`, `Flags`) so you can see what would be kept vs removed.
 - `--enforce`: apply maintenance even when `session.maintenance.mode` is `warn`.
 - `--fix-missing`: remove entries whose transcript files are missing, even if they would not normally age/count out yet.
-- `--active-key <key>`: protect a specific active key from disk-budget eviction.
+- `--active-key <key>`: protect a specific active key from disk-budget eviction. Durable external conversation pointers, such as group sessions and thread-scoped chat sessions, are also kept by age/count/disk-budget maintenance.
 - `--agent <id>`: run cleanup for one configured agent store.
 - `--all-agents`: run cleanup for all configured agent stores.
 - `--store <path>`: run against a specific `sessions.json` file.

@@ -1,19 +1,19 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-export const IOS_VERSION_FILE = "apps/ios/version.json";
-export const IOS_CHANGELOG_FILE = "apps/ios/CHANGELOG.md";
-export const IOS_VERSION_XCCONFIG_FILE = "apps/ios/Config/Version.xcconfig";
-export const IOS_RELEASE_NOTES_FILE = "apps/ios/fastlane/metadata/en-US/release_notes.txt";
+const IOS_VERSION_FILE = "apps/ios/version.json";
+const IOS_CHANGELOG_FILE = "apps/ios/CHANGELOG.md";
+const IOS_VERSION_XCCONFIG_FILE = "apps/ios/Config/Version.xcconfig";
+const IOS_RELEASE_NOTES_FILE = "apps/ios/fastlane/metadata/en-US/release_notes.txt";
 
 const PINNED_IOS_VERSION_PATTERN = /^(\d{4}\.\d{1,2}\.\d{1,2})$/u;
 const GATEWAY_VERSION_PATTERN = /^(\d{4}\.\d{1,2}\.\d{1,2})(?:-(?:beta\.\d+|\d+))?$/u;
 
-export type IosVersionManifest = {
+type IosVersionManifest = {
   version: string;
 };
 
-export type ResolvedIosVersion = {
+type ResolvedIosVersion = {
   canonicalVersion: string;
   marketingVersion: string;
   buildVersion: string;
@@ -23,7 +23,7 @@ export type ResolvedIosVersion = {
   releaseNotesPath: string;
 };
 
-export type SyncIosVersioningMode = "check" | "write";
+type SyncIosVersioningMode = "check" | "write";
 
 function normalizeTrailingNewline(value: string): string {
   return value.endsWith("\n") ? value : `${value}\n`;
@@ -59,7 +59,7 @@ export function normalizeGatewayVersionToPinnedIosVersion(rawVersion: string): s
   return match[1] ?? trimmed;
 }
 
-export function readRootPackageVersion(rootDir = path.resolve(".")): string {
+function readRootPackageVersion(rootDir = path.resolve(".")): string {
   const packageJsonPath = path.join(rootDir, "package.json");
   const parsed = JSON.parse(readFileSync(packageJsonPath, "utf8")) as { version?: unknown };
   const version = typeof parsed.version === "string" ? parsed.version.trim() : "";
@@ -80,7 +80,7 @@ export function resolveGatewayVersionForIosRelease(rootDir = path.resolve(".")):
   };
 }
 
-export function readIosVersionManifest(rootDir = path.resolve(".")): IosVersionManifest {
+function readIosVersionManifest(rootDir = path.resolve(".")): IosVersionManifest {
   const versionFilePath = path.join(rootDir, IOS_VERSION_FILE);
   return JSON.parse(readFileSync(versionFilePath, "utf8")) as IosVersionManifest;
 }

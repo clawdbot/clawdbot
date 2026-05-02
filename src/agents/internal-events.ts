@@ -9,7 +9,7 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "./internal-runtime-context.js";
 
-export type AgentTaskCompletionInternalEvent = {
+type AgentTaskCompletionInternalEvent = {
   type: typeof AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION;
   source: AgentInternalEventSource;
   childSessionKey: string;

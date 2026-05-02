@@ -1,4 +1,4 @@
-export type MSTeamsQuoteInfo = {
+type MSTeamsQuoteInfo = {
   sender: string;
   body: string;
 };
@@ -74,7 +74,7 @@ export function extractMSTeamsQuoteInfo(
   return undefined;
 }
 
-export type MentionableActivity = {
+type MentionableActivity = {
   recipient?: { id?: string } | null;
   entities?: Array<{
     type?: string;

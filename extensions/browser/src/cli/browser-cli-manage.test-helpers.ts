@@ -10,7 +10,7 @@ type BrowserRequest = {
 };
 type BrowserRuntimeOptions = { timeoutMs?: number };
 
-export type BrowserManageCall = [unknown, BrowserRequest, BrowserRuntimeOptions | undefined];
+type BrowserManageCall = [unknown, BrowserRequest, BrowserRuntimeOptions | undefined];
 
 const browserManageMocks = vi.hoisted(() => ({
   callBrowserRequest: vi.fn<

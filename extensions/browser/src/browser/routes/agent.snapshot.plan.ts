@@ -19,7 +19,7 @@ function normalizeOptionalString(value: unknown): string | undefined {
   return readStringValue(value)?.trim() || undefined;
 }
 
-export type BrowserSnapshotPlan = {
+type BrowserSnapshotPlan = {
   format: "ai" | "aria";
   mode?: "efficient";
   labels?: boolean;

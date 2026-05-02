@@ -136,6 +136,88 @@ describe("xai x_search tool", () => {
     ]);
   });
 
+  it("routes x_search through plugin-owned xSearch.baseUrl", async () => {
+    const mockFetch = installXSearchFetch();
+    const tool = createXSearchTool({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-config-test", // pragma: allowlist secret
+                },
+                xSearch: {
+                  enabled: true,
+                  baseUrl: "https://api.x.ai/xai-search/v1/",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await tool?.execute?.("x-search:plugin-base-url", {
+      query: "base url route",
+    });
+
+    expect(String(mockFetch.mock.calls[0]?.[0])).toBe("https://api.x.ai/xai-search/v1/responses");
+  });
+
+  it("falls back to Grok web search baseUrl for x_search", async () => {
+    const mockFetch = installXSearchFetch();
+    const tool = createXSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              grok: {
+                apiKey: "xai-legacy-key", // pragma: allowlist secret
+                baseUrl: "https://api.x.ai/legacy/v1/",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await tool?.execute?.("x-search:legacy-grok-base-url", {
+      query: "legacy base url route",
+    });
+
+    expect(String(mockFetch.mock.calls[0]?.[0])).toBe("https://api.x.ai/legacy/v1/responses");
+  });
+
+  it("shares plugin webSearch.baseUrl with x_search when xSearch.baseUrl is unset", async () => {
+    const mockFetch = installXSearchFetch();
+    const tool = createXSearchTool({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-plugin-key", // pragma: allowlist secret
+                  baseUrl: "https://api.x.ai/shared/v1/",
+                },
+                xSearch: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await tool?.execute?.("x-search:web-search-base-url", {
+      query: "shared base url route",
+    });
+
+    expect(String(mockFetch.mock.calls[0]?.[0])).toBe("https://api.x.ai/shared/v1/responses");
+  });
+
   it("reuses the xAI plugin web search key for x_search requests", async () => {
     const mockFetch = installXSearchFetch();
     const tool = createXSearchTool({

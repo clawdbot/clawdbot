@@ -758,6 +758,24 @@
     "imageGenerationProviders": ["openai"],
     "videoGenerationProviders": ["openai"]
   },
+  "imageGenerationProviderMetadata": {
+    "openai": {
+      "aliases": ["openai-codex"],
+      "authSignals": [
+        {
+          "provider": "openai"
+        },
+        {
+          "provider": "openai-codex",
+          "providerBaseUrl": {
+            "provider": "openai",
+            "defaultBaseUrl": "https://api.openai.com/v1",
+            "allowedBaseUrls": ["https://api.openai.com/v1"]
+          }
+        }
+      ]
+    }
+  },
   "mediaUnderstandingProviderMetadata": {
     "openai": {
       "capabilities": ["image", "audio"],

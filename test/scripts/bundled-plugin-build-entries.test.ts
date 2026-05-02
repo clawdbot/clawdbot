@@ -87,6 +87,14 @@ describe("bundled plugin build entries", () => {
     );
   });
 
+  it("keeps explicitly downloadable plugins out of bundled package artifacts", () => {
+    const entries = listBundledPluginBuildEntries();
+    const artifacts = listBundledPluginPackArtifacts();
+
+    expect(Object.keys(entries).some((entry) => entry.startsWith("extensions/qqbot/"))).toBe(false);
+    expect(artifacts.some((artifact) => artifact.startsWith("dist/extensions/qqbot/"))).toBe(false);
+  });
+
   it("keeps bundled channel secret contracts on packed top-level sidecars", () => {
     const artifacts = listBundledPluginPackArtifacts();
     const offenders: string[] = [];

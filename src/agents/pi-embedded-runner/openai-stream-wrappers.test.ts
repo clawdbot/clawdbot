@@ -211,7 +211,7 @@ describe("createOpenAIThinkingLevelWrapper", () => {
 });
 
 describe("createOpenAIAttributionHeadersWrapper", () => {
-  it("routes native Codex traffic through the OpenClaw transport when no wrapped stream exists", () => {
+  it("routes native Codex traffic through the OpenClaw transport so attribution survives PI defaults", () => {
     let codexCalls = 0;
     let capturedHeaders: Record<string, string> | undefined;
     const codexTransport: StreamFn = (_model, _context, options) => {

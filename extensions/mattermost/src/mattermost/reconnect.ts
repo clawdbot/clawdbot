@@ -1,13 +1,13 @@
-export type ReconnectOutcome = "resolved" | "rejected";
+type ReconnectOutcome = "resolved" | "rejected";
 
-export type ShouldReconnectParams = {
+type ShouldReconnectParams = {
   attempt: number;
   delayMs: number;
   outcome: ReconnectOutcome;
   error?: unknown;
 };
 
-export type RunWithReconnectOpts = {
+type RunWithReconnectOpts = {
   abortSignal?: AbortSignal;
   onError?: (err: unknown) => void;
   onReconnect?: (delayMs: number) => void;

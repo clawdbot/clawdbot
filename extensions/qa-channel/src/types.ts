@@ -1,4 +1,4 @@
-export type QaChannelActionConfig = {
+type QaChannelActionConfig = {
   messages?: boolean;
   reactions?: boolean;
   search?: boolean;
@@ -27,7 +27,7 @@ export type QaChannelAccountConfig = {
   actions?: QaChannelActionConfig;
 };
 
-export type QaChannelConfig = QaChannelAccountConfig & {
+type QaChannelConfig = QaChannelAccountConfig & {
   accounts?: Record<string, Partial<QaChannelAccountConfig>>;
   defaultAccount?: string;
 };

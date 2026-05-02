@@ -10,6 +10,7 @@ import type {
 } from "openclaw/plugin-sdk/config-types";
 import { resolveDefaultGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import {
+  expandAllowFromWithAccessGroups,
   readStoreAllowFromForDmPolicy,
   resolveEffectiveAllowFromLists,
   resolveDmGroupAccessWithCommandGate,
@@ -177,13 +178,45 @@ export async function resolveWhatsAppCommandAuthorized(params: {
           dmPolicy: policy.dmPolicy,
           shouldRead: policy.shouldReadStorePairingApprovals,
         });
+  const isSenderAllowed = (senderId: string, allowEntries: string[]) =>
+    isGroup
+      ? policy.isGroupSenderAllowed(allowEntries, senderId)
+      : policy.isDmSenderAllowed(allowEntries, senderId);
+  const [allowFrom, groupAllowFrom] = await Promise.all([
+    expandAllowFromWithAccessGroups({
+      cfg: params.cfg,
+      allowFrom: policy.dmAllowFrom,
+      channel: "whatsapp",
+      accountId: policy.account.accountId,
+      senderId: normalizedSender,
+      isSenderAllowed,
+    }),
+    expandAllowFromWithAccessGroups({
+      cfg: params.cfg,
+      allowFrom: policy.groupAllowFrom,
+      channel: "whatsapp",
+      accountId: policy.account.accountId,
+      senderId: normalizedSender,
+      isSenderAllowed,
+    }),
+  ]);
+  const dmStoreAllowFrom = isGroup
+    ? []
+    : await expandAllowFromWithAccessGroups({
+        cfg: params.cfg,
+        allowFrom: storeAllowFrom,
+        channel: "whatsapp",
+        accountId: policy.account.accountId,
+        senderId: normalizedSender,
+        isSenderAllowed,
+      });
   const access = resolveDmGroupAccessWithCommandGate({
     isGroup,
     dmPolicy: policy.dmPolicy,
     groupPolicy: policy.groupPolicy,
-    allowFrom: policy.dmAllowFrom,
-    groupAllowFrom: policy.groupAllowFrom,
-    storeAllowFrom,
+    allowFrom,
+    groupAllowFrom,
+    storeAllowFrom: dmStoreAllowFrom,
     isSenderAllowed: (allowEntries) =>
       isGroup
         ? policy.isGroupSenderAllowed(allowEntries, groupSender)

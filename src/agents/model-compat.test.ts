@@ -595,10 +595,11 @@ describe("isHighSignalLiveModelRef", () => {
   it("keeps only curated xAI routes in the default live matrix", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
 
-    expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4-1-fast-non-reasoning" })).toBe(
-      true,
-    );
+    expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4.3" })).toBe(true);
     expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-3" })).toBe(false);
+    expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4-1-fast-non-reasoning" })).toBe(
+      false,
+    );
     expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4-fast-non-reasoning" })).toBe(
       false,
     );

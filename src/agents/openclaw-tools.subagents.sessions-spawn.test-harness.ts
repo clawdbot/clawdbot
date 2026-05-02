@@ -194,7 +194,10 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
       compact: async () => ({ ok: true, compacted: false }),
       ingest: async () => ({ ingested: false }),
     }),
-    resolveParentForkMaxTokens: () => 100_000,
+    resolveParentForkDecision: async () => ({
+      status: "fork",
+      maxTokens: 100_000,
+    }),
     forkSessionFromParent: async () => ({
       sessionId: "forked-session-id",
       sessionFile: "/tmp/forked-session.jsonl",

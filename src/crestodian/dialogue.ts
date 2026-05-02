@@ -7,7 +7,7 @@ import {
 } from "./operations.js";
 import { loadCrestodianOverview, type CrestodianOverview } from "./overview.js";
 
-export type CrestodianDialogueOptions = {
+type CrestodianDialogueOptions = {
   loadOverview?: typeof loadCrestodianOverview;
   planWithAssistant?: CrestodianAssistantPlanner;
 };

@@ -1,4 +1,4 @@
-export const MAX_CACHED_CHAT_SESSIONS = 20;
+const MAX_CACHED_CHAT_SESSIONS = 20;
 
 export function getOrCreateSessionCacheValue<T>(
   map: Map<string, T>,

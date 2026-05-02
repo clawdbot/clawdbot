@@ -439,7 +439,7 @@ describe("getHealthSnapshot", () => {
           activationSource: "explicit",
           activationReason: "bundled-channel-enabled-in-config",
           failurePhase: "load",
-          error: "failed to prepare bundled runtime deps: ENOSPC",
+          error: "failed to load plugin dependency: ENOSPC",
         }),
         createPluginRecord({
           id: "optional-broken",
@@ -470,7 +470,7 @@ describe("getHealthSnapshot", () => {
         activationSource: "explicit",
         activationReason: "bundled-channel-enabled-in-config",
         failurePhase: "load",
-        error: "failed to prepare bundled runtime deps: ENOSPC",
+        error: "failed to load plugin dependency: ENOSPC",
       },
     ]);
   });

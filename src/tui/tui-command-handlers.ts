@@ -634,6 +634,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       tui.requestRender();
       await client.sendChat({
         sessionKey: state.currentSessionKey,
+        sessionId: state.currentSessionId,
         message: text,
         thinking: opts.thinking,
         deliver: deliverDefault,

@@ -13,7 +13,7 @@ MiniMax also provides:
 - Bundled speech synthesis via T2A v2
 - Bundled image understanding via `MiniMax-VL-01`
 - Bundled music generation via `music-2.6`
-- Bundled `web_search` through the MiniMax Coding Plan search API
+- Bundled `web_search` through the MiniMax Token Plan search API
 
 Provider split:
 
@@ -357,16 +357,16 @@ when the bundled text-provider catalog still shows text-only M2.7 chat refs.
 
 ### Web search
 
-The MiniMax plugin also registers `web_search` through the MiniMax Coding Plan
+The MiniMax plugin also registers `web_search` through the MiniMax Token Plan
 search API.
 
 - Provider id: `minimax`
 - Structured results: titles, URLs, snippets, related queries
 - Preferred env var: `MINIMAX_CODE_PLAN_KEY`
-- Accepted env alias: `MINIMAX_CODING_API_KEY`
-- Compatibility fallback: `MINIMAX_API_KEY` when it already points at a coding-plan token
+- Accepted env aliases: `MINIMAX_CODING_API_KEY`, `MINIMAX_OAUTH_TOKEN`
+- Compatibility fallback: `MINIMAX_API_KEY` when it already points at a token-plan credential
 - Region reuse: `plugins.entries.minimax.config.webSearch.region`, then `MINIMAX_API_HOST`, then MiniMax provider base URLs
-- Search stays on provider id `minimax`; OAuth CN/global setup can still steer region indirectly through `models.providers.minimax-portal.baseUrl`
+- Search stays on provider id `minimax`; OAuth CN/global setup can steer region indirectly through `models.providers.minimax-portal.baseUrl` and can provide bearer auth through `MINIMAX_OAUTH_TOKEN`
 
 Config lives under `plugins.entries.minimax.config.webSearch.*`.
 
@@ -423,7 +423,8 @@ See [MiniMax Search](/tools/minimax-search) for full web search configuration an
   </Accordion>
 
   <Accordion title="Coding Plan usage details">
-    - Coding Plan usage API: `https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains` (requires a coding plan key).
+    - Coding Plan usage API: `https://api.minimaxi.com/v1/token_plan/remains` or `https://api.minimax.io/v1/token_plan/remains` (requires a coding plan key).
+    - Usage polling derives the host from `models.providers.minimax-portal.baseUrl` or `models.providers.minimax.baseUrl` when configured, so global setups using `https://api.minimax.io/anthropic` poll `api.minimax.io`. Missing or malformed base URLs keep the CN fallback for compatibility.
     - OpenClaw normalizes MiniMax coding-plan usage to the same `% left` display used by other providers. MiniMax's raw `usage_percent` / `usagePercent` fields are remaining quota, not consumed quota, so OpenClaw inverts them. Count-based fields win when present.
     - When the API returns `model_remains`, OpenClaw prefers the chat-model entry, derives the window label from `start_time` / `end_time` when needed, and includes the selected model name in the plan label so coding-plan windows are easier to distinguish.
     - Usage snapshots treat `minimax`, `minimax-cn`, and `minimax-portal` as the same MiniMax quota surface, and prefer stored MiniMax OAuth before falling back to Coding Plan key env vars.
@@ -496,7 +497,7 @@ More help: [Troubleshooting](/help/troubleshooting) and [FAQ](/help/faq).
     Shared video tool parameters and provider selection.
   </Card>
   <Card title="MiniMax Search" href="/tools/minimax-search" icon="magnifying-glass">
-    Web search configuration via MiniMax Coding Plan.
+    Web search configuration via MiniMax Token Plan.
   </Card>
   <Card title="Troubleshooting" href="/help/troubleshooting" icon="wrench">
     General troubleshooting and FAQ.

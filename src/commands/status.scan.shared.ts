@@ -159,7 +159,7 @@ async function applyLocalStatusRpcFallback(params: {
   };
 }
 
-export function hasExplicitMemorySearchConfig(cfg: OpenClawConfig, agentId: string): boolean {
+function hasExplicitMemorySearchConfig(cfg: OpenClawConfig, agentId: string): boolean {
   if (
     cfg.agents?.defaults &&
     Object.prototype.hasOwnProperty.call(cfg.agents.defaults, "memorySearch")

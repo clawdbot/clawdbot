@@ -2,7 +2,7 @@ import type { WAMessage, WAMessageKey } from "@whiskeysockets/baileys";
 
 export type WhatsAppSendKind = "media" | "poll" | "reaction" | "text";
 
-export type WhatsAppSendKey = Omit<
+type WhatsAppSendKey = Omit<
   Pick<WAMessageKey, "fromMe" | "id" | "participant" | "remoteJid">,
   "id"
 > & {

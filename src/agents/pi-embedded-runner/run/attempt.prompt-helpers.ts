@@ -244,9 +244,6 @@ export function resolvePromptSubmissionSkipReason(params: {
   imageCount: number;
   runtimeOnly?: boolean;
 }): PromptSubmissionSkipReason | null {
-  if (params.runtimeOnly) {
-    return null;
-  }
   if (params.prompt.trim().length > 0 || params.imageCount > 0) {
     return null;
   }

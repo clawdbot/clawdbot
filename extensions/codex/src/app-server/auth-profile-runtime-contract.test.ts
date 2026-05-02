@@ -26,6 +26,7 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
     disableTools: true,
     timeoutMs: 5_000,
     authStorage: {} as never,
+    authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
   } as EmbeddedRunAttemptParams;
 }

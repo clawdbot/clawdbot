@@ -24,7 +24,7 @@ function matchesProviderAuthChoice(
   return normalizeProviderIdForAuth(choice.providerId, aliases) === normalized;
 }
 
-export function resolveProviderAuthLoginCommand(params: {
+function resolveProviderAuthLoginCommand(params: {
   provider: string;
   config?: OpenClawConfig;
   workspaceDir?: string;

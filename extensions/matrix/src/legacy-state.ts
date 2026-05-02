@@ -6,7 +6,7 @@ import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolveLegacyMatrixFlatStoreTarget } from "./migration-config.js";
 import { resolveMatrixLegacyFlatStoragePaths } from "./storage-paths.js";
 
-export type MatrixLegacyStateMigrationResult = {
+type MatrixLegacyStateMigrationResult = {
   migrated: boolean;
   changes: string[];
   warnings: string[];

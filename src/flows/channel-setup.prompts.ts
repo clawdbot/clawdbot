@@ -13,7 +13,7 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.j
 import { formatDocsLink } from "../terminal/links.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 
-export type ConfiguredChannelAction = "update" | "disable" | "delete" | "skip";
+type ConfiguredChannelAction = "update" | "disable" | "delete" | "skip";
 
 export function formatAccountLabel(accountId: string): string {
   return accountId === DEFAULT_ACCOUNT_ID ? "default (primary)" : accountId;

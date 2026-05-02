@@ -1,9 +1,8 @@
 import { formatInboundFromLabel as formatInboundFromLabelShared } from "openclaw/plugin-sdk/channel-inbound";
-import { createDedupeCache } from "openclaw/plugin-sdk/core";
 import { resolveThreadSessionKeys as resolveThreadSessionKeysShared } from "openclaw/plugin-sdk/routing";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 
-export { createDedupeCache, rawDataToString };
+export { rawDataToString };
 
 export const formatInboundFromLabel = formatInboundFromLabelShared;
 

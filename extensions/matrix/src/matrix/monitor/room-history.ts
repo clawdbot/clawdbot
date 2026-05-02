@@ -26,16 +26,16 @@ const MAX_PREPARED_TRIGGER_ENTRIES = 500;
 
 export type { HistoryEntry };
 
-export type HistorySnapshotToken = {
+type HistorySnapshotToken = {
   snapshotIdx: number;
   queueGeneration: number;
 };
 
-export type PreparedTriggerResult = {
+type PreparedTriggerResult = {
   history: HistoryEntry[];
 } & HistorySnapshotToken;
 
-export type RoomHistoryTracker = {
+type RoomHistoryTracker = {
   /**
    * Record a non-trigger message for future context.
    * Call this when a room message arrives but does not mention the bot.
@@ -66,7 +66,7 @@ export type RoomHistoryTracker = {
   ) => void;
 };
 
-export type RoomHistoryTrackerTestApi = RoomHistoryTracker & {
+type RoomHistoryTrackerTestApi = RoomHistoryTracker & {
   /**
    * Test-only helper for inspecting pending room history directly.
    */

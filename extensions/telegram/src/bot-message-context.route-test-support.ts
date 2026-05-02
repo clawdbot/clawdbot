@@ -9,9 +9,8 @@ type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
 type BuildTelegramMessageContextForTest =
   typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
 type BuildTelegramMessageContextForTestParams = Parameters<BuildTelegramMessageContextForTest>[0];
-type TelegramTestSessionRuntime = NonNullable<
-  import("./bot-message-context.types.js").BuildTelegramMessageContextParams["sessionRuntime"]
->;
+type BuildTelegramMessageContextParams =
+  import("./bot-message-context.types.js").BuildTelegramMessageContextParams;
 
 const hoisted = vi.hoisted((): { recordInboundSessionMock: AsyncUnknownMock } => ({
   recordInboundSessionMock: vi.fn().mockResolvedValue(undefined),
@@ -19,15 +18,17 @@ const hoisted = vi.hoisted((): { recordInboundSessionMock: AsyncUnknownMock } =>
 
 export const recordInboundSessionMock: AsyncUnknownMock = hoisted.recordInboundSessionMock;
 const finalizeInboundContextForTest = finalizeTelegramInboundContextForTest as NonNullable<
-  TelegramTestSessionRuntime["finalizeInboundContext"]
+  NonNullable<BuildTelegramMessageContextParams["sessionRuntime"]>["finalizeInboundContext"]
 >;
 const recordInboundSessionForTest: NonNullable<
-  TelegramTestSessionRuntime["recordInboundSession"]
+  NonNullable<BuildTelegramMessageContextParams["sessionRuntime"]>["recordInboundSession"]
 > = async (params) => {
   await recordInboundSessionMock(params);
 };
 
-export const telegramRouteTestSessionRuntime = {
+export const telegramRouteTestSessionRuntime: NonNullable<
+  BuildTelegramMessageContextParams["sessionRuntime"]
+> = {
   finalizeInboundContext: finalizeInboundContextForTest,
   readSessionUpdatedAt: () => undefined,
   recordInboundSession: recordInboundSessionForTest,
@@ -35,7 +36,7 @@ export const telegramRouteTestSessionRuntime = {
     route.lastRoutePolicy === "main" ? route.mainSessionKey : sessionKey,
   resolvePinnedMainDmOwnerFromAllowlist: () => null,
   resolveStorePath: () => "/tmp/openclaw/session-store.json",
-} satisfies TelegramTestSessionRuntime;
+};
 
 export async function loadTelegramMessageContextRouteHarness() {
   const { buildTelegramMessageContextForTest } =

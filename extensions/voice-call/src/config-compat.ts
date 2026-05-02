@@ -4,7 +4,7 @@ import { VoiceCallConfigSchema } from "./config.js";
 
 export const VOICE_CALL_LEGACY_CONFIG_REMOVAL_VERSION = "2026.6.0";
 
-export type VoiceCallLegacyConfigIssue = {
+type VoiceCallLegacyConfigIssue = {
   path: string;
   replacement: string;
   message: string;

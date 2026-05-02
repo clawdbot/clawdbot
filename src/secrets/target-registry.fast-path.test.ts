@@ -59,7 +59,6 @@ describe("secret target registry fast path", () => {
     expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
       dirName: "googlechat",
       artifactBasename: "secret-contract-api.js",
-      installRuntimeDeps: false,
     });
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
   });

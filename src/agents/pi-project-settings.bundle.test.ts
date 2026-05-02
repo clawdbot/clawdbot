@@ -79,6 +79,42 @@ vi.mock("../plugins/plugin-registry.js", async () => {
   };
 });
 
+vi.mock("../plugins/plugin-metadata-snapshot.js", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const loadRegistry = (params: { workspaceDir?: string }) => {
+    const rootDir = path.join(
+      params.workspaceDir ?? "",
+      ".openclaw",
+      "extensions",
+      "claude-bundle",
+    );
+    if (!fs.existsSync(path.join(rootDir, ".claude-plugin", "plugin.json"))) {
+      return { plugins: [], diagnostics: [] };
+    }
+    const resolvedRootDir = fs.realpathSync(rootDir);
+    return {
+      diagnostics: [],
+      plugins: [
+        {
+          id: "claude-bundle",
+          origin: "workspace",
+          format: "bundle",
+          bundleFormat: "claude",
+          settingsFiles: ["settings.json"],
+          rootDir: resolvedRootDir,
+        },
+      ],
+    };
+  };
+  return {
+    loadPluginMetadataSnapshot: (params: { workspaceDir?: string }) => ({
+      manifestRegistry: loadRegistry(params),
+      normalizePluginId: (id: string) => id.trim(),
+    }),
+  };
+});
+
 vi.mock("./embedded-pi-mcp.js", async () => {
   const fs = await import("node:fs");
   const path = await import("node:path");

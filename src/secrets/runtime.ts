@@ -140,21 +140,14 @@ async function resolveLoadablePluginOrigins(params: {
     params.config,
     resolveDefaultAgentId(params.config),
   );
-  const { loadPluginManifestRegistryForInstalledIndex, loadPluginRegistrySnapshot } =
+  const { listPluginOriginsFromMetadataSnapshot, loadPluginMetadataSnapshot } =
     await loadRuntimeManifestHelpers();
-  const index = loadPluginRegistrySnapshot({
+  const snapshot = loadPluginMetadataSnapshot({
     config: params.config,
     workspaceDir,
     env: params.env,
   });
-  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
-    index,
-    config: params.config,
-    workspaceDir,
-    env: params.env,
-    includeDisabled: true,
-  });
-  return new Map(manifestRegistry.plugins.map((record) => [record.id, record.origin]));
+  return listPluginOriginsFromMetadataSnapshot(snapshot);
 }
 
 function mergeSecretsRuntimeEnv(

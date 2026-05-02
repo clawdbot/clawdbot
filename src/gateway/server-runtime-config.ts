@@ -20,7 +20,7 @@ import {
 } from "./net.js";
 import { mergeGatewayTailscaleConfig } from "./startup-auth.js";
 
-export type GatewayRuntimeConfig = {
+type GatewayRuntimeConfig = {
   bindHost: string;
   controlUiEnabled: boolean;
   openAiChatCompletionsEnabled: boolean;

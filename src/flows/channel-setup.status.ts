@@ -27,7 +27,7 @@ import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { FlowContribution } from "./types.js";
 
-export type ChannelStatusSummary = {
+type ChannelStatusSummary = {
   installedPlugins: ChannelSetupPlugin[];
   catalogEntries: ReturnType<typeof listChannelPluginCatalogEntries>;
   installedCatalogEntries: ReturnType<typeof listChannelPluginCatalogEntries>;
@@ -35,7 +35,7 @@ export type ChannelStatusSummary = {
   statusLines: string[];
 };
 
-export type ChannelSetupSelectionContribution = FlowContribution & {
+type ChannelSetupSelectionContribution = FlowContribution & {
   kind: "channel";
   surface: "setup";
   channel: ChannelChoice;

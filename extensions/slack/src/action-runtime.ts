@@ -244,22 +244,34 @@ export async function handleSlackAction(
         if (!content && !mediaUrl && !blocks) {
           throw new Error("Slack sendMessage requires content, blocks, or mediaUrl.");
         }
-        if (mediaUrl && blocks) {
-          throw new Error("Slack sendMessage does not support blocks with mediaUrl.");
-        }
         const threadTs = resolveThreadTsFromContext(
           readStringParam(params, "threadTs"),
           to,
           context,
         );
-        const result = await slackActionRuntime.sendSlackMessage(to, content ?? "", {
+        const sendOpts = {
           ...writeOpts,
-          mediaUrl: mediaUrl ?? undefined,
           mediaLocalRoots: context?.mediaLocalRoots,
           mediaReadFile: context?.mediaReadFile,
           threadTs: threadTs ?? undefined,
-          blocks,
-        });
+        };
+        const result =
+          mediaUrl && blocks
+            ? await (async () => {
+                await slackActionRuntime.sendSlackMessage(to, "", {
+                  ...sendOpts,
+                  mediaUrl,
+                });
+                return await slackActionRuntime.sendSlackMessage(to, content ?? "", {
+                  ...sendOpts,
+                  blocks,
+                });
+              })()
+            : await slackActionRuntime.sendSlackMessage(to, content ?? "", {
+                ...sendOpts,
+                mediaUrl: mediaUrl ?? undefined,
+                blocks,
+              });
 
         if (threadTs && result.channelId && account.accountId) {
           slackActionRuntime.recordSlackThreadParticipation(
@@ -366,12 +378,14 @@ export async function handleSlackAction(
         const before = readStringParam(params, "before");
         const after = readStringParam(params, "after");
         const threadId = readStringParam(params, "threadId");
+        const messageId = readStringParam(params, "messageId");
         const result = await slackActionRuntime.readSlackMessages(channelId, {
           ...readOpts,
           limit,
           before: before ?? undefined,
           after: after ?? undefined,
           threadId: threadId ?? undefined,
+          messageId: messageId ?? undefined,
         });
         const messages = result.messages.map((message) =>
           withNormalizedTimestamp(

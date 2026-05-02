@@ -353,12 +353,16 @@ function getLastRouteUpdate():
 function getLastDispatchCtx():
   | {
       BodyForAgent?: string;
+      ChatType?: string;
       CommandBody?: string;
+      From?: string;
       MediaTranscribedIndexes?: number[];
       MessageThreadId?: string | number;
       ModelParentSessionKey?: string;
+      OriginatingTo?: string;
       ParentSessionKey?: string;
       SessionKey?: string;
+      To?: string;
       Transcript?: string;
     }
   | undefined {
@@ -367,12 +371,16 @@ function getLastDispatchCtx():
     | {
         ctx?: {
           BodyForAgent?: string;
+          ChatType?: string;
           CommandBody?: string;
+          From?: string;
           MediaTranscribedIndexes?: number[];
           MessageThreadId?: string | number;
           ModelParentSessionKey?: string;
+          OriginatingTo?: string;
           ParentSessionKey?: string;
           SessionKey?: string;
+          To?: string;
           Transcript?: string;
         };
       }
@@ -807,6 +815,13 @@ describe("processDiscordMessage session routing", () => {
       channel: "discord",
       to: "user:U1",
       accountId: "default",
+    });
+    expect(getLastDispatchCtx()).toMatchObject({
+      ChatType: "direct",
+      From: "discord:U1",
+      To: "user:U1",
+      OriginatingTo: "user:U1",
+      SessionKey: "agent:main:discord:direct:u1",
     });
   });
 

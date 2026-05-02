@@ -71,7 +71,7 @@ export function getPluginInteractiveHandlersState() {
   return getState().interactiveHandlers;
 }
 
-export function getPluginInteractiveCallbackDedupeState() {
+function getPluginInteractiveCallbackDedupeState() {
   return getState().callbackDedupe;
 }
 

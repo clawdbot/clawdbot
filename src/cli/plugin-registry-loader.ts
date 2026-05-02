@@ -11,7 +11,6 @@ function loadPluginRegistryModule() {
 
 export type CliPluginRegistryLoadPolicy = {
   scope: CliPluginRegistryScope;
-  installBundledRuntimeDeps?: boolean;
 };
 
 export async function ensureCliPluginRegistryLoaded(params: {
@@ -19,7 +18,6 @@ export async function ensureCliPluginRegistryLoaded(params: {
   routeLogsToStderr?: boolean;
   config?: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
-  installBundledRuntimeDeps?: boolean;
 }) {
   const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
   const previousForceStderr = loggingState.forceConsoleToStderr;
@@ -32,9 +30,6 @@ export async function ensureCliPluginRegistryLoaded(params: {
       ...(params.config ? { config: params.config } : {}),
       ...(params.activationSourceConfig
         ? { activationSourceConfig: params.activationSourceConfig }
-        : {}),
-      ...(params.installBundledRuntimeDeps !== undefined
-        ? { installBundledRuntimeDeps: params.installBundledRuntimeDeps }
         : {}),
     });
   } finally {

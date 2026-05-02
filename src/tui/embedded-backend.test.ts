@@ -72,7 +72,7 @@ vi.mock("../gateway/server-methods/chat.js", () => ({
 
 vi.mock("../gateway/session-utils.js", () => ({
   listAgentsForGateway: () => [],
-  listSessionsFromStore: () => ({ sessions: [] }),
+  listSessionsFromStoreAsync: async () => ({ sessions: [] }),
   loadCombinedSessionStoreForGateway: () => ({
     storePath: "/tmp/openclaw-sessions.json",
     store: {},
@@ -83,7 +83,7 @@ vi.mock("../gateway/session-utils.js", () => ({
     entry: {},
   }),
   migrateAndPruneGatewaySessionStoreKey: ({ key }: { key: string }) => ({ primaryKey: key }),
-  readSessionMessages: () => [],
+  readSessionMessagesAsync: async () => [],
   resolveGatewaySessionStoreTarget: ({ key }: { key: string }) => ({
     canonicalKey: key,
     storePath: "/tmp/openclaw-sessions.json",

@@ -10,7 +10,7 @@ import {
   resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 
-export type TelegramTokenSource = "env" | "tokenFile" | "config" | "none";
+type TelegramTokenSource = "env" | "tokenFile" | "config" | "none";
 
 export type TelegramTokenResolution = BaseTokenResolution & {
   source: TelegramTokenSource;

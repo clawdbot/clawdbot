@@ -2,9 +2,9 @@ import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 import { RelationType } from "./types.js";
 
-export type MatrixThreadReplies = "off" | "inbound" | "always";
+type MatrixThreadReplies = "off" | "inbound" | "always";
 
-export type MatrixThreadRouting = {
+type MatrixThreadRouting = {
   threadId?: string;
 };
 

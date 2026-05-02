@@ -274,17 +274,17 @@ export async function buildDiscordMessageProcessContext(params: {
   const effectiveFrom = isDirectMessage
     ? `discord:${author.id}`
     : (autoThreadContext?.From ?? `discord:channel:${messageChannelId}`);
-  const effectiveTo = autoThreadContext?.To ?? replyTarget;
-  if (!effectiveTo) {
-    runtime.error?.(danger("discord: missing reply target"));
-    return null;
-  }
   const dmConversationTarget = isDirectMessage
     ? resolveDiscordConversationIdentity({
         isDirectMessage,
         userId: author.id,
       })
     : undefined;
+  const effectiveTo = autoThreadContext?.To ?? dmConversationTarget ?? replyTarget;
+  if (!effectiveTo) {
+    runtime.error?.(danger("discord: missing reply target"));
+    return null;
+  }
   const lastRouteTo = dmConversationTarget ?? effectiveTo;
   const inboundHistory =
     shouldIncludeChannelHistory && historyLimit > 0

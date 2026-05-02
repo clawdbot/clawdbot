@@ -9,7 +9,7 @@ export const SLACK_SOCKET_RECONNECT_POLICY = {
   maxAttempts: 12,
 } as const;
 
-export type SlackSocketDisconnectEvent = "disconnect" | "unable_to_socket_mode_start" | "error";
+type SlackSocketDisconnectEvent = "disconnect" | "unable_to_socket_mode_start" | "error";
 
 type EmitterLike = {
   on: (event: string, listener: (...args: unknown[]) => void) => unknown;

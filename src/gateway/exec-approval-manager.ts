@@ -20,7 +20,7 @@ function scheduleResolvedEntryCleanup(cleanup: () => void): void {
   unrefTimer(timer);
 }
 
-export type ExecApprovalRequestPayload = InfraExecApprovalRequestPayload;
+type ExecApprovalRequestPayload = InfraExecApprovalRequestPayload;
 
 export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   id: string;

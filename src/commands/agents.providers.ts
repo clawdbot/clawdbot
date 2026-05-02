@@ -19,7 +19,7 @@ type ProviderAccountStatus = {
   visibleInConfiguredLists?: boolean;
 };
 
-export type ProviderSummaryMetadata = {
+type ProviderSummaryMetadata = {
   label: string;
   defaultAccountId: string;
   visibleInConfiguredLists: boolean;

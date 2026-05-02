@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildStatusJsonPayload, resolveStatusUpdateChannelInfo } from "./status-json-payload.ts";
+import { resolveStatusUpdateChannelInfo } from "./status-all/format.js";
+import { buildStatusJsonPayload } from "./status-json-payload.ts";
 
 const mocks = vi.hoisted(() => ({
   normalizeUpdateChannel: vi.fn((value?: string | null) => value ?? null),

@@ -7,7 +7,7 @@ import { parsePostContent } from "./post.js";
 import { getFeishuRuntime } from "./runtime.js";
 import type { FeishuChatType, FeishuMediaInfo } from "./types.js";
 
-export type FeishuMention = {
+type FeishuMention = {
   key: string;
   id: {
     open_id?: string;
@@ -37,11 +37,11 @@ type FeishuMessageLike = {
   };
 };
 
-export type GroupSessionScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
+type GroupSessionScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
 
 type FeishuLogger = (...args: unknown[]) => void;
 
-export type ResolvedFeishuGroupSession = {
+type ResolvedFeishuGroupSession = {
   peerId: string;
   parentPeer: { kind: "group"; id: string } | null;
   groupSessionScope: GroupSessionScope;
@@ -299,7 +299,7 @@ export function normalizeFeishuCommandProbeBody(text: string): string {
     .trim();
 }
 
-export function parseMediaKeys(
+function parseMediaKeys(
   content: string,
   messageType: string,
 ): { imageKey?: string; fileKey?: string; fileName?: string } {

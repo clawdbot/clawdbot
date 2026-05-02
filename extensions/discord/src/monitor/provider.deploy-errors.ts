@@ -5,7 +5,7 @@ import { RateLimitError } from "../internal/discord.js";
 
 const DISCORD_DEPLOY_REJECTED_ENTRY_LIMIT = 3;
 
-export type DiscordDeployErrorLike = {
+type DiscordDeployErrorLike = {
   status?: unknown;
   statusCode?: unknown;
   discordCode?: unknown;
@@ -19,7 +19,7 @@ export type DiscordDeployErrorLike = {
   deployTimeoutMs?: unknown;
 };
 
-export type DiscordDeployRateLimitDetails = {
+type DiscordDeployRateLimitDetails = {
   status?: number;
   retryAfterMs?: number;
   scope?: string;

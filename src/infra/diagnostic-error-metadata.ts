@@ -15,7 +15,7 @@ const PROVIDER_REQUEST_ID_TEXT_PATTERNS = [
   /\((?:request_id|trace_id)\s*:\s*([A-Za-z0-9._:-]{1,128})\)/i,
 ] as const;
 
-export type DiagnosticErrorFailureKind =
+type DiagnosticErrorFailureKind =
   | "aborted"
   | "connection_closed"
   | "connection_reset"

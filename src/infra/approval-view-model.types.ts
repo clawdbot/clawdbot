@@ -21,7 +21,7 @@ export type ApprovalMetadataView = {
   value: string;
 };
 
-export type ApprovalViewBase = {
+type ApprovalViewBase = {
   approvalId: string;
   approvalKind: ChannelApprovalKind;
   phase: ApprovalPhase;

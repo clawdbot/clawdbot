@@ -37,6 +37,8 @@ describe("buildTimeoutAbortSignal", () => {
         timeoutMs: 25,
         operation: "unit-test",
         url: "https://example.com/v1/responses",
+        consoleMessage:
+          "fetch timeout after 25ms (elapsed 25ms) operation=unit-test url=https://example.com/v1/responses",
       }),
     );
 

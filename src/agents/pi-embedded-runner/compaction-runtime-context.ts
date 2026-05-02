@@ -21,6 +21,7 @@ export type EmbeddedCompactionRuntimeContext = {
   senderId?: string;
   provider?: string;
   model?: string;
+  modelFallbacksOverride?: string[];
   thinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
   bashElevated?: ExecElevatedDefaults;
@@ -87,6 +88,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   senderId?: string | null;
   provider?: string | null;
   modelId?: string | null;
+  modelFallbacksOverride?: string[];
   thinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
   bashElevated?: ExecElevatedDefaults;
@@ -117,6 +119,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     senderId: params.senderId ?? undefined,
     provider: resolved.provider,
     model: resolved.model,
+    modelFallbacksOverride: params.modelFallbacksOverride,
     thinkLevel: params.thinkLevel,
     reasoningLevel: params.reasoningLevel,
     bashElevated: params.bashElevated,

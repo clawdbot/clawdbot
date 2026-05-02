@@ -72,6 +72,8 @@ export type AcpSessionRuntimeOptions = {
 
 export type CliSessionBinding = {
   sessionId: string;
+  /** Trust an explicitly attached CLI session even when auth, prompt, or MCP fingerprints drift. */
+  forceReuse?: boolean;
   authProfileId?: string;
   authEpoch?: string;
   authEpochVersion?: number;

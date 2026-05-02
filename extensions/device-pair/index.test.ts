@@ -8,7 +8,6 @@ import type {
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "./api.js";
-import type { PendingPairingRequest } from "./notify.ts";
 
 const pluginApiMocks = vi.hoisted(() => ({
   clearDeviceBootstrapTokens: vi.fn(async () => ({ removed: 2 })),
@@ -713,7 +712,7 @@ describe("device-pair notify pending formatting", () => {
   it("includes role and scopes for pending requests", async () => {
     const { formatPendingRequests } =
       await vi.importActual<typeof import("./notify.ts")>("./notify.ts");
-    const pending: PendingPairingRequest[] = [
+    const pending: Parameters<typeof formatPendingRequests>[0] = [
       {
         requestId: "req-1",
         deviceId: "device-1",
@@ -737,7 +736,7 @@ describe("device-pair notify pending formatting", () => {
   it("falls back to roles list and no scopes when role/scopes are absent", async () => {
     const { formatPendingRequests } =
       await vi.importActual<typeof import("./notify.ts")>("./notify.ts");
-    const pending: PendingPairingRequest[] = [
+    const pending: Parameters<typeof formatPendingRequests>[0] = [
       {
         requestId: "req-2",
         deviceId: "device-2",

@@ -14,6 +14,7 @@ import { attachModelProviderRequestTransport } from "./provider-request-config.j
 import {
   buildTransportAwareSimpleStreamFn,
   createBoundaryAwareStreamFnForModel,
+  createOpenClawTransportStreamFnForModel,
   isTransportAwareApiSupported,
   prepareTransportAwareSimpleModel,
   resolveTransportAwareSimpleApi,
@@ -167,6 +168,20 @@ describe("openai transport stream", () => {
   it("builds boundary-aware stream shapers for supported default agent transports", () => {
     expect(
       createBoundaryAwareStreamFnForModel({
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">),
+    ).toBeTypeOf("function");
+    expect(
+      createOpenClawTransportStreamFnForModel({
         id: "gpt-5.4",
         name: "GPT-5.4",
         api: "openai-responses",

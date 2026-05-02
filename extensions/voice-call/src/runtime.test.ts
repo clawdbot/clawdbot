@@ -28,6 +28,22 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./config.js", () => ({
+  resolveVoiceCallSessionKey: (params: {
+    config: Pick<VoiceCallConfig, "sessionScope">;
+    callId: string;
+    phone?: string;
+    explicitSessionKey?: string;
+  }) => {
+    const explicit = params.explicitSessionKey?.trim();
+    if (explicit) {
+      return explicit;
+    }
+    if (params.config.sessionScope === "per-call") {
+      return `voice:call:${params.callId}`;
+    }
+    const normalizedPhone = params.phone?.replace(/\D/g, "");
+    return normalizedPhone ? `voice:${normalizedPhone}` : `voice:${params.callId}`;
+  },
   resolveVoiceCallConfig: mocks.resolveVoiceCallConfig,
   resolveTwilioAuthToken: mocks.resolveTwilioAuthToken,
   validateProviderConfig: mocks.validateProviderConfig,
@@ -378,6 +394,64 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         prompt: expect.stringContaining("Caller: Also check the ETA."),
+      }),
+    );
+  });
+
+  it("uses persisted per-call session keys for realtime consults", async () => {
+    const config = createBaseConfig();
+    config.inboundPolicy = "allowlist";
+    config.realtime.enabled = true;
+    config.sessionScope = "per-call";
+    const runEmbeddedPiAgent = vi.fn(async () => ({
+      payloads: [{ text: "Per-call consult answer." }],
+      meta: {},
+    }));
+    const sessionStore: Record<string, unknown> = {};
+    const agentRuntime = {
+      defaults: { provider: "openai", model: "gpt-5.4" },
+      resolveAgentDir: vi.fn(() => "/tmp/agent"),
+      resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
+      resolveAgentIdentity: vi.fn(),
+      resolveThinkingDefault: vi.fn(() => "high"),
+      resolveAgentTimeoutMs: vi.fn(() => 30_000),
+      ensureAgentWorkspace: vi.fn(async () => {}),
+      session: {
+        resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+        loadSessionStore: vi.fn(() => sessionStore),
+        saveSessionStore: vi.fn(async () => {}),
+        resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
+      },
+      runEmbeddedPiAgent,
+    };
+    mocks.managerGetCall.mockReturnValue({
+      callId: "call-1",
+      sessionKey: "voice:call:call-1",
+      direction: "inbound",
+      from: "+15550001234",
+      to: "+15550009999",
+      transcript: [],
+    });
+
+    await createVoiceCallRuntime({
+      config,
+      coreConfig: {} as CoreConfig,
+      agentRuntime: agentRuntime as never,
+    });
+
+    const handler = mocks.realtimeHandlerRegisterToolHandler.mock.calls[0]?.[1] as
+      | ((
+          args: unknown,
+          callId: string,
+          context?: { partialUserTranscript?: string },
+        ) => Promise<unknown>)
+      | undefined;
+    await expect(handler?.({ question: "What should I say?" }, "call-1")).resolves.toEqual({
+      text: "Per-call consult answer.",
+    });
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "voice:call:call-1",
       }),
     );
   });

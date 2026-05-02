@@ -10,7 +10,7 @@ import { getWindowsInstallRoots, getWindowsProgramFilesRoots } from "./windows-i
  *   directories appended after system dirs. Use for tool binaries like
  *   ffmpeg that are rarely available via the OS itself.
  */
-export type SystemBinTrust = "strict" | "standard";
+type SystemBinTrust = "strict" | "standard";
 
 // Unix directories where OS-managed or system-installed binaries live.
 // User-writable or package-manager-managed directories are excluded so that

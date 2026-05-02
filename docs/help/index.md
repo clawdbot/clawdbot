@@ -29,6 +29,7 @@ Quick "get unstuck" path for the most common problems:
 ## Testing
 
 - [Testing](/help/testing) — test suites and Docker runners
+- [Update and plugin tests](/help/testing-updates-plugins) — package update, migration, and plugin install validation
 - [Live tests](/help/testing-live) — network-touching provider and CLI smokes
 
 ## Community and meta

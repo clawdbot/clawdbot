@@ -1,6 +1,6 @@
 import { isNodeRoleMethod } from "./method-scopes.js";
 
-export const GATEWAY_ROLES = ["operator", "node"] as const;
+const GATEWAY_ROLES = ["operator", "node"] as const;
 
 export type GatewayRole = (typeof GATEWAY_ROLES)[number];
 

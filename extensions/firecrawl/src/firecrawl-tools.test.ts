@@ -36,6 +36,7 @@ describe("firecrawl tools", () => {
   let createFirecrawlSearchTool: typeof import("./firecrawl-search-tool.js").createFirecrawlSearchTool;
   let createFirecrawlScrapeTool: typeof import("./firecrawl-scrape-tool.js").createFirecrawlScrapeTool;
   let firecrawlClientTesting: typeof import("./firecrawl-client.js").__testing;
+  let runActualFirecrawlScrape: typeof import("./firecrawl-client.js").runFirecrawlScrape;
   let ssrfMock: { mockRestore: () => void } | undefined;
 
   beforeAll(async () => {
@@ -44,7 +45,7 @@ describe("firecrawl tools", () => {
     ({ createFirecrawlWebSearchProvider } = await import("./firecrawl-search-provider.js"));
     ({ createFirecrawlSearchTool } = await import("./firecrawl-search-tool.js"));
     ({ createFirecrawlScrapeTool } = await import("./firecrawl-scrape-tool.js"));
-    ({ __testing: firecrawlClientTesting } =
+    ({ __testing: firecrawlClientTesting, runFirecrawlScrape: runActualFirecrawlScrape } =
       await vi.importActual<typeof import("./firecrawl-client.js")>("./firecrawl-client.js"));
   });
 
@@ -205,6 +206,61 @@ describe("firecrawl tools", () => {
 
     const authHeader = new Headers(capturedInit?.headers).get("Authorization");
     expect(authHeader).toBe("Bearer firecrawl-test-key");
+  });
+
+  it("blocks private and non-http scrape targets before Firecrawl requests", async () => {
+    expect(() =>
+      firecrawlClientTesting.assertFirecrawlScrapeTargetAllowed("https://example.com/page"),
+    ).not.toThrow();
+
+    for (const blockedUrl of [
+      "http://localhost/admin",
+      "http://127.0.0.1/secret",
+      "http://10.0.0.5/secret",
+      "http://169.254.169.254/latest/meta-data/",
+      "http://metadata.google.internal/computeMetadata/v1/",
+      "file:///etc/passwd",
+    ]) {
+      expect(() => firecrawlClientTesting.assertFirecrawlScrapeTargetAllowed(blockedUrl)).toThrow(
+        /Blocked|non-HTTP/i,
+      );
+    }
+
+    try {
+      firecrawlClientTesting.assertFirecrawlScrapeTargetAllowed("not-a-valid-url?token=secret");
+      expect.fail("Expected invalid URL to be blocked");
+    } catch (error) {
+      expect((error as Error).message).toBe("Invalid URL supplied to Firecrawl scrape");
+      expect((error as Error).message).not.toContain("token=secret");
+    }
+  });
+
+  it("rejects blocked scrape targets before cache lookup or network fetch", async () => {
+    const fetchSpy = vi.fn(async () => new Response("should not be called"));
+    global.fetch = fetchSpy as typeof fetch;
+
+    await expect(
+      runActualFirecrawlScrape({
+        cfg: {
+          plugins: {
+            entries: {
+              firecrawl: {
+                config: {
+                  webFetch: {
+                    apiKey: "firecrawl-key",
+                    baseUrl: "https://api.firecrawl.dev",
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        url: "http://169.254.169.254/latest/meta-data/",
+        extractMode: "markdown",
+      }),
+    ).rejects.toThrow(/Blocked hostname or private\/internal IP/);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("maps generic provider args into firecrawl search params", async () => {
@@ -605,19 +661,64 @@ describe("firecrawl tools", () => {
     expect(resolveFirecrawlApiKey(cfg)).toBeUndefined();
   });
 
-  it("only allows the official Firecrawl API host for fetch endpoints", () => {
-    expect(firecrawlClientTesting.resolveEndpoint("https://api.firecrawl.dev", "/v2/scrape")).toBe(
-      "https://api.firecrawl.dev/v2/scrape",
-    );
-    expect(() =>
+  it("allows hosted Firecrawl and private self-hosted endpoints only", async () => {
+    await expect(
+      firecrawlClientTesting.resolveEndpoint("https://api.firecrawl.dev", "/v2/scrape"),
+    ).resolves.toEqual({
+      url: "https://api.firecrawl.dev/v2/scrape",
+      mode: "strict",
+    });
+    await expect(
+      firecrawlClientTesting.resolveEndpoint("http://127.0.0.1:8787", "/v2/scrape"),
+    ).resolves.toEqual({
+      url: "http://127.0.0.1:8787/v2/scrape",
+      mode: "selfHosted",
+    });
+    await expect(
+      firecrawlClientTesting.resolveEndpoint(
+        "https://host.openshell.internal:444/v1",
+        "/v2/search",
+      ),
+    ).resolves.toEqual({
+      url: "https://host.openshell.internal:444/v2/search",
+      mode: "selfHosted",
+    });
+    await expect(
       firecrawlClientTesting.resolveEndpoint("http://api.firecrawl.dev", "/v2/scrape"),
-    ).toThrow("Firecrawl baseUrl must use https.");
-    expect(() =>
-      firecrawlClientTesting.resolveEndpoint("https://127.0.0.1:8787", "/v2/scrape"),
-    ).toThrow("Firecrawl baseUrl host is not allowed");
-    expect(() =>
+    ).rejects.toThrow("Firecrawl HTTP baseUrl must target a private or internal");
+    await expect(
       firecrawlClientTesting.resolveEndpoint("https://attacker.example", "/v2/search"),
-    ).toThrow("Firecrawl baseUrl host is not allowed");
+    ).rejects.toThrow("Firecrawl custom baseUrl must target a private or internal");
+    await expect(
+      firecrawlClientTesting.resolveEndpoint("ftp://127.0.0.1:8787", "/v2/scrape"),
+    ).rejects.toThrow("Firecrawl baseUrl must use http:// or https://.");
+  });
+
+  it("routes private self-hosted Firecrawl endpoints through the self-hosted fetch guard", async () => {
+    ssrfMock?.mockRestore();
+    ssrfMock = mockPinnedHostnameResolution(["127.0.0.1"]);
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ success: true, data: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    global.fetch = fetchSpy as typeof fetch;
+
+    const result = await firecrawlClientTesting.postFirecrawlJson(
+      {
+        url: "http://127.0.0.1:8787/v2/search",
+        timeoutSeconds: 5,
+        apiKey: "firecrawl-key",
+        body: { query: "openclaw" },
+        errorLabel: "Firecrawl Search",
+      },
+      async (response) => (await response.json()) as Record<string, unknown>,
+    );
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ success: true });
   });
 
   it("respects positive numeric overrides for scrape and cache behavior", () => {

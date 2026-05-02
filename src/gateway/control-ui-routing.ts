@@ -1,6 +1,6 @@
 import { isReadHttpMethod } from "./control-ui-http-utils.js";
 
-export type ControlUiRequestClassification =
+type ControlUiRequestClassification =
   | { kind: "not-control-ui" }
   | { kind: "not-found" }
   | { kind: "redirect"; location: string }

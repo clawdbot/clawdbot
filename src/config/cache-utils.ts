@@ -27,7 +27,7 @@ type ExpiringMapCacheEntry<TValue> = {
   value: TValue;
 };
 
-export type ExpiringMapCache<TKey, TValue> = {
+type ExpiringMapCache<TKey, TValue> = {
   get: (key: TKey) => TValue | undefined;
   set: (key: TKey, value: TValue) => void;
   delete: (key: TKey) => void;
@@ -141,7 +141,7 @@ export function createExpiringMapCache<TKey, TValue>(options: {
   };
 }
 
-export type FileStatSnapshot = {
+type FileStatSnapshot = {
   mtimeMs: number;
   sizeBytes: number;
 };

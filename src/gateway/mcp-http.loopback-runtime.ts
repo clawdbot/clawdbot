@@ -1,4 +1,4 @@
-export type McpLoopbackRuntime = {
+type McpLoopbackRuntime = {
   port: number;
   ownerToken: string;
   nonOwnerToken: string;

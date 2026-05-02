@@ -195,6 +195,18 @@ function createTestProvider(params: {
         ? (entryConfig as { webSearch?: { apiKey?: unknown } }).webSearch?.apiKey
         : undefined;
     },
+    getConfiguredCredentialFallback:
+      params.provider === "gemini"
+        ? (config) => {
+            const provider = config?.models?.providers?.google;
+            return provider && typeof provider === "object" && "apiKey" in provider
+              ? {
+                  path: "models.providers.google.apiKey",
+                  value: (provider as { apiKey?: unknown }).apiKey,
+                }
+              : undefined;
+          }
+        : undefined,
     setConfiguredCredentialValue: (configTarget, value) => {
       setConfiguredProviderKey(configTarget, params.pluginId, value);
     },
@@ -789,6 +801,61 @@ describe("runtime web tools resolution", () => {
     expect(context.warnings.map((warning) => warning.code)).not.toContain(
       "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
     );
+  });
+
+  it("auto-detects Gemini from the Google model provider key after env fallbacks", async () => {
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+            },
+          },
+        },
+        models: {
+          providers: {
+            google: {
+              apiKey: "google-provider-runtime-key",
+            },
+          },
+        },
+      }),
+    });
+
+    expect(metadata.search.providerSource).toBe("auto-detect");
+    expect(metadata.search.selectedProvider).toBe("gemini");
+    expect(metadata.search.selectedProviderKeySource).toBe("config");
+    expect(readProviderKey(resolvedConfig, "gemini")).toBe("google-provider-runtime-key");
+  });
+
+  it("prefers GEMINI_API_KEY over the Google model provider key", async () => {
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+            },
+          },
+        },
+        models: {
+          providers: {
+            google: {
+              apiKey: "google-provider-runtime-key",
+            },
+          },
+        },
+      }),
+      env: {
+        GEMINI_API_KEY: "gemini-env-runtime-key",
+      },
+    });
+
+    expect(metadata.search.providerSource).toBe("auto-detect");
+    expect(metadata.search.selectedProvider).toBe("gemini");
+    expect(metadata.search.selectedProviderKeySource).toBe("env");
+    expect(readProviderKey(resolvedConfig, "gemini")).toBe("gemini-env-runtime-key");
   });
 
   it("warns when provider is invalid and falls back to auto-detect", async () => {

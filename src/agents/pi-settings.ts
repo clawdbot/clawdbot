@@ -123,9 +123,7 @@ export function applyPiCompactionSettingsFromConfig(params: {
 }
 
 /** Decide whether Pi's internal auto-compaction should be disabled for this run. */
-export function shouldDisablePiAutoCompaction(params: {
-  contextEngineInfo?: ContextEngineInfo;
-}): boolean {
+function shouldDisablePiAutoCompaction(params: { contextEngineInfo?: ContextEngineInfo }): boolean {
   return params.contextEngineInfo?.ownsCompaction === true;
 }
 

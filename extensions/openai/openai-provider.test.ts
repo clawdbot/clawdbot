@@ -19,9 +19,7 @@ vi.mock("openclaw/plugin-sdk/provider-stream-family", async (importOriginal) => 
   const wrapStreamFn: NonNullable<typeof actual.OPENAI_RESPONSES_STREAM_HOOKS.wrapStreamFn> = (
     ctx,
   ) => {
-    let nextStreamFn = actual.createOpenAIAttributionHeadersWrapper(ctx.streamFn, {
-      codexNativeTransportStreamFn: mocks.openAIResponsesTransportStreamFn,
-    });
+    let nextStreamFn = actual.createOpenAIAttributionHeadersWrapper(ctx.streamFn);
 
     if (actual.resolveOpenAIFastMode(ctx.extraParams)) {
       nextStreamFn = actual.createOpenAIFastModeWrapper(nextStreamFn);

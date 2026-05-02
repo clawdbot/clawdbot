@@ -18,7 +18,7 @@ import memoryPlugin, {
   normalizeRecallQuery,
   shouldCapture,
 } from "./index.js";
-import { createLanceDbRuntimeLoader, type LanceDbRuntimeLogger } from "./lancedb-runtime.js";
+import { createLanceDbRuntimeLoader } from "./lancedb-runtime.js";
 import { installTmpDirHarness } from "./test-helpers.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "test-key";
@@ -38,22 +38,7 @@ type MemoryPluginTestConfig = {
   storageOptions?: Record<string, string>;
 };
 
-const TEST_RUNTIME_MANIFEST = {
-  name: "openclaw-memory-lancedb-runtime",
-  private: true as const,
-  type: "module" as const,
-  dependencies: {
-    "@lancedb/lancedb": "^0.27.1",
-  },
-};
-
 type LanceDbModule = typeof import("@lancedb/lancedb");
-type RuntimeManifest = {
-  name: string;
-  private: true;
-  type: "module";
-  dependencies: Record<string, string>;
-};
 
 function createMockModule(): LanceDbModule {
   return {
@@ -67,40 +52,19 @@ function invokeEmbeddingCreate(mock: ReturnType<typeof vi.fn>, body: unknown) {
 
 function createRuntimeLoader(
   overrides: {
-    env?: NodeJS.ProcessEnv;
     importBundled?: () => Promise<LanceDbModule>;
-    importResolved?: (resolvedPath: string) => Promise<LanceDbModule>;
     platform?: NodeJS.Platform;
     arch?: NodeJS.Architecture;
-    resolveRuntimeEntry?: (params: {
-      runtimeDir: string;
-      manifest: RuntimeManifest;
-    }) => string | null;
-    installRuntime?: (params: {
-      runtimeDir: string;
-      manifest: RuntimeManifest;
-      env: NodeJS.ProcessEnv;
-      logger?: LanceDbRuntimeLogger;
-    }) => Promise<string>;
   } = {},
 ) {
   return createLanceDbRuntimeLoader({
-    env: overrides.env ?? ({} as NodeJS.ProcessEnv),
     platform: overrides.platform,
     arch: overrides.arch,
-    resolveStateDir: () => "/tmp/openclaw-state",
-    runtimeManifest: TEST_RUNTIME_MANIFEST,
     importBundled:
       overrides.importBundled ??
       (async () => {
         throw new Error("Cannot find package '@lancedb/lancedb'");
       }),
-    importResolved: overrides.importResolved ?? (async () => createMockModule()),
-    resolveRuntimeEntry: overrides.resolveRuntimeEntry ?? (() => null),
-    installRuntime:
-      overrides.installRuntime ??
-      (async ({ runtimeDir }: { runtimeDir: string }) =>
-        `${runtimeDir}/node_modules/@lancedb/lancedb/index.js`),
   });
 }
 
@@ -2261,131 +2225,47 @@ describe("lancedb runtime loader", () => {
   test("uses the bundled module when it is already available", async () => {
     const bundledModule = createMockModule();
     const importBundled = vi.fn(async () => bundledModule);
-    const importResolved = vi.fn(async () => createMockModule());
-    const resolveRuntimeEntry = vi.fn(() => null);
-    const installRuntime = vi.fn(async () => "/tmp/openclaw-state/plugin-runtimes/lancedb.js");
     const loader = createRuntimeLoader({
       importBundled,
-      importResolved,
-      resolveRuntimeEntry,
-      installRuntime,
     });
 
     await expect(loader.load()).resolves.toBe(bundledModule);
 
-    expect(resolveRuntimeEntry).not.toHaveBeenCalled();
-    expect(installRuntime).not.toHaveBeenCalled();
-    expect(importResolved).not.toHaveBeenCalled();
-  });
-
-  test("reuses an existing user runtime install before attempting a reinstall", async () => {
-    const runtimeModule = createMockModule();
-    const importResolved = vi.fn(async () => runtimeModule);
-    const resolveRuntimeEntry = vi.fn(
-      () => "/tmp/openclaw-state/plugin-runtimes/memory-lancedb/runtime-entry.js",
-    );
-    const installRuntime = vi.fn(
-      async () => "/tmp/openclaw-state/plugin-runtimes/memory-lancedb/runtime-entry.js",
-    );
-    const loader = createRuntimeLoader({
-      importResolved,
-      resolveRuntimeEntry,
-      installRuntime,
-    });
-
-    await expect(loader.load()).resolves.toBe(runtimeModule);
-
-    expect(resolveRuntimeEntry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runtimeDir: "/tmp/openclaw-state/plugin-runtimes/memory-lancedb/lancedb",
-      }),
-    );
-    expect(installRuntime).not.toHaveBeenCalled();
-  });
-
-  test("installs LanceDB into user state when the bundled runtime is unavailable", async () => {
-    const runtimeModule = createMockModule();
-    const logger: LanceDbRuntimeLogger = {
-      warn: vi.fn(),
-      info: vi.fn(),
-    };
-    const importResolved = vi.fn(async () => runtimeModule);
-    const resolveRuntimeEntry = vi.fn(() => null);
-    const installRuntime = vi.fn(
-      async ({ runtimeDir }: { runtimeDir: string }) =>
-        `${runtimeDir}/node_modules/@lancedb/lancedb/index.js`,
-    );
-    const loader = createRuntimeLoader({
-      importResolved,
-      resolveRuntimeEntry,
-      installRuntime,
-    });
-
-    await expect(loader.load(logger)).resolves.toBe(runtimeModule);
-
-    expect(installRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runtimeDir: "/tmp/openclaw-state/plugin-runtimes/memory-lancedb/lancedb",
-        manifest: TEST_RUNTIME_MANIFEST,
-      }),
-    );
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "installing runtime deps under /tmp/openclaw-state/plugin-runtimes/memory-lancedb/lancedb",
-      ),
-    );
-  });
-
-  test("fails fast in nix mode instead of attempting auto-install", async () => {
-    const installRuntime = vi.fn(
-      async ({ runtimeDir }: { runtimeDir: string }) =>
-        `${runtimeDir}/node_modules/@lancedb/lancedb/index.js`,
-    );
-    const loader = createRuntimeLoader({
-      env: { OPENCLAW_NIX_MODE: "1" } as NodeJS.ProcessEnv,
-      installRuntime,
-    });
-
-    await expect(loader.load()).rejects.toThrow(
-      "memory-lancedb: failed to load LanceDB and Nix mode disables auto-install.",
-    );
-    expect(installRuntime).not.toHaveBeenCalled();
+    expect(importBundled).toHaveBeenCalledTimes(1);
   });
 
   test("fails clearly on Intel macOS instead of attempting an unsupported native install", async () => {
-    const installRuntime = vi.fn(
-      async ({ runtimeDir }: { runtimeDir: string }) =>
-        `${runtimeDir}/node_modules/@lancedb/lancedb/index.js`,
-    );
     const loader = createRuntimeLoader({
       platform: "darwin",
       arch: "x64",
-      installRuntime,
     });
 
     await expect(loader.load()).rejects.toThrow(
       "memory-lancedb: LanceDB runtime is unavailable on darwin-x64.",
     );
-    expect(installRuntime).not.toHaveBeenCalled();
   });
 
-  test("clears the cached failure so later calls can retry the install", async () => {
+  test("fails fast when package dependencies are missing", async () => {
+    const loader = createRuntimeLoader();
+
+    await expect(loader.load()).rejects.toThrow(
+      "memory-lancedb: bundled @lancedb/lancedb dependency is unavailable.",
+    );
+  });
+
+  test("clears the cached failure so later calls can retry the package import", async () => {
     const runtimeModule = createMockModule();
-    const installRuntime = vi
+    const importBundled = vi
       .fn()
       .mockRejectedValueOnce(new Error("network down"))
-      .mockResolvedValueOnce(
-        "/tmp/openclaw-state/plugin-runtimes/memory-lancedb/lancedb/node_modules/@lancedb/lancedb/index.js",
-      );
-    const importResolved = vi.fn(async () => runtimeModule);
+      .mockResolvedValueOnce(runtimeModule);
     const loader = createRuntimeLoader({
-      installRuntime,
-      importResolved,
+      importBundled,
     });
 
     await expect(loader.load()).rejects.toThrow("network down");
     await expect(loader.load()).resolves.toBe(runtimeModule);
 
-    expect(installRuntime).toHaveBeenCalledTimes(2);
+    expect(importBundled).toHaveBeenCalledTimes(2);
   });
 });

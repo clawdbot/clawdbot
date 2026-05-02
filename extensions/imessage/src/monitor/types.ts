@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 
-export type IMessageAttachment = {
+type IMessageAttachment = {
   original_path?: string | null;
   mime_type?: string | null;
   missing?: boolean | null;

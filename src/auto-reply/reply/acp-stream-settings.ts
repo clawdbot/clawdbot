@@ -11,7 +11,7 @@ const DEFAULT_ACP_HIDDEN_BOUNDARY_SEPARATOR_LIVE = "space";
 const DEFAULT_ACP_MAX_OUTPUT_CHARS = 24_000;
 const DEFAULT_ACP_MAX_SESSION_UPDATE_CHARS = 320;
 
-export const ACP_TAG_VISIBILITY_DEFAULTS: Record<AcpSessionUpdateTag, boolean> = {
+const ACP_TAG_VISIBILITY_DEFAULTS: Record<AcpSessionUpdateTag, boolean> = {
   agent_message_chunk: true,
   tool_call: false,
   tool_call_update: false,

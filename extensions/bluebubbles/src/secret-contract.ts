@@ -3,33 +3,33 @@ import {
   getChannelSurface,
   type ResolverContext,
   type SecretDefaults,
-  type SecretTargetRegistryEntry,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 
-export const secretTargetRegistryEntries = [
-  {
-    id: "channels.bluebubbles.accounts.*.password",
-    targetType: "channels.bluebubbles.accounts.*.password",
-    configFile: "openclaw.json",
-    pathPattern: "channels.bluebubbles.accounts.*.password",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.bluebubbles.password",
-    targetType: "channels.bluebubbles.password",
-    configFile: "openclaw.json",
-    pathPattern: "channels.bluebubbles.password",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-] satisfies SecretTargetRegistryEntry[];
+export const secretTargetRegistryEntries: import("openclaw/plugin-sdk/channel-secret-basic-runtime").SecretTargetRegistryEntry[] =
+  [
+    {
+      id: "channels.bluebubbles.accounts.*.password",
+      targetType: "channels.bluebubbles.accounts.*.password",
+      configFile: "openclaw.json",
+      pathPattern: "channels.bluebubbles.accounts.*.password",
+      secretShape: "secret_input",
+      expectedResolvedValue: "string",
+      includeInPlan: true,
+      includeInConfigure: true,
+      includeInAudit: true,
+    },
+    {
+      id: "channels.bluebubbles.password",
+      targetType: "channels.bluebubbles.password",
+      configFile: "openclaw.json",
+      pathPattern: "channels.bluebubbles.password",
+      secretShape: "secret_input",
+      expectedResolvedValue: "string",
+      includeInPlan: true,
+      includeInConfigure: true,
+      includeInAudit: true,
+    },
+  ];
 
 export function collectRuntimeConfigAssignments(params: {
   config: { channels?: Record<string, unknown> };

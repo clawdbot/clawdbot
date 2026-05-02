@@ -57,7 +57,7 @@ function isPartialReasoningTagPrefix(text: string): boolean {
   return REASONING_TAG_PREFIXES.some((prefix) => prefix.startsWith(trimmed));
 }
 
-export type TelegramReasoningSplit = {
+type TelegramReasoningSplit = {
   reasoningText?: string;
   answerText?: string;
 };
@@ -90,7 +90,7 @@ export function splitTelegramReasoningText(text?: string): TelegramReasoningSpli
   return { reasoningText, answerText };
 }
 
-export type BufferedFinalAnswer = {
+type BufferedFinalAnswer = {
   payload: ReplyPayload;
   text: string;
 };

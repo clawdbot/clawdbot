@@ -39,7 +39,7 @@ function readStringValue(value: unknown): string | undefined {
   return undefined;
 }
 
-export function resolveOllamaDiscoveryApiKey(params: {
+function resolveOllamaDiscoveryApiKey(params: {
   env: NodeJS.ProcessEnv;
   baseUrl?: string;
   explicitApiKey?: string;
@@ -169,7 +169,7 @@ export function shouldUseSyntheticOllamaAuth(
   return isLocalOllamaBaseUrl(readProviderBaseUrl(providerConfig));
 }
 
-export function hasMeaningfulExplicitOllamaConfig(
+function hasMeaningfulExplicitOllamaConfig(
   providerConfig: ModelProviderConfig | undefined,
 ): boolean {
   if (!providerConfig) {

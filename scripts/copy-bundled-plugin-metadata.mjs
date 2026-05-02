@@ -363,8 +363,7 @@ export function copyBundledPluginMetadata(params = {}) {
         manifest,
         generatedChannelConfigsByPlugin.get(manifest.id),
       );
-      // Generated skill assets live under a dedicated dist-owned directory. Runtime
-      // dependency staging owns dist plugin node_modules; do not remove it here.
+      // Generated skill assets live under a dedicated dist-owned directory.
       removePathIfExists(path.join(distPluginDir, GENERATED_BUNDLED_SKILLS_DIR));
       const copiedSkills = copyDeclaredPluginSkillPaths({
         manifest: manifestWithGeneratedChannelConfigs,

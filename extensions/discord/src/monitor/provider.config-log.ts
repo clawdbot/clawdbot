@@ -2,7 +2,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { summarizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
 import { formatThreadBindingDurationLabel } from "./thread-bindings.messages.js";
 
-export function formatThreadBindingDurationForConfigLabel(durationMs: number): string {
+function formatThreadBindingDurationForConfigLabel(durationMs: number): string {
   const label = formatThreadBindingDurationLabel(durationMs);
   return label === "disabled" ? "off" : label;
 }

@@ -3,14 +3,14 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
-export const DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO = 0.85;
-export const DEFAULT_BOOTSTRAP_PROMPT_WARNING_MAX_FILES = 3;
-export const DEFAULT_BOOTSTRAP_PROMPT_WARNING_SIGNATURE_HISTORY_MAX = 32;
+const DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO = 0.85;
+const DEFAULT_BOOTSTRAP_PROMPT_WARNING_MAX_FILES = 3;
+const DEFAULT_BOOTSTRAP_PROMPT_WARNING_SIGNATURE_HISTORY_MAX = 32;
 
-export type BootstrapTruncationCause = "per-file-limit" | "total-limit";
-export type BootstrapPromptWarningMode = "off" | "once" | "always";
+type BootstrapTruncationCause = "per-file-limit" | "total-limit";
+type BootstrapPromptWarningMode = "off" | "once" | "always";
 
-export type BootstrapInjectionStat = {
+type BootstrapInjectionStat = {
   name: string;
   path: string;
   missing: boolean;
@@ -19,12 +19,12 @@ export type BootstrapInjectionStat = {
   truncated: boolean;
 };
 
-export type BootstrapAnalyzedFile = BootstrapInjectionStat & {
+type BootstrapAnalyzedFile = BootstrapInjectionStat & {
   nearLimit: boolean;
   causes: BootstrapTruncationCause[];
 };
 
-export type BootstrapBudgetAnalysis = {
+type BootstrapBudgetAnalysis = {
   files: BootstrapAnalyzedFile[];
   truncatedFiles: BootstrapAnalyzedFile[];
   nearLimitFiles: BootstrapAnalyzedFile[];
@@ -40,14 +40,14 @@ export type BootstrapBudgetAnalysis = {
   };
 };
 
-export type BootstrapPromptWarning = {
+type BootstrapPromptWarning = {
   signature?: string;
   warningShown: boolean;
   lines: string[];
   warningSignaturesSeen: string[];
 };
 
-export type BootstrapTruncationReportMeta = {
+type BootstrapTruncationReportMeta = {
   warningMode: BootstrapPromptWarningMode;
   warningShown: boolean;
   promptWarningSignature?: string;

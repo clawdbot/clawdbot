@@ -13,7 +13,7 @@ import {
 } from "../config/sessions/paths.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 
-export type ArchiveFileReason = SessionArchiveReason;
+type ArchiveFileReason = SessionArchiveReason;
 export type ArchivedSessionTranscript = {
   sourcePath: string;
   archivedPath: string;

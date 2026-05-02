@@ -1,4 +1,4 @@
-export function formatChannelDefaultAccountPath(channelKey: string): string {
+function formatChannelDefaultAccountPath(channelKey: string): string {
   return `channels.${channelKey}.defaultAccount`;
 }
 

@@ -28,7 +28,7 @@ export interface RemindParams {
  * `fallbackAccountId` are consulted only when the corresponding AI-supplied
  * parameter is missing.
  */
-export interface RemindExecuteContext {
+interface RemindExecuteContext {
   fallbackTo?: string;
   fallbackAccountId?: string;
 }
@@ -41,9 +41,9 @@ export type RemindCronAction =
       job: ReturnType<typeof buildOnceJob>["job"] | ReturnType<typeof buildCronJob>["job"];
     };
 
-export type RemindCronScheduler = (params: RemindCronAction) => Promise<unknown>;
+type RemindCronScheduler = (params: RemindCronAction) => Promise<unknown>;
 
-export type RemindCronPlan =
+type RemindCronPlan =
   | {
       ok: true;
       action: RemindParams["action"];
@@ -181,7 +181,7 @@ export function buildReminderPrompt(content: string): string {
 }
 
 /** Build cron job params for a one-shot delayed reminder. */
-export function buildOnceJob(params: RemindParams, delayMs: number, to: string, accountId: string) {
+function buildOnceJob(params: RemindParams, delayMs: number, to: string, accountId: string) {
   const atMs = Date.now() + delayMs;
   const content = params.content!;
   const name = params.name || generateJobName(content);
@@ -208,7 +208,7 @@ export function buildOnceJob(params: RemindParams, delayMs: number, to: string, 
 }
 
 /** Build cron job params for a recurring cron reminder. */
-export function buildCronJob(params: RemindParams, to: string, accountId: string) {
+function buildCronJob(params: RemindParams, to: string, accountId: string) {
   const content = params.content!;
   const name = params.name || generateJobName(content);
   const tz = params.timezone || "Asia/Shanghai";

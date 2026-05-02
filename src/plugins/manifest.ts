@@ -28,6 +28,7 @@ import {
   type PluginManifestCommandAlias,
 } from "./manifest-command-aliases.js";
 import type { PluginConfigUiHint } from "./manifest-types.js";
+import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
@@ -42,7 +43,9 @@ type PluginManifestLoadCacheEntry = {
   ctimeMs: number;
 };
 
-const pluginManifestLoadCache = new Map<string, PluginManifestLoadCacheEntry>();
+const pluginManifestLoadCache = new PluginLruCache<PluginManifestLoadCacheEntry>(
+  MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES,
+);
 
 export function clearPluginManifestLoadCache(): void {
   pluginManifestLoadCache.clear();
@@ -155,11 +158,9 @@ export type PluginManifestActivationCapability = "provider" | "channel" | "tool"
 
 export type PluginManifestActivation = {
   /**
-   * Explicit Gateway startup activation. Every plugin should set this as
-   * OpenClaw moves away from implicit startup sidecar loading. Set true when
-   * the plugin must be imported during Gateway startup; set false to opt out
-   * of the deprecated implicit startup sidecar fallback when no other
-   * activation trigger matches.
+   * Explicit Gateway startup activation. Set true when the plugin must be
+   * imported during Gateway startup; set false when narrower activation
+   * triggers should load it on demand.
    */
   onStartup?: boolean;
   /**
@@ -374,6 +375,14 @@ export type PluginManifest = {
     string,
     PluginManifestMediaUnderstandingProviderMetadata
   >;
+  /** Cheap image-generation provider auth metadata without importing plugin runtime. */
+  imageGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
+  /** Cheap video-generation provider auth metadata without importing plugin runtime. */
+  videoGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
+  /** Cheap music-generation provider auth metadata without importing plugin runtime. */
+  musicGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
+  /** Cheap plugin-tool availability metadata without importing plugin runtime. */
+  toolMetadata?: Record<string, PluginManifestToolMetadata>;
   /** Manifest-owned config behavior consumed by generic core helpers. */
   configContracts?: PluginManifestConfigContracts;
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
@@ -412,6 +421,41 @@ export type PluginManifestMediaUnderstandingProviderMetadata = {
   autoPriority?: Partial<Record<PluginManifestMediaUnderstandingCapability, number>>;
   nativeDocumentInputs?: Array<"pdf">;
 };
+
+export type PluginManifestProviderBaseUrlGuard = {
+  provider: string;
+  defaultBaseUrl?: string;
+  allowedBaseUrls: string[];
+};
+
+export type PluginManifestCapabilityProviderAuthSignal = {
+  provider: string;
+  providerBaseUrl?: PluginManifestProviderBaseUrlGuard;
+};
+
+export type PluginManifestCapabilityProviderModeConfigSignal = {
+  path?: string;
+  default?: string;
+  allowed?: string[];
+  disallowed?: string[];
+};
+
+export type PluginManifestCapabilityProviderConfigSignal = {
+  rootPath: string;
+  overlayPath?: string;
+  required?: string[];
+  requiredAny?: string[];
+  mode?: PluginManifestCapabilityProviderModeConfigSignal;
+};
+
+export type PluginManifestCapabilityProviderMetadata = {
+  aliases?: string[];
+  authProviders?: string[];
+  authSignals?: PluginManifestCapabilityProviderAuthSignal[];
+  configSignals?: PluginManifestCapabilityProviderConfigSignal[];
+};
+
+export type PluginManifestToolMetadata = PluginManifestCapabilityProviderMetadata;
 
 export type PluginManifestProviderAuthChoice = {
   /** Provider id owned by this manifest entry. */
@@ -566,6 +610,130 @@ function normalizeMediaUnderstandingProviderMetadata(
       ...(autoPriority ? { autoPriority } : {}),
       ...(nativeDocumentInputs ? { nativeDocumentInputs } : {}),
     } satisfies PluginManifestMediaUnderstandingProviderMetadata;
+    if (Object.keys(metadata).length > 0) {
+      normalized[providerId] = metadata;
+    }
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeProviderBaseUrlGuard(
+  value: unknown,
+): PluginManifestProviderBaseUrlGuard | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const provider = normalizeOptionalString(value.provider);
+  const allowedBaseUrls = normalizeTrimmedStringList(value.allowedBaseUrls);
+  if (!provider || allowedBaseUrls.length === 0) {
+    return undefined;
+  }
+  const defaultBaseUrl = normalizeOptionalString(value.defaultBaseUrl);
+  return {
+    provider,
+    ...(defaultBaseUrl ? { defaultBaseUrl } : {}),
+    allowedBaseUrls,
+  };
+}
+
+function normalizeCapabilityProviderAuthSignals(
+  value: unknown,
+): PluginManifestCapabilityProviderAuthSignal[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const signals: PluginManifestCapabilityProviderAuthSignal[] = [];
+  for (const rawSignal of value) {
+    if (!isRecord(rawSignal)) {
+      continue;
+    }
+    const provider = normalizeOptionalString(rawSignal.provider);
+    if (!provider) {
+      continue;
+    }
+    const providerBaseUrl = normalizeProviderBaseUrlGuard(rawSignal.providerBaseUrl);
+    signals.push({
+      provider,
+      ...(providerBaseUrl ? { providerBaseUrl } : {}),
+    });
+  }
+  return signals.length > 0 ? signals : undefined;
+}
+
+function normalizeCapabilityProviderModeConfigSignal(
+  value: unknown,
+): PluginManifestCapabilityProviderModeConfigSignal | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const path = normalizeOptionalString(value.path);
+  const defaultValue = normalizeOptionalString(value.default);
+  const allowed = normalizeTrimmedStringList(value.allowed);
+  const disallowed = normalizeTrimmedStringList(value.disallowed);
+  const signal = {
+    ...(path ? { path } : {}),
+    ...(defaultValue ? { default: defaultValue } : {}),
+    ...(allowed.length > 0 ? { allowed } : {}),
+    ...(disallowed.length > 0 ? { disallowed } : {}),
+  } satisfies PluginManifestCapabilityProviderModeConfigSignal;
+  return Object.keys(signal).length > 0 ? signal : undefined;
+}
+
+function normalizeCapabilityProviderConfigSignals(
+  value: unknown,
+): PluginManifestCapabilityProviderConfigSignal[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const signals: PluginManifestCapabilityProviderConfigSignal[] = [];
+  for (const rawSignal of value) {
+    if (!isRecord(rawSignal)) {
+      continue;
+    }
+    const rootPath = normalizeOptionalString(rawSignal.rootPath);
+    if (!rootPath) {
+      continue;
+    }
+    const overlayPath = normalizeOptionalString(rawSignal.overlayPath);
+    const required = normalizeTrimmedStringList(rawSignal.required);
+    const requiredAny = normalizeTrimmedStringList(rawSignal.requiredAny);
+    const mode = normalizeCapabilityProviderModeConfigSignal(rawSignal.mode);
+    const signal = {
+      rootPath,
+      ...(overlayPath ? { overlayPath } : {}),
+      ...(required.length > 0 ? { required } : {}),
+      ...(requiredAny.length > 0 ? { requiredAny } : {}),
+      ...(mode ? { mode } : {}),
+    } satisfies PluginManifestCapabilityProviderConfigSignal;
+    if (required.length > 0 || requiredAny.length > 0 || mode) {
+      signals.push(signal);
+    }
+  }
+  return signals.length > 0 ? signals : undefined;
+}
+
+function normalizeCapabilityProviderMetadata(
+  value: unknown,
+): Record<string, PluginManifestCapabilityProviderMetadata> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, PluginManifestCapabilityProviderMetadata> = Object.create(null);
+  for (const [rawProviderId, rawMetadata] of Object.entries(value)) {
+    const providerId = normalizeOptionalString(rawProviderId) ?? "";
+    if (!providerId || isBlockedObjectKey(providerId) || !isRecord(rawMetadata)) {
+      continue;
+    }
+    const aliases = normalizeTrimmedStringList(rawMetadata.aliases);
+    const authProviders = normalizeTrimmedStringList(rawMetadata.authProviders);
+    const authSignals = normalizeCapabilityProviderAuthSignals(rawMetadata.authSignals);
+    const configSignals = normalizeCapabilityProviderConfigSignals(rawMetadata.configSignals);
+    const metadata = {
+      ...(aliases.length > 0 ? { aliases } : {}),
+      ...(authProviders.length > 0 ? { authProviders } : {}),
+      ...(authSignals ? { authSignals } : {}),
+      ...(configSignals ? { configSignals } : {}),
+    } satisfies PluginManifestCapabilityProviderMetadata;
     if (Object.keys(metadata).length > 0) {
       normalized[providerId] = metadata;
     }
@@ -1229,12 +1397,14 @@ function buildPluginManifestLoadCacheKey(params: {
   rootRealPath?: string;
   stats: fs.Stats;
 }): string {
-  return JSON.stringify([
-    path.resolve(params.manifestPath),
-    params.rejectHardlinks,
-    params.rootRealPath ?? "",
-    params.stats.dev,
-    params.stats.ino,
+  return createPluginCacheKey([
+    [
+      path.resolve(params.manifestPath),
+      params.rejectHardlinks,
+      params.rootRealPath ?? "",
+      params.stats.dev,
+      params.stats.ino,
+    ],
     params.stats.size,
     params.stats.mtimeMs,
     params.stats.ctimeMs,
@@ -1254,8 +1424,6 @@ function getCachedPluginManifestLoadResult(
   ) {
     return undefined;
   }
-  pluginManifestLoadCache.delete(key);
-  pluginManifestLoadCache.set(key, entry);
   return entry.result;
 }
 
@@ -1270,13 +1438,6 @@ function setCachedPluginManifestLoadResult(
     mtimeMs: stats.mtimeMs,
     ctimeMs: stats.ctimeMs,
   });
-  if (pluginManifestLoadCache.size <= MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES) {
-    return;
-  }
-  const oldestKey = pluginManifestLoadCache.keys().next().value;
-  if (typeof oldestKey === "string") {
-    pluginManifestLoadCache.delete(oldestKey);
-  }
 }
 
 function parsePluginKind(raw: unknown): PluginKind | PluginKind[] | undefined {
@@ -1399,6 +1560,16 @@ export function loadPluginManifest(
   const mediaUnderstandingProviderMetadata = normalizeMediaUnderstandingProviderMetadata(
     raw.mediaUnderstandingProviderMetadata,
   );
+  const imageGenerationProviderMetadata = normalizeCapabilityProviderMetadata(
+    raw.imageGenerationProviderMetadata,
+  );
+  const videoGenerationProviderMetadata = normalizeCapabilityProviderMetadata(
+    raw.videoGenerationProviderMetadata,
+  );
+  const musicGenerationProviderMetadata = normalizeCapabilityProviderMetadata(
+    raw.musicGenerationProviderMetadata,
+  );
+  const toolMetadata = normalizeCapabilityProviderMetadata(raw.toolMetadata);
   const configContracts = normalizeManifestConfigContracts(raw.configContracts);
   const channelConfigs = normalizeChannelConfigs(raw.channelConfigs);
 
@@ -1445,6 +1616,10 @@ export function loadPluginManifest(
       uiHints,
       contracts,
       mediaUnderstandingProviderMetadata,
+      imageGenerationProviderMetadata,
+      videoGenerationProviderMetadata,
+      musicGenerationProviderMetadata,
+      toolMetadata,
       configContracts,
       channelConfigs,
     },
@@ -1483,6 +1658,10 @@ export type PluginPackageChannel = {
   configuredState?: {
     specifier?: string;
     exportName?: string;
+    env?: {
+      allOf?: readonly string[];
+      anyOf?: readonly string[];
+    };
   };
   persistedAuthState?: {
     specifier?: string;
@@ -1528,6 +1707,10 @@ export type OpenClawPackageSetupFeatures = {
   legacySessionSurfaces?: boolean;
 };
 
+export type OpenClawPackageBundle = {
+  includeInCore?: boolean;
+};
+
 export type OpenClawPackageManifest = {
   extensions?: string[];
   runtimeExtensions?: string[];
@@ -1536,6 +1719,7 @@ export type OpenClawPackageManifest = {
   setupFeatures?: OpenClawPackageSetupFeatures;
   channel?: PluginPackageChannel;
   install?: PluginPackageInstall;
+  bundle?: OpenClawPackageBundle;
   startup?: OpenClawPackageStartup;
 };
 
@@ -1566,6 +1750,12 @@ export function getPackageManifestMetadata(
     return undefined;
   }
   return manifest[MANIFEST_KEY];
+}
+
+export function isPackageIncludedInCoreBundle(
+  manifest: OpenClawPackageManifest | undefined,
+): boolean {
+  return manifest?.bundle?.includeInCore !== false;
 }
 
 export function resolvePackageExtensionEntries(

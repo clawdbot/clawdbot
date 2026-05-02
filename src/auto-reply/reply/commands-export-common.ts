@@ -15,7 +15,7 @@ export interface ExportCommandSessionTarget {
   sessionFile: string;
 }
 
-export const MAX_EXPORT_COMMAND_OUTPUT_PATH_CHARS = 512;
+const MAX_EXPORT_COMMAND_OUTPUT_PATH_CHARS = 512;
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

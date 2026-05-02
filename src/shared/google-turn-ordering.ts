@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
-export const GOOGLE_TURN_ORDER_BOOTSTRAP_TEXT = "(session bootstrap)";
+const GOOGLE_TURN_ORDER_BOOTSTRAP_TEXT = "(session bootstrap)";
 
 export function sanitizeGoogleAssistantFirstOrdering(messages: AgentMessage[]): AgentMessage[] {
   const first = messages[0] as { role?: unknown; content?: unknown } | undefined;

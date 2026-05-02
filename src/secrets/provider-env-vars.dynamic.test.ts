@@ -44,6 +44,20 @@ const pluginRegistryMocks = vi.hoisted(() => {
     loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
     loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
     loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
+    loadPluginMetadataSnapshot: vi.fn((params: unknown) => {
+      const registry = loadManifestRegistry(params) ?? { plugins: [], diagnostics: [] };
+      return {
+        index: {
+          plugins: registry.plugins.map((plugin) => ({
+            pluginId: plugin.id,
+            origin: plugin.origin,
+            enabled: true,
+            enabledByDefault: true,
+          })),
+        },
+        plugins: registry.plugins,
+      };
+    }),
   };
 });
 
@@ -58,6 +72,10 @@ vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
 }));
 
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: pluginRegistryMocks.loadPluginMetadataSnapshot,
+}));
+
 describe("provider env vars dynamic manifest metadata", () => {
   beforeEach(() => {
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
@@ -67,6 +85,7 @@ describe("provider env vars dynamic manifest metadata", () => {
     });
     pluginRegistryMocks.loadPluginRegistrySnapshot.mockReset();
     pluginRegistryMocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
+    pluginRegistryMocks.loadPluginMetadataSnapshot.mockClear();
     __testing.resetProviderEnvVarCachesForTests();
   });
 
@@ -153,9 +172,9 @@ describe("provider env vars dynamic manifest metadata", () => {
         source: "external cloud credentials",
       },
     ]);
-    expect(
-      pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mock.calls.at(-1)?.[0],
-    ).toMatchObject({ includeDisabled: false });
+    expect(pluginRegistryMocks.loadPluginMetadataSnapshot.mock.calls.at(-1)?.[0]).toMatchObject({
+      preferPersisted: false,
+    });
   });
 
   it("excludes untrusted workspace plugin auth evidence by default", async () => {

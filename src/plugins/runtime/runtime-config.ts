@@ -6,7 +6,7 @@ import {
 import { logWarn } from "../../logger.js";
 import type { PluginRuntime } from "./types.js";
 
-export const RUNTIME_CONFIG_LOAD_WRITE_COMPAT_CODE = "runtime-config-load-write";
+const RUNTIME_CONFIG_LOAD_WRITE_COMPAT_CODE = "runtime-config-load-write";
 
 const warnedDeprecatedConfigApis = new Set<string>();
 

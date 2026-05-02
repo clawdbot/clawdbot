@@ -23,7 +23,7 @@ sidebarTitle: "Models CLI"
   </Card>
 </CardGroup>
 
-Model refs choose a provider and model. They do not usually choose the low-level agent runtime. For example, `openai/gpt-5.5` can run through the normal OpenAI provider path or through the Codex app-server runtime, depending on `agents.defaults.agentRuntime.id`. See [Agent runtimes](/concepts/agent-runtimes).
+Model refs choose a provider and model. They do not usually choose the low-level agent runtime. For example, `openai/gpt-5.5` can run through the normal OpenAI provider path or through the Codex app-server runtime, depending on `agents.defaults.agentRuntime.id`. In Codex runtime mode, the `openai/gpt-*` ref does not imply API-key billing; auth can come from a Codex account or `openai-codex` auth profile. See [Agent runtimes](/concepts/agent-runtimes).
 
 ## How model selection works
 
@@ -167,6 +167,7 @@ You can switch models for the current session without restarting:
   <Accordion title="Picker behavior">
     - `/model` (and `/model list`) is a compact, numbered picker (model family + available providers).
     - On Discord, `/model` and `/models` open an interactive picker with provider and model dropdowns plus a Submit step.
+    - On Telegram, `/models` picker selections are session-scoped; they do not change the agent's persistent default in `openclaw.json`.
     - `/models add` is deprecated and now returns a deprecation message instead of registering models from chat.
     - `/model <#>` selects from that picker.
 

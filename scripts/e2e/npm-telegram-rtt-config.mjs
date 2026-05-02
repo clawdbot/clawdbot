@@ -39,6 +39,7 @@ config.models.providers.openai = {
     id: "OPENAI_API_KEY",
   },
   baseUrl: `http://127.0.0.1:${mockPort}/v1`,
+  request: { allowPrivateNetwork: true },
   models: [
     {
       id: "gpt-5.5",

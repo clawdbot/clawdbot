@@ -4,7 +4,7 @@ import type { NodeListNode } from "../shared/node-list-types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { NodeSession } from "./node-registry.js";
 
-export type KnownNodeDevicePairingSource = {
+type KnownNodeDevicePairingSource = {
   nodeId: string;
   displayName?: string;
   platform?: string;
@@ -16,7 +16,7 @@ export type KnownNodeDevicePairingSource = {
   lastSeenReason?: string;
 };
 
-export type KnownNodeApprovedSource = {
+type KnownNodeApprovedSource = {
   nodeId: string;
   displayName?: string;
   platform?: string;
@@ -35,7 +35,7 @@ export type KnownNodeApprovedSource = {
   lastSeenReason?: string;
 };
 
-export type KnownNodeEntry = {
+type KnownNodeEntry = {
   nodeId: string;
   devicePairing?: KnownNodeDevicePairingSource;
   nodePairing?: KnownNodeApprovedSource;
@@ -43,7 +43,7 @@ export type KnownNodeEntry = {
   effective: NodeListNode;
 };
 
-export type KnownNodeCatalog = {
+type KnownNodeCatalog = {
   entriesById: Map<string, KnownNodeEntry>;
 };
 

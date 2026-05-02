@@ -11,7 +11,7 @@ import {
   resolveGraphToken,
 } from "./graph.js";
 
-export type MSTeamsChannelResolution = {
+type MSTeamsChannelResolution = {
   input: string;
   resolved: boolean;
   teamId?: string;
@@ -21,7 +21,7 @@ export type MSTeamsChannelResolution = {
   note?: string;
 };
 
-export type MSTeamsUserResolution = {
+type MSTeamsUserResolution = {
   input: string;
   resolved: boolean;
   id?: string;

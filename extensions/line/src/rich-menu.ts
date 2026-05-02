@@ -323,4 +323,4 @@ export function createDefaultMenuConfig(): CreateRichMenuParams {
   };
 }
 
-export type { RichMenuRequest, RichMenuResponse, RichMenuArea, Action };
+export type { RichMenuRequest, RichMenuResponse, RichMenuArea };

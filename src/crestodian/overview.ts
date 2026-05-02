@@ -19,7 +19,7 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { probeGatewayUrl, probeLocalCommand, type LocalCommandProbe } from "./probes.js";
 
-export type CrestodianAgentSummary = {
+type CrestodianAgentSummary = {
   id: string;
   name?: string;
   isDefault: boolean;
@@ -274,7 +274,7 @@ export function formatCrestodianOverview(overview: CrestodianOverview): string {
     .join("\n");
 }
 
-export function recommendCrestodianNextStep(overview: CrestodianOverview): string {
+function recommendCrestodianNextStep(overview: CrestodianOverview): string {
   if (!overview.config.exists) {
     return 'run "setup" to create a starter config';
   }

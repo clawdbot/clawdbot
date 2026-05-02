@@ -7,20 +7,15 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   {
     pluginId: "discord",
     pluginLocalRuntimeDeps: ["@discordjs/voice", "discord-api-types", "opusscript"],
-    mirroredRootRuntimeDeps: ["https-proxy-agent"],
     minHostVersionBaseline: "2026.3.22",
   },
   {
     pluginId: "feishu",
     pluginLocalRuntimeDeps: ["@larksuiteoapi/node-sdk"],
-    mirroredRootRuntimeDeps: ["typebox"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "google", pluginLocalRuntimeDeps: ["@google/genai"] },
-  {
-    pluginId: "google-meet",
-    mirroredRootRuntimeDeps: ["commander", "typebox"],
-  },
+  { pluginId: "google-meet" },
   {
     pluginId: "googlechat",
     pluginLocalRuntimeDeps: ["gaxios", "google-auth-library"],
@@ -42,13 +37,11 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   },
   {
     pluginId: "diffs",
-    pluginLocalRuntimeDeps: ["@pierre/diffs", "@pierre/theme", "playwright-core"],
-    mirroredRootRuntimeDeps: ["typebox"],
+    pluginLocalRuntimeDeps: ["@pierre/diffs", "@pierre/theme"],
   },
   {
     pluginId: "file-transfer",
     pluginLocalRuntimeDeps: ["minimatch"],
-    mirroredRootRuntimeDeps: ["typebox"],
   },
   {
     pluginId: "matrix",
@@ -59,14 +52,12 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
       "matrix-js-sdk",
       "music-metadata",
     ],
-    mirroredRootRuntimeDeps: ["markdown-it"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "mattermost", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "memory-lancedb",
     pluginLocalRuntimeDeps: ["@lancedb/lancedb"],
-    mirroredRootRuntimeDeps: ["typebox", "openai"],
     minHostVersionBaseline: "2026.3.22",
   },
   {
@@ -79,7 +70,6 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
       "jsonwebtoken",
       "jwks-rsa",
     ],
-    mirroredRootRuntimeDeps: ["typebox"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "nextcloud-talk", minHostVersionBaseline: "2026.3.22" },
@@ -92,12 +82,10 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   {
     pluginId: "qqbot",
     pluginLocalRuntimeDeps: ["@tencent-connect/qqbot-connector", "mpg123-decoder", "silk-wasm"],
-    mirroredRootRuntimeDeps: ["ws"],
   },
   {
     pluginId: "slack",
     pluginLocalRuntimeDeps: ["@slack/bolt", "@slack/web-api"],
-    mirroredRootRuntimeDeps: ["https-proxy-agent"],
   },
   { pluginId: "synology-chat", minHostVersionBaseline: "2026.3.22" },
   {

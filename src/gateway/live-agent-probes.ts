@@ -5,7 +5,7 @@ import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 const execFileAsync = promisify(execFile);
 
-export type CronListCliResult = {
+type CronListCliResult = {
   jobs?: Array<{
     id?: string;
     name?: string;
@@ -18,7 +18,7 @@ export type CronListCliResult = {
 
 export type CronListJob = NonNullable<CronListCliResult["jobs"]>[number];
 
-export type LiveCronProbeSpec = {
+type LiveCronProbeSpec = {
   nonce: string;
   name: string;
   message: string;

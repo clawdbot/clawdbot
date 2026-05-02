@@ -565,6 +565,7 @@ const subagentLifecycleController = createSubagentRegistryLifecycleController({
   emitSubagentEndedHookForRun,
   notifyContextEngineSubagentEnded,
   resumeSubagentRun,
+  callGateway: (request) => subagentRegistryDeps.callGateway(request),
   captureSubagentCompletionReply: (sessionKey, options) =>
     subagentRegistryDeps.captureSubagentCompletionReply(sessionKey, options),
   cleanupBrowserSessionsForLifecycleEnd: (args) =>

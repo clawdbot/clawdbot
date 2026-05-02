@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
+import { resolveVoiceCallSessionKey } from "../config.js";
 import type { CallRecord, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { finalizeCall } from "./lifecycle.js";
@@ -73,6 +74,11 @@ function createWebhookCall(params: {
     state: "ringing",
     from: params.from,
     to: params.to,
+    sessionKey: resolveVoiceCallSessionKey({
+      config: params.ctx.config,
+      callId,
+      phone: params.direction === "outbound" ? params.to : params.from,
+    }),
     startedAt: Date.now(),
     transcript: [],
     processedEventIds: [],

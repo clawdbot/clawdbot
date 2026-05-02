@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { modelKey } from "./model-ref-shared.js";
 
-export type FastModeState = {
+type FastModeState = {
   enabled: boolean;
   source: "session" | "agent" | "config" | "default";
 };

@@ -16,6 +16,24 @@ describe("TtsConfigSchema openai speed and instructions", () => {
     ).not.toThrow();
   });
 
+  it("accepts openai extraBody objects for compatible TTS endpoints", () => {
+    expect(() =>
+      TtsConfigSchema.parse({
+        providers: {
+          openai: {
+            baseUrl: "http://localhost:8880/v1",
+            model: "kokoro",
+            voice: "em_alex",
+            extraBody: {
+              lang: "e",
+              speed: 1.2,
+            },
+          },
+        },
+      }),
+    ).not.toThrow();
+  });
+
   it("rejects out-of-range openai speed", () => {
     expect(() =>
       TtsConfigSchema.parse({

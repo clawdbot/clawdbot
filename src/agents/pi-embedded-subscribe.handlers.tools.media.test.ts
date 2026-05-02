@@ -590,4 +590,33 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
     expect(ctx.state.pendingToolTrustedLocalMedia).toBe(true);
   });
+
+  it("queues trusted TTS local media when the exact built-in name is absent", async () => {
+    const ctx = createMockContext({
+      shouldEmitToolOutput: false,
+      onToolResult: vi.fn(),
+      builtinToolNames: new Set(["web_search"]),
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "tts",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "(spoken) hello" }],
+        details: {
+          media: {
+            mediaUrl: "/tmp/reply.opus",
+            audioAsVoice: true,
+            trustedLocalMedia: true,
+          },
+        },
+      },
+    });
+
+    expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
+    expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
+    expect(ctx.state.pendingToolTrustedLocalMedia).toBe(true);
+  });
 });

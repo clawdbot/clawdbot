@@ -18,7 +18,7 @@ type LmstudioLoadResponse = {
   status?: string;
 };
 
-export type FetchLmstudioModelsResult = {
+type FetchLmstudioModelsResult = {
   reachable: boolean;
   status?: number;
   models: LmstudioModelWire[];

@@ -37,8 +37,6 @@ export {
   HEARTBEAT_PROMPT,
   HEARTBEAT_TOKEN,
   monitorWebChannel,
-  resolveHeartbeatRecipients,
-  runWebHeartbeatOnce,
   SILENT_REPLY_TOKEN,
   stripHeartbeatToken,
   type WebChannelStatus,

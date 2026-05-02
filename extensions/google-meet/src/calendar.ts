@@ -18,7 +18,7 @@ type GoogleCalendarConferenceEntryPoint = {
   label?: string;
 };
 
-export type GoogleMeetCalendarEvent = {
+type GoogleMeetCalendarEvent = {
   id?: string;
   summary?: string;
   description?: string;
@@ -44,7 +44,7 @@ export type GoogleMeetCalendarLookupResult = {
   meetingUri: string;
 };
 
-export type GoogleMeetCalendarEventsResult = {
+type GoogleMeetCalendarEventsResult = {
   calendarId: string;
   events: Array<{
     event: GoogleMeetCalendarEvent;

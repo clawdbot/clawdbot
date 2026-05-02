@@ -145,17 +145,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note(sanitizeDoctorNote(pluginToolAllowlistWarnings.join("\n")), "Doctor warnings");
   }
 
-  if (params.runtime && params.prompter) {
-    const { maybeRepairBundledPluginRuntimeDeps } =
-      await import("./doctor-bundled-plugin-runtime-deps.js");
-    await maybeRepairBundledPluginRuntimeDeps({
-      runtime: params.runtime,
-      prompter: params.prompter,
-      config: candidate,
-      includeConfiguredChannels: true,
-    });
-  }
-
   const hasConfiguredChannels = collectConfiguredChannelIds(candidate).length > 0;
   let collectMutableAllowlistWarnings:
     | typeof import("./doctor/shared/channel-doctor.js").collectChannelDoctorMutableAllowlistWarnings

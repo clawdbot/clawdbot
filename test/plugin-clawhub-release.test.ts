@@ -11,6 +11,7 @@ import {
   resolveSelectedClawHubPublishablePluginPackages,
   type PublishablePluginPackage,
 } from "../scripts/lib/plugin-clawhub-release.ts";
+import { OPENCLAW_PLUGIN_NPM_REPOSITORY_URL } from "../scripts/lib/plugin-npm-release.ts";
 import { cleanupTempDirs, makeTempRepoRoot } from "./helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
@@ -69,6 +70,35 @@ describe("collectClawHubPublishablePluginPackages", () => {
       "Demo Plugin: extension directory name must match",
     );
   });
+
+  it("validates only selected package names when filters are provided", () => {
+    const repoDir = createTempPluginRepo({
+      extraExtensionIds: ["broken-plugin"],
+    });
+    writeFileSync(
+      join(repoDir, "extensions", "broken-plugin", "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/broken-plugin",
+          version: "2026.4.1",
+          openclaw: {
+            extensions: ["./index.ts"],
+            release: {
+              publishToClawHub: true,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    expect(
+      collectClawHubPublishablePluginPackages(repoDir, {
+        packageNames: ["@openclaw/demo-plugin"],
+      }).map((plugin) => plugin.packageName),
+    ).toEqual(["@openclaw/demo-plugin"]);
+  });
 });
 
 describe("collectClawHubVersionGateErrors", () => {
@@ -115,10 +145,17 @@ describe("collectClawHubVersionGateErrors", () => {
         {
           name: "@openclaw/demo-plugin",
           version: "2026.4.1",
+          repository: {
+            type: "git",
+            url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+          },
           openclaw: {
             extensions: ["./index.ts"],
             compat: {
               pluginApi: ">=2026.4.1",
+            },
+            install: {
+              npmSpec: "@openclaw/demo-plugin",
             },
             build: {
               openclawVersion: "2026.4.1",
@@ -234,6 +271,38 @@ describe("collectPluginClawHubReleasePlan", () => {
       version: "2026.4.1",
     });
   });
+
+  it("plans selected packages without validating unrelated publishable packages", async () => {
+    const repoDir = createTempPluginRepo({
+      extraExtensionIds: ["broken-plugin"],
+    });
+    writeFileSync(
+      join(repoDir, "extensions", "broken-plugin", "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/broken-plugin",
+          version: "2026.4.1",
+          openclaw: {
+            extensions: ["./index.ts"],
+            release: {
+              publishToClawHub: true,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const plan = await collectPluginClawHubReleasePlan({
+      rootDir: repoDir,
+      selection: ["@openclaw/demo-plugin"],
+      fetchImpl: async () => new Response("{}", { status: 404 }),
+      registryBaseUrl: "https://clawhub.ai",
+    });
+
+    expect(plan.candidates.map((plugin) => plugin.packageName)).toEqual(["@openclaw/demo-plugin"]);
+  });
 });
 
 describe("collectPluginClawHubReleasePathsFromGitRange", () => {
@@ -278,6 +347,10 @@ function createTempPluginRepo(
         {
           name: `@openclaw/${currentExtensionId}`,
           version: "2026.4.1",
+          repository: {
+            type: "git",
+            url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+          },
           openclaw: {
             extensions: ["./index.ts"],
             ...(options.includeClawHubContract === false
@@ -290,6 +363,9 @@ function createTempPluginRepo(
                     openclawVersion: "2026.4.1",
                   },
                 }),
+            install: {
+              npmSpec: `@openclaw/${currentExtensionId}`,
+            },
             release: {
               publishToClawHub: options.publishToClawHub ?? true,
             },

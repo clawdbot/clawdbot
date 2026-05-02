@@ -220,7 +220,7 @@ export async function getMattermostCommand(
 /**
  * Create a custom slash command on a Mattermost team.
  */
-export async function createMattermostCommand(
+async function createMattermostCommand(
   client: MattermostClient,
   params: MattermostCommandCreate,
 ): Promise<MattermostCommandResponse> {
@@ -233,10 +233,7 @@ export async function createMattermostCommand(
 /**
  * Delete a custom slash command.
  */
-export async function deleteMattermostCommand(
-  client: MattermostClient,
-  commandId: string,
-): Promise<void> {
+async function deleteMattermostCommand(client: MattermostClient, commandId: string): Promise<void> {
   await client.request<Record<string, unknown>>(`/commands/${encodeURIComponent(commandId)}`, {
     method: "DELETE",
   });
@@ -245,7 +242,7 @@ export async function deleteMattermostCommand(
 /**
  * Update an existing custom slash command.
  */
-export async function updateMattermostCommand(
+async function updateMattermostCommand(
   client: MattermostClient,
   params: MattermostCommandUpdate,
 ): Promise<MattermostCommandResponse> {

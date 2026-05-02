@@ -35,6 +35,7 @@ function writeChannelToolPlugin(params: {
       {
         id: params.id,
         channels: [params.channelId],
+        contracts: { tools: ["qqbot_remind"] },
         ...(params.enabledByDefault ? { enabledByDefault: true } : {}),
         channelConfigs: {
           [params.channelId]: {

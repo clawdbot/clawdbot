@@ -1,18 +1,21 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import {
   CURRENT_SESSION_VERSION,
-  SessionManager,
   type CompactionEntry,
   type SessionEntry,
   type SessionHeader,
 } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { collectDuplicateUserMessageEntryIdsForCompaction } from "./compaction-duplicate-user-messages.js";
+import {
+  readTranscriptFileState,
+  TranscriptFileState,
+  writeTranscriptFileAtomic,
+} from "./transcript-file-state.js";
 
 type ReadonlySessionManagerForRotation = Pick<
-  SessionManager,
+  TranscriptFileState,
   "buildSessionContext" | "getBranch" | "getCwd" | "getEntries" | "getHeader"
 >;
 
@@ -70,14 +73,8 @@ export async function rotateTranscriptAfterCompaction(params: {
     cwd: params.sessionManager.getCwd(),
     parentSession: sessionFile,
   });
-  await writeSessionFileAtomic(successorFile, [header, ...successorEntries]);
-
-  try {
-    SessionManager.open(successorFile).buildSessionContext();
-  } catch (err) {
-    await fs.unlink(successorFile).catch(() => undefined);
-    throw err;
-  }
+  await writeTranscriptFileAtomic(successorFile, [header, ...successorEntries]);
+  new TranscriptFileState({ header, entries: successorEntries }).buildSessionContext();
 
   return {
     rotated: true,
@@ -87,6 +84,18 @@ export async function rotateTranscriptAfterCompaction(params: {
     leafId: successorEntries[successorEntries.length - 1]?.id,
     entriesWritten: successorEntries.length,
   };
+}
+
+export async function rotateTranscriptFileAfterCompaction(params: {
+  sessionFile: string;
+  now?: () => Date;
+}): Promise<CompactionTranscriptRotation> {
+  const state = await readTranscriptFileState(params.sessionFile);
+  return rotateTranscriptAfterCompaction({
+    sessionManager: state,
+    sessionFile: params.sessionFile,
+    ...(params.now ? { now: params.now } : {}),
+  });
 }
 
 function findLatestCompactionIndex(entries: SessionEntry[]): number {
@@ -262,21 +271,4 @@ function resolveSuccessorSessionFile(params: {
 }): string {
   const fileTimestamp = params.timestamp.replace(/[:.]/g, "-");
   return path.join(path.dirname(params.sessionFile), `${fileTimestamp}_${params.sessionId}.jsonl`);
-}
-
-async function writeSessionFileAtomic(
-  filePath: string,
-  entries: Array<SessionHeader | SessionEntry>,
-) {
-  const dir = path.dirname(filePath);
-  await fs.mkdir(dir, { recursive: true });
-  const tmpFile = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
-  const content = `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
-  try {
-    await fs.writeFile(tmpFile, content, { encoding: "utf8", flag: "wx" });
-    await fs.rename(tmpFile, filePath);
-  } catch (err) {
-    await fs.unlink(tmpFile).catch(() => undefined);
-    throw err;
-  }
 }

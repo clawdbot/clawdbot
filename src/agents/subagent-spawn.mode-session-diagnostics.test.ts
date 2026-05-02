@@ -49,6 +49,7 @@ describe('spawnSubagentDirect mode="session" diagnostics (#67400)', () => {
         task: "persistent planning session",
         mode: "session",
         thread: true,
+        context: "isolated",
       },
       {
         agentSessionKey: "agent:main:main",
@@ -119,6 +120,7 @@ describe('spawnSubagentDirect mode="session" with registered thread hooks (#6740
         task: "persistent planning session",
         mode: "session",
         thread: true,
+        context: "isolated",
       },
       {
         agentSessionKey: "agent:main:main",

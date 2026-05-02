@@ -226,7 +226,7 @@ export function unwrapShellWrapper(command: string): string {
   return inner ? (stripOuterQuotes(inner) ?? command) : command;
 }
 
-export function scanTopLevelChars(
+function scanTopLevelChars(
   command: string,
   visit: (char: string, index: number) => boolean | void,
 ): void {

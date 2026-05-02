@@ -145,11 +145,12 @@ troubleshooting, see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="Can I use GPT 5.5 for daily tasks and Codex 5.5 for coding?">
-    Yes. Set one as default and switch as needed:
+    Yes. Treat model choice and runtime choice separately:
 
-    - **Quick switch (per session):** `/model openai/gpt-5.5` for current direct OpenAI API-key tasks or `/model openai-codex/gpt-5.5` for GPT-5.5 Codex OAuth tasks.
-    - **Default:** set `agents.defaults.model.primary` to `openai/gpt-5.5` for API-key usage or `openai-codex/gpt-5.5` for GPT-5.5 Codex OAuth usage.
-    - **Sub-agents:** route coding tasks to sub-agents with a different default model.
+    - **Native Codex coding agent:** set `agents.defaults.model.primary` to `openai/gpt-5.5` and `agents.defaults.agentRuntime.id` to `"codex"`. Sign in with `openclaw models auth login --provider openai-codex` when you want ChatGPT/Codex subscription auth.
+    - **Direct OpenAI API tasks through PI:** use `/model openai/gpt-5.5` without a Codex runtime override and configure `OPENAI_API_KEY`.
+    - **Codex OAuth through PI:** use `/model openai-codex/gpt-5.5` only when you intentionally want the normal PI runner with Codex OAuth.
+    - **Sub-agents:** route coding tasks to a Codex-only agent with its own model and `agentRuntime` default.
 
     See [Models](/concepts/models) and [Slash commands](/tools/slash-commands).
 

@@ -13,12 +13,12 @@ import { getDefaultSsrFPolicy } from "../urbit/context.js";
 const MAX_IMAGES_PER_MESSAGE = 8;
 const TLON_MEDIA_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
 
-export interface ExtractedImage {
+interface ExtractedImage {
   url: string;
   alt?: string;
 }
 
-export interface DownloadedMedia {
+interface DownloadedMedia {
   localPath: string;
   contentType: string;
   originalUrl: string;

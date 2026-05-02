@@ -14,6 +14,7 @@ import { listBundledChannelPluginIds } from "./plugins/bundled-ids.js";
 const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
 
 type ChannelPresenceOptions = {
+  channelIds?: readonly string[];
   includePersistedAuthState?: boolean;
   persistedAuthStateProbe?: {
     listChannelIds: () => readonly string[];
@@ -27,7 +28,7 @@ type ChannelPresenceOptions = {
 
 export type ChannelPresenceSignalSource = "config" | "env" | "persisted-auth";
 
-export type ChannelPresenceSignal = {
+type ChannelPresenceSignal = {
   channelId: string;
   source: ChannelPresenceSignalSource;
 };
@@ -120,7 +121,7 @@ export function listPotentialConfiguredChannelPresenceSignals(
     signals.push({ channelId, source });
   };
   const configuredChannelIds = new Set<string>();
-  const channelIds = listBundledChannelPluginIds();
+  const channelIds = options.channelIds ?? listBundledChannelPluginIds(env);
   const channelEnvPrefixes = listChannelEnvPrefixes(channelIds);
   const channels = isRecord(cfg.channels) ? cfg.channels : null;
   if (channels) {
@@ -164,7 +165,7 @@ function hasEnvConfiguredChannel(
   env: NodeJS.ProcessEnv,
   options: ChannelPresenceOptions = {},
 ): boolean {
-  const channelIds = listBundledChannelPluginIds();
+  const channelIds = options.channelIds ?? listBundledChannelPluginIds(env);
   const channelEnvPrefixes = listChannelEnvPrefixes(channelIds);
   for (const [key, value] of Object.entries(env)) {
     if (!hasNonEmptyString(value)) {

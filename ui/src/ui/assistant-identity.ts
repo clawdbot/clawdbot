@@ -14,7 +14,7 @@ const MAX_ASSISTANT_AVATAR_REASON = 200;
 // this module free of UI view imports (avoids an import cycle).
 const RENDERABLE_AVATAR_URL_RE = /^(data:image\/|\/(?!\/))/i;
 
-export const DEFAULT_ASSISTANT_NAME = "Assistant";
+const DEFAULT_ASSISTANT_NAME = "Assistant";
 export const DEFAULT_ASSISTANT_AVATAR = "A";
 
 export type AssistantIdentity = {

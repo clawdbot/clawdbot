@@ -19,20 +19,20 @@ export type CodexSkillSource = {
   sourceLabel: string;
 };
 
-export type CodexPluginSource = {
+type CodexPluginSource = {
   name: string;
   source: string;
   manifestPath: string;
 };
 
-export type CodexArchiveSource = {
+type CodexArchiveSource = {
   id: string;
   path: string;
   relativePath: string;
   message?: string;
 };
 
-export type CodexSource = {
+type CodexSource = {
   root: string;
   confidence: "low" | "medium" | "high";
   codexHome: string;

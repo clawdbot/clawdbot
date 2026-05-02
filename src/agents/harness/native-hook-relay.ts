@@ -35,14 +35,14 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-export const NATIVE_HOOK_RELAY_EVENTS = [
+const NATIVE_HOOK_RELAY_EVENTS = [
   "pre_tool_use",
   "post_tool_use",
   "permission_request",
   "before_agent_finalize",
 ] as const;
 
-export const NATIVE_HOOK_RELAY_PROVIDERS = ["codex"] as const;
+const NATIVE_HOOK_RELAY_PROVIDERS = ["codex"] as const;
 
 export type NativeHookRelayEvent = (typeof NATIVE_HOOK_RELAY_EVENTS)[number];
 export type NativeHookRelayProvider = (typeof NATIVE_HOOK_RELAY_PROVIDERS)[number];
@@ -321,7 +321,7 @@ export function registerNativeHookRelay(
   };
 }
 
-export function unregisterNativeHookRelay(relayId: string): void {
+function unregisterNativeHookRelay(relayId: string): void {
   unregisterNativeHookRelayBridge(relayId);
   relays.delete(relayId);
   removeNativeHookRelayInvocations(relayId);

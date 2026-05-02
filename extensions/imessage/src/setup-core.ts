@@ -67,7 +67,7 @@ function buildIMessageSetupPatch(input: {
   };
 }
 
-export async function promptIMessageAllowFrom(params: {
+async function promptIMessageAllowFrom(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
   accountId?: string;

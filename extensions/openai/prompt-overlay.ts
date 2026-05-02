@@ -12,7 +12,7 @@ const OPENAI_PROVIDER_IDS = new Set(["openai", "openai-codex"]);
 export const OPENAI_FRIENDLY_PROMPT_OVERLAY = GPT5_FRIENDLY_PROMPT_OVERLAY;
 export const OPENAI_GPT5_BEHAVIOR_CONTRACT = GPT5_BEHAVIOR_CONTRACT;
 
-export type OpenAIPromptOverlayMode = Gpt5PromptOverlayMode;
+type OpenAIPromptOverlayMode = Gpt5PromptOverlayMode;
 
 export function resolveOpenAIPromptOverlayMode(
   pluginConfig?: Record<string, unknown>,

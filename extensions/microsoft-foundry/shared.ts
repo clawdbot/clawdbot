@@ -73,13 +73,13 @@ export type CachedTokenEntry = {
 
 export type FoundryProviderApi = typeof DEFAULT_API | typeof DEFAULT_GPT5_API;
 
-export type FoundryDeploymentConfigInput = {
+type FoundryDeploymentConfigInput = {
   name: string;
   modelName?: string;
   api?: FoundryProviderApi;
 };
 
-export type FoundryModelCapabilities = {
+type FoundryModelCapabilities = {
   modelName: string;
   api: FoundryProviderApi;
   input: Array<"text" | "image">;

@@ -42,7 +42,7 @@ export interface RawMention {
 }
 
 /** Input for {@link detectWasMentioned}. */
-export interface DetectWasMentionedInput {
+interface DetectWasMentionedInput {
   /**
    * Raw event type. `"GROUP_AT_MESSAGE_CREATE"` unambiguously identifies
    * that the bot was @-ed, even when the mentions array is empty.
@@ -59,7 +59,7 @@ export interface DetectWasMentionedInput {
 }
 
 /** Input for {@link hasAnyMention}. */
-export interface HasAnyMentionInput {
+interface HasAnyMentionInput {
   mentions?: RawMention[];
   content?: string;
 }

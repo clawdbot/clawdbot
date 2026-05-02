@@ -12,6 +12,10 @@ import {
   stripProviderPrefix,
 } from "../../execution-contract.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
+import {
+  hasCommittedMessagingToolDeliveryEvidence,
+  hasMessagingToolDeliveryEvidence,
+} from "../delivery-evidence.js";
 import { isZeroUsageEmptyStopAssistantTurn } from "../empty-assistant-turn.js";
 import { assessLastAssistantMessage } from "../thinking.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
@@ -24,7 +28,8 @@ type ReplayMetadataAttempt = Pick<
   | "messagingToolSentTexts"
   | "messagingToolSentMediaUrls"
   | "successfulCronAdds"
->;
+> &
+  Partial<Pick<EmbeddedRunAttemptResult, "messagingToolSentTargets">>;
 
 type IncompleteTurnAttempt = Pick<
   EmbeddedRunAttemptResult,
@@ -36,6 +41,7 @@ type IncompleteTurnAttempt = Pick<
   | "didSendViaMessagingTool"
   | "messagingToolSentTexts"
   | "messagingToolSentMediaUrls"
+  | "messagingToolSentTargets"
   | "lastToolError"
   | "lastAssistant"
   | "replayMetadata"
@@ -54,6 +60,9 @@ type PlanningOnlyAttempt = Pick<
   | "lastAssistant"
   | "itemLifecycle"
   | "replayMetadata"
+  | "messagingToolSentTexts"
+  | "messagingToolSentMediaUrls"
+  | "messagingToolSentTargets"
   | "toolMetas"
 >;
 
@@ -185,30 +194,13 @@ export type PlanningOnlyPlanDetails = {
   steps: string[];
 };
 
-function hasStringEntry(values: readonly unknown[] | undefined): boolean {
-  return (
-    Array.isArray(values) &&
-    values.some((value) => typeof value === "string" && value.trim().length > 0)
-  );
-}
-
-export function hasCommittedUserVisibleToolDelivery(
-  attempt: Pick<EmbeddedRunAttemptResult, "messagingToolSentTexts" | "messagingToolSentMediaUrls">,
-): boolean {
-  return (
-    hasStringEntry(attempt.messagingToolSentTexts) ||
-    hasStringEntry(attempt.messagingToolSentMediaUrls)
-  );
-}
-
 export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
   const hadMutatingTools = params.toolMetas.some((t) => isLikelyMutatingToolName(t.toolName));
   const hadPotentialSideEffects =
     hadMutatingTools ||
-    params.didSendViaMessagingTool ||
-    hasCommittedUserVisibleToolDelivery(params) ||
+    hasMessagingToolDeliveryEvidence(params) ||
     (params.successfulCronAdds ?? 0) > 0;
   return {
     hadPotentialSideEffects,
@@ -244,7 +236,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  if (hasCommittedUserVisibleToolDelivery(params.attempt)) {
+  if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
     return null;
   }
 
@@ -398,7 +390,7 @@ export function resolveRunLivenessState(params: {
   return "working";
 }
 
-export function isReasoningOnlyAssistantTurn(message: unknown): boolean {
+function isReasoningOnlyAssistantTurn(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
   }
@@ -494,7 +486,7 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   if (!params.allowEmptyAssistantReplyAsSilent || shouldSkipPlanningOnlyRetry(params)) {
     return false;
   }
-  if (hasCommittedUserVisibleToolDelivery(params.attempt)) {
+  if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
     return false;
   }
   return isNonVisibleAssistantTurnEligibleForSilentReply({
@@ -830,7 +822,7 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     params.attempt.clientToolCall ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
-    params.attempt.didSendViaMessagingTool ||
+    hasMessagingToolDeliveryEvidence(params.attempt) ||
     params.attempt.lastToolError ||
     (hasNonPlanToolActivity(params.attempt.toolMetas) && !allowSingleActionRetryBypass) ||
     ((params.attempt.itemLifecycle?.startedCount ?? 0) > planOnlyToolMetaCount &&

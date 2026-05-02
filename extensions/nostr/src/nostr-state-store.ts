@@ -28,7 +28,7 @@ type NostrBusState = {
 };
 
 /** Profile publish state (separate from bus state) */
-export type NostrProfileState = {
+type NostrProfileState = {
   version: 1;
   /** Unix timestamp (seconds) of last successful profile publish */
   lastPublishedAt: number | null;

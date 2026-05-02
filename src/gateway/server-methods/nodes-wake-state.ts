@@ -11,7 +11,7 @@ export type NodeWakeAttempt = {
   apnsReason?: string;
 };
 
-export type NodeWakeState = {
+type NodeWakeState = {
   lastWakeAtMs: number;
   inFlight?: Promise<NodeWakeAttempt>;
 };

@@ -155,6 +155,7 @@ type SynologyChatPlugin = Omit<
     }) => string[];
   };
   messaging: {
+    targetPrefixes?: readonly string[];
     normalizeTarget: (target: string) => string | undefined;
     targetResolver: {
       looksLikeId: (id: string) => boolean;
@@ -237,13 +238,14 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
       },
       approvalCapability: synologyChatApprovalAuth,
       messaging: {
+        targetPrefixes: ["synology-chat", "synology_chat", "synology"],
         normalizeTarget: (target: string) => {
           const trimmed = target.trim();
           if (!trimmed) {
             return undefined;
           }
           // Strip common prefixes
-          return trimmed.replace(/^synology[-_]?chat:/i, "").trim();
+          return trimmed.replace(/^synology(?:[-_]?chat)?:/i, "").trim();
         },
         targetResolver: {
           looksLikeId: (id: string) => {
@@ -252,7 +254,7 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
               return false;
             }
             // Synology Chat user IDs are numeric
-            return /^\d+$/.test(trimmed) || /^synology[-_]?chat:/i.test(trimmed);
+            return /^\d+$/.test(trimmed) || /^synology(?:[-_]?chat)?:/i.test(trimmed);
           },
           hint: "<userId>",
         },

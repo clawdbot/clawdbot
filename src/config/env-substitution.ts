@@ -80,7 +80,7 @@ export type EnvSubstitutionWarning = {
   configPath: string;
 };
 
-export type SubstituteOptions = {
+type SubstituteOptions = {
   /** When set, missing vars call this instead of throwing and the original placeholder is preserved. */
   onMissing?: (warning: EnvSubstitutionWarning) => void;
 };

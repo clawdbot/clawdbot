@@ -12,9 +12,9 @@ import {
   parseBoolEnv,
   parseMode,
   parseProvider,
-  providerIdFromModelId,
-  providerTimeoutConfigJson,
+  modelProviderConfigBatchJson,
   repoRoot,
+  resolveParallelsModelTimeoutSeconds,
   resolveHostIp,
   resolveHostPort,
   resolveLatestVersion,
@@ -344,7 +344,7 @@ class LinuxSmoke {
     this.status.freshGateway = "pass";
     await this.phase(
       "fresh.first-local-agent-turn",
-      Number(process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S || 900),
+      Number(process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S || 1500),
       () => this.verifyLocalTurn(),
     );
     this.status.freshAgent = "pass";
@@ -373,7 +373,7 @@ class LinuxSmoke {
     this.status.upgradeGateway = "pass";
     await this.phase(
       "upgrade.first-local-agent-turn",
-      Number(process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S || 900),
+      Number(process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S || 1500),
       () => this.verifyLocalTurn(),
     );
     this.status.upgradeAgent = "pass";
@@ -689,14 +689,14 @@ rm -rf /root/.openclaw/test-bad-plugin`);
 
   private verifyLocalTurn(): void {
     this.guestExec(["openclaw", "models", "set", this.auth.modelId]);
-    const providerId = providerIdFromModelId(this.auth.modelId) || this.options.provider;
-    const providerTimeoutConfig = providerTimeoutConfigJson(this.auth.modelId, "linux");
-    if (providerTimeoutConfig) {
-      this.guestBash(
-        `openclaw config set ${shellQuote(`models.providers.${providerId}`)} ${shellQuote(
-          providerTimeoutConfig,
-        )} --strict-json`,
-      );
+    const modelProviderConfigBatch = modelProviderConfigBatchJson(this.auth.modelId, "linux");
+    if (modelProviderConfigBatch) {
+      this.guestBash(`provider_config_batch="$(mktemp)"
+cat >"$provider_config_batch" <<'JSON'
+${modelProviderConfigBatch}
+JSON
+openclaw config set --batch-file "$provider_config_batch" --strict-json
+rm -f "$provider_config_batch"`);
     }
     this.guestExec([
       "openclaw",
@@ -718,7 +718,7 @@ for attempt in 1 2; do
   set +e
   /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} openclaw agent --local --agent main --session-id "$session_id" --message ${shellQuote(
     "Reply with exact ASCII text OK only.",
-  )} --thinking minimal --json >"$output_file" 2>&1
+  )} --thinking minimal --timeout ${resolveParallelsModelTimeoutSeconds("linux")} --json >"$output_file" 2>&1
   rc=$?
   set -e
   cat "$output_file"

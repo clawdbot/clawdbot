@@ -1,11 +1,11 @@
-export type UrbitErrorCode =
+type UrbitErrorCode =
   | "invalid_url"
   | "http_error"
   | "auth_failed"
   | "missing_cookie"
   | "channel_not_open";
 
-export class UrbitError extends Error {
+class UrbitError extends Error {
   readonly code: UrbitErrorCode;
 
   constructor(code: UrbitErrorCode, message: string, options?: { cause?: unknown }) {

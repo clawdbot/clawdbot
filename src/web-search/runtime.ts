@@ -76,6 +76,7 @@ function hasEntryCredential(
     | "id"
     | "envVars"
     | "getConfiguredCredentialValue"
+    | "getConfiguredCredentialFallback"
     | "getCredentialValue"
     | "requiresCredential"
   >,
@@ -88,6 +89,8 @@ function hasEntryCredential(
     toolConfig: search as Record<string, unknown> | undefined,
     resolveRawValue: ({ provider: currentProvider, config: currentConfig }) =>
       currentProvider.getConfiguredCredentialValue?.(currentConfig),
+    resolveFallbackRawValue: ({ provider: currentProvider, config: currentConfig }) =>
+      currentProvider.getConfiguredCredentialFallback?.(currentConfig)?.value,
     resolveEnvValue: ({ provider: currentProvider, configuredEnvVarId }) =>
       (configuredEnvVarId ? readWebProviderEnvValue([configuredEnvVarId]) : undefined) ??
       readWebProviderEnvValue(currentProvider.envVars),
@@ -101,6 +104,7 @@ export function isWebSearchProviderConfigured(params: {
     | "id"
     | "envVars"
     | "getConfiguredCredentialValue"
+    | "getConfiguredCredentialFallback"
     | "getCredentialValue"
     | "requiresCredential"
   >;
@@ -357,7 +361,7 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
         sawUnavailableProvider = true;
         continue;
       }
-      const executed = await definition.execute(params.args);
+      const executed = await definition.execute(params.args, { signal: params.signal });
       if (allowFallback && isStructuredAvailabilityError(executed)) {
         lastError = new Error(`web_search provider "${candidate.id}" returned ${executed.error}`);
         continue;

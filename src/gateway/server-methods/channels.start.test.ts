@@ -40,6 +40,7 @@ function createOptions(
       getRuntimeConfig: mocks.getRuntimeConfig,
       startChannel: vi.fn(),
       stopChannel: vi.fn(),
+      markChannelLoggedOut: vi.fn(),
       getRuntimeSnapshot: vi.fn(
         (): ChannelRuntimeSnapshot => ({
           channels: {
@@ -172,6 +173,63 @@ describe("channelsHandlers channels.start", () => {
         channel: "whatsapp",
         accountId: "default-account",
         started: false,
+      },
+      undefined,
+    );
+  });
+});
+
+describe("channelsHandlers channels.stop", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getRuntimeConfig.mockReturnValue({});
+    mocks.getChannelPlugin.mockReturnValue({
+      id: "whatsapp",
+      config: {
+        defaultAccountId: () => "default-account",
+        listAccountIds: () => ["default-account"],
+        resolveAccount: () => ({}),
+      },
+    });
+  });
+
+  it("stops a channel account without clearing auth state", async () => {
+    const stopChannel = vi.fn(async () => undefined);
+    const respond = vi.fn();
+
+    await channelsHandlers["channels.stop"](
+      createOptions(
+        { channel: "whatsapp" },
+        {
+          respond,
+          context: {
+            getRuntimeConfig: mocks.getRuntimeConfig,
+            stopChannel,
+            getRuntimeSnapshot: vi.fn(
+              (): ChannelRuntimeSnapshot => ({
+                channels: {},
+                channelAccounts: {
+                  whatsapp: {
+                    "default-account": {
+                      accountId: "default-account",
+                      running: false,
+                    },
+                  },
+                },
+              }),
+            ),
+          } as unknown as GatewayRequestHandlerOptions["context"],
+        },
+      ),
+    );
+
+    expect(stopChannel).toHaveBeenCalledWith("whatsapp", "default-account");
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        channel: "whatsapp",
+        accountId: "default-account",
+        stopped: true,
       },
       undefined,
     );

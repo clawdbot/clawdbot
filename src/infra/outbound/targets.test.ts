@@ -205,6 +205,39 @@ describe("resolveSessionDeliveryTarget", () => {
     });
   });
 
+  it("uses an explicit provider-prefixed target before last-session channel fallback", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-prefixed",
+        updatedAt: 1,
+        lastChannel: "alpha",
+        lastTo: "room-one",
+      },
+      requestedChannel: "last",
+      explicitTo: "beta:room-two",
+    });
+
+    expect(resolved.channel).toBe("beta");
+    expect(resolved.to).toBe("beta:room-two");
+    expect(resolved.lastChannel).toBe("alpha");
+  });
+
+  it("keeps target-kind prefixes on the selected last-session channel", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-target-kind",
+        updatedAt: 1,
+        lastChannel: "alpha",
+        lastTo: "room-one",
+      },
+      requestedChannel: "last",
+      explicitTo: "channel:room-two",
+    });
+
+    expect(resolved.channel).toBe("alpha");
+    expect(resolved.to).toBe("channel:room-two");
+  });
+
   it("allows mismatched lastTo when configured", () => {
     const resolved = resolveSessionDeliveryTarget({
       entry: {

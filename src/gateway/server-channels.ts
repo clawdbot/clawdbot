@@ -13,7 +13,11 @@ import { type BackoffPolicy, computeBackoff, sleepWithAbort } from "../infra/bac
 import { createTaskScopedChannelRuntime } from "../infra/channel-runtime-context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
-import type { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  createSubsystemLogger,
+  runtimeForLogger,
+  type SubsystemLogger,
+} from "../logging/subsystem.js";
 import { resolveAccountEntry, resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -32,8 +36,6 @@ const CHANNEL_RESTART_POLICY: BackoffPolicy = {
 };
 const MAX_RESTART_ATTEMPTS = 10;
 const CHANNEL_STOP_ABORT_TIMEOUT_MS = 5_000;
-
-type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 type ChannelRuntimeStore = {
   aborts: Map<string, AbortController>;
@@ -128,8 +130,8 @@ function applyDescribedAccountFields(
 
 type ChannelManagerOptions = {
   getRuntimeConfig: () => OpenClawConfig;
-  channelLogs: Record<ChannelId, SubsystemLogger>;
-  channelRuntimeEnvs: Record<ChannelId, RuntimeEnv>;
+  channelLogs: Partial<Record<ChannelId, SubsystemLogger>>;
+  channelRuntimeEnvs: Partial<Record<ChannelId, RuntimeEnv>>;
   /**
    * Optional channel runtime helpers for external channel plugins.
    *
@@ -214,6 +216,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const manuallyStopped = new Set<string>();
 
   const restartKey = (channelId: ChannelId, accountId: string) => `${channelId}:${accountId}`;
+  const ensureChannelLog = (channelId: ChannelId): SubsystemLogger => {
+    channelLogs[channelId] ??= createSubsystemLogger("channels").child(channelId);
+    return channelLogs[channelId];
+  };
+  const ensureChannelRuntime = (channelId: ChannelId): RuntimeEnv => {
+    channelRuntimeEnvs[channelId] ??= runtimeForLogger(ensureChannelLog(channelId));
+    return channelRuntimeEnvs[channelId];
+  };
 
   const resolveAccountHealthMonitorOverride = (
     channelConfig: ChannelHealthMonitorConfig | undefined,
@@ -265,7 +275,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       // This call exists solely to fail closed if resolver-side config loading is broken.
       plugin.config.resolveAccount(cfg, accountId);
     } catch (err) {
-      channelLogs[channelId].warn?.(
+      ensureChannelLog(channelId).warn?.(
         `[${channelId}:${accountId}] health-monitor: failed to resolve account; skipping monitor (${formatErrorMessage(err)})`,
       );
       return false;
@@ -388,7 +398,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         const abort = new AbortController();
         store.aborts.set(id, abort);
         let handedOffTask = false;
-        const log = channelLogs[channelId];
+        const log = ensureChannelLog(channelId);
+        const runtime = ensureChannelRuntime(channelId);
         let scopedChannelRuntime: ReturnType<typeof createTaskScopedChannelRuntime> | null = null;
         let channelRuntimeForTask: ChannelRuntimeSurface | undefined;
         let stopApprovalBootstrap: () => Promise<void> = async () => {};
@@ -499,7 +510,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 cfg,
                 accountId: id,
                 account,
-                runtime: channelRuntimeEnvs[channelId],
+                runtime,
                 abortSignal: abort.signal,
                 log,
                 getStatus: () => getRuntime(channelId, id),
@@ -641,16 +652,17 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         }
         manuallyStopped.add(restartKey(channelId, id));
         abort?.abort();
-        const log = channelLogs[channelId];
+        const log = ensureChannelLog(channelId);
+        const runtime = ensureChannelRuntime(channelId);
         if (plugin?.gateway?.stopAccount) {
           const account = plugin.config.resolveAccount(cfg, id);
           await plugin.gateway.stopAccount({
             cfg,
             accountId: id,
             account,
-            runtime: channelRuntimeEnvs[channelId],
+            runtime,
             abortSignal: abort?.signal ?? new AbortController().signal,
-            log: channelLogs[channelId],
+            log,
             getStatus: () => getRuntime(channelId, id),
             setStatus: (next) => setRuntime(channelId, id, next),
           });
@@ -696,7 +708,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           try {
             await measureStartup(`channels.${plugin.id}.start`, () => startChannel(plugin.id));
           } catch (err) {
-            channelLogs[plugin.id]?.error?.(
+            ensureChannelLog(plugin.id).error?.(
               `[${plugin.id}] channel startup failed: ${formatErrorMessage(err)}`,
             );
           }

@@ -60,7 +60,7 @@ export type MatrixQaScenarioContext = {
   waitGatewayAccountReady?: (accountId: string, opts?: { timeoutMs?: number }) => Promise<void>;
 };
 
-export const NO_REPLY_WINDOW_MS = 8_000;
+const NO_REPLY_WINDOW_MS = 8_000;
 const NO_REPLY_WINDOW_ENV = "OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS";
 
 export function resolveMatrixQaNoReplyWindowMs(timeoutMs: number) {
@@ -340,7 +340,7 @@ export function advanceMatrixQaActorCursor(params: {
   writeMatrixQaSyncCursor(params.syncState, params.actorId, params.nextSince ?? params.startSince);
 }
 
-export type MatrixQaScenarioClient = ReturnType<typeof createMatrixQaScenarioClient>;
+type MatrixQaScenarioClient = ReturnType<typeof createMatrixQaScenarioClient>;
 
 export async function assertNoSutReplyWindow(params: {
   actorId: MatrixQaActorId;
@@ -446,7 +446,7 @@ export async function runConfigurableTopLevelScenario(params: {
   };
 }
 
-export async function runTopLevelMentionScenario(params: {
+async function runTopLevelMentionScenario(params: {
   accessToken: string;
   actorId: MatrixQaActorId;
   baseUrl: string;

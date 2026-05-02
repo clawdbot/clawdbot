@@ -1,10 +1,10 @@
-export type LaneDeliverySnapshot = {
+type LaneDeliverySnapshot = {
   delivered: boolean;
   skippedNonSilent: number;
   failedNonSilent: number;
 };
 
-export type LaneDeliveryStateTracker = {
+type LaneDeliveryStateTracker = {
   markDelivered: () => void;
   markNonSilentSkip: () => void;
   markNonSilentFailure: () => void;

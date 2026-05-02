@@ -24,8 +24,11 @@ function readManifestRecords(): PluginManifest[] {
         return false;
       }
       const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf-8")) as {
-        openclaw?: { extensions?: unknown };
+        openclaw?: { bundle?: { includeInCore?: unknown }; extensions?: unknown };
       };
+      if (packageJson.openclaw?.bundle?.includeInCore === false) {
+        return false;
+      }
       return normalizeBundledPluginStringList(packageJson.openclaw?.extensions).length > 0;
     })
     .map(

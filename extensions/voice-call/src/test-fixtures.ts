@@ -18,6 +18,7 @@ export function createVoiceCallBaseConfig(params?: {
     transcriptTimeoutMs: 180000,
     ringTimeoutMs: 30000,
     maxConcurrentCalls: 1,
+    sessionScope: "per-phone",
     serve: { port: 3334, bind: "127.0.0.1", path: "/voice/webhook" },
     tailscale: { mode: "off", path: "/voice/webhook" },
     tunnel: {

@@ -18,7 +18,7 @@ type SendIrcOptions = {
   client?: IrcClient;
 };
 
-export type SendIrcResult = {
+type SendIrcResult = {
   messageId: string;
   target: string;
 };

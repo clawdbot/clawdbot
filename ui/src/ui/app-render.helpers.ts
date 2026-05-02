@@ -89,6 +89,7 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   const previousSessionKey = state.sessionKey;
   saveChatQueueForSession(state, previousSessionKey);
   state.sessionKey = sessionKey;
+  (state as unknown as { currentSessionId?: string | null }).currentSessionId = null;
   state.chatMessage = "";
   state.chatAttachments = [];
   state.chatMessages = [];

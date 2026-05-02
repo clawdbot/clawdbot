@@ -1154,6 +1154,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       setup: feishuSetupAdapter,
       setupWizard: feishuSetupWizard,
       messaging: {
+        targetPrefixes: ["feishu", "lark"],
         normalizeTarget: (raw) => normalizeFeishuTarget(raw) ?? undefined,
         resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
           const directId = parseFeishuDirectConversationId(conversationId);

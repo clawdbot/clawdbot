@@ -9,6 +9,10 @@ import {
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import {
+  markDiagnosticEmbeddedRunEnded,
+  markDiagnosticEmbeddedRunStarted,
+} from "../../logging/diagnostic-run-activity.js";
+import {
   diagnosticLogger as diag,
   logMessageQueued,
   logSessionStateChange,
@@ -366,6 +370,7 @@ export function setActiveEmbeddedRun(
     state: "processing",
     reason: wasActive ? "run_replaced" : "run_started",
   });
+  markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
   if (!sessionId.startsWith("probe-")) {
     diag.debug(`run registered: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
   }
@@ -392,6 +397,7 @@ export function clearActiveEmbeddedRun(
     EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.delete(sessionId);
     clearActiveRunSessionKeys(sessionId, sessionKey);
     logSessionStateChange({ sessionId, sessionKey, state: "idle", reason: "run_completed" });
+    markDiagnosticEmbeddedRunEnded({ sessionId, sessionKey });
     if (!sessionId.startsWith("probe-")) {
       diag.debug(`run cleared: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
     }
@@ -413,6 +419,7 @@ export function forceClearEmbeddedPiRun(
     EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.delete(sessionId);
     clearActiveRunSessionKeys(sessionId, sessionKey);
     logSessionStateChange({ sessionId, sessionKey, state: "idle", reason });
+    markDiagnosticEmbeddedRunEnded({ sessionId, sessionKey });
     notifyEmbeddedRunEnded(sessionId);
     cleared = true;
   }

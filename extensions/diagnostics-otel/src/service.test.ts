@@ -320,6 +320,7 @@ describe("diagnostics-otel service", () => {
       type: "session.stuck",
       state: "processing",
       ageMs: 125_000,
+      classification: "stale_session_state",
     });
     emitDiagnosticEvent({
       type: "run.attempt",

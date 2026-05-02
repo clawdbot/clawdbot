@@ -13,10 +13,10 @@ type DispatchReplyWithBufferedBlockDispatcherFn =
 type DispatchReplyHarnessParams = Parameters<DispatchReplyWithBufferedBlockDispatcherFn>[0];
 type FetchRemoteMediaFn = typeof import("openclaw/plugin-sdk/media-runtime").fetchRemoteMedia;
 
-export const useSpy: Mock = vi.fn();
-export const middlewareUseSpy: Mock = vi.fn();
+const useSpy: Mock = vi.fn();
+const middlewareUseSpy: Mock = vi.fn();
 export const onSpy: Mock = vi.fn();
-export const stopSpy: Mock = vi.fn();
+const stopSpy: Mock = vi.fn();
 export const sendChatActionSpy: Mock = vi.fn();
 
 function defaultUndiciFetch(input: RequestInfo | URL, init?: RequestInit) {
@@ -25,7 +25,7 @@ function defaultUndiciFetch(input: RequestInfo | URL, init?: RequestInit) {
 
 export const undiciFetchSpy: Mock = vi.fn(defaultUndiciFetch);
 
-export function resetUndiciFetchMock() {
+function resetUndiciFetchMock() {
   undiciFetchSpy.mockReset();
   undiciFetchSpy.mockImplementation(defaultUndiciFetch);
 }
@@ -84,7 +84,7 @@ export function setNextSavedMediaPath(params: {
   );
 }
 
-export function resetSaveMediaBufferMock() {
+function resetSaveMediaBufferMock() {
   saveMediaBufferSpy.mockReset();
   saveMediaBufferSpy.mockImplementation(defaultSaveMediaBuffer);
 }

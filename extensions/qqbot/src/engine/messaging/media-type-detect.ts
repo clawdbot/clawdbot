@@ -11,7 +11,7 @@ const VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".avi", ".mkv", ".webm", ".flv
 /**
  * Extract a lowercase file extension from a path or URL, ignoring query and hash.
  */
-export function getCleanExtension(filePath: string): string {
+function getCleanExtension(filePath: string): string {
   const cleanPath = filePath.split("?")[0].split("#")[0];
   const lastDot = cleanPath.lastIndexOf(".");
   if (lastDot < 0) {

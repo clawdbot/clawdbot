@@ -19,8 +19,6 @@ function createScenarioWaitForCondition(state: QaTransportState) {
   return createFailureAwareTransportWaitForCondition(state);
 }
 
-const waitForCondition = createScenarioWaitForCondition;
-
 async function waitForOutboundMessage(
   state: QaTransportState,
   predicate: (message: QaBusMessage) => boolean,
@@ -154,7 +152,6 @@ export {
   readTransportTranscript,
   recentOutboundSummary,
   waitForChannelOutboundMessage,
-  waitForCondition,
   waitForNoOutbound,
   waitForNoTransportOutbound,
   waitForOutboundMessage,

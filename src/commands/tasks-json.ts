@@ -122,7 +122,7 @@ function toSystemAuditFindings(params: {
   };
 }
 
-export function buildTasksListJsonPayload(opts: TasksListJsonArgs) {
+function buildTasksListJsonPayload(opts: TasksListJsonArgs) {
   const runtimeFilter = opts.runtime?.trim();
   const statusFilter = opts.status?.trim();
   const tasks = listTaskJsonRecords().filter((task) => {
@@ -142,7 +142,7 @@ export function buildTasksListJsonPayload(opts: TasksListJsonArgs) {
   };
 }
 
-export function buildTasksAuditJsonPayload(opts: TasksAuditJsonArgs) {
+function buildTasksAuditJsonPayload(opts: TasksAuditJsonArgs) {
   const severityFilter = opts.severity?.trim() as TaskSystemAuditSeverity | undefined;
   const codeFilter = opts.code?.trim() as TaskSystemAuditCode | undefined;
   const { allFindings, filteredFindings, taskFindings, summary } = toSystemAuditFindings({

@@ -1,16 +1,27 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
 import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import type { WhatsAppSendResult } from "../inbound/send-result.js";
+import {
+  evaluateSessionFreshness,
+  loadSessionStore,
+  resolveChannelResetConfig,
+  resolveSessionKey,
+  resolveSessionResetPolicy,
+  resolveSessionResetType,
+  resolveStorePath,
+  resolveThreadFlag,
+} from "./config.runtime.js";
 import {
   debugMention,
   isBotMentionedFromTargets,
   resolveMentionTargets,
   resolveOwnerList,
 } from "./mentions.js";
-import { getSessionSnapshot } from "./session-snapshot.js";
 import type { WebInboundMsg } from "./types.js";
 import { elide, isLikelyWhatsAppCryptoError } from "./util.js";
 
@@ -39,6 +50,60 @@ const makeMsg = (overrides: Partial<WebInboundMsg>): WebInboundMsg =>
     sendMedia: async () => acceptedSendResult("media", "m1"),
     ...overrides,
   }) as WebInboundMsg;
+
+function getSessionSnapshotForTest(
+  cfg: OpenClawConfig,
+  from: string,
+  ctx?: {
+    sessionKey?: string | null;
+    isGroup?: boolean;
+    messageThreadId?: string | number | null;
+    threadLabel?: string | null;
+    threadStarterBody?: string | null;
+    parentSessionKey?: string | null;
+  },
+) {
+  const sessionCfg = cfg.session;
+  const scope = sessionCfg?.scope ?? "per-sender";
+  const key =
+    ctx?.sessionKey?.trim() ??
+    resolveSessionKey(
+      scope,
+      { From: from, To: "", Body: "" },
+      normalizeMainKey(sessionCfg?.mainKey),
+    );
+  const store = loadSessionStore(resolveStorePath(sessionCfg?.store));
+  const entry = store[key];
+  const isThread = resolveThreadFlag({
+    sessionKey: key,
+    messageThreadId: ctx?.messageThreadId ?? null,
+    threadLabel: ctx?.threadLabel ?? null,
+    threadStarterBody: ctx?.threadStarterBody ?? null,
+    parentSessionKey: ctx?.parentSessionKey ?? null,
+  });
+  const resetType = resolveSessionResetType({ sessionKey: key, isGroup: ctx?.isGroup, isThread });
+  const resetPolicy = resolveSessionResetPolicy({
+    sessionCfg,
+    resetType,
+    resetOverride: resolveChannelResetConfig({
+      sessionCfg,
+      channel: entry?.lastChannel ?? entry?.channel,
+    }),
+  });
+  const freshness = entry
+    ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now: Date.now(), policy: resetPolicy })
+    : { fresh: false };
+
+  return {
+    key,
+    entry,
+    fresh: freshness.fresh,
+    resetPolicy,
+    resetType,
+    dailyResetAt: freshness.dailyResetAt,
+    idleExpiresAt: freshness.idleExpiresAt,
+  };
+}
 
 describe("isBotMentionedFromTargets", () => {
   const mentionCfg = { mentionRegexes: [/\bopenclaw\b/i] };
@@ -215,9 +280,9 @@ describe("getSessionSnapshot", () => {
               whatsapp: { mode: "idle", idleMinutes: 360 },
             },
           },
-        } as Parameters<typeof getSessionSnapshot>[0];
+        } as OpenClawConfig;
 
-        const snapshot = getSessionSnapshot(cfg, "whatsapp:+15550001111", true, {
+        const snapshot = getSessionSnapshotForTest(cfg, "whatsapp:+15550001111", {
           sessionKey,
         });
 

@@ -10,6 +10,11 @@ const DISABLED_BUNDLED_PLUGINS_DIR = path.join(os.tmpdir(), "openclaw-empty-bund
 const TEST_TRUST_BUNDLED_PLUGINS_DIR_ENV = "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR";
 let bundledPluginsDirOverrideForTest: string | undefined;
 
+export type SourceCheckoutDependencyDiagnostic = {
+  source: string;
+  message: string;
+};
+
 export function areBundledPluginsDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = normalizeOptionalLowercaseString(env.OPENCLAW_DISABLE_BUNDLED_PLUGINS);
   return raw === "1" || raw === "true";
@@ -23,6 +28,7 @@ function resolveDisabledBundledPluginsDir(): string {
 function isSourceCheckoutRoot(packageRoot: string): boolean {
   return (
     fs.existsSync(path.join(packageRoot, ".git")) &&
+    fs.existsSync(path.join(packageRoot, "pnpm-workspace.yaml")) &&
     fs.existsSync(path.join(packageRoot, "src")) &&
     fs.existsSync(path.join(packageRoot, "extensions"))
   );
@@ -86,6 +92,40 @@ function trustedBundledPluginRootsForPackageRoot(packageRoot: string): string[] 
   return roots;
 }
 
+function resolvePackageRootsForBundledPlugins(): string[] {
+  const argvRoot = resolveOpenClawPackageRootSync({ argv1: process.argv[1] });
+  const moduleRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
+  return [argvRoot, moduleRoot].filter(
+    (entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index,
+  );
+}
+
+export function resolveSourceCheckoutDependencyDiagnostic(
+  env: NodeJS.ProcessEnv = process.env,
+): SourceCheckoutDependencyDiagnostic | null {
+  if (areBundledPluginsDisabled(env)) {
+    return null;
+  }
+  for (const packageRoot of resolvePackageRootsForBundledPlugins()) {
+    if (!isSourceCheckoutRoot(packageRoot)) {
+      continue;
+    }
+    const extensionsDir = path.join(packageRoot, "extensions");
+    if (!hasUsableBundledPluginTree(extensionsDir)) {
+      continue;
+    }
+    if (fs.existsSync(path.join(packageRoot, "node_modules", ".pnpm"))) {
+      continue;
+    }
+    return {
+      source: packageRoot,
+      message:
+        "OpenClaw source checkout detected without pnpm workspace dependencies; run `pnpm install` from the repo root so bundled plugins can load package-local dependencies.",
+    };
+  }
+  return null;
+}
+
 function resolveTrustedExistingOverride(resolvedOverride: string): string | null {
   const realOverride = safeRealpathSync(resolvedOverride);
   if (!realOverride) {
@@ -126,12 +166,13 @@ function resolveBundledDirFromPackageRoot(packageRoot: string): string | undefin
   const builtExtensionsDir = path.join(packageRoot, "dist", "extensions");
   const sourceCheckout = isSourceCheckoutRoot(packageRoot);
   const hasUsableSourceTree = sourceCheckout && hasUsableBundledPluginTree(sourceExtensionsDir);
-  // Local source checkouts stage a runtime-complete bundled plugin tree under
-  // dist-runtime/. Prefer that over source extensions only when the paired
-  // dist/ tree exists; otherwise wrappers can drift ahead of the last build.
-  // Even when OpenClaw itself runs from TypeScript, bundled plugins should use
-  // compiled JavaScript whenever it is available. Source plugin entries force
-  // jiti onto hot runtime paths such as per-run tool construction.
+  // In pnpm source checkouts, extensions/* is a workspace package tree with its
+  // own package.json dependencies. Prefer it so git checkouts remain editable
+  // and dependency-complete without moving optional plugin deps back into root.
+  if (hasUsableSourceTree) {
+    return sourceExtensionsDir;
+  }
+
   const runtimeExtensionsDir = path.join(packageRoot, "dist-runtime", "extensions");
   const hasUsableRuntimeTree = sourceCheckout
     ? hasUsableBundledPluginTree(runtimeExtensionsDir)

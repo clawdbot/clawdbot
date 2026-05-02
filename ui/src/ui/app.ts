@@ -191,6 +191,7 @@ export class OpenClawApp extends LitElement {
   @state() serverVersion: string | null = null;
 
   @state() sessionKey = this.settings.sessionKey;
+  currentSessionId: string | null = null;
   @state() chatLoading = false;
   @state() chatSending = false;
   @state() chatMessage = "";

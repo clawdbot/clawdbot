@@ -14,7 +14,7 @@ function truncateSummary(value: string, maxLen = 120): string {
   return `${trimmed}...`;
 }
 
-export function isToolDocBlockStart(line: string): boolean {
+function isToolDocBlockStart(line: string): boolean {
   const normalized = line.trim().toUpperCase();
   if (!normalized) {
     return false;

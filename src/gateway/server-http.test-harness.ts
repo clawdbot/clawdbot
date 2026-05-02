@@ -8,8 +8,8 @@ import { createGatewayHttpServer } from "./server-http.js";
 import { createHooksRequestHandler } from "./server/hooks-request-handler.js";
 import { withTempConfig } from "./test-temp-config.js";
 
-export type GatewayHttpServer = ReturnType<typeof createGatewayHttpServer>;
-export type GatewayServerOptions = Partial<Parameters<typeof createGatewayHttpServer>[0]>;
+type GatewayHttpServer = ReturnType<typeof createGatewayHttpServer>;
+type GatewayServerOptions = Partial<Parameters<typeof createGatewayHttpServer>[0]>;
 type HooksHandlerDeps = Parameters<typeof createHooksRequestHandler>[0];
 
 const responseEndPromises = new WeakMap<ServerResponse, Promise<void>>();
@@ -221,7 +221,7 @@ export function createHooksHandler(
   });
 }
 
-export type RouteVariant = {
+type RouteVariant = {
   label: string;
   path: string;
 };

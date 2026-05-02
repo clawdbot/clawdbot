@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { PluginLoadOptions } from "./loader.js";
+import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 import type { PluginWebFetchProviderEntry, PluginWebSearchProviderEntry } from "./types.js";
 import { resolveBundledWebFetchResolutionConfig } from "./web-fetch-providers.shared.js";
 import {
@@ -71,11 +71,10 @@ function resolveBundledManifestRecordsByPluginId(params: {
   const allowedPluginIds = new Set(params.onlyPluginIds);
   const manifestRecords =
     params.manifestRecords ??
-    loadPluginManifestRegistryForPluginRegistry({
+    loadManifestMetadataSnapshot({
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
-      includeDisabled: true,
     }).plugins;
   return new Map(
     manifestRecords
